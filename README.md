@@ -167,7 +167,30 @@ Lucy stores credentials securely in the OS keyring. On first launch, the setup o
 4. Push to the branch (`git push origin feature/my-feature`)
 5. Open a Pull Request
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+## Support Lucy AI
+
+Love Lucy? Consider supporting development! Your contribution helps improve the project and keeps it free and open source.
+
+### 💝 Sponsor Options
+
+- **[GitHub Sponsors](https://github.com/sponsors/Phenomx64L)** — Direct sponsorship
+- **[Buy Me a Coffee](https://www.buymeacoffee.com/phenomx64l)** — One-time or recurring
+- **[Patreon](https://patreon.com/lucy-ai)** — Monthly support
+- **[PayPal](https://paypal.me/phenomx64l)** — Donation
+
+### 🙏 Other Ways to Help
+
+- ⭐ **Star the repository** — Helps visibility
+- 🐛 **Report bugs** — Create detailed issues
+- 💡 **Suggest features** — Share your ideas
+- 🔧 **Contribute code** — Submit PRs
+- 📢 **Share Lucy** — Tell others about it
+
 ## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
