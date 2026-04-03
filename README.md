@@ -24,6 +24,12 @@ Lucy is a desktop AI assistant designed for system administrators. It combines a
 
 Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs natively on Windows with minimal resource overhead.
 
+## Demo Video
+
+[![Lucy AI Demo](https://img.youtube.com/vi/-baowyd16kc/maxresdefault.jpg)](https://www.youtube.com/watch?v=-baowyd16kc)
+
+**[Watch Full Demo on YouTube](https://www.youtube.com/watch?v=-baowyd16kc)** — See Lucy in action managing infrastructure, running compliance checks, and automating SysAdmin tasks.
+
 ## Features
 
 - **AI Chat Interface** — Conversational assistant with streaming LLM responses, markdown rendering, and syntax highlighting
