@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(grep -o \"\"text\"\":\"\"[^\"\"]*U6[^\"\"]*\"\" C:/Users/eleue/.claude/projects/X--Rust-Projects-lucy-svelte/87a853f0-e9a6-4a15-8409-d374739289c3.jsonl)",
+      "Bash(cargo build:*)",
+      "Bash(npm run:*)",
+      "Bash(ls \"C:\\\\Users\\\\eleue\\\\.claude\\\\projects\\\\X--Rust-Projects-lucy-svelte\\\\memory\"\" 2>/dev/null || echo \"directory empty or not found \")",
+      "Bash(wc -l /X/Rust_Projects/lucy-svelte/src-tauri/src/*.rs /X/Rust_Projects/lucy-svelte/src-tauri/src/*/*.rs)",
+      "Bash(wc -l /X/Rust_Projects/lucy-svelte/src/lib/*.ts /X/Rust_Projects/lucy-svelte/src/routes/*.svelte /X/Rust_Projects/lucy-svelte/src/routes/*.js)",
+      "Bash(find /X/Rust_Projects/lucy-svelte -type d -not -path */node_modules/* -not -path */target/* -not -path */.svelte-kit/* -not -path */build/*)",
+      "Bash(Get-Content \"X:\\\\Rust_Projects\\\\lucy-svelte\\\\src\\\\routes\\\\+page.svelte\")",
+      "Bash(Measure-Object -Line)",
+      "Bash(Select-Object -ExpandProperty Lines)",
+      "Bash(npm install:*)",
+      "Bash(node -e \"require\\(''highlight.js''\\); console.log\\(''ok''\\)\")",
+      "Bash(npx vite:*)",
+      "Bash(wc -l /x/Rust_Projects/lucy-svelte/src/lib/*.svelte)",
+      "Bash(grep -n \"import.*stores\\\\|from.*stores\\\\|hosts\\\\.update\\\\|hosts\\\\.set\\\\|get.*hosts\\\\|$hosts\\\\|let hosts\\\\b\" \"X:/Rust_Projects/lucy-svelte/src/routes/+page.svelte\")",
+      "Bash(grep -rn \"readfile\\\\|writefile\\\\|listdir\\\\|readlines\" /X/Rust_Projects/lucy-svelte/src-tauri/src --include=*.rs)",
+      "Bash(grep -rn \"TOOL\\\\|<EXECUTE>\" /X/Rust_Projects/lucy-svelte/src-tauri/src --include=*.rs)",
+      "Bash(npx svelte-check:*)",
+      "Bash(grep -n \"{#if activeView === ''nexshell''}\" \"X:\\\\Rust_Projects\\\\lucy-svelte\\\\src\\\\routes\\\\+page.svelte\")",
+      "Bash(grep -n \"{#if activeView === ''dashboard''}\" \"X:\\\\Rust_Projects\\\\lucy-svelte\\\\src\\\\routes\\\\+page.svelte\")",
+      "Bash(grep -n \"{#if activeView === ''logviewer''}\" \"X:\\\\Rust_Projects\\\\lucy-svelte\\\\src\\\\routes\\\\+page.svelte\")",
+      "Bash(grep -v '\\\\$show')",
+      "Bash(done)",
+      "Bash(grep -E '\\\\.\\(md|ts|js\\)$')",
+      "Bash(fi)",
+      "Bash(wc -l C:UserseleueMusicclaw-code-mainclaw-code-mainrustcratesruntimesrc/*.rs)",
+      "Bash(wc -l /c/Users/eleue/Music/claw-code-main/claw-code-main/rust/crates/**/src/*.rs)",
+      "Bash(xargs wc:*)",
+      "Bash(python3 -c \"import json; f=open\\(''C:/Users/eleue/Music/claw-code-main/claw-code-main/src/reference_data/commands_snapshot.json''\\); cmds=json.load\\(f\\); print\\(f''Total commands: {len\\(cmds\\)}''\\); print\\(''Sample commands:''\\); [print\\(f\"\"  - {c[''name'']}\"\"\\) for c in cmds[:15]]\")",
+      "Bash(python3 -c \"import json; f=open\\(''C:/Users/eleue/Music/claw-code-main/claw-code-main/src/reference_data/tools_snapshot.json''\\); tools=json.load\\(f\\); print\\(f''Total tools: {len\\(tools\\)}''\\); print\\(''Sample tools:''\\); [print\\(f\"\"  - {t[''name'']}\"\"\\) for t in tools[:15]]\")",
+      "Bash(find /X/Rust_Projects/lucy-svelte -not -path */node_modules/* -not -path */target/* -not -path */build/* -not -path */.svelte-kit/* -type d)",
+      "Bash(grep -E \"\\\\.\\(md|txt|json|toml|lock|yml|yaml\\)$\")",
+      "Bash(wc -l /X/Rust_Projects/lucy-svelte/src/lib/*.ts /X/Rust_Projects/lucy-svelte/src/lib/*.js)",
+      "Bash(find \"/X/Rust_Projects/lucy-svelte/src-tauri/src\" -type f -name \"*.rs\" -not -path \"*/target/*\" -exec wc -l {} +)",
+      "Bash(find \"/X/Rust_Projects/lucy-svelte/src\" -type f \\\\\\( -name \"*.svelte\" -o -name \"*.ts\" -o -name \"*.js\" \\\\\\) -exec wc -l {} +)"
+    ]
+  }
+}

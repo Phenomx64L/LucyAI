@@ -1,0 +1,30 @@
+# Dependencies
+node_modules
+
+# Build outputs
+/build
+/.svelte-kit
+/package
+src-tauri/target
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea
+*.swp
+*.swo
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Logs & debug
+*.log
+svelte_errors.txt

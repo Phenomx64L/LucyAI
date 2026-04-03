@@ -1,0 +1,2303 @@
+<script>
+    import { invoke } from '@tauri-apps/api/core';
+    import { listen } from '@tauri-apps/api/event';
+    import { LLM_GROUPS, getModelDescription } from '$lib/models.js';
+    import { tick, createEventDispatcher, onDestroy } from 'svelte';
+    import { logAuditEntry } from '$lib/audit';
+    import { analyzeCommand, shouldBlock } from '$lib/hooks/command-guard';
+    import { guardConfig } from '$lib/stores';
+    import DangerConfirmModal from '$lib/DangerConfirmModal.svelte';
+    import TurnLoopPanel from '$lib/TurnLoopPanel.svelte';
+    import SkillBrowserModal from '$lib/SkillBrowserModal.svelte';
+    import { Rocket, Hash, GitBranch, Sparkles, Mic, Timer, Radio, Globe, BookMarked, FolderSync, Activity, Monitor, Server } from 'lucide-svelte';
+    import {
+        createTurnLoop, extractCommand, extractVerdict, cleanAiResponse,
+        getDiagnosePrompt, getAnalyzePrompt, getProposePrompt, getVerifyPrompt, getResultPrompt
+    } from '$lib/hooks/turn-loop';
+    import {
+        registerSkill, getSkill, getAllSkills, searchSkills,
+        createSkillRun, buildPhasePrompt,
+        extractCommand as skExtractCommand, extractVerdict as skExtractVerdict, cleanResponse as skCleanResponse
+    } from '$lib/skills/skill-engine';
+    import { registerBuiltinSkills } from '$lib/skills/builtin/index';
+
+    // Register built-in skills once on module load
+    registerBuiltinSkills();
+
+    const dispatch = createEventDispatcher();
+
+    // ── Props (from parent) ─────────────────────────────────────────────────
+    export let rshellSessions = [];
+    export let activeShellId  = null;
+    export let hosts          = [];
+    export let lucyConfig     = {};
+    export let userLang       = 'es';
+    export let selectedModel  = 'gemini-2.5-flash';
+    export let isEN           = false;
+
+    // ── Internal NexShell state ─────────────────────────────────────────────
+    let nexshellFilter     = '';
+    let nsHostsCollapsed   = false;
+    let nsInputsCollapsed  = false;
+    let nsSort             = 'status';
+    let nsCategoryFilter   = 'all';
+
+    function getHostTypeComponent(type) {
+        return type === 'windows' ? Monitor : Server;
+    }
+
+    // ── Modal states ────────────────────────────────────────────────────────
+    let showPlaybookModal      = false;
+    let playbookShellId        = null;
+    let pbForm                 = { name: '', commands: '' };
+
+    let showBroadcast          = false;
+    let broadcastShellId       = null;
+    let broadcastCmd           = '';
+    let broadcastSelected      = new Set();
+    let broadcastResults       = [];
+    let broadcastRunning       = false;
+
+    let showFileTransferModal  = false;
+    let ftShellId              = null;
+    let ftDirection            = 'upload';
+    let ftLocalPath            = '';
+    let ftRemotePath           = '';
+    let ftRunning              = false;
+    let ftResult               = '';
+
+    let showTailModal          = false;
+    let tailShellId            = null;
+    let tailPath               = '';
+    let tailIntervals          = {};
+
+    // ── Command Guard (pre-execution hook) ──────────────────────────────────
+    let guardAssessment        = null;
+    let guardHostName          = '';
+    let guardSource            = 'manual';
+    let guardPendingAction     = null;  // () => Promise<void>
+
+    // ── Turn-Loop (formalized troubleshooting) ──────────────────────────────
+    let turnLoops              = {};    // shellId → TurnLoopState
+
+    // ── Skill System ────────────────────────────────────────────────────────
+    let skillRuns              = {};    // shellId → SkillRunState
+    let showSkillBrowser       = false;
+    let skillBrowserShellId    = null;
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+    function toast(msg, type = 'info') {
+        dispatch('toast', { msg, type });
+    }
+
+    const ahora = () => new Date().toLocaleTimeString(userLang, { hour: '2-digit', minute: '2-digit' });
+
+    const getShell = (id) => rshellSessions.find(s => s.id === id);
+
+    // ── Reactive: sorted/filtered host list ─────────────────────────────────
+    $: nsHostsSorted = (() => {
+        let list = hosts.filter(h =>
+            (nexshellFilter === '' || h.name.toLowerCase().includes(nexshellFilter.toLowerCase()) || h.host.includes(nexshellFilter)) &&
+            (nsCategoryFilter === 'all' || (h.category || 'shell') === nsCategoryFilter)
+        );
+        if (nsSort === 'name')     return [...list].sort((a,b) => a.name.localeCompare(b.name));
+        if (nsSort === 'type')     return [...list].sort((a,b) => (a.category||'shell').localeCompare(b.category||'shell') || a.name.localeCompare(b.name));
+        if (nsSort === 'activity') return [...list].sort((a,b) => (b.lastActivity||0) - (a.lastActivity||0));
+        return [...list].sort((a,b) => {
+            const ac = rshellSessions.find(s=>s.host.id===a.id)?.connected ? 1 : 0;
+            const bc = rshellSessions.find(s=>s.host.id===b.id)?.connected ? 1 : 0;
+            return bc - ac || a.name.localeCompare(b.name);
+        });
+    })();
+
+    // ── Icon / label helpers ────────────────────────────────────────────────
+    function nsHostIcon(h) {
+        const cat = h.category || 'shell';
+        if (cat === 'database') { const m={postgres:'🐘',mysql:'🐬',mongodb:'🍃',redis:'⚡',mssql:'🪟'}; return m[h.dbType]||'🗄️'; }
+        if (cat === 'container')  return '🐳';
+        if (cat === 'kubernetes') return '⎈';
+        if (cat === 'network')    return '🌐';
+        return h.type === 'windows' ? '🖥️' : '🐧';
+    }
+
+    function nsProtoLabel(h) {
+        if (h.protocol) {
+            const labels = { winrm:'WinRM', ssh:'SSH', rdp:'RDP', snmp:'SNMP', docker:'Docker',
+                k8s:'K8s', postgres:'PgSQL', mysql:'MySQL', mongodb:'Mongo', redis:'Redis', mssql:'MSSQL' };
+            return labels[h.protocol] || h.protocol.toUpperCase();
+        }
+        const cat = h.category || 'shell';
+        if (cat === 'database')   return (h.dbType||'DB').toUpperCase();
+        if (cat === 'container')  return 'Docker';
+        if (cat === 'kubernetes') return 'K8s';
+        if (cat === 'network')    return 'SNMP';
+        return h.type === 'windows' ? 'WinRM' : 'SSH';
+    }
+
+    function nsRelTime(ts) {
+        if (!ts) return '';
+        const d = Date.now() - ts;
+        if (d < 60000)    return 'hace <1m';
+        if (d < 3600000)  return `hace ${Math.floor(d/60000)}m`;
+        if (d < 86400000) return `hace ${Math.floor(d/3600000)}h`;
+        return `hace ${Math.floor(d/86400000)}d`;
+    }
+
+    // ── Scroll helper ───────────────────────────────────────────────────────
+    function rsScrollBottom(id) {
+        tick().then(() => {
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    const el = document.getElementById(`rshell-out-${id}`);
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            });
+        });
+    }
+
+    // ── Log to history ──────────────────────────────────────────────────────
+    function rsLogTo(id, type, text, meta = {}) {
+        const s = getShell(id);
+        if (!s) return;
+        s.history = [...s.history, { type, text, time: ahora(), ...meta }];
+        if (s.history.length > 300) s.history = s.history.slice(-300);
+        rshellSessions = [...rshellSessions];
+        rsScrollBottom(id);
+    }
+
+    // ── Interactive prompt patterns ─────────────────────────────────────────
+    const RS_PROMPT_PATTERNS = [
+        { re: /\[sudo\]\s*password\s+for\s+\S+\s*:/i,    hint: 'Contraseña sudo',   mask: true  },
+        { re: /password\s+for\s+\S+@\S+\s*:/i,           hint: 'Contraseña SSH',    mask: true  },
+        { re: /(?:^|\n)Password:\s*$/i,                   hint: 'Contraseña',        mask: true  },
+        { re: /Enter passphrase for key/i,                hint: 'Passphrase de clave', mask: true },
+        { re: /Do you want to continue\?\s*\[Y\/n\]/i,   hint: 'Y o n (Enter = Y)', mask: false },
+        { re: /\[Y\/n\]\s*$/i,                            hint: 'Y o n (Enter = Y)', mask: false },
+        { re: /\[y\/N\]\s*$/i,                            hint: 'y o N (Enter = N)', mask: false },
+        { re: /\(yes\/no(?:\/\[fingerprint\])?\)\s*[?:]?\s*$/i, hint: 'yes o no',   mask: false },
+        { re: /Are you sure.*\?\s*$/i,                    hint: 'yes o no',          mask: false },
+    ];
+
+    // ── Stream chunk handler ────────────────────────────────────────────────
+    function rsHandleStreamChunk(id, chunk, isErr) {
+        const s = getShell(id);
+        if (!s || !s.isStreaming) return;
+        s.streamOut = (s.streamOut || '') + chunk;
+        if (!s.waitingForInput) {
+            for (const p of RS_PROMPT_PATTERNS) {
+                if (p.re.test(s.streamOut)) {
+                    s.waitingForInput = true;
+                    s.promptIsPassword = p.mask;
+                    s.promptHint = p.hint;
+                    break;
+                }
+            }
+        }
+        rshellSessions = [...rshellSessions];
+        rsScrollBottom(id);
+    }
+
+    // ── Cancel active stream ────────────────────────────────────────────────
+    async function cancelarStream(id) {
+        const s = getShell(id);
+        if (!s || !s.isStreaming) return;
+        const partial  = s.streamOut?.trim() || '';
+        const resolve  = s._streamResolve;
+        s.streamOut = '';
+        s.isStreaming = false;
+        s.running = false;
+        s.waitingForInput = false;
+        s.interactiveInput = '';
+        s._streamResolve = null;
+        rshellSessions = [...rshellSessions];
+        if (partial) rsLogTo(id, 'out', partial);
+        rsLogTo(id, 'info', '⚠️ Ejecución cancelada por el usuario');
+        if (resolve) resolve(partial);
+        invoke('kill_shell_session', { sessionId: id }).catch(() => {});
+    }
+
+    // ── Stream done ─────────────────────────────────────────────────────────
+    function rsStreamDone(id, exitCode = null, durationMs = null) {
+        const s = getShell(id);
+        if (!s || !s.isStreaming) return;
+        const finalOut = s.streamOut || '';
+        if (finalOut.trim()) rsLogTo(id, 'out', finalOut, { exitCode, durationMs });
+        // Log to audit trail
+        const lastCmd = [...(s.history || [])].reverse().find(h => h.type === 'cmd' || h.type === 'lucy-in');
+        if (lastCmd) {
+            logAuditEntry({
+                hostId: s.host?.id || 'unknown',
+                hostName: s.host?.name || 'Unknown',
+                command: lastCmd.text.replace(/^\$ /, ''),
+                source: lastCmd.type === 'lucy-in' ? 'ai' : 'manual',
+                exitCode, durationMs,
+                outputPreview: finalOut.substring(0, 500),
+                user: lucyConfig?.name || '',
+            });
+        }
+        s.streamOut = '';
+        s.isStreaming = false;
+        s.running = false;
+        s.waitingForInput = false;
+        s.promptHint = '';
+        s.interactiveInput = '';
+        rshellSessions = [...rshellSessions];
+        if (s._streamResolve) {
+            const resolve = s._streamResolve;
+            s._streamResolve = null;
+            resolve(finalOut);
+        }
+        rsScrollBottom(id);
+    }
+
+    // ── Send interactive input ──────────────────────────────────────────────
+    async function rsEnviarInput(id) {
+        const s = getShell(id);
+        if (!s || !s.waitingForInput) return;
+        const input = s.interactiveInput;
+        s.waitingForInput = false;
+        s.interactiveInput = '';
+        const display = s.promptIsPassword ? '••••••\n' : input + '\n';
+        s.streamOut = (s.streamOut || '') + display;
+        rshellSessions = [...rshellSessions];
+        try {
+            await invoke('send_shell_input', { sessionId: id, input });
+        } catch(e) {
+            rsLogTo(id, 'err', `Error enviando input: ${e}`);
+        }
+    }
+
+    // ── Command Guard — pre-execution risk check ─────────────────────────
+    function guardCheck(cmd, hostType, hostName, source, action) {
+        if (!$guardConfig.enabled) { action(); return; }
+        if (source === 'ai'        && !$guardConfig.interceptAI)        { action(); return; }
+        if (source === 'broadcast'  && !$guardConfig.interceptBroadcast) { action(); return; }
+        const assessment = analyzeCommand(cmd, hostType || 'linux', isEN);
+        if (shouldBlock(assessment, $guardConfig.threshold)) {
+            guardAssessment    = assessment;
+            guardHostName      = hostName || 'local';
+            guardSource        = source;
+            guardPendingAction = action;
+        } else {
+            action();
+        }
+    }
+
+    function guardConfirm() {
+        const action = guardPendingAction;
+        guardAssessment = null;
+        guardPendingAction = null;
+        if (action) action();
+    }
+
+    function guardCancel() {
+        const shellId = activeShellId;
+        if (shellId && guardAssessment) {
+            rsLogTo(shellId, 'info', `🛡️ ${isEN ? 'Command blocked by guard' : 'Comando bloqueado por guardia'}: ${guardAssessment.command.substring(0, 80)}`);
+        }
+        guardAssessment = null;
+        guardPendingAction = null;
+    }
+
+    // ── Turn-Loop orchestrator ────────────────────────────────────────────
+    function tlStop(shellId) {
+        const tl = turnLoops[shellId];
+        if (tl) {
+            tl.active = false;
+            tl.phase = 'failed';
+            tl.summary = isEN ? 'Stopped by user' : 'Detenido por el usuario';
+            turnLoops = { ...turnLoops };
+            rsLogTo(shellId, 'info', `🔄 Turn-Loop ${isEN ? 'stopped' : 'detenido'}`);
+        }
+    }
+
+    async function tlAskLucy(shellId, prompt, context) {
+        const s = getShell(shellId);
+        return invoke('ask_lucy', {
+            prompt, context,
+            userName: lucyConfig.name,
+            runbooksDir: lucyConfig.runbooksDir || null,
+            model: selectedModel || 'gemini-2.5-flash',
+            images: null, lang: userLang, hostsJson: null
+        });
+    }
+
+    function tlBootCtx(shellId) {
+        const s = getShell(shellId);
+        if (!s) return '';
+        const b = s.bootstrap;
+        return b ? [
+            b.os ? `OS: ${b.os}` : '', b.kernel ? `Kernel: ${b.kernel}` : '',
+            b.user ? `User: ${b.user}` : '', b.tools ? `Tools: ${b.tools}` : '',
+        ].filter(Boolean).join(', ') : '';
+    }
+
+    function tlCleanCmd(cmd, hostType) {
+        if (hostType !== 'linux') {
+            const icM = cmd.match(/Invoke-Command\s+(?:-\S+\s+\S+\s+)*-ScriptBlock\s*\{([\s\S]+)\}/i);
+            if (icM) cmd = icM[1].trim();
+        } else {
+            if (/^ssh\s/i.test(cmd)) {
+                const sshM = cmd.match(/ssh(?:\s+-\S+\s+\S+)*\s+\S+@\S+\s+["']?([\s\S]+?)["']?\s*$/i);
+                if (sshM) cmd = sshM[1].trim();
+            }
+        }
+        return cmd;
+    }
+
+    async function tlRunTurnLoop(shellId, problem) {
+        const s = getShell(shellId);
+        if (!s) return;
+        const tl = createTurnLoop(problem, s.host.name, s.host.type === 'linux' ? 'Linux' : 'Windows');
+        turnLoops = { ...turnLoops, [shellId]: tl };
+        rsLogTo(shellId, 'info', `🔄 Turn-Loop ${isEN ? 'started' : 'iniciado'}: "${problem.substring(0, 80)}"`);
+
+        while (tl.active && tl.iteration <= tl.maxIterations) {
+            turnLoops = { ...turnLoops };
+
+            // ── PHASE 1: DIAGNOSE ──
+            tl.phase = 'diagnose';
+            turnLoops = { ...turnLoops };
+            rsLogTo(shellId, 'lucy-out', `🔍 **Turn-Loop [${tl.iteration}/${tl.maxIterations}]** — ${isEN ? 'Diagnosing...' : 'Diagnosticando...'}`);
+
+            let diagResp;
+            try {
+                diagResp = await tlAskLucy(shellId, getDiagnosePrompt(tl, tlBootCtx(shellId), isEN), '');
+            } catch(e) { rsLogTo(shellId, 'err', `Turn-Loop diag error: ${e}`); tl.phase = 'failed'; tl.active = false; break; }
+
+            const diagCmd = extractCommand(diagResp);
+            const diagClean = cleanAiResponse(diagResp);
+            if (diagClean) rsLogTo(shellId, 'lucy-out', diagClean);
+
+            if (!diagCmd) {
+                rsLogTo(shellId, 'info', `🔄 ${isEN ? 'No diagnostic command generated' : 'Sin comando diagnostico generado'}`);
+                tl.steps.push({ phase: 'diagnose', timestamp: Date.now(), aiResponse: diagClean });
+                tl.phase = 'failed'; tl.active = false; break;
+            }
+
+            const cleanDiagCmd = tlCleanCmd(diagCmd, s.host.type);
+            rsLogTo(shellId, 'cmd', `$ ${cleanDiagCmd}`);
+            let diagOut = '';
+            try { diagOut = await rsRunStreaming(shellId, cleanDiagCmd); } catch(e) { diagOut = String(e); }
+            tl.steps.push({ phase: 'diagnose', timestamp: Date.now(), command: cleanDiagCmd, output: diagOut, aiResponse: diagClean });
+            if (!tl.active) break;
+
+            // ── PHASE 2: ANALYZE ──
+            tl.phase = 'analyze';
+            turnLoops = { ...turnLoops };
+            rsLogTo(shellId, 'lucy-out', `🧠 ${isEN ? 'Analyzing results...' : 'Analizando resultados...'}`);
+
+            let analyzeResp;
+            try {
+                analyzeResp = await tlAskLucy(shellId, getAnalyzePrompt(tl, diagOut, isEN), '');
+            } catch(e) { rsLogTo(shellId, 'err', `Turn-Loop analyze error: ${e}`); tl.phase = 'failed'; tl.active = false; break; }
+
+            const analyzeClean = cleanAiResponse(analyzeResp);
+            rsLogTo(shellId, 'lucy-out', analyzeClean);
+            tl.steps.push({ phase: 'analyze', timestamp: Date.now(), aiResponse: analyzeClean });
+
+            const verdict1 = extractVerdict(analyzeResp);
+            if (verdict1 === 'NO_ISSUE') {
+                tl.phase = 'done'; tl.resolved = true; tl.active = false;
+                tl.summary = isEN ? 'No issue detected.' : 'No se detecto problema.';
+                rsLogTo(shellId, 'info', `🎉 Turn-Loop: ${tl.summary}`);
+                break;
+            }
+            if (verdict1 === 'NEEDS_MORE_DIAG') {
+                // Run another diagnostic in same iteration
+                rsLogTo(shellId, 'info', `🔍 ${isEN ? 'Running additional diagnosis...' : 'Ejecutando diagnostico adicional...'}`);
+                tl.phase = 'diagnose';
+                turnLoops = { ...turnLoops };
+                let diag2Resp;
+                try { diag2Resp = await tlAskLucy(shellId, getDiagnosePrompt(tl, tlBootCtx(shellId), isEN), ''); } catch(e) { break; }
+                const diag2Cmd = extractCommand(diag2Resp);
+                const diag2Clean = cleanAiResponse(diag2Resp);
+                if (diag2Clean) rsLogTo(shellId, 'lucy-out', diag2Clean);
+                if (diag2Cmd) {
+                    const cleanDiag2 = tlCleanCmd(diag2Cmd, s.host.type);
+                    rsLogTo(shellId, 'cmd', `$ ${cleanDiag2}`);
+                    let d2Out = '';
+                    try { d2Out = await rsRunStreaming(shellId, cleanDiag2); } catch(e) { d2Out = String(e); }
+                    tl.steps.push({ phase: 'diagnose', timestamp: Date.now(), command: cleanDiag2, output: d2Out, aiResponse: diag2Clean });
+                    diagOut += '\n' + d2Out;
+                }
+                if (!tl.active) break;
+            }
+
+            // ── PHASE 3: PROPOSE ──
+            tl.phase = 'propose';
+            turnLoops = { ...turnLoops };
+            rsLogTo(shellId, 'lucy-out', `💡 ${isEN ? 'Proposing fix...' : 'Proponiendo solucion...'}`);
+
+            let proposeResp;
+            try {
+                proposeResp = await tlAskLucy(shellId, getProposePrompt(tl, isEN), '');
+            } catch(e) { rsLogTo(shellId, 'err', `Turn-Loop propose error: ${e}`); tl.phase = 'failed'; tl.active = false; break; }
+
+            const proposeCmd = extractCommand(proposeResp);
+            const proposeClean = cleanAiResponse(proposeResp);
+            if (proposeClean) rsLogTo(shellId, 'lucy-out', proposeClean);
+            tl.steps.push({ phase: 'propose', timestamp: Date.now(), command: proposeCmd, aiResponse: proposeClean });
+
+            if (!proposeCmd) {
+                rsLogTo(shellId, 'info', `🔄 ${isEN ? 'No fix command proposed' : 'Sin comando de fix propuesto'}`);
+                tl.phase = 'failed'; tl.active = false; break;
+            }
+            if (!tl.active) break;
+
+            // ── PHASE 4: APPLY (with guard!) ──
+            tl.phase = 'apply';
+            turnLoops = { ...turnLoops };
+            const cleanFixCmd = tlCleanCmd(proposeCmd, s.host.type);
+
+            let fixApplied = false;
+            let fixOut = '';
+            await new Promise((resolve) => {
+                guardCheck(cleanFixCmd, s.host.type, s.host.name, 'ai', async () => {
+                    rsLogTo(shellId, 'cmd', `$ ${cleanFixCmd}`);
+                    try {
+                        fixOut = await rsRunStreaming(shellId, cleanFixCmd);
+                        fixApplied = true;
+                    } catch(e) { fixOut = String(e); }
+                    resolve();
+                });
+                // If guard blocks and user cancels, we still need to resolve
+                const checkCancel = setInterval(() => {
+                    if (!guardAssessment && !fixApplied) {
+                        clearInterval(checkCancel);
+                        resolve();
+                    }
+                }, 500);
+            });
+
+            if (!fixApplied) {
+                rsLogTo(shellId, 'info', `🛡️ ${isEN ? 'Fix was blocked/cancelled. Stopping loop.' : 'Fix bloqueado/cancelado. Deteniendo loop.'}`);
+                tl.steps.push({ phase: 'apply', timestamp: Date.now(), command: cleanFixCmd, aiResponse: isEN ? 'Blocked by guard' : 'Bloqueado por guardia' });
+                tl.phase = 'failed'; tl.active = false; break;
+            }
+            tl.steps.push({ phase: 'apply', timestamp: Date.now(), command: cleanFixCmd, output: fixOut });
+            if (!tl.active) break;
+
+            // ── PHASE 5: VERIFY ──
+            tl.phase = 'verify';
+            turnLoops = { ...turnLoops };
+            rsLogTo(shellId, 'lucy-out', `✅ ${isEN ? 'Verifying fix...' : 'Verificando solucion...'}`);
+
+            let verifyResp;
+            try {
+                verifyResp = await tlAskLucy(shellId, getVerifyPrompt(tl, fixOut, isEN), '');
+            } catch(e) { rsLogTo(shellId, 'err', `Turn-Loop verify error: ${e}`); tl.phase = 'failed'; tl.active = false; break; }
+
+            const verifyCmd = extractCommand(verifyResp);
+            const verifyClean = cleanAiResponse(verifyResp);
+            if (verifyClean) rsLogTo(shellId, 'lucy-out', verifyClean);
+
+            let verifyOut = '';
+            if (verifyCmd) {
+                const cleanVerify = tlCleanCmd(verifyCmd, s.host.type);
+                rsLogTo(shellId, 'cmd', `$ ${cleanVerify}`);
+                try { verifyOut = await rsRunStreaming(shellId, cleanVerify); } catch(e) { verifyOut = String(e); }
+                tl.steps.push({ phase: 'verify', timestamp: Date.now(), command: cleanVerify, output: verifyOut, aiResponse: verifyClean });
+            } else {
+                tl.steps.push({ phase: 'verify', timestamp: Date.now(), aiResponse: verifyClean });
+            }
+            if (!tl.active) break;
+
+            // ── PHASE 6: RESULT CHECK ──
+            let resultResp;
+            try {
+                resultResp = await tlAskLucy(shellId, getResultPrompt(tl, verifyOut || fixOut, isEN), '');
+            } catch(e) { tl.phase = 'failed'; tl.active = false; break; }
+
+            const resultClean = cleanAiResponse(resultResp);
+            rsLogTo(shellId, 'lucy-out', resultClean);
+
+            const verdict2 = extractVerdict(resultResp);
+            if (verdict2 === 'RESOLVED') {
+                tl.phase = 'done'; tl.resolved = true; tl.active = false;
+                tl.summary = resultClean;
+                rsLogTo(shellId, 'info', `🎉 Turn-Loop: ${isEN ? 'Problem resolved!' : 'Problema resuelto!'}`);
+                break;
+            } else if (verdict2 === 'PARTIAL') {
+                tl.summary = resultClean;
+                tl.phase = 'done'; tl.resolved = false; tl.active = false;
+                rsLogTo(shellId, 'info', `⚠️ Turn-Loop: ${isEN ? 'Partially resolved. Manual intervention may be needed.' : 'Parcialmente resuelto. Puede necesitar intervencion manual.'}`);
+                break;
+            } else {
+                // NOT_RESOLVED — loop again
+                tl.iteration++;
+                if (tl.iteration > tl.maxIterations) {
+                    tl.phase = 'failed'; tl.active = false;
+                    tl.summary = isEN ? 'Max iterations reached without full resolution.' : 'Iteraciones maximas alcanzadas sin resolucion completa.';
+                    rsLogTo(shellId, 'info', `⚠️ Turn-Loop: ${tl.summary}`);
+                } else {
+                    rsLogTo(shellId, 'info', `🔄 ${isEN ? 'Not resolved. Starting iteration' : 'No resuelto. Iniciando iteracion'} ${tl.iteration}...`);
+                }
+            }
+        }
+        turnLoops = { ...turnLoops };
+    }
+
+    // ── Skill Orchestrator ─────────────────────────────────────────────────
+    async function skRunSkill(shellId, skill, userInput = '') {
+        const s = getShell(shellId);
+        if (!s) return;
+
+        const run = createSkillRun(skill, userInput);
+        skillRuns = { ...skillRuns, [shellId]: run };
+        rsLogTo(shellId, 'info', `📚 ${isEN ? 'Skill started' : 'Skill iniciado'}: ${skill.icon} ${isEN ? skill.nameEN : skill.name}`);
+
+        const bootCtx = tlBootCtx(shellId);
+        const hostType = s.host.type === 'linux' ? 'Linux' : 'Windows';
+
+        for (let i = 0; i < skill.phases.length; i++) {
+            const phase = skill.phases[i];
+            run.currentPhaseIdx = i;
+            run.phaseStatus = 'running';
+            skillRuns = { ...skillRuns };
+
+            rsLogTo(shellId, 'lucy-out', `**[${i + 1}/${skill.phases.length}] ${isEN ? phase.nameEN : phase.name}**`);
+
+            // Build phase prompt and ask AI
+            const prompt = buildPhasePrompt(skill, phase, run, s.host.name, hostType, bootCtx, isEN);
+            let aiResp;
+            try {
+                aiResp = await tlAskLucy(shellId, prompt, '');
+            } catch (e) {
+                rsLogTo(shellId, 'err', `Skill phase error: ${e}`);
+                run.phaseStatus = 'error';
+                run.active = false;
+                skillRuns = { ...skillRuns };
+                return;
+            }
+
+            const cmd = skExtractCommand(aiResp);
+            const verdict = skExtractVerdict(aiResp);
+            const clean = skCleanResponse(aiResp);
+            if (clean) rsLogTo(shellId, 'lucy-out', clean);
+
+            let output = '';
+            if (cmd) {
+                const cleanCmd = tlCleanCmd(cmd, s.host.type);
+                // Use guard for commands
+                let executed = false;
+                await new Promise((resolve) => {
+                    guardCheck(cleanCmd, s.host.type, s.host.name, 'ai', async () => {
+                        rsLogTo(shellId, 'cmd', `$ ${cleanCmd}`);
+                        try {
+                            output = await rsRunStreaming(shellId, cleanCmd);
+                            executed = true;
+                        } catch (e) { output = String(e); executed = true; }
+                        resolve();
+                    });
+                    const check = setInterval(() => {
+                        if (!guardAssessment && !executed) { clearInterval(check); resolve(); }
+                    }, 500);
+                });
+
+                if (!executed) {
+                    rsLogTo(shellId, 'info', `🛡️ ${isEN ? 'Command blocked. Skipping phase.' : 'Comando bloqueado. Saltando fase.'}`);
+                }
+            }
+
+            // Record result
+            run.results.push({
+                phaseId: phase.id,
+                phaseName: isEN ? phase.nameEN : phase.name,
+                command: cmd || undefined,
+                output: output || undefined,
+                aiResponse: clean || undefined,
+                verdict: verdict || undefined,
+                timestamp: Date.now(),
+            });
+
+            run.phaseStatus = 'done';
+            skillRuns = { ...skillRuns };
+
+            if (!run.active) break;
+
+            // If verdict says DONE or ESCALATE, stop
+            if (verdict === 'DONE' || verdict === 'ESCALATE') {
+                rsLogTo(shellId, 'info', verdict === 'DONE'
+                    ? `✅ ${isEN ? 'Skill completed successfully.' : 'Skill completado exitosamente.'}`
+                    : `⚠️ ${isEN ? 'Skill escalated. Manual intervention needed.' : 'Skill escalado. Se necesita intervención manual.'}`);
+                break;
+            }
+        }
+
+        run.active = false;
+        skillRuns = { ...skillRuns };
+        rsLogTo(shellId, 'info', `📚 ${isEN ? 'Skill finished' : 'Skill finalizado'}: ${skill.icon} ${isEN ? skill.nameEN : skill.name}`);
+    }
+
+    function skOpenBrowser(shellId) {
+        skillBrowserShellId = shellId;
+        showSkillBrowser = true;
+    }
+
+    function skOnRun(e) {
+        showSkillBrowser = false;
+        const { skill, userInput } = e.detail;
+        if (skillBrowserShellId) {
+            skRunSkill(skillBrowserShellId, skill, userInput);
+        }
+    }
+
+    // ── Core streaming ──────────────────────────────────────────────────────
+    function rsRunStreaming(id, cmd) {
+        const s = getShell(id);
+        if (!s) return Promise.resolve('');
+        s.running = true;
+        s.isStreaming = true;
+        s.streamOut = '';
+        s.waitingForInput = false;
+        s.promptHint = '';
+        s.interactiveInput = '';
+        rshellSessions = [...rshellSessions];
+        return new Promise((resolve) => {
+            s._streamResolve = resolve;
+            invoke('stream_shell_cmd', {
+                sessionId: id,
+                host: s.host.host, username: s.host.username, command: cmd,
+                hostType: s.host.type,
+                port: s.host.port || (s.host.type === 'linux' ? 22 : 5985),
+                password: s.host.password || null, keyPath: s.host.sshKeyPath || null
+            }).catch(e => {
+                rsLogTo(id, 'err', String(e));
+                const sx = getShell(id);
+                if (sx) { sx.running = false; sx.isStreaming = false; }
+                rshellSessions = [...rshellSessions];
+                if (s._streamResolve) { s._streamResolve(''); s._streamResolve = null; }
+            });
+        });
+    }
+
+    // ── Open remote shell ───────────────────────────────────────────────────
+    async function abrirRShell(h) {
+        const existing = rshellSessions.find(s => s.host.id === h.id);
+        if (existing) {
+            activeShellId = existing.id;
+            existing.minimized = false;
+            rshellSessions = [...rshellSessions];
+            return;
+        }
+        const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => '');
+        const id  = `shell_${h.id}_${Date.now()}`;
+        rshellSessions = [...rshellSessions, {
+            id, host: { ...h, password: pwd },
+            connected: false, history: [],
+            directIn: '', lucyIn: '',
+            running: false, lucyRunning: false, minimized: false,
+            bootstrap: null,
+            streamOut: '',
+            isStreaming: false,
+            waitingForInput: false,
+            promptIsPassword: false,
+            promptHint: '',
+            interactiveInput: '',
+            _streamResolve: null,
+            _unlisten: null,
+            _aiSugg: '',
+            _aiSuggLoading: false,
+            _aiSuggTimer: null,
+            bgTasks: [],
+        }];
+        activeShellId = id;
+
+        const outUnlisten  = await listen(`ssh-out-${id}`,  (e) => rsHandleStreamChunk(id, String(e.payload), false));
+        const errUnlisten  = await listen(`ssh-err-${id}`,  (e) => rsHandleStreamChunk(id, String(e.payload), true));
+        const doneUnlisten = await listen(`ssh-done-${id}`, (e) => {
+            let exitCode = null, durationMs = null;
+            try { const p = JSON.parse(e.payload); exitCode = p.exit_code ?? null; durationMs = p.duration_ms ?? null; } catch {}
+            rsStreamDone(id, exitCode, durationMs);
+        });
+        const sInit = getShell(id);
+        if (sInit) {
+            sInit._unlisten = () => { outUnlisten(); errUnlisten(); doneUnlisten(); };
+            rshellSessions = [...rshellSessions];
+        }
+
+        rsLogTo(id, 'info', `Conectando a ${h.name} (${h.host})...`);
+        const testCmd = h.type === 'linux' ? 'echo "Lucy:OK" && uname -a' : 'echo "Lucy:OK"; $env:OS';
+        try {
+            const out = await invoke('execute_shell_cmd', {
+                host: h.host, username: h.username, command: testCmd,
+                hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985), password: pwd || null, keyPath: h.sshKeyPath||null
+            });
+            const s = getShell(id);
+            if (s) { s.connected = true; rshellSessions = [...rshellSessions]; }
+            rsLogTo(id, 'info', `✓ Conectado a ${h.name} · ${h.type === 'linux' ? 'SSH activo' : 'WinRM'}`);
+            rsLogTo(id, 'out', out.replace('Lucy:OK\n','').trim());
+
+            invoke('nexshell_bootstrap', {
+                host: h.host, username: h.username, hostType: h.type,
+                port: h.port || (h.type === 'linux' ? 22 : 5985),
+                password: pwd || null, keyPath: h.sshKeyPath || null
+            }).then(data => {
+                const sb = getShell(id);
+                if (!sb) return;
+                sb.bootstrap = data;
+                rshellSessions = [...rshellSessions];
+                const env = [];
+                if (data.git_branch) env.push(`🌿 ${data.git_branch}${data.git_dirty ? '*' : ''}`);
+                if (data.k8s_ctx)    env.push(`⎈ ${data.k8s_ctx}`);
+                if (data.docker)     env.push('🐳 Docker');
+                if (data.node_ver)   env.push(`⬡ Node ${data.node_ver}`);
+                if (data.python_venv)env.push(`🐍 ${data.python_venv}`);
+                if (env.length)      rsLogTo(id, 'info', `Entorno: ${env.join(' · ')}`);
+                if (data.tools)      rsLogTo(id, 'info', `Herramientas: ${data.tools}`);
+            }).catch(() => {});
+
+        } catch(e) { rsLogTo(id, 'err', `✗ No se pudo conectar: ${e}`); }
+    }
+
+    // ── Close shell ─────────────────────────────────────────────────────────
+    function cerrarShell(id) {
+        const dying = getShell(id);
+        if (dying?._unlisten) dying._unlisten();
+        if (dying?.isStreaming) invoke('kill_shell_session', { sessionId: id }).catch(() => {});
+        rshellSessions = rshellSessions.filter(s => s.id !== id);
+        if (activeShellId === id) {
+            const otra = rshellSessions.find(s => !s.minimized) || rshellSessions[rshellSessions.length-1];
+            activeShellId = otra?.id || null;
+        }
+    }
+
+    function minimizarShell(id) {
+        const s = getShell(id);
+        if (s) { s.minimized = true; rshellSessions = [...rshellSessions]; }
+    }
+
+    function restaurarShell(id) {
+        const s = getShell(id);
+        if (s) { s.minimized = false; rshellSessions = [...rshellSessions]; }
+        activeShellId = id;
+    }
+
+    // ── Send direct command ─────────────────────────────────────────────────
+    async function rsEnviarDirecto(id) {
+        const s = getShell(id);
+        if (!s) return;
+        const cmd = s.directIn.trim();
+        if (!cmd || s.running || s.isStreaming) return;
+        s.directIn = ''; s._histIdx = undefined;
+        rshellSessions = [...rshellSessions];
+        rsSaveHistory(s.host.id, cmd);
+        guardCheck(cmd, s.host.type, s.host.name, 'manual', async () => {
+            rsLogTo(id, 'cmd', `$ ${cmd}`);
+            await rsRunStreaming(id, cmd);
+        });
+    }
+
+    // ── Send Lucy query ─────────────────────────────────────────────────────
+    async function rsEnviarLucy(id) {
+        const s = getShell(id);
+        if (!s) return;
+        const raw = s.lucyIn.trim();
+        if (!raw || s.lucyRunning) return;
+        s.lucyIn = ''; s.lucyRunning = true;
+        rshellSessions = [...rshellSessions];
+        rsLogTo(id, 'lucy-in', raw);
+
+        // ── /fix trigger → start Turn-Loop ──
+        const fixMatch = raw.match(/^\/fix\s+(.+)$/i);
+        if (fixMatch) {
+            const problem = fixMatch[1].trim();
+            s.lucyRunning = false; rshellSessions = [...rshellSessions];
+            await tlRunTurnLoop(id, problem);
+            return;
+        }
+        const b = s.bootstrap;
+        const bootCtx = b ? [
+            b.os       ? `OS: ${b.os}`                                              : '',
+            b.kernel   ? `Kernel: ${b.kernel}`                                      : '',
+            b.user     ? `User: ${b.user}`                                          : '',
+            b.cwd      ? `CWD: ${b.cwd}`                                            : '',
+            b.git_branch ? `Git branch: ${b.git_branch}${b.git_dirty ? ' (dirty)' : ''}` : '',
+            b.k8s_ctx  ? `Kubernetes context: ${b.k8s_ctx}`                         : '',
+            b.docker   ? 'Docker: available'                                         : '',
+            b.node_ver ? `Node.js: v${b.node_ver}`                                  : '',
+            b.python_venv ? `Python venv: ${b.python_venv}`                         : '',
+            b.tools    ? `Installed tools: ${b.tools}`                              : '',
+        ].filter(Boolean).join(', ') : '';
+        const hostCtx = `ACTIVE REMOTE SHELL — the WinRM/SSH session to "${s.host.name}" is ALREADY ESTABLISHED. Type: ${s.host.type === 'linux' ? 'Linux (SSH)' : 'Windows (WinRM)'}. IP: ${s.host.host}. User: ${s.host.username}.${bootCtx ? '\nHost context: ' + bootCtx : ''}\nCRITICAL RULES FOR THIS CONTEXT:\n1. ALWAYS reason first with a Markdown blockquote (> 💭 Razonamiento:) and THEN wrap commands in <EXECUTE></EXECUTE> — even for informational requests like "is X installed?" or "check Y". The execution engine will run the command and show output.\n2. Generate ONLY raw commands inside <EXECUTE> — NO Invoke-Command, NO -ComputerName, NO -Credential, NO ssh wrappers.\n3. If the user asks a question about the remote host, answer with a command that retrieves the answer (<EXECUTE>), NOT with an explanation.\n4. OVERRIDE RULE 8, RULE 9 and RULE 0 for this context — always use <EXECUTE>.\nRecent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${h.text.substring(0,100)}`).join('\n')}`;
+        try {
+            let enrichedCtx = hostCtx;
+            const rsUrlMatches = [...raw.matchAll(/https?:\/\/[^\s"'<>()]+/gi)];
+            if (rsUrlMatches.length > 0) {
+                rsLogTo(id, 'info', `🌐 Leyendo ${rsUrlMatches.length} URL${rsUrlMatches.length>1?'s':''}…`);
+                const rsUrls = rsUrlMatches.slice(0,2).map(m=>m[0]);
+                const rsFetched = await Promise.allSettled(rsUrls.map(u=>invoke('fetch_url_content',{url:u})));
+                rsFetched.forEach((r,i) => {
+                    if (r.status==='fulfilled' && r.value)
+                        enrichedCtx += `\n\n--- CONTENIDO WEB: ${rsUrls[i]} ---\n${r.value}\n--- FIN CONTENIDO WEB ---`;
+                });
+            }
+            const resp = await invoke('ask_lucy', {
+                prompt: raw, context: enrichedCtx, userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
+                model: selectedModel || 'gemini-2.5-flash',
+                images: null, lang: userLang, hostsJson: JSON.stringify(hosts)
+            });
+            const execM = resp.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i)
+                       || resp.match(/```(?:powershell|ps1|batch|cmd|bash|sh)?\s*\n([\s\S]*?)\n```/i);
+            if (execM) {
+                let cmd = execM[1].trim();
+                if (s.host.type !== 'linux') {
+                    const icM = cmd.match(/Invoke-Command\s+(?:-\S+\s+\S+\s+)*-ScriptBlock\s*\{([\s\S]+)\}/i);
+                    if (icM) cmd = icM[1].trim();
+                    const npsM = cmd.match(/Invoke-Command\s+-Session\s+\S+\s+-ScriptBlock\s*\{([\s\S]+)\}/i);
+                    if (npsM) cmd = npsM[1].trim();
+                } else {
+                    if (/^ssh\s/i.test(cmd)) {
+                        const sshM = cmd.match(/ssh(?:\s+-\S+\s+\S+)*\s+\S+@\S+\s+["']?([\s\S]+?)["']?\s*$/i);
+                        if (sshM) cmd = sshM[1].trim();
+                    }
+                }
+                const clean = resp.replace(/<EXECUTE>[\s\S]*?(?:<\/EXECUTE>|$)/gi, '').replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '').trim();
+                if (clean) rsLogTo(id, 'lucy-out', clean);
+                const aiExec = async () => {
+                    rsLogTo(id, 'cmd', `$ ${cmd}`);
+                    try {
+                        const out = await rsRunStreaming(id, cmd);
+                        if (out.trim()) {
+                            const analysis = await invoke('ask_lucy', {
+                                prompt: `[SYSTEM ANALYSIS — análisis detallado del resultado]\nHost: ${s.host.name} (${s.host.type === 'linux' ? 'Linux' : 'Windows'})\nComando ejecutado: \`${cmd.substring(0,300)}\`\nOutput completo:\n\`\`\`\n${out.substring(0,4000)}\n\`\`\`\n\nAnaliza el resultado detalladamente:\n1. ¿Se ejecutó correctamente?\n2. ¿Qué información relevante muestra?\n3. ¿Hay errores, advertencias o situaciones que requieran atención?\n4. Si aplica, sugiere el siguiente paso.\nNO uses <EXECUTE>. Responde en Markdown.`,
+                                context: '', userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
+                                model: selectedModel || 'gemini-2.5-flash',
+                                images: null, lang: userLang, hostsJson: null
+                            });
+                            rsLogTo(id, 'lucy-out', analysis.replace(/<[^>]*>/g,''));
+                        }
+                    } catch(e) { rsLogTo(id, 'err', String(e)); }
+                };
+                guardCheck(cmd, s.host.type, s.host.name, 'ai', aiExec);
+            } else { rsLogTo(id, 'lucy-out', resp.replace(/<[^>]*>/g,'').trim()); }
+        } catch(e) { rsLogTo(id, 'err', `Lucy error: ${e}`); }
+        const s2 = getShell(id);
+        if (s2) { s2.lucyRunning = false; rshellSessions = [...rshellSessions]; }
+        rsScrollBottom(id);
+    }
+
+    // ── Autocomplete suggestions ────────────────────────────────────────────
+    const RS_SUGGESTIONS = {
+        linux:   ['systemctl restart ','systemctl status ','journalctl -u ','journalctl -f','df -h','free -m','top -bn1','ps aux | grep ','tail -f ','cat /var/log/','netstat -tulnp','ss -tulnp','who','uptime','uname -a','ls -la','find / -name ','chmod +x ','scp ','apt install ','yum install ','dnf install '],
+        windows: ['Get-Service ','Stop-Service ','Start-Service ','Restart-Service ','Get-EventLog -LogName System -Newest 20','Get-Process | Sort CPU -Desc | Select -First 10','Get-Disk','Get-NetAdapter','Get-NetIPAddress','Get-WindowsUpdate','Get-HotFix','Test-NetConnection ','Invoke-Command ','Get-ChildItem ','Remove-Item ','Copy-Item ','Get-Content ','Set-Content ','Get-WinEvent -LogName Security -MaxEvents 20']
+    };
+
+    function rsSuggestion(id) {
+        const s = getShell(id);
+        if (!s || !s.directIn) return '';
+        const input = s.directIn.toLowerCase();
+        const bootTools = s.bootstrap?.tools
+            ? s.bootstrap.tools.split(',').filter(Boolean).map(t => t.trim() + ' ')
+            : [];
+        const staticList = RS_SUGGESTIONS[s.host.type] || [];
+        const list = [...bootTools, ...staticList];
+        return list.find(c => c.toLowerCase().startsWith(input) && c.toLowerCase() !== input) || '';
+    }
+
+    function rsAcceptSuggestion(e, id) {
+        if (e.key !== 'Tab') return;
+        const s = getShell(id);
+        if (!s) return;
+        const sugg = rsSuggestion(id) || s._aiSugg;
+        if (!sugg) return;
+        e.preventDefault();
+        s.directIn = sugg;
+        s._aiSugg = ''; s._aiSuggLoading = false;
+        if (s._aiSuggTimer) { clearTimeout(s._aiSuggTimer); s._aiSuggTimer = null; }
+        rshellSessions = [...rshellSessions];
+    }
+
+    // ── Persistent history per host ─────────────────────────────────────────
+    function rsSaveHistory(hostId, cmd) {
+        const key = `lucy_rsh_${hostId}`;
+        try {
+            const hist = JSON.parse(localStorage.getItem(key) || '[]');
+            const filtered = hist.filter(c => c !== cmd);
+            filtered.push(cmd);
+            localStorage.setItem(key, JSON.stringify(filtered.slice(-100)));
+        } catch(e) {}
+    }
+
+    function rsGetHistory(hostId) {
+        try { return JSON.parse(localStorage.getItem(`lucy_rsh_${hostId}`) || '[]'); } catch(e) { return []; }
+    }
+
+    function rsKeyDirect(e, id) {
+        const s = getShell(id);
+        if (!s) return;
+        if (e.key === 'Tab') { rsAcceptSuggestion(e, id); return; }
+        if (e.key === 'Enter' && e.ctrlKey) {
+            e.preventDefault();
+            const cmd = s.directIn.trim();
+            if (cmd && !s.isStreaming) { rsSaveHistory(s.host.id, cmd); rsRunBackground(id, cmd); }
+            return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!s.isStreaming) rsEnviarDirecto(id); return; }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const hist = rsGetHistory(s.host.id);
+            if (!hist.length) return;
+            if (s._histIdx === undefined) s._histIdx = hist.length;
+            s._histIdx = e.key === 'ArrowUp'
+                ? Math.max(0, s._histIdx - 1)
+                : Math.min(hist.length, s._histIdx + 1);
+            s.directIn = s._histIdx === hist.length ? '' : hist[s._histIdx];
+            rshellSessions = [...rshellSessions];
+        } else {
+            s._histIdx = undefined;
+        }
+    }
+
+    function rsKeyLucy(e, id) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            rsEnviarLucy(id);
+            if (e.target) { e.target.style.height = 'auto'; }
+        }
+    }
+
+    // ── AI ghost text ───────────────────────────────────────────────────────
+    function rsHandleDirectInput(id) {
+        const s = getShell(id);
+        if (!s) return;
+        if (s._aiSugg) { s._aiSugg = ''; }
+        if (s._aiSuggTimer) { clearTimeout(s._aiSuggTimer); s._aiSuggTimer = null; }
+        const input = s.directIn.trim();
+        if (input.length >= 3 && !rsSuggestion(id)) {
+            s._aiSuggTimer = setTimeout(() => rsAISuggest(id), 250); // ROI inmenso: Timeout reducido de 520 a 250ms para UX fluida Warp-style
+        }
+        rshellSessions = [...rshellSessions];
+    }
+
+    async function rsAISuggest(id) {
+        const s = getShell(id);
+        if (!s || s.isStreaming || s.running || !s.directIn.trim()) return;
+        const partial = s.directIn.trim();
+        if (partial.length < 3) return;
+        s._aiSuggLoading = true;
+        rshellSessions = [...rshellSessions];
+        const b = s.bootstrap;
+        const ctx = b
+            ? `OS: ${b.os || s.host.type}, CWD: ${b.cwd || '/'}, shell: ${b.shell || 'bash'}, tools: ${b.tools || 'standard'}`
+            : `type: ${s.host.type}`;
+        try {
+            const resp = await invoke('ask_lucy', {
+                prompt: `[SHELL AUTOCOMPLETE — one line only]\nHost context: ${ctx}.\nComplete this partial command: \`${partial}\`\nRules: respond with ONLY the completed command. No explanation, no markdown, no backticks. Single line.`,
+                context: '', userName: lucyConfig?.name || 'admin',
+                model: 'gemini-2.5-flash',
+                images: null, lang: 'en', hostsJson: null
+            });
+            const completion = resp.trim().replace(/^`+|`+$/g, '').split('\n')[0].trim();
+            if (completion && completion.toLowerCase().startsWith(partial.toLowerCase())) {
+                const sx = getShell(id);
+                if (sx && sx.directIn.trim() === partial) {
+                    sx._aiSugg = completion;
+                    rshellSessions = [...rshellSessions];
+                }
+            }
+        } catch { /* AI suggestion is optional */ }
+        const sx = getShell(id);
+        if (sx) { sx._aiSuggLoading = false; rshellSessions = [...rshellSessions]; }
+    }
+
+    // ── Background tasks ────────────────────────────────────────────────────
+    async function rsRunBackground(shellId, cmd) {
+        const s = getShell(shellId);
+        if (!s || !cmd.trim()) return;
+        const bgId = `bg_${shellId}_${Date.now()}`;
+        const task = { id: bgId, cmd, startTime: Date.now(), streamOut: '', done: false, exitCode: null, durationMs: null };
+        s.bgTasks = [...s.bgTasks, task];
+        s.directIn = '';
+        rshellSessions = [...rshellSessions];
+        rsLogTo(shellId, 'info', `⏳ Background iniciado: ${cmd}`);
+
+        const outUl  = await listen(`ssh-out-${bgId}`,  (e) => {
+            const t = getShell(shellId)?.bgTasks?.find(t => t.id === bgId);
+            if (t) { t.streamOut += String(e.payload); rshellSessions = [...rshellSessions]; }
+        });
+        const errUl  = await listen(`ssh-err-${bgId}`,  (e) => {
+            const t = getShell(shellId)?.bgTasks?.find(t => t.id === bgId);
+            if (t) { t.streamOut += String(e.payload); rshellSessions = [...rshellSessions]; }
+        });
+        const doneUl = await listen(`ssh-done-${bgId}`, (e) => {
+            let exitCode = null, durationMs = null;
+            try { const p = JSON.parse(e.payload); exitCode = p.exit_code; durationMs = p.duration_ms; } catch {}
+            outUl(); errUl(); doneUl();
+            const sx = getShell(shellId);
+            const t  = sx?.bgTasks?.find(t => t.id === bgId);
+            if (t) { t.done = true; t.exitCode = exitCode; t.durationMs = durationMs; }
+            const dur = durationMs != null ? (durationMs / 1000).toFixed(1) + 's' : '';
+            const ok  = exitCode === 0;
+            rsLogTo(shellId, ok ? 'info' : 'err',
+                `${ok ? '✅' : '✗'} Background completado: ${cmd.substring(0, 60)}${dur ? ' (' + dur + ')' : ''}`);
+            if (t?.streamOut?.trim()) rsLogTo(shellId, 'out', t.streamOut.trim(), { exitCode, durationMs });
+            toast(`${ok ? '✅' : '⚠️'} BG: ${cmd.substring(0, 35)}${dur ? ' · ' + dur : ''}`, ok ? 'info' : 'warn');
+            if (sx) { sx.bgTasks = sx.bgTasks.filter(bt => bt.id !== bgId); rshellSessions = [...rshellSessions]; }
+        });
+
+        invoke('stream_shell_cmd', {
+            sessionId: bgId,
+            host: s.host.host, username: s.host.username, command: cmd,
+            hostType: s.host.type,
+            port: s.host.port || (s.host.type === 'linux' ? 22 : 5985),
+            password: s.host.password || null, keyPath: s.host.sshKeyPath || null
+        }).catch(err => {
+            outUl(); errUl(); doneUl();
+            rsLogTo(shellId, 'err', `BG error: ${err}`);
+            const sx = getShell(shellId);
+            if (sx) { sx.bgTasks = sx.bgTasks.filter(bt => bt.id !== bgId); rshellSessions = [...rshellSessions]; }
+        });
+    }
+
+    // ── Broadcast ───────────────────────────────────────────────────────────
+    function abrirBroadcast(shellId) {
+        broadcastShellId  = shellId;
+        broadcastCmd      = '';
+        broadcastSelected = new Set(hosts.filter(h => h.id !== null).map(h => h.id).slice(0, 3));
+        broadcastResults  = [];
+        broadcastRunning  = false;
+        showBroadcast     = true;
+    }
+
+    async function runBroadcast() {
+        if (!broadcastCmd.trim() || broadcastSelected.size === 0 || broadcastRunning) return;
+        // Guard check for broadcast — uses first target's type for analysis
+        const firstTarget = hosts.find(h => broadcastSelected.has(h.id));
+        const bcExec = async () => { await _runBroadcastInner(); };
+        guardCheck(broadcastCmd, firstTarget?.type || 'linux', `${broadcastSelected.size} hosts`, 'broadcast', bcExec);
+    }
+
+    async function _runBroadcastInner() {
+        broadcastRunning = true;
+        broadcastResults = [];
+        const targets = hosts.filter(h => broadcastSelected.has(h.id));
+        const jobs = targets.map(async (h) => {
+            const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => '');
+            const t0  = Date.now();
+            try {
+                const out = await invoke('execute_shell_cmd', {
+                    host: h.host, username: h.username, command: broadcastCmd,
+                    hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
+                    password: pwd || null, keyPath: h.sshKeyPath || null
+                });
+                return { hostName: h.name, hostType: h.type, output: out.trim(), exitCode: 0, durationMs: Date.now() - t0, error: null };
+            } catch(e) {
+                return { hostName: h.name, hostType: h.type, output: '', exitCode: 1, durationMs: Date.now() - t0, error: String(e) };
+            }
+        });
+        broadcastResults = await Promise.all(jobs);
+        broadcastRunning = false;
+        const s = getShell(broadcastShellId);
+        if (s) {
+            const ok = broadcastResults.filter(r => r.exitCode === 0).length;
+            rsLogTo(broadcastShellId, 'info',
+                `📡 Broadcast completado: ${ok}/${broadcastResults.length} hosts OK — "${broadcastCmd.substring(0,50)}"`);
+        }
+    }
+
+    // ── Playbooks ───────────────────────────────────────────────────────────
+    function rsGetPlaybooks(hostId) {
+        try { return JSON.parse(localStorage.getItem(`lucy_pb_${hostId}`) || '[]'); } catch(e) { return []; }
+    }
+
+    function rsSavePlaybook(hostId, pb) {
+        const pbs = rsGetPlaybooks(hostId).filter(p => p.id !== pb.id);
+        pbs.push(pb);
+        localStorage.setItem(`lucy_pb_${hostId}`, JSON.stringify(pbs));
+    }
+
+    function rsDeletePlaybook(hostId, pbId) {
+        const pbs = rsGetPlaybooks(hostId).filter(p => p.id !== pbId);
+        localStorage.setItem(`lucy_pb_${hostId}`, JSON.stringify(pbs));
+        rshellSessions = [...rshellSessions];
+    }
+
+    async function rsRunPlaybook(shellId, pb) {
+        showPlaybookModal = false;
+        const cmds = pb.commands.filter(c => c.trim());
+        rsLogTo(shellId, 'info', `▶ Playbook: ${pb.name} (${cmds.length} comandos)`);
+        for (const cmd of cmds) {
+            await rsEnviarDirectoCmd(shellId, cmd);
+        }
+    }
+
+    async function rsEnviarDirectoCmd(id, cmd) {
+        const s = getShell(id);
+        if (!s) return;
+        return new Promise((resolve) => {
+            guardCheck(cmd, s.host.type, s.host.name, 'playbook', async () => {
+                rsLogTo(id, 'cmd', `$ ${cmd}`);
+                rsSaveHistory(s.host.id, cmd);
+                await rsRunStreaming(id, cmd);
+                resolve();
+            });
+        });
+    }
+
+    function rsGuardarPlaybook() {
+        const s = getShell(playbookShellId);
+        if (!s || !pbForm.name.trim()) return;
+        const pb = {
+            id: Date.now().toString(),
+            name: pbForm.name.trim(),
+            hostId: s.host.id,
+            commands: pbForm.commands.split('\n').map(c => c.trim()).filter(Boolean)
+        };
+        rsSavePlaybook(s.host.id, pb);
+        showPlaybookModal = false;
+        pbForm = { name: '', commands: '' };
+        rshellSessions = [...rshellSessions];
+    }
+
+    // ── File transfer ───────────────────────────────────────────────────────
+    async function rsPickFile() {
+        try {
+            const path = await invoke('pick_file_path');
+            if (path && typeof path === 'string' && path.trim()) {
+                ftLocalPath = path;
+            }
+        } catch(e) {
+            console.error('pick_file_path error:', e);
+        }
+    }
+
+    async function rsEjecutarTransferencia() {
+        const s = getShell(ftShellId);
+        if (!s || !ftLocalPath || !ftRemotePath) return;
+        ftRunning = true; ftResult = '';
+        try {
+            let cmd = '';
+            if (s.host.type === 'linux') {
+                if (ftDirection === 'upload') {
+                    cmd = `scp -P ${s.host.port||22} "${ftLocalPath}" ${s.host.username}@${s.host.host}:"${ftRemotePath}"`;
+                } else {
+                    cmd = `scp -P ${s.host.port||22} ${s.host.username}@${s.host.host}:"${ftRemotePath}" "${ftLocalPath}"`;
+                }
+                const out = await invoke('execute_powershell', { script: cmd, forceExecute: false });
+                ftResult = `✓ ${ftDirection === 'upload' ? 'Subido' : 'Descargado'} correctamente`;
+                rsLogTo(ftShellId, 'info', `📁 Transferencia completada: ${ftLocalPath} ↔ ${s.host.host}:${ftRemotePath}`);
+            } else {
+                const ps = ftDirection === 'upload'
+                    ? `Copy-Item -Path "${ftLocalPath}" -Destination "${ftRemotePath}" -ToSession (New-PSSession -ComputerName ${s.host.host})`
+                    : `Copy-Item -Path "${ftRemotePath}" -Destination "${ftLocalPath}" -FromSession (New-PSSession -ComputerName ${s.host.host})`;
+                await invoke('execute_powershell', { script: ps, forceExecute: false });
+                ftResult = `✓ Transferencia completada`;
+                rsLogTo(ftShellId, 'info', `📁 Transferencia completada`);
+            }
+        } catch(e) {
+            ftResult = `✗ Error: ${String(e).substring(0,200)}`;
+        }
+        ftRunning = false;
+    }
+
+    // ── Tail -f ─────────────────────────────────────────────────────────────
+    function rsIniciarTail(shellId, logPath) {
+        const key = `${shellId}_${logPath}`;
+        if (tailIntervals[key]) return;
+        const s = getShell(shellId);
+        if (!s) return;
+        rsLogTo(shellId, 'info', `📡 Iniciando tail: ${logPath}`);
+        showTailModal = false;
+        let lastLines = '';
+        const interval = setInterval(async () => {
+            try {
+                const cmd = s.host.type === 'linux'
+                    ? `tail -n 20 "${logPath}"`
+                    : `Get-Content "${logPath}" -Tail 20`;
+                const out = await invoke('execute_shell_cmd', {
+                    host: s.host.host, username: s.host.username,
+                    command: cmd, hostType: s.host.type,
+                    port: s.host.port || (s.host.type === 'linux' ? 22 : 5985),
+                    password: s.host.password || null, keyPath: s.host.sshKeyPath||null
+                });
+                if (out !== lastLines) {
+                    const newLines = out.replace(lastLines, '').trim();
+                    if (newLines) rsLogTo(shellId, 'out', newLines);
+                    lastLines = out;
+                }
+            } catch(e) { rsDetenerTail(shellId, logPath); }
+        }, 3000);
+        tailIntervals = { ...tailIntervals, [key]: interval };
+        rshellSessions = [...rshellSessions];
+    }
+
+    function rsDetenerTail(shellId, logPath) {
+        const key = `${shellId}_${logPath}`;
+        if (tailIntervals[key]) {
+            clearInterval(tailIntervals[key]);
+            const { [key]: _, ...rest } = tailIntervals;
+            tailIntervals = rest;
+            rsLogTo(shellId, 'info', `⏹ Tail detenido: ${logPath}`);
+        }
+    }
+
+    function rsTailActivo(shellId) {
+        return Object.keys(tailIntervals).some(k => k.startsWith(shellId));
+    }
+
+    function rsDetenerTodosTails(shellId) {
+        Object.keys(tailIntervals).filter(k => k.startsWith(shellId)).forEach(k => {
+            clearInterval(tailIntervals[k]);
+        });
+        tailIntervals = Object.fromEntries(Object.entries(tailIntervals).filter(([k]) => !k.startsWith(shellId)));
+    }
+
+    // ── Dispatch host modal open to parent ──────────────────────────────────
+    function abrirHostModal(host = null) {
+        dispatch('openHostModal', { host });
+    }
+
+    // ── Cleanup on destroy ──────────────────────────────────────────────────
+    onDestroy(() => {
+        Object.values(tailIntervals).forEach(id => clearInterval(id));
+    });
+</script>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- NexShell View Template                                                     -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+
+<div class="view-wrap ns-view">
+
+  <!-- ── HEADER ── -->
+  <div class="view-hdr ns-hdr">
+    <div class="ns-hdr-left">
+      <span class="view-title">🔌 NexShell</span>
+      {#if rshellSessions.length > 0}
+        <span class="ns-summary-badge">{rshellSessions.filter(s=>s.connected).length}/{rshellSessions.length} sesión{rshellSessions.length!==1?'es':''}</span>
+      {/if}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button class="ns-panel-toggle" on:click={() => nsHostsCollapsed = !nsHostsCollapsed}
+        title={nsHostsCollapsed ? (isEN ? 'Expand hosts panel' : 'Mostrar panel de hosts') : (isEN ? 'Collapse hosts panel' : 'Colapsar panel de hosts')}>
+        {nsHostsCollapsed ? (isEN ? '▶ Hosts' : '▶ Hosts') : (isEN ? '◀ Collapse' : '◀ Colapsar')}
+      </button>
+      <button class="ns-add-btn" on:click={() => abrirHostModal()}>{isEN ? '+ Add host' : '+ Añadir host'}</button>
+      <button class="ns-guard-btn" class:active={$guardConfig.enabled}
+        on:click={() => { $guardConfig = { ...$guardConfig, enabled: !$guardConfig.enabled }; }}
+        title={$guardConfig.enabled
+          ? (isEN ? 'Command Guard: ON (click to disable)' : 'Guardia: ACTIVO (clic para desactivar)')
+          : (isEN ? 'Command Guard: OFF (click to enable)' : 'Guardia: INACTIVO (clic para activar)')}>
+        🛡️{$guardConfig.enabled ? '' : ' OFF'}
+      </button>
+    </div>
+  </div>
+
+  <!-- ── BODY ── -->
+  <div class="ns-body {nsHostsCollapsed ? 'ns-body-full' : ''}">
+
+    <!-- ── LEFT: collapsible host catalogue ── -->
+    {#if !nsHostsCollapsed}
+    <div class="ns-hosts-col">
+
+      <!-- Search + Sort toolbar -->
+      <div class="ns-col-toolbar">
+        <input class="ns-search" placeholder={isEN ? 'Search host…' : 'Buscar host…'} bind:value={nexshellFilter}/>
+        <select class="ns-sort-sel" bind:value={nsSort} title={isEN ? 'Sort hosts' : 'Ordenar hosts'}>
+          <option value="status">⬤ {isEN ? 'Status' : 'Estado'}</option>
+          <option value="name">A–Z {isEN ? 'Name' : 'Nombre'}</option>
+          <option value="type">📁 {isEN ? 'Type' : 'Tipo'}</option>
+          <option value="activity">🕐 {isEN ? 'Activity' : 'Actividad'}</option>
+        </select>
+      </div>
+
+      <!-- Category filter chips -->
+      <div class="ns-cat-chips">
+        {#each [['all','Todos'],['shell','Shell'],['database','DB'],['container','Docker'],['kubernetes','K8s'],['network','Red']] as [v,l]}
+          <button class="ns-cat-chip {nsCategoryFilter===v?'ns-cat-active':''}"
+            on:click={() => nsCategoryFilter = v}>{l}</button>
+        {/each}
+      </div>
+
+      <div class="ns-col-lbl">{isEN ? 'CONFIGURED HOSTS' : 'HOSTS CONFIGURADOS'} <span class="ns-col-count">{nsHostsSorted.length}</span></div>
+
+      {#each nsHostsSorted as h (h.id)}
+        {@const sess = rshellSessions.find(s => s.host.id === h.id)}
+        {@const isActive = sess?.id === activeShellId}
+        <div class="ns-host-card {sess ? (sess.connected ? 'ns-card-on' : 'ns-card-connecting') : ''} {isActive ? 'ns-card-focused' : ''}"
+          role="button" tabindex="0"
+          on:click={() => { if(sess) activeShellId = sess.id; }}
+          on:keydown={(e) => e.key==='Enter' && sess && (activeShellId = sess.id)}>
+          <div class="ns-card-top">
+            <span class="ns-card-ico"><svelte:component this={getHostTypeComponent(h.type)} size={20}/></span>
+            <div class="ns-card-info">
+              <span class="ns-card-name">{h.name}</span>
+              <span class="ns-card-addr">{h.host}:{h.port||(h.type==='windows'?5985:22)}</span>
+            </div>
+            <span class="ns-proto-badge ns-cat-badge-{h.category||'shell'}">{nsProtoLabel(h)}</span>
+          </div>
+          <div class="ns-card-meta">
+            <span class="ns-card-user">👤 {h.username}</span>
+            {#if h.color && h.color !== '#10b981'}<span class="ns-color-dot" style="background:{h.color};"></span>{/if}
+            {#if sess}
+              <span class="ns-conn-pill {sess.connected ? 'ns-conn-ok' : 'ns-conn-wait'}">{sess.connected ? '● Conectado' : '⟳ Conectando…'}</span>
+            {:else if h.lastActivity}
+              <span class="ns-activity-ts">{nsRelTime(h.lastActivity)}</span>
+            {/if}
+          </div>
+          {#if sess?.bootstrap}
+            <div class="ns-card-env">
+              {#if sess.bootstrap.os}<span class="ns-env-tag">🖥 {sess.bootstrap.os.split(' ').slice(0,2).join(' ')}</span>{/if}
+              {#if sess.bootstrap.git_branch}<span class="ns-env-tag">🌿 {sess.bootstrap.git_branch}{sess.bootstrap.git_dirty?'*':''}</span>{/if}
+              {#if sess.bootstrap.docker}<span class="ns-env-tag">🐳</span>{/if}
+              {#if sess.bootstrap.k8s_ctx}<span class="ns-env-tag">⎈ {sess.bootstrap.k8s_ctx}</span>{/if}
+            </div>
+          {/if}
+          <div class="ns-card-actions">
+            {#if sess}
+              <button class="ns-act-btn ns-act-open" on:click|stopPropagation={() => activeShellId = sess.id}>⬆ Ver</button>
+              <button class="ns-act-btn ns-act-close" on:click|stopPropagation={() => { rsDetenerTodosTails(sess.id); cerrarShell(sess.id); }}>✕</button>
+            {:else}
+              <button class="ns-act-btn ns-act-connect" on:click|stopPropagation={() => abrirRShell(h)}>⚡ Conectar</button>
+            {/if}
+            <button class="ns-act-btn ns-act-edit" on:click|stopPropagation={() => abrirHostModal(h)}>✏️</button>
+          </div>
+        </div>
+      {/each}
+
+      {#if !hosts.length}
+        <div class="ns-empty-hosts">
+          <span style="font-size:32px;">🔌</span>
+          <p>{isEN ? 'No hosts configured' : 'Sin hosts configurados'}</p>
+          <button class="ns-add-btn" on:click={() => abrirHostModal()}>{isEN ? '+ Add first host' : '+ Añadir primer host'}</button>
+        </div>
+      {/if}
+
+    </div><!-- /ns-hosts-col -->
+    {/if}
+
+    <!-- ── RIGHT: session workspace ── -->
+    <div class="ns-workspace">
+
+      {#if rshellSessions.length === 0}
+        <!-- Welcome screen -->
+        <div class="ns-welcome">
+          <div class="ns-welcome-ico" style="animation: host-hover 3s ease-in-out infinite;">
+            <Rocket size={48} color="var(--acc)"/>
+          </div>
+          <h3 class="ns-welcome-title">NexShell — {isEN ? 'Smart Shell' : 'Shell Inteligente'}</h3>
+          <p class="ns-welcome-sub">{isEN ? 'Connect to a host to start. Lucy co-pilots every session.' : 'Conecta a un host para comenzar. Lucy co-pilota cada sesión.'}</p>
+          <div class="ns-caps-grid">
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Hash size={18}/></span><span>{isEN ? 'Exit code + duration per command' : 'Exit code + duración por comando'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><GitBranch size={18}/></span><span>{isEN ? 'Git, K8s, Docker context on connect' : 'Contexto Git, K8s, Docker al conectar'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Sparkles size={18}/></span><span>{isEN ? 'Real-time AI autocomplete' : 'Autocompletado IA en tiempo real'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Mic size={18}/></span><span>{isEN ? 'Natural language commands' : 'Órdenes en lenguaje natural'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Timer size={18}/></span><span>{isEN ? 'Background tasks (Ctrl+Enter)' : 'Tareas en background (Ctrl+Enter)'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Radio size={18}/></span><span>{isEN ? 'Simultaneous multi-host broadcast' : 'Broadcast multi-host simultáneo'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Globe size={18}/></span><span>{isEN ? 'Reads URL docs in context' : 'Lee documentación de URLs en contexto'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><BookMarked size={18}/></span><span>{isEN ? 'Playbooks: script sequences' : 'Playbooks: secuencias de comandos'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><FolderSync size={18}/></span><span>{isEN ? 'File transfer' : 'Transferencia de archivos'}</span></div>
+            <div class="ns-cap-item"><span style="color:var(--txt2);"><Activity size={18}/></span><span>{isEN ? 'Real-time log tailing' : 'Log tail en tiempo real'}</span></div>
+          </div>
+        </div>
+
+      {:else}
+        <!-- Session tab bar -->
+        <div class="ns-session-tabs">
+          {#each rshellSessions as s (s.id)}
+            <div class="ns-stab {s.id === activeShellId ? 'ns-stab-active' : ''}"
+              role="tab" tabindex="0" aria-selected={s.id === activeShellId}
+              on:click={() => activeShellId = s.id}
+              on:keydown={(e) => e.key === 'Enter' && (activeShellId = s.id)}>
+              <span class="ns-stab-ico"><svelte:component this={getHostTypeComponent(s.host.type)} size={16}/></span>
+              <span class="ns-stab-name">{s.host.name}</span>
+              <span class="ns-stab-dot {s.connected?'ok':'wait'}">●</span>
+              {#if s.running||s.lucyRunning}<span class="ns-stab-spin">◌</span>{/if}
+              <button class="ns-stab-close" on:click|stopPropagation={() => { rsDetenerTodosTails(s.id); cerrarShell(s.id); }} title="Cerrar sesión">✕</button>
+            </div>
+          {/each}
+        </div>
+
+        <!-- Active session shell content -->
+        {#each rshellSessions.filter(s => s.id === activeShellId) as s (s.id)}
+        <div class="ns-shell-wrap">
+
+          <!-- Shell header -->
+          <div class="ns-shell-hdr">
+            <div class="rshell-hdr-left">
+              <span class="rshell-ico"><svelte:component this={getHostTypeComponent(s.host.type)} size={24}/></span>
+              <div>
+                <div class="rshell-title">{s.host.name}</div>
+                <div class="rshell-sub">{s.host.username}@{s.host.host}:{s.host.port||22}
+                  {#if s.connected}<span class="rshell-badge ok">● Conectado</span>{:else}<span class="rshell-badge err">● Sin conexión</span>{/if}
+                  {#if s.bootstrap}
+                    {#if s.bootstrap.git_branch}<span class="rs-ctx-badge ctx-git">🌿 {s.bootstrap.git_branch}{s.bootstrap.git_dirty?'*':''}</span>{/if}
+                    {#if s.bootstrap.k8s_ctx}<span class="rs-ctx-badge ctx-k8s">⎈ {s.bootstrap.k8s_ctx}</span>{/if}
+                    {#if s.bootstrap.docker}<span class="rs-ctx-badge ctx-docker">🐳</span>{/if}
+                    {#if s.bootstrap.node_ver}<span class="rs-ctx-badge ctx-node">⬡ {s.bootstrap.node_ver}</span>{/if}
+                    {#if s.bootstrap.python_venv}<span class="rs-ctx-badge ctx-venv">🐍 {s.bootstrap.python_venv}</span>{/if}
+                  {:else if s.connected}<span class="rs-ctx-badge ctx-loading">⟳ analizando…</span>{/if}
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;gap:5px;align-items:center;">
+              <button class="rshell-feat-btn" title="Playbooks"
+                on:click={() => { playbookShellId=s.id; pbForm={name:'',commands:''}; showPlaybookModal=true; }}>📋</button>
+              <button class="rshell-feat-btn" title="Transferir archivos"
+                on:click={() => { ftShellId=s.id; ftDirection='upload'; ftLocalPath=''; ftRemotePath=''; ftResult=''; showFileTransferModal=true; }}>📁</button>
+              <button class="rshell-feat-btn {rsTailActivo(s.id)?'rs-feat-active':''}"
+                title="{rsTailActivo(s.id)?'Detener tail':'Iniciar tail de logs'}"
+                on:click={() => { if(rsTailActivo(s.id)) { rsDetenerTodosTails(s.id); } else { tailShellId=s.id; tailPath=''; showTailModal=true; } }}>📡</button>
+              <button class="rshell-feat-btn" title="Broadcast" on:click={() => abrirBroadcast(s.id)}>📡✕N</button>
+            </div>
+          </div>
+
+          <!-- Turn-Loop tracker -->
+          {#if turnLoops[s.id]}
+          <div style="padding:0 8px;">
+            <TurnLoopPanel loop={turnLoops[s.id]} {isEN} on:stop={() => tlStop(s.id)} />
+          </div>
+          {/if}
+
+          <!-- Output area -->
+          <div class="rshell-out" id="rshell-out-{s.id}">
+            {#each s.history as entry}
+              <div class="rshell-line rsl-{entry.type}">
+                {#if entry.type === 'cmd'}
+                  <span class="rsl-prompt">$</span><span class="rsl-cmd">{entry.text.replace(/^\$ /,'')}</span>
+                {:else if entry.type === 'lucy-in'}
+                  <span class="rsl-prompt">✨</span><span class="rsl-lucy-in">{entry.text}</span>
+                {:else if entry.type === 'lucy-out'}
+                  <span class="rsl-prompt lucy-dot">●</span><span class="rsl-lucy-out">{entry.text}</span>
+                {:else if entry.type === 'err'}
+                  <span class="rsl-err-txt">{entry.text}</span>
+                {:else if entry.type === 'info'}
+                  <span class="rsl-info-txt">{entry.text}</span>
+                {:else}
+                  <pre class="rsl-out-txt">{entry.text}</pre>
+                  {#if entry.exitCode !== null && entry.exitCode !== undefined}
+                    <div class="rsl-meta-row">
+                      <span class="rsl-exit-badge {entry.exitCode === 0 ? 'ok' : 'err'}">{entry.exitCode === 0 ? '✓ exit 0' : `✗ exit ${entry.exitCode}`}</span>
+                      {#if entry.durationMs !== null && entry.durationMs !== undefined}
+                        <span class="rsl-dur">⏱ {entry.durationMs < 1000 ? `${entry.durationMs}ms` : `${(entry.durationMs / 1000).toFixed(1)}s`}</span>
+                      {/if}
+                    </div>
+                  {/if}
+                {/if}
+                <span class="rsl-time">{entry.time}</span>
+              </div>
+            {/each}
+            {#if s.isStreaming}
+              <div class="rsl-live-block">
+                <div class="rsl-live-hdr">
+                  <span class="rsl-live-dot"></span>
+                  <span class="rsl-live-label">En ejecución…</span>
+                  <button class="rsl-live-input-btn"
+                    on:click={() => { const sx=getShell(s.id); if(sx){ sx.waitingForInput=!sx.waitingForInput; sx.promptHint='Input'; sx.promptIsPassword=false; rshellSessions=[...rshellSessions]; } }}>⌨ Input</button>
+                  <button class="rsl-cancel-btn" on:click={() => cancelarStream(s.id)}>✕ Cancelar</button>
+                </div>
+                <pre class="rsl-live-pre">{s.streamOut}<span class="rsl-live-cursor"></span></pre>
+                {#if s.waitingForInput}
+                  <div class="rsl-iprompt-row">
+                    <span class="rsl-iprompt-hint">{s.promptHint || 'Input'}:</span>
+                    <input class="rsl-iprompt-input" type={s.promptIsPassword ? 'password' : 'text'}
+                      bind:value={s.interactiveInput}
+                      on:keydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); rsEnviarInput(s.id); } else if (e.key === 'Escape') { const sx=getShell(s.id); if(sx){sx.waitingForInput=false;rshellSessions=[...rshellSessions];} } }}
+                      placeholder={s.promptHint || (isEN ? 'Type and press Enter…' : 'Escribe y presiona Enter…')}>
+                    <button class="rsl-iprompt-send" on:click={() => rsEnviarInput(s.id)}>↵</button>
+                  </div>
+                {/if}
+              </div>
+            {:else if s.lucyRunning}
+              <div class="rshell-line rsl-running">
+                <span class="rsl-spin">◌</span>
+                <span style="color:#475569;font-size:11px;">Lucy procesando...</span>
+              </div>
+            {/if}
+          </div><!-- /rshell-out -->
+
+          <!-- Toggle bar para colapsar/expandir inputs -->
+          <div class="ns-input-toggle-bar" role="button" tabindex="0" on:click={() => nsInputsCollapsed = !nsInputsCollapsed} on:keydown={(e) => { if(e.key==='Enter'||e.key===' ') nsInputsCollapsed = !nsInputsCollapsed; }}
+            title={nsInputsCollapsed ? (isEN ? 'Expand command panel' : 'Expandir panel de comandos') : (isEN ? 'Collapse command panel' : 'Colapsar panel de comandos')}>
+            <span class="ns-input-toggle-ico">{nsInputsCollapsed ? (isEN ? '▲ Show commands' : '▲ Mostrar comandos') : (isEN ? '▼ Hide commands' : '▼ Ocultar comandos')}</span>
+            {#if nsInputsCollapsed && s.connected}
+              <span class="ns-input-toggle-hint">{isEN ? 'Click or Ctrl+I to expand · Type to auto-open' : 'Click o Ctrl+I para expandir · Escribe para abrir automáticamente'}</span>
+            {/if}
+          </div>
+
+          <!-- Input area (colapsable) -->
+          {#if !nsInputsCollapsed}
+          <div class="rshell-inputs">
+            <div class="rshell-input-wrap rs-direct">
+              <div class="rshell-input-label">
+                <code class="rs-label-ico">&gt;_</code><span>Comando directo</span>
+                <span class="rs-hint">↑↓ historial · Tab autocompletar · Enter enviar · Ctrl+Enter background</span>
+                {#if s.bgTasks?.length}<span class="rs-bg-badge">{s.bgTasks.length} bg</span>{/if}
+              </div>
+              <div class="rshell-input-row" style="position:relative;">
+                <span class="rsi-prompt">{s.host.type==='linux'?'bash':'PS'} &gt;</span>
+                <div style="flex:1;position:relative;">
+                  {#if rsSuggestion(s.id)}
+                    <div class="rs-suggestion" aria-hidden="true">
+                      <span style="opacity:0">{s.directIn}</span><span>{rsSuggestion(s.id).slice(s.directIn.length)}</span>
+                    </div>
+                  {:else if s._aiSugg}
+                    <div class="rs-suggestion rs-sugg-ai" aria-hidden="true">
+                      <span style="opacity:0">{s.directIn}</span><span>✨ {s._aiSugg.slice(s.directIn.length)}</span>
+                    </div>
+                  {/if}
+                  <input class="rsi-box rs-direct-box"
+                    placeholder="systemctl restart sshd · whoami · ls -la ..."
+                    bind:value={s.directIn}
+                    on:keydown={(e) => rsKeyDirect(e, s.id)}
+                    on:input={() => rsHandleDirectInput(s.id)}
+                    disabled={s.running || s.isStreaming || !s.connected}>
+                </div>
+                <button class="rsi-send" on:click={() => rsEnviarDirecto(s.id)}
+                  disabled={s.running || s.isStreaming || !s.connected || !s.directIn.trim()}>▶</button>
+              </div>
+              {#if s._aiSuggLoading}
+                <div class="rs-ai-spinner">✨ <span class="rs-ai-spin-dot">Lucy pensando…</span></div>
+              {/if}
+            </div>
+            <div class="rshell-input-wrap rs-lucy">
+              <div class="rshell-input-label" style="display:flex; align-items:center;">
+                <span class="rs-label-ico">✨</span><span>Lucy — IA interactiva</span>
+                <div style="margin-left: 10px; display:inline-block;">
+                  <select class="ns-llm-select" bind:value={selectedModel} title={getModelDescription(selectedModel, isEN)}>
+                    {#each LLM_GROUPS as group}
+                      <optgroup label={group.label}>
+                        {#each group.options as opt}
+                          <option value={opt.id}>{opt.icon} {isEN ? opt.nameEn : opt.nameEs}</option>
+                        {/each}
+                      </optgroup>
+                    {/each}
+                  </select>
+                </div>
+                <span class="rs-hint">Enter enviar · Shift+Enter nueva línea</span>
+              </div>
+              <div class="rshell-input-row" style="align-items:flex-end;">
+                <span class="rsi-prompt" style="color:var(--acc);padding-bottom:9px;">Lucy &gt;</span>
+                <textarea class="rsi-box rs-lucy-box rs-lucy-ta" rows="1"
+                  placeholder={isEN ? '/fix [problem] for auto-troubleshoot · or ask Lucy anything...' : '/fix [problema] para auto-diagnostico · o pregunta lo que sea a Lucy...'}
+                  bind:value={s.lucyIn}
+                  on:keydown={(e) => rsKeyLucy(e, s.id)}
+                  on:input={(e) => { e.target.style.height='auto'; e.target.style.height=Math.min(e.target.scrollHeight,140)+'px'; }}
+                  disabled={s.lucyRunning || !s.connected}></textarea>
+                <button class="rsi-send rs-lucy-send" style="align-self:flex-end;margin-bottom:2px;" on:click={() => rsEnviarLucy(s.id)}
+                  disabled={s.lucyRunning || !s.connected || !s.lucyIn.trim()}>▶</button>
+              </div>
+            </div>
+          </div><!-- /rshell-inputs -->
+          {/if}
+
+        </div><!-- /ns-shell-wrap -->
+        {/each}
+
+      {/if}<!-- /sessions -->
+
+    </div><!-- /ns-workspace -->
+
+  </div><!-- /ns-body -->
+</div><!-- /ns-view -->
+
+<!-- ── MODAL: PLAYBOOKS ── -->
+{#if showPlaybookModal}
+<div class="mb" role="button" tabindex="-1" on:click|self={() => showPlaybookModal=false} on:keydown>
+  <div class="mbox lg">
+    <div class="mhdr">
+      <h3 class="mtitle">📋 Playbooks — {getShell(playbookShellId)?.host.name}</h3>
+      <button class="mclose" on:click={() => showPlaybookModal=false}>✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      {#each rsGetPlaybooks(getShell(playbookShellId)?.host.id||'') as pb (pb.id)}
+      <div class="pb-item">
+        <div class="pb-name">▶ {pb.name}</div>
+        <div class="pb-cmds">{pb.commands.join(' → ')}</div>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button class="mbtn pri" on:click={() => rsRunPlaybook(playbookShellId, pb)}>▶ Ejecutar</button>
+          <button class="mbtn ghost" on:click={() => { rsDeletePlaybook(getShell(playbookShellId)?.host.id, pb.id); }}>✕ Eliminar</button>
+        </div>
+      </div>
+      {:else}
+      <p style="color:#475569;font-size:12px;">No hay playbooks guardados para este host.</p>
+      {/each}
+      <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+        <div style="margin-bottom:8px;">
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="pb-name">Nombre del playbook</label>
+          <input id="pb-name" class="minp" bind:value={pbForm.name} placeholder="Diagnóstico de sistema">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="pb-cmds">Comandos (uno por línea)</label>
+          <textarea id="pb-cmds" class="minp" style="height:90px;resize:vertical;font-family:var(--mono);font-size:11px;"
+            bind:value={pbForm.commands}
+            placeholder="df -h&#10;free -m&#10;systemctl --failed&#10;uptime"></textarea>
+        </div>
+        <button class="mbtn pri" style="margin-top:8px;" on:click={rsGuardarPlaybook}
+          disabled={!pbForm.name.trim() || !pbForm.commands.trim()}>💾 Guardar playbook</button>
+      </div>
+    </div>
+  </div>
+</div>
+{/if}
+
+<!-- ── MODAL: FILE TRANSFER ── -->
+{#if showFileTransferModal}
+<div class="mb" role="button" tabindex="-1" on:click|self={() => showFileTransferModal=false} on:keydown>
+  <div class="mbox lg">
+    <div class="mhdr">
+      <h3 class="mtitle">📁 Transferir archivos — {getShell(ftShellId)?.host.name}</h3>
+      <button class="mclose" on:click={() => showFileTransferModal=false}>✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+
+      <div style="display:flex;gap:8px;">
+        <button class="mbtn {ftDirection==='upload'?'pri':'ghost'}" style="flex:1;"
+          on:click={() => { ftDirection='upload'; ftLocalPath=''; ftRemotePath=''; ftResult=''; }}>
+          ⬆ Subir al servidor
+        </button>
+        <button class="mbtn {ftDirection==='download'?'pri':'ghost'}" style="flex:1;"
+          on:click={() => { ftDirection='download'; ftLocalPath=''; ftRemotePath=''; ftResult=''; }}>
+          ⬇ Bajar del servidor
+        </button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,0,0,.3);border-radius:6px;font-size:11px;color:#475569;">
+        {#if ftDirection === 'upload'}
+          <span style="color:var(--txt2);">💻 Tu PC</span>
+          <span style="flex:1;text-align:center;color:var(--acc);">────────── ⬆ ──────────→</span>
+          <span style="color:var(--txt2);">🖥 {getShell(ftShellId)?.host.name}</span>
+        {:else}
+          <span style="color:var(--txt2);">💻 Tu PC</span>
+          <span style="flex:1;text-align:center;color:#6ab0ff;">←────────── ⬇ ──────────</span>
+          <span style="color:var(--txt2);">🖥 {getShell(ftShellId)?.host.name}</span>
+        {/if}
+      </div>
+
+      {#if ftDirection === 'upload'}
+        <div>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="ft-local">📄 Archivo en tu PC (origen)</label>
+          <div style="display:flex;gap:6px;">
+            <input id="ft-local" class="minp" style="flex:1;" bind:value={ftLocalPath}
+              placeholder="C:\Users\tu\archivo.txt">
+            <button class="mbtn ghost" title="Seleccionar archivo" on:click={rsPickFile}>📂</button>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="ft-remote">📂 Carpeta destino en el servidor</label>
+          <input id="ft-remote" class="minp" bind:value={ftRemotePath}
+            placeholder="/home/usuario/ o /opt/scripts/">
+        </div>
+      {:else}
+        <div>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="ft-remote">📄 Archivo en el servidor (origen)</label>
+          <input id="ft-remote" class="minp" bind:value={ftRemotePath}
+            placeholder="/var/log/app.log o /etc/nginx/nginx.conf">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="ft-local">📂 Carpeta destino en tu PC</label>
+          <div style="display:flex;gap:6px;">
+            <input id="ft-local" class="minp" style="flex:1;" bind:value={ftLocalPath}
+              placeholder="C:\\Users\\tu\\Descargas\\">
+            <button class="mbtn ghost" title="Seleccionar carpeta destino" on:click={async () => {
+              const p = await invoke('pick_file_path').catch(()=>'');
+              if(p) ftLocalPath = p.substring(0, p.lastIndexOf('\\') + 1) || p;
+            }}>📂</button>
+          </div>
+        </div>
+      {/if}
+
+      {#if ftResult}
+      <div style="font-size:12px;padding:8px 10px;border-radius:6px;
+        background:{ftResult.startsWith('✓')?'rgba(16,185,129,.06)':'rgba(255,68,68,.06)'};
+        color:{ftResult.startsWith('✓')?'var(--acc)':'var(--red)'};">{ftResult}</div>
+      {/if}
+
+      <button class="mbtn pri" on:click={rsEjecutarTransferencia}
+        disabled={ftRunning || !(typeof ftLocalPath==='string'&&ftLocalPath.trim()) || !(typeof ftRemotePath==='string'&&ftRemotePath.trim())}>
+        {#if ftRunning}⏳ Transfiriendo...{:else if ftDirection==='upload'}⬆ Subir archivo{:else}⬇ Bajar archivo{/if}
+      </button>
+    </div>
+  </div>
+</div>
+{/if}
+
+<!-- ── MODAL: TAIL -F ── -->
+{#if showTailModal}
+<div class="mb" role="button" tabindex="-1" on:click|self={() => showTailModal=false} on:keydown>
+  <div class="mbox md">
+    <div class="mhdr">
+      <h3 class="mtitle">📡 Tail de logs — {getShell(tailShellId)?.host.name}</h3>
+      <button class="mclose" on:click={() => showTailModal=false}>✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="tail-path">Ruta del log</label>
+        <input id="tail-path" class="minp" bind:value={tailPath} placeholder="/var/log/syslog">
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;">
+        {#each (getShell(tailShellId)?.host.type==='linux'
+    ? ['/var/log/syslog','/var/log/auth.log','/var/log/nginx/access.log','/var/log/nginx/error.log']
+    : ['C:/Windows/Logs/CBS/CBS.log','C:/inetpub/logs/LogFiles']) as p}
+        <button class="rs-log-preset" on:click={() => tailPath=p}>{p.replace(/\\/g,'/').split('/').pop()}</button>
+        {/each}
+      </div>
+      <button class="mbtn pri" on:click={() => rsIniciarTail(tailShellId, tailPath)}
+        disabled={!tailPath.trim()}>📡 Iniciar tail</button>
+    </div>
+  </div>
+</div>
+{/if}
+
+<!-- ── MODAL: BROADCAST ── -->
+{#if showBroadcast}
+<div class="mb" role="button" tabindex="-1" on:click|self={() => showBroadcast=false} on:keydown>
+  <div class="mbox" style="width:580px;">
+    <div class="mhdr">
+      <h3 class="mtitle">📡 Broadcast — Ejecutar en múltiples hosts</h3>
+      <button class="mclose" on:click={() => showBroadcast=false}>✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div>
+        <label for={'bc-cmd-'+_id} style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{isEN ? 'Command to execute on all selected hosts' : 'Comando a ejecutar en todos los hosts seleccionados'}</label>
+        <input id={'bc-cmd-'+_id} class="minp" style="font-family:var(--mono);font-size:12px;"
+          placeholder="systemctl status nginx · uptime · df -h ..."
+          bind:value={broadcastCmd}>
+      </div>
+      <div>
+        <span style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{isEN ? `Target hosts (${broadcastSelected.size} selected)` : `Hosts destino (${broadcastSelected.size} seleccionados)`}</span>
+        <div class="bc-host-list">
+          {#each hosts.filter(h => h.id !== null) as h}
+            <label class="bc-host-item">
+              <input type="checkbox"
+                checked={broadcastSelected.has(h.id)}
+                on:change={(e) => {
+                  if (e.target.checked) broadcastSelected.add(h.id);
+                  else broadcastSelected.delete(h.id);
+                  broadcastSelected = new Set(broadcastSelected);
+                }}>
+              <span class="bc-host-ico">{h.type === 'windows' ? '🖥️' : '🐧'}</span>
+              <span class="bc-host-name">{h.name}</span>
+              <span class="bc-host-addr">{h.host}:{h.port}</span>
+            </label>
+          {/each}
+        </div>
+      </div>
+      {#if broadcastResults.length > 0}
+        <div>
+          <span style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;">{isEN ? 'Results' : 'Resultados'} ({broadcastResults.filter(r=>r.exitCode===0).length}/{broadcastResults.length} OK)</span>
+          <div class="bc-results">
+            {#each broadcastResults as r}
+              <div class="bc-result-row {r.exitCode === 0 ? 'bc-ok' : r.error ? 'bc-fail' : 'bc-warn'}">
+                <span class="bc-r-host">{r.hostName}</span>
+                <span class="bc-r-badge">{r.error ? '✗ error' : r.exitCode === 0 ? '✓ ok' : `✗ exit ${r.exitCode}`}</span>
+                <pre class="bc-r-out">{r.error || r.output || ''}</pre>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="mbtn ghost" on:click={() => showBroadcast=false}>Cancelar</button>
+        <button class="mbtn pri"
+          disabled={broadcastRunning || !broadcastCmd.trim() || broadcastSelected.size === 0}
+          on:click={runBroadcast}>
+          {#if broadcastRunning}<span class="rsl-spin">◌</span>{:else}📡{/if}
+          Ejecutar en {broadcastSelected.size} host{broadcastSelected.size!==1?'s':''}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{/if}
+
+<!-- ── DANGER CONFIRM MODAL (pre-execution hook) ── -->
+{#if guardAssessment}
+<DangerConfirmModal
+  assessment={guardAssessment}
+  hostName={guardHostName}
+  source={guardSource}
+  {isEN}
+  on:confirm={guardConfirm}
+  on:cancel={guardCancel}
+/>
+{/if}
+
+<style>
+    /* ══════════════════════════════════════════════════════════════════════════ */
+    /* NexShell View Styles                                                      */
+    /* ══════════════════════════════════════════════════════════════════════════ */
+
+    /* Full-view wrapper */
+    .ns-view{
+        display:flex;flex-direction:column;
+        height:100%;overflow:hidden;
+    }
+
+    /* Header */
+    .ns-hdr{
+        display:flex;align-items:center;gap:12px;
+        padding:10px 18px;
+        background:var(--panel);
+        border-bottom:1px solid var(--bdr);
+        flex-shrink:0;
+    }
+    .ns-hdr-left{ display:flex;align-items:center;gap:10px; }
+    .ns-hdr-center{
+        flex:1;display:flex;justify-content:center;
+    }
+    .ns-search{
+        width:260px;max-width:100%;
+        background:rgba(255,255,255,.05);
+        border:1px solid var(--bdr);
+        border-radius:6px;
+        color:var(--txt);
+        font-size:13px;
+        padding:5px 10px;
+        outline:none;
+        transition:.15s;
+    }
+    .ns-search:focus{ border-color:var(--acc); background:rgba(255,255,255,.08); }
+    .ns-search::placeholder{ color:var(--txt3); }
+
+    .ns-summary-badge{
+        font-size:11px;color:var(--txt3);
+        background:rgba(255,255,255,.06);
+        border:1px solid var(--bdr);
+        border-radius:10px;padding:2px 10px;
+        white-space:nowrap;
+    }
+    .ns-add-btn{
+        background:var(--acc);color:#000;
+        border:none;border-radius:6px;
+        font-size:12px;font-weight:700;
+        padding:5px 13px;cursor:pointer;
+        transition:.15s;white-space:nowrap;
+    }
+    .ns-add-btn:hover{ filter:brightness(1.15); }
+    .ns-guard-btn{background:rgba(255,255,255,.04);border:1px solid var(--bdr);border-radius:6px;font-size:11px;padding:4px 8px;cursor:pointer;transition:.15s;color:#4a5a6a;white-space:nowrap;}
+    .ns-guard-btn:hover{background:rgba(255,255,255,.08);color:var(--txt);}
+    .ns-guard-btn.active{border-color:rgba(16,185,129,.25);color:var(--acc);background:rgba(16,185,129,.06);}
+    .ns-panel-toggle{ background:rgba(255,255,255,.05);border:1px solid #1a2030;color:var(--txt2);padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer;transition:.15s;white-space:nowrap; }
+    .ns-panel-toggle:hover{ background:rgba(255,255,255,.09);color:var(--txt); }
+
+    /* Body: two-column layout */
+    .ns-body{
+        display:grid;
+        grid-template-columns:310px 1fr;
+        flex:1;
+        overflow:hidden;
+        gap:0;
+    }
+    .ns-body-full{ grid-template-columns:1fr; }
+    .ns-body-full .ns-workspace{ width:100%; }
+
+    /* Column labels */
+    .ns-col-lbl{
+        font-size:10px;font-weight:700;letter-spacing:.08em;
+        color:var(--txt3);
+        padding:10px 14px 6px;
+        text-transform:uppercase;
+        display:flex;align-items:center;gap:6px;
+        flex-shrink:0;
+    }
+    .ns-col-count{
+        background:rgba(255,255,255,.1);
+        border-radius:8px;padding:1px 6px;
+        font-size:10px;color:var(--txt2);
+    }
+
+    /* Toolbar */
+    .ns-col-toolbar{ display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid #1a2030;flex-shrink:0; }
+    .ns-sort-sel{ background:#0a1018;border:1px solid #1a2030;color:var(--txt2);padding:4px 8px;border-radius:5px;font-size:11px;cursor:pointer;flex-shrink:0;outline:none; }
+    .ns-sort-sel:focus{ border-color:var(--acc); }
+    .ns-cat-chips{ display:flex;gap:4px;padding:6px 10px;flex-wrap:wrap;border-bottom:1px solid #1a2030;flex-shrink:0; }
+    .ns-cat-chip{ background:rgba(255,255,255,.05);border:1px solid #1a2030;color:var(--txt3);padding:2px 8px;border-radius:10px;font-size:10px;cursor:pointer;transition:.15s;white-space:nowrap; }
+    .ns-cat-chip:hover{ background:rgba(255,255,255,.09);color:var(--txt); }
+    .ns-cat-active{ background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:var(--acc); }
+
+    /* Category badge variants */
+    .ns-cat-badge-shell     { background:rgba(0,120,215,.25);color:#60b8ff;border-color:rgba(0,120,215,.4); }
+    .ns-cat-badge-database  { background:rgba(139,92,246,.25);color:#c084fc;border-color:rgba(139,92,246,.4); }
+    .ns-cat-badge-container { background:rgba(14,165,233,.25);color:#38bdf8;border-color:rgba(14,165,233,.4); }
+    .ns-cat-badge-kubernetes{ background:rgba(59,130,246,.25);color:#93c5fd;border-color:rgba(59,130,246,.4); }
+    .ns-cat-badge-network   { background:rgba(16,185,129,.25);color:#6ee7b7;border-color:rgba(16,185,129,.4); }
+
+    /* LEFT COLUMN — host catalogue */
+    .ns-hosts-col{
+        display:flex;flex-direction:column;
+        border-right:1px solid var(--bdr);
+        overflow-y:auto;
+        overflow-x:hidden;
+        background:var(--panel);
+    }
+
+    /* Host card */
+    .ns-host-card{
+        margin:4px 8px;
+        background:rgba(255,255,255,.04);
+        border:1px solid var(--bdr);
+        border-radius:10px;
+        padding:10px 12px;
+        transition:border-color .15s, box-shadow .15s;
+        cursor:default;
+    }
+    .ns-host-card:hover{
+        border-color:rgba(255,255,255,.15);
+        box-shadow:0 2px 12px rgba(0,0,0,.3);
+    }
+    .ns-card-on{
+        border-color:rgba(0,230,130,.35)!important;
+        box-shadow:0 0 0 1px rgba(0,230,130,.15), 0 0 14px rgba(16,185,129,.08);
+    }
+    .ns-card-connecting{
+        border-color:rgba(255,200,0,.3)!important;
+        box-shadow:0 0 10px rgba(255,200,0,.06);
+    }
+    .ns-card-focused{ border-color:rgba(16,185,129,.45)!important;background:rgba(16,185,129,.05)!important;box-shadow:0 0 0 1px rgba(16,185,129,.2),0 0 18px rgba(16,185,129,.1)!important; }
+
+    .ns-card-top{
+        display:flex;align-items:center;gap:8px;
+        margin-bottom:6px;
+    }
+    .ns-card-ico{ font-size:18px;flex-shrink:0; }
+    .ns-card-info{
+        display:flex;flex-direction:column;flex:1;min-width:0;
+    }
+    .ns-card-name{
+        font-size:13px;font-weight:600;color:var(--txt);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    .ns-card-addr{
+        font-size:11px;color:var(--txt3);font-family:monospace;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    .ns-proto-badge{
+        font-size:10px;font-weight:700;border-radius:5px;
+        padding:2px 6px;flex-shrink:0;
+        border:1px solid transparent;
+    }
+
+    .ns-card-meta{
+        display:flex;align-items:center;gap:8px;
+        font-size:11px;margin-bottom:6px;flex-wrap:wrap;
+    }
+    .ns-card-user{ color:var(--txt3); }
+    .ns-color-dot{
+        width:8px;height:8px;border-radius:50%;flex-shrink:0;
+    }
+    .ns-conn-pill{
+        font-size:10px;font-weight:600;border-radius:8px;
+        padding:2px 8px;border:1px solid transparent;
+    }
+    .ns-conn-ok  { background:rgba(0,230,130,.15);color:#00e682;border-color:rgba(0,230,130,.3); }
+    .ns-conn-wait{ background:rgba(255,200,0,.12);color:#ffc800;border-color:rgba(255,200,0,.25); }
+    .ns-activity-ts{ font-size:9px;color:#2a3a4a;margin-left:auto; }
+
+    /* Bootstrap env badges on card */
+    .ns-card-env{
+        display:flex;flex-wrap:wrap;gap:4px;
+        margin-bottom:6px;
+    }
+    .ns-env-tag{
+        font-size:10px;background:rgba(255,255,255,.07);
+        border:1px solid var(--bdr);border-radius:5px;
+        padding:1px 6px;color:var(--txt2);
+        white-space:nowrap;
+    }
+
+    /* Card action buttons */
+    .ns-card-actions{
+        display:flex;gap:5px;flex-wrap:wrap;
+    }
+    .ns-act-btn{
+        font-size:11px;font-weight:600;border-radius:5px;
+        padding:3px 10px;cursor:pointer;border:1px solid var(--bdr);
+        background:rgba(255,255,255,.06);color:var(--txt2);
+        transition:.15s;
+    }
+    .ns-act-btn:hover{ background:rgba(255,255,255,.12);color:var(--txt); }
+    .ns-act-open   { color:var(--acc);border-color:rgba(16,185,129,.25); }
+    .ns-act-open:hover{ background:rgba(16,185,129,.1); }
+    .ns-act-close  { color:#ff6b6b;border-color:rgba(255,107,107,.25); }
+    .ns-act-close:hover{ background:rgba(255,107,107,.1); }
+    .ns-act-connect{ color:#60b8ff;border-color:rgba(96,184,255,.3); }
+    .ns-act-connect:hover{ background:rgba(96,184,255,.1); }
+    .ns-act-edit   { color:var(--txt3); }
+    .ns-act-edit:hover{ color:var(--txt); }
+
+    /* Empty state */
+    .ns-empty-hosts{
+        flex:1;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;
+        gap:10px;padding:32px 16px;
+        color:var(--txt3);font-size:13px;text-align:center;
+    }
+
+    /* Workspace panel */
+    .ns-workspace{ flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0; }
+
+    /* Welcome / capabilities screen */
+    .ns-welcome{
+        flex:1;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;
+        padding:32px 24px;gap:12px;text-align:center;
+        overflow-y:auto;
+    }
+    .ns-welcome-ico{ font-size:42px; }
+    .ns-welcome-title{
+        font-size:18px;font-weight:700;color:var(--txt);margin:0;
+    }
+    .ns-welcome-sub{
+        font-size:13px;color:var(--txt3);margin:0;max-width:420px;
+    }
+    .ns-caps-grid{
+        display:grid;
+        grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+        gap:8px;
+        width:100%;max-width:600px;
+        margin-top:8px;
+    }
+    .ns-cap-item{
+        display:flex;align-items:center;gap:8px;
+        background:rgba(255,255,255,.04);
+        border:1px solid var(--bdr);border-radius:8px;
+        padding:8px 12px;font-size:12px;color:var(--txt2);
+        text-align:left;
+    }
+    .ns-cap-item span:first-child{ font-size:16px;flex-shrink:0; }
+
+    /* Session tabs */
+    .ns-session-tabs{ display:flex;gap:1px;background:var(--bg);padding:4px 8px 0;border-bottom:1px solid var(--bdr);flex-wrap:nowrap;overflow-x:auto;flex-shrink:0; }
+    .ns-session-tabs::-webkit-scrollbar{ height:3px; }
+    .ns-stab{ display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px 6px 0 0;border:1px solid transparent;background:rgba(255,255,255,.04);color:var(--txt2);font-size:11px;cursor:pointer;transition:.15s;white-space:nowrap;flex-shrink:0; }
+    .ns-stab:hover{ background:rgba(255,255,255,.08);color:var(--txt); }
+    .ns-stab-active{ background:var(--bg2);border-color:var(--bdr);border-bottom-color:var(--bg2);color:var(--txt); }
+    .ns-stab-ico{ font-size:13px; }
+    .ns-stab-name{ max-width:110px;overflow:hidden;text-overflow:ellipsis; }
+    .ns-stab-dot.ok{ color:var(--acc); }
+    .ns-stab-dot.wait{ color:var(--amber); }
+    .ns-stab-spin{ color:var(--amber);animation:spin 1s linear infinite; }
+    .ns-stab-close{ background:none;border:none;color:#475569;cursor:pointer;padding:0 2px;font-size:10px;line-height:1;border-radius:3px;transition:.15s; }
+    .ns-stab-close:hover{ background:rgba(255,107,107,.2);color:#ff6b6b; }
+
+    /* Shell wrap inside workspace */
+    .ns-shell-wrap{ flex:1;display:flex;flex-direction:column;overflow:hidden; }
+    .ns-shell-hdr{ display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);flex-shrink:0; }
+
+    /* Input toggle bar */
+    .ns-input-toggle-bar{
+        display:flex;align-items:center;justify-content:center;gap:10px;
+        padding:3px 0;cursor:pointer;
+        background:var(--bg2);border-top:1px solid var(--bdr);
+        transition:background .15s;flex-shrink:0;
+        user-select:none;
+    }
+    .ns-input-toggle-bar:hover{ background:#0d1520; }
+    .ns-input-toggle-ico{ font-size:10px;color:#3a5a7a;font-weight:600;letter-spacing:.05em; }
+    .ns-input-toggle-hint{ font-size:9px;color:#2a3a4a; }
+
+    /* ── REMOTE SHELL STYLES ─────────────────────────────────────────────── */
+    .rshell-hdr-left{display:flex;align-items:center;gap:12px;}
+    .rshell-ico{font-size:20px;}
+    .rshell-title{font-size:14px;font-weight:600;color:white;}
+    .rshell-sub{font-size:11px;color:#475569;font-family:var(--mono);margin-top:2px;display:flex;align-items:center;gap:8px;}
+    .rshell-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
+    .rshell-badge.ok{color:#10b981;background:rgba(16,185,129,.1);}
+    .rshell-badge.err{color:#ef4444;background:rgba(255,68,68,.1);}
+
+    /* Context Badges (bootstrap) */
+    .rs-ctx-badge{font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;transition:opacity .2s;}
+    .ctx-git   {color:#00cc78;background:rgba(0,204,120,.12);border:1px solid rgba(0,204,120,.2);}
+    .ctx-k8s   {color:#6496ff;background:rgba(100,150,255,.12);border:1px solid rgba(100,150,255,.2);}
+    .ctx-docker{color:#2496ed;background:rgba(36,150,237,.12);border:1px solid rgba(36,150,237,.2);}
+    .ctx-node  {color:#68a063;background:rgba(104,160,99,.12);border:1px solid rgba(104,160,99,.2);}
+    .ctx-venv  {color:#ffb86c;background:rgba(255,184,108,.12);border:1px solid rgba(255,184,108,.2);}
+    .ctx-loading{color:#2a3a4a;background:transparent;border:none;animation:ctx-pulse 1.5s ease-in-out infinite;}
+    @keyframes ctx-pulse{0%,100%{opacity:.4}50%{opacity:1}}
+
+    /* Feature buttons */
+    .rshell-feat-btn{background:rgba(255,255,255,.04);border:1px solid #1a2030;border-radius:5px;color:#0f7b5a;cursor:pointer;font-size:13px;padding:3px 7px;transition:.15s;line-height:1;}
+    .rshell-feat-btn:hover{background:rgba(16,185,129,.08);border-color:rgba(16,185,129,.2);color:var(--acc);}
+    .rs-feat-active{background:rgba(16,185,129,.1)!important;border-color:rgba(16,185,129,.3)!important;color:var(--acc)!important;}
+
+    /* Autocomplete suggestion */
+    .rs-suggestion{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;padding:7px 10px;font-family:var(--mono);font-size:12px;color:#2a3a4a;pointer-events:none;white-space:pre;overflow:hidden;}
+    .rs-sugg-ai{color:#5a3a7a;}
+    .rs-sugg-ai span:last-child{color:#7a4a9a;font-style:italic;}
+    .rs-ai-spinner{display:flex;align-items:center;gap:5px;padding:2px 4px;font-size:10px;color:#5a3a7a;font-family:var(--mono);}
+    .rs-ai-spin-dot{animation:ai-pulse 1.2s ease-in-out infinite;}
+    @keyframes ai-pulse{0%,100%{opacity:.3}50%{opacity:1}}
+    .rs-bg-badge{font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(90,58,122,.25);border:1px solid rgba(120,80,160,.3);color:#9a6aba;font-family:var(--mono);margin-left:6px;}
+
+    /* Output area */
+    .rshell-out{flex:1;overflow-y:auto;padding:12px 16px;font-family:var(--mono);font-size:12px;background:#020407;display:flex;flex-direction:column;gap:3px;}
+    .rshell-line{display:flex;align-items:flex-start;gap:8px;padding:2px 0;border-bottom:1px solid rgba(26,32,48,.3);flex-wrap:wrap;}
+    .rsl-time{margin-left:auto;font-size:10px;color:#1a2030;flex-shrink:0;align-self:center;}
+    .rsl-prompt{flex-shrink:0;font-weight:700;color:#0f7b5a;user-select:none;}
+    .lucy-dot{color:var(--acc)!important;}
+    .rsl-cmd{color:var(--acc);flex:1;word-break:break-all;}
+    .rsl-lucy-in{color:#aaa;flex:1;font-family:var(--font-sans);font-size:12px;}
+    .rsl-lucy-out{color:#8ba8c8;flex:1;font-family:var(--font-sans);font-size:12px;line-height:1.6;white-space:pre-wrap;}
+    .rsl-out-txt{color:#7a8a9a;flex:1;margin:0;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;}
+    .rsl-err-txt{color:#ef4444;flex:1;white-space:pre-wrap;}
+    .rsl-info-txt{color:#0f7b5a;flex:1;}
+    .rsl-running .rsl-spin{color:#475569;animation:spin .8s linear infinite;display:inline-block;}
+
+    /* Streaming */
+    .rsl-live-block{display:flex;flex-direction:column;gap:0;border-left:2px solid rgba(16,185,129,.25);margin:2px 0;background:rgba(16,185,129,.02);border-radius:0 4px 4px 0;}
+    .rsl-live-hdr{display:flex;align-items:center;gap:7px;padding:4px 10px;background:rgba(16,185,129,.04);border-bottom:1px solid rgba(16,185,129,.08);}
+    .rsl-live-dot{width:7px;height:7px;border-radius:50%;background:var(--acc);animation:stream-blink .7s ease-in-out infinite;flex-shrink:0;}
+    .rsl-live-label{color:#0d9668;font-size:11px;flex:1;}
+    .rsl-live-input-btn{background:rgba(100,149,255,.1);border:1px solid rgba(100,149,255,.25);border-radius:4px;color:#6495ff;cursor:pointer;font-size:10px;padding:2px 7px;transition:.15s;flex-shrink:0;}
+    .rsl-live-input-btn:hover{background:rgba(100,149,255,.2);}
+    .rsl-cancel-btn{background:rgba(255,68,68,.1);border:1px solid rgba(255,68,68,.25);border-radius:4px;color:#ff6464;cursor:pointer;font-size:10px;font-weight:600;padding:2px 8px;transition:.15s;flex-shrink:0;}
+    .rsl-cancel-btn:hover{background:rgba(255,68,68,.2);}
+    .rsl-live-pre{color:#7aaa8a;margin:0;padding:6px 10px;white-space:pre-wrap;word-break:break-all;font-size:11.5px;font-family:var(--mono);line-height:1.5;max-height:320px;overflow-y:auto;}
+    .rsl-live-cursor{display:inline-block;width:7px;height:12px;background:var(--acc);border-radius:1px;vertical-align:middle;margin-left:1px;animation:stream-blink .7s ease-in-out infinite;}
+    @keyframes stream-blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+    /* Exit code + duration */
+    .rsl-meta-row{display:flex;align-items:center;gap:10px;padding:3px 0 2px;border-top:1px solid rgba(255,255,255,.04);margin-top:3px;}
+    .rsl-exit-badge{font-size:10px;font-weight:700;padding:1px 8px;border-radius:10px;font-family:var(--mono);letter-spacing:.3px;}
+    .rsl-exit-badge.ok{color:#10b981;background:rgba(16,185,129,.09);border:1px solid rgba(16,185,129,.2);}
+    .rsl-exit-badge.err{color:#ff5555;background:rgba(255,68,68,.09);border:1px solid rgba(255,68,68,.2);}
+    .rsl-dur{font-size:10px;color:#2a3a4a;font-family:var(--mono);}
+
+    /* Interactive prompt */
+    .rsl-iprompt-row{display:flex;align-items:center;gap:6px;padding:6px 10px;background:rgba(255,170,0,.05);border-top:1px solid rgba(255,170,0,.15);}
+    .rsl-iprompt-hint{color:#f59e0b;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;}
+    .rsl-iprompt-input{flex:1;background:var(--bg);border:1px solid rgba(255,170,0,.35);border-radius:4px;color:#fff;font-size:12px;font-family:var(--mono);padding:4px 8px;outline:none;transition:.15s;}
+    .rsl-iprompt-input:focus{border-color:#f59e0b;box-shadow:0 0 0 2px rgba(255,170,0,.12);}
+    .rsl-iprompt-send{background:rgba(255,170,0,.15);border:1px solid rgba(255,170,0,.35);border-radius:4px;color:#f59e0b;cursor:pointer;font-size:14px;padding:3px 8px;transition:.15s;flex-shrink:0;}
+    .rsl-iprompt-send:hover{background:rgba(255,170,0,.25);}
+
+    /* Input area */
+    .rshell-inputs{flex-shrink:0;border-top:1px solid var(--bdr);}
+    .rshell-input-wrap{padding:10px 14px;border-bottom:1px solid #0e1520;}
+    .rs-direct{background:rgba(0,0,0,.3);}
+    .rs-lucy{background:rgba(16,185,129,.02);}
+    .rshell-input-label{display:flex;align-items:center;gap:6px;font-size:10px;color:#334155;margin-bottom:6px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;}
+    .rs-label-ico{font-size:11px;color:#0f7b5a;background:rgba(0,0,0,.4);padding:1px 5px;border-radius:3px;}
+    .rs-lucy .rs-label-ico{color:var(--acc);}
+    .rs-hint{margin-left:auto;font-size:10px;color:#1a2030;font-weight:400;text-transform:none;letter-spacing:0;}
+    .rshell-input-row{display:flex;align-items:center;gap:8px;}
+    .rsi-prompt{font-family:var(--mono);font-size:11px;color:#334155;flex-shrink:0;}
+    .rsi-box{flex:1;background:rgba(0,0,0,.5);border:1px solid #1a2030;border-radius:6px;color:white;font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;transition:.15s;}
+    .rsi-box:focus{border-color:#2a3a5a;}
+    .rs-lucy-box{font-family:var(--font-sans);font-size:12px;}
+    .rs-lucy-box:focus{border-color:rgba(16,185,129,.2);}
+    .rs-lucy-ta{resize:none;min-height:34px;max-height:140px;line-height:1.45;overflow-y:auto;}
+    .rsi-box:disabled{opacity:.4;cursor:not-allowed;}
+    .rsi-send{background:rgba(255,255,255,.06);border:1px solid var(--bdr);border-radius:6px;color:#475569;cursor:pointer;font-size:12px;padding:6px 10px;transition:.15s;flex-shrink:0;}
+    .rsi-send:hover:not(:disabled){background:rgba(255,255,255,.1);color:white;}
+    .rsi-send:disabled{opacity:.3;cursor:not-allowed;}
+    .rs-lucy-send:not(:disabled){border-color:rgba(16,185,129,.2);color:var(--acc);}
+    .rs-lucy-send:hover:not(:disabled){background:rgba(16,185,129,.08);}
+
+    /* Broadcast modal */
+    .bc-host-list{display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto;background:var(--bg);border:1px solid var(--bdr);border-radius:7px;padding:8px;}
+    .bc-host-item{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:5px;cursor:pointer;font-size:12px;transition:.12s;}
+    .bc-host-item:hover{background:rgba(255,255,255,.04);}
+    .bc-host-item input[type=checkbox]{accent-color:var(--acc);width:14px;height:14px;cursor:pointer;}
+    .bc-host-ico{font-size:13px;}
+    .bc-host-name{font-weight:600;color:#c0d0e0;flex:1;}
+    .bc-host-addr{font-size:10px;color:#475569;font-family:var(--mono);}
+    .bc-results{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;}
+    .bc-result-row{border-radius:7px;border:1px solid #1a2030;padding:8px 10px;font-size:11px;}
+    .bc-ok{border-color:rgba(16,185,129,.18);background:rgba(16,185,129,.04);}
+    .bc-fail{border-color:rgba(255,68,68,.18);background:rgba(255,68,68,.04);}
+    .bc-warn{border-color:rgba(255,200,0,.18);background:rgba(255,200,0,.04);}
+    .bc-r-host{font-weight:700;color:#c0d0e0;font-size:12px;display:block;margin-bottom:3px;}
+    .bc-r-badge{font-size:10px;font-weight:700;font-family:var(--mono);padding:1px 7px;border-radius:8px;margin-bottom:4px;display:inline-block;}
+    .bc-ok .bc-r-badge{color:#10b981;background:rgba(16,185,129,.1);}
+    .bc-fail .bc-r-badge,.bc-warn .bc-r-badge{color:#ff5555;background:rgba(255,68,68,.1);}
+    .bc-r-out{font-size:10px;font-family:var(--mono);color:#6a8a7a;white-space:pre-wrap;word-break:break-all;margin:0;max-height:60px;overflow-y:auto;}
+
+    /* Playbooks */
+    .pb-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:10px 12px;}
+    .pb-name{font-size:12px;font-weight:600;color:var(--acc);margin-bottom:4px;}
+    .pb-cmds{font-size:10px;color:#475569;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+    /* Tail log presets */
+    .rs-log-preset{background:rgba(255,255,255,.04);border:1px solid #1a2030;border-radius:4px;color:#475569;cursor:pointer;font-size:10px;font-family:var(--mono);padding:3px 8px;transition:.1s;}
+    .rs-log-preset:hover{background:rgba(16,185,129,.06);color:var(--acc);border-color:rgba(16,185,129,.2);}
+
+    /* Spin animation */
+    .rsl-spin{color:#475569;animation:spin .8s linear infinite;display:inline-block;font-size:12px;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+
+    /* ── Modal styles (scoped) ───────────────────────────────────────────── */
+    .mb{position:fixed;inset:0;background:rgba(4,8,14,.92);backdrop-filter:blur(6px);z-index:10000;display:flex;justify-content:center;align-items:center;}
+    .mbox{background:var(--bg2);border:1px solid var(--bdr2);border-radius:12px;padding:28px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.6);}
+    .mbox.sm{width:380px;}.mbox.md{width:440px;}.mbox.lg{width:520px;}
+    .mhdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bdr);padding-bottom:14px;margin-bottom:18px;}
+    .mtitle{color:white;margin:0;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;}
+    .mclose{background:transparent;border:none;color:var(--txt2);font-size:18px;cursor:pointer;padding:2px 6px;border-radius:4px;transition:.15s;line-height:1;}
+    .mclose:hover{color:var(--red);background:rgba(255,68,68,.08);}
+    .mbtn{padding:9px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;transition:.15s;border:1px solid var(--bdr);}
+    .mbtn.pri{background:var(--acc);color:#000;border:none;}.mbtn.pri:hover{opacity:.85;}
+    .mbtn.ghost{background:transparent;color:var(--txt2);}.mbtn.ghost:hover{background:rgba(255,255,255,.04);color:var(--txt);}
+    .mbtn:disabled{opacity:.4;cursor:not-allowed;}
+    .minp{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--bdr2);color:white;padding:10px 12px;border-radius:7px;outline:none;font-family:inherit;font-size:13px;transition:border-color .2s;box-sizing:border-box;}
+    .minp:focus{border-color:var(--acc-b);}
+
+    /* ── View shared styles ──────────────────────────────────────────────── */
+    .view-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0;}
+    .view-hdr{display:flex;align-items:center;padding:10px 16px;background:rgba(2,4,8,.6);border-bottom:1px solid var(--bdr);flex-shrink:0;gap:10px;}
+    .view-title{font-size:13px;font-weight:700;color:var(--txt);white-space:nowrap;}
+
+    /* ── Light theme overrides ───────────────────────────────────────────── */
+    :global(:root.light) .ns-view          { background:var(--bg); }
+    :global(:root.light) .ns-hdr           { background:#e8eef5;border-bottom-color:var(--bdr); }
+    :global(:root.light) .ns-hosts-col     { background:#f0f4f8;border-right-color:var(--bdr); }
+    :global(:root.light) .ns-workspace     { background:#f8fafc; }
+    :global(:root.light) .ns-host-card     { background:rgba(0,0,0,.03);border-color:var(--bdr); }
+    :global(:root.light) .ns-host-card:hover{ border-color:rgba(0,0,0,.18); }
+    :global(:root.light) .ns-card-name     { color:var(--txt); }
+    :global(:root.light) .ns-search        { background:rgba(0,0,0,.05);border-color:var(--bdr);color:var(--txt); }
+    :global(:root.light) .ns-search:focus  { border-color:var(--acc);background:rgba(0,0,0,.08); }
+    :global(:root.light) .ns-act-btn       { background:rgba(0,0,0,.05);border-color:var(--bdr);color:var(--txt2); }
+    :global(:root.light) .ns-act-btn:hover { background:rgba(0,0,0,.1);color:var(--txt); }
+    :global(:root.light) .ns-cap-item      { background:rgba(0,0,0,.03);border-color:var(--bdr); }
+    :global(:root.light) .ns-env-tag       { background:rgba(0,0,0,.06);border-color:var(--bdr); }
+    :global(:root.light) .ns-summary-badge { background:rgba(0,0,0,.06);border-color:var(--bdr); }
+    :global(:root.light) .ns-sort-sel      { background:#f0f4f8;border-color:var(--bdr);color:var(--txt); }
+    :global(:root.light) .ns-cat-chip      { background:rgba(0,0,0,.05);border-color:var(--bdr);color:var(--txt2); }
+    :global(:root.light) .ns-cat-active    { background:rgba(0,168,107,.1);border-color:rgba(0,168,107,.3);color:var(--acc); }
+    :global(:root.light) .ns-stab          { background:rgba(0,0,0,.04);color:var(--txt2);border-color:transparent; }
+    :global(:root.light) .ns-stab:hover    { background:rgba(0,0,0,.08);color:var(--txt); }
+    :global(:root.light) .ns-stab-active   { background:#fff;border-color:var(--bdr);border-bottom-color:#fff;color:var(--txt); }
+    :global(:root.light) .ns-session-tabs  { background:#e4eaf0;border-bottom-color:var(--bdr); }
+    :global(:root.light) .ns-shell-hdr     { background:#e8eef5;border-bottom-color:var(--bdr); }
+    :global(:root.light) .ns-panel-toggle  { background:rgba(0,0,0,.05);border-color:var(--bdr);color:var(--txt2); }
+    :global(:root.light) .ns-input-toggle-bar { background:#e8eef5;border-top-color:var(--bdr); }
+    :global(:root.light) .ns-input-toggle-bar:hover { background:#dde5ee; }
+    :global(:root.light) .ns-input-toggle-ico { color:var(--txt3); }
+    :global(:root.light) .ns-input-toggle-hint { color:var(--txt3); }
+    :global(:root.light) .ns-col-toolbar   { border-bottom-color:var(--bdr); }
+    :global(:root.light) .ns-cat-chips     { border-bottom-color:var(--bdr); }
+    :global(:root.light) .rshell-out       { background:#f6f8fb; }
+    :global(:root.light) .rshell-line      { border-bottom-color:var(--bdr); }
+    :global(:root.light) .rsl-prompt       { color:#00784e; }
+    :global(:root.light) .rsl-cmd          { color:#0b6045; }
+    :global(:root.light) .rsl-lucy-out     { color:#1e3a5a; }
+    :global(:root.light) .rsl-out-txt      { color:#475569; }
+    :global(:root.light) .rshell-inputs    { border-top-color:var(--bdr); }
+    :global(:root.light) .rshell-input-wrap{ border-bottom-color:var(--bdr); background:#fcfcfc; }
+    :global(:root.light) .rsi-box          { background:#fff; border-color:var(--bdr); color:var(--txt); }
+    :global(:root.light) .ns-llm-select    { background:#ececec; color:#0e6a4e; border-color:rgba(16,185,129,.5); }
+    :global(:root.light) .ns-llm-select option { background:#ffffff; color:#333; }
+    :global(:root.light) .ns-llm-select optgroup { background:#f5f5f5; color:#555; }
+    
+    .ns-llm-select {
+        background:rgba(0,0,0,0.4); color:var(--acc); 
+        border:1px solid rgba(16,185,129,0.3); border-radius:4px; 
+        font-size:10px; padding:2px 4px; outline:none; 
+        font-family:var(--font-sans); cursor:pointer;
+        transition: .15s;
+    }
+    .ns-llm-select option, .ns-llm-select optgroup {
+        background: var(--bg2);
+        color: var(--txt);
+    }
+    :global(:root.light) .rsi-box:focus    { border-color:var(--acc); }
+    :global(:root.light) .rs-label-ico     { background:rgba(0,168,107,.1); color:#00784e; }
+    :global(:root.light) .rsi-prompt       { color:#0f172a; }
+    :global(:root.light) .rs-lucy          { background:rgba(16,185,129,.05); }
+    :global(:root.light) .rs-direct        { background:#f1f5f9; }
+    :global(:root.light) .rshell-input-label select { background:#fff !important; color:#00784e !important; border-color:var(--bdr) !important; }
+</style>
+
