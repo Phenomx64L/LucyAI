@@ -39,9 +39,24 @@ Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs 
 
 ## Screenshots
 
-<!-- Add screenshots of your app here -->
-<!-- ![Dashboard](docs/screenshots/dashboard.png) -->
-<!-- ![Chat](docs/screenshots/chat.png) -->
+### Main Interface & Dashboard
+![Setup & Dashboard](docs/screenshots/Screenshot_1.png)
+![Main Interface](docs/screenshots/Screenshot_2.png)
+
+### AI Chat & Features
+![Chat Interface](docs/screenshots/Screenshot_3.png)
+![Chat Interaction](docs/screenshots/Screenshot_4.png)
+![Feature Settings](docs/screenshots/Screenshot_5.png)
+
+### Infrastructure & Compliance
+![Inventory View](docs/screenshots/Screenshot_6.png)
+![Compliance Scanning](docs/screenshots/Screenshot_7.png)
+![Log Analysis](docs/screenshots/Screenshot_8.png)
+
+### Advanced Features
+![Audit Trail](docs/screenshots/Screenshot_9.png)
+![Remote Shell (NexShell)](docs/screenshots/Screenshot_10.png)
+![Skills & Automation](docs/screenshots/Screenshot_11.png)
 
 ## Prerequisites
 
