@@ -53,8 +53,8 @@ Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs 
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/lucy-svelte.git
-cd lucy-svelte
+git clone https://github.com/Phenomx64L/LucyAI.git
+cd LucyAI
 
 # Install frontend dependencies
 npm install
