@@ -1065,3 +1065,43 @@ pub fn panic_kill_all() -> Result<(), String> {
     // se detendrían aquí. Como mitigación base, imprimimos la acción.
     Ok(())
 }
+
+
+#[tauri::command]
+pub async fn search_web(query: String) -> Result<String, String> {
+    let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(&query));
+    let res = reqwest::Client::new()
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Error fetching web: {}", e))?;
+
+    if res.status().as_u16() >= 400 {
+        return Err(format!("Web search returned HTTP {}", res.status()));
+    }
+
+    let html = res.text().await.unwrap_or_default();
+    let re = regex::Regex::new(r#"(?s)<a class="result__snippet[^>]*>(.*?)</a>"#).unwrap();
+    let re_url = regex::Regex::new(r#"(?s)<a class="result__url[^>]*>(.*?)</a>"#).unwrap();
+    
+    let mut results = Vec::new();
+    let snippets: Vec<_> = re.captures_iter(&html).collect();
+    let urls: Vec<_> = re_url.captures_iter(&html).collect();
+    
+    for i in 0..snippets.len().min(5).min(urls.len()) {
+        let mut snip = snippets[i][1].to_string();
+        snip = snip.replace("<b>", "").replace("</b>", "").replace("&#x27;", "'").replace("&quot;", "\"").replace("&amp;", "&");
+        let url = urls[i][1].trim().to_string();
+        results.push(format!("* {}: {}", url, snip));
+    }
+    
+    if results.is_empty() {
+        return Ok("No results found or HTML format changed.".to_string());
+    }
+    
+    Ok(results.join("\n\n"))
+}

@@ -11,6 +11,8 @@
 
     // Internal state
     let loading = false;
+    let loadingSecs = 0;
+    let timerInterval = null;
     let error = '';
     let skills = [];
     let selectedCategory = null;
@@ -190,58 +192,58 @@
 
     async function generateSkillWithAI() {
         const idea = aiIdea.trim();
-        if (!idea) { aiError = 'Describe qué skill quieres generar'; return; }
+        if (!idea) { aiError = 'Describe quǸ skill quieres generar'; return; }
         aiError = '';
         loading = true; error = '';
-        try {
-            const sysPrompt = `Eres un asistente que genera plantillas de "skills" para Lucy (asistente SysAdmin Windows/PowerShell). Responde EXCLUSIVAMENTE con JSON válido, sin markdown ni explicaciones, con esta forma exacta:
-{
-  "name": "Nombre corto en español",
-  "category": "monitoring|admin|network|security|diagnostics",
-  "description": "Descripción en una frase de qué hace",
-  "script": "Script PowerShell completo. Usa {nombreParam} para placeholders de parámetros.",
-  "parameters": [{"name":"ejemplo","type":"string","required":true,"description":"Para qué sirve"}],
-  "triggers": ["frase natural 1","frase natural 2","frase natural 3"],
-  "tags": ["tag1","tag2"]
-}
+        loadingSecs = 0;
+        
+        timerInterval = setInterval(() => {
+            loadingSecs++;
+        }, 1000);
 
-Petición del usuario: ${idea}`;
-            const raw = await invoke('ask_lucy', {
-                prompt: sysPrompt,
-                context: '',
-                userName: 'User',
-                runbooksDir: null,
-                model: 'gemini-2.5-flash',
-                lang: 'es',
-                hostsJson: null,
-                images: null
-            });
+        try {
+            // Re-enforcamos el requerimiento al final
+            const ideaStrict = idea + " (Responde SOLO con JSON, nada más)";
+            
+            // 20 second timeout protect en Frontend
+            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Tiempo de espera agotado (20s). Los servidores de Gemini están sobrecargados o hay latencia de red.')), 20000));
+            const raw = await Promise.race([
+                invoke('generate_skill_template', {
+                    idea: ideaStrict,
+                    model: 'gemini-2.5-flash'
+                }),
+                timeoutPromise
+            ]);
+            
+            clearInterval(timerInterval);
+            
             // Extraer JSON del texto de respuesta
             const txt = String(raw);
             const m = txt.match(/\{[\s\S]*\}/);
-            if (!m) throw new Error('La IA no devolvió JSON válido. Respuesta:\n' + txt.slice(0, 300));
+            if (!m) throw new Error('La IA no devolvió JSON válido. Respuesta:\n' + txt.slice(0, 100));
+            
             const parsed = JSON.parse(m[0]);
-            // Pre-rellenar el formulario de nueva skill con lo generado
+            
             newSkill = {
                 name: parsed.name || 'Skill generada',
-                category: parsed.category || 'general',
+                category: ['monitoring','admin','network','security','diagnostics'].includes(parsed.category) ? parsed.category : 'admin',
                 description: parsed.description || '',
                 script: parsed.script || '',
-                parameters: JSON.stringify(parsed.parameters || [], null, 2),
-                triggers: JSON.stringify(parsed.triggers || [], null, 2),
-                tags: JSON.stringify(parsed.tags || [], null, 2),
-                enabled: true
+                parameters: parsed.parameters ? JSON.stringify(parsed.parameters, null, 2) : '[]',
+                triggers: parsed.triggers ? JSON.stringify(parsed.triggers, null, 2) : '[]',
+                tags: parsed.tags ? JSON.stringify(parsed.tags, null, 2) : '[]'
             };
-            editingSkill = null;
             aiPromptOpen = false;
-            formOpen = true;
+            formOpen = true; // abrir form con la data rellenada
             toast('✨ Skill generada por IA — revisa y guarda', 'success');
         } catch (e) {
+            clearInterval(timerInterval);
             error = String(e);
-            aiError = String(e).slice(0, 400);
-            toast(lang.error + ': ' + error, 'error');
+            aiError = String(e).slice(0, 400); // mostrar error directo en la caja
+            toast('Error de IA: ' + String(e).slice(0, 50), 'error');
         }
         loading = false;
+        clearInterval(timerInterval);
     }
 
     async function deleteSkill(id) {
@@ -580,7 +582,7 @@ Petición del usuario: ${idea}`;
                             {/if}
                             <div style="display:flex;gap:8px;margin-top:10px;">
                                 <button class="btn-add" style="background:linear-gradient(135deg,#7c3aed,#a855f7);" on:click={generateSkillWithAI} disabled={loading}>
-                                    {loading ? '⏳ Generando…' : '✨ Generar'}
+                                    {loading ? '⏳ Generando (' + loadingSecs + 's)…' : '✨ Generar'}
                                 </button>
                                 <button class="btn-cancel" on:click={() => { aiPromptOpen = false; loading = false; }} disabled={loading}>
                                     Cancelar

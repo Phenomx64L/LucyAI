@@ -91,6 +91,15 @@ import { listen } from '@tauri-apps/api/event';
     
     let pendingLearnSpeak  = false;
     let forkedTasks        = {};
+
+    let mcpSecrets = {};
+    if (typeof localStorage !== 'undefined') {
+        try {
+            const stored = localStorage.getItem('lucy_mcp_secrets');
+            if (stored) mcpSecrets = JSON.parse(stored);
+        } catch (e) {}
+    }
+
     let subAgentModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_subagent')) || 'ollama';
 
     let tabs               = [];
@@ -265,7 +274,7 @@ import { listen } from '@tauri-apps/api/event';
         if (m.includes('flash-lite'))     return isEN ? '⚡ Ultra-fast, low cost — simple tasks'                : '⚡ Ultra rápido, económico — tareas simples';
         return isEN ? '⚡ Fast & cost-efficient — recommended for general use' : '⚡ Rápido y económico — recomendado para uso general';
     })();
-    $: quickChips = comandosExt.filter(c => c.script !== 'RESET_APP' && c.script !== 'TOOL_SYSINFO').slice(0, 7);
+    
     // hostsFiltered, allTags → derived stores en stores.ts
     // ── UX: Zoom & Font — CSS vars en <html> ──────
     $: if (typeof document !== 'undefined') {
@@ -284,7 +293,7 @@ import { listen } from '@tauri-apps/api/event';
     // showChipsModal → stores.ts
     let editingChipIdx = null; // null = nuevo, número = editar existente
     let chipForm       = { label: '', clave: '' };
-    $: allChips        = [...userChips, ...quickChips.map(c => ({ label: c.claves[0], clave: c.claves[0], _builtin: true }))];
+    
     // ── COMMAND PALETTE items (unfiltered — CommandPalette component handles query) ──
     $: allPaletteItems = [
         // Vistas
@@ -725,7 +734,13 @@ import { listen } from '@tauri-apps/api/event';
             { icono:'🗑️', nombre:'Vaciar papelera',     script:'Clear-RecycleBin -Force' }
         ];
         const storedActions = localStorage.getItem('lucy_quick_actions');
-        quickActions = storedActions ? JSON.parse(storedActions) : [...defaultActions];
+        quickActions = storedActions ? JSON.parse(storedActions) : [
+    { icono: '🏥', nombre: isEN ? 'System Health' : 'Salud del sistema', script: 'TOOL_SYSINFO' },
+    { icono: '🌐', nombre: 'Flush DNS', script: 'ipconfig /flushdns' },
+    { icono: '🔒', nombre: isEN ? 'Lock System' : 'Bloquear equipo', script: 'rundll32.exe user32.dll,LockWorkStation' },
+    { icono: '🧹', nombre: isEN ? 'Clear Clipboard' : 'Limpiar portapap.', script: 'Set-Clipboard -Value $null' },
+    { icono: '🗑️', nombre: isEN ? 'Empty Trash' : 'Vaciar papelera', script: 'Clear-RecycleBin -Force' }
+];
         if (!storedActions) localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
 
         // hosts, alertRules, runbooks → cargados automáticamente por persistedWritable en stores.ts
@@ -733,19 +748,43 @@ import { listen } from '@tauri-apps/api/event';
         try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch(e) {}
         // Cargar chips personalizados de la barra inferior
         const storedChips = localStorage.getItem('lucy_user_chips');
-        userChips = storedChips ? JSON.parse(storedChips) : [];
+        userChips = storedChips ? JSON.parse(storedChips) : [
+    { label: isEN ? 'mute audio' : 'silencia', clave: isEN ? 'mute' : 'silencia' },
+    { label: isEN ? 'volume down' : 'baja el volumen', clave: isEN ? 'volume down' : 'baja el volumen' },
+    { label: isEN ? 'volume up' : 'sube el volumen', clave: isEN ? 'volume up' : 'sube el volumen' },
+    { label: isEN ? 'pause/play' : 'pausa', clave: 'pausa' },
+    { label: isEN ? 'next song' : 'siguiente', clave: 'siguiente cancion' },
+    { label: isEN ? 'prev song' : 'anterior', clave: 'cancion anterior' },
+    { label: isEN ? 'lock system' : 'bloquear', clave: 'bloquear' }
+];
+
+if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChips));
+
     }
 
     // Funciones para Acciones Rápidas en Sidebar
     function guardarNuevaAccion() {
         if (!newActionName.trim() || !newActionScript.trim()) return;
-        quickActions = [...quickActions, { icono: "⚡", nombre: newActionName, script: newActionScript }];
+        if (editingActionIdx !== null) {
+            quickActions[editingActionIdx].nombre = newActionName;
+            quickActions[editingActionIdx].script = newActionScript;
+            quickActions = [...quickActions];
+        } else {
+            quickActions = [...quickActions, { icono: "⚡", nombre: newActionName, script: newActionScript }];
+        }
         localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
         $showNewActionModal = false;
         newActionName = '';
         newActionScript = '';
     }
 
+    
+    function abrirEditarAccionRapida(i) {
+        editingActionIdx = i;
+        newActionName = quickActions[i].nombre;
+        newActionScript = quickActions[i].script;
+        $showNewActionModal = true;
+    }
     function eliminarAccionRapida(i) {
         quickActions.splice(i, 1);
         quickActions = [...quickActions];
@@ -1195,7 +1234,7 @@ import { listen } from '@tauri-apps/api/event';
         const id = Date.now().toString();
         const t = {
             id, title: userLang.startsWith('en') ? 'New Terminal' : 'Nueva Terminal',
-            messages: [{ id: Date.now(), role: 'system', html: `--- Módulo IA · Sesión de ${lucyConfig.name} ---` }],
+            messages: [],
             attachedFiles: [], inputValue: '', selectedModel: 'gemini-2.5-flash',
             contextMax: 50000, _histIdx: undefined,
             isProcessing: false, usedVoice: false, isListening: false,
@@ -1281,7 +1320,7 @@ import { listen } from '@tauri-apps/api/event';
     function limpiarSesion(tabId) {
         const t = getTab(tabId);
         if (!t) return;
-        t.messages = [{ id: Date.now(), role: 'system', html: `--- Módulo IA · Sesión de ${lucyConfig.name} (nueva) ---` }];
+        t.messages = [];
         contextUsed = 0;
         refresh();
         persistir();
@@ -2021,7 +2060,7 @@ import { listen } from '@tauri-apps/api/event';
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
             const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|fork_task|wait_task):/i;
-            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:)/i;
+            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|fetch:|mcp_discover:)/i;
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
                 // raw puede venir vacío en auto-retry, así que buscamos el último mensaje user del historial
@@ -2414,6 +2453,27 @@ import { listen } from '@tauri-apps/api/event';
                         readOnlyTasks.push({ label: `[⚖️ Diff] ${diffM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('system_diff', {category:diffM[1].trim()}), 2, true).then(r => `[SYSTEM DIFF RESULT]\n${r}`) });
                     }
 
+                    const mdM = agentResp.match(/<TOOL>mcp_discover:([^<]+)<\/TOOL>/i);
+                    if (mdM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>mcp_discover:[^<]+<\/TOOL>/gi, '');
+                        const mcpSrv = mdM[1].trim();
+                        readOnlyTasks.push({ label: `[🔍 MCP Scanner] ${mcpSrv}`, fn: () => retryWithBackoff(() => invoke('discover_mcp_tools', {serverName: mcpSrv, env: mcpSecrets}), 2, true).then(r => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`) });
+                    }
+                    const fetchM = agentResp.match(/<TOOL>fetch:([^<]+)<\/TOOL>/i);
+                    if (fetchM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>fetch:[^<]+<\/TOOL>/gi, '');
+                        const urlQ = fetchM[1].trim();
+                        readOnlyTasks.push({ label: `[🌐 Lector WEB] ${urlQ}`, fn: () => retryWithBackoff(() => invoke('fetch_url_content', {url: urlQ}), 2, true).then(r => `[FETCH RESULT for '${urlQ}']\n${r}`) });
+                    }
+                    const webM = agentResp.match(/<TOOL>search_web:([^<]+)<\/TOOL>/i);
+                    if (webM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>search_web:[^<]+<\/TOOL>/gi, '');
+                        const webQ = webM[1].trim();
+                        readOnlyTasks.push({ label: `[🌐 Web] ${webQ}`, fn: () => retryWithBackoff(() => invoke('search_web', {query: webQ}), 2, true).then(r => `[WEB SEARCH RESULT for '${webQ}']\n${r}`) });
+                    }
                     const rbM = agentResp.match(/<TOOL>search_runbooks:([^<]+)<\/TOOL>/i);
                     if (rbM) {
                         toolUsed = true;
@@ -2521,7 +2581,7 @@ import { listen } from '@tauri-apps/api/event';
                         for (const mcpQ of [...agentResp.matchAll(/<TOOL>mcp_query:([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
                             toolUsed = true;
                             lucyText = lucyText.replace(/<TOOL>mcp_query:[\s\S]*?<\/TOOL>/gi, '');
-                            readOnlyTasks.push({ label: `[MCP ${mcpQ[1].trim()}]`, fn: () => retryWithBackoff(() => invoke('call_mcp_tool', {serverName:mcpQ[1].trim(), query:mcpQ[2].trim()}), 2, true).then(c => `[MCP ${mcpQ[1].trim()} RESULT]\n`+c) });
+                            readOnlyTasks.push({ label: `[MCP ${mcpQ[1].trim()}]`, fn: () => retryWithBackoff(() => invoke('call_mcp_tool', {serverName:mcpQ[1].trim(), query:mcpQ[2].trim(), env: mcpSecrets}), 2, true).then(c => `[MCP ${mcpQ[1].trim()} RESULT]\n`+c) });
                         }
 
                         const results = await Promise.allSettled(readOnlyTasks.map(t2 => t2.fn()));
@@ -5110,7 +5170,7 @@ if (Test-Path $src) {
             <span>{isEN ? 'Direct actions' : 'Acciones directas'}</span>
             <span class="sb-noai-badge" title={isEN ? "These buttons execute PowerShell scripts directly, bypassing Lucy" : "Estos botones ejecutan scripts de PowerShell directamente, sin pasar por Lucy"}>{isEN ? 'NO AI' : 'SIN IA'}</span>
           </div>
-          <button on:click={() => $showNewActionModal = true} style="background:none; border:none; color:var(--acc); cursor:pointer; font-size:16px; font-weight:bold; line-height:1; padding:0 5px;" title={isEN ? "Add direct action" : "Añadir acción directa"}>+</button>
+          <button on:click={() => { editingActionIdx = null; newActionName = ''; newActionScript = ''; $showNewActionModal = true; }} style="background:none; border:none; color:var(--acc); cursor:pointer; font-size:16px; font-weight:bold; line-height:1; padding:0 5px;" title={isEN ? "Add direct action" : "Añadir acción directa"}>+</button>
         {/if}
       </div>
 
@@ -5438,18 +5498,7 @@ if (Test-Path $src) {
                   </div>
                 </div>
               {/each}
-              {#each quickChips as chip}
-                <button class="chip" on:click={() => runChip(chip)} disabled={tab.isProcessing}
-                  title="{isEN?'Send to':'Enviar a'} Lucy: {chip.claves[0]}">{isEN ? (
-                    chip.claves[0]==='silencia'?'mute audio':
-                    chip.claves[0]==='baja el volumen'?'volume down':
-                    chip.claves[0]==='sube el volumen'?'volume up':
-                    chip.claves[0]==='pausa'?'pause/play':
-                    chip.claves[0]==='siguiente cancion'?'next song':
-                    chip.claves[0]==='anterior cancion'?'prev song':
-                    chip.claves[0]==='bloquea el equipo'?'lock system':chip.claves[0]
-                  ) : chip.claves[0]}</button>
-              {/each}
+              
               <button class="chip chip-add" on:click={abrirNuevoChip} title={isEN ? "Add message shortcut for Lucy" : "Agregar atajo de mensaje para Lucy"}>＋</button>
             </div>
 
@@ -5630,7 +5679,7 @@ if (Test-Path $src) {
   <div class="mb">
     <div class="mbox sm">
       <div class="mhdr">
-        <h2 class="mtitle"><span style="color:var(--acc);">⚡</span> Nueva Acción Rápida</h2>
+        <h2 class="mtitle"><span style="color:var(--acc);">⚡</span> {editingActionIdx !== null ? 'Editar Accion Directa' : 'Nueva Accion Rapida'}</h2>
         <button class="mclose" on:click={() => $showNewActionModal = false}>✕</button>
       </div>
       <div style="text-align:left;margin-bottom:12px;">
@@ -6095,7 +6144,30 @@ if (Test-Path $src) {
       </div>
       <div class="settings-body">
 
-        <!-- Sección: Apariencia -->
+                  <!-- Sección: Secretos MCP -->
+          <div class="settings-section">
+            <div class="settings-section-title">Variables / API Keys para MCP</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              {#each Object.entries(mcpSecrets) as [k, v]}
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <input type="text" value={k} disabled style="background:#0f172a;color:#94a3b8;border:1px solid #1e293b;border-radius:4px;padding:4px;width:120px;font-size:11px;" />
+                  <input type="password" value={v} disabled style="background:#0f172a;color:#94a3b8;border:1px solid #1e293b;border-radius:4px;padding:4px;flex:1;font-size:11px;" />
+                  <button on:click={() => { delete mcpSecrets[k]; mcpSecrets = mcpSecrets; localStorage.setItem('lucy_mcp_secrets', JSON.stringify(mcpSecrets)); }} style="background:transparent;border:none;color:#ef4444;cursor:pointer;">⨯</button>
+                </div>
+              {/each}
+              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+                <input id="newMcpK" type="text" placeholder="Ej. GOOGLE_SHEETS_KEY" style="background:#1e293b;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px;width:120px;font-size:11px;" />
+                <input id="newMcpV" type="password" placeholder="Valor Secreto" style="background:#1e293b;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px;flex:1;font-size:11px;" />
+                <button on:click={() => { 
+                  let k = document.getElementById('newMcpK').value.trim();
+                  let v = document.getElementById('newMcpV').value.trim();
+                  if(k && v){ mcpSecrets[k] = v; mcpSecrets = mcpSecrets; localStorage.setItem('lucy_mcp_secrets', JSON.stringify(mcpSecrets)); document.getElementById('newMcpK').value=''; document.getElementById('newMcpV').value=''; }
+                }} class="settings-btn" style="padding:4px 8px;">Agregar</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sección: Apariencia -->
         <div class="settings-section">
           <div class="settings-section-title">{isEN ? 'Appearance' : 'Apariencia'}</div>
 

@@ -2711,6 +2711,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-javascript",
  "tree-sitter-rust",
+ "urlencoding",
  "walkdir",
  "winreg 0.52.0",
 ]

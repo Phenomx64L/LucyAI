@@ -16,165 +16,56 @@
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout
     // view: which activeView the parent must switch to before spotlighting
-    const STEPS = [
-        // 1. Main chat terminal (the most important feature, center of the app)
+                const STEPS = [
         {
             sel: ['.chat-wrap.on .chat-area', '.chat-wrap.on', '.panel'],
             tip: 'left',
             view: 'terminal',
-            tES: '💬 Terminal IA — El corazón de Lucy',
-            tEN: '💬 AI Terminal — The heart of Lucy',
-            dES: 'Escribe cualquier instrucción en <b>lenguaje natural</b> y Lucy genera, verifica y ejecuta el comando adecuado automáticamente.<br><br>Puedes pedir diagnósticos, ejecutar scripts, adjuntar logs o imágenes. Lucy explica cada resultado y sugiere los próximos pasos.',
-            dEN: 'Type any instruction in <b>natural language</b> and Lucy automatically generates, verifies, and runs the right command.<br><br>Request diagnostics, run scripts, attach logs or images. Lucy explains each result and suggests next steps.',
+            tES: '💬 Terminal IA — Bucle Agéntico',
+            tEN: '💬 AI Terminal — Agentic Loop',
+            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea (Bucle de Auto-curación).',
+            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and auto-execute</b> commands until the task is complete (Self-Healing Loop).',
         },
-        // 2. Input bar — directly below the chat
         {
-            sel: ['.ibar', '.igrp'],
-            tip: 'top',
-            view: 'terminal',
-            tES: '⌨️ Barra de Entrada',
-            tEN: '⌨️ Input Bar',
-            dES: 'Aquí escribes tus instrucciones. Botones adicionales permiten:<br>• 📎 Adjuntar archivos, logs o imágenes<br>• 🎙️ Activar entrada por <b>voz</b> (dictado)<br>• Elegir dinámicamente el <b>modelo de IA</b> (Claude, GPT, Gemini o Local)',
-            dEN: 'Type your instructions here. Additional buttons allow:<br>• 📎 Attach files, logs or images<br>• 🎙️ Activate <b>voice</b> input<br>• Dynamically pick the <b>AI Model</b> (Claude, GPT, Gemini or Local)',
-        },
-        // 2.b Chat Shortcuts
-        {
-            sel: ['.chips', '.ibar'],
-            tip: 'top',
-            view: 'terminal',
-            tES: '⚡ Atajos de Mensaje (Chips)',
-            tEN: '⚡ Message Shortcuts (Chips)',
-            dES: 'Justo encima de la barra de chat hay atajos de mensaje que se envían directamente a Lucy.<br><br>💡 <b>Cómo crearlos:</b> Haz clic en el botón <b>＋</b> al final de la lista de atajos para agregar comandos o instrucciones que envíes frecuentemente a la IA.',
-            dEN: 'Right above the chat input are quick message shortcuts that are sent directly to Lucy.<br><br>💡 <b>How to create:</b> Click the <b>＋</b> button at the end of the shortcut row to add commands or instructions you frequently send to the AI.',
-        },
-        // 3. Tabs — title bar, top of app
-        {
-            sel: ['#tabs-list', '.tabs-area', '.tb'],
-            tip: 'bottom',
-            view: 'terminal',
-            tES: '📑 Pestañas de Sesión',
-            tEN: '📑 Session Tabs',
-            dES: 'Lucy permite <b>múltiples sesiones simultáneas</b>. Crea nuevas pestañas con el botón <b>+</b> y renómbralas con <b>doble clic</b> sobre el nombre.<br><br>💡 Lucy <b>renombra automáticamente</b> cada pestaña según la actividad ejecutada — sin necesidad de intervención manual.',
-            dEN: 'Lucy supports <b>multiple simultaneous sessions</b>. Create new tabs with <b>+</b> and rename them by <b>double-clicking</b> the name.<br><br>💡 Lucy <b>auto-renames</b> each tab based on the current activity — no manual action needed.',
-        },
-        // 4. Dashboard — first item in sidebar Sistema section
-        {
-            sel: ['.sidebar .sb-it[title*="Dashboard"]', '.sidebar .sb-it[title*="ashboard"]'],
-            fallback: '.sidebar',
-            tip: 'right',
-            view: 'dashboard',
-            tES: '📊 Dashboard — Métricas en Vivo',
-            tEN: '📊 Dashboard — Live Metrics',
-            dES: 'Vista de métricas en tiempo real: <b>CPU, RAM, disco y red</b> del equipo local o de cualquier host remoto conectado.<br><br>Incluye tabla de procesos activos, <b>gráficas sparkline</b> de historial y alertas proactivas configurables por umbral. Selecciona el host en el selector superior.',
-            dEN: 'Real-time metrics: <b>CPU, RAM, disk and network</b> for the local machine or any connected remote host.<br><br>Includes active process table, <b>sparkline</b> history charts, and configurable threshold-based alerts. Select the host in the top selector.',
-        },
-        // 5. Log Viewer
-        {
-            sel: ['.sidebar .sb-it[title*="Log Viewer"]', '.sidebar .sb-it[title*="og View"]'],
-            fallback: '.sidebar',
-            tip: 'right',
-            view: 'logviewer',
-            tES: '🗂️ Log Viewer',
-            tEN: '🗂️ Log Viewer',
-            dES: 'Lee y filtra logs del sistema en tiempo real, tanto locales como de hosts remotos. Soporta archivos <code>.log</code>, <code>.txt</code> y <code>.csv</code>.<br><br>Errores y advertencias se <b>colorean automáticamente</b>. Puedes preguntar a Lucy sobre cualquier entrada del log directamente en el chat.',
-            dEN: 'Read and filter system logs in real-time, both local and from remote hosts. Supports <code>.log</code>, <code>.txt</code> and <code>.csv</code> files.<br><br>Errors and warnings are <b>automatically color-coded</b>. Ask Lucy about any log entry directly in the chat.',
-        },
-        // 6. NexShell — host catalogue & categories
-        {
-            sel: ['.ns-hosts-col', '.ns-view', '.ns-body'],
+            sel: ['.sidebar .sb-it[title*="NexShell"]', '.sidebar .sb-it[title*="exShell"]'],
             fallback: '.sidebar .sb-it[title*="NexShell"]',
             tip: 'right',
             view: 'nexshell',
-            tES: '🔌 NexShell — Infraestructura Remota',
-            tEN: '🔌 NexShell — Remote Infrastructure',
-            dES: '<b>NexShell</b> centraliza toda tu infraestructura remota. Desde aquí administras y conectas cualquier tipo de servidor:<br><br>• 🖥 <b>Shell</b> — servidores Linux (SSH) y Windows (WinRM)<br>• 🗄️ <b>Base de datos</b> — PostgreSQL 🐘, MySQL 🐬, MongoDB 🍃, Redis ⚡, MSSQL 🪟<br>• 🐳 <b>Contenedor (Docker)</b> — gestión de contenedores vía SSH<br>• ⎈ <b>Kubernetes</b> — control plane con <code>kubectl</code> asistido por Lucy<br>• 🌐 <b>Red</b> — dispositivos de red y monitoreo<br><br>Usa los filtros y el ordenamiento por <b>estado · nombre · tipo · actividad</b>. El panel de hosts se puede <b>colapsar</b> (◀) para maximizar el workspace.',
-            dEN: '<b>NexShell</b> centralises all your remote infrastructure. Manage and connect to any server type:<br><br>• 🖥 <b>Shell</b> — Linux (SSH) and Windows (WinRM) servers<br>• 🗄️ <b>Database</b> — PostgreSQL 🐘, MySQL 🐬, MongoDB 🍃, Redis ⚡, MSSQL 🪟<br>• 🐳 <b>Container (Docker)</b> — container management via SSH<br>• ⎈ <b>Kubernetes</b> — control plane with Lucy-assisted <code>kubectl</code><br>• 🌐 <b>Network</b> — network devices and monitoring<br><br>Use filters and sort by <b>status · name · type · activity</b>. The hosts panel can be <b>collapsed</b> (◀) to maximise workspace.',
+            tES: '🔌 NexShell — Infraestructura',
+            tEN: '🔌 NexShell — Infrastructure',
+            dES: 'Conecta servidores por SSH, WinRM, Bases de Datos o clústeres Kubernetes de forma nativa. La terminal de NexShell incluye <b>Sugerencias Inteligentes (Ghost Text)</b> en tiempo real.',
+            dEN: 'Bind to SSH, WinRM, Databases, or Kubernetes clusters natively. the NexShell terminal includes real-time <b>Intelligent Ghost Text Suggestions</b>.',
         },
-        // 7. NexShell — embedded workspace + Lucy co-pilot
         {
-            sel: ['.ns-workspace', '.ns-shell-wrap', '.ns-session-tabs'],
-            fallback: '.sidebar .sb-it[title*="NexShell"]',
-            tip: 'left',
-            view: 'nexshell',
-            tES: '🤖 NexShell — Shell con Co-piloto IA',
-            tEN: '🤖 NexShell — AI Co-pilot Shell',
-            dES: 'Al conectarte a un host la terminal se abre <b>inline</b> en el workspace.<br><br><b>Dos formas de interactuar:</b><br>• <code>&gt;_</code> <b>Comando directo</b> — escribe el comando, Lucy sugiere en tiempo real (ghost text ✨)<br>• <b>✨ Lucy</b> — interactúa en lenguaje natural con tu <b>modelo de IA</b> preferido configurado por host<br><br><b>Capacidades avanzadas:</b><br>• 🌿 Bootstrap automático al conectar<br>• ⏱ <b>Ctrl+Enter</b> — ejecuta en background<br>• 📡 <b>Broadcast</b> — comandos multi-host<br>• 📋 <b>Playbooks</b> — secuencias pregrabadas<br>• 📁 <b>Transferencias SCP</b><br>• 📊 <b>Log tail</b> y Exit codes en vivo',
-            dEN: 'When connecting to a host, the terminal opens <b>inline</b> in the workspace.<br><br><b>Two interaction modes:</b><br>• <code>&gt;_</code> <b>Direct command</b> — type a command, Lucy suggests in real time (ghost text ✨)<br>• <b>✨ Lucy</b> — use natural language powered by your preferred <b>AI model</b> selection per host<br><br><b>Advanced capabilities:</b><br>• 🌿 Auto-bootstrap on connect<br>• ⏱ <b>Ctrl+Enter</b> — background execution<br>• 📡 <b>Broadcast</b> — multi-host commands<br>• 📋 <b>Playbooks</b> — preserved sequences<br>• 📁 <b>SCP file transfer</b><br>• 📊 <b>Log tail</b> and live Exit codes',
-        },
-        // 9. Direct Actions
-        {
-            sel: ['.sidebar [title*="Health"]', '.sidebar [title*="Salud"]', '.sidebar [title*="Flush DNS"]', '.sidebar [title*="Direct actions"]', '.sidebar [title*="Acciones directas"]'],
+            sel: ['.sidebar .sb-it[title*="Skills"]', '.sidebar .sb-it[title*="abilidades"]'],
             fallback: '.sidebar',
             tip: 'right',
             view: 'terminal',
-            tES: '⚡ Acciones Directas',
-            tEN: '⚡ Direct Actions',
-            dES: 'Atajos de <b>un clic</b> para tareas de administración frecuentes. Cada acción se ejecuta en tu máquina <b>sin usar la IA</b>.<br><br>💡 <b>Cómo crearlas:</b> Usa el botón <b>+</b> junto al texto "Acciones directas" para agregar tus propios scripts de PowerShell con nombre e ícono personalizados.',
-            dEN: '<b>One-click</b> shortcuts for frequent admin tasks. Each executes locally <b>without using the AI</b>.<br><br>💡 <b>How to create:</b> Use the <b>+</b> button next to "Direct actions" to add your own PowerShell scripts with a custom name and icon.',
+            tES: '⚡ Skills Manager',
+            tEN: '⚡ Skills Manager',
+            dES: 'Automatización pura. Crea "Macros" y Playbooks ejecutables con 1 clic impulsados por IA. Guarda tus rutinas frecuentes de administración y Lucy las ejecutará cuando menciones las palabras clave (Triggers).',
+            dEN: 'Pure automation. Create 1-click executable Macros & Playbooks powered by AI. Save your frequent routines and Lucy will execute them whenever you mention the Triggers.',
         },
-        // 10. Runbooks
-        {
-            sel: ['.sidebar [title*="New runbook"]', '.sidebar [title*="Nuevo runbook"]'],
-            fallback: '.sidebar',
-            tip: 'right',
-            view: 'terminal',
-            tES: '📋 Runbooks — Automatización',
-            tEN: '📋 Runbooks — Automation',
-            dES: 'Crea <b>flujos de trabajo automatizados</b>. Cada runbook es una secuencia de comandos que Lucy ejecuta paso a paso.<br><br>💡 <b>Cómo crearlos:</b> Haz clic en el botón <b>+</b> junto al texto "RUNBOOKS" en la barra lateral superior. Rellena los comandos de cada paso, ideal para auditorías y mantenimientos.',
-            dEN: 'Create <b>automated workflows</b>. Each runbook is a sequence of commands Lucy runs step-by-step.<br><br>💡 <b>How to create:</b> Click the <b>+</b> button next to "RUNBOOKS" in the upper sidebar. Fill in the commands for each step, ideal for audits and maintenance.',
-        },
-        // 11. Status bar — very bottom
-        {
-            sel: ['.sbar'],
-            tip: 'top',
-            view: 'terminal',
-            tES: '📡 Barra de Estado',
-            tEN: '📡 Status Bar',
-            dES: 'Panel de estado en tiempo real:<br>• 🟢 <b>Keyring seguro</b> — credenciales protegidas en Windows Credential Manager<br>• <b>Host activo</b> — servidor remoto seleccionado<br>• 🟡 <b>Procesando…</b> — Lucy ejecutando una tarea (con timer)<br>• Versión de Lucy, alertas de seguridad de red y host activo',
-            dEN: 'Real-time status panel:<br>• 🟢 <b>Secure keyring</b> — credentials in Windows Credential Manager<br>• <b>Active host</b> — selected remote server<br>• 🟡 <b>Processing…</b> — Lucy running a task (with timer)<br>• Lucy OS version, network security alerts and active host',
-        },
-        // 12. Win controls — top right (theme, focus, Ctrl+P)
-        {
-            sel: ['.win-controls'],
-            tip: 'bottom',
-            view: 'terminal',
-            tES: '🌗 Controles y Accesos Rápidos',
-            tEN: '🌗 Controls & Quick Access',
-            dES: '• <b>☀️/🌙</b> Alterna entre tema claro y oscuro<br>• <b>⊟/⊞</b> Modo focus — oculta el panel lateral (<kbd>Ctrl+M</kbd>)<br><br>💡 Presiona <kbd>Ctrl+P</kbd> en cualquier momento para la <b>paleta de comandos</b> con acceso instantáneo a todas las funciones de Lucy.',
-            dEN: '• <b>☀️/🌙</b> Toggle light / dark theme<br>• <b>⊟/⊞</b> Focus mode — hides sidebar (<kbd>Ctrl+M</kbd>)<br><br>💡 Press <kbd>Ctrl+P</kbd> at any time for the <b>command palette</b> with instant access to all Lucy features.',
-        },
-        // 13. Sidebar overview
-        {
-            sel: ['.sidebar'],
-            tip: 'right',
-            view: 'terminal',
-            tES: '🧭 Panel Lateral — Navegación',
-            tEN: '🧭 Sidebar — Navigation',
-            dES: 'Centro de control de Lucy. Accede a todas las vistas desde aquí.<br><br>Colapsa el panel con el botón <b>‹</b> para maximizar el espacio. El <b>modo focus</b> (<kbd>Ctrl+M</kbd>) lo oculta completamente. Arrastra el borde derecho para ajustar el ancho a tu gusto.',
-            dEN: 'Lucy\'s control center. Access all views from here.<br><br>Collapse with the <b>‹</b> button to maximize workspace. <b>Focus mode</b> (<kbd>Ctrl+M</kbd>) hides it completely. Drag the right edge to adjust the width.',
-        },
-        // 14. Bottom options — last step, points to Tutorial/About buttons
         {
             sel: ['.sidebar [title*="Settings"]', '.sidebar [title*="Configurac"]'],
             fallback: '.sidebar',
             tip: 'right',
             view: 'terminal',
-            tES: '⚙️ Configuración del Sistema',
+            tES: '⚙️ Configuración & Inteligencia',
             tEN: '⚙️ System Settings',
-            dES: 'Un menú centralizado para adaptar Lucy a ti:<br>• 🤖 <b>Modelos IA:</b> Ajusta la URL si usas Ollama o cambia entre Gemini/Claude<br>• 🔒 <b>Permisos:</b> Exige permisos para eliminar archivos o aislar carpetas<br>• 💫 <b>Interfaz:</b> Temas visuales y control de telemetría<br><br>Todo lo que ajustes se guardará automáticamente de forma segura.',
-            dEN: 'A centralized menu to tailor Lucy to your needs:<br>• 🤖 <b>AI Models:</b> Adjust the URL if you use Ollama or switch Gemini/Claude<br>• 🔒 <b>Permissions:</b> Escalate permissions to delete files or isolate paths<br>• 💫 <b>Interface:</b> Visual themes and telemetry controls<br><br>All adjustments are securely auto-saved.',
+            dES: 'Configura tus Modelos (LLM), gestiona Permisos Locales y administra <b>Secretos MCP</b>. El protocolo MCP (Model Context Protocol) permite a Lucy aprender nuevas herramientas de forma dinámica.',
+            dEN: 'Configure LLMs, manage Security Permissions and <b>MCP Secrets</b>. The MCP Protocol enables dynamic "plug and play" tool learning for Lucy.',
         },
-        // 15. Extra Preferences
         {
-            sel: ['.sidebar [title*="Tutorial"]', '.sidebar [title*="Acerca"]', '.sidebar [title*="About"]'],
+            sel: ['.sidebar .sb-it[title*="Dashboard"]', '.sidebar'],
             fallback: '.sidebar',
             tip: 'right',
-            view: 'terminal',
-            tES: '⚙️ Registros y Preferencias',
-            tEN: '⚙️ Logs & Preferences',
-            dES: 'En la parte inferior de la barra lateral:<br>• 📋 <b>Comandos / Audit Log / Exportar Log</b> — registro de toda la actividad<br>• 🎓 <b>Ver Tutorial</b> — relanza este tour en cualquier momento<br>• ℹ️ <b>Acerca de Lucy</b> — versión y modelo activo<br>• 🔑 <b>Cambiar API Key</b> — actualiza tu clave de Gemini',
-            dEN: 'At the bottom of the sidebar:<br>• 📋 <b>Commands / Audit Log / Export</b> — full activity log<br>• 🎓 <b>Show Tutorial</b> — relaunch this tour anytime<br>• ℹ️ <b>About Lucy</b> — version and active model<br>• 🔑 <b>Change API Key</b> — update your Gemini key',
-        },
+            view: 'dashboard',
+            tES: '📊 Dashboard y Métricas',
+            tEN: '📊 Metrics Dashboard',
+            dES: 'Métricas instantáneas locales o de hosts remotos. Monitorea CPU, Memoria, Disco y red a través de gráficas vectoriales. Una vista panorámica del rendimiento.',
+            dEN: 'Instant metrics for local or remote hosts. Monitor CPU, Memory, Disk and Network via vector graphs. A panoramic view of performance.',
+        }
     ];
 
     // ── State (plain let — never assigned inside $: derivations) ────────────

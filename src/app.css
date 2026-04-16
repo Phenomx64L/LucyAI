@@ -13,10 +13,10 @@
 
 :root {
   /* ── Bitono Premium — profundidad visual sin bordes pesados ── */
-  --bg-base:       #0f111a;
-  --bg-dark:       #12141e;
-  --bg-card:       #161822;
-  --bg-elevated:   #1e2030;
+  --bg-base:       #0d1117;
+  --bg-dark:       #161b22;
+  --bg-card:       #161b22;
+  --bg-elevated:   #21262d;
   /* ── Accent: neon verde operacional ── */
   --accent:        #10b981;
   --accent-dim:    rgba(16, 185, 129, 0.10);
@@ -46,8 +46,8 @@
   /* Punchier defaults — pushed even further for visible contrast on dark monitors */
   --bg-top:          #5a6478;
   --bg-mid:          #1c1f2a;
-  --bg-bottom:       #050608;
-  --sidebar-overlay: rgba(8, 10, 16, 0.55);
+  --bg-bottom:       #0d1117;
+  --sidebar-overlay: rgba(13, 17, 23, 0.65);
   --border-glass:    rgba(255, 255, 255, 0.08);
 }
 
@@ -145,7 +145,7 @@
 body {
   margin: 0;
   font-family: var(--font-ui);
-  background: #0b0d16;
+  background: #0d1117;
   color: var(--text-main);
   height: 100vh;
   overflow: hidden;
@@ -853,3 +853,7 @@ body > div, #svelte { height: 100%; display: contents; }
   width: 18px;
   height: 18px;
 }
+  
+/* �� MICRO-ANIMATIONS �� */  
+@keyframes fade-slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }  
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } } 

@@ -1458,10 +1458,11 @@
 
       <div class="ns-col-lbl">{isEN ? 'CONFIGURED HOSTS' : 'HOSTS CONFIGURADOS'} <span class="ns-col-count">{nsHostsSorted.length}</span></div>
 
-      {#each nsHostsSorted as h (h.id)}
+      {#each nsHostsSorted as h, i (h.id)}
         {@const sess = rshellSessions.find(s => s.host.id === h.id)}
         {@const isActive = sess?.id === activeShellId}
         <div class="ns-host-card {sess ? (sess.connected ? 'ns-card-on' : 'ns-card-connecting') : ''} {isActive ? 'ns-card-focused' : ''}"
+            style="--i: {i};"
           role="button" tabindex="0"
           on:click={() => { if(sess) activeShellId = sess.id; }}
           on:keydown={(e) => e.key==='Enter' && sess && (activeShellId = sess.id)}>
@@ -2102,12 +2103,16 @@
         border:1px solid var(--bdr);
         border-radius:10px;
         padding:10px 12px;
-        transition:border-color .15s, box-shadow .15s;
+        transition:border-color .2s, box-shadow .2s, transform .2s;
+        animation: fade-slide-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        animation-delay: calc(var(--i) * 0.04s);
+        opacity: 0;
         cursor:default;
     }
     .ns-host-card:hover{
         border-color:rgba(255,255,255,.15);
-        box-shadow:0 2px 12px rgba(0,0,0,.3);
+        box-shadow:0 6px 16px rgba(0,0,0,.4);
+        transform: translateY(-1px);
     }
     .ns-card-on{
         border-color:rgba(0,230,130,.35)!important;

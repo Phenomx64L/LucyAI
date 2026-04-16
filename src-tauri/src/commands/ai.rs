@@ -330,14 +330,16 @@ fn build_system_prompt(
         - LOCATE FILE: <TOOL>locate_file:name</TOOL> — Searches the entire local drive for a filename instantaneously (O(log n)) using the SQLite indexer.\n\
         - START INDEXER: <TOOL>start_indexer:C:\\</TOOL> — Rebuilds the global SQLite file index for a given path. Use this if locate_file cannot find something you suspect exists.\n\
         - CHANGE DIR: <TOOL>cd:/nueva/ruta</TOOL> — Changes your logical working directory. Use this when the user asks you to switch paths or create a project in a specific directory. ⚠️ CRITICAL: NEVER use `<EXECUTE>cd path</EXECUTE>` — that spawns a subprocess that exits immediately and changes NOTHING. ALWAYS use `<TOOL>cd:path</TOOL>` which persists the change for all future commands.\n\
-        - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot of system processes or ports. Call it again later to get a DIFFERENCE (who died/closed, who was born/opened). Perfect for verifying if your commands worked.\n\
+        RULE 22 - WEB KNOWLEDGE: NEVER guess release dates, software versions, or post-2024 information. You MUST ALWAYS use <TOOL>search_web:query</TOOL> IMMEDIATELY in your response. DO NOT ask the user for permission to search. Do it autonomously.\n        If the snippet is too short or lacks exact dates/versions, YOU MUST copy the URL from the snippet and execute `<TOOL>fetch:URL</TOOL>` to deeply read the article before responding to the user.
+        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Allows you to search DuckDuckGo to retrieve documentation, current events post-2024 cutoff, or exact system requirements.\n\
+          - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot of system processes or ports. Call it again later to get a DIFFERENCE (who died/closed, who was born/opened). Perfect for verifying if your commands worked.\n\
         - SEARCH RUNBOOKS: <TOOL>search_runbooks:query</TOOL> — uses TF-IDF Semantic similarity to fetch the top 2 company runbooks that match your technical issue query.\n\
         - SEARCH FILES: <TOOL>searchfiles:/directory|||pattern</TOOL> — searches text across all files. For multi-pattern search, separate words with '|' (e.g. ERROR|CRITICAL|PANIC), this uses Aho-Corasick for blazing speed.\n\
         - ANALYZE CODE: <TOOL>analyze_code:/path</TOOL> — uses Tree-Sitter to extract the Abstract Syntax Tree (AST) summary of Rust or JavaScript. Use this BEFORE reading the whole file if you only want to explore existing functions/classes.\n\
         - SUB-AGENTS (Parallel Forking):
         - <TOOL>fork_task:TaskID|||Instruction</TOOL> - Forks a fast background agent to investigate something while you continue. Does not return result immediately.
         - <TOOL>wait_task:TaskID</TOOL> - Waits for a forked task to finish and returns its findings.
-        - MCP: <TOOL>mcp_query:server|||tool|||json_args</TOOL> - Spawns a local MCP server, asks for context/tool, and returns the result json natively.
+        - FETCH WEB: <TOOL>fetch:URL</TOOL> — Copies the full text of a webpage. Use this to dive deeper into web search results when snippets are insufficient.\n        - MCP DISCOVER: <TOOL>mcp_discover:server_cmd</TOOL> — Interrogates an MCP server (e.g. npx -y @modelcontextprotocol/server-sqlite) to learn what tools it offers. YOU MUST ALWAYS EXECUTE THIS FIRST before using mcp_query on an unknown MCP.\n        - MCP QUERY: <TOOL>mcp_query:server_cmd|||tool_name|||json_args</TOOL> — Spawns a local MCP server, asks for a tool, and returns result. (E.g. <TOOL>mcp_query:npx -y @modelcontextprotocol/server-sqlite|||query|||{{\"query\":\"SELECT * FROM foo\"}}</TOOL>).
         TOOL CHAINING: You are AUTHORIZED to use MULTIPLE tools in a single response to speed up your work. Simply output consecutive <TOOL>...</TOOL> tags. Use this to: search → read → analyze → edit → verify in parallel.\n\
         EDITING FILES: For modifications, ALWAYS prefer <TOOL>editfile</TOOL> over <TOOL>writefile</TOOL>. editfile does surgical find-and-replace — you only need to specify the exact block to change. Use writefile ONLY for creating new files or complete rewrites.\n\
         UX RULE (FILES MODIFIED): Never manually format a list of files you modified. The system interface will automatically group and display 'Files Modified' badges for the user when you use writefile or editfile.\n\
@@ -664,5 +666,72 @@ pub fn log_agent_loop(message: String) {
     let path = crate::utils::logging::get_logs_dir().join("lucy_agent_loop.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), message);
+    }
+}
+
+// ==========================================
+// GENERADOR DIRECTO DE SKILLS (Sin overhead de agente)
+// ==========================================
+#[tauri::command]
+pub async fn generate_skill_template(idea: String, model: String) -> Result<String, String> {
+    let provider = if model.starts_with("gpt-") { "openai" } 
+                   else if model.starts_with("claude-") { "anthropic" } 
+                   else if model.starts_with("local-") { "local" }
+                   else { "gemini" };
+
+    let entry = keyring::Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
+    let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
+
+    let sys_prompt = format!(r#"Eres un generador estricto de JSON. Crea una "skill" de automatización de Windows/Powershell para la siguiente idea: {}.
+Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando esta estructura:
+{{
+  "name": "Nombre corto descriptivo",
+  "category": "monitoring|admin|network|security|diagnostics",
+  "description": "Qué hace la skill",
+  "script": "El script ps1. Usa {{paramName}} para parámetros.",
+  "parameters": [{{"name":"paramName","type":"string","required":true,"description":"Para qué es"}}],
+  "triggers": ["frase natural 1", "frase 2"],
+  "tags": ["tag1", "tag2"]
+}}"#, idea);
+
+    let req = match provider {
+        "openai" => {
+            let payload = serde_json::json!({ "model": model, "messages": [{"role": "user", "content": sys_prompt}] });
+            crate::state::HTTP_CLIENT.post("https://api.openai.com/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&payload)
+        },
+        "anthropic" => {
+            let payload = serde_json::json!({ "model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": sys_prompt}] });
+            crate::state::HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&payload)
+        },
+        _ => { // gemini
+            let payload = serde_json::json!({ "contents": [{ "parts": [{"text": sys_prompt}] }] });
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model, api_key);
+            crate::state::HTTP_CLIENT.post(&url).json(&payload)
+        }
+    };
+
+    let res = req.send().await.map_err(|e| format!("Error de conexión: {}", e))?;
+    let status = res.status();
+    let body_text = res.text().await.map_err(|e| e.to_string())?;
+
+    if status.is_success() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
+            let text = match provider {
+                "openai" | "local" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
+                "anthropic" => v["content"].get(0).and_then(|c| c["text"].as_str()),
+                _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
+            };
+            if let Some(t) = text {
+                return Ok(t.to_string());
+            }
+        }
+        Ok(body_text)
+    } else {
+        Err(format!("Respuesta API ({}): {}", provider, body_text))
     }
 }
