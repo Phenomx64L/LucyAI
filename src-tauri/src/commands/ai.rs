@@ -5,6 +5,93 @@ use serde_json::json;
 use tauri::Emitter;
 use futures_util::StreamExt;
 use crate::state::{HTTP_CLIENT, ALLOWED_MODELS};
+use crate::commands::metrics::log_usage_internal;
+
+// ── LIST LOCAL MODELS (Ollama /api/tags) ─────────────────────────────────────
+/// Pregunta a Ollama (o endpoint compatible) qué modelos hay instalados.
+/// Lee la URL del chat endpoint guardada en keyring (`local_api_key`),
+/// deriva la base y consulta `{base}/api/tags`.
+#[tauri::command]
+pub async fn list_local_models() -> Result<Vec<String>, String> {
+    let entry = Entry::new("LucySysAdmin", "local_api_key").map_err(|e| e.to_string())?;
+    let stored = entry.get_password().map_err(|_| "Endpoint local no configurado".to_string())?;
+
+    // Derivar base URL: quitar /v1/chat/completions, /v1, /api/chat, etc.
+    let base = stored
+        .trim_end_matches('/')
+        .trim_end_matches("/v1/chat/completions")
+        .trim_end_matches("/api/chat")
+        .trim_end_matches("/v1")
+        .trim_end_matches("/api")
+        .trim_end_matches('/')
+        .to_string();
+
+    let tags_url = format!("{}/api/tags", base);
+    let resp = HTTP_CLIENT
+        .get(&tags_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("No se pudo conectar a Ollama en {}: {}", tags_url, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Ollama respondió {}: verifica que esté corriendo", resp.status()));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| format!("JSON inválido: {}", e))?;
+    let models = json["models"].as_array().ok_or("Respuesta sin campo 'models'")?;
+
+    let names: Vec<String> = models
+        .iter()
+        .filter_map(|m| m["name"].as_str().map(String::from))
+        .collect();
+
+    Ok(names)
+}
+
+// ── TOKEN EXTRACTION from API responses ──────────────────────────────────────
+
+/// Extract input and output tokens from Anthropic API response
+fn extract_tokens_anthropic(json: &serde_json::Value) -> Option<(u32, u32)> {
+    let usage = &json["usage"];
+    let input = usage["input_tokens"].as_u64()? as u32;
+    let output = usage["output_tokens"].as_u64()? as u32;
+    Some((input, output))
+}
+
+/// Extract input and output tokens from OpenAI API response
+fn extract_tokens_openai(json: &serde_json::Value) -> Option<(u32, u32)> {
+    let usage = &json["usage"];
+    let input = usage["prompt_tokens"].as_u64()? as u32;
+    let output = usage["completion_tokens"].as_u64()? as u32;
+    Some((input, output))
+}
+
+/// Extract input and output tokens from Google Gemini API response
+fn extract_tokens_gemini(json: &serde_json::Value) -> Option<(u32, u32)> {
+    let usage = &json["usageMetadata"];
+    let input = usage["promptTokenCount"].as_u64()? as u32;
+    let output = usage["candidatesTokenCount"].as_u64()? as u32;
+    Some((input, output))
+}
+
+// ── MAX TOKENS por modelo ────────────────────────────────────────────────────
+/// Devuelve el max_tokens óptimo para cada modelo de Anthropic.
+/// Si se pasa un override > 0, lo usa directamente (escalación por truncamiento).
+fn get_max_tokens(model: &str, override_val: Option<u32>) -> u32 {
+    if let Some(v) = override_val {
+        if v > 0 { return v; }
+    }
+    if model.contains("sonnet-4") || model.contains("opus-4") {
+        16384
+    } else if model.contains("3-7") || model.contains("3.7") {
+        16384
+    } else if model.contains("3-5") || model.contains("3.5") {
+        8192
+    } else {
+        8192 // default seguro
+    }
+}
 
 // ── URL CONTENT FETCHER ───────────────────────────────────────────────────────
 
@@ -46,10 +133,8 @@ fn strip_html_tags(html: &str) -> String {
 }
 
 /// Fetches a URL and returns up to 12 000 chars of readable plain text.
-/// Used by the frontend to attach web documentation to the AI context.
 #[tauri::command]
 pub async fn fetch_url_content(url: String) -> Result<String, String> {
-    // Basic URL validation
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("URL debe comenzar con http:// o https://".to_string());
     }
@@ -71,7 +156,6 @@ pub async fn fetch_url_content(url: String) -> Result<String, String> {
         .map_err(|e| format!("Error al leer cuerpo: {}", e))?;
 
     let plain = strip_html_tags(&body);
-    // Collapse whitespace
     let clean: String = plain.split_whitespace().collect::<Vec<&str>>().join(" ");
     let truncated = if clean.len() > 6_000 { &clean[..6_000] } else { &clean };
 
@@ -116,17 +200,18 @@ fn build_hosts_context(hosts_json: Option<&str>) -> String {
     lines
 }
 
-fn load_local_runbooks(dir_path: Option<&str>) -> String {
-    let Some(path) = dir_path else { return String::new(); };
-    if path.trim().is_empty() { return String::new(); }
-    
-    let path_obj = std::path::Path::new(path);
+#[tauri::command]
+pub async fn search_runbooks(dir_path: Option<String>, query: String) -> Result<String, String> {
+    use simsearch::SimSearch;
+
+    let Some(path) = dir_path else { return Err("No runbooks directory configured.".to_string()) };
+    let path_obj = std::path::Path::new(&path);
     if !path_obj.exists() || !path_obj.is_dir() {
-        return String::new();
+        return Err("Runbooks directory not found.".to_string());
     }
 
-    let mut content = String::from("\n<COMPANY_RUNBOOKS>\n");
-    let mut found = false;
+    let mut engine: SimSearch<String> = SimSearch::new();
+    let mut files_metadata = std::collections::HashMap::new();
 
     if let Ok(entries) = std::fs::read_dir(path_obj) {
         for entry in entries.flatten() {
@@ -136,23 +221,45 @@ fn load_local_runbooks(dir_path: Option<&str>) -> String {
                     let ext_str = ext.to_string_lossy().to_lowercase();
                     if ext_str == "md" || ext_str == "txt" {
                         if let Ok(text) = std::fs::read_to_string(&p) {
-                            found = true;
-                            content.push_str(&format!("--- FILE: {} ---\n", p.file_name().unwrap_or_default().to_string_lossy()));
-                            let trunc = if text.len() > 100_000 { &text[..100_000] } else { &text };
-                            content.push_str(trunc);
-                            content.push_str("\n\n");
+                            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                            engine.insert(name.clone(), &text);
+                            files_metadata.insert(name, text);
                         }
                     }
                 }
             }
         }
     }
-    
-    if !found { return String::new(); }
-    
-    content.push_str("</COMPANY_RUNBOOKS>\n");
-    content.push_str("COMPANY KNOWLEDGE RULE: Always consult <COMPANY_RUNBOOKS> first when facing an error or when the user asks how to do something related to the company infrastructure. If a runbook matches the scenario, EXECUTE EXACTLY the steps outlined in the file.\n");
-    content
+
+    let results = engine.search(&query);
+    if results.is_empty() {
+        return Ok(format!("[Sin resultados SEMÁNTICOS estrictos para '{}'", query));
+    }
+
+    let mut out = String::new();
+    for r in results.into_iter().take(2) { // Top 2 más relevantes
+        if let Some(content) = files_metadata.get(&r) {
+            let trunc = if content.len() > 12000 { &content[..12000] } else { content };
+            out.push_str(&format!("--- RUNBOOK FILE: {} ---\n{}\n\n", r, trunc));
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn change_agent_dir(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() && p.is_dir() {
+        if let Ok(mut cwd) = crate::state::GLOBAL_CWD.write() {
+            *cwd = path.clone();
+            std::env::set_current_dir(&path).ok();
+            Ok(format!("Directorio de trabajo cambiado a: {}", path))
+        } else {
+            Err("Fallo al bloquear GLOBAL_CWD".into())
+        }
+    } else {
+        Err(format!("Directorio no encontrado o no válido: {}", path))
+    }
 }
 
 fn build_system_prompt(
@@ -165,21 +272,26 @@ fn build_system_prompt(
     runbooks_dir: Option<&str>,
 ) -> String {
     let cwd = working_dir;
-    let local_runbooks = load_local_runbooks(runbooks_dir);
+    let runbooks_info = if let Some(rf) = runbooks_dir {
+        format!("Runbooks Directory Configured: {rf}\nUse <TOOL>search_runbooks:YOUR_QUERY</TOOL> to fetch specific runbook files using Semantic Search TF-IDF. Strongly consider doing this BEFORE executing commands if the user is asking context-heavy infrastructure questions.")
+    } else { "".to_string() };
+
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
     format!(
         "You are Lucy, an expert Windows SysAdmin AI assistant with autonomous code analysis and modification capabilities.\n\
         {lang}\n\
+        CURRENT USER: {user_name} (Profile: {user_profile})\n\
         WORKING DIRECTORY: {cwd}\n\
+        {rb}\n\
         When the user references project files without a full path, resolve them relative to this directory.\n\
         RULE 0 — INTENT DETECTION (apply BEFORE anything else):\n\
         STEP 1: Classify the message into one of these categories:\n\
-        A) CONVERSATIONAL — questions about you, your logic, opinions, advice, explanations, 'how', 'why', 'what is', 'can you', 'cómo', 'qué', 'por qué', 'puedes', 'explícame', 'ves algún problema', 'qué opinas', 'cómo podríamos' → respond with MARKDOWN TEXT ONLY. NO <EXECUTE>, NO <TOOL>.\n\
-        B) FILE OPERATION — the user mentions a file name, path, or asks to analyze/review/fix code → use RULE 17/18 <TOOL> file operations. If only a filename is given (e.g. 'local.rs', '+page.svelte'), resolve it within the WORKING DIRECTORY using <TOOL>searchfiles</TOOL> or <TOOL>listdir</TOOL> first.\n\
-        C) SYSTEM ACTION — the user asks to DO something on the system: install, restart, check status, clean, generate, create, execute, list processes/services, verify connectivity → use <EXECUTE>, <EXECUTE_REMOTE> or appropriate <TOOL>. NEVER print commands in plain text if they belong to this category.\n\
-        STEP 2: If the message does NOT contain a specific file path or system target, AND is NOT about code, it is category A (CONVERSATIONAL). Respond in Markdown only.\n\
-        STEP 3: 'verifica' + file path = category B. 'verifica' without file path = category A. 'ves algún problema' about YOUR logic = category A. 'busca todas las funciones' = category B.\n\
-        RULE 1: To execute a local action or tool, YOU MUST ALWAYS reason first. Provide your reasoning wrapped in <THOUGHT>...</THOUGHT> tags. AFTER your reasoning, YOU ABSOLUTELY MUST provide the command wrapped in <EXECUTE>...</EXECUTE>, <EXECUTE_REMOTE target=\"...\">...</EXECUTE_REMOTE> or <TOOL>...</TOOL> tags. NEVER print bare commands in plain text. NEVER output <EXECUTE> or <TOOL> without a preceding <THOUGHT> block analyzing the risks.\n\
-        RULE 2: Commands requiring admin rights must use EXACTLY: <EXECUTE>Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"COMMAND\"'</EXECUTE>\n\
+          A) CONVERSATIONAL — general questions -> respond with normal text.\n\
+          B) FILE OPERATION — user asks to create, edit, or read a file -> You MUST use <TOOL> operations like <TOOL>writefile:/path</TOOL> or <EXECUTE> directly. DO NOT just show the code to the user, ACTUALLY create the file for them autonomously.\n\
+          C) SYSTEM ACTION — user asks to execute on the system -> Use <EXECUTE> tags autonomously.\n\
+          D) CODE GENERATION — user EXPLICITLY asks to just SEE code without running it -> Provide standard markdown code blocks without executing.\n\
+          RULE 1: For trivial tasks (like simple file creation, basic commands), COMPLETELY BYPASS <THOUGHT> tags and output the <TOOL>...</TOOL> or <EXECUTE>...</EXECUTE> tags NATIVELY to save tokens and answer instantaneously. MAKE SURE TO ACTUALLY USE THE XML TAGS (do not write raw commands without wrappers). For complex architecture tasks, you may use <THOUGHT> tags first.\n\
+        RULE 2: If a command requires admin elevation, DO NOT auto-generate Start-Process RunAs. Instead: explain what requires elevation, show the command the user should run, and ask 'Do you want me to execute this with admin privileges?'. Only generate the RunAs <EXECUTE> after user explicitly confirms.\n\
         RULE 3: NEVER print raw HTML. Use Markdown for formatting responses.\n\
         RULE 4: ONLY if a command you already executed in THIS conversation returned an error, analyze the error and ask how to proceed WITHOUT generating <EXECUTE>. Do NOT apply this rule to new independent instructions.\n\
         RULE 5: Silently correct phonetically mistranscribed words.\n\
@@ -190,7 +302,7 @@ fn build_system_prompt(
         RULE 10: To keep the machine awake use PowerToys Awake.\n\
         RULE 11: For cleaning system logs, ALWAYS use RULE 2 elevation.\n\
         RULE 12: If asked about quick actions or the sidebar, tell them to use the + button in the side panel.\n\
-        RULE 13: Each user message is an INDEPENDENT instruction unless explicitly referencing a previous result. Do NOT mix outputs or reports from previous tasks into new responses.\n\
+        RULE 13: Each user message is INDEPENDENT unless explicitly referencing a previous result. Do NOT mix outputs or reports from previous tasks into new responses.\n\
         RULE 14 — HOST ROUTING: When the user asks to execute on a CONFIGURED REMOTE HOST (check the JSON list below), YOU MUST NEVER use Invoke-Command or SSH manually. Instead, use the native tool: <EXECUTE_REMOTE target=\"host_id\">YOUR_COMMAND</EXECUTE_REMOTE>. The system will securely inject credentials and execute YOUR_COMMAND over WinRM or SSH natively. Example: <EXECUTE_REMOTE target=\"e4b5c6\">Get-ADUser -Identity admin</EXECUTE_REMOTE>.\n\
         CRITICAL RULE FOR REMOTE: If an <EXECUTE_REMOTE> command returns a syntax error or property validation error, DO NOT attempt to rewrite the command using Invoke-Command or Get-Credential. The connection is fully isolated and managed by the system. Simply correct your YOUR_COMMAND syntax and try again using <EXECUTE_REMOTE>.\n\
         RULE 15 — ALTERNATIVE EXECUTORS (use when PowerShell is blocked by policy or unavailable):\n\
@@ -208,50 +320,68 @@ fn build_system_prompt(
         When the user asks for network info, processes, registry values, or hardware info and PowerShell might be restricted, prefer these native alternatives.\n\
         RULE 17 — FILE & CODE TOOLS (ALWAYS prefer over PowerShell — you are an AI agent with tool chaining):\n\
         These tools execute natively in Rust. The system will automatically feed results back to you so you can chain multiple operations.\n\
+        ⚠️ CRITICAL SYNTAX RULE: You MUST ALWAYS wrap tool invocations inside <TOOL>...</TOOL> tags VERBATIM. NEVER write a tool name as plain text (e.g. NEVER write 'system_diff:tasks' alone — it MUST be '<TOOL>system_diff:tasks</TOOL>'). The system parser only recognizes tools wrapped in literal <TOOL> tags. Plain text tool names will be IGNORED and the user will see nothing happen.\n\
         Available tools:\n\
         - READ FILE: <TOOL>readfile:/path/to/file</TOOL> — reads file content (max 512KB). For large files use readlines.\n\
         - READ LINES: <TOOL>readlines:/path/to/file:START:COUNT</TOOL> — reads specific lines (1-based). Example: <TOOL>readlines:C:\\config.txt:1:50</TOOL>\n\
-        - WRITE FILE: <TOOL>writefile:/path/to/file</TOOL> followed by <FILECONTENT>full content</FILECONTENT> — overwrites entire file.\n\
-        - EDIT FILE: <TOOL>editfile:/path/to/file</TOOL> followed by <OLDSTRING>exact text to find</OLDSTRING><NEWSTRING>replacement text</NEWSTRING> — surgical find-and-replace WITHOUT rewriting the whole file. PREFERRED for modifications.\n\
+        - WRITE FILE: <TOOL>writefile:/path/to/file</TOOL> followed by <FILECONTENT>full content</FILECONTENT> — overwrites entire file. ⚠️ TEXT ONLY: writefile writes UTF-8 text. It CANNOT create binary files (.ico, .png, .jpg, .exe, .dll, .wasm, .onnx, etc.). For binary assets use <EXECUTE> with PowerShell: `Invoke-WebRequest -Uri URL -OutFile path` to download, or `cargo tauri icon input.png` to generate app icons, or `[System.IO.File]::WriteAllBytes(path, bytes)` for raw bytes.\n\
+        - EDIT FILE: <TOOL>editfile:/path/to/file|||exact text to find|||replacement text</TOOL> — surgical find-and-replace WITHOUT rewriting the whole file. PREFERRED for modifications.\n\
         - LIST DIR: <TOOL>listdir:/path/to/dir</TOOL> — lists directory contents with sizes and dates.\n\
-        - SEARCH FILES: <TOOL>searchfiles:/directory|search pattern</TOOL> — searches text across all files in a directory (like grep). Returns file:line matches.\n\
-        TOOL CHAINING: You can use ONE tool per response. After execution, the system sends you the result and you can use another tool. This continues up to 8 steps. Use this to: search → read → analyze → edit → verify.\n\
+        - LOCATE FILE: <TOOL>locate_file:name</TOOL> — Searches the entire local drive for a filename instantaneously (O(log n)) using the SQLite indexer.\n\
+        - START INDEXER: <TOOL>start_indexer:C:\\</TOOL> — Rebuilds the global SQLite file index for a given path. Use this if locate_file cannot find something you suspect exists.\n\
+        - CHANGE DIR: <TOOL>cd:/nueva/ruta</TOOL> — Changes your logical working directory. Use this when the user asks you to switch paths or create a project in a specific directory. ⚠️ CRITICAL: NEVER use `<EXECUTE>cd path</EXECUTE>` — that spawns a subprocess that exits immediately and changes NOTHING. ALWAYS use `<TOOL>cd:path</TOOL>` which persists the change for all future commands.\n\
+        - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot of system processes or ports. Call it again later to get a DIFFERENCE (who died/closed, who was born/opened). Perfect for verifying if your commands worked.\n\
+        - SEARCH RUNBOOKS: <TOOL>search_runbooks:query</TOOL> — uses TF-IDF Semantic similarity to fetch the top 2 company runbooks that match your technical issue query.\n\
+        - SEARCH FILES: <TOOL>searchfiles:/directory|||pattern</TOOL> — searches text across all files. For multi-pattern search, separate words with '|' (e.g. ERROR|CRITICAL|PANIC), this uses Aho-Corasick for blazing speed.\n\
+        - ANALYZE CODE: <TOOL>analyze_code:/path</TOOL> — uses Tree-Sitter to extract the Abstract Syntax Tree (AST) summary of Rust or JavaScript. Use this BEFORE reading the whole file if you only want to explore existing functions/classes.\n\
+        - SUB-AGENTS (Parallel Forking):
+        - <TOOL>fork_task:TaskID|||Instruction</TOOL> - Forks a fast background agent to investigate something while you continue. Does not return result immediately.
+        - <TOOL>wait_task:TaskID</TOOL> - Waits for a forked task to finish and returns its findings.
+        - MCP: <TOOL>mcp_query:server|||tool|||json_args</TOOL> - Spawns a local MCP server, asks for context/tool, and returns the result json natively.
+        TOOL CHAINING: You are AUTHORIZED to use MULTIPLE tools in a single response to speed up your work. Simply output consecutive <TOOL>...</TOOL> tags. Use this to: search → read → analyze → edit → verify in parallel.\n\
         EDITING FILES: For modifications, ALWAYS prefer <TOOL>editfile</TOOL> over <TOOL>writefile</TOOL>. editfile does surgical find-and-replace — you only need to specify the exact block to change. Use writefile ONLY for creating new files or complete rewrites.\n\
         UX RULE (FILES MODIFIED): Never manually format a list of files you modified. The system interface will automatically group and display 'Files Modified' badges for the user when you use writefile or editfile.\n\
         CRITICAL: NEVER use PowerShell for file I/O. NEVER use Get-Content/Set-Content/Out-File. ALWAYS use these native tools.\n\
         RULE 18 — CODE ANALYSIS & MODIFICATION WORKFLOW:\n\
         When asked to analyze, review, fix, or modify code:\n\
         Step 1: <TOOL>listdir:/path</TOOL> to understand the project.\n\
-        Step 2: <TOOL>searchfiles:/path|keyword</TOOL> to find relevant code.\n\
+        Step 2: <TOOL>searchfiles:/path|||keyword</TOOL> to find relevant code.\n\
         Step 3: <TOOL>readfile:/path</TOOL> or <TOOL>readlines:/path:START:COUNT</TOOL> to read the specific file.\n\
-        Step 4: Analyze and explain findings wrapped in <THOUGHT>...</THOUGHT>.\n\
-        Step 5: If asked to fix, use <TOOL>editfile:/path</TOOL> with <OLDSTRING>...</OLDSTRING><NEWSTRING>...</NEWSTRING>.\n\
+        Step 4: Analyze and explain findings wrapped in <THOUGHT>...</THOUGHT>. (Skip THOUGHT entirely if the logic is trivial to save latency).\n\
+        Step 5: If asked to fix, use <TOOL>editfile:/path|||OLD_TEXT|||NEW_TEXT</TOOL> to patch the code.\n\
         Step 6: Optionally read back the modified file to verify the change.\n\
         NEVER respond with <TOOL>sysinfo</TOOL> when asked about code. NEVER use <EXECUTE> to read/write files.\n\
         When the user asks 'ves algún problema', 'revisa el código', 'analiza este archivo' → this is CODE ANALYSIS, not system health.\n\
+        RULE 18.5 — AUTONOMOUS CODING AGENT CAPABILITIES:\n\
+        You are an advanced agentic programmer. You can autonomously write, test, and debug code.\n\
+        When tasked with software development (e.g., \"build this feature\", \"fix tests\", \"create a project\"):\n\
+        1. Explore the codebase first using your file tracking tools (searchfiles, readfile).\n\
+        2. Implement the requested code correctly using editfile or writefile.\n\
+        3. ALWAYS verify your changes by executing the relevant build/test commands (e.g., 'cargo check', 'npm test') via <EXECUTE> or <EXECUTE_CMD>. Commands automatically run in the GLOBAL WORKING DIRECTORY (set with <TOOL>cd:path</TOOL>).\n\
+        ⚠️ POWERSHELL SYNTAX: NEVER chain commands with `&&` — it fails on PowerShell 5.x. Use `;` to chain (e.g., `Set-Location dir; cargo check`) or better yet, change directory first with <TOOL>cd:path</TOOL> then run <EXECUTE>cargo check</EXECUTE> separately.\n\
+        ⚠️ BUILD COMMANDS: Use `--manifest-path` for Cargo instead of cd: `cargo check --manifest-path X:\\path\\Cargo.toml`. For npm: `npm run build --prefix X:\\path`.\n\
+        4. If a command fails, autonomously read the error, reason about the fix in <THOUGHT>, edit the file, and run the command again. Repeat this verify-fix loop until successful.\n\
+        DO NOT ask the user for permission to fix your own compilation errors. Work autonomously as a senior developer.\n\
         RULE 19 — SELF-AWARENESS & ANTI-HALLUCINATION:\n\
         - Your rules and configuration are embedded in this system prompt. You do NOT have a config file on disk. If asked about your rules, logic, or how to improve your behavior, answer from what you know here — do NOT try to read files.\n\
-        - NEVER invent or guess file paths. Use the WORKING DIRECTORY above as your base. When a user mentions a filename without full path, use <TOOL>searchfiles:{cwd}|filename</TOOL> to locate it FIRST.\n\
+        - NEVER invent or guess file paths. Use the WORKING DIRECTORY above as your base. When a user mentions a filename without full path, use <TOOL>searchfiles:{cwd}|||filename</TOOL> to locate it FIRST.\n\
         - If a TOOL returns an error (e.g. 'os error 3' = file not found), do NOT retry with a different guessed path. Instead, tell the user the file was not found and ask for the correct path.\n\
         - When asked about yourself, your logic, or how to improve: explain based on your rules above. Suggest improvements as text — do NOT try to modify your own code.\n\
         RULE 20 — LARGE FILE STRATEGY:\n\
         - You possess a massive context window. You are AUTHORIZED to use <TOOL>readfile:/path</TOOL> for any file up to 500KB (including massive files like +page.svelte) to gain full structural understanding.\n\
         - Only for files EXCEEDING 512KB, use <TOOL>searchfiles:/path|keyword</TOOL> followed by <TOOL>readlines:/path:START:COUNT</TOOL>.\n\
         RULE 21: When using the file editing tool, NEVER attempt to replace a single line of code, as duplicate lines may exist and the system will block the operation. Always include at least 2 preceding lines and 2 succeeding lines in your search string context to ensure the match is 100% unique across the entire file.
-        {runbooks}
         {ctx}
         {hosts}
         The user's name is {uname}. Always address them by name.\nINSTRUCTION: {prompt}",
         lang = lang,
-        cwd = cwd,
-        runbooks = local_runbooks,
         ctx = context,
         hosts = hosts_context,
         uname = user_name,
+        rb = runbooks_info,
         prompt = prompt
     )
 }
-
 // ── ASK LUCY (respuesta única) ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -264,6 +394,7 @@ pub async fn ask_lucy(
     lang: Option<String>,
     hosts_json: Option<String>,
     runbooks_dir: Option<String>,
+    max_tokens_override: Option<u32>,
 ) -> Result<String, String> {
     let is_allowed = ALLOWED_MODELS.contains(&model.as_str()) || model.starts_with("local-");
     if !is_allowed {
@@ -278,9 +409,7 @@ pub async fn ask_lucy(
     let entry = Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
     let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
 
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "C:\\".to_string());
+    let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
     let user_lang = lang.as_deref().unwrap_or("es-MX");
     let hosts_context = build_hosts_context(hosts_json.as_deref());
     let final_prompt = build_system_prompt(
@@ -301,12 +430,22 @@ pub async fn ask_lucy(
                 .json(&payload)
         },
         "local" => {
-            // api_key contiene la URL del endpoint
-            let payload = json!({ "model": model, "messages": [{"role": "user", "content": final_prompt}] });
+            // Le quitamos el prefijo "local-" y aplicamos parámetros de coherencia para Qwen
+            let actual_model = model.replace("local-", "");
+            let payload = json!({ 
+                "model": actual_model, 
+                "messages": [{"role": "user", "content": final_prompt}],
+                "options": {
+                    "temperature": 0.2,
+                    "num_ctx": 8192,
+                    "top_p": 0.9
+                }
+            });
             HTTP_CLIENT.post(&api_key).json(&payload)
         },
         "anthropic" => {
-            let payload = json!({ "model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": final_prompt}] });
+            let max_tok = get_max_tokens(&model, max_tokens_override);
+            let payload = json!({ "model": model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}] });
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -324,16 +463,24 @@ pub async fn ask_lucy(
     };
 
     let res = req.send().await.map_err(|e| format!("Error de red: {}", e))?;
-    
-    // Check for HTTP errors before parsing
+
     if !res.status().is_success() {
         let status = res.status();
         let err_text = res.text().await.unwrap_or_default();
         return Err(format!("Error API HTTP {}: {}", status, err_text));
     }
-    
+
     let body_text = res.text().await.map_err(|e| format!("Error al leer body: {}", e))?;
     let v: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| format!("Error parseando JSON: {}", e))?;
+
+    if provider == "anthropic" {
+        if let Some(reason) = v["stop_reason"].as_str() {
+            if reason == "max_tokens" {
+                let text = v["content"].get(0).and_then(|c| c["text"].as_str()).unwrap_or("");
+                return Ok(format!("{}\n__TRUNCATED__", text));
+            }
+        }
+    }
 
     let text_result = match provider {
         "openai" | "local" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
@@ -342,6 +489,14 @@ pub async fn ask_lucy(
     };
 
     if let Some(t) = text_result {
+        if let Some((input_tokens, output_tokens)) = match provider {
+            "openai" | "local" => extract_tokens_openai(&v),
+            "anthropic" => extract_tokens_anthropic(&v),
+            _ => extract_tokens_gemini(&v),
+        } {
+            let _ = log_usage_internal(&model, input_tokens, output_tokens, "ask_lucy", &user_name).await;
+        }
+
         Ok(t.to_string())
     } else {
         Err(format!("Respuesta API ({}): {}", provider, body_text))
@@ -350,9 +505,6 @@ pub async fn ask_lucy(
 
 // ── ASK LUCY STREAMING (SSE) ──────────────────────────────────────────────────
 
-/// Igual que ask_lucy pero emite chunks vía eventos Tauri para respuesta progresiva.
-/// El frontend escucha "lucy-chunk-{request_id}".
-/// Retorna el texto completo como resultado del invoke para mayor fiabilidad.
 #[tauri::command]
 pub async fn ask_lucy_stream(
     window: tauri::Window,
@@ -365,6 +517,7 @@ pub async fn ask_lucy_stream(
     lang: Option<String>,
     hosts_json: Option<String>,
     runbooks_dir: Option<String>,
+    max_tokens_override: Option<u32>,
 ) -> Result<String, String> {
     let is_allowed = ALLOWED_MODELS.contains(&model.as_str()) || model.starts_with("local-");
     if !is_allowed {
@@ -379,9 +532,7 @@ pub async fn ask_lucy_stream(
     let entry = Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
     let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
 
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "C:\\".to_string());
+    let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
     let user_lang = lang.as_deref().unwrap_or("es-MX");
     let hosts_context = build_hosts_context(hosts_json.as_deref());
     let final_prompt = build_system_prompt(
@@ -402,11 +553,23 @@ pub async fn ask_lucy_stream(
                 .json(&payload)
         },
         "local" => {
-            let payload = json!({ "model": model, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
+            // Le quitamos el prefijo "local-" y aplicamos parámetros de coherencia para Qwen
+            let actual_model = model.replace("local-", "");
+            let payload = json!({ 
+                "model": actual_model, 
+                "messages": [{"role": "user", "content": final_prompt}], 
+                "stream": true,
+                "options": {
+                    "temperature": 0.2,
+                    "num_ctx": 8192,
+                    "top_p": 0.9
+                }
+            });
             HTTP_CLIENT.post(&api_key).json(&payload)
         },
         "anthropic" => {
-            let payload = json!({ "model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
+            let max_tok = get_max_tokens(&model, max_tokens_override);
+            let payload = json!({ "model": model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -435,6 +598,9 @@ pub async fn ask_lucy_stream(
     let mut full_text = String::new();
     let mut line_buffer = String::new();
     let chunk_event = format!("lucy-chunk-{}", request_id);
+    let mut was_truncated = false;
+    let mut input_tokens: u32 = 0;
+    let mut output_tokens: u32 = 0;
 
     while let Some(chunk) = byte_stream.next().await {
         let bytes = chunk.map_err(|e| format!("Error de stream: {}", e))?;
@@ -447,12 +613,31 @@ pub async fn ask_lucy_stream(
             if let Some(data) = line.strip_prefix("data: ") {
                 if data == "[DONE]" { continue; }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(reason) = v["delta"]["stop_reason"].as_str().or_else(|| {
+                        v["choices"].get(0).and_then(|c| c["finish_reason"].as_str())
+                    }) {
+                        if reason == "max_tokens" || reason == "length" {
+                            was_truncated = true;
+                        }
+                    }
+
+                    if input_tokens == 0 && output_tokens == 0 {
+                        if let Some((in_t, out_t)) = match provider {
+                            "openai" | "local" => extract_tokens_openai(&v),
+                            "anthropic" => extract_tokens_anthropic(&v),
+                            _ => extract_tokens_gemini(&v),
+                        } {
+                            input_tokens = in_t;
+                            output_tokens = out_t;
+                        }
+                    }
+
                     let text_chunk = match provider {
                         "openai" | "local" => v["choices"].get(0).and_then(|c| c["delta"]["content"].as_str()),
-                        "anthropic" => v["delta"]["text"].as_str(), // handles type: text_delta
+                        "anthropic" => v["delta"]["text"].as_str(),
                         _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
                     };
-                    
+
                     if let Some(t) = text_chunk {
                         full_text.push_str(t);
                         let _ = window.emit(&chunk_event, t);
@@ -462,5 +647,22 @@ pub async fn ask_lucy_stream(
         }
     }
 
+    if was_truncated {
+        full_text.push_str("\n__TRUNCATED__");
+    }
+
+    if input_tokens > 0 || output_tokens > 0 {
+        let _ = log_usage_internal(&model, input_tokens, output_tokens, "ask_lucy_stream", &user_name).await;
+    }
+
     Ok(full_text)
+}
+
+#[tauri::command]
+pub fn log_agent_loop(message: String) {
+    use std::io::Write;
+    let path = crate::utils::logging::get_logs_dir().join("lucy_agent_loop.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), message);
+    }
 }

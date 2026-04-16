@@ -10,6 +10,22 @@ use serde::Serialize;
 use crate::state::CREATE_NO_WINDOW;
 use crate::utils::logging::{write_app_log, rotate_audit_log, get_logs_dir};
 
+// ── HELPER: Resolve relative paths against GLOBAL_CWD ───────────────────────
+// The agent often emits relative paths like "src-tauri/src/upscaler.rs".
+// Without this, they resolve against the *process* CWD (Lucy's install dir),
+// not the user's project directory.
+fn resolve_path(raw: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(raw);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        let cwd = crate::state::GLOBAL_CWD.read()
+            .map(|c| c.clone())
+            .unwrap_or_else(|_| "C:\\".to_string());
+        std::path::Path::new(&cwd).join(p)
+    }
+}
+
 // ── HELPER DE PARSEO DE ARGUMENTOS (Para soportar comillas) ──────────────────
 
 fn parse_args(input: &str) -> Vec<String> {
@@ -87,7 +103,9 @@ pub async fn execute_cmd(script: String, force_execute: bool) -> Result<String, 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(300), // AUMENTADO A 5 MINUTOS (300s)
         tokio::task::spawn_blocking(move || {
+            let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
             Command::new("cmd")
+                .current_dir(cwd)
                 .arg("/C")
                 .arg(&script_clone)
                 .creation_flags(CREATE_NO_WINDOW)
@@ -292,7 +310,7 @@ pub async fn execute_cscript(script_content: String, force_execute: bool) -> Res
 
 // ── CONEXIONES DE RED ACTIVAS — netstat -ano ─────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, PartialEq, Eq, Hash)]
 pub struct NetConnection {
     pub protocol:    String,
     pub local_addr:  String,
@@ -448,7 +466,7 @@ fn parse_wevtutil_text(text: &str) -> Result<Vec<EventEntry>, String> {
 
 // ── TASKLIST — procesos activos con detalle ───────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, PartialEq, Eq, Hash)]
 pub struct TaskEntry {
     pub name:    String,
     pub pid:     u32,
@@ -554,46 +572,65 @@ pub fn list_registry_key(hive: String, key_path: String) -> Result<serde_json::V
 
 #[tauri::command]
 pub async fn read_file_content(path: String) -> Result<String, String> {
-    let p = std::path::Path::new(&path);
+    use once_cell::sync::Lazy;
+    static BPE: Lazy<tiktoken_rs::CoreBPE> = Lazy::new(|| tiktoken_rs::cl100k_base().unwrap());
+
+    let resolved = resolve_path(&path);
+    let p = resolved.as_path();
     if !p.exists() {
-        return Err(format!("Archivo no encontrado: {}", path));
+        return Err(format!("Archivo no encontrado: {}", resolved.display()));
     }
-    let meta = std::fs::metadata(&path).map_err(|e| format!("Error al leer metadata: {}", e))?;
-    if meta.len() > 512 * 1024 {
+    let meta = std::fs::metadata(p).map_err(|e| format!("Error al leer metadata: {}", e))?;
+    if meta.len() > 1024 * 1024 { // Bypass general para archivos bestialmente gigantes
         return Err(format!(
-            "Archivo demasiado grande ({:.1} KB). Máximo 512 KB. Usa read_file_lines para leer por rangos.",
-            meta.len() as f64 / 1024.0
+            "Archivo demasiado grande ({:.1} MB). Máximo permitido 1MB físico. Usa <TOOL>readlines</TOOL>.",
+            meta.len() as f64 / 1024.0 / 1024.0
         ));
     }
-    audit(&format!("[{}] [HOST:{}] [FILE_READ] {}", ts(), host(), &path));
-    std::fs::read_to_string(&path).map_err(|e| format!("Error al leer archivo: {}", e))
+    
+    let content = std::fs::read_to_string(p).map_err(|e| format!("Error al leer archivo: {}", e))?;
+
+    let tokens = BPE.encode_with_special_tokens(&content).len();
+    if tokens > 20000 {
+        return Err(format!("El archivo es demasiado extenso ({} tokens). Excede el límite de lectura monolítica de 20,000. Por favor, usa la herramienta <TOOL>readlines:{}:1:200</TOOL> en su lugar.", tokens, resolved.display()));
+    }
+
+    audit(&format!("[{}] [HOST:{}] [FILE_READ] {} ({} tokens)", ts(), host(), resolved.display(), tokens));
+    Ok(content)
 }
 
 #[tauri::command]
 pub async fn read_file_lines(path: String, start: usize, count: usize) -> Result<String, String> {
-    let p = std::path::Path::new(&path);
+    use ropey::Rope;
+    use std::fs::File;
+    use std::io::BufReader;
+    let resolved = resolve_path(&path);
+    let p = resolved.as_path();
     if !p.exists() {
-        return Err(format!("Archivo no encontrado: {}", path));
+        return Err(format!("Archivo no encontrado: {}", resolved.display()));
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Error al leer archivo: {}", e))?;
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len();
+    let file = File::open(p).map_err(|e| format!("Error abriendo archivo: {}", e))?;
+    let rope = Rope::from_reader(BufReader::new(file)).map_err(|e| format!("Error Ropey: {}", e))?;
+    
+    let total = rope.len_lines();
     let s = if start == 0 { 0 } else { start - 1 };
     let e = (s + count).min(total);
     if s >= total {
-        return Ok(format!("[Archivo tiene {} líneas, rango solicitado fuera de alcance]", total));
+        return Ok(format!("[Archivo tiene {} líneas, rango solicitado {} fuera de alcance]", total, start));
     }
-    audit(&format!("[{}] [HOST:{}] [FILE_READ_LINES] {} ({}..{})", ts(), host(), &path, s+1, e));
-    let result: Vec<String> = lines[s..e].iter().enumerate()
-        .map(|(i, l)| format!("{:>4}│ {}", s + i + 1, l))
-        .collect();
+    audit(&format!("[{}] [HOST:{}] [FILE_READ_LINES] {} ({}..{})", ts(), host(), resolved.display(), s+1, e));
+    let mut result = Vec::new();
+    for (i, line) in rope.lines_at(s).take(e - s).enumerate() {
+        let line_str = line.to_string();
+        result.push(format!("{:>4}│ {}", s + i + 1, line_str.trim_end_matches(&['\n', '\r'][..])));
+    }
     Ok(format!("[Líneas {}-{} de {}]\n{}", s+1, e, total, result.join("\n")))
 }
 
 #[tauri::command]
 pub async fn write_file_content(path: String, content: String, force: bool) -> Result<String, String> {
-    let p = std::path::Path::new(&path);
+    let resolved = resolve_path(&path);
+    let p = resolved.as_path();
 
     // DEFENSA: Resolver la ruta para evitar Path Traversal (ej. \..\..\Windows)
     let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
@@ -609,7 +646,7 @@ pub async fn write_file_content(path: String, content: String, force: bool) -> R
     if p.exists() && !force {
         return Err(format!(
             "El archivo ya existe: {}. Usa force=true para sobrescribir.",
-            path
+            resolved.display()
         ));
     }
 
@@ -621,19 +658,43 @@ pub async fn write_file_content(path: String, content: String, force: bool) -> R
     }
 
     audit(&format!("[{}] [HOST:{}] [FILE_WRITE] {} ({} bytes, force={})",
-        ts(), host(), &path, content.len(), force));
+        ts(), host(), resolved.display(), content.len(), force));
 
-    std::fs::write(&path, &content)
+    std::fs::write(p, &content)
         .map_err(|e| format!("Error al escribir archivo: {}", e))?;
 
-    Ok(format!("✓ Archivo escrito: {} ({} bytes)", path, content.len()))
+    Ok(format!("✓ Archivo escrito: {} ({} bytes)", resolved.display(), content.len()))
 }
 
 #[tauri::command]
 pub async fn list_directory(path: String) -> Result<Vec<serde_json::Value>, String> {
     use serde_json::json;
+    use radix_trie::Trie;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use once_cell::sync::Lazy;
+    use std::time::{Instant, Duration};
 
-    let p = std::path::Path::new(&path);
+    struct CacheEntry {
+        entries: Vec<serde_json::Value>,
+        timestamp: Instant,
+    }
+
+    static DIR_CACHE: Lazy<Arc<Mutex<Trie<String, CacheEntry>>>> = Lazy::new(|| Arc::new(Mutex::new(Trie::new())));
+
+    let resolved = resolve_path(&path);
+    let p = resolved.as_path();
+    let norm_path = p.to_string_lossy().to_string();
+
+    {
+        let cache = DIR_CACHE.lock().await;
+        if let Some(entry) = cache.get(&norm_path) {
+            if entry.timestamp.elapsed() < Duration::from_secs(60) {
+                return Ok(entry.entries.clone());
+            }
+        }
+    }
+
     if !p.exists() {
         return Err(format!("Directorio no encontrado: {}", path));
     }
@@ -676,6 +737,11 @@ pub async fn list_directory(path: String) -> Result<Vec<serde_json::Value>, Stri
             ))
     });
 
+    {
+        let mut cache = DIR_CACHE.lock().await;
+        cache.insert(norm_path, CacheEntry { entries: entries.clone(), timestamp: Instant::now() });
+    }
+
     Ok(entries)
 }
 
@@ -689,13 +755,23 @@ pub async fn search_files(
     max_results: Option<usize>,
 ) -> Result<String, String> {
     use std::path::Path;
+    use aho_corasick::AhoCorasick;
 
     let dir = Path::new(&directory);
     if !dir.exists() || !dir.is_dir() {
         return Err(format!("Directorio no encontrado: {}", directory));
     }
 
-    let pattern_lower = pattern.to_lowercase();
+    let patterns: Vec<String> = pattern.split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    if patterns.is_empty() {
+        return Err("No se proporcionó un patrón válido.".to_string());
+    }
+
+    let ac = AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build(&patterns)
+        .map_err(|e| format!("Error compilando motor Aho-Corasick: {}", e))?;
+
     let max = max_results.unwrap_or(100).min(200);
     let glob_ext: Option<Vec<String>> = file_glob.map(|g| {
         g.split(',')
@@ -707,7 +783,7 @@ pub async fn search_files(
     let mut results = Vec::new();
 
     fn walk(
-        dir: &Path, pattern: &str, glob_ext: &Option<Vec<String>>,
+        dir: &Path, ac: &AhoCorasick, glob_ext: &Option<Vec<String>>,
         results: &mut Vec<String>, max: usize, depth: usize,
     ) {
         if depth > 6 || results.len() >= max { return; }
@@ -723,7 +799,7 @@ pub async fn search_files(
                     || name == "build" || name == "dist" || name == ".svelte-kit" {
                     continue;
                 }
-                walk(&path, pattern, glob_ext, results, max, depth + 1);
+                walk(&path, ac, glob_ext, results, max, depth + 1);
                 continue;
             }
 
@@ -740,7 +816,7 @@ pub async fn search_files(
             let Ok(content) = std::fs::read_to_string(&path) else { continue };
             for (i, line) in content.lines().enumerate() {
                 if results.len() >= max { break; }
-                if line.to_lowercase().contains(pattern) {
+                if ac.is_match(line) {
                     let rel = path.strip_prefix(dir).unwrap_or(&path);
                     results.push(format!("{}:{}| {}",
                         rel.display(), i + 1,
@@ -751,10 +827,10 @@ pub async fn search_files(
         }
     }
 
-    audit(&format!("[{}] [HOST:{}] [SEARCH_FILES] dir={} pattern=\"{}\" glob={:?}",
-        ts(), host(), &directory, &pattern, &glob_ext));
+    audit(&format!("[{}] [HOST:{}] [SEARCH_FILES] dir={} pattern=\"{:?}\" glob={:?}",
+        ts(), host(), &directory, &patterns, &glob_ext));
 
-    walk(dir, &pattern_lower, &glob_ext, &mut results, max, 0);
+    walk(dir, &ac, &glob_ext, &mut results, max, 0);
 
     if results.is_empty() {
         Ok(format!("[Sin coincidencias para \"{}\" en {}]", pattern, directory))
@@ -772,9 +848,12 @@ pub async fn edit_file(
     new_string: String,
     replace_all: Option<bool>,
 ) -> Result<String, String> {
-    let p = std::path::Path::new(&path);
+    use similar::{ChangeTag, TextDiff};
+
+    let resolved = resolve_path(&path);
+    let p = resolved.as_path();
     if !p.exists() {
-        return Err(format!("Archivo no encontrado: {}", path));
+        return Err(format!("Archivo no encontrado: {}", resolved.display()));
     }
 
     // DEFENSA: Resolver la ruta para evitar Path Traversal (ej. \..\..\Windows)
@@ -788,7 +867,7 @@ pub async fn edit_file(
         }
     }
 
-    let content = std::fs::read_to_string(&path)
+    let content = std::fs::read_to_string(p)
         .map_err(|e| format!("Error al leer archivo: {}", e))?;
 
     if !content.contains(&old_string) {
@@ -797,7 +876,7 @@ pub async fn edit_file(
             "No se encontró el texto a reemplazar en {}. El archivo tiene {} líneas.\n\
             Primeras 3 líneas:\n{}\n\
             Sugerencia: usa readlines para ver el contenido actual.",
-            path, lines.len(),
+            resolved.display(), lines.len(),
             lines.iter().take(3).cloned().collect::<Vec<&str>>().join("\n")
         ));
     }
@@ -808,7 +887,7 @@ pub async fn edit_file(
     if count > 1 && !do_all {
         return Err(format!(
             "Se encontraron {} coincidencias del texto en {}. Usa replace_all=true para reemplazar todas, o proporciona más contexto para hacer la búsqueda única.",
-            count, path
+            count, resolved.display()
         ));
     }
 
@@ -818,15 +897,32 @@ pub async fn edit_file(
         content.replacen(&old_string, &new_string, 1)
     };
 
+    let diff = TextDiff::from_lines(&content, &new_content);
+    let mut diff_str = String::new();
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        diff_str.push_str(&format!("{}{}", sign, change));
+    }
+
     audit(&format!("[{}] [HOST:{}] [FILE_EDIT] {} (replaced {} occurrence(s), {} -> {} bytes)",
-        ts(), host(), &path, if do_all { count } else { 1 },
+        ts(), host(), resolved.display(), if do_all { count } else { 1 },
         old_string.len(), new_string.len()));
 
-    std::fs::write(&path, &new_content)
+    std::fs::write(p, &new_content)
         .map_err(|e| format!("Error al escribir archivo: {}", e))?;
 
-    Ok(format!("ok: editado {} ({} reemplazo(s), {} bytes total)",
-        path, if do_all { count } else { 1 }, new_content.len()))
+    let limited_diff = if diff_str.len() > 3000 {
+        format!("{}... [Diff Truncado]", &diff_str[..3000])
+    } else {
+        diff_str
+    };
+
+    Ok(format!("ok: editado {} ({} reemplazo(s))\n## Unified Diff:\n```diff\n{}\n```",
+        path, if do_all { count } else { 1 }, limited_diff))
 }
 
 // ── OPEN VS CODE — herramienta UI para Agentes ────────────────────────
@@ -838,6 +934,125 @@ pub fn open_vscode(path: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("No se pudo abrir VS Code. Asegúrate de tener 'code' en el PATH. Error: {}", e))?;
     Ok(())
+}
+
+// ── TREE-SITTER — abstracción sintáctica AST ─────────────────────────────────
+
+#[tauri::command]
+pub async fn analyze_code(path: String) -> Result<String, String> {
+    use tree_sitter::Parser;
+    
+    let path = std::path::Path::new(&path);
+    if !path.exists() {
+        return Err(format!("Archivo no encontrado: {:?}", path));
+    }
+    
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let is_rust = ext == "rs";
+    let is_js = ext == "js" || ext == "ts" || ext == "svelte";
+    
+    if !is_rust && !is_js {
+        return Err("Solo se soporta AST para Rust (.rs) o JavaScript (.js, .ts, .svelte)".to_string());
+    }
+    
+    let source = std::fs::read_to_string(&path).map_err(|e| format!("Error abriendo archivo: {}", e))?;
+        
+    let mut parser = Parser::new();
+    let language = if is_rust {
+        tree_sitter_rust::LANGUAGE.into()
+    } else {
+        tree_sitter_javascript::LANGUAGE.into()
+    };
+    
+    parser.set_language(&language).map_err(|_| "Error configurando parser".to_string())?;
+        
+    let tree = parser.parse(&source, None).ok_or("Error generando AST")?;
+    let root = tree.root_node();
+    
+    let mut summary = String::new();
+    summary.push_str(&format!("### Abstract Syntax Tree Summary for {:?}\n\n", path));
+    
+    fn format_node(node: tree_sitter::Node, source_code: &[u8], depth: usize, summary: &mut String) {
+        if depth > 4 { return; } // Limitar anidamiento profundo
+        let kind = node.kind();
+        let is_interesting = kind == "function_item" || kind == "impl_item" || kind == "struct_item" || 
+                             kind == "function_declaration" || kind == "class_declaration" || kind == "method_definition";
+                             
+        if is_interesting {
+            if let Ok(text) = node.utf8_text(source_code) {
+                let first_line = text.lines().next().unwrap_or("").trim_end_matches('{').trim();
+                summary.push_str(&format!("{}• {} (lines {}..{})\n", "  ".repeat(depth), first_line, node.start_position().row + 1, node.end_position().row + 1));
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            format_node(child, source_code, depth + 1, summary);
+        }
+    }
+    
+    format_node(root, source.as_bytes(), 0, &mut summary);
+    if !summary.contains("•") { summary.push_str("> No se detectaron funciones/clases principales en AST root.\n"); }
+    
+    Ok(summary)
+}
+
+// ── SYSTEM DIFFING — Analizador temporal abstracto ──────────────────────────
+
+use std::collections::HashSet;
+use tokio::sync::Mutex;
+use std::sync::Arc;
+use once_cell::sync::Lazy;
+
+static TASKS_CACHE: Lazy<Arc<Mutex<Option<Vec<TaskEntry>>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+static NET_CACHE: Lazy<Arc<Mutex<Option<Vec<NetConnection>>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+
+#[tauri::command]
+pub async fn system_diff(category: String) -> Result<String, String> {
+    if category == "tasks" || category == "processes" {
+        let current = get_tasklist().await?;
+        let mut cache = TASKS_CACHE.lock().await;
+
+        if let Some(prev) = cache.take() {
+            cache.replace(current.clone()); // Update cache to current
+
+            let prev_pids: HashSet<u32> = prev.iter().map(|p| p.pid).collect();
+            let curr_pids: HashSet<u32> = current.iter().map(|p| p.pid).collect();
+
+            let died: Vec<_> = prev.into_iter().filter(|p| !curr_pids.contains(&p.pid)).collect();
+            let born: Vec<_> = current.into_iter().filter(|p| !prev_pids.contains(&p.pid)).collect();
+
+            let mut out = format!("--- DIFF DE PROCESOS ({} murieron, {} nacieron) ---\n", died.len(), born.len());
+            for d in died.iter().take(50) { out.push_str(&format!("[-] MURIÓ: {} (PID: {})\n", d.name, d.pid)); }
+            for b in born.iter().take(50) { out.push_str(&format!("[+] NACIÓ: {} (PID: {})\n", b.name, b.pid)); }
+            return Ok(out);
+        } else {
+            cache.replace(current);
+            return Ok("SNAPSHOT INICIAL DE PROCESOS ESTABLECIDA. Realiza tus comandos y vuelve a llamar a system_diff.".to_string());
+        }
+    } else if category == "network" || category == "ports" {
+        let current = get_network_connections().await?;
+        let mut cache = NET_CACHE.lock().await;
+
+        if let Some(prev) = cache.take() {
+            cache.replace(current.clone()); // Update cache
+
+            let prev_set: HashSet<NetConnection> = prev.into_iter().collect();
+            let curr_set: HashSet<NetConnection> = current.into_iter().collect();
+
+            let died: Vec<_> = prev_set.difference(&curr_set).collect();
+            let born: Vec<_> = curr_set.difference(&prev_set).collect();
+
+            let mut out = format!("--- DIFF DE RED ({} cerradas, {} abiertas) ---\n", died.len(), born.len());
+            for d in died.iter().take(50) { out.push_str(&format!("[-] CERRÓ: {} {}:{} -> {}:{} (PID: {:?})\n", d.protocol, d.local_addr, d.local_port, d.remote_addr, d.remote_port, d.pid)); }
+            for b in born.iter().take(50) { out.push_str(&format!("[+] ABRIÓ: {} {}:{} -> {}:{} (PID: {:?})\n", b.protocol, b.local_addr, b.local_port, b.remote_addr, b.remote_port, b.pid)); }
+            return Ok(out);
+        } else {
+            cache.replace(current);
+            return Ok("SNAPSHOT INICIAL DE RED ESTABLECIDA. Realiza tus comandos y vuelve a llamar a system_diff.".to_string());
+        }
+    }
+
+    Err("Categoría no soportada. Usa 'tasks' o 'network'.".to_string())
 }
 
 // ── PANIC BUTTON ──────────────────────────────────────────────────────────────

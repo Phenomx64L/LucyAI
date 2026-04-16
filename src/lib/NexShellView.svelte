@@ -4,7 +4,7 @@
     import { LLM_GROUPS, getModelDescription } from '$lib/models.js';
     import { tick, createEventDispatcher, onDestroy } from 'svelte';
     import { logAuditEntry } from '$lib/audit';
-    import { analyzeCommand, shouldBlock } from '$lib/hooks/command-guard';
+    import { analyzeCommand, shouldBlock, checkPermissionRules } from '$lib/hooks/command-guard';
     import { guardConfig } from '$lib/stores';
     import DangerConfirmModal from '$lib/DangerConfirmModal.svelte';
     import TurnLoopPanel from '$lib/TurnLoopPanel.svelte';
@@ -144,13 +144,18 @@
     }
 
     // ── Scroll helper ───────────────────────────────────────────────────────
-    function rsScrollBottom(id) {
+    // Sticky autoscroll: only follow the bottom if the user is already near it.
+    // If they scrolled up to read backlog, we don't yank them back down.
+    function rsScrollBottom(id, force = false) {
         tick().then(() => {
             requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    const el = document.getElementById(`rshell-out-${id}`);
-                    if (el) el.scrollTop = el.scrollHeight;
-                });
+                const el = document.getElementById(`rshell-out-${id}`);
+                if (!el) return;
+                const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                // "Near bottom" = within 80px. Force = always.
+                if (force || distFromBottom < 80) {
+                    el.scrollTop = el.scrollHeight;
+                }
             });
         });
     }
@@ -159,7 +164,8 @@
     function rsLogTo(id, type, text, meta = {}) {
         const s = getShell(id);
         if (!s) return;
-        s.history = [...s.history, { type, text, time: ahora(), ...meta }];
+        const entryId = 'e-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
+        s.history = [...s.history, { id: entryId, type, text, time: ahora(), ...meta }];
         if (s.history.length > 300) s.history = s.history.slice(-300);
         rshellSessions = [...rshellSessions];
         rsScrollBottom(id);
@@ -267,11 +273,40 @@
         }
     }
 
-    // ── Command Guard — pre-execution risk check ─────────────────────────
-    function guardCheck(cmd, hostType, hostName, source, action) {
+    // ── Command Guard — pre-execution risk check + permission rules ──────────
+    async function guardCheck(cmd, hostType, hostName, source, action) {
         if (!$guardConfig.enabled) { action(); return; }
         if (source === 'ai'        && !$guardConfig.interceptAI)        { action(); return; }
         if (source === 'broadcast'  && !$guardConfig.interceptBroadcast) { action(); return; }
+
+        // Check permission rules first (takes priority over risk assessment)
+        const permResult = await checkPermissionRules(cmd, 'command');
+        if (permResult.action === 'block') {
+            // Permission denied - show error
+            const msg = isEN
+                ? `Permission denied: ${permResult.reason}`
+                : `Permiso denegado: ${permResult.reason}`;
+            console.warn('Permission blocked:', cmd, permResult.reason);
+            // Could show a toast or modal here instead of just logging
+            return;
+        } else if (permResult.action === 'ask') {
+            // Permission rule requires confirmation - show confirmation modal
+            guardAssessment    = {
+                level: 'high',
+                score: 80,
+                command: cmd,
+                matches: [],
+                summary: isEN
+                    ? `Permission rule requires confirmation: ${permResult.reason}`
+                    : `Regla de permiso requiere confirmación: ${permResult.reason}`,
+            };
+            guardHostName      = hostName || 'local';
+            guardSource        = source;
+            guardPendingAction = action;
+            return;
+        }
+        // If action === 'allow', continue to risk assessment
+
         const assessment = analyzeCommand(cmd, hostType || 'linux', isEN);
         if (shouldBlock(assessment, $guardConfig.threshold)) {
             guardAssessment    = assessment;
@@ -452,8 +487,8 @@
 
             let fixApplied = false;
             let fixOut = '';
-            await new Promise((resolve) => {
-                guardCheck(cleanFixCmd, s.host.type, s.host.name, 'ai', async () => {
+            await new Promise(async (resolve) => {
+                await guardCheck(cleanFixCmd, s.host.type, s.host.name, 'ai', async () => {
                     rsLogTo(shellId, 'cmd', `$ ${cleanFixCmd}`);
                     try {
                         fixOut = await rsRunStreaming(shellId, cleanFixCmd);
@@ -581,8 +616,8 @@
                 const cleanCmd = tlCleanCmd(cmd, s.host.type);
                 // Use guard for commands
                 let executed = false;
-                await new Promise((resolve) => {
-                    guardCheck(cleanCmd, s.host.type, s.host.name, 'ai', async () => {
+                await new Promise(async (resolve) => {
+                    await guardCheck(cleanCmd, s.host.type, s.host.name, 'ai', async () => {
                         rsLogTo(shellId, 'cmd', `$ ${cleanCmd}`);
                         try {
                             output = await rsRunStreaming(shellId, cleanCmd);
@@ -783,10 +818,90 @@
         s.directIn = ''; s._histIdx = undefined;
         rshellSessions = [...rshellSessions];
         rsSaveHistory(s.host.id, cmd);
-        guardCheck(cmd, s.host.type, s.host.name, 'manual', async () => {
+        await guardCheck(cmd, s.host.type, s.host.name, 'manual', async () => {
             rsLogTo(id, 'cmd', `$ ${cmd}`);
             await rsRunStreaming(id, cmd);
         });
+    }
+
+    // ── askLucyStream wrapper (chunks vía Tauri events) ─────────────────────
+    async function askLucyStream(params, onChunk) {
+        const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        let accumulated = '';
+        const unlisten = await listen(`lucy-chunk-${requestId}`, (event) => {
+            accumulated += event.payload;
+            onChunk(accumulated);
+        });
+        try {
+            const result = await invoke('ask_lucy_stream', { ...params, requestId });
+            return result;
+        } finally {
+            unlisten();
+        }
+    }
+
+    // ── Helpers para entries de razonamiento y tool-cards ──────────────────
+    function rsPushReasoning(id) {
+        const s = getShell(id);
+        if (!s) return null;
+        const entry = {
+            type: 'reasoning',
+            id: 'r-' + Math.random().toString(36).slice(2,9),
+            time: ahora(),
+            startTs: Date.now(),
+            duration: 0,
+            content: '',
+            active: true,
+            collapsed: false,
+        };
+        s.history = [...s.history, entry];
+        if (s.history.length > 300) s.history = s.history.slice(-300);
+        rshellSessions = [...rshellSessions];
+        rsScrollBottom(id);
+        return entry;
+    }
+    function rsUpdateReasoning(id, entry, deltaOrContent, isFullReplace = false) {
+        const s = getShell(id);
+        if (!s || !entry) return;
+        if (isFullReplace) entry.content = deltaOrContent;
+        else entry.content += deltaOrContent;
+        entry.duration = (Date.now() - entry.startTs) / 1000;
+        rshellSessions = [...rshellSessions];
+        rsScrollBottom(id);
+    }
+    function rsFinishReasoning(id, entry) {
+        if (!entry) return;
+        entry.active = false;
+        entry.collapsed = true;
+        entry.duration = (Date.now() - entry.startTs) / 1000;
+        rshellSessions = [...rshellSessions];
+    }
+    function rsPushToolCard(id, icon, label, kind = 'exec') {
+        const s = getShell(id);
+        if (!s) return null;
+        const entry = {
+            type: 'tool-card',
+            id: 'tc-' + Math.random().toString(36).slice(2,9),
+            time: ahora(),
+            icon, label, kind,
+            status: 'running',
+            startTs: Date.now(),
+            duration: 0,
+            output: '',
+        };
+        s.history = [...s.history, entry];
+        if (s.history.length > 300) s.history = s.history.slice(-300);
+        rshellSessions = [...rshellSessions];
+        rsScrollBottom(id);
+        return entry;
+    }
+    function rsFinishToolCard(id, entry, output, ok = true) {
+        if (!entry) return;
+        entry.status = ok ? 'done' : 'error';
+        entry.duration = (Date.now() - entry.startTs) / 1000;
+        entry.output = output || '';
+        rshellSessions = [...rshellSessions];
+        rsScrollBottom(id);
     }
 
     // ── Send Lucy query ─────────────────────────────────────────────────────
@@ -833,11 +948,26 @@
                         enrichedCtx += `\n\n--- CONTENIDO WEB: ${rsUrls[i]} ---\n${r.value}\n--- FIN CONTENIDO WEB ---`;
                 });
             }
-            const resp = await invoke('ask_lucy', {
+            // ── Live reasoning bubble ──
+            const reasoningEntry = rsPushReasoning(id);
+            let _lastThoughtLen = 0;
+            const resp = await askLucyStream({
                 prompt: raw, context: enrichedCtx, userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
                 model: selectedModel || 'gemini-2.5-flash',
                 images: null, lang: userLang, hostsJson: JSON.stringify(hosts)
+            }, (acc) => {
+                const m = acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/i);
+                if (m) {
+                    const cur = m[1];
+                    if (cur.length > _lastThoughtLen) {
+                        const delta = cur.slice(_lastThoughtLen);
+                        _lastThoughtLen = cur.length;
+                        rsUpdateReasoning(id, reasoningEntry, delta);
+                    }
+                }
             });
+            rsFinishReasoning(id, reasoningEntry);
+
             const execM = resp.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i)
                        || resp.match(/```(?:powershell|ps1|batch|cmd|bash|sh)?\s*\n([\s\S]*?)\n```/i);
             if (execM) {
@@ -856,21 +986,36 @@
                 const clean = resp.replace(/<EXECUTE>[\s\S]*?(?:<\/EXECUTE>|$)/gi, '').replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '').trim();
                 if (clean) rsLogTo(id, 'lucy-out', clean);
                 const aiExec = async () => {
+                    // Tool card #1 — command execution
+                    const execIcon = s.host.type === 'linux' ? '🐧' : '⚡';
+                    const execCard = rsPushToolCard(id, execIcon, `${s.host.type === 'linux' ? 'bash' : 'powershell'}: ${cmd.substring(0,80)}`, 'exec');
                     rsLogTo(id, 'cmd', `$ ${cmd}`);
                     try {
                         const out = await rsRunStreaming(id, cmd);
+                        rsFinishToolCard(id, execCard, out || '(sin salida)', true);
                         if (out.trim()) {
-                            const analysis = await invoke('ask_lucy', {
-                                prompt: `[SYSTEM ANALYSIS — análisis detallado del resultado]\nHost: ${s.host.name} (${s.host.type === 'linux' ? 'Linux' : 'Windows'})\nComando ejecutado: \`${cmd.substring(0,300)}\`\nOutput completo:\n\`\`\`\n${out.substring(0,4000)}\n\`\`\`\n\nAnaliza el resultado detalladamente:\n1. ¿Se ejecutó correctamente?\n2. ¿Qué información relevante muestra?\n3. ¿Hay errores, advertencias o situaciones que requieran atención?\n4. Si aplica, sugiere el siguiente paso.\nNO uses <EXECUTE>. Responde en Markdown.`,
-                                context: '', userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
-                                model: selectedModel || 'gemini-2.5-flash',
-                                images: null, lang: userLang, hostsJson: null
-                            });
-                            rsLogTo(id, 'lucy-out', analysis.replace(/<[^>]*>/g,''));
+                            // Tool card #2 — analysis
+                            const analysisCard = rsPushToolCard(id, '🔎', 'Analizando salida…', 'analyze');
+                            try {
+                                const analysis = await invoke('ask_lucy', {
+                                    prompt: `[SYSTEM ANALYSIS — análisis detallado del resultado]\nHost: ${s.host.name} (${s.host.type === 'linux' ? 'Linux' : 'Windows'})\nComando ejecutado: \`${cmd.substring(0,300)}\`\nOutput completo:\n\`\`\`\n${out.substring(0,4000)}\n\`\`\`\n\nAnaliza el resultado detalladamente:\n1. ¿Se ejecutó correctamente?\n2. ¿Qué información relevante muestra?\n3. ¿Hay errores, advertencias o situaciones que requieran atención?\n4. Si aplica, sugiere el siguiente paso.\nNO uses <EXECUTE>. Responde en Markdown.`,
+                                    context: '', userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
+                                    model: selectedModel || 'gemini-2.5-flash',
+                                    images: null, lang: userLang, hostsJson: null
+                                });
+                                const cleanAnalysis = analysis.replace(/<[^>]*>/g,'').trim();
+                                rsFinishToolCard(id, analysisCard, 'Análisis completado', true);
+                                rsLogTo(id, 'lucy-out', cleanAnalysis);
+                            } catch(e) {
+                                rsFinishToolCard(id, analysisCard, String(e), false);
+                            }
                         }
-                    } catch(e) { rsLogTo(id, 'err', String(e)); }
+                    } catch(e) {
+                        rsFinishToolCard(id, execCard, String(e), false);
+                        rsLogTo(id, 'err', String(e));
+                    }
                 };
-                guardCheck(cmd, s.host.type, s.host.name, 'ai', aiExec);
+                await guardCheck(cmd, s.host.type, s.host.name, 'ai', aiExec);
             } else { rsLogTo(id, 'lucy-out', resp.replace(/<[^>]*>/g,'').trim()); }
         } catch(e) { rsLogTo(id, 'err', `Lucy error: ${e}`); }
         const s2 = getShell(id);
@@ -1066,7 +1211,7 @@
         // Guard check for broadcast — uses first target's type for analysis
         const firstTarget = hosts.find(h => broadcastSelected.has(h.id));
         const bcExec = async () => { await _runBroadcastInner(); };
-        guardCheck(broadcastCmd, firstTarget?.type || 'linux', `${broadcastSelected.size} hosts`, 'broadcast', bcExec);
+        await guardCheck(broadcastCmd, firstTarget?.type || 'linux', `${broadcastSelected.size} hosts`, 'broadcast', bcExec);
     }
 
     async function _runBroadcastInner() {
@@ -1126,8 +1271,8 @@
     async function rsEnviarDirectoCmd(id, cmd) {
         const s = getShell(id);
         if (!s) return;
-        return new Promise((resolve) => {
-            guardCheck(cmd, s.host.type, s.host.name, 'playbook', async () => {
+        return new Promise(async (resolve) => {
+            await guardCheck(cmd, s.host.type, s.host.name, 'playbook', async () => {
                 rsLogTo(id, 'cmd', `$ ${cmd}`);
                 rsSaveHistory(s.host.id, cmd);
                 await rsRunStreaming(id, cmd);
@@ -1453,7 +1598,7 @@
 
           <!-- Output area -->
           <div class="rshell-out" id="rshell-out-{s.id}">
-            {#each s.history as entry}
+            {#each s.history as entry, _i (entry.id || (entry.type + '-' + _i + '-' + entry.time))}
               <div class="rshell-line rsl-{entry.type}">
                 {#if entry.type === 'cmd'}
                   <span class="rsl-prompt">$</span><span class="rsl-cmd">{entry.text.replace(/^\$ /,'')}</span>
@@ -1461,6 +1606,32 @@
                   <span class="rsl-prompt">✨</span><span class="rsl-lucy-in">{entry.text}</span>
                 {:else if entry.type === 'lucy-out'}
                   <span class="rsl-prompt lucy-dot">●</span><span class="rsl-lucy-out">{entry.text}</span>
+                {:else if entry.type === 'reasoning'}
+                  <div class="ns-reasoning {entry.active ? 'nr-active' : 'nr-done'} {entry.collapsed ? 'nr-collapsed' : ''}">
+                    <button type="button" class="nr-head" on:click={() => { entry.collapsed = !entry.collapsed; rshellSessions = [...rshellSessions]; }}>
+                      <span class="nr-icon">💭</span>
+                      <span class="nr-title">{entry.active ? 'Pensando…' : `Pensó durante ${entry.duration.toFixed(1)}s`}</span>
+                      {#if entry.active}<span class="nr-timer">{entry.duration.toFixed(1)}s</span>{/if}
+                      <span class="nr-chev">{entry.collapsed ? '▸' : '▾'}</span>
+                    </button>
+                    {#if !entry.collapsed && entry.content}
+                      <pre class="nr-body">{entry.content}</pre>
+                    {/if}
+                  </div>
+                {:else if entry.type === 'tool-card'}
+                  <details class="ns-toolcard ntc-{entry.status}" open={entry.status === 'error'}>
+                    <summary class="ntc-head">
+                      <span class="ntc-icon">{entry.icon}</span>
+                      <span class="ntc-label">{entry.label}</span>
+                      {#if entry.duration > 0}<span class="ntc-dur">{entry.duration.toFixed(2)}s</span>{/if}
+                      <span class="ntc-status">
+                        {#if entry.status === 'running'}<span class="ntc-spinner"></span>{:else if entry.status === 'error'}✕{:else}✓{/if}
+                      </span>
+                    </summary>
+                    {#if entry.output}
+                      <pre class="ntc-body">{entry.output.length > 4000 ? entry.output.slice(0,4000) + '\n… [truncated]' : entry.output}</pre>
+                    {/if}
+                  </details>
                 {:else if entry.type === 'err'}
                   <span class="rsl-err-txt">{entry.text}</span>
                 {:else if entry.type === 'info'}
@@ -2145,7 +2316,124 @@
     .rsl-live-input-btn:hover{background:rgba(100,149,255,.2);}
     .rsl-cancel-btn{background:rgba(255,68,68,.1);border:1px solid rgba(255,68,68,.25);border-radius:4px;color:#ff6464;cursor:pointer;font-size:10px;font-weight:600;padding:2px 8px;transition:.15s;flex-shrink:0;}
     .rsl-cancel-btn:hover{background:rgba(255,68,68,.2);}
-    .rsl-live-pre{color:#7aaa8a;margin:0;padding:6px 10px;white-space:pre-wrap;word-break:break-all;font-size:11.5px;font-family:var(--mono);line-height:1.5;max-height:320px;overflow-y:auto;}
+    .rsl-live-pre{color:#7aaa8a;margin:0;padding:6px 10px;white-space:pre-wrap;word-break:break-all;font-size:11.5px;font-family:var(--mono);line-height:1.5;}
+
+    /* ── Live reasoning bubble (NexShell port) ── */
+    .ns-reasoning{
+      width:100%;
+      margin:4px 0;
+      border-radius:6px;
+      background:rgba(167,139,250,.04);
+      border:1px solid rgba(167,139,250,.14);
+      border-left:2px solid transparent;
+      overflow:hidden;
+      transition:background .25s, border-color .25s;
+    }
+    .ns-reasoning.nr-active{
+      background:linear-gradient(110deg, rgba(167,139,250,.06) 0%, rgba(99,102,241,.10) 50%, rgba(167,139,250,.06) 100%);
+      background-size:200% 100%;
+      animation:nrShimmer 2.4s linear infinite;
+      border-left-color:#a78bfa;
+      box-shadow:0 0 0 1px rgba(167,139,250,.10), 0 4px 14px -8px rgba(99,102,241,.35);
+    }
+    .ns-reasoning.nr-done{
+      background:rgba(255,255,255,.015);
+      border-left-color:rgba(167,139,250,.35);
+    }
+    @keyframes nrShimmer{0%{background-position:0% 50%;}100%{background-position:200% 50%;}}
+    .nr-head{
+      display:flex;align-items:center;gap:8px;
+      width:100%;
+      padding:6px 11px;
+      background:transparent;border:0;
+      color:#cbd5e1;font-size:11.5px;font-weight:500;
+      cursor:pointer;text-align:left;font-family:inherit;
+    }
+    .nr-head:hover{background:rgba(255,255,255,.02);}
+    .nr-icon{font-size:13px;}
+    .nr-active .nr-icon{animation:nrPulse 1.6s ease-in-out infinite;}
+    @keyframes nrPulse{0%,100%{opacity:.55;transform:scale(1);}50%{opacity:1;transform:scale(1.15);}}
+    .nr-title{flex:1;letter-spacing:.1px;}
+    .nr-active .nr-title{
+      background:linear-gradient(90deg,#cbd5e1 0%,#a78bfa 50%,#cbd5e1 100%);
+      background-size:200% auto;
+      -webkit-background-clip:text;background-clip:text;
+      -webkit-text-fill-color:transparent;
+      animation:nrTextShine 2.4s linear infinite;
+    }
+    @keyframes nrTextShine{0%{background-position:0% 50%;}100%{background-position:200% 50%;}}
+    .nr-timer{
+      font-family:var(--mono);font-size:10px;color:#a78bfa;
+      background:rgba(167,139,250,.10);
+      padding:1px 7px;border-radius:10px;
+      border:1px solid rgba(167,139,250,.20);
+    }
+    .nr-chev{font-size:10px;opacity:.55;}
+    .nr-body{
+      margin:0;padding:2px 14px 10px;
+      font-size:11px;line-height:1.55;color:#94a3b8;
+      font-family:var(--mono);white-space:pre-wrap;
+      border-top:1px solid rgba(167,139,250,.08);
+      max-height:300px;overflow-y:auto;
+    }
+
+    /* ── Tool cards (NexShell port) ── */
+    .ns-toolcard{
+      width:100%;
+      margin:4px 0;
+      border:1px solid rgba(255,255,255,.07);
+      border-left:2px solid rgba(167,139,250,.4);
+      border-radius:6px;
+      background:rgba(255,255,255,.015);
+      overflow:hidden;
+      transition:border-color .25s, background .25s;
+    }
+    .ns-toolcard.ntc-running{
+      border-left-color:#a78bfa;
+      background:linear-gradient(110deg, rgba(167,139,250,.05) 0%, rgba(99,102,241,.09) 50%, rgba(167,139,250,.05) 100%);
+      background-size:200% 100%;
+      animation:nrShimmer 2.4s linear infinite;
+    }
+    .ns-toolcard.ntc-done{border-left-color:#10b981;}
+    .ns-toolcard.ntc-error{border-left-color:#ef4444;background:rgba(239,68,68,.04);}
+    .ns-toolcard .ntc-head{
+      display:flex;align-items:center;gap:9px;
+      padding:6px 11px;cursor:pointer;list-style:none;
+      font-size:11.5px;color:#cbd5e1;user-select:none;
+    }
+    .ns-toolcard .ntc-head::-webkit-details-marker{display:none;}
+    .ns-toolcard .ntc-head:hover{background:rgba(255,255,255,.025);}
+    .ns-toolcard .ntc-icon{font-size:13px;flex-shrink:0;}
+    .ns-toolcard .ntc-label{
+      flex:1;font-family:var(--mono);font-size:11px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1;
+    }
+    .ns-toolcard .ntc-dur{
+      font-family:var(--mono);font-size:10px;color:#94a3b8;
+      background:rgba(255,255,255,.04);padding:1px 6px;border-radius:8px;
+    }
+    .ns-toolcard .ntc-status{
+      font-size:11px;font-weight:700;min-width:14px;text-align:center;
+    }
+    .ntc-running .ntc-status{color:#a78bfa;}
+    .ntc-done .ntc-status{color:#10b981;}
+    .ntc-error .ntc-status{color:#ef4444;}
+    .ntc-spinner{
+      display:inline-block;width:10px;height:10px;
+      border:1.5px solid rgba(167,139,250,.25);
+      border-top-color:#a78bfa;
+      border-radius:50%;
+      animation:ntcSpin .7s linear infinite;
+    }
+    @keyframes ntcSpin{to{transform:rotate(360deg);}}
+    .ns-toolcard .ntc-body{
+      margin:0;padding:8px 12px;
+      font-family:var(--mono);font-size:11px;line-height:1.5;
+      color:#94a3b8;background:rgba(0,0,0,.18);
+      border-top:1px solid rgba(255,255,255,.04);
+      white-space:pre-wrap;word-break:break-word;
+      max-height:280px;overflow-y:auto;
+    }
     .rsl-live-cursor{display:inline-block;width:7px;height:12px;background:var(--acc);border-radius:1px;vertical-align:middle;margin-left:1px;animation:stream-blink .7s ease-in-out infinite;}
     @keyframes stream-blink{0%,100%{opacity:1;}50%{opacity:0;}}
 

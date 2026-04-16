@@ -30,18 +30,24 @@ Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs 
 
 **[Watch Full Demo on YouTube](https://www.youtube.com/watch?v=-baowyd16kc)** — See Lucy in action managing infrastructure, running compliance checks, and automating SysAdmin tasks.
 
-## Features
+## Core Features: The Agentic OS
 
-- **AI Chat Interface** — Conversational assistant with streaming LLM responses, markdown rendering, and syntax highlighting
+Lucy has evolved from a conversational tool into a fully **Autonomous Agentic OS**:
+
+- **Sub-Agents & Parallel Orchestration** — Fork tasks natively to independent background agents using Ollama (Local) or Cloud models, allowing simultaneous multi-threaded execution.
+- **Self-Healing Execution Loop** — If Lucy encounters an error running a command (e.g., PowerShell access denied), she intercepts the terminal output on the fly, auto-corrects her approach, and retries until success without user intervention.
+- **OpenClaw TCP Gateway** — Integrated native webhook listener on port `31337`. External systems can trigger Lucy instantly, automatically spawning dedicated Agent Tabs to process the events.
+- **Claude Mem (Anti-Amnesia)** — Lucy securely saves architectural memory seamlessly into `workspace_memory.md`, retaining context across sessions and preserving knowledge permanently.
+- **Graphify AST Integration** — Advanced codebase parsing hooks allowing Lucy to query Abstract Syntax Trees to map logic accurately.
+- **Local LLM Emancipation** — Auto-parsers convert markdown into native OS commands instantly. Restricted local models (like `llama3`, `qwen`) can operate as unrestricted SysAdmin executors, massively reducing token latency with dynamic environment injection.
+
+### Standard SyAdmin Features
+
 - **Remote Shell (NexShell)** — Execute commands on remote Windows and Linux hosts via SSH/WinRM
-- **Log Viewer** — Monitor and analyze system event logs (local and remote)
-- **Infrastructure Inventory** — Auto-discover network services, installed software, and system configuration
-- **CIS Compliance** — Run CIS benchmark checks against Windows and Linux baselines
-- **Audit Trail** — Full logging of all administrative actions with timestamps and context
+- **Log Viewer & Infrastructure Inventory** — Monitor event logs, auto-discover services, and track installed software
+- **CIS Compliance** — Run strict CIS benchmark checks against Windows and Linux baselines
+- **Audit Trail & Reports** — Export PDF reports and log every administrative action securely
 - **Credential Vault** — Secure API key and host credential storage via OS keyring
-- **Multi-Host Profiles** — Manage multiple infrastructure targets with saved connection profiles
-- **PDF Reports** — Generate compliance and audit reports on demand
-- **Skill System** — Extensible command skills for common sysadmin tasks
 
 ## Screenshots
 

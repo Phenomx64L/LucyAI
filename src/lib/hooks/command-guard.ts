@@ -1,8 +1,18 @@
 // ── command-guard.ts — Pre-execution hook: detects dangerous commands ────────
 // Analyzes commands for risk level before execution.
+// Integrates with permission rules for fine-grained access control.
 // Does NOT copy any external code — inspired by generic SysAdmin best-practices.
 
+import { invoke } from '@tauri-apps/api/core';
+
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'safe';
+
+export interface PermissionCheckResult {
+    allowed: boolean;
+    action: 'allow' | 'block' | 'ask';
+    reason: string;
+    ruleId?: string;
+}
 
 export interface RiskAssessment {
     level: RiskLevel;
@@ -177,6 +187,55 @@ const DB_PATTERNS: DangerPattern[] = [
       severity: 'medium', points: 20 },
 ];
 
+// ── NORMALIZATION (defeat trivial obfuscation before pattern matching) ──────
+// Covers: PS backtick escapes, string concatenation (`'a'+'b'`), env-var
+// expansion (%SystemRoot%, $env:SystemRoot, ${env:WinDir}), Unicode fullwidth,
+// quoted paths, caret escapes (cmd), and case folding for env names.
+export function normalizeCommand(cmd: string): string {
+    let s = String(cmd || '');
+
+    // 1. PowerShell backtick line-continuations and char escapes: `a → a
+    s = s.replace(/`([^\r\n])/g, '$1');
+    // 2. cmd.exe caret escapes: ^a → a
+    s = s.replace(/\^([^\r\n])/g, '$1');
+    // 3. Collapse PS string concatenation: 'abc' + 'def' → 'abcdef'
+    //    (repeat to catch chains like 'a'+'b'+'c')
+    for (let i = 0; i < 6; i++) {
+        const before = s;
+        s = s.replace(/(['"])([^'"`]*)\1\s*\+\s*(['"])([^'"`]*)\3/g, (_m, q1, a, _q2, b) => `${q1}${a}${b}${q1}`);
+        if (s === before) break;
+    }
+    // 4. Environment variable expansion → canonical Windows paths
+    const envMap: Record<string, string> = {
+        systemroot: 'C:\\Windows',
+        windir: 'C:\\Windows',
+        systemdrive: 'C:',
+        programfiles: 'C:\\Program Files',
+        'programfiles(x86)': 'C:\\Program Files (x86)',
+        programdata: 'C:\\ProgramData',
+        allusersprofile: 'C:\\ProgramData',
+        public: 'C:\\Users\\Public',
+        temp: 'C:\\Windows\\Temp',
+        tmp: 'C:\\Windows\\Temp',
+        userprofile: 'C:\\Users\\User',
+        localappdata: 'C:\\Users\\User\\AppData\\Local',
+        appdata: 'C:\\Users\\User\\AppData\\Roaming',
+    };
+    const expandEnv = (name: string) => envMap[name.toLowerCase()] ?? `%${name}%`;
+    // %VAR%
+    s = s.replace(/%([A-Za-z_][A-Za-z0-9_()]*)%/g, (_m, n) => expandEnv(n));
+    // $env:VAR  and  ${env:VAR}
+    s = s.replace(/\$\{?env:([A-Za-z_][A-Za-z0-9_()]*)\}?/gi, (_m, n) => expandEnv(n));
+    // 5. Fullwidth / unicode homoglyph normalization (common jailbreak)
+    try { s = s.normalize('NFKC'); } catch { /* ignore */ }
+    // 6. Collapse duplicate backslashes that aren't escapes
+    s = s.replace(/\\{2,}/g, '\\');
+    // 7. Strip wrapping quotes around paths so regex can see C:\Windows\System32
+    s = s.replace(/(['"])(C:\\[^'"]*)\1/gi, '$2');
+
+    return s;
+}
+
 // ── MAIN ANALYSIS FUNCTION ──────────────────────────────────────────────────
 
 export function analyzeCommand(
@@ -190,15 +249,25 @@ export function analyzeCommand(
         ...DB_PATTERNS,
     ];
 
+    // Match against BOTH original and normalized forms so obfuscation can't bypass.
+    const normalized = normalizeCommand(command);
+    const targets = normalized === command ? [command] : [command, normalized];
+    const seen = new Set<string>();
+
     for (const p of patterns) {
-        if (p.regex.test(command)) {
-            matches.push({
-                pattern: p.regex.source,
-                category: p.category,
-                description: isEN ? p.descriptionEN : p.description,
-                severity: p.severity,
-                points: p.points,
-            });
+        for (const target of targets) {
+            if (p.regex.test(target)) {
+                if (seen.has(p.regex.source)) break;
+                seen.add(p.regex.source);
+                matches.push({
+                    pattern: p.regex.source,
+                    category: p.category,
+                    description: isEN ? p.descriptionEN : p.description,
+                    severity: p.severity,
+                    points: p.points,
+                });
+                break;
+            }
         }
     }
 
@@ -267,5 +336,36 @@ export function riskIcon(level: RiskLevel): string {
         case 'medium':   return '🔶';
         case 'low':      return '🔵';
         default:         return '✅';
+    }
+}
+
+// ── PERMISSION RULES CHECKING ────────────────────────────────────────────────
+
+/**
+ * Check if a command is allowed by permission rules
+ * @param cmd Command or path to check
+ * @param ruleType Type of rule: 'command', 'file_path', or 'registry'
+ * @returns Permission check result with allowed status and action
+ */
+export async function checkPermissionRules(cmd: string, ruleType: string = 'command'): Promise<PermissionCheckResult> {
+    try {
+        const result: any = await invoke('check_permission', {
+            cmd,
+            ruleType,
+        });
+
+        return {
+            allowed: result.action !== 'block',
+            action: result.action,
+            reason: result.reason,
+            ruleId: result.rule_id,
+        };
+    } catch (error) {
+        // If permission checking fails, allow by default (graceful degradation)
+        return {
+            allowed: true,
+            action: 'allow',
+            reason: 'Permission rules unavailable - allowing execution',
+        };
     }
 }

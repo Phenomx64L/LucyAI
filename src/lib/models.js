@@ -1,38 +1,94 @@
+import { writable, get } from 'svelte/store';
+import { invoke } from '@tauri-apps/api/core';
+
+// Reactive store: starts with one fallback "custom" entry, gets replaced
+// when refreshLocalModels() succeeds.
+export const localModels = writable([
+    { id: "local-custom", icon: "", nameEn: "Local LLM — Custom Endpoint", nameEs: "LLM Local — Endpoint Personalizado" }
+]);
+
+// 🟢 / 🔴 status of local Ollama endpoint
+export const ollamaOnline = writable(false);
+
+/** Pick a friendly icon based on model family. */
+function pickIcon(name) {
+    const n = name.toLowerCase();
+    if (n.includes('qwen')) return '🐉';
+    if (n.includes('llama')) return '🦙';
+    if (n.includes('deepseek')) return '🐋';
+    if (n.includes('mistral') || n.includes('mixtral')) return '🌬️';
+    if (n.includes('phi')) return '🔷';
+    if (n.includes('gemma')) return '💎';
+    if (n.includes('codellama') || n.includes('coder')) return '👨‍💻';
+    return '🖥️';
+}
+
+/** Query Ollama for installed models and update the store. */
+export async function refreshLocalModels() {
+    try {
+        const names = await invoke('list_local_models');
+        ollamaOnline.set(Array.isArray(names));
+        if (Array.isArray(names) && names.length > 0) {
+            const opts = names.map(n => ({
+                id: 'local-' + n,
+                icon: pickIcon(n),
+                nameEn: `${n} — Local (Ollama)`,
+                nameEs: `${n} — Local (Ollama)`
+            }));
+            // Always keep "custom" as a manual fallback
+            opts.push({ id: "local-custom", icon: "🖥️", nameEn: "Custom Endpoint", nameEs: "Endpoint Personalizado" });
+            localModels.set(opts);
+            // Sync into LLM_GROUPS so existing consumers (getModelDescription, etc.) see them too.
+            const grp = LLM_GROUPS.find(g => g.label.includes('Locales'));
+            if (grp) grp.options = opts;
+            return opts;
+        }
+    } catch (e) {
+        // Ollama not running or endpoint not configured — keep fallback.
+        ollamaOnline.set(false);
+        console.warn('[localModels] refresh failed:', e);
+    }
+    return get(localModels);
+}
+
 export const LLM_GROUPS = [
     {
         label: "── Anthropic Claude ──",
         options: [
-            { id: "claude-sonnet-4-6", icon: "🧠", nameEn: "Claude 4.6 Sonnet — Advanced Coding & Analysis", nameEs: "Claude 4.6 Sonnet — Análisis y Programación Avanzada" },
-            { id: "claude-sonnet-4-5", icon: "✨", nameEn: "Claude 4.5 Sonnet — Fast & Efficient", nameEs: "Claude 4.5 Sonnet — Rápido y Eficiente" }
+            { id: "claude-sonnet-4-6", icon: "🧠", nameEn: "Claude Sonnet 4.6 — Advanced Analysis & Code", nameEs: "Claude Sonnet 4.6 — Análisis Avanzado y Código" },
+            { id: "claude-sonnet-4-5", icon: "✨", nameEn: "Claude Sonnet 4.5 — Fast & Efficient", nameEs: "Claude Sonnet 4.5 — Rápido y Eficiente" },
+            { id: "claude-3-5-sonnet-latest", icon: "⚡", nameEn: "Claude 3.5 Sonnet — Balanced Performance", nameEs: "Claude 3.5 Sonnet — Rendimiento Equilibrado" },
+            { id: "claude-3-5-haiku-latest", icon: "💨", nameEn: "Claude 3.5 Haiku — Speed Optimized", nameEs: "Claude 3.5 Haiku — Optimizado para Velocidad" },
         ]
     },
     {
         label: "── OpenAI GPT ──",
         options: [
-            { id: "gpt-5.4", icon: "✨", nameEn: "GPT-5.4 — Scale Intelligence", nameEs: "GPT-5.4 — Inteligencia a Escala" },
-            { id: "gpt-5.4-mini", icon: "⚡", nameEn: "GPT-5.4 Mini — Fast Code & Agents", nameEs: "GPT-5.4 Mini — Rápido para Código y Agentes" },
-            { id: "gpt-5.4-nano", icon: "💨", nameEn: "GPT-5.4 Nano — High-Volume Tasks", nameEs: "GPT-5.4 Nano — Tareas de Alto Volumen" }
+            { id: "gpt-4o", icon: "✨", nameEn: "GPT-4o — Multimodal Intelligence", nameEs: "GPT-4o — Inteligencia Multimodal" },
+            { id: "gpt-4o-mini", icon: "⚡", nameEn: "GPT-4o Mini — Fast & Cost Effective", nameEs: "GPT-4o Mini — Rápido y Económico" },
+            { id: "o3-mini", icon: "🎯", nameEn: "o3-mini — Advanced Reasoning", nameEs: "o3-mini — Razonamiento Avanzado" },
         ]
     },
     {
-        label: "── Gemini 3 (Next-Gen Preview) ──",
+        label: "── Gemini 3.1 (Nuevos) ──",
         options: [
-            { id: "gemini-3.1-pro-preview", icon: "💎", nameEn: "Pro 3.1 — Complex logic & deep thinking", nameEs: "Pro 3.1 — Análisis Arquitectónico Profundo" },
-            { id: "gemini-3-flash-preview", icon: "🦅", nameEn: "Flash 3 — Expansive context, rapid tasks", nameEs: "Flash 3 — Contexto Masivo & Refactorización ágil" },
-            { id: "gemini-3.1-flash-lite-preview", icon: "⚡", nameEn: "Lite 3.1 — Max efficiency for simple ops", nameEs: "Lite 3.1 — Scripts Rápidos" }
+            { id: "gemini-3.1-pro-preview", icon: "💎", nameEn: "Gemini 3.1 Pro — Ultimate Analysis", nameEs: "Gemini 3.1 Pro — Inteligencia Avanzada" },
+            { id: "gemini-3-flash-preview", icon: "⚡", nameEn: "Gemini 3 Flash — Balanced (Next Gen)", nameEs: "Gemini 3 Flash — Equilibrado" },
+            { id: "gemini-3.1-flash-lite-preview", icon: "💨", nameEn: "Flash Lite 3.1 — Instant Tasks", nameEs: "Flash Lite 3.1 — Tareas Rápidas" }
         ]
     },
     {
-        label: "── Gemini 2.5 (Estable) ──",
+        label: "── Gemini 2.5 (Legacy) ──",
         options: [
-            { id: "gemini-2.5-flash", icon: "⚡", nameEn: "Flash 2.5 — Balanced SysAdmin (Recommended)", nameEs: "Flash 2.5 — SysAdmin Equilibrado" },
-            { id: "gemini-2.5-pro", icon: "🧠", nameEn: "Pro 2.5 — Critical code & debugging", nameEs: "Pro 2.5 — Depuración Crítica" }
+            { id: "gemini-2.5-pro", icon: "💎", nameEn: "Gemini 2.5 Pro — Deep Analysis & Complex Tasks", nameEs: "Gemini 2.5 Pro — Análisis Profundo" },
+            { id: "gemini-2.5-flash", icon: "⚡", nameEn: "Flash 2.5 — Balanced SysAdmin", nameEs: "Flash 2.5 — SysAdmin Equilibrado" },
+            { id: "gemini-2.5-flash-lite-preview", icon: "💨", nameEn: "Flash Lite 2.5 — High-Speed Simple Tasks", nameEs: "Flash Lite 2.5 — Tareas Rápidas" },
         ]
     },
     {
         label: "── Modelos Locales ──",
         options: [
-            { id: "local-custom", icon: "🖥️", nameEn: "Local LLM — Custom Endpoint (Ollama/API)", nameEs: "Local LLM — Endpoint Personalizado (Ollama/API)" }
+            { id: "local-custom", icon: "🖥️", nameEn: "Local LLM — Custom Endpoint (Ollama/API)", nameEs: "LLM Local — Endpoint Personalizado (Ollama/API)" }
         ]
     }
 ];

@@ -14,7 +14,7 @@ use crate::utils::shell::{strip_ansi, ensure_trusted_host};
 // ── POWERSHELL LOCAL CON AUDIT LOG ────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn execute_powershell(script: String, bypass_token: Option<String>) -> Result<String, String> {
+pub async fn execute_powershell(script: String, bypass_token: Option<String>, timeout_secs: Option<u64>) -> Result<String, String> {
     use std::fs::OpenOptions;
     let script_lower = script.to_lowercase();
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -66,10 +66,13 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>) ->
     }
 
     let script_clone = script.clone();
+    let timeout_val = timeout_secs.unwrap_or(60);
     let output_result = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(timeout_val),
         tokio::task::spawn_blocking(move || {
+            let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
             Command::new("powershell")
+                .current_dir(cwd)
                 .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
                 .arg("-Command").arg(&script_clone)
                 .creation_flags(CREATE_NO_WINDOW)
@@ -79,8 +82,8 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>) ->
 
     let output = match output_result {
         Err(_) => {
-            write_app_log("WARNING", "PowerShell timeout: comando tardó más de 60 segundos");
-            return Err("Timeout: el comando tardó más de 60 segundos y fue cancelado.".to_string());
+            write_app_log("WARNING", &format!("PowerShell timeout: comando tardó más de {} segundos", timeout_val));
+            return Err(format!("Timeout: el comando tardó más de {} segundos y fue cancelado.", timeout_val));
         }
         Ok(Err(e)) => { return Err(format!("Error interno spawn: {}", e)); }
         Ok(Ok(Err(e))) => {
@@ -93,9 +96,25 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>) ->
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    if output.status.success() { Ok(stdout) }
-    else {
-        let err_msg = if stderr.trim().is_empty() { stdout } else { stderr.clone() };
+    // Success criteria: exit code 0 ⇒ success.
+    // If exit != 0 BUT stdout has content, treat as partial success (Get-ChildItem -Recurse
+    // commonly emits stderr for ACL-denied dirs while still returning useful results).
+    // Returning Err here would force the agent into useless retries.
+    if output.status.success() {
+        if stderr.trim().is_empty() {
+            Ok(stdout)
+        } else {
+            // Success with stderr noise — append as warning footer so the agent sees both.
+            Ok(format!("{}\n\n[stderr warnings]\n{}", stdout, stderr.trim()))
+        }
+    } else if !stdout.trim().is_empty() {
+        // Non-zero exit but we got output — return it with a warning footer instead of erroring.
+        write_app_log("WARNING", &format!("PowerShell non-zero exit with output. stderr: {}",
+            stderr.trim()));
+        Ok(format!("{}\n\n[stderr warnings — partial results, exit non-zero]\n{}",
+            stdout, stderr.trim()))
+    } else {
+        let err_msg = if stderr.trim().is_empty() { String::from("(no output)") } else { stderr.clone() };
         write_app_log("WARNING", &format!("PowerShell error: {}", err_msg));
         Err(format!("PowerShell Error:\n{}", err_msg))
     }

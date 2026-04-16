@@ -41,14 +41,82 @@
   /* ── Typography ── */
   --font-mono:     'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Consolas', monospace;
   --font-ui:       'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+
+  /* ── Warp-style theme system (consumed by .bg-warp-gradient + .sidebar-glass) ── */
+  /* Punchier defaults — pushed even further for visible contrast on dark monitors */
+  --bg-top:          #5a6478;
+  --bg-mid:          #1c1f2a;
+  --bg-bottom:       #050608;
+  --sidebar-overlay: rgba(8, 10, 16, 0.55);
+  --border-glass:    rgba(255, 255, 255, 0.08);
 }
+
+[data-theme="ocean"] {
+  --bg-top:          #2a4a6e;
+  --bg-mid:          #122236;
+  --bg-bottom:       #04080f;
+  --sidebar-overlay: rgba(4, 12, 24, 0.55);
+}
+[data-theme="hacker"] {
+  --bg-top:          #1b3a1b;
+  --bg-mid:          #0a1a0a;
+  --bg-bottom:       #020602;
+  --sidebar-overlay: rgba(2, 8, 2, 0.60);
+}
+
+/* Top-to-bottom gradient background. Used on the .root container.
+   background-attachment:fixed keeps the gradient stable while content scrolls. */
+.bg-warp-gradient {
+  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  background-attachment: fixed;
+  transition: background 0.5s ease;
+}
+
+/* Glassmorphism overlay for the sidebar.
+   NOTE: backdrop-filter requires WebView2 ≥ Edge 105. If unavailable,
+   the semi-transparent background still renders a darkened panel. */
+.sidebar-glass {
+  background-color: var(--sidebar-overlay) !important;
+  background-image: none !important;
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border-right: 1px solid var(--border-glass) !important;
+  transition: background-color 0.5s ease, border-color 0.5s ease;
+}
+
+/* Warp-style theme picker — 3 circular swatches at the bottom of the sidebar */
+.theme-picker {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 10px 8px 14px;
+  margin-top: auto;
+}
+.theme-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  -webkit-app-region: no-drag;
+}
+.theme-dot:hover { transform: scale(1.12); border-color: rgba(255, 255, 255, 0.35); }
+.theme-dot.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25), 0 0 8px rgba(16, 185, 129, 0.4);
+}
+.theme-dot-default { background: linear-gradient(180deg, #2A2D35 0%, #121317 100%); }
+.theme-dot-ocean   { background: linear-gradient(180deg, #1A2634 0%, #090E14 100%); }
+.theme-dot-hacker  { background: linear-gradient(180deg, #111B11 0%, #030603 100%); }
 
 /* ── RESET ───────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 body {
   margin: 0;
   font-family: var(--font-ui);
-  background: var(--bg-base);
+  background: #0b0d16;
   color: var(--text-main);
   height: 100vh;
   overflow: hidden;
@@ -175,14 +243,24 @@ body > div, #svelte { height: 100%; display: contents; }
   flex: 1 !important;
   overflow: hidden !important;
   min-height: 0 !important;
+  background:
+    radial-gradient(ellipse 600px 500px at 10% 50%, rgba(16, 185, 129, 0.12) 0%, transparent 65%),
+    radial-gradient(ellipse 500px 450px at 85% 15%, rgba(59, 130, 246, 0.10) 0%, transparent 65%),
+    radial-gradient(ellipse 450px 400px at 50% 90%, rgba(167, 139, 250, 0.08) 0%, transparent 65%),
+    radial-gradient(ellipse 300px 300px at 65% 55%, rgba(245, 158, 11, 0.05) 0%, transparent 60%),
+    linear-gradient(135deg, #080a14 0%, #0c0f1a 40%, #0a0e18 70%, #080a14 100%);
 }
 
 /* ── SIDEBAR ─────────────────────────────────────────────── */
 .sidebar {
   width: 210px;
   flex-shrink: 0 !important;
-  background: rgba(4, 8, 14, 0.85);
-  border-right: 1px solid var(--border-color);
+  background:
+    linear-gradient(180deg, rgba(16, 185, 129, 0.04) 0%, transparent 30%),
+    linear-gradient(0deg, rgba(167, 139, 250, 0.03) 0%, transparent 40%),
+    linear-gradient(180deg, #060810 0%, #0a0d18 50%, #080b14 100%);
+  border-right: 1px solid rgba(16, 185, 129, 0.15);
+  box-shadow: 1px 0 24px rgba(0, 0, 0, 0.4), inset -1px 0 0 rgba(255, 255, 255, 0.04);
   display: flex !important;
   flex-direction: column !important;
   overflow-y: auto;
@@ -236,14 +314,15 @@ body > div, #svelte { height: 100%; display: contents; }
   border-left: 2px solid transparent;
 }
 .sidebar-item:hover {
-  background: rgba(16,185,129,0.03);
+  background: rgba(16,185,129,0.06);
   color: #94a3b8;
-  border-left-color: rgba(16,185,129,0.15);
+  border-left-color: rgba(16,185,129,0.2);
 }
 .sidebar-item.active {
-  background: rgba(16,185,129,0.05);
+  background: rgba(16,185,129,0.08);
   color: var(--accent);
   border-left-color: var(--accent);
+  box-shadow: inset 2px 0 8px rgba(16, 185, 129, 0.1);
   box-shadow: inset 3px 0 8px rgba(16, 185, 129, 0.08);
 }
 .sidebar-item.soon { opacity: 0.35; cursor: default; }
@@ -336,14 +415,13 @@ body > div, #svelte { height: 100%; display: contents; }
 /* ── MESSAGES ────────────────────────────────────────────── */
 .msg-user {
   align-self: flex-end;
-  background: rgba(20, 30, 50, 0.75);
-  border: 1px solid rgba(59,130,246,0.12);
+  background: linear-gradient(135deg, rgba(15, 25, 50, 0.9) 0%, rgba(12, 20, 40, 0.85) 100%);
+  border: 1px solid rgba(59,130,246,0.2);
   border-right: 2px solid var(--blue);
   border-radius: 10px 10px 0 10px;
   padding: 10px 14px;
   max-width: 78%;
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25), 0 0 15px rgba(59, 130, 246, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 .msg-user .msg-name {
   font-size: 11px;
@@ -357,16 +435,14 @@ body > div, #svelte { height: 100%; display: contents; }
 
 .msg-lucy {
   align-self: flex-start;
-  background: rgba(6, 12, 20, 0.85);
-  border: 1px solid rgba(16,185,129,0.07);
+  background: linear-gradient(135deg, rgba(8, 16, 28, 0.92) 0%, rgba(6, 12, 22, 0.88) 100%);
+  border: 1px solid rgba(16,185,129,0.14);
   border-left: 2px solid var(--accent);
   border-radius: 0 10px 10px 10px;
   padding: 10px 14px;
   max-width: 88%;
   line-height: 1.6;
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  box-shadow: -2px 0 12px rgba(16, 185, 129, 0.04);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25), 0 0 12px rgba(16, 185, 129, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .msg-lucy .msg-name {
   font-size: 11px;
@@ -511,8 +587,8 @@ body > div, #svelte { height: 100%; display: contents; }
   padding: 10px 14px;
   display: flex;
   gap: 8px;
-  background: rgba(2, 5, 10, 0.7);
-  border-top: 1px solid var(--border-color);
+  background: linear-gradient(0deg, #060810 0%, #0a0e1a 100%);
+  border-top: 1px solid rgba(16, 185, 129, 0.10);
   align-items: flex-end;
   flex-shrink: 0;
 }
@@ -610,8 +686,8 @@ body > div, #svelte { height: 100%; display: contents; }
   flex-direction: row !important;
   align-items: center;
   height: 22px;
-  background: rgba(2, 4, 8, 0.85);
-  border-top: 1px solid #0c1018;
+  background: #050710;
+  border-top: 1px solid rgba(16, 185, 129, 0.08);
   padding: 0 12px;
   font-size: 10px;
   color: #2a3a4a;
@@ -875,11 +951,6 @@ body > div, #svelte { height: 100%; display: contents; }
   padding: 2px 0;
 }
 
-/* ── ANIMATIONS ──────────────────────────────────────────── */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.msg-lucy, .msg-user {
-  animation: fadeInUp 0.2s ease forwards;
-}
+/* Messages render statically — no entrance animation. Re-enabling fadeInUp
+   here causes Svelte's reactive re-renders to retrigger the keyframes on
+   existing messages, producing visible "jumping". */

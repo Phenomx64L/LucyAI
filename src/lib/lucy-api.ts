@@ -292,3 +292,41 @@ export const runComplianceLinux = (args: {
 export const runComplianceWindows = (args: {
     host: string; username: string; password: string; checksJson: string;
 }): Promise<unknown[]> => invoke('run_compliance_windows', args);
+
+// ── COST TRACKING & METRICS (Nivel 2) ─────────────────────────────────────
+
+export interface ModelCostBreakdown {
+    model: string;
+    cost: number;
+    tokens: number;
+    requests: number;
+}
+
+export interface CostSummary {
+    total_cost: number;
+    total_tokens: number;
+    request_count: number;
+    per_model: ModelCostBreakdown[];
+    period: 'day' | 'month' | 'all';
+}
+
+export interface TokenUsage {
+    id: string;
+    task_id: string;
+    timestamp: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    total_cost: number;
+    user: string;
+    request_type: string;
+}
+
+export const initMetricsDb = (): Promise<void> =>
+    invoke('init_metrics_db');
+
+export const getCostSummary = (period: 'day' | 'month' | 'all'): Promise<CostSummary> =>
+    invoke('get_cost_summary', { period });
+
+export const getTokenHistory = (limit: number): Promise<TokenUsage[]> =>
+    invoke('get_token_history', { limit });

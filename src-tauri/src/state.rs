@@ -3,7 +3,7 @@
 
 use reqwest::Client;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use once_cell::sync::Lazy;
 
 /// Flag de creación sin ventana de consola (Windows-only).
@@ -22,11 +22,18 @@ pub static STREAM_PIDS: Lazy<StdMutex<HashMap<String, u32>>> =
 pub static BYPASS_TOKENS: Lazy<StdMutex<HashMap<String, String>>> =
     Lazy::new(|| StdMutex::new(HashMap::new()));
 
+pub static GLOBAL_CWD: Lazy<RwLock<String>> = Lazy::new(|| {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "C:\\".to_string());
+    RwLock::new(cwd)
+});
+
 /// Cliente HTTP global con pool de conexiones — un único cliente para toda la app
 /// evita crear sockets nuevos en cada llamada y amortiza TLS handshake.
 pub static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .build()
         .expect("Error creando cliente HTTP global")
 });
@@ -34,23 +41,24 @@ pub static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 /// Whitelist explícita de modelos Gemini permitidos.
 /// Previene llamadas a endpoints arbitrarios si el frontend envía un modelo inválido.
 pub const ALLOWED_MODELS: &[&str] = &[
+    // Gemini 3.1
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    // Gemini 2.5
     "gemini-2.5-flash",
     "gemini-2.5-pro",
-    "gemini-2.5-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash-lite-preview",
+    // Anthropic Claude
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-3-7-sonnet-20250219",
     "claude-3-5-sonnet-latest",
     "claude-3-5-haiku-latest",
-    "claude-sonnet-4-5",
-    "claude-sonnet-4-6",
-    "gpt-4.5-preview",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.4-nano",
+    // OpenAI GPT
     "gpt-4o",
     "gpt-4o-mini",
     "o1",
-    "o3-mini"
+    "o3-mini",
+    "o4-mini",
 ];

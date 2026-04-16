@@ -280,3 +280,35 @@ export const guardConfig = persistedWritable<GuardConfig>('lucy_guard_config', {
     interceptAI: true,
     interceptBroadcast: true,
 });
+
+// ── COST TRACKING (Nivel 2) ──────────────────────────────────────────────────
+
+export interface ModelCostBreakdown {
+    model: string;
+    cost: number;
+    tokens: number;
+    requests: number;
+}
+
+export interface CostSummary {
+    total_cost: number;
+    total_tokens: number;
+    request_count: number;
+    per_model: ModelCostBreakdown[];
+    period: 'day' | 'month' | 'all';
+}
+
+export interface TokenBudgetConfig {
+    monthlyLimit: number; // USD
+    alertThreshold: number; // percentage (e.g., 80 = alert at 80% of limit)
+    enabled: boolean;
+}
+
+export const costSummaryDay = writable<CostSummary | null>(null);
+export const costSummaryMonth = writable<CostSummary | null>(null);
+export const costSummaryAll = writable<CostSummary | null>(null);
+export const tokenBudgetConfig = persistedWritable<TokenBudgetConfig>('lucy_token_budget', {
+    monthlyLimit: 10.0,
+    alertThreshold: 80,
+    enabled: true,
+});

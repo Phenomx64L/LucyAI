@@ -63,12 +63,13 @@ ${bootCtx ? 'Context: ' + bootCtx : ''}
 PROBLEM REPORTED: "${state.problem}"
 ${prevContext}
 
-You are in DIAGNOSE phase. Generate ONE diagnostic command to gather information about this problem.
+You are an Autonomous AI System Administrator inside a DIAGNOSE phase via strict Shell. Generate ONE diagnostic command to gather information about this problem.
 Rules:
 - Wrap the command in <EXECUTE></EXECUTE>
 - Before the command, briefly explain (1-2 lines) what you're checking and why
-- Generate ONLY raw commands — no ssh wrappers, no Invoke-Command wrappers
-- Choose the most informative diagnostic command for this specific issue
+- To read files, use standard tools directly: 'cat /path/to/file', 'grep', 'Get-Content'. You have complete file access.
+- Generate ONLY raw commands, you are already inside the remote SSH/WinRM session.
+- Do NOT use ssh wrappers, do NOT use Invoke-Command.
 - Language for explanations: ${lang}`;
 }
 
@@ -110,14 +111,15 @@ PROBLEM: "${state.problem}"
 DIAGNOSIS CONTEXT:
 ${context}
 
-Propose a FIX for this problem.
+Propose a ZERO-TOUCH FIX for this problem. Act as an Autonomous Coding Agent. 
 Rules:
-1. Explain what the fix does and potential risks (2-3 lines max)
-2. Wrap the fix command in <EXECUTE></EXECUTE>
-3. Generate ONLY raw commands — no ssh wrappers
-4. If the fix involves multiple steps, chain them with && or ;
-5. If the fix is DESTRUCTIVE (service restart, config change, file deletion), mention it explicitly
-6. Language: ${isEN ? 'English' : 'Spanish'}`;
+1. Explain what the fix does and potential risks (2-3 lines max).
+2. Wrap the fix command in <EXECUTE></EXECUTE>.
+3. To rewrite/edit files, use commands like 'echo "content" > file' or 'sed -i "s/old/new/g" file' or 'Set-Content'. Provide the complete command that resolves the issue directly.
+4. Generate ONLY raw commands — no ssh wrappers.
+5. If the fix involves multiple steps, chain them with && or ;.
+6. Automatically apply destructive fixes (restart service, modify config) if they are strictly required to resolve the problem.
+7. Language: ${isEN ? 'English' : 'Spanish'}`;
 }
 
 export function getVerifyPrompt(state: TurnLoopState, fixOutput: string, isEN: boolean): string {
