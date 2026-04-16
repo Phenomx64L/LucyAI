@@ -14,6 +14,7 @@
     export let show        = false;
     /** Host being edited, or null for a new host */
     export let editingHost = null;
+    export let isEN = false;
 
     const dispatch = createEventDispatcher();
 
@@ -124,7 +125,7 @@
     }
 
     function eliminar() {
-        if (confirm("¿Estás seguro de que deseas eliminar este host? Esta acción no se puede deshacer.")) {
+        if (confirm("${isEN ? 'Are you sure you want to delete this host? This action cannot be undone.' : '¿Estás seguro de que deseas eliminar este host? Esta acción no se puede deshacer.'}")) {
             dispatch('delete', editingHost.id);
             show = false;
         }
@@ -139,7 +140,7 @@
     <div class="hm-hdr">
       <h2 class="hm-title">
         <span style="color:var(--blue);">{editingHost ? '🖊' : '+'}</span>
-        {editingHost ? 'Editar Host' : 'Nuevo Host Remoto'}
+        {editingHost ? (isEN ? 'Edit Host' : 'Editar Host') : (isEN ? 'New Remote Host' : 'Nuevo Host Remoto')}
       </h2>
       <button class="hm-close" on:click={cancel}>✕</button>
     </div>
@@ -147,27 +148,27 @@
     <!-- Form grid -->
     <div class="hm-grid">
       <div>
-        <label class="hm-label" for="hf-name">Nombre *</label>
-        <input id="hf-name" class="hm-inp" placeholder="Ej. Prod-Web-01"
+        <label class="hm-label" for="hf-name">{isEN ? 'Name *' : 'Nombre *'}</label>
+        <input id="hf-name" class="hm-inp" placeholder={isEN ? 'E.g. Prod-Web-01' : 'Ej. Prod-Web-01'}
           bind:value={hostForm.name}>
       </div>
       <div>
-        <label class="hm-label" for="hf-proto">Protocolo *</label>
+        <label class="hm-label" for="hf-proto">{isEN ? 'Protocol *' : 'Protocolo *'}</label>
         <select id="hf-proto" class="hm-inp" bind:value={hostForm.protocol}
           on:change={() => onProtocolChange(hostForm.protocol)}>
-          <optgroup label="Shell / Acceso remoto">
+          <optgroup label="Shell / {isEN ? 'Remote access' : 'Acceso remoto'}">
             <option value="winrm">🖥 Windows (WinRM)</option>
             <option value="ssh">🐧 Linux (SSH)</option>
             <option value="rdp">🖥 Windows (RDP)</option>
           </optgroup>
-          <optgroup label="Bases de datos">
+          <optgroup label="{isEN ? 'Databases' : 'Bases de datos'}">
             <option value="postgres">🐘 PostgreSQL</option>
             <option value="mysql">🐬 MySQL / MariaDB</option>
             <option value="mongodb">🍃 MongoDB</option>
             <option value="redis">⚡ Redis</option>
             <option value="mssql">🪟 SQL Server</option>
           </optgroup>
-          <optgroup label="Infraestructura">
+          <optgroup label="{isEN ? 'Infrastructure' : 'Infraestructura'}">
             <option value="docker">🐳 Docker API</option>
             <option value="k8s">⎈ Kubernetes API</option>
             <option value="snmp">🌐 SNMP (Red)</option>
@@ -175,18 +176,18 @@
         </select>
       </div>
       <div>
-        <label class="hm-label" for="hf-category">Categoría</label>
+        <label class="hm-label" for="hf-category">{isEN ? 'Category' : 'Categoría'}</label>
         <select id="hf-category" class="hm-inp" bind:value={hostForm.category}>
-          <option value="shell">🖥 Servidor / Shell</option>
-          <option value="database">🗄️ Base de datos</option>
-          <option value="container">🐳 Contenedor (Docker)</option>
+          <option value="shell">🖥 {isEN ? 'Server / Shell' : 'Servidor / Shell'}</option>
+          <option value="database">🗄️ {isEN ? 'Database' : 'Base de datos'}</option>
+          <option value="container">🐳 {isEN ? 'Container (Docker)' : 'Contenedor (Docker)'}</option>
           <option value="kubernetes">⎈ Kubernetes</option>
-          <option value="network">🌐 Dispositivo de red</option>
+          <option value="network">🌐 {isEN ? 'Network Device' : 'Dispositivo de red'}</option>
         </select>
       </div>
       {#if hostForm.category === 'database' && !['postgres','mysql','mongodb','redis','mssql'].includes(hostForm.protocol)}
       <div class="hm-full">
-        <label class="hm-label" for="hf-dbtype">Motor de base de datos</label>
+        <label class="hm-label" for="hf-dbtype">{isEN ? 'Database Engine' : 'Motor de base de datos'}</label>
         <select id="hf-dbtype" class="hm-inp" bind:value={hostForm.dbType}>
           <option value="postgres">🐘 PostgreSQL</option>
           <option value="mysql">🐬 MySQL / MariaDB</option>
@@ -199,7 +200,7 @@
       <div>
         <label class="hm-label" for="hf-host">IP / Hostname *</label>
         <input id="hf-host" class="hm-inp hm-mono"
-          placeholder="192.168.1.10 ó servidor.empresa.com"
+          placeholder={isEN ? '192.168.1.10 or server.company.com' : '192.168.1.10 ó servidor.empresa.com'}
           bind:value={hostForm.host}>
       </div>
       <div>
@@ -211,27 +212,27 @@
           bind:value={hostForm.port}>
       </div>
       <div>
-        <label class="hm-label" for="hf-user">Usuario {hostForm.protocol === 'snmp' ? '(community)' : '*'}</label>
+        <label class="hm-label" for="hf-user">{isEN ? 'User ' : 'Usuario '}{hostForm.protocol === 'snmp' ? '(community)' : '*'}</label>
         <input id="hf-user" class="hm-inp hm-mono"
           placeholder={hostForm.protocol === 'snmp' ? 'public' : hostForm.type === 'windows' ? 'DOMINIO/usuario' : 'root'}
           bind:value={hostForm.username}>
       </div>
       <div>
         <label class="hm-label" for="hf-pass">
-          Contraseña {editingHost ? '(dejar vacío = no cambiar)' : '*'}
+          {isEN ? 'Password ' : 'Contraseña '} {editingHost ? (isEN ? '(leave empty = no change)' : '(dejar vacío = no cambiar)') : '*'}
         </label>
         <input class="hm-inp" type="password" id="hf-pass"
           placeholder="••••••••" bind:value={hostPassword}>
       </div>
       <div class="hm-full">
         <label class="hm-label" for="hf-tags">
-          🏷️ Tags <span class="hm-sub">(separados por coma — ej: prod, web, db)</span>
+          🏷️ Tags <span class="hm-sub">({isEN ? 'comma separated — e.g. prod, web, db' : 'separados por coma — ej: prod, web, db'})</span>
         </label>
         <input id="hf-tags" class="hm-inp hm-mono"
           placeholder="prod, web, linux" bind:value={hostForm.tags}>
       </div>
       <div class="hm-full">
-        <span class="hm-label">🎨 Color del host</span>
+        <span class="hm-label">🎨 {isEN ? 'Host Color' : 'Color del host'}</span>
         <div class="hm-swatches">
           {#each ['#10b981','#ef4444','#3b82f6','#f59e0b','#a78bfa','#ff6eb4','#00d4ff','#ff8c00'] as c}
           <button class="hm-swatch" class:active={hostForm.color === c}
@@ -248,21 +249,21 @@
     {#if hostForm.protocol === 'ssh'}
     <div class="hm-keypath">
       <label class="hm-label" for="hf-keypath">
-        🔑 Ruta de clave SSH privada
-        <span class="hm-sub">(opcional — deja vacío para usar contraseña)</span>
+        🔑 {isEN ? 'Private SSH key path' : 'Ruta de clave SSH privada'}
+        <span class="hm-sub">({isEN ? 'optional — leave empty to use password' : 'opcional — deja vacío para usar contraseña'})</span>
       </label>
       <div class="hm-keypath-row">
         <input id="hf-keypath" class="hm-inp hm-mono" style="flex:1;"
           placeholder="C:\Users\tu\.ssh\id_rsa o ~/.ssh/id_ed25519"
           bind:value={hostForm.sshKeyPath}>
-        <button class="hm-pick" title="Seleccionar archivo de clave"
+        <button class="hm-pick" title="{isEN ? 'Select key file' : 'Seleccionar archivo de clave'}"
           on:click={async () => {
             const p = await invoke('pick_file_path').catch(() => '');
             if (p) hostForm.sshKeyPath = p;
           }}>📂</button>
       </div>
       <p class="hm-note">
-        Si se especifica, se usa <code>ssh -i &lt;ruta&gt;</code> en lugar de contraseña.
+        {isEN ? 'If specified, <code>ssh -i &lt;path&gt;</code> will be used instead of a password.' : 'Si se especifica, se usa <code>ssh -i &lt;ruta&gt;</code> en lugar de contraseña.'}
       </p>
     </div>
     {/if}
@@ -270,48 +271,38 @@
     <!-- Protocol-specific info boxes -->
     {#if hostForm.protocol === 'ssh'}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ Requisito SSH:</b> El equipo local debe tener OpenSSH
-      instalado (incluido en Windows 10/11) y el host remoto debe permitir autenticación por
-      contraseña o clave SSH.
+      <b style="color:var(--blue);">ℹ️ {isEN ? 'SSH Requirement:' : 'Requisito SSH:'}</b> {isEN ? 'The local machine must have OpenSSH installed (included in Windows 10/11) and the remote host must allow authentication via password or SSH key.' : 'El equipo local debe tener OpenSSH instalado (incluido en Windows 10/11) y el host remoto debe permitir autenticación por contraseña o clave SSH.'}
     </div>
     {:else if hostForm.protocol === 'winrm'}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ Requisito WinRM:</b> El servidor remoto debe tener WinRM
-      habilitado. Ejecuta en el servidor:
+      <b style="color:var(--blue);">ℹ️ {isEN ? 'WinRM Requirement:' : 'Requisito WinRM:'}</b> {isEN ? 'The remote server must have WinRM enabled. Run on the server:' : 'El servidor remoto debe tener WinRM habilitado. Ejecuta en el servidor:'}
       <code class="hm-mono" style="font-size:10px;color:var(--acc);">Enable-PSRemoting -Force</code>
     </div>
     {:else if hostForm.protocol === 'rdp'}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ RDP:</b> Lucy lanzará una sesión de Escritorio Remoto
-      (<code class="hm-mono" style="font-size:10px;">mstsc.exe</code>) al conectar.
-      Asegúrate de que el puerto 3389 esté accesible y el acceso remoto habilitado en el servidor.
+      <b style="color:var(--blue);">ℹ️ RDP:</b> {isEN ? 'Lucy will launch a Remote Desktop session' : 'Lucy lanzará una sesión de Escritorio Remoto'}
+      (<code class="hm-mono" style="font-size:10px;">mstsc.exe</code>) {isEN ? 'upon connection. Ensure port 3389 is accessible and remote access is enabled on the server.' : 'al conectar. Asegúrate de que el puerto 3389 esté accesible y el acceso remoto habilitado en el servidor.'}
     </div>
     {:else if hostForm.protocol === 'docker'}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ Docker API:</b> Requiere que el daemon de Docker exponga
-      el API TCP. Configura en <code class="hm-mono" style="font-size:10px;">/etc/docker/daemon.json</code>:
+      <b style="color:var(--blue);">ℹ️ Docker API:</b> {isEN ? 'Requires the Docker daemon to expose the TCP API. Configure in' : 'Requiere que el daemon de Docker exponga el API TCP. Configura en'} <code class="hm-mono" style="font-size:10px;">/etc/docker/daemon.json</code>:
       <code class="hm-mono" style="font-size:10px;color:var(--acc);">"hosts": ["tcp://0.0.0.0:2375"]</code>.
-      Usa TLS (2376) en producción.
+      {isEN ? 'Use TLS (2376) in production.' : 'Usa TLS (2376) en producción.'}
     </div>
     {:else if hostForm.protocol === 'k8s'}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ Kubernetes:</b> Lucy ejecutará comandos
-      <code class="hm-mono" style="font-size:10px;">kubectl</code> contra el API server.
-      Asegúrate de tener un <code class="hm-mono" style="font-size:10px;">kubeconfig</code> válido
-      o un token de servicio.
+      <b style="color:var(--blue);">ℹ️ Kubernetes:</b> {isEN ? 'Lucy will execute' : 'Lucy ejecutará comandos'}
+      <code class="hm-mono" style="font-size:10px;">kubectl</code> {isEN ? 'commands against the API server. Ensure you have a valid' : 'contra el API server. Asegúrate de tener un'} <code class="hm-mono" style="font-size:10px;">kubeconfig</code> {isEN ? 'valid <code>kubeconfig</code> or a service token.' : 'válido o un token de servicio.'}
     </div>
     {:else if hostForm.protocol === 'snmp'}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ SNMP:</b> Lucy realizará consultas SNMP (GET/WALK) al
-      dispositivo. El campo "Usuario" se usa como <b>community string</b> (v2c) o usuario SNMPv3.
-      Puerto estándar: 161.
+      <b style="color:var(--blue);">ℹ️ SNMP:</b> {isEN ? 'Lucy will perform SNMP queries (GET/WALK) to the device. The User field is used as the' : 'Lucy realizará consultas SNMP (GET/WALK) al dispositivo. El campo "Usuario" se usa como'} <b>community string</b> (v2c) {isEN ? 'or SNMPv3 user. Standard port: 161.' : 'o usuario SNMPv3. Puerto estándar: 161.'}
     </div>
     {:else if ['postgres','mysql','mongodb','redis','mssql'].includes(hostForm.protocol)}
     <div class="hm-info">
-      <b style="color:var(--blue);">ℹ️ Base de datos:</b> Lucy se conectará al motor
+      <b style="color:var(--blue);">ℹ️ {isEN ? 'Database' : 'Base de datos'}:</b> {isEN ? 'Lucy will connect to the' : 'Lucy se conectará al motor'}
       <b>{PROTOCOLS.find(p => p.value === hostForm.protocol)?.label.split(' ')[1] || hostForm.protocol}</b>
-      en el puerto {defaultPort(hostForm.protocol)}. Asegúrate de que el servidor acepte conexiones remotas
-      y que el usuario tenga los permisos necesarios.
+      {isEN ? `engine on port ${defaultPort(hostForm.protocol)}. Ensure the server accepts remote connections and the user has required permissions.` : `en el puerto ${defaultPort(hostForm.protocol)}. Asegúrate de que el servidor acepte conexiones remotas y que el usuario tenga los permisos necesarios.`}
     </div>
     {/if}
 
@@ -319,12 +310,12 @@
     <div class="hm-footer">
       {#if editingHost}
       <button class="hm-btn" style="background:var(--red, #ef4444); color:#fff; margin-right:auto;" on:click={eliminar}>
-        🗑️ Eliminar
+        🗑️ {isEN ? 'Delete' : 'Eliminar'}
       </button>
       {/if}
-      <button class="hm-btn hm-ghost" on:click={cancel}>Cancelar</button>
+      <button class="hm-btn hm-ghost" on:click={cancel}>{isEN ? 'Cancel' : 'Cancelar'}</button>
       <button class="hm-btn hm-pri" on:click={guardarHost} disabled={hostSaving}>
-        {hostSaving ? '⏳ Guardando...' : editingHost ? 'Actualizar Host' : 'Guardar Host'}
+        {hostSaving ? (isEN ? '⏳ Saving...' : '⏳ Guardando...') : editingHost ? (isEN ? 'Update Host' : 'Actualizar Host') : (isEN ? 'Save Host' : 'Guardar Host')}
       </button>
     </div>
 

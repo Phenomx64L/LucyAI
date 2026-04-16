@@ -761,7 +761,7 @@
             });
             const s = getShell(id);
             if (s) { s.connected = true; rshellSessions = [...rshellSessions]; }
-            rsLogTo(id, 'info', `✓ Conectado a ${h.name} · ${h.type === 'linux' ? 'SSH activo' : 'WinRM'}`);
+            rsLogTo(id, 'info', `✓ {isEN ? 'Connected to' : 'Conectado a'} ${h.name} · ${h.type === 'linux' ? 'SSH activo' : 'WinRM'}`);
             rsLogTo(id, 'out', out.replace('Lucy:OK\n','').trim());
 
             invoke('nexshell_bootstrap', {
@@ -1322,14 +1322,14 @@
                 }
                 const out = await invoke('execute_powershell', { script: cmd, forceExecute: false });
                 ftResult = `✓ ${ftDirection === 'upload' ? 'Subido' : 'Descargado'} correctamente`;
-                rsLogTo(ftShellId, 'info', `📁 Transferencia completada: ${ftLocalPath} ↔ ${s.host.host}:${ftRemotePath}`);
+                rsLogTo(ftShellId, 'info', `📁 {isEN ? 'Transfer complete' : 'Transferencia completada'}: ${ftLocalPath} ↔ ${s.host.host}:${ftRemotePath}`);
             } else {
                 const ps = ftDirection === 'upload'
                     ? `Copy-Item -Path "${ftLocalPath}" -Destination "${ftRemotePath}" -ToSession (New-PSSession -ComputerName ${s.host.host})`
                     : `Copy-Item -Path "${ftRemotePath}" -Destination "${ftLocalPath}" -FromSession (New-PSSession -ComputerName ${s.host.host})`;
                 await invoke('execute_powershell', { script: ps, forceExecute: false });
-                ftResult = `✓ Transferencia completada`;
-                rsLogTo(ftShellId, 'info', `📁 Transferencia completada`);
+                ftResult = `✓ {isEN ? 'Transfer complete' : 'Transferencia completada'}`;
+                rsLogTo(ftShellId, 'info', `📁 {isEN ? 'Transfer complete' : 'Transferencia completada'}`);
             }
         } catch(e) {
             ftResult = `✗ Error: ${String(e).substring(0,200)}`;
@@ -1444,7 +1444,7 @@
           <option value="status">⬤ {isEN ? 'Status' : 'Estado'}</option>
           <option value="name">A–Z {isEN ? 'Name' : 'Nombre'}</option>
           <option value="type">📁 {isEN ? 'Type' : 'Tipo'}</option>
-          <option value="activity">🕐 {isEN ? 'Activity' : 'Actividad'}</option>
+          <option value="activity">⏱ {isEN ? 'Activity' : 'Actividad'}</option>
         </select>
       </div>
 
@@ -1550,7 +1550,7 @@
               <span class="ns-stab-name">{s.host.name}</span>
               <span class="ns-stab-dot {s.connected?'ok':'wait'}">●</span>
               {#if s.running||s.lucyRunning}<span class="ns-stab-spin">◌</span>{/if}
-              <button class="ns-stab-close" on:click|stopPropagation={() => { rsDetenerTodosTails(s.id); cerrarShell(s.id); }} title="Cerrar sesión">✕</button>
+              <button class="ns-stab-close" on:click|stopPropagation={() => { rsDetenerTodosTails(s.id); cerrarShell(s.id); }} title="{isEN ? 'Close session' : 'Cerrar sesión'}">✕</button>
             </div>
           {/each}
         </div>
@@ -1787,7 +1787,7 @@
       {/each}
       <div style="border-top:1px solid var(--bdr);padding-top:12px;">
         <div style="margin-bottom:8px;">
-          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="pb-name">Nombre del playbook</label>
+          <label style="font-size:11px;color:var(--txt3);display:block;margin-bottom:4px;" for="pb-name">{isEN ? 'Name' : 'Nombre'} del playbook</label>
           <input id="pb-name" class="minp" bind:value={pbForm.name} placeholder="Diagnóstico de sistema">
         </div>
         <div>
@@ -1843,7 +1843,7 @@
           <div style="display:flex;gap:6px;">
             <input id="ft-local" class="minp" style="flex:1;" bind:value={ftLocalPath}
               placeholder="C:\Users\tu\archivo.txt">
-            <button class="mbtn ghost" title="Seleccionar archivo" on:click={rsPickFile}>📂</button>
+            <button class="mbtn ghost" title="{isEN ? 'Select' : 'Seleccionar'} archivo" on:click={rsPickFile}>📂</button>
           </div>
         </div>
         <div>
@@ -1862,7 +1862,7 @@
           <div style="display:flex;gap:6px;">
             <input id="ft-local" class="minp" style="flex:1;" bind:value={ftLocalPath}
               placeholder="C:\\Users\\tu\\Descargas\\">
-            <button class="mbtn ghost" title="Seleccionar carpeta destino" on:click={async () => {
+            <button class="mbtn ghost" title="{isEN ? 'Select' : 'Seleccionar'} carpeta destino" on:click={async () => {
               const p = await invoke('pick_file_path').catch(()=>'');
               if(p) ftLocalPath = p.substring(0, p.lastIndexOf('\\') + 1) || p;
             }}>📂</button>

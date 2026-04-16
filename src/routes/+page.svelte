@@ -3968,7 +3968,7 @@ if (Test-Path $src) {
     /* Los mensajes fuera del viewport no se renderizan, se reserva 80px de altura */
     :global(.msg-user),:global(.msg-lucy),:global(.sys-msg),:global(.msg-thinking){content-visibility:auto;contain-intrinsic-size:0 80px;}
     /* ── MESSAGES ──────────────────────────────── */
-    :global(.msg-user){align-self:flex-end;background:#1e212b;border:1px solid rgba(96,165,250,.08);border-right:2px solid var(--blue);border-radius:10px 10px 0 10px;padding:10px 14px;max-width:78%;}
+    :global(.msg-user){align-self:flex-end;background:#1e212b;border:1px solid rgba(96,165,250,.08);border-right:2px solid var(--blue);border-radius:10px 10px 0 10px;padding:10px 14px;max-width:78%;white-space:pre-wrap;}
     :global(.msg-lucy){align-self:flex-start;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid #10b981;border-radius:0 10px 10px 10px;padding:10px 14px;max-width:88%;line-height:1.6;}
     /* ── Skeleton streaming ─────────────────────── */
     :global(.skel-block){display:flex;flex-direction:column;gap:7px;padding:4px 0;}
@@ -5758,7 +5758,7 @@ if (Test-Path $src) {
   {/if}
 
   <!-- ── MODAL: GESTOR DE HOSTS ── -->
-  <HostModal bind:show={showHostModal} {editingHost}
+  <HostModal bind:show={showHostModal} {editingHost} {isEN}
     on:saved={onHostSaved}
     on:delete={(e) => eliminarHost(e.detail)}
     on:error={({ detail }) => toast(`Error guardando host: ${detail}`, 'error')} />
@@ -6304,7 +6304,7 @@ if (Test-Path $src) {
   {/if}
 
   <!-- ── COMMAND PALETTE (Ctrl+P) ── -->
-  <CommandPalette bind:show={showPalette} allItems={allPaletteItems} />
+  <CommandPalette bind:show={showPalette} allItems={allPaletteItems} {isEN} />
 
   <!-- ── TUTORIAL OVERLAY (first run + on demand) ── -->
   <TutorialOverlay bind:show={showTutorial} {isEN}

@@ -287,10 +287,10 @@ fn build_system_prompt(
         RULE 0 — INTENT DETECTION (apply BEFORE anything else):\n\
         STEP 1: Classify the message into one of these categories:\n\
           A) CONVERSATIONAL — general questions -> respond with normal text.\n\
-          B) FILE OPERATION — user asks to create, edit, or read a file -> You MUST use <TOOL> operations like <TOOL>writefile:/path</TOOL> or <EXECUTE> directly. DO NOT just show the code to the user, ACTUALLY create the file for them autonomously.\n\
-          C) SYSTEM ACTION — user asks to execute on the system -> Use <EXECUTE> tags autonomously.\n\
+          B) FILE OPERATION — user asks to create, edit, or read a local file -> You MUST generate a markdown PowerShell block (e.g., ```powershell New-Item ... ```) to natively execute the file operation. DO NOT explicitly ask for permission. ACTUALLY create or edit the file autonomously.\n\
+          C) SYSTEM ACTION — user asks to execute on the system -> Use <EXECUTE> tags or native markdown powershell blocks autonomously.\n\
           D) CODE GENERATION — user EXPLICITLY asks to just SEE code without running it -> Provide standard markdown code blocks without executing.\n\
-          RULE 1: For trivial tasks (like simple file creation, basic commands), COMPLETELY BYPASS <THOUGHT> tags and output the <TOOL>...</TOOL> or <EXECUTE>...</EXECUTE> tags NATIVELY to save tokens and answer instantaneously. MAKE SURE TO ACTUALLY USE THE XML TAGS (do not write raw commands without wrappers). For complex architecture tasks, you may use <THOUGHT> tags first.\n\
+          RULE 1: For trivial tasks (like simple file creation, basic commands), COMPLETELY BYPASS <THOUGHT> tags and output the markdown codeblock or <EXECUTE> tags NATIVELY to save tokens and answer instantaneously. Do not pause to ask for permission. Just do it.\n\
         RULE 2: If a command requires admin elevation, DO NOT auto-generate Start-Process RunAs. Instead: explain what requires elevation, show the command the user should run, and ask 'Do you want me to execute this with admin privileges?'. Only generate the RunAs <EXECUTE> after user explicitly confirms.\n\
         RULE 3: NEVER print raw HTML. Use Markdown for formatting responses.\n\
         RULE 4: ONLY if a command you already executed in THIS conversation returned an error, analyze the error and ask how to proceed WITHOUT generating <EXECUTE>. Do NOT apply this rule to new independent instructions.\n\

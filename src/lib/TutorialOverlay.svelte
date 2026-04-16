@@ -155,6 +155,17 @@
         },
         // 14. Bottom options — last step, points to Tutorial/About buttons
         {
+            sel: ['.sidebar [title*="Settings"]', '.sidebar [title*="Configurac"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'terminal',
+            tES: '⚙️ Configuración del Sistema',
+            tEN: '⚙️ System Settings',
+            dES: 'Un menú centralizado para adaptar Lucy a ti:<br>• 🤖 <b>Modelos IA:</b> Ajusta la URL si usas Ollama o cambia entre Gemini/Claude<br>• 🔒 <b>Permisos:</b> Exige permisos para eliminar archivos o aislar carpetas<br>• 💫 <b>Interfaz:</b> Temas visuales y control de telemetría<br><br>Todo lo que ajustes se guardará automáticamente de forma segura.',
+            dEN: 'A centralized menu to tailor Lucy to your needs:<br>• 🤖 <b>AI Models:</b> Adjust the URL if you use Ollama or switch Gemini/Claude<br>• 🔒 <b>Permissions:</b> Escalate permissions to delete files or isolate paths<br>• 💫 <b>Interface:</b> Visual themes and telemetry controls<br><br>All adjustments are securely auto-saved.',
+        },
+        // 15. Extra Preferences
+        {
             sel: ['.sidebar [title*="Tutorial"]', '.sidebar [title*="Acerca"]', '.sidebar [title*="About"]'],
             fallback: '.sidebar',
             tip: 'right',

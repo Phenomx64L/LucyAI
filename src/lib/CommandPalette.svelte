@@ -15,6 +15,7 @@
     export let allItems = [];
     /** Controls visibility; supports bind:show */
     export let show = false;
+    export let isEN = false;
 
     let query = '';
     let idx   = 0;
@@ -55,7 +56,7 @@
   <div class="cp-search">
     <span class="cp-ico">⌕</span>
     <input id="cp-input" class="cp-input"
-      placeholder="Buscar comandos, acciones, hosts..."
+      placeholder={isEN ? 'Search commands, actions, hosts...' : 'Buscar comandos, acciones, hosts...'}
       bind:value={query}
       on:input={() => idx = 0}
       on:keydown={(e) => {
@@ -79,14 +80,14 @@
       </button>
     {/each}
     {#if filtered.length === 0}
-      <div class="cp-empty">Sin resultados para "{query}"</div>
+      <div class="cp-empty">{isEN ? 'No results for' : 'Sin resultados para'} "{query}"</div>
     {/if}
   </div>
 
   <div class="cp-footer">
-    <span>↑↓ navegar</span>
-    <span>↵ ejecutar</span>
-    <span>Ctrl+P cerrar</span>
+    <span>↑↓ {isEN ? 'navigate' : 'navegar'}</span>
+    <span>↵ {isEN ? 'execute' : 'ejecutar'}</span>
+    <span>Ctrl+P {isEN ? 'close' : 'cerrar'}</span>
   </div>
 
 </div>
