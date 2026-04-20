@@ -2,6 +2,7 @@
     import { createEventDispatcher } from 'svelte';
     import { auditTrail } from '$lib/stores';
     import { exportAuditPdf } from '$lib/reports/ReportGenerator';
+    import { IconClipboardList as ClipboardList, IconDownload as Download, IconTrash as Trash2, IconFileText as FileText, IconSparkles as Sparkles, IconBook2 as BookOpen, IconShieldCheck as ShieldCheck, IconRadio as Radio, IconKeyboard as Keyboard, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
@@ -61,34 +62,34 @@
     }
 
     function sourceIcon(s) {
-        if (s === 'ai') return '✨';
-        if (s === 'runbook') return '📋';
-        if (s === 'compliance') return '🛡️';
-        if (s === 'broadcast') return '📡';
-        return '⌨️';
+        if (s === 'ai') return '✦';
+        if (s === 'runbook') return '≡';
+        if (s === 'compliance') return '⬡';
+        if (s === 'broadcast') return '◎';
+        return '⌨';
     }
 </script>
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title">{isEN ? '📋 Audit Trail' : '📋 Registro de Auditoría'}</div>
+    <div class="view-title"><ClipboardList size={13} strokeWidth={2}/> {isEN ? 'Audit Trail' : 'Registro de Auditoría'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={filterHost}>
         <option value="all">{isEN ? 'All Hosts' : 'Todos los hosts'}</option>
-        <option value="local">🖥 Local</option>
+        <option value="local">⊡ Local</option>
         {#each hosts as h}<option value={h.id}>{h.name}</option>{/each}
       </select>
       <select class="view-select" bind:value={filterSource}>
         <option value="all">{isEN ? 'All Sources' : 'Todas'}</option>
-        <option value="manual">⌨️ Manual</option>
-        <option value="ai">✨ AI</option>
-        <option value="runbook">📋 Runbook</option>
-        <option value="compliance">🛡️ Compliance</option>
-        <option value="broadcast">📡 Broadcast</option>
+        <option value="manual">⌨ Manual</option>
+        <option value="ai">✦ AI</option>
+        <option value="runbook">≡ Runbook</option>
+        <option value="compliance">⬡ Compliance</option>
+        <option value="broadcast">◎ Broadcast</option>
       </select>
-      <button class="view-btn" on:click={exportTrail} title="Export CSV">⬇ CSV</button>
-      <button class="view-btn" on:click={exportPdf} disabled={exportingPdf} title="Export PDF">{exportingPdf ? '⏳' : '📄'} PDF</button>
-      <button class="view-btn" on:click={clearTrail} title="Clear">🗑</button>
+      <button class="view-btn" on:click={exportTrail} title="Export CSV" style="display:flex;align-items:center;gap:5px;"><Download size={12} strokeWidth={2}/> CSV</button>
+      <button class="view-btn" on:click={exportPdf} disabled={exportingPdf} title="Export PDF" style="display:flex;align-items:center;gap:5px;">{#if exportingPdf}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF</button>
+      <button class="view-btn" on:click={clearTrail} title="Clear" style="display:flex;align-items:center;justify-content:center;padding:4px 8px;"><Trash2 size={13} strokeWidth={1.8}/></button>
     </div>
   </div>
 

@@ -1,7 +1,7 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { Settings, Trash2, Plus, Check, X } from 'lucide-svelte';
+    import { IconSettings as Settings, IconTrash as Trash2, IconPlus as Plus, IconCheck as Check, IconX as X } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
@@ -180,6 +180,7 @@
     function closeModal() {
         isOpen = false;
         resetForm();
+        dispatch('close');
     }
 
     $: if (isOpen && rules.length === 0) loadRules();
@@ -350,7 +351,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 1000;
+        z-index: var(--z-modal, 2000);
     }
 
     .modal-content {

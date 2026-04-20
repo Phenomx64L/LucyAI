@@ -1,6 +1,7 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    import { IconScan as ScanSearch, IconFileText as FileText, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
     import { inventorySnapshots } from '$lib/stores';
     import { exportInventoryPdf } from '$lib/reports/ReportGenerator';
 
@@ -98,18 +99,18 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title">{isEN ? '🔍 Infrastructure Inventory' : '🔍 Inventario de Infraestructura'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ScanSearch size={13} strokeWidth={2}/> {isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={selectedHost}>
-        <option value="local">🖥 Local ({hostName})</option>
-        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'🖥':'🐧'} {h.name}</option>{/each}
+        <option value="local">⊡ Local ({hostName})</option>
+        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
-      <button class="view-btn" on:click={runScan} disabled={scanning}>
-        {scanning ? '⏳ Escaneando...' : '🔍 Escanear'}
+      <button class="view-btn" on:click={runScan} disabled={scanning} style="display:flex;align-items:center;gap:5px;">
+        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ScanSearch size={12} strokeWidth={2}/> {isEN ? 'Scan' : 'Escanear'}{/if}
       </button>
       {#if snapshot}
-        <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF">
-          {exporting ? '⏳' : '📄'} PDF
+        <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF" style="display:flex;align-items:center;gap:5px;">
+          {#if exporting}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF
         </button>
         <span style="font-size:10px;color:#4a5a6a;">{relTime(snapshot.timestamp)}</span>
       {/if}
@@ -117,7 +118,7 @@
   </div>
 
   {#if error}
-    <div class="view-error">⚠️ {error}</div>
+    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {error}</div>
   {/if}
 
   {#if snapshot}
@@ -217,7 +218,7 @@
   {:else if !scanning}
   <div class="view-loading"><span style="color:#334155">{isEN ? 'Select a host and click Scan' : 'Selecciona un host y haz clic en Escanear'}</span></div>
   {:else}
-  <div class="view-loading"><span style="color:var(--acc)">⏳ {isEN ? 'Scanning...' : 'Escaneando...'}</span></div>
+  <div class="view-loading"><span style="color:var(--acc)">↻ {isEN ? 'Scanning...' : 'Escaneando...'}</span></div>
   {/if}
 </div>
 

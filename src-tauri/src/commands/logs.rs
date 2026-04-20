@@ -68,11 +68,14 @@ pub async fn read_remote_log_windows(
          Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
         pw_esc, username, host, script
     );
-    let output = Command::new("powershell")
-        .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-        .arg("-Command").arg(&ps)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("powershell")
+            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
+            .arg("-Command").arg(&ps)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+    }).await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("Error WinRM: {}", e))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).lines().map(String::from).collect())
@@ -101,9 +104,10 @@ pub async fn read_remote_log_linux(
     if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
     ssh_cmd.arg(&format!("{}@{}", username, host))
            .arg(&cmd);
-    let output = ssh_cmd
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    ssh_cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = tokio::task::spawn_blocking(move || ssh_cmd.output())
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("SSH Error: {}", e))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).lines().map(String::from).collect())

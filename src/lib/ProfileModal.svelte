@@ -1,20 +1,21 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { profiles, hosts } from '$lib/stores';
+    import { IconAlertTriangle as AlertTriangle, IconPencil as Pencil, IconTrash as Trash2, IconUser as User } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
     export let isEN = false;
 
     let editingId   = null;
-    let form        = { name: '', icon: '🏢', hostIds: [] };
+    let form        = { name: '', icon: '⊞', hostIds: [] };
     let showForm    = false;
     let importError = '';
 
-    const ICONS = ['🏢','🏠','🔬','🏭','🌐','🛡️','💼','🎯','🚀','☁️','🖥','📡','🔧'];
+    const ICONS = ['⊞','◈','◉','⬡','⊕','⊟','·','▶','⚡','○','⊡','⊗','⚙'];
 
     function resetForm() {
-        form = { name: '', icon: '🏢', hostIds: [] };
+        form = { name: '', icon: '⊞', hostIds: [] };
         editingId = null;
         showForm = false;
     }
@@ -106,7 +107,7 @@
 <div class="pm-overlay" on:click|self={close}>
   <div class="pm-modal">
     <div class="pm-hdr">
-      <span class="pm-title">{isEN ? '👤 Manage Profiles' : '👤 Gestionar Perfiles'}</span>
+      <span class="pm-title">{isEN ? '◈ Manage Profiles' : '◈ Gestionar Perfiles'}</span>
       <div style="display:flex;gap:6px;margin-left:auto;">
         <button class="pm-btn sm" on:click={exportProfiles} title="Export JSON">⬇ JSON</button>
         <label class="pm-btn sm" title="Import JSON">
@@ -119,7 +120,7 @@
     </div>
 
     {#if importError}
-    <div class="pm-error">⚠️ {importError}</div>
+    <div class="pm-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {importError}</div>
     {/if}
 
     {#if showForm}
@@ -141,7 +142,7 @@
         <div class="pm-hosts">
           {#each $hosts as h}
           <button class="pm-host-btn" class:sel={form.hostIds.includes(h.id)} on:click={() => toggleHost(h.id)}>
-            {h.type === 'windows' ? '🖥' : '🐧'} {h.name}
+            {h.type === 'windows' ? '⊡' : '◈'} {h.name}
           </button>
           {/each}
           {#if $hosts.length === 0}
@@ -166,13 +167,13 @@
           <div class="pm-item-name">{p.name}</div>
           <div class="pm-item-meta">{p.hostIds.length} hosts · {isEN ? 'Created' : 'Creado'} {new Date(p.createdAt).toLocaleDateString()}</div>
         </div>
-        <button class="pm-btn sm" on:click={() => openEdit(p)}>✏️</button>
-        <button class="pm-btn sm danger" on:click={() => deleteProfile(p.id)}>🗑</button>
+        <button class="pm-btn sm" on:click={() => openEdit(p)} style="display:flex;align-items:center;justify-content:center;"><Pencil size={12} strokeWidth={2}/></button>
+        <button class="pm-btn sm danger" on:click={() => deleteProfile(p.id)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} strokeWidth={2}/></button>
       </div>
       {/each}
       {#if $profiles.length === 0 && !showForm}
       <div class="pm-empty">
-        <div style="font-size:32px;margin-bottom:8px;">👤</div>
+        <div style="font-size:32px;margin-bottom:8px;display:flex;justify-content:center;"><User size={32} strokeWidth={1.5} style="color:#334155"/></div>
         <div>{isEN ? 'No profiles yet. Create one to group your hosts.' : 'Sin perfiles. Crea uno para agrupar tus hosts.'}</div>
         <button class="pm-btn accent" style="margin-top:12px;" on:click={openNew}>+ {isEN ? 'Create Profile' : 'Crear Perfil'}</button>
       </div>
@@ -182,7 +183,7 @@
 </div>
 
 <style>
-    .pm-overlay{position:fixed;inset:0;z-index:990;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
+    .pm-overlay{position:fixed;inset:0;z-index:var(--z-modal, 2000);background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
     .pm-modal{background:var(--bg2,#0f1724);border:1px solid var(--bdr);border-radius:12px;width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);}
     .pm-hdr{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--bdr);flex-shrink:0;}
     .pm-title{font-size:14px;font-weight:700;color:var(--txt);}

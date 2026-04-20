@@ -171,14 +171,13 @@ pub async fn stream_shell_cmd(
         let stdout = child.stdout.take().ok_or("stdout no disponible")?;
         let stderr = child.stderr.take().ok_or("stderr no disponible")?;
 
-        STREAM_SESSIONS.lock().unwrap().insert(session_id.clone(), Arc::new(StdMutex::new(stdin)));
-        STREAM_PIDS.lock().unwrap().insert(session_id.clone(), pid);
+        STREAM_SESSIONS.lock().map_err(|e| format!("session lock: {}", e))?.insert(session_id.clone(), Arc::new(StdMutex::new(stdin)));
+        STREAM_PIDS.lock().map_err(|e| format!("pids lock: {}", e))?.insert(session_id.clone(), pid);
 
         // Capturar tiempo de inicio para calcular duración del comando
         let start_time = std::time::Instant::now();
 
         // Hilo lector de stdout — emite chunks; al EOF captura exit code y duración
-        // (SSH con -tt propaga el exit code del comando remoto al proceso local)
         let win_out = window.clone();
         let sid_out = session_id.clone();
         std::thread::spawn(move || {
@@ -196,9 +195,9 @@ pub async fn stream_shell_cmd(
                     }
                 }
             }
-            // Limpiar sesión, luego esperar exit code real del proceso SSH
-            STREAM_SESSIONS.lock().unwrap().remove(&sid_out);
-            STREAM_PIDS.lock().unwrap().remove(&sid_out);
+            // Limpiar sesión — usar if let para no propagar panic en mutex poisoning
+            if let Ok(mut m) = STREAM_SESSIONS.lock() { m.remove(&sid_out); }
+            if let Ok(mut m) = STREAM_PIDS.lock()     { m.remove(&sid_out); }
             let exit_code   = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
             let duration_ms = start_time.elapsed().as_millis() as u64;
             let _ = win_out.emit(
@@ -264,8 +263,8 @@ pub async fn stream_shell_cmd(
         let stdout  = child.stdout.take().ok_or("stdout no disponible")?;
         let stderr  = child.stderr.take().ok_or("stderr no disponible")?;
 
-        STREAM_SESSIONS.lock().unwrap().insert(session_id.clone(), Arc::new(StdMutex::new(stdin)));
-        STREAM_PIDS.lock().unwrap().insert(session_id.clone(), pid_win);
+        STREAM_SESSIONS.lock().map_err(|e| format!("session lock: {}", e))?.insert(session_id.clone(), Arc::new(StdMutex::new(stdin)));
+        STREAM_PIDS.lock().map_err(|e| format!("pids lock: {}", e))?.insert(session_id.clone(), pid_win);
 
         let start_time_win = std::time::Instant::now();
 
@@ -287,8 +286,8 @@ pub async fn stream_shell_cmd(
                     Err(_) => break,
                 }
             }
-            STREAM_SESSIONS.lock().unwrap().remove(&sid_out);
-            STREAM_PIDS.lock().unwrap().remove(&sid_out);
+            if let Ok(mut m) = STREAM_SESSIONS.lock() { m.remove(&sid_out); }
+            if let Ok(mut m) = STREAM_PIDS.lock()     { m.remove(&sid_out); }
             let duration_ms = start_time_win.elapsed().as_millis() as u64;
             let _ = win_out.emit(
                 &format!("ssh-done-{}", sid_out),
@@ -315,22 +314,27 @@ pub async fn stream_shell_cmd(
 /// Envía texto a stdin del proceso de streaming activo (respuesta a prompts interactivos).
 #[tauri::command]
 pub fn send_shell_input(session_id: String, input: String) -> Result<(), String> {
-    let map = STREAM_SESSIONS.lock().unwrap();
-    if let Some(stdin_arc) = map.get(&session_id) {
-        let mut stdin = stdin_arc.lock().unwrap();
-        writeln!(*stdin, "{}", input)
-            .map_err(|e| format!("Error al enviar input: {}", e))?;
-        Ok(())
-    } else {
-        Err(format!("Sesión {} no encontrada o ya terminó", session_id))
-    }
+    // Grab the Arc and release the map lock before writing to stdin,
+    // so we don't hold the global map lock during a potentially-blocking write.
+    let stdin_arc = {
+        let map = STREAM_SESSIONS.lock()
+            .map_err(|e| format!("session lock poisoned: {}", e))?;
+        map.get(&session_id)
+            .cloned()
+            .ok_or_else(|| format!("Sesión {} no encontrada o ya terminó", session_id))?
+    };
+    let mut stdin = stdin_arc.lock()
+        .map_err(|e| format!("stdin lock poisoned: {}", e))?;
+    writeln!(*stdin, "{}", input)
+        .map_err(|e| format!("Error al enviar input: {}", e))?;
+    Ok(())
 }
 
 /// Cancela la sesión de streaming: cierra stdin y mata el árbol de procesos con taskkill /F /T.
 #[tauri::command]
 pub fn kill_shell_session(session_id: String) {
-    STREAM_SESSIONS.lock().unwrap().remove(&session_id);
-    if let Some(pid) = STREAM_PIDS.lock().unwrap().remove(&session_id) {
+    if let Ok(mut m) = STREAM_SESSIONS.lock() { m.remove(&session_id); }
+    if let Some(pid) = STREAM_PIDS.lock().ok().and_then(|mut m| m.remove(&session_id)) {
         let _ = Command::new("taskkill")
             .arg("/F").arg("/T").arg("/PID").arg(pid.to_string())
             .creation_flags(CREATE_NO_WINDOW)

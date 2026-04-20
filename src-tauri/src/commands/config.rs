@@ -5,6 +5,7 @@ use keyring::Entry;
 use crate::state::HTTP_CLIENT;
 use crate::utils::logging::write_app_log;
 use crate::utils::shell::validate_host_id;
+use serde_json;
 
 // ── API KEY ───────────────────────────────────────────────────────────────────
 
@@ -114,4 +115,60 @@ pub fn delete_host_credential(host_id: String) -> Result<(), String> {
     entry.delete_password().map_err(|e| e.to_string())?;
     write_app_log("INFO", &format!("Credencial eliminada para host: {}", host_id));
     Ok(())
+}
+
+// ── MCP SECRETS ───────────────────────────────────────────────────────────────
+// Los secretos MCP (tokens, API keys de herramientas externas) se guardan en el
+// Credential Manager del SO — nunca en localStorage (texto plano).
+
+/// Guarda un secreto MCP en el Credential Manager.
+/// La clave se almacena como "LucyMCP_{name}" bajo el servicio "LucySysAdmin".
+#[tauri::command]
+pub fn save_mcp_secret(name: String, value: String) -> Result<(), String> {
+    if name.is_empty() || name.len() > 128 || name.contains('\n') {
+        return Err("Nombre de secreto MCP inválido.".to_string());
+    }
+    let key = format!("LucyMCP_{}", name);
+    let entry = Entry::new("LucySysAdmin", &key).map_err(|e| e.to_string())?;
+    entry.set_password(&value).map_err(|e| e.to_string())?;
+    write_app_log("INFO", &format!("Secreto MCP '{}' guardado en Credential Manager.", name));
+    Ok(())
+}
+
+/// Recupera un secreto MCP del Credential Manager.
+#[tauri::command]
+pub fn get_mcp_secret(name: String) -> Result<String, String> {
+    let key = format!("LucyMCP_{}", name);
+    let entry = Entry::new("LucySysAdmin", &key).map_err(|e| e.to_string())?;
+    entry.get_password().map_err(|_| "Secreto no encontrado".to_string())
+}
+
+/// Elimina un secreto MCP del Credential Manager.
+#[tauri::command]
+pub fn delete_mcp_secret(name: String) -> Result<(), String> {
+    let key = format!("LucyMCP_{}", name);
+    let entry = Entry::new("LucySysAdmin", &key).map_err(|e| e.to_string())?;
+    entry.delete_password().map_err(|e| e.to_string())?;
+    write_app_log("INFO", &format!("Secreto MCP '{}' eliminado.", name));
+    Ok(())
+}
+
+/// Devuelve la lista de nombres de secretos MCP almacenados.
+/// Utiliza un índice serializado en el Credential Manager.
+#[tauri::command]
+pub fn list_mcp_secrets() -> Result<Vec<String>, String> {
+    // Guardamos el índice de nombres como JSON bajo "LucyMCP__index"
+    let idx_entry = Entry::new("LucySysAdmin", "LucyMCP__index").map_err(|e| e.to_string())?;
+    match idx_entry.get_password() {
+        Ok(raw) => serde_json::from_str::<Vec<String>>(&raw).map_err(|e| e.to_string()),
+        Err(_) => Ok(vec![]),
+    }
+}
+
+/// Actualiza el índice de nombres de secretos MCP.
+#[tauri::command]
+pub fn set_mcp_secret_index(names: Vec<String>) -> Result<(), String> {
+    let idx_entry = Entry::new("LucySysAdmin", "LucyMCP__index").map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&names).map_err(|e| e.to_string())?;
+    idx_entry.set_password(&json).map_err(|e| e.to_string())
 }

@@ -35,33 +35,32 @@ pub async fn run_compliance_linux(
     script.push_str("echo ']'\n");
 
     let port_str = port.unwrap_or(22).to_string();
-    let mut ssh_cmd = Command::new("ssh");
-    ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
-           .arg("-o").arg("BatchMode=yes")
-           .arg("-o").arg("ConnectTimeout=15")
-           .arg("-p").arg(&port_str);
-    if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
-    ssh_cmd.arg(&format!("{}@{}", username, host))
-           .arg("bash -s");
-    let mut child = ssh_cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("SSH no disponible: {}", e))?;
-
-    if let Some(stdin) = child.stdin.take() {
+    let raw = tokio::task::spawn_blocking(move || -> Result<String, String> {
         use std::io::Write;
-        let mut stdin = stdin;
-        stdin.write_all(script.as_bytes())
-            .map_err(|e| format!("Error enviando script: {}", e))?;
-    }
+        let mut ssh_cmd = Command::new("ssh");
+        ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
+               .arg("-o").arg("BatchMode=yes")
+               .arg("-o").arg("ConnectTimeout=15")
+               .arg("-p").arg(&port_str);
+        if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
+        ssh_cmd.arg(format!("{}@{}", username, host)).arg("bash -s");
+        let mut child = ssh_cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("SSH no disponible: {}", e))?;
+        if let Some(mut s) = child.stdin.take() {
+            s.write_all(script.as_bytes())
+                .map_err(|e| format!("Error enviando script: {}", e))?;
+        }
+        let output = child.wait_with_output()
+            .map_err(|e| format!("Error esperando SSH: {}", e))?;
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }).await
+        .map_err(|e| e.to_string())??;
 
-    let output = child.wait_with_output()
-        .map_err(|e| format!("Error esperando SSH: {}", e))?;
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     serde_json::from_str(&raw)
         .map_err(|e| format!("JSON inválido de compliance: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
 }
@@ -100,11 +99,14 @@ $results += [PSCustomObject]@{{ id='{}'; exit_code=$ec; stdout=$out.Substring(0,
          Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
         pw_esc, username, host, ps_script
     );
-    let output = Command::new("powershell")
-        .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-        .arg("-Command").arg(&ps)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("powershell")
+            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
+            .arg("-Command").arg(&ps)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+    }).await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("Error WinRM: {}", e))?;
 
     if !output.status.success() {
@@ -138,11 +140,14 @@ $results += [PSCustomObject]@{{ id='{}'; exit_code=$ec; stdout=$out.Substring(0,
     }
     ps_script.push_str("$results | ConvertTo-Json -Depth 3\n");
 
-    let output = Command::new("powershell")
-        .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-        .arg("-Command").arg(&ps_script)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("powershell")
+            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
+            .arg("-Command").arg(&ps_script)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+    }).await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("Error PowerShell: {}", e))?;
 
     if !output.status.success() {

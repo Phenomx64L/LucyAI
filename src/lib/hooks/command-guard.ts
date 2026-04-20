@@ -331,11 +331,11 @@ export function riskColor(level: RiskLevel): string {
 
 export function riskIcon(level: RiskLevel): string {
     switch (level) {
-        case 'critical': return '🚨';
-        case 'high':     return '⚠️';
-        case 'medium':   return '🔶';
-        case 'low':      return '🔵';
-        default:         return '✅';
+        case 'critical': return '!!';
+        case 'high':     return '!';
+        case 'medium':   return '◈';
+        case 'low':      return '·';
+        default:         return '✓';
     }
 }
 

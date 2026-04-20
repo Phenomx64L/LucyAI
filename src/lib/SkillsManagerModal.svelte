@@ -1,7 +1,7 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { Zap, Trash2, Plus, Edit2, Play, ChevronDown } from 'lucide-svelte';
+    import { IconBolt as Zap, IconTrash as Trash2, IconPlus as Plus, IconEdit as Edit2, IconPlayerPlay as Play, IconChevronDown as ChevronDown, IconSparkles as Sparkles } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
@@ -21,7 +21,20 @@
     let executingSkill = null;
     let skillParams = {};
 
+    // ── Favorites (localStorage, no backend needed) ─────────────────────────
+    let favorites = new Set();
+    function loadFavorites() {
+        try { favorites = new Set(JSON.parse(localStorage.getItem('lucy_skill_favorites') || '[]')); }
+        catch { favorites = new Set(); }
+    }
+    function toggleFavorite(id) {
+        if (favorites.has(id)) favorites.delete(id); else favorites.add(id);
+        favorites = new Set(favorites); // trigger Svelte reactivity
+        try { localStorage.setItem('lucy_skill_favorites', JSON.stringify([...favorites])); } catch {}
+    }
+
     let newSkill = {
+        id: '',  // generated server-side if empty (new skill), preserved (edit)
         name: '',
         category: 'quick_cmd',
         triggers: JSON.stringify([]),
@@ -114,10 +127,14 @@
         return map[cat] || cat;
     }
 
-    // Filter skills by category
-    $: filteredSkills = selectedCategory
-        ? skills.filter(s => s.category === selectedCategory)
-        : skills;
+    // Filter by category, pinned first, then by usage
+    $: filteredSkills = (selectedCategory ? skills.filter(s => s.category === selectedCategory) : skills)
+        .slice()
+        .sort((a, b) => {
+            const fa = favorites.has(a.id) ? 0 : 1;
+            const fb = favorites.has(b.id) ? 0 : 1;
+            return fa - fb || (b.usage_count - a.usage_count);
+        });
 
     // Get unique categories
     $: categories = [...new Set(skills.map(s => s.category))];
@@ -170,7 +187,11 @@
                 last_executed: editingSkill ? editingSkill.last_executed : null
             };
 
-            await invoke('save_skill', { skill: skillData });
+            const savedId = await invoke('save_skill', { skill: skillData });
+            // Semantic index: fire-and-forget; silently skip if Ollama is offline.
+            const embedText = `${skillData.name}\n${skillData.description || ''}\n${skillData.triggers || ''}`;
+            invoke('upsert_embedding', { entityType: 'skill', entityId: savedId || skillData.id, text: embedText })
+                .catch(err => console.debug('[embed] skill skipped:', err));
             toast(lang.success, 'success');
             formOpen = false;
             editingSkill = null;
@@ -231,11 +252,12 @@
                 script: parsed.script || '',
                 parameters: parsed.parameters ? JSON.stringify(parsed.parameters, null, 2) : '[]',
                 triggers: parsed.triggers ? JSON.stringify(parsed.triggers, null, 2) : '[]',
-                tags: parsed.tags ? JSON.stringify(parsed.tags, null, 2) : '[]'
+                tags: parsed.tags ? JSON.stringify(parsed.tags, null, 2) : '[]',
+                enabled: true
             };
             aiPromptOpen = false;
             formOpen = true; // abrir form con la data rellenada
-            toast('✨ Skill generada por IA — revisa y guarda', 'success');
+            toast('Skill generada por IA — revisa y guarda', 'success');
         } catch (e) {
             clearInterval(timerInterval);
             error = String(e);
@@ -251,6 +273,8 @@
         loading = true;
         try {
             await invoke('delete_skill', { skillId: id });
+            invoke('delete_embedding', { entityType: 'skill', entityId: id })
+                .catch(err => console.debug('[embed] delete skipped:', err));
             toast(lang.success, 'success');
             await loadSkills();
         } catch (e) {
@@ -271,6 +295,7 @@
 
     function editSkill(skill) {
         newSkill = {
+            id: skill.id,  // CRITICAL: preserve ID for UPDATE instead of INSERT
             name: skill.name,
             category: skill.category,
             triggers: skill.triggers,
@@ -351,9 +376,11 @@
         resetForm();
         executingSkill = null;
         skillParams = {};
+        dispatch('close');
     }
 
     onMount(() => {
+        loadFavorites();
         loading = false; // reset defensivo (HMR puede dejarlo stuck)
         if (isOpen && skills.length === 0) loadSkills();
     });
@@ -522,13 +549,18 @@
                         {:else}
                             <div class="skills-grid">
                                 {#each filteredSkills as skill (skill.id)}
-                                    <div class="skill-card">
+                                    <div class="skill-card" class:skill-pinned={favorites.has(skill.id)}>
                                         <div class="skill-header">
                                             <div>
                                                 <h4>{skill.name}</h4>
                                                 <span class="category-badge">{getCategoryLabel(skill.category)}</span>
                                             </div>
                                             <div class="skill-status">
+                                                <button class="btn-fav" class:fav-active={favorites.has(skill.id)}
+                                                    on:click|stopPropagation={() => toggleFavorite(skill.id)}
+                                                    title={favorites.has(skill.id) ? (isEN ? 'Unpin' : 'Quitar favorito') : (isEN ? 'Pin to top' : 'Marcar favorito')}>
+                                                    {favorites.has(skill.id) ? '★' : '☆'}
+                                                </button>
                                                 {#if skill.enabled}
                                                     <span class="enabled">✓</span>
                                                 {/if}
@@ -565,13 +597,13 @@
                         <button class="btn-add" on:click={openAddForm}>
                             <Plus size={16} /> {lang.add}
                         </button>
-                        <button class="btn-add" style="margin-left:8px;background:linear-gradient(135deg,#7c3aed,#a855f7);" on:click={openAIPrompt} disabled={loading && aiPromptOpen}>
-                            ✨ Generar con IA
+                        <button class="btn-add" style="margin-left:8px;background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;gap:5px;" on:click={openAIPrompt} disabled={loading && aiPromptOpen}>
+                            <Sparkles size={13} strokeWidth={2}/> Generar con IA
                         </button>
 
                         {#if aiPromptOpen}
                         <div style="margin-top:14px;padding:14px;background:rgba(124,58,237,.08);border:1px solid rgba(124,58,237,.3);border-radius:8px;">
-                            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#c4b5fd;">✨ Generar skill con IA</div>
+                            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#c4b5fd;display:flex;align-items:center;gap:6px;"><Sparkles size={13} strokeWidth={2}/> Generar skill con IA</div>
                             <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Describe qué quieres que haga la skill. Lucy la generará automáticamente con script PowerShell, parámetros, triggers y tags.</div>
                             <input type="text" bind:value={aiIdea}
                                 placeholder='Ej: "reporte de uso de disco", "reiniciar IIS", "listar procesos con más CPU"'
@@ -581,8 +613,8 @@
                                 <div style="color:#f87171;font-size:11px;margin-top:6px;font-family:monospace;white-space:pre-wrap;">{aiError}</div>
                             {/if}
                             <div style="display:flex;gap:8px;margin-top:10px;">
-                                <button class="btn-add" style="background:linear-gradient(135deg,#7c3aed,#a855f7);" on:click={generateSkillWithAI} disabled={loading}>
-                                    {loading ? '⏳ Generando (' + loadingSecs + 's)…' : '✨ Generar'}
+                                <button class="btn-add" style="background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;gap:5px;" on:click={generateSkillWithAI} disabled={loading}>
+                                    {#if loading}↻ Generando ({loadingSecs}s)…{:else}<Sparkles size={12} strokeWidth={2}/> Generar{/if}
                                 </button>
                                 <button class="btn-cancel" on:click={() => { aiPromptOpen = false; loading = false; }} disabled={loading}>
                                     Cancelar
@@ -608,7 +640,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 1000;
+        z-index: var(--z-modal, 2000);
     }
 
     .modal-content {
@@ -881,8 +913,29 @@
     }
 
     .skill-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         color: #66ff66;
         font-weight: bold;
+    }
+
+    /* ── Favorites ─────────────────────────────────────────────────────── */
+    .btn-fav {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 15px;
+        color: #475569;
+        padding: 0 2px;
+        line-height: 1;
+        transition: color .15s, transform .15s;
+    }
+    .btn-fav:hover { color: #fbbf24; transform: scale(1.15); }
+    .btn-fav.fav-active { color: #fbbf24; }
+    .skill-pinned {
+        border-color: rgba(251,191,36,0.35) !important;
+        box-shadow: 0 0 0 1px rgba(251,191,36,0.18) !important;
     }
 
     .description {

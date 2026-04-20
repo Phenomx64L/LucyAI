@@ -150,10 +150,10 @@ export function cleanResponse(response: string): string {
 
 export function categoryIcon(cat: string): string {
     const icons: Record<string, string> = {
-        network: '🌐', security: '🛡️', storage: '💾',
-        services: '⚙️', monitoring: '📊', custom: '🔧',
+        network: '◉', security: '⬡', storage: '⊞',
+        services: '⚙', monitoring: '◑', custom: '⊕',
     };
-    return icons[cat] || '🔧';
+    return icons[cat] || '⊕';
 }
 
 export function categoryLabel(cat: string, isEN: boolean): string {

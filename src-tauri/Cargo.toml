@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.0.0"
+version = "1.2.0"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
@@ -18,6 +18,7 @@ serde      = { version = "1",     features = ["derive"] }
 serde_json = "1"
 reqwest    = { version = "0.12",  features = ["json", "stream"] }
 futures-util = "0.3"
+async-trait = "0.1"
 base64     = "0.22"
 rfd        = "0.14"
 sysinfo    = "0.30"
@@ -26,7 +27,6 @@ chrono     = "0.4"
 once_cell  = "1"
 tokio      = { version = "1", features = ["time", "rt", "process", "io-util"] }
 winreg     = "0.52"
-git2       = "0.18" # Para control de versiones y rollback automático
 tauri-plugin-sql = { version = "2.0.0", features = ["sqlite"] }
 regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -41,3 +41,13 @@ tiktoken-rs = "0.9.1"
 simsearch = "0.3.0"
 walkdir = "2.5.0"
 urlencoding = "2.1.3"
+
+# ── RDP Computer Use Agent ────────────────────────────────────────────────────
+# Win32 APIs for window screenshot + input simulation
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "winuser", "wingdi", "processthreadsapi", "psapi",
+    "handleapi", "windef", "minwindef", "errhandlingapi", "winnt"
+] }
+# PNG encoding for screenshots
+image = { version = "0.25", default-features = false, features = ["png"] }

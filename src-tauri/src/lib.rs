@@ -4,7 +4,7 @@ mod state;
 mod utils;
 mod commands;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, local, logs, metrics, shell, system, ui};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, shell, system, ui, embeddings, memory};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -66,6 +66,11 @@ pub fn run() {
             config::save_host_credential,
             config::get_host_credential,
             config::delete_host_credential,
+            config::save_mcp_secret,
+            config::get_mcp_secret,
+            config::delete_mcp_secret,
+            config::list_mcp_secrets,
+            config::set_mcp_secret_index,
             // UI / ventana / archivos
             ui::copy_to_clipboard,
             ui::minimize_window,
@@ -104,10 +109,16 @@ pub fn run() {
             local::list_directory,
             local::search_files,
             local::edit_file,
+            local::analyze_code,
             local::system_diff,
             local::search_web,
             local::open_vscode,
             local::panic_kill_all,
+            local::launch_rdp,
+            // RDP Computer Use Agent
+            rdp_agent::find_rdp_windows,
+            rdp_agent::capture_rdp_screenshot,
+            rdp_agent::run_rdp_agent,
             indexer::locate_file,
             indexer::start_indexer,
             // Shell local + streaming interactivo
@@ -140,6 +151,52 @@ pub fn run() {
             metrics::list_skills,
             metrics::delete_skill,
             metrics::increment_skill_usage,
+            metrics::save_agent_memory,
+            metrics::search_agent_memories,
+            metrics::get_recent_memories,
+            // User Profile (Hermes-inspired persistent memory)
+            metrics::set_user_profile,
+            metrics::get_user_profile,
+            metrics::delete_user_profile,
+            metrics::build_profile_context,
+            // Conversation history / recall (Hermes-inspired)
+            metrics::save_conversation_turn,
+            metrics::recall_conversations,
+            // Quality Telemetry (opus-4-7 Tier 2.A) — raw logger only
+            metrics::log_task_event,
+            // Provider Management (Multi-LLM Support)
+            providers::save_credential,
+            providers::get_credential,
+            providers::check_provider_health,
+            // Incident Response / SRE Mode (Nivel 4)
+            incident::incident_start,
+            incident::incident_advance_phase,
+            incident::incident_add_evidence,
+            incident::incident_list_evidence,
+            incident::incident_propose_hypothesis,
+            incident::incident_list_hypotheses,
+            incident::incident_calculate_score,
+            incident::incident_log_action,
+            incident::incident_finalize,
+            incident::incident_list,
+            incident::incident_get,
+            incident::incident_phase_prompt,
+            // Semantic embeddings (Sprint 2 — vector search on skills, memories, runbooks)
+            embeddings::embed_text,
+            embeddings::embeddings_available,
+            embeddings::upsert_embedding,
+            embeddings::delete_embedding,
+            embeddings::semantic_search,
+            embeddings::backfill_embeddings,
+            // Tiered memory — MemGPT-style (Sprint 3)
+            memory::memory_core_set,
+            memory::memory_core_list,
+            memory::memory_core_delete,
+            memory::memory_core_render,
+            memory::memory_working_append,
+            memory::memory_working_list,
+            memory::memory_working_clear,
+            memory::memory_stats,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

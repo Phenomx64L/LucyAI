@@ -22,11 +22,14 @@ pub async fn execute_remote_windows(
          Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
         pw_esc, username, host, command
     );
-    let output = Command::new("powershell")
-        .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-        .arg("-Command").arg(&ps)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("powershell")
+            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
+            .arg("-Command").arg(&ps)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+    }).await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("Error WinRM: {}", e))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -70,16 +73,19 @@ pub async fn get_remote_health_windows(
              Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
             pw_esc, username, host, script
         );
-        let output = Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&ps)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
+        let out = tokio::task::spawn_blocking(move || {
+            Command::new("powershell")
+                .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
+                .arg("-Command").arg(&ps)
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+        }).await
+            .map_err(|e| e.to_string())?
             .map_err(|e| format!("Error WinRM: {}", e))?;
-        if output.status.success() {
-            String::from_utf8_lossy(&output.stdout).to_string()
+        if out.status.success() {
+            String::from_utf8_lossy(&out.stdout).to_string()
         } else {
-            return Err(format!("WinRM Error: {}", String::from_utf8_lossy(&output.stderr)));
+            return Err(format!("WinRM Error: {}", String::from_utf8_lossy(&out.stderr)));
         }
     };
     let v: serde_json::Value = serde_json::from_str(raw.trim())
@@ -127,10 +133,12 @@ pub async fn execute_remote_linux(
        .arg("-o").arg("ConnectTimeout=10")
        .arg("-p").arg(&port_str);
     if let Some(ref kp) = key_path { if !kp.is_empty() { cmd.arg("-i").arg(kp); } }
-    cmd.arg(&format!("{}@{}", username, host))
+    cmd.arg(format!("{}@{}", username, host))
        .arg(&command)
        .creation_flags(CREATE_NO_WINDOW);
-    let output = cmd.output()
+    let output = tokio::task::spawn_blocking(move || cmd.output())
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("SSH no disponible. Verifica OpenSSH en Windows: {}", e))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -186,37 +194,36 @@ printf '{"hostname":"%s","os":"%s","uptime_h":%d,"timestamp":"%s","cpu":{"global
 "#;
 
     let port_str = port.unwrap_or(22).to_string();
-    let mut ssh_cmd = Command::new("ssh");
-    ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
-           .arg("-o").arg("BatchMode=yes")
-           .arg("-o").arg("ConnectTimeout=15")
-           .arg("-p").arg(&port_str);
-    if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
-    ssh_cmd.arg(&format!("{}@{}", username, host))
-           .arg("bash -s");
-    let mut child = ssh_cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("SSH no disponible (verifica OpenSSH en Windows): {}", e))?;
-
-    if let Some(stdin) = child.stdin.take() {
+    let raw = tokio::task::spawn_blocking(move || -> Result<String, String> {
         use std::io::Write;
-        let mut stdin = stdin;
-        stdin.write_all(script.as_bytes())
-            .map_err(|e| format!("Error enviando script SSH: {}", e))?;
-    }
+        let mut ssh_cmd = Command::new("ssh");
+        ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
+               .arg("-o").arg("BatchMode=yes")
+               .arg("-o").arg("ConnectTimeout=15")
+               .arg("-p").arg(&port_str);
+        if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
+        ssh_cmd.arg(format!("{}@{}", username, host))
+               .arg("bash -s");
+        let mut child = ssh_cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("SSH no disponible (verifica OpenSSH en Windows): {}", e))?;
+        if let Some(mut s) = child.stdin.take() {
+            s.write_all(script.as_bytes())
+                .map_err(|e| format!("Error enviando script SSH: {}", e))?;
+        }
+        let output = child.wait_with_output()
+            .map_err(|e| format!("Error esperando SSH: {}", e))?;
+        if !output.status.success() {
+            return Err(format!("SSH Error: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }).await
+        .map_err(|e| e.to_string())??;
 
-    let output = child.wait_with_output()
-        .map_err(|e| format!("Error esperando SSH: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!("SSH Error: {}", String::from_utf8_lossy(&output.stderr)));
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if raw.is_empty() {
         return Err("El host no devolvió datos. Verifica que bash esté disponible y la conexión SSH.".to_string());
     }
@@ -364,33 +371,32 @@ printf '{"hostname":"%s","os":"%s","shell":"%s","kernel":"%s","user":"%s","cwd":
     "$__GB" "$__GD" "$__K8S" "$__VENV" "$__NODE" "$__DOCK" "$__TOOLS"
 "#;
         let port_str = port.unwrap_or(22).to_string();
-        let mut ssh_cmd = Command::new("ssh");
-        ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
-               .arg("-o").arg("BatchMode=yes")
-               .arg("-o").arg("ConnectTimeout=10")
-               .arg("-p").arg(&port_str);
-        if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
-        ssh_cmd.arg(format!("{}@{}", username, host)).arg("bash -s");
-
-        let mut child = ssh_cmd
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("SSH no disponible: {}", e))?;
-
-        if let Some(stdin) = child.stdin.take() {
+        let raw = tokio::task::spawn_blocking(move || -> Result<String, String> {
             use std::io::Write;
-            let mut s = stdin;
-            s.write_all(script.as_bytes())
-                .map_err(|e| format!("Error enviando bootstrap: {}", e))?;
-        }
+            let mut ssh_cmd = Command::new("ssh");
+            ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
+                   .arg("-o").arg("BatchMode=yes")
+                   .arg("-o").arg("ConnectTimeout=10")
+                   .arg("-p").arg(&port_str);
+            if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
+            ssh_cmd.arg(format!("{}@{}", username, host)).arg("bash -s");
+            let mut child = ssh_cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| format!("SSH no disponible: {}", e))?;
+            if let Some(mut s) = child.stdin.take() {
+                s.write_all(script.as_bytes())
+                    .map_err(|e| format!("Error enviando bootstrap: {}", e))?;
+            }
+            let output = child.wait_with_output()
+                .map_err(|e| format!("Error en bootstrap SSH: {}", e))?;
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }).await
+            .map_err(|e| e.to_string())??;
 
-        let output = child.wait_with_output()
-            .map_err(|e| format!("Error en bootstrap SSH: {}", e))?;
-
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if raw.is_empty() { return Err("Bootstrap: sin datos del host".to_string()); }
         serde_json::from_str(&raw)
             .map_err(|e| format!("Bootstrap JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(300)]))

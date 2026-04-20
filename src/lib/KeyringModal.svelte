@@ -1,6 +1,6 @@
 <script lang="ts">
     import { createEventDispatcher, onMount } from 'svelte';
-    import { ShieldAlert, ShieldCheck, Key, Shield } from 'lucide-svelte';
+    import { IconShieldExclamation as ShieldAlert, IconShieldCheck as ShieldCheck, IconKey as Key, IconShield as Shield } from '@tabler/icons-svelte';
     import { testApiKey, saveLlmKey, getConfiguredProviders } from '$lib/lucy-api';
 
     const dispatch = createEventDispatcher();

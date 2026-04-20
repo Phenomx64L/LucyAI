@@ -184,18 +184,45 @@ fn build_hosts_context(hosts_json: Option<&str>) -> String {
     let Some(arr) = hosts.as_array() else { return String::new(); };
     if arr.is_empty() { return String::new(); }
 
-    let mut lines = String::from("\n--- CONFIGURED REMOTE HOSTS (use these when user mentions a host by name) ---\n");
+    // CRITICAL: we expose `id` so Lucy can fill target="..." in EXECUTE_REMOTE.
+    // We intentionally do NOT suggest raw Invoke-Command/ssh here because
+    // RULE 14 forbids them for configured hosts — the previous version of
+    // this helper contradicted RULE 14 and caused Lucy to emit bare
+    // markdown commands that the frontend never executed.
+    let mut lines = String::from("\n--- CONFIGURED REMOTE HOSTS ---\n");
+    lines.push_str("When user mentions any of these by name, you MUST wrap the command in:\n");
+    lines.push_str("<EXECUTE_REMOTE target=\"HOST_ID\">YOUR_COMMAND</EXECUTE_REMOTE>\n");
+    lines.push_str("using the exact `id` field below as HOST_ID. NEVER use Invoke-Command, PSCredential,\n");
+    lines.push_str("or raw `ssh user@ip` — credentials and transport are handled by the system.\n\n");
+
     for h in arr {
+        let id      = h["id"].as_str().unwrap_or("?");
         let name    = h["name"].as_str().unwrap_or("?");
         let htype   = h["type"].as_str().unwrap_or("windows");
         let host_ip = h["host"].as_str().unwrap_or("?");
         let uname   = h["username"].as_str().unwrap_or("?");
         let port    = h["port"].as_u64().unwrap_or(if htype == "linux" { 22 } else { 5985 });
         let proto   = if htype == "linux" { "SSH" } else { "WinRM" };
-        lines.push_str(&format!("- \"{name}\": type={htype} ({proto}), ip={host_ip}, user={uname}, port={port}\n"));
+        lines.push_str(&format!(
+            "- id=\"{id}\" name=\"{name}\" type={htype} ({proto}) ip={host_ip} user={uname} port={port}\n"
+        ));
     }
-    lines.push_str("For Windows remote: use Invoke-Command -ComputerName <ip> with PSCredential.\n");
-    lines.push_str("For Linux remote: use ssh <user>@<ip> -p <port> '<command>'.\n");
+    // Concrete example using a real id from the list — if arr is non-empty,
+    // show one example so Lucy has a pattern to copy rather than guessing.
+    if let Some(first) = arr.first() {
+        let id   = first["id"].as_str().unwrap_or("?");
+        let name = first["name"].as_str().unwrap_or("?");
+        let htype = first["type"].as_str().unwrap_or("windows");
+        let example_cmd = if htype == "linux" {
+            "top -b -n 1 -o %CPU | head -n 20"
+        } else {
+            "Get-Process | Sort-Object CPU -Descending | Select -First 10 Name, CPU, Id"
+        };
+        lines.push_str(&format!(
+            "\nEXAMPLE — user says \"investigar CPU en {name}\" → you emit:\n\
+             <EXECUTE_REMOTE target=\"{id}\">{example_cmd}</EXECUTE_REMOTE>\n"
+        ));
+    }
     lines.push_str("--- END HOSTS ---\n");
     lines
 }
@@ -277,6 +304,7 @@ fn build_system_prompt(
     } else { "".to_string() };
 
     let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+    let core_mem_block = crate::commands::memory::render_core_sync();
     format!(
         "You are Lucy, an expert Windows SysAdmin AI assistant with autonomous code analysis and modification capabilities.\n\
         {lang}\n\
@@ -296,6 +324,7 @@ fn build_system_prompt(
         RULE 4: ONLY if a command you already executed in THIS conversation returned an error, analyze the error and ask how to proceed WITHOUT generating <EXECUTE>. Do NOT apply this rule to new independent instructions.\n\
         RULE 5: Silently correct phonetically mistranscribed words.\n\
         RULE 6: If the user teaches you a command, respond ONLY with <LEARN>key1,key2|powershell_command|response</LEARN>.\n\
+        RULE 6b — PERSONAL MEMORY: When the user reveals stable personal facts, preferences, or environment info worth remembering across sessions, silently emit a <REMEMBER> tag ALONGSIDE your normal response (not instead of it). The tag is stripped from display and persisted to the user profile. Format: <REMEMBER category=\"identity|preference|context|host\">key: value</REMEMBER>. Valid categories: 'identity' (name, role, org), 'preference' (verbose/concise, shell, language), 'context' (projects, responsibilities), 'host' (info tied to a specific server). Only remember FACTS — not conversational filler. Do NOT re-remember facts already shown in the '--- PERFIL DEL USUARIO ---' section. Examples: <REMEMBER category=\"preference\">preferred_shell: PowerShell 7</REMEMBER>, <REMEMBER category=\"context\">main_project: Lucy Tauri assistant</REMEMBER>.\n\
         RULE 7: You can create PDFs using Edge Headless.\n\
         RULE 8: For Linux use native ssh. For Windows Server use Invoke-Command -ComputerName. EXCEPTION: if the context says \"ACTIVE REMOTE SHELL\", the session is already established — generate RAW commands only, NO Invoke-Command, NO -ComputerName, NO -Credential wrappers.\n\
         RULE 9: <TOOL>sysinfo</TOOL> is ONLY for LOCAL machine hardware queries: CPU usage, RAM, disk, system health, uptime. NEVER use sysinfo for: code analysis, file review, bug detection, logic verification, architecture analysis, or ANY question about code/files/projects. For REMOTE hosts, use Invoke-Command or SSH with the host details. EXCEPTION: if context says \"ACTIVE REMOTE SHELL\", generate raw commands — the WinRM/SSH tunnel is already open.\n\
@@ -303,7 +332,7 @@ fn build_system_prompt(
         RULE 11: For cleaning system logs, ALWAYS use RULE 2 elevation.\n\
         RULE 12: If asked about quick actions or the sidebar, tell them to use the + button in the side panel.\n\
         RULE 13: Each user message is INDEPENDENT unless explicitly referencing a previous result. Do NOT mix outputs or reports from previous tasks into new responses.\n\
-        RULE 14 — HOST ROUTING: When the user asks to execute on a CONFIGURED REMOTE HOST (check the JSON list below), YOU MUST NEVER use Invoke-Command or SSH manually. Instead, use the native tool: <EXECUTE_REMOTE target=\"host_id\">YOUR_COMMAND</EXECUTE_REMOTE>. The system will securely inject credentials and execute YOUR_COMMAND over WinRM or SSH natively. Example: <EXECUTE_REMOTE target=\"e4b5c6\">Get-ADUser -Identity admin</EXECUTE_REMOTE>.\n\
+        RULE 14 — HOST ROUTING (CRITICAL — DO NOT SKIP): If the user's message mentions ANY host name, alias, or ID listed in the CONFIGURED REMOTE HOSTS block below, you MUST emit the command wrapped in <EXECUTE_REMOTE target=\"<id>\">...</EXECUTE_REMOTE> using the exact `id` field from that block. Do NOT describe what you would do. Do NOT show the command as markdown. Do NOT wait for permission. Do NOT use Invoke-Command, PSCredential, ssh, or scp. Emit the tag IMMEDIATELY as part of your first response. The frontend will execute it, capture output, and send it back for analysis on the NEXT turn. If you respond without <EXECUTE_REMOTE> when a host is clearly mentioned, NOTHING runs and the user sees dead text. Example: user says \"CPU alta en PARROT\" and PARROT has id=\"abc123\" type=linux → your entire response body should include <EXECUTE_REMOTE target=\"abc123\">top -b -n 1 -o %CPU | head -n 20</EXECUTE_REMOTE>.\n\
         CRITICAL RULE FOR REMOTE: If an <EXECUTE_REMOTE> command returns a syntax error or property validation error, DO NOT attempt to rewrite the command using Invoke-Command or Get-Credential. The connection is fully isolated and managed by the system. Simply correct your YOUR_COMMAND syntax and try again using <EXECUTE_REMOTE>.\n\
         RULE 15 — ALTERNATIVE EXECUTORS (use when PowerShell is blocked by policy or unavailable):\n\
         RULE 15b — AVOID TERMINAL-SERVER-ONLY COMMANDS: 'query user', 'query session', 'qwinsta' ONLY work on Terminal Server / RDS hosts. On regular Windows workstations/servers to check if a user is active or enabled, ALWAYS use PowerShell: Get-LocalUser -Name 'username' | Select Name,Enabled,LastLogon. To list logged-on users: Get-WmiObject Win32_LoggedOnUser | Select Antecedent -Unique.\n\
@@ -330,16 +359,33 @@ fn build_system_prompt(
         - LOCATE FILE: <TOOL>locate_file:name</TOOL> — Searches the entire local drive for a filename instantaneously (O(log n)) using the SQLite indexer.\n\
         - START INDEXER: <TOOL>start_indexer:C:\\</TOOL> — Rebuilds the global SQLite file index for a given path. Use this if locate_file cannot find something you suspect exists.\n\
         - CHANGE DIR: <TOOL>cd:/nueva/ruta</TOOL> — Changes your logical working directory. Use this when the user asks you to switch paths or create a project in a specific directory. ⚠️ CRITICAL: NEVER use `<EXECUTE>cd path</EXECUTE>` — that spawns a subprocess that exits immediately and changes NOTHING. ALWAYS use `<TOOL>cd:path</TOOL>` which persists the change for all future commands.\n\
-        RULE 22 - WEB KNOWLEDGE: NEVER guess release dates, software versions, or post-2024 information. You MUST ALWAYS use <TOOL>search_web:query</TOOL> IMMEDIATELY in your response. DO NOT ask the user for permission to search. Do it autonomously.\n        If the snippet is too short or lacks exact dates/versions, YOU MUST copy the URL from the snippet and execute `<TOOL>fetch:URL</TOOL>` to deeply read the article before responding to the user.
-        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Allows you to search DuckDuckGo to retrieve documentation, current events post-2024 cutoff, or exact system requirements.\n\
-          - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot of system processes or ports. Call it again later to get a DIFFERENCE (who died/closed, who was born/opened). Perfect for verifying if your commands worked.\n\
+        RULE 22 — WEB KNOWLEDGE: NEVER guess release dates, software versions, or information post-2024. Use <TOOL>search_web:query</TOOL> IMMEDIATELY and autonomously — do NOT ask the user for permission. If a snippet is too short or lacks exact data, follow up with <TOOL>fetch:URL</TOOL> on the result URL before answering.\n\
+        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Searches DuckDuckGo. Use for documentation, current events, software versions, or system requirements.\n\
+        - FETCH WEB: <TOOL>fetch:URL</TOOL> — Fetches full text of a webpage. Use when search snippets are insufficient.\n\
+        - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot of system processes or ports. Call it again later to get a DIFFERENCE (who died/closed, who was born/opened). Perfect for verifying if your commands worked.\n\
         - SEARCH RUNBOOKS: <TOOL>search_runbooks:query</TOOL> — uses TF-IDF Semantic similarity to fetch the top 2 company runbooks that match your technical issue query.\n\
+        - SEMANTIC SEARCH: <TOOL>semantic:natural language query</TOOL> — vector search (cosine over Ollama embeddings) across the user's saved skills and persistent memories. USE THIS FIRST when the user's phrasing may not match exact trigger words — e.g. user says \"the server won't respond\" → semantic can surface a 'restart service' skill even if the trigger is 'reiniciar servicio'. Returns top hits with similarity scores; if it returns [SEMANTIC SEARCH UNAVAILABLE], fall back to search_runbooks or search_web.\n\
         - SEARCH FILES: <TOOL>searchfiles:/directory|||pattern</TOOL> — searches text across all files. For multi-pattern search, separate words with '|' (e.g. ERROR|CRITICAL|PANIC), this uses Aho-Corasick for blazing speed.\n\
         - ANALYZE CODE: <TOOL>analyze_code:/path</TOOL> — uses Tree-Sitter to extract the Abstract Syntax Tree (AST) summary of Rust or JavaScript. Use this BEFORE reading the whole file if you only want to explore existing functions/classes.\n\
-        - SUB-AGENTS (Parallel Forking):
-        - <TOOL>fork_task:TaskID|||Instruction</TOOL> - Forks a fast background agent to investigate something while you continue. Does not return result immediately.
-        - <TOOL>wait_task:TaskID</TOOL> - Waits for a forked task to finish and returns its findings.
-        - FETCH WEB: <TOOL>fetch:URL</TOOL> — Copies the full text of a webpage. Use this to dive deeper into web search results when snippets are insufficient.\n        - MCP DISCOVER: <TOOL>mcp_discover:server_cmd</TOOL> — Interrogates an MCP server (e.g. npx -y @modelcontextprotocol/server-sqlite) to learn what tools it offers. YOU MUST ALWAYS EXECUTE THIS FIRST before using mcp_query on an unknown MCP.\n        - MCP QUERY: <TOOL>mcp_query:server_cmd|||tool_name|||json_args</TOOL> — Spawns a local MCP server, asks for a tool, and returns result. (E.g. <TOOL>mcp_query:npx -y @modelcontextprotocol/server-sqlite|||query|||{{\"query\":\"SELECT * FROM foo\"}}</TOOL>).
+        - SUB-AGENTS (Parallel Forking): Use these to investigate multiple things simultaneously, saving iterations.\n\
+          - FORK: <TOOL>fork_task:UniqueID|||Single-shot instruction for the sub-agent (no tools available)</TOOL> — Launches a fast background LLM agent. Returns immediately with [FORK LAUNCHED]. The sub-agent runs in parallel while you continue with other actions.\n\
+          - WAIT: <TOOL>wait_task:UniqueID</TOOL> — Blocks until the forked sub-agent finishes and returns its result. Use in a LATER step after fork_task. Example pattern: fork ResearchA + fork ResearchB → do other work → wait ResearchA → wait ResearchB → synthesize.\n\
+          - RULE: UniqueID must be a short snake_case string (e.g. research_deps, check_errors). Never reuse the same ID in one task.\n\
+        - MCP DISCOVER: <TOOL>mcp_discover:server_cmd</TOOL> — Interrogates an MCP server (e.g. npx -y @modelcontextprotocol/server-sqlite) to learn what tools it offers. YOU MUST ALWAYS EXECUTE THIS FIRST before using mcp_query on an unknown MCP.\n\
+        - MCP QUERY: <TOOL>mcp_query:server_cmd|||tool_name|||json_args</TOOL> — Spawns a local MCP server, asks for a tool, and returns result. (E.g. <TOOL>mcp_query:npx -y @modelcontextprotocol/server-sqlite|||query|||{{\"query\":\"SELECT * FROM foo\"}}</TOOL>).\n\
+        MCP SERVERS AVAILABLE (no install needed — npx auto-downloads):\n\
+          • Git/version-control: uvx mcp-server-git — tools: git_log, git_diff, git_status, git_commit, git_branch\n\
+          • SQLite DB: npx -y @modelcontextprotocol/server-sqlite -- /path/to/db.sqlite — tools: query, list-tables, describe-table\n\
+          • Filesystem (ACL): npx -y @modelcontextprotocol/server-filesystem /allowed/path — tools: read_file, write_file, list_directory\n\
+          • Memory (persistent KV): npx -y @modelcontextprotocol/server-memory — tools: create_entities, search_nodes, read_graph\n\
+          • Shodan (recon): npx -y @burtthecoder/mcp-shodan — requires SHODAN_API_KEY in MCP secrets — tools: search, host_info, dns_lookup\n\
+          • VirusTotal (malware): npx -y @burtthecoder/mcp-virustotal — requires VIRUSTOTAL_API_KEY — tools: file_report, url_report, ip_report\n\
+          WORKFLOW: 1) mcp_discover the server 2) learn its tools 3) mcp_query with correct tool_name and json_args.\n\
+        PERSISTENT MEMORY — Cross-session knowledge store. Use these to remember important discoveries:\n\
+        - SAVE MEMORY: <TOOL>memoria_guardar:Short title|||Detailed content|||tag1,tag2</TOOL> — Persists a fact, decision, or discovery to your long-term memory DB. Use after: finding a key config, understanding project architecture, fixing a recurring error pattern, learning the user's environment specifics.\n\
+        - SEARCH MEMORY: <TOOL>memoria_buscar:query</TOOL> — Full-text searches your memory DB. Use at the START of a task to recall relevant past knowledge before acting.\n\
+        - IMPORTANCE: Include importance:1 (routine), importance:2 (useful), or importance:3 (critical) in the content to prioritize. Default: 1.\n\
+        - RULE: Save memories proactively. If you learned something that would help in a future session (server names, project structure, user preferences, working solutions), ALWAYS save it.\n\
         TOOL CHAINING: You are AUTHORIZED to use MULTIPLE tools in a single response to speed up your work. Simply output consecutive <TOOL>...</TOOL> tags. Use this to: search → read → analyze → edit → verify in parallel.\n\
         EDITING FILES: For modifications, ALWAYS prefer <TOOL>editfile</TOOL> over <TOOL>writefile</TOOL>. editfile does surgical find-and-replace — you only need to specify the exact block to change. Use writefile ONLY for creating new files or complete rewrites.\n\
         UX RULE (FILES MODIFIED): Never manually format a list of files you modified. The system interface will automatically group and display 'Files Modified' badges for the user when you use writefile or editfile.\n\
@@ -372,7 +418,15 @@ fn build_system_prompt(
         RULE 20 — LARGE FILE STRATEGY:\n\
         - You possess a massive context window. You are AUTHORIZED to use <TOOL>readfile:/path</TOOL> for any file up to 500KB (including massive files like +page.svelte) to gain full structural understanding.\n\
         - Only for files EXCEEDING 512KB, use <TOOL>searchfiles:/path|keyword</TOOL> followed by <TOOL>readlines:/path:START:COUNT</TOOL>.\n\
-        RULE 21: When using the file editing tool, NEVER attempt to replace a single line of code, as duplicate lines may exist and the system will block the operation. Always include at least 2 preceding lines and 2 succeeding lines in your search string context to ensure the match is 100% unique across the entire file.
+        RULE 21: When using the file editing tool, NEVER attempt to replace a single line of code, as duplicate lines may exist and the system will block the operation. Always include at least 2 preceding lines and 2 succeeding lines in your search string context to ensure the match is 100% unique across the entire file.\n\
+        RULE 23 — REACT SELF-CORRECTION (MANDATORY on failure): Tool results arrive tagged with [EXIT_CODE: N]. Interpret them as follows: 0 = success (proceed), 1 = soft stderr/warning (inspect, then proceed or adjust), 2 = hard failure (MUST reflect before retrying). If you see `[TOOL FAILURE DETECTED — step N | exit=X]` in your tool results, your NEXT response MUST begin with a <THOUGHT> block (≤80 words) stating: (a) the probable root cause in one sentence, (b) whether the command itself was wrong (syntax, missing dependency, permission, wrong host) or the environment was unexpected, (c) a DIFFERENT next action — NEVER retry the identical command without a concrete change. If you have already failed the same command twice in a row with the same cause, STOP executing and surface a clear summary to the user asking for guidance. This reflection is silent telemetry: keep it inside <THOUGHT> — do not apologize to the user.\n\
+        RULE 24 — PLAN/ACT/VERIFY for DESTRUCTIVE actions (MANDATORY): Before executing ANY potentially destructive command, you MUST emit a <PLAN> block instead of a raw <EXECUTE>. Destructive = anything that stops/restarts services, deletes files/keys/users, modifies firewall/network state, kills processes, reboots, uninstalls, or changes persistent configuration. Trigger words (any of these in your intended command): Stop-Service, Restart-Service, Restart-Computer, Remove-*, Disable-*, Set-Service, Set-ItemProperty, Invoke-WmiMethod, shutdown, reboot, reg delete, reg add (HKLM/HKCR), netsh set, sc delete, sc stop, taskkill, kill -9, rm -rf, dd, mkfs, fdisk, format, systemctl stop/disable/mask, iptables -F, Disable-NetAdapter, Reset-*. Format: <PLAN risk=\"high|med|low\" target=\"local|<host_id>\" engine=\"powershell|shell\"><DESC>One-line human description</DESC><CMD>the exact command to run</CMD><VERIFY>a short read-only command that confirms success after CMD runs</VERIFY><ROLLBACK>optional — command that undoes CMD if needed</ROLLBACK></PLAN>. The UI will render this as an interactive card with [Execute] [Dry-Run] [Edit] [Cancel] buttons. Do NOT emit a separate <EXECUTE> alongside <PLAN> — the user clicks Execute to run it. READ-ONLY commands (Get-*, Select-*, ps, ls, df, netstat, grep) do NOT need <PLAN> — keep using <EXECUTE> / <EXECUTE_REMOTE> for those. Example: <PLAN risk=\"high\" target=\"local\" engine=\"powershell\"><DESC>Stop IIS World Wide Web service</DESC><CMD>Stop-Service -Name W3SVC -Force</CMD><VERIFY>Get-Service W3SVC | Select Name,Status</VERIFY><ROLLBACK>Start-Service W3SVC</ROLLBACK></PLAN>.\n\
+        RULE 25 — TIERED MEMORY (MemGPT-style): Your memory has THREE tiers. Use them correctly:\n\
+        • CORE — Small, always-injected facts shown in the '--- CORE MEMORY (always-on facts) ---' block below (if present). These facts are ALWAYS in your context — do NOT search for them. To ADD a stable fact (env info, hard preferences, critical rules), emit <TOOL>memory_core_set:section|||key|||value</TOOL>. Valid sections: 'user_facts', 'preferences', 'rules', 'environment'. Keep values short (<200 chars). Only promote to CORE facts that are truly always-relevant — everyday findings belong in episodic memory (memoria_guardar). To remove a core fact use <TOOL>memory_core_delete:section|||key</TOOL>.\n\
+        • WORKING — Per-session compressed summaries of long agent loops. You do NOT write these directly; the UI may compress raw context into <TOOL>memory_working_append</TOOL> automatically.\n\
+        • EPISODIC — Long-term searchable knowledge (memoria_guardar / memoria_buscar / semantic). This is where general discoveries go.\n\
+        DECISION GUIDE: Is this fact true across ALL future sessions AND short enough to always carry? → CORE. Is it a useful but situational fact? → memoria_guardar. Is it just session scratch? → don't persist.\n\
+        {core_mem}\n\
         {ctx}
         {hosts}
         The user's name is {uname}. Always address them by name.\nINSTRUCTION: {prompt}",
@@ -381,6 +435,7 @@ fn build_system_prompt(
         hosts = hosts_context,
         uname = user_name,
         rb = runbooks_info,
+        core_mem = core_mem_block,
         prompt = prompt
     )
 }
@@ -603,8 +658,19 @@ pub async fn ask_lucy_stream(
     let mut was_truncated = false;
     let mut input_tokens: u32 = 0;
     let mut output_tokens: u32 = 0;
+    let start_time = std::time::Instant::now();
+    let stream_timeout = std::time::Duration::from_secs(30); // 30 second timeout for faster feedback
 
     while let Some(chunk) = byte_stream.next().await {
+        // Check for timeout
+        if start_time.elapsed() > stream_timeout {
+            eprintln!("[ask_lucy_stream] Timeout after 60 segundos esperando stream");
+            let timeout_msg = "\n__STREAM_TIMEOUT__";
+            full_text.push_str(timeout_msg);
+            let _ = window.emit(&chunk_event, timeout_msg); // Emit timeout marker
+            break;
+        }
+
         let bytes = chunk.map_err(|e| format!("Error de stream: {}", e))?;
         line_buffer.push_str(&String::from_utf8_lossy(&bytes));
 
@@ -613,12 +679,31 @@ pub async fn ask_lucy_stream(
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
             if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" { continue; }
+                if data == "[DONE]" { break; } // Break on [DONE] instead of continue
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(reason) = v["delta"]["stop_reason"].as_str().or_else(|| {
-                        v["choices"].get(0).and_then(|c| c["finish_reason"].as_str())
-                    }) {
+                    // Check for end-of-stream indicators from various providers
+                    let mut stream_ended = false;
+
+                    // Anthropic: check delta.stop_reason
+                    if let Some(reason) = v["delta"]["stop_reason"].as_str() {
+                        if reason != "end_turn" {
+                            was_truncated = true;
+                        }
+                        stream_ended = reason == "end_turn" || reason == "stop_sequence" || reason == "max_tokens";
+                    }
+
+                    // OpenAI/Local: check choices[0].finish_reason
+                    if let Some(reason) = v["choices"].get(0).and_then(|c| c["finish_reason"].as_str()) {
                         if reason == "max_tokens" || reason == "length" {
+                            was_truncated = true;
+                        }
+                        stream_ended = reason == "stop" || reason == "max_tokens" || reason == "length";
+                    }
+
+                    // Gemini: check finishReason in candidates
+                    if let Some(reason) = v["candidates"].get(0).and_then(|c| c["finishReason"].as_str()) {
+                        stream_ended = reason == "STOP" || reason == "MAX_TOKENS";
+                        if reason == "MAX_TOKENS" {
                             was_truncated = true;
                         }
                     }
@@ -644,6 +729,11 @@ pub async fn ask_lucy_stream(
                         full_text.push_str(t);
                         let _ = window.emit(&chunk_event, t);
                     }
+
+                    // Break if stream has ended
+                    if stream_ended {
+                        break;
+                    }
                 }
             }
         }
@@ -657,6 +747,7 @@ pub async fn ask_lucy_stream(
         let _ = log_usage_internal(&model, input_tokens, output_tokens, "ask_lucy_stream", &user_name).await;
     }
 
+    eprintln!("[ask_lucy_stream] Completado: {} bytes, modelo: {}, tokens: in={} out={}", full_text.len(), model, input_tokens, output_tokens);
     Ok(full_text)
 }
 

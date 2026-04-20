@@ -1,6 +1,7 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { PHASE_ORDER, phaseLabel, phaseIcon } from '$lib/hooks/turn-loop';
+    import { IconCircleCheck as CheckCircle, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
@@ -30,7 +31,7 @@
 
   <!-- Header -->
   <div class="tl-hdr">
-    <span class="tl-icon">🔄</span>
+    <span class="tl-icon">↻</span>
     <span class="tl-title">Turn-Loop</span>
     <span class="tl-iter">{isEN ? 'Iter' : 'Iter'} {loop.iteration}/{loop.maxIterations}</span>
     <span class="tl-time">{fmtTime(elapsed)}</span>
@@ -94,9 +95,9 @@
   {#if loop.phase === 'done' || loop.phase === 'failed'}
   <div class="tl-summary" class:ok={loop.resolved}>
     {#if loop.resolved}
-      🎉 {isEN ? 'Problem resolved!' : 'Problema resuelto!'}
+      <CheckCircle size={13} strokeWidth={2} style="color:var(--acc)"/> {isEN ? 'Problem resolved!' : 'Problema resuelto!'}
     {:else}
-      ⚠️ {isEN ? 'Could not fully resolve.' : 'No se pudo resolver completamente.'}
+      <AlertTriangle size={13} strokeWidth={2} style="color:var(--amber)"/> {isEN ? 'Could not fully resolve.' : 'No se pudo resolver completamente.'}
     {/if}
     {#if loop.summary}
       <div class="tl-summary-text">{loop.summary}</div>

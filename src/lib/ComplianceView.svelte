@@ -1,6 +1,7 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    import { IconShieldCheck as ShieldCheck, IconFileText as FileText, IconAlertTriangle as AlertTriangle, IconBulb as Lightbulb } from '@tabler/icons-svelte';
     import { complianceReports } from '$lib/stores';
     import { exportCompliancePdf } from '$lib/reports/ReportGenerator';
     import cisLinux from '$lib/compliance/cis-linux.json';
@@ -153,18 +154,18 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title">{isEN ? '🛡️ Compliance Scanning' : '🛡️ Auditoría de Compliance'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ShieldCheck size={13} strokeWidth={2}/> {isEN ? 'Compliance Scanning' : 'Auditoría de Compliance'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={selectedHost}>
-        <option value="local">🖥 Local ({hostName})</option>
-        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'🖥':'🐧'} {h.name}</option>{/each}
+        <option value="local">⊡ Local ({hostName})</option>
+        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
-      <button class="view-btn" on:click={runScan} disabled={scanning}>
-        {scanning ? '⏳ Escaneando...' : '🛡️ Run CIS Scan'}
+      <button class="view-btn" on:click={runScan} disabled={scanning} style="display:flex;align-items:center;gap:5px;">
+        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ShieldCheck size={12} strokeWidth={2}/> Run CIS Scan{/if}
       </button>
       {#if report}
-        <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF">
-          {exporting ? '⏳' : '📄'} PDF
+        <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF" style="display:flex;align-items:center;gap:5px;">
+          {#if exporting}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF
         </button>
         <span style="font-size:10px;color:#4a5a6a;">{checks.length} checks · {relTime(report.timestamp)}</span>
       {/if}
@@ -172,7 +173,7 @@
   </div>
 
   {#if error}
-    <div class="view-error">⚠️ {error}</div>
+    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {error}</div>
   {/if}
 
   {#if report}
@@ -218,7 +219,7 @@
           <span class="comp-cat">{r.category}</span>
         </div>
         {#if !r.passed && r.remediation}
-        <div class="comp-item-rem">💡 {r.remediation}</div>
+        <div class="comp-item-rem" style="display:flex;align-items:flex-start;gap:5px;"><Lightbulb size={11} strokeWidth={2}/> {r.remediation}</div>
         {/if}
         {#if r.stdout}
         <details class="comp-item-detail">
@@ -236,7 +237,7 @@
   {:else if !scanning}
   <div class="view-loading"><span style="color:#334155">{isEN ? 'Select a host and run a CIS Benchmark scan' : 'Selecciona un host y ejecuta un escaneo CIS Benchmark'}</span></div>
   {:else}
-  <div class="view-loading"><span style="color:var(--acc)">⏳ {isEN ? 'Running compliance checks...' : 'Ejecutando checks de compliance...'}</span></div>
+  <div class="view-loading"><span style="color:var(--acc)">↻ {isEN ? 'Running compliance checks...' : 'Ejecutando checks de compliance...'}</span></div>
   {/if}
 </div>
 

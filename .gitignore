@@ -28,3 +28,15 @@ vite.config.ts.timestamp-*
 # Logs & debug
 *.log
 svelte_errors.txt
+
+# Archives / local bundles
+*.rar
+*.7z
+*.zip
+
+# Local one-off patch / apply scripts (kept out of the tree)
+patch_*.cjs
+patch_*.mjs
+apply*.mjs
+apply_orchestrator*.js
+sync_lucy.cjs

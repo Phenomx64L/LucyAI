@@ -96,7 +96,7 @@
 <style>
   /* ── Backdrop ───────────────────────────────────────────────────────────── */
   .cp-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 1000;
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: var(--z-palette, 3000);
   }
 
   /* ── Panel ──────────────────────────────────────────────────────────────── */
@@ -104,7 +104,7 @@
     position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
     width: 580px; max-width: calc(100vw - 48px);
     background: #0b0e14; border: 1px solid #1e2a3a; border-radius: 12px;
-    z-index: 1001; overflow: hidden;
+    z-index: calc(var(--z-palette, 3000) + 1); overflow: hidden;
     box-shadow: 0 24px 60px rgba(0,0,0,.6);
   }
 

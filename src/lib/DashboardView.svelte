@@ -2,6 +2,7 @@
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { countUp } from '$lib/actions';
+    import { IconChartBar as BarChart3, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconTrendingUp as TrendingUp } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
@@ -20,6 +21,7 @@
     let dashSelectedHost   = 'local';
     let dashRefreshTimer   = null;
     let dashLastUpdate     = '';
+    let _dashStartId       = 0;   // guard contra race conditions en startDashboard()
 
     // ── Metrics history (sparklines) ─────────────────────────────────────────
     let metricsHistory     = {};
@@ -41,9 +43,11 @@
 
     async function startDashboard() {
         stopDashboard();
+        const myId = ++_dashStartId;           // token único para esta invocación
         dashMetrics = null; dashError = '';
         dashLoading = true;
         await refreshDash();
+        if (myId !== _dashStartId) return;     // llamada más reciente ya tomó el control
         dashRefreshTimer = setInterval(refreshDash, 10000);
     }
 
@@ -173,11 +177,11 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style={dashSelectedHost!=='local'?(()=>{const hc=hosts.find(h=>h.id===dashSelectedHost);return hc?.color?`border-left:3px solid ${hc.color};padding-left:10px;`:'';})():''}>📊 {isEN ? 'System Dashboard' : 'Dashboard de Sistema'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;{dashSelectedHost!=='local'?(()=>{const hc=hosts.find(h=>h.id===dashSelectedHost);return hc?.color?`border-left:3px solid ${hc.color};padding-left:10px;`:'';})():''}"><BarChart3 size={13} strokeWidth={2}/> {isEN ? 'System Dashboard' : 'Dashboard de Sistema'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={dashSelectedHost} on:change={onDashHostChange}>
-        <option value="local">🖥 Local ({hostName})</option>
-        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'🖥':'🐧'} {h.name}</option>{/each}
+        <option value="local">⊡ Local ({hostName})</option>
+        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       {#if dashRefreshTimer}
         <span class="dash-auto-badge" title={isEN ? 'Auto-refresh every 10s' : 'Auto-actualización cada 10s'}>
@@ -186,14 +190,14 @@
       {/if}
       <button class="view-btn" on:click={refreshDash} disabled={dashLoading} title={isEN ? 'Refresh now' : 'Actualizar ahora'}>{dashLoading?'⏳':'↻'}</button>
       <button class="view-btn" on:click={() => showAlertsModal=true} title={isEN ? 'Configure proactive alerts' : 'Configurar alertas proactivas'}
-        style="position:relative;">🔔{#if activeAlerts.length}<span class="alert-badge-btn">{activeAlerts.length}</span>{/if}</button>
+        style="position:relative;display:flex;align-items:center;gap:4px;"><Bell size={13} strokeWidth={1.8}/>{#if activeAlerts.length}<span class="alert-badge-btn">{activeAlerts.length}</span>{/if}</button>
       {#if dashLastUpdate}
         <span class="dash-last-update">{isEN ? 'Upd.' : 'Act.'} {dashLastUpdate}</span>
       {/if}
     </div>
   </div>
   {#if dashError}
-    <div class="view-error">⚠️ {dashError}</div>
+    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {dashError}</div>
   {:else if !dashMetrics && dashLoading}
     <div class="dash-skeleton">
       <div class="dash-cards">
@@ -210,7 +214,7 @@
   <div class="alert-bar">
     {#each activeAlerts as al}
     <div class="alert-item">
-      <span class="alert-item-ico">⚠️</span>
+      <span class="alert-item-ico"><AlertTriangle size={13} strokeWidth={2} style="color:var(--red)"/></span>
       <span><b>{al.metric}</b> {isEN ? 'on' : 'en'} <b>{al.hostLabel}</b>: <span style="color:var(--red);font-weight:700;">{al.value}%</span> ({isEN ? 'threshold' : 'umbral'} {al.threshold}%) · {al.ts}</span>
       <button class="alert-dismiss" on:click={() => activeAlerts = activeAlerts.filter(x=>x.id!==al.id)} title={isEN ? 'Dismiss' : 'Descartar'}>✕</button>
     </div>
@@ -251,7 +255,7 @@
         <div class="dc-sub">{dashMetrics.os}</div>
         <div class="dc-sub">Uptime: {dashMetrics.uptime_h}h</div>
         {#if metricsHistory[dashSelectedHost]?.length > 1}
-        <div class="dc-sub" style="margin-top:4px;color:#2a4a3a;">📈 {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
+        <div class="dc-sub" style="margin-top:4px;color:#2a4a3a;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} strokeWidth={2}/> {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
         {/if}
       </div>
     </div>

@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-1.2.0-7dd3fc" alt="v1.2.0" />
   <img src="https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Svelte-5-orange?logo=svelte" alt="Svelte 5" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
@@ -23,6 +24,36 @@
 Lucy is a desktop AI assistant designed for system administrators. It combines a conversational LLM interface with real infrastructure tooling — remote shell execution, log analysis, CIS compliance scanning, and credential management — all from a single, secure desktop app.
 
 Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs natively on Windows with minimal resource overhead.
+
+## What's New in v1.2.0
+
+Three sprints of work landed in this release — Lucy is now more **self-correcting**, **retrieval-aware**, and **memory-persistent** than ever.
+
+### Sprint 1 — ReAct Self-Correction
+Lucy now parses the exit code of every command she runs. When a tool fails (`FullyQualifiedErrorId`, `ParserError`, non-zero stderr…), she **must** emit a `<THOUGHT>` block stating (a) the probable cause and (b) a *different* next action — never blindly retrying the same broken command. After two identical failures she stops and asks you for guidance instead of burning tokens in a loop.
+
+### Sprint 2 — Semantic Search over Skills & Memory (Ollama-powered)
+A new vector index backs every saved skill and persistent memory. Lucy calls `<TOOL>semantic:natural language query</TOOL>` and gets back cosine-ranked hits even when the user's phrasing doesn't match the exact trigger words.
+
+- **Local embeddings** via Ollama (`nomic-embed-text` by default) — zero cloud dependency, zero API cost.
+- **Auto-indexing**: every skill you save and every memory Lucy writes is embedded in the background (fire-and-forget; Ollama downtime never blocks a save).
+- **Backfill command** for existing data: `invoke('backfill_embeddings')`.
+- **Graceful fallback**: if Ollama is offline, Lucy falls back to `search_runbooks` (TF-IDF) or `search_web`.
+
+### Sprint 3 — Tiered Memory (MemGPT-style)
+Lucy's memory is now split into three explicit tiers, each with the right cost/recall trade-off:
+
+| Tier          | Storage                  | Scope                | How Lucy writes it                                   |
+| ------------- | ------------------------ | -------------------- | ---------------------------------------------------- |
+| **CORE**      | `memory_core` (always injected into system prompt, <2 KB) | Cross-session, always-on | `<TOOL>memory_core_set:section\|\|\|key\|\|\|value</TOOL>` |
+| **WORKING**   | `memory_working` (per-session summaries) | Current session          | Auto-compression of long agent loops                  |
+| **EPISODIC**  | `agent_memories` + FTS + embeddings | Cross-session, searchable | `<TOOL>memoria_guardar:title\|\|\|content\|\|\|tags</TOOL>` |
+
+Valid CORE sections: `user_facts`, `preferences`, `rules`, `environment`. Only truly always-relevant facts should be promoted to CORE — everyday discoveries belong in episodic memory.
+
+### UX polish
+- Removed the experimental Live Trace floating panel (kept the internal ReAct trace helpers that power self-correction).
+- Repository cleanup: removed ~15 stale patch/apply/orchestrator scripts and local archives.
 
 ## Demo Video
 
@@ -94,6 +125,67 @@ npm run tauri build
 ```
 
 The production build generates Windows installers (NSIS + MSI) in `src-tauri/target/release/bundle/`.
+
+## How to Use Lucy
+
+### First-run setup
+1. Launch Lucy → the setup overlay appears.
+2. Paste an LLM API key (Gemini / OpenAI / Anthropic / local Ollama). Stored in the OS keyring — never on disk.
+3. *(Optional)* Add remote hosts (Windows over WinRM, Linux over SSH). Credentials also go in the keyring.
+4. Pick your language (EN / ES). You're ready.
+
+### Talking to Lucy
+Lucy is **autonomous** — you describe an intent, she picks the right tool:
+
+- **Local actions** (file, registry, processes, network): just ask. She writes PowerShell / WMIC / netsh / reg / cscript blocks and runs them.
+- **Remote hosts**: mention the host name. She emits `<EXECUTE_REMOTE target="hostId">...</EXECUTE_REMOTE>` and the UI runs it over your configured WinRM / SSH tunnel.
+- **Destructive commands** (`Stop-Service`, `Restart-Computer`, `Remove-*`, `reg delete`…): Lucy emits a `<PLAN>` card with **Execute / Dry-Run / Edit / Cancel** buttons instead of running blindly.
+- **Code tasks** (read, analyze, edit files): uses native Rust tools (`readfile`, `editfile`, `analyze_code` via Tree-Sitter) — no PowerShell file I/O.
+
+### Enabling semantic search (Sprint 2)
+Lucy uses **Ollama** locally for embeddings — no cloud cost.
+
+```bash
+# One-time install (see https://ollama.com)
+ollama pull nomic-embed-text
+ollama serve   # usually runs as a service automatically on Windows
+```
+
+After that every skill you save and every memory Lucy writes is indexed automatically. To retro-index existing rows:
+
+```js
+await invoke('backfill_embeddings');   // from the browser console / a dev skill
+```
+
+If Ollama is offline, semantic tools silently fall back to TF-IDF / web search — nothing breaks.
+
+### Teaching Lucy to remember (Sprint 3)
+Three ways to persist knowledge, ordered from cheapest to most detailed:
+
+1. **CORE memory** — Always-on facts injected into every system prompt. Keep it tight (<2 KB total). Lucy writes this herself when you state a stable preference (e.g. "always use PowerShell 7, never cmd").
+2. **`<REMEMBER>` tags** — Personal profile facts (name, role, org, main projects). Persisted across sessions.
+3. **`memoria_guardar`** — Episodic knowledge: discoveries, fixes, runbook steps. FTS + vector-searchable later via `memoria_buscar` or `semantic:` tools.
+
+You can review and edit everything Lucy has remembered from the **Settings → Memory** panel.
+
+### Skills & Runbooks
+- Teach Lucy a reusable action with `<LEARN>trigger words|powershell command|confirmation message</LEARN>` — she'll auto-save it as a Skill.
+- Parameterize with `{{var_name}}` in the command; Lucy will prompt you when needed.
+- Manage / test / export everything from the **Skills** tab in the sidebar.
+
+### Compliance, Inventory & Audit
+- **Compliance** → run CIS baselines against local or remote Windows / Linux hosts, export PDF reports.
+- **Inventory** → auto-discover services, installed software, hardware, NICs.
+- **Audit Trail** → every command, plan execution, and memory write is logged to SQLite with a signed timestamp.
+
+### Keyboard shortcuts
+| Shortcut              | Action                        |
+| --------------------- | ----------------------------- |
+| `Ctrl+T`              | New agent tab                 |
+| `Ctrl+W`              | Close current tab             |
+| `Ctrl+K`              | Command palette               |
+| `Ctrl+,`              | Settings                      |
+| `Esc`                 | Stop running agent loop       |
 
 ## Project Structure
 
@@ -195,8 +287,6 @@ Love Lucy? Consider supporting development! Your contribution helps improve the 
 - 📢 **Share Lucy** — Tell others about it
 
 ## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 

@@ -199,16 +199,16 @@ export function phaseLabel(phase: TurnPhase, isEN: boolean): string {
 
 export function phaseIcon(phase: TurnPhase): string {
     const icons: Record<TurnPhase, string> = {
-        idle: '⏸',
-        diagnose: '🔍',
-        analyze: '🧠',
-        propose: '💡',
-        apply: '🔧',
-        verify: '✅',
-        done: '🎉',
-        failed: '❌',
+        idle: '·',
+        diagnose: '◎',
+        analyze: '◑',
+        propose: '→',
+        apply: '▶',
+        verify: '✓',
+        done: '✓✓',
+        failed: '✗',
     };
-    return icons[phase] || '⏳';
+    return icons[phase] || '↻';
 }
 
 export const PHASE_ORDER: TurnPhase[] = ['diagnose', 'analyze', 'propose', 'apply', 'verify', 'done'];

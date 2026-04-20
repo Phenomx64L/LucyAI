@@ -1066,11 +1066,32 @@ pub fn panic_kill_all() -> Result<(), String> {
     Ok(())
 }
 
+// ── RDP LAUNCHER ──────────────────────────────────────────────────────────────
+// Lanza mstsc.exe en background. El proceso de escritorio remoto es independiente
+// de Lucy; la cooperación se realiza mediante el portapapeles (clipboard bridge).
+
+#[tauri::command]
+pub fn launch_rdp(host: String, port: u16) -> Result<(), String> {
+    // mstsc.exe acepta /v:HOST o /v:HOST:PORT (omitir puerto si es 3389 estándar)
+    let target = if port == 3389 {
+        host.clone()
+    } else {
+        format!("{}:{}", host, port)
+    };
+    write_app_log("INFO", &format!("Lanzando RDP hacia {}", target));
+    Command::new("mstsc")
+        .arg(format!("/v:{}", target))
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("No se pudo lanzar mstsc.exe: {}", e))?;
+    Ok(())
+}
+
 
 #[tauri::command]
 pub async fn search_web(query: String) -> Result<String, String> {
     let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(&query));
-    let res = reqwest::Client::new()
+    let res = crate::state::HTTP_CLIENT
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .header("Accept-Language", "en-US,en;q=0.9")

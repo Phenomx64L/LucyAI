@@ -53,42 +53,44 @@ export async function refreshLocalModels() {
 
 export const LLM_GROUPS = [
     {
-        label: "── Anthropic Claude ──",
+        label: "── Anthropic Claude (Native Computer Use) ──",
+        provider: "anthropic",
+        credential_key: "anthropic_api_key",
         options: [
-            { id: "claude-sonnet-4-6", icon: "🧠", nameEn: "Claude Sonnet 4.6 — Advanced Analysis & Code", nameEs: "Claude Sonnet 4.6 — Análisis Avanzado y Código" },
-            { id: "claude-sonnet-4-5", icon: "✨", nameEn: "Claude Sonnet 4.5 — Fast & Efficient", nameEs: "Claude Sonnet 4.5 — Rápido y Eficiente" },
-            { id: "claude-3-5-sonnet-latest", icon: "⚡", nameEn: "Claude 3.5 Sonnet — Balanced Performance", nameEs: "Claude 3.5 Sonnet — Rendimiento Equilibrado" },
-            { id: "claude-3-5-haiku-latest", icon: "💨", nameEn: "Claude 3.5 Haiku — Speed Optimized", nameEs: "Claude 3.5 Haiku — Optimizado para Velocidad" },
+            { id: "claude-opus-4-5", icon: "◉", nameEn: "Claude Opus 4.5 — Best Intelligence", nameEs: "Claude Opus 4.5 — Máxima Inteligencia" },
+            { id: "claude-sonnet-4-6", icon: "◉", nameEn: "Claude Sonnet 4.6 — Advanced Analysis & Code", nameEs: "Claude Sonnet 4.6 — Análisis Avanzado y Código" },
+            { id: "claude-sonnet-4-5", icon: "✦", nameEn: "Claude Sonnet 4.5 — Fast & Efficient", nameEs: "Claude Sonnet 4.5 — Rápido y Eficiente" },
+            { id: "claude-3-5-sonnet-latest", icon: "▸", nameEn: "Claude 3.5 Sonnet — Balanced Performance", nameEs: "Claude 3.5 Sonnet — Rendimiento Equilibrado" },
         ]
     },
     {
-        label: "── OpenAI GPT ──",
+        label: "── Google Gemini Vision ──",
+        provider: "gemini",
+        credential_key: "gemini_api_key",
         options: [
-            { id: "gpt-4o", icon: "✨", nameEn: "GPT-4o — Multimodal Intelligence", nameEs: "GPT-4o — Inteligencia Multimodal" },
-            { id: "gpt-4o-mini", icon: "⚡", nameEn: "GPT-4o Mini — Fast & Cost Effective", nameEs: "GPT-4o Mini — Rápido y Económico" },
-            { id: "o3-mini", icon: "🎯", nameEn: "o3-mini — Advanced Reasoning", nameEs: "o3-mini — Razonamiento Avanzado" },
+            { id: "gemini-3.1-pro-preview", icon: "◆", nameEn: "Gemini 3.1 Pro — Ultimate Analysis", nameEs: "Gemini 3.1 Pro — Máxima Inteligencia" },
+            { id: "gemini-3-flash-preview", icon: "▸", nameEn: "Gemini 3 Flash — Fast & Balanced", nameEs: "Gemini 3 Flash — Rápido y Equilibrado" },
+            { id: "gemini-2.5-pro", icon: "◆", nameEn: "Gemini 2.5 Pro — Deep Analysis", nameEs: "Gemini 2.5 Pro — Análisis Profundo" },
+            { id: "gemini-2.5-flash", icon: "▸", nameEn: "Gemini 2.5 Flash — SysAdmin Balanced", nameEs: "Gemini 2.5 Flash — SysAdmin Equilibrado" },
         ]
     },
     {
-        label: "── Gemini 3.1 (Nuevos) ──",
+        label: "── OpenAI GPT-4 Vision ──",
+        provider: "openai",
+        credential_key: "openai_api_key",
         options: [
-            { id: "gemini-3.1-pro-preview", icon: "💎", nameEn: "Gemini 3.1 Pro — Ultimate Analysis", nameEs: "Gemini 3.1 Pro — Inteligencia Avanzada" },
-            { id: "gemini-3-flash-preview", icon: "⚡", nameEn: "Gemini 3 Flash — Balanced (Next Gen)", nameEs: "Gemini 3 Flash — Equilibrado" },
-            { id: "gemini-3.1-flash-lite-preview", icon: "💨", nameEn: "Flash Lite 3.1 — Instant Tasks", nameEs: "Flash Lite 3.1 — Tareas Rápidas" }
+            { id: "gpt-4o", icon: "✦", nameEn: "GPT-4o — Multimodal Intelligence", nameEs: "GPT-4o — Inteligencia Multimodal" },
+            { id: "gpt-4-turbo", icon: "▸", nameEn: "GPT-4 Turbo — Fast & Capable", nameEs: "GPT-4 Turbo — Rápido y Capaz" },
+            { id: "gpt-4o-mini", icon: "▸", nameEn: "GPT-4o Mini — Fast & Cost Effective", nameEs: "GPT-4o Mini — Rápido y Económico" },
         ]
     },
     {
-        label: "── Gemini 2.5 (Legacy) ──",
+        label: "── Local Ollama (Self-Hosted) ──",
+        provider: "ollama",
+        credential_key: "ollama_endpoint",
+        endpoint_default: "http://localhost:11434",
         options: [
-            { id: "gemini-2.5-pro", icon: "💎", nameEn: "Gemini 2.5 Pro — Deep Analysis & Complex Tasks", nameEs: "Gemini 2.5 Pro — Análisis Profundo" },
-            { id: "gemini-2.5-flash", icon: "⚡", nameEn: "Flash 2.5 — Balanced SysAdmin", nameEs: "Flash 2.5 — SysAdmin Equilibrado" },
-            { id: "gemini-2.5-flash-lite-preview", icon: "💨", nameEn: "Flash Lite 2.5 — High-Speed Simple Tasks", nameEs: "Flash Lite 2.5 — Tareas Rápidas" },
-        ]
-    },
-    {
-        label: "── Modelos Locales ──",
-        options: [
-            { id: "local-custom", icon: "🖥️", nameEn: "Local LLM — Custom Endpoint (Ollama/API)", nameEs: "LLM Local — Endpoint Personalizado (Ollama/API)" }
+            { id: "local-custom", icon: "🖥️", nameEn: "Custom Local Model — ollama pull <model>", nameEs: "Modelo Local Personalizado — ollama pull <model>" }
         ]
     }
 ];
@@ -106,5 +108,5 @@ export function getModelIcon(id) {
         const opt = group.options.find(o => o.id === id);
         if (opt) return opt.icon;
     }
-    return "🤖";
+    return "◉";  // Fallback to neutral circle symbol
 }

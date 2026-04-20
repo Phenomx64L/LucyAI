@@ -1,6 +1,7 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { profiles, activeProfileId } from '$lib/stores';
+    import { IconUser as User, IconWorld as Globe, IconSettings as Settings, IconChevronDown as ChevronDown, IconChevronUp as ChevronUp } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
 
@@ -34,9 +35,9 @@
 
 <div class="ps-wrap">
     <button class="ps-btn" on:click={() => open = !open} title={isEN ? 'Switch profile' : 'Cambiar perfil'}>
-        <span class="ps-icon">{active ? active.icon : '👤'}</span>
+        <span class="ps-icon">{#if active}{active.icon}{:else}<User size={13}/>{/if}</span>
         <span class="ps-name">{active ? active.name : (isEN ? 'All Hosts' : 'Todos')}</span>
-        <span class="ps-caret">{open ? '▴' : '▾'}</span>
+        <span class="ps-caret">{#if open}<ChevronUp size={11}/>{:else}<ChevronDown size={11}/>{/if}</span>
     </button>
 
     {#if open}
@@ -44,7 +45,7 @@
     <div class="ps-backdrop" on:click={() => open = false}></div>
     <div class="ps-dropdown">
         <button class="ps-opt" class:active={!$activeProfileId} on:click={() => select(null)}>
-            <span class="ps-opt-icon">🌐</span>
+            <span class="ps-opt-icon"><Globe size={13}/></span>
             <span>{isEN ? 'All Hosts (No Filter)' : 'Todos los Hosts (Sin Filtro)'}</span>
         </button>
         {#each $profiles as p}
@@ -58,7 +59,7 @@
         <div class="ps-empty">{isEN ? 'No profiles yet' : 'Sin perfiles aún'}</div>
         {/if}
         <button class="ps-opt ps-add" on:click={() => { open = false; dispatch('manage'); }}>
-            <span class="ps-opt-icon">⚙</span>
+            <span class="ps-opt-icon"><Settings size={12}/></span>
             <span>{isEN ? 'Manage Profiles...' : 'Gestionar Perfiles...'}</span>
         </button>
     </div>

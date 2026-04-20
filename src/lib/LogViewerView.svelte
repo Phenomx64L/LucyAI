@@ -1,6 +1,7 @@
 <script>
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
+    import { IconSearch as Search, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
 
     export let hosts = [];
     // svelte-ignore export_let_unused
@@ -80,11 +81,11 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title">🔍 Log Viewer</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><Search size={13} strokeWidth={2}/> Log Viewer</div>
     <div style="display:flex;align-items:center;gap:8px;flex:1;margin-left:12px;min-width:0;">
       <select class="view-select" bind:value={logSelectedHost} style="flex-shrink:0;">
-        <option value="local">🖥 Local</option>
-        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'🖥':'🐧'} {h.name}</option>{/each}
+        <option value="local">⊡ Local</option>
+        {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       <input class="minp" placeholder={logSelectedHost==='local'?'C:/inetpub/logs/archivo.log':'/var/log/nginx/error.log'} bind:value={logPath} style="flex:1;height:32px;padding:0 10px;font-family:var(--mono);font-size:12px;" on:keydown={(e)=>{if(e.key==='Enter')startLogViewer();}}>
       <button class="view-btn" on:click={startLogViewer} disabled={!logPath.trim()||logLoading}>{logLoading?'⏳':(isEN ? '▶ Open' : '▶ Abrir')}</button>
@@ -104,7 +105,7 @@
     </label>
     <span style="font-size:10px;color:#334155;margin-left:auto;white-space:nowrap;">{filteredLog.length} {isEN ? 'lines' : 'líneas'}{logFilter?` / ${logLines.length} total`:''}</span>
   </div>
-  {#if logError}<div class="view-error">⚠️ {logError}</div>{/if}
+  {#if logError}<div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {logError}</div>{/if}
   <div class="log-lines" bind:this={logLinesEl}>
     {#if !logLines.length && !logLoading}
       <div style="padding:30px;text-align:center;color:#334155;font-style:italic;font-size:12px;">

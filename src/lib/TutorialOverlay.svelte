@@ -21,50 +21,80 @@
             sel: ['.chat-wrap.on .chat-area', '.chat-wrap.on', '.panel'],
             tip: 'left',
             view: 'terminal',
-            tES: '💬 Terminal IA — Bucle Agéntico',
-            tEN: '💬 AI Terminal — Agentic Loop',
-            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea (Bucle de Auto-curación).',
-            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and auto-execute</b> commands until the task is complete (Self-Healing Loop).',
+            tES: '↗ Terminal IA — Bucle Agéntico',
+            tEN: '↗ AI Terminal — Agentic Loop',
+            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea. Incluye <b>PLAN/VERIFY/ROLLBACK</b> — para cambios riesgosos Lucy propone un plan, verifica el resultado y revierte automáticamente si falla.',
+            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and auto-execute</b> commands until the task is complete. Includes <b>PLAN/VERIFY/ROLLBACK</b> — for risky changes Lucy proposes a plan, verifies the outcome, and auto-rolls back if it fails.',
         },
         {
             sel: ['.sidebar .sb-it[title*="NexShell"]', '.sidebar .sb-it[title*="exShell"]'],
             fallback: '.sidebar .sb-it[title*="NexShell"]',
             tip: 'right',
             view: 'nexshell',
-            tES: '🔌 NexShell — Infraestructura',
-            tEN: '🔌 NexShell — Infrastructure',
-            dES: 'Conecta servidores por SSH, WinRM, Bases de Datos o clústeres Kubernetes de forma nativa. La terminal de NexShell incluye <b>Sugerencias Inteligentes (Ghost Text)</b> en tiempo real.',
-            dEN: 'Bind to SSH, WinRM, Databases, or Kubernetes clusters natively. the NexShell terminal includes real-time <b>Intelligent Ghost Text Suggestions</b>.',
+            tES: '⊟ NexShell — Infraestructura',
+            tEN: '⊟ NexShell — Infrastructure',
+            dES: 'Conecta servidores por SSH, WinRM, Bases de Datos o clústeres Kubernetes de forma nativa. Incluye <b>Ghost Text en tiempo real</b> y <b>host preflight</b>: antes de ejecutar un comando remoto Lucy verifica conectividad TCP y falla rápido si el host no responde, sin esperar 15 s a un timeout WinRM críptico.',
+            dEN: 'Native SSH, WinRM, Database, or Kubernetes connectivity. Features real-time <b>Ghost Text suggestions</b> and <b>host preflight</b>: before any remote command Lucy tests TCP reachability and fails fast when a host is down — no more cryptic 15 s WinRM timeouts.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Log Viewer"]', '.sidebar .sb-it[title*="og Viewer"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'logviewer',
+            tES: '≡ Log Viewer — Observabilidad',
+            tEN: '≡ Log Viewer — Observability',
+            dES: 'Abre, filtra y sigue en tiempo real cualquier log local o remoto (Event Viewer, IIS, /var/log, journalctl). Búsqueda instantánea, resaltado de niveles (ERROR/WARN/INFO) y tail continuo vía SSH o WinRM.',
+            dEN: 'Open, filter, and tail any local or remote log (Event Viewer, IIS, /var/log, journalctl). Instant search, level highlighting (ERROR/WARN/INFO), and continuous tail over SSH or WinRM.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Inventory"]', '.sidebar .sb-it[title*="nventario"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'inventory',
+            tES: '⊞ Inventory & Compliance',
+            tEN: '⊞ Inventory & Compliance',
+            dES: 'Descubre automáticamente el hardware, software, servicios y parches de cada host, y evalúalos contra <b>CIS Benchmarks</b> (Windows Server, Ubuntu/RHEL). Genera reportes PDF con el veredicto de cumplimiento de cada control.',
+            dEN: 'Auto-discover each host\'s hardware, software, services, and patches, and evaluate them against <b>CIS Benchmarks</b> (Windows Server, Ubuntu/RHEL). Generate PDF reports with pass/fail verdicts per control.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Audit"]', '.sidebar .sb-it[title*="uditor"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'audittrail',
+            tES: '◉ Audit Trail — Trazabilidad',
+            tEN: '◉ Audit Trail — Accountability',
+            dES: 'Cada comando ejecutado, cada skill invocado y cada decisión del agente queda registrado con timestamp, usuario, host destino y resultado. Exporta a PDF para auditorías SOX, ISO 27001 o evidencia forense.',
+            dEN: 'Every executed command, invoked skill and agent decision is logged with timestamp, user, target host and result. Export to PDF for SOX, ISO 27001 audits or forensic evidence.',
         },
         {
             sel: ['.sidebar .sb-it[title*="Skills"]', '.sidebar .sb-it[title*="abilidades"]'],
             fallback: '.sidebar',
             tip: 'right',
             view: 'terminal',
-            tES: '⚡ Skills Manager',
-            tEN: '⚡ Skills Manager',
-            dES: 'Automatización pura. Crea "Macros" y Playbooks ejecutables con 1 clic impulsados por IA. Guarda tus rutinas frecuentes de administración y Lucy las ejecutará cuando menciones las palabras clave (Triggers).',
-            dEN: 'Pure automation. Create 1-click executable Macros & Playbooks powered by AI. Save your frequent routines and Lucy will execute them whenever you mention the Triggers.',
+            tES: '▸ Skills Manager',
+            tEN: '▸ Skills Manager',
+            dES: 'Automatización pura. Crea "Macros" y Playbooks ejecutables con 1 clic impulsados por IA. Guarda tus rutinas frecuentes — Lucy las ejecutará al detectar los <b>triggers</b>. Parámetros, tags y contadores de uso persistidos en SQLite.',
+            dEN: 'Pure automation. Create 1-click executable Macros & Playbooks powered by AI. Save your frequent routines — Lucy runs them when it detects the <b>triggers</b>. Parameters, tags and usage counters persisted in SQLite.',
         },
         {
             sel: ['.sidebar [title*="Settings"]', '.sidebar [title*="Configurac"]'],
             fallback: '.sidebar',
             tip: 'right',
             view: 'terminal',
-            tES: '⚙️ Configuración & Inteligencia',
-            tEN: '⚙️ System Settings',
-            dES: 'Configura tus Modelos (LLM), gestiona Permisos Locales y administra <b>Secretos MCP</b>. El protocolo MCP (Model Context Protocol) permite a Lucy aprender nuevas herramientas de forma dinámica.',
-            dEN: 'Configure LLMs, manage Security Permissions and <b>MCP Secrets</b>. The MCP Protocol enables dynamic "plug and play" tool learning for Lucy.',
+            tES: '⚙ Configuración & Seguridad',
+            tEN: '⚙ System Settings',
+            dES: 'Configura tus Modelos (LLM multi-provider), <b>Permission Rules</b> (reglas allow/block/ask basadas en regex), <b>Cost Tracking</b> (tokens y gasto por modelo), y <b>MCP Secrets</b>. El protocolo MCP permite a Lucy aprender nuevas herramientas de forma dinámica.',
+            dEN: 'Configure LLMs (multi-provider), <b>Permission Rules</b> (regex-based allow/block/ask), <b>Cost Tracking</b> (tokens and spend per model), and <b>MCP Secrets</b>. The MCP protocol enables dynamic "plug and play" tool learning.',
         },
         {
             sel: ['.sidebar .sb-it[title*="Dashboard"]', '.sidebar'],
             fallback: '.sidebar',
             tip: 'right',
             view: 'dashboard',
-            tES: '📊 Dashboard y Métricas',
-            tEN: '📊 Metrics Dashboard',
-            dES: 'Métricas instantáneas locales o de hosts remotos. Monitorea CPU, Memoria, Disco y red a través de gráficas vectoriales. Una vista panorámica del rendimiento.',
-            dEN: 'Instant metrics for local or remote hosts. Monitor CPU, Memory, Disk and Network via vector graphs. A panoramic view of performance.',
+            tES: '◑ Dashboard y Métricas',
+            tEN: '◑ Metrics Dashboard',
+            dES: 'Métricas instantáneas locales o de hosts remotos. Monitorea CPU, Memoria, Disco y red a través de gráficas vectoriales. Una vista panorámica del rendimiento de toda tu infraestructura.',
+            dEN: 'Instant metrics for local or remote hosts. Monitor CPU, Memory, Disk and Network via vector graphs. A panoramic view of your infrastructure\'s performance.',
         }
     ];
 
@@ -254,7 +284,7 @@
       ← {isEN ? 'Back' : 'Atrás'}
     </button>
     <button class="tut-btn tut-pri" on:click={next}>
-      {#if isLast}{isEN ? '🚀 Done!' : '🚀 ¡Listo!'}{:else}{isEN ? 'Next →' : 'Siguiente →'}{/if}
+      {#if isLast}{isEN ? '✓ Done!' : '✓ ¡Listo!'}{:else}{isEN ? 'Next →' : 'Siguiente →'}{/if}
     </button>
   </div>
 </div>
@@ -264,7 +294,7 @@
 <style>
   /* ── SVG overlay ──────────────────────────────────────────────────────── */
   .tut-svg {
-    position: fixed; top: 0; left: 0; z-index: 10000;
+    position: fixed; top: 0; left: 0; z-index: var(--z-tutorial, 6000);
     pointer-events: none; display: block;
   }
   .tut-ring {
@@ -278,7 +308,7 @@
 
   /* ── Tooltip card ─────────────────────────────────────────────────────── */
   .tut-tip {
-    position: fixed; z-index: 10001;
+    position: fixed; z-index: calc(var(--z-tutorial, 6000) + 1);
     width: 320px;
     max-height: calc(100vh - 28px);        /* never overflow screen */
     display: flex; flex-direction: column; /* children stack vertically */

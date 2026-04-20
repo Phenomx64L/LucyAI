@@ -6,7 +6,7 @@
 // `with_db()`. This avoids opening a new file handle on every Tauri call,
 // gives us PRAGMA WAL once, and serializes writes safely.
 
-use crate::utils::db::{TokenUsage, PermissionRule, Skill, generate_id, calculate_cost, INIT_SQL};
+use crate::utils::db::{TokenUsage, PermissionRule, Skill, AgentMemory, generate_id, calculate_cost, INIT_SQL};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -83,6 +83,16 @@ where
     let cell = DB.get().ok_or_else(|| "Metrics DB not initialized".to_string())?;
     let guard = cell.lock().map_err(|e| format!("DB mutex poisoned: {}", e))?;
     f(&*guard)
+}
+
+/// Crate-visible alias so sibling modules (e.g. incident.rs) can reuse the
+/// same connection without re-opening the file. Keeps the private DB static
+/// encapsulated here while allowing incident-response commands to share it.
+pub(crate) fn shared_db<F, R>(f: F) -> Result<R, String>
+where
+    F: FnOnce(&rusqlite::Connection) -> Result<R, String>,
+{
+    with_db(f)
 }
 
 /// Back-compat shim: frontend may still invoke this. Schema is already created
@@ -442,5 +452,332 @@ fn parse_skill(row: &rusqlite::Row) -> rusqlite::Result<Skill> {
         last_executed: row.get(10).ok(),
         enabled: row.get::<_, u8>(11)? != 0,
         tags: row.get(12)?,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AGENT MEMORY — persistent cross-session knowledge store
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Save a memory discovered during an agent task.
+/// `tags`  — JSON array string, e.g. `["rust","cargo","fix"]`
+/// `files` — JSON array string of related file paths
+#[tauri::command]
+pub fn save_agent_memory(
+    title:      String,
+    content:    String,
+    tags:       Option<String>,
+    files:      Option<String>,
+    session_id: Option<String>,
+    importance: Option<i64>,
+) -> Result<i64, String> {
+    with_db(|conn| {
+        let imp  = importance.unwrap_or(1).max(1).min(3);
+        let tags  = tags.unwrap_or_else(|| "[]".to_string());
+        let files = files.unwrap_or_else(|| "[]".to_string());
+        let sid   = session_id.unwrap_or_default();
+        conn.execute(
+            "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![sid, title, content, tags, files, imp],
+        ).map_err(|e| format!("save_agent_memory: {}", e))?;
+        Ok(conn.last_insert_rowid())
+    })
+}
+
+/// Full-text search over memories using FTS5.
+/// Returns up to `limit` entries, ranked by relevance then recency.
+#[tauri::command]
+pub fn search_agent_memories(query: String, limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+    with_db(|conn| {
+        let lim = limit.unwrap_or(10).max(1).min(50);
+        // Build a safe FTS5 query: each word becomes a prefix match term
+        let safe_q = query
+            .split_whitespace()
+            .filter(|w| !w.is_empty())
+            .map(|w| format!("\"{}\"*", w.replace('"', "")))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        if safe_q.is_empty() {
+            return get_recent_memories(Some(lim));
+        }
+        let sql = "SELECT am.id, am.session_id, am.title, am.content, am.tags, am.files,
+                          am.importance, am.created_at
+                   FROM agent_memories am
+                   JOIN agent_memories_fts fts ON am.id = fts.rowid
+                   WHERE agent_memories_fts MATCH ?1
+                   ORDER BY rank, am.importance DESC, am.created_at DESC
+                   LIMIT ?2";
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("search prepare: {}", e))?;
+        map_memory_rows(&mut stmt, rusqlite::params![safe_q, lim])
+    })
+}
+
+/// Return the most recent memories ordered by importance then date.
+#[tauri::command]
+pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+    with_db(|conn| {
+        let lim = limit.unwrap_or(15).max(1).min(50);
+        let sql = "SELECT id, session_id, title, content, tags, files, importance, created_at
+                   FROM agent_memories
+                   ORDER BY importance DESC, created_at DESC
+                   LIMIT ?1";
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("get_recent prepare: {}", e))?;
+        map_memory_rows(&mut stmt, rusqlite::params![lim])
+    })
+}
+
+fn map_memory_rows(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: impl rusqlite::Params,
+) -> Result<Vec<AgentMemory>, String> {
+    let rows = stmt.query_map(params, |row| {
+        Ok(AgentMemory {
+            id:         row.get(0)?,
+            session_id: row.get(1)?,
+            title:      row.get(2)?,
+            content:    row.get(3)?,
+            tags:       row.get(4)?,
+            files:      row.get(5)?,
+            importance: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    }).map_err(|e| format!("query_map: {}", e))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("collect: {}", e))
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// USER PROFILE — persistent facts about the user (Hermes-style)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileEntry {
+    pub key: String,
+    pub value: String,
+    pub category: String,
+    pub updated_at: i64,
+}
+
+/// Upsert a profile key. Category defaults to "general".
+/// Keys are user-supplied but should be slug-like (e.g. "preferred_shell",
+/// "default_domain", "host:prod-db:role"). We don't enforce a schema because
+/// the AI may discover new fact types we haven't anticipated.
+#[tauri::command]
+pub fn set_user_profile(key: String, value: String, category: Option<String>) -> Result<(), String> {
+    let cat = category.unwrap_or_else(|| "general".to_string());
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO user_profile (key, value, category, updated_at)
+             VALUES (?1, ?2, ?3, strftime('%s','now'))
+             ON CONFLICT(key) DO UPDATE SET
+                 value      = excluded.value,
+                 category   = excluded.category,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![key, value, cat],
+        ).map_err(|e| format!("set_user_profile: {}", e))?;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn get_user_profile() -> Result<Vec<ProfileEntry>, String> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT key, value, category, updated_at FROM user_profile
+             ORDER BY category, key"
+        ).map_err(|e| format!("profile prepare: {}", e))?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ProfileEntry {
+                key: row.get(0)?,
+                value: row.get(1)?,
+                category: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        }).map_err(|e| format!("profile query: {}", e))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("profile collect: {}", e))
+    })
+}
+
+#[tauri::command]
+pub fn delete_user_profile(key: String) -> Result<(), String> {
+    with_db(|conn| {
+        conn.execute(
+            "DELETE FROM user_profile WHERE key = ?1",
+            rusqlite::params![key],
+        ).map_err(|e| format!("delete_user_profile: {}", e))?;
+        Ok(())
+    })
+}
+
+/// Build a compact context block ready to be concatenated into the system
+/// prompt. Format is intentionally terse — Lucy pays for every token in
+/// this block on every turn. Groups entries by category; skips stale facts
+/// older than 180 days (profile info becomes lies otherwise).
+///
+/// Also appends the top 5 high-importance memories for continuity.
+/// Returns an empty string when profile + memories are both empty so the
+/// caller can safely `.concat()` without special-casing.
+#[tauri::command]
+pub fn build_profile_context() -> Result<String, String> {
+    const STALE_SECS: i64 = 180 * 24 * 3600;
+    let profile = get_user_profile()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64).unwrap_or(0);
+
+    let mut out = String::new();
+    if !profile.is_empty() {
+        out.push_str("## USER PROFILE (facts Lucy has learned about this user)\n");
+        let mut last_cat = String::new();
+        for p in &profile {
+            if now - p.updated_at > STALE_SECS { continue; }
+            if p.category != last_cat {
+                out.push_str(&format!("\n### {}\n", p.category));
+                last_cat = p.category.clone();
+            }
+            out.push_str(&format!("- {}: {}\n", p.key, p.value));
+        }
+    }
+
+    // Append top memories (importance DESC, recent first)
+    let mems = get_recent_memories(Some(5)).unwrap_or_default();
+    if !mems.is_empty() {
+        out.push_str("\n## RELEVANT MEMORIES FROM PAST SESSIONS\n");
+        for m in mems {
+            // Trim each memory content to 200 chars — avoids bloating the prompt
+            let trimmed = if m.content.len() > 200 {
+                format!("{}…", &m.content[..200])
+            } else {
+                m.content.clone()
+            };
+            out.push_str(&format!("- [{}] {}: {}\n", m.importance, m.title, trimmed));
+        }
+    }
+
+    Ok(out)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONVERSATION HISTORY — /recall (Hermes-inspired cross-session search)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    pub id: i64,
+    pub tab_id: String,
+    pub tab_title: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: i64,
+}
+
+/// Persist a visible conversation turn. Called fire-and-forget from the
+/// frontend on every user/lucy/system message. Content is truncated to
+/// 32KB to protect the DB from giant tool outputs occasionally appearing
+/// in chat. Silently drops empty content.
+#[tauri::command]
+pub fn save_conversation_turn(
+    tab_id: String,
+    tab_title: String,
+    role: String,
+    content: String,
+) -> Result<(), String> {
+    const MAX_CONTENT: usize = 32 * 1024;
+    let trimmed = content.trim();
+    if trimmed.is_empty() { return Ok(()); }
+    let clipped: String = if trimmed.len() > MAX_CONTENT {
+        format!("{}…[truncated]", &trimmed[..MAX_CONTENT])
+    } else {
+        trimmed.to_string()
+    };
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO conversation_turns (tab_id, tab_title, role, content)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![tab_id, tab_title, role, clipped],
+        ).map_err(|e| format!("save_conversation_turn: {}", e))?;
+        Ok(())
+    })
+}
+
+/// Full-text search across conversation history. Each whitespace-separated
+/// term becomes a prefix match (`word*`) OR'd together — this matches
+/// Hermes' FTS behavior and tolerates sysadmin-style queries ("iis reset
+/// prod"). Returns up to `limit` turns, newest first when ranks tie.
+#[tauri::command]
+pub fn recall_conversations(query: String, limit: Option<i64>) -> Result<Vec<ConversationTurn>, String> {
+    let lim = limit.unwrap_or(15).max(1).min(50);
+    let safe_q: String = query
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{}\"*", w.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    with_db(|conn| {
+        if safe_q.is_empty() {
+            // Empty query → most recent turns
+            let mut stmt = conn.prepare(
+                "SELECT id, tab_id, tab_title, role, content, created_at
+                 FROM conversation_turns ORDER BY created_at DESC LIMIT ?1"
+            ).map_err(|e| format!("recall prepare: {}", e))?;
+            map_turn_rows(&mut stmt, rusqlite::params![lim])
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT ct.id, ct.tab_id, ct.tab_title, ct.role, ct.content, ct.created_at
+                 FROM conversation_turns ct
+                 JOIN conversation_turns_fts fts ON ct.id = fts.rowid
+                 WHERE conversation_turns_fts MATCH ?1
+                 ORDER BY rank, ct.created_at DESC
+                 LIMIT ?2"
+            ).map_err(|e| format!("recall FTS prepare: {}", e))?;
+            map_turn_rows(&mut stmt, rusqlite::params![safe_q, lim])
+        }
+    })
+}
+
+fn map_turn_rows(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: impl rusqlite::Params,
+) -> Result<Vec<ConversationTurn>, String> {
+    let rows = stmt.query_map(params, |row| {
+        Ok(ConversationTurn {
+            id:         row.get(0)?,
+            tab_id:     row.get(1)?,
+            tab_title:  row.get(2)?,
+            role:       row.get(3)?,
+            content:    row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    }).map_err(|e| format!("recall query: {}", e))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("recall collect: {}", e))
+}
+
+// ── Quality Telemetry (opus-4-7 Tier 2.A — raw event log only) ────────────
+// Raw event logger. No pre-baked summary command — queries against
+// task_events are done ad-hoc once real data accumulates, so we avoid
+// shipping metrics that conflate distinct failure modes or that rely on
+// self-reported signals. Kept intentionally minimal.
+
+/// Log a quality telemetry event. Non-blocking best-effort — failure is swallowed.
+#[tauri::command]
+pub async fn log_task_event(
+    event_type: String,
+    subtype: Option<String>,
+    elapsed_ms: Option<i64>,
+    metadata: Option<String>,
+    tab_id: Option<String>,
+) -> Result<(), String> {
+    let id = generate_id();
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO task_events (id, tab_id, event_type, subtype, elapsed_ms, metadata)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![&id, &tab_id, &event_type, &subtype, &elapsed_ms, &metadata],
+        ).map_err(|e| format!("insert task_event: {}", e))?;
+        Ok(())
     })
 }

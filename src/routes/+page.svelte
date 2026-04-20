@@ -8,7 +8,7 @@ import { listen } from '@tauri-apps/api/event';
     import DOMPurify from 'dompurify';
     import Database from '@tauri-apps/plugin-sql';
     import SetupOverlay    from '$lib/SetupOverlay.svelte';
-    import { LayoutDashboard, Sparkles, TerminalSquare, ScrollText, Network, ShieldCheck, ClipboardList, Activity, Globe, Lock, Eraser, Trash2, Settings, Monitor, Server, Rocket, Brain, Zap, Wrench, Download, GraduationCap, FileCode, DollarSign } from 'lucide-svelte';
+    import { IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles, IconTerminal2 as TerminalSquare, IconFileText as ScrollText, IconNetwork as Network, IconShieldCheck as ShieldCheck, IconClipboardList as ClipboardList, IconActivity as Activity, IconWorld as Globe, IconLock as Lock, IconEraser as Eraser, IconTrash as Trash2, IconSettings as Settings, IconDeviceDesktop as Monitor, IconServer as Server, IconRocket as Rocket, IconBrain as Brain, IconBolt as Zap, IconTool as Wrench, IconDownload as Download, IconSchool as GraduationCap, IconFileCode as FileCode, IconCurrencyDollar as DollarSign, IconOctagonMinus as OctagonX, IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconFileDownload as FileDown, IconBug as Bug, IconUser as User, IconDeviceTv as Tv2, IconTerminal as Terminal, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTag as Tag, IconBell as Bell, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
     import TutorialOverlay from '$lib/TutorialOverlay.svelte';
@@ -18,12 +18,18 @@ import { listen } from '@tauri-apps/api/event';
     import InventoryView   from '$lib/InventoryView.svelte';
     import ComplianceView  from '$lib/ComplianceView.svelte';
     import CostDashboardView from '$lib/CostDashboardView.svelte';
-    import PermissionRulesModal from '$lib/PermissionRulesModal.svelte';
-    import SkillsManagerModal from '$lib/SkillsManagerModal.svelte';
     import AuditTrailView  from '$lib/AuditTrailView.svelte';
+    import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
     import ProfileSwitcher from '$lib/ProfileSwitcher.svelte';
-    import ProfileModal    from '$lib/ProfileModal.svelte';
-    import KeyringModal    from '$lib/KeyringModal.svelte';
+    // ── Lazy-loaded: solo se descargan cuando el usuario los abre por primera vez ──
+    let _lazyPermissions   = null;
+    let _lazySkills        = null;
+    let _lazyProfile       = null;
+    const lazyPermissions  = () => _lazyPermissions  || (_lazyPermissions  = import('$lib/PermissionRulesModal.svelte').then(m => m.default));
+    const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
+    const lazyProfile      = () => _lazyProfile       || (_lazyProfile       = import('$lib/ProfileModal.svelte').then(m => m.default));
+    import KeyringModal         from '$lib/KeyringModal.svelte';
+    import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import { countUp }     from '$lib/actions';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline } from '$lib/models.js';
     import { get } from 'svelte/store';
@@ -92,13 +98,9 @@ import { listen } from '@tauri-apps/api/event';
     let pendingLearnSpeak  = false;
     let forkedTasks        = {};
 
-    let mcpSecrets = {};
-    if (typeof localStorage !== 'undefined') {
-        try {
-            const stored = localStorage.getItem('lucy_mcp_secrets');
-            if (stored) mcpSecrets = JSON.parse(stored);
-        } catch (e) {}
-    }
+    let mcpSecrets = {};          // cargado en onMount desde OS Keyring
+    let _newMcpK = '';
+    let _newMcpV = '';
 
     let subAgentModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_subagent')) || 'ollama';
 
@@ -108,7 +110,8 @@ import { listen } from '@tauri-apps/api/event';
     let sidebarCollapsed   = false;
     let sidebarResizing    = false;  // drag-to-resize activo
     let registrosOpen      = false;  // accordion sidebar "Registros"
-    let showSettingsModal  = false;  // modal de Configuración/Preferencias
+    let showSettingsModal     = false;  // modal de Configuración/Preferencias
+    let showProviderConfig    = false;  // modal de Configuración de Proveedores (IA múltiples)
     let currentTheme = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_warp_theme')) || 'default'; // 'default' | 'ocean' | 'hacker'
     function setWarpTheme(t) {
         currentTheme = t;
@@ -196,8 +199,9 @@ import { listen } from '@tauri-apps/api/event';
     // --- ACCIONES RÁPIDAS DINÁMICAS ---
     let quickActions = [];
     // showNewActionModal → stores.ts
-    let newActionName = '';
-    let newActionScript = '';
+    let newActionName    = '';
+    let newActionScript  = '';
+    let editingActionIdx = null; // null = nueva acción, número = editar existente
     
     // ── TOAST ────────────────────────────────────
     let toasts             = [];   // [{id, msg, type}] — cola de notificaciones apilables
@@ -242,7 +246,7 @@ import { listen } from '@tauri-apps/api/event';
     // ── RUNBOOKS ──────────────────────────────────
     // runbooks, showRunbookModal → stores.ts
     let editingRunbook     = null;
-    let runbookForm        = { name:'', icon:'📋', steps:[] };
+    let runbookForm        = { name:'', icon:'≡', steps:[] };
     let runbookStepForm    = { label:'', cmd:'' };
     let runbookRunning     = null;        // {rbId, stepIdx, results:[]}
 
@@ -258,20 +262,20 @@ import { listen } from '@tauri-apps/api/event';
     $: ctxPct       = Math.min(100, Math.round((contextUsed / contextMax) * 100));
     $: modelLabel = (() => {
         const m = activeTab?.selectedModel || '';
-        if (m.includes('3.1-pro'))        return '💎 Pro 3.1';
-        if (m.includes('3-flash'))        return '🚀 Flash 3';
-        if (m.includes('3.1-flash-lite')) return '⚡ Lite 3.1';
-        if (m.includes('2.5-pro'))        return '🧠 Pro 2.5';
+        if (m.includes('3.1-pro'))        return '◆ Pro 3.1';
+        if (m.includes('3-flash'))        return '⚡ Flash 3';
+        if (m.includes('3.1-flash-lite')) return '› Lite 3.1';
+        if (m.includes('2.5-pro'))        return '◆ Pro 2.5';
         return '⚡ Flash 2.5';
     })();
     // U9: descripción del modelo para tooltip
     $: modelDesc = (() => {
         const m = activeTab?.selectedModel || '';
-        if (m.includes('3.1-pro'))        return isEN ? '💎 Most intelligent — complex tasks, slower (preview)' : '💎 Más inteligente — tareas complejas, más lento (preview)';
-        if (m.includes('3-flash'))        return isEN ? '🚀 Fast & capable — great balance (preview)'           : '🚀 Rápido y capaz — buen balance (preview)';
-        if (m.includes('3.1-flash-lite')) return isEN ? '⚡ Ultra-fast, low cost — simple tasks (preview)'      : '⚡ Ultra rápido, económico — tareas simples (preview)';
-        if (m.includes('2.5-pro'))        return isEN ? '🧠 Deep analysis — smartest stable model'              : '🧠 Análisis profundo — modelo estable más inteligente';
-        if (m.includes('flash-lite'))     return isEN ? '⚡ Ultra-fast, low cost — simple tasks'                : '⚡ Ultra rápido, económico — tareas simples';
+        if (m.includes('3.1-pro'))        return isEN ? '◆ Most intelligent — complex tasks, slower (preview)' : '◆ Más inteligente — tareas complejas, más lento (preview)';
+        if (m.includes('3-flash'))        return isEN ? '⚡ Fast & capable — great balance (preview)'           : '⚡ Rápido y capaz — buen balance (preview)';
+        if (m.includes('3.1-flash-lite')) return isEN ? '› Ultra-fast, low cost — simple tasks (preview)'      : '› Ultra rápido, económico — tareas simples (preview)';
+        if (m.includes('2.5-pro'))        return isEN ? '◆ Deep analysis — smartest stable model'              : '◆ Análisis profundo — modelo estable más inteligente';
+        if (m.includes('flash-lite'))     return isEN ? '› Ultra-fast, low cost — simple tasks'                : '› Ultra rápido, económico — tareas simples';
         return isEN ? '⚡ Fast & cost-efficient — recommended for general use' : '⚡ Rápido y económico — recomendado para uso general';
     })();
     
@@ -297,47 +301,48 @@ import { listen } from '@tauri-apps/api/event';
     // ── COMMAND PALETTE items (unfiltered — CommandPalette component handles query) ──
     $: allPaletteItems = [
         // Vistas
-        { icon:'📊', label:'Dashboard',              cat:'Vista',       action:()=>{setView('dashboard');showPalette=false;} },
+        { icon:'◑', label:'Dashboard',              cat:'Vista',       action:()=>{setView('dashboard');showPalette=false;} },
         { icon:'⚡', label:'Terminal IA',             cat:'Vista',       action:()=>{setView('terminal');showPalette=false;} },
-        { icon:'🔍', label:'Log Viewer',              cat:'Vista',       action:()=>{setView('logviewer');showPalette=false;} },
-        { icon:'🔌', label:'NexShell',                cat:'Vista',       action:()=>{setView('nexshell');showPalette=false;} },
-        { icon:'🔍', label:'Inventario',              cat:'Vista',       action:()=>{setView('inventory');showPalette=false;} },
-        { icon:'🛡️', label:'Compliance',              cat:'Vista',       action:()=>{setView('compliance');showPalette=false;} },
-        { icon:'📋', label:'Audit Trail',              cat:'Vista',       action:()=>{setView('audittrail');showPalette=false;} },
-        { icon:'⚙️', label:'Configuración',             cat:'Config',      action:()=>{showSettingsModal=true;showPalette=false;} },
-        { icon:'👤', label:'Manage Profiles',           cat:'Config',      action:()=>{showProfileModal=true;showPalette=false;} },
+        { icon:'◎', label:'Log Viewer',              cat:'Vista',       action:()=>{setView('logviewer');showPalette=false;} },
+        { icon:'⊟', label:'NexShell',                cat:'Vista',       action:()=>{setView('nexshell');showPalette=false;} },
+        { icon:'◎', label:'Inventario',              cat:'Vista',       action:()=>{setView('inventory');showPalette=false;} },
+        { icon:'⬡', label:'Compliance',              cat:'Vista',       action:()=>{setView('compliance');showPalette=false;} },
+        { icon:'≡', label:'Audit Trail',              cat:'Vista',       action:()=>{setView('audittrail');showPalette=false;} },
+        { icon:'⚙', label:'Configuración',             cat:'Config',      action:()=>{showSettingsModal=true;showPalette=false;} },
+        { icon:'◈', label:'Manage Profiles',           cat:'Config',      action:()=>{showProfileModal=true;showPalette=false;} },
         // Terminales
         { icon:'＋', label:'Nueva terminal',          cat:'Terminal',    action:()=>{crearTab();showPalette=false;}, hint:'Ctrl+T' },
-        { icon:'🗑', label:'Limpiar sesión actual',   cat:'Terminal',    action:()=>{if(activeTabId)limpiarSesion(activeTabId);showPalette=false;}, hint:'Ctrl+L' },
+        { icon:'⌫', label:'Limpiar sesión actual',   cat:'Terminal',    action:()=>{if(activeTabId)limpiarSesion(activeTabId);showPalette=false;}, hint:'Ctrl+L' },
         // Herramientas
-        { icon:'🎓', label:'Ver Tutorial',             cat:'Ayuda',       action:()=>{showTutorial=true;showPalette=false;}, hint:'?' },
-        { icon:'ℹ️', label:'Acerca de Lucy',          cat:'Sistema',     action:()=>{abrirAcercaDe();showPalette=false;} },
-        { icon:'🔑', label:'Cambiar API Key',         cat:'Sistema',     action:()=>{$showChangeKeyModal=true;showPalette=false;} },
-        { icon:'📁', label:'Abrir Audit Log',         cat:'Sistema',     action:()=>{abrirAudit();showPalette=false;} },
-        { icon:'🧠', label:'Ver comandos aprendidos', cat:'Memoria',     action:()=>{abrirMemoria();showPalette=false;} },
-        { icon:'🌐', label:'Cambiar idioma',          cat:'Sistema',     action:()=>{showPalette=false;toast('Cambia el idioma en la barra inferior','info');} },
+        { icon:'▸', label:'Ver Tutorial',             cat:'Ayuda',       action:()=>{showTutorial=true;showPalette=false;}, hint:'?' },
+        { icon:'·', label:'Acerca de Lucy',          cat:'Sistema',     action:()=>{abrirAcercaDe();showPalette=false;} },
+        { icon:'⊕', label:'Cambiar API Key',         cat:'Sistema',     action:()=>{$showChangeKeyModal=true;showPalette=false;} },
+        { icon:'🔌', label:'Configurar Proveedores', cat:'Sistema',     action:()=>{showProviderConfig=true;showPalette=false;} },
+        { icon:'≡', label:'Abrir Audit Log',         cat:'Sistema',     action:()=>{abrirAudit();showPalette=false;} },
+        { icon:'◈', label:'Ver comandos aprendidos', cat:'Memoria',     action:()=>{abrirMemoria();showPalette=false;} },
+        { icon:'⊕', label:'Cambiar idioma',          cat:'Sistema',     action:()=>{showPalette=false;toast('Cambia el idioma en la barra inferior','info');} },
         // Acciones rápidas del sidebar
         ...quickActions.map(a => ({ icon:a.icono, label:a.nombre, cat:'Acción rápida',
             action:()=>{ejecutarDesdeSidebar(a);showPalette=false;} })),
         // Hosts
-        ...$hosts.map(h => ({ icon:h.type==='windows'?'🖥️':'🐧', label:`Conectar a ${h.name}`, cat:'Host',
+        ...$hosts.map(h => ({ icon:h.type==='windows'?'⊡':'◈', label:`Conectar a ${h.name}`, cat:'Host',
             action:()=>{dashSelectedHost=h.id;setView('dashboard');showPalette=false;} })),
         // Comandos aprendidos
-        ...(() => { try { return JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]'); } catch(e) { return []; } })().map(c => ({ icon:'🧠', label:c.claves?.[0]||'', cat:'Aprendido',
+        ...(() => { try { return JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]'); } catch(e) { return []; } })().map(c => ({ icon:'◈', label:c.claves?.[0]||'', cat:'Aprendido',
             action:()=>{if(activeTabId){const t=getTab(activeTabId);if(t){t.inputValue=c.claves[0];refresh();}}showPalette=false;} })),
     ];
     // ── DAILY TIPS — rota uno por día del mes (índice = día % total) ───────────
     $: DAILY_TIPS = [
-        { icon: '📁', text: isEN ? 'The <b>Audit Log</b> tracks every command with timestamp and host. Open it from <b>📁 Audit Log</b> on the left panel for full traceability.' : 'El <b>Audit Log</b> registra cada comando con timestamp y host. Ábrelo desde <b>📁 Audit Log</b> en el panel izquierdo para tener trazabilidad completa de todas las acciones.' },
+        { icon: '≡', text: isEN ? 'The <b>Audit Log</b> tracks every command with timestamp and host. Open it from <b>Audit Log</b> on the left panel for full traceability.' : 'El <b>Audit Log</b> registra cada comando con timestamp y host. Ábrelo desde <b>Audit Log</b> en el panel izquierdo para tener trazabilidad completa de todas las acciones.' },
         { icon: '⌨', text: isEN ? 'Use <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+P</kbd> to access any view, action or host without leaving the keyboard. The palette filters in real time.' : 'Usa <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+P</kbd> para acceder a cualquier vista, acción o host sin soltar el teclado. La paleta filtra en tiempo real.' },
-        { icon: '🖥', text: isEN ? 'With the <b>⚡</b> button in the hosts bar you can run the same command on <b>multiple servers at once</b> and compare results.' : 'Con el botón <b>⚡</b> en la barra de hosts puedes ejecutar el mismo comando en <b>múltiples servidores a la vez</b> y comparar resultados.' },
-        { icon: '📋', text: isEN ? '<b>Runbooks</b> are script sequences that execute in order with one click. Create them from the Runbooks section on the left.' : 'Los <b>Runbooks</b> son secuencias de scripts que se ejecutan en orden con un solo clic. Créalos desde la sección Runbooks en el panel izquierdo.' },
-        { icon: '🐧', text: isEN ? 'The <b>Interactive Remote Shell</b> opens a persistent SSH/WinRM channel — send consecutive commands without reconnecting and with real-time output.' : 'La <b>Shell Remota Interactiva</b> abre un canal persistente SSH/WinRM — envía comandos consecutivos sin reconexión y con output en tiempo real.' },
-        { icon: '🎤', text: isEN ? 'Dictate voice commands using the <b>microphone 🎤</b>. Lucy understands technical terminology and automatically corrects phonetic transcription errors.' : 'Dictale comandos por voz con el <b>micrófono 🎤</b>. Lucy entiende terminología técnica y corrige automáticamente errores de transcripción fonética.' },
-        { icon: '🧠', text: isEN ? 'Teach Lucy custom commands: <i>"teach her that when I say restart_iis execute iisreset"</i>. Memory persists across sessions even if you close the app.' : 'Enseña a Lucy comandos propios: <i>"enséñale que cuando diga reinicia_iis ejecute iisreset"</i>. La memoria persiste entre sesiones aunque cierres la app.' },
-        { icon: '🔑', text: isEN ? 'Host credentials are saved in <b>Windows Credential Manager</b> using native keyring API — never in plain text on disk.' : 'Las credenciales de hosts se guardan en <b>Windows Credential Manager</b> usando la API nativa de keyring — nunca en texto plano en disco.' },
-        { icon: '💡', text: isEN ? 'To generate a system status PDF, tell Lucy: <i>"generate a system report in PDF"</i> — automatically uses Edge Headless via PowerShell.' : 'Para generar un PDF del estado del sistema, dile a Lucy: <i>"genera un informe del sistema en PDF"</i> — usa Edge Headless automáticamente via PowerShell.' },
-        { icon: '🖼', text: isEN ? 'Paste screenshots directly with <b>Ctrl+V</b> — Lucy analyzes them using Gemini Vision for visual error diagnostics.' : 'Pega capturas de pantalla directamente con <b>Ctrl+V</b> — Lucy las analiza usando Gemini Vision para diagnóstico visual de errores.' },
+        { icon: '⊡', text: isEN ? 'With the <b>⚡</b> button in the hosts bar you can run the same command on <b>multiple servers at once</b> and compare results.' : 'Con el botón <b>⚡</b> en la barra de hosts puedes ejecutar el mismo comando en <b>múltiples servidores a la vez</b> y comparar resultados.' },
+        { icon: '≡', text: isEN ? '<b>Runbooks</b> are script sequences that execute in order with one click. Create them from the Runbooks section on the left.' : 'Los <b>Runbooks</b> son secuencias de scripts que se ejecutan en orden con un solo clic. Créalos desde la sección Runbooks en el panel izquierdo.' },
+        { icon: '◈', text: isEN ? 'The <b>Interactive Remote Shell</b> opens a persistent SSH/WinRM channel — send consecutive commands without reconnecting and with real-time output.' : 'La <b>Shell Remota Interactiva</b> abre un canal persistente SSH/WinRM — envía comandos consecutivos sin reconexión y con output en tiempo real.' },
+        { icon: '⊕', text: isEN ? 'Dictate voice commands using the <b>microphone</b>. Lucy understands technical terminology and automatically corrects phonetic transcription errors.' : 'Dictale comandos por voz con el <b>micrófono</b>. Lucy entiende terminología técnica y corrige automáticamente errores de transcripción fonética.' },
+        { icon: '◈', text: isEN ? 'Teach Lucy custom commands: <i>"teach her that when I say restart_iis execute iisreset"</i>. Memory persists across sessions even if you close the app.' : 'Enseña a Lucy comandos propios: <i>"enséñale que cuando diga reinicia_iis ejecute iisreset"</i>. La memoria persiste entre sesiones aunque cierres la app.' },
+        { icon: '⊕', text: isEN ? 'Host credentials are saved in <b>Windows Credential Manager</b> using native keyring API — never in plain text on disk.' : 'Las credenciales de hosts se guardan en <b>Windows Credential Manager</b> usando la API nativa de keyring — nunca en texto plano en disco.' },
+        { icon: '→', text: isEN ? 'To generate a system status PDF, tell Lucy: <i>"generate a system report in PDF"</i> — automatically uses Edge Headless via PowerShell.' : 'Para generar un PDF del estado del sistema, dile a Lucy: <i>"genera un informe del sistema en PDF"</i> — usa Edge Headless automáticamente via PowerShell.' },
+        { icon: '◑', text: isEN ? 'Paste screenshots directly with <b>Ctrl+V</b> — Lucy analyzes them using Gemini Vision for visual error diagnostics.' : 'Pega capturas de pantalla directamente con <b>Ctrl+V</b> — Lucy las analiza usando Gemini Vision para diagnóstico visual de errores.' },
     ];
     $: todayTip = DAILY_TIPS[new Date().getDate() % DAILY_TIPS.length];
 
@@ -418,7 +423,7 @@ import { listen } from '@tauri-apps/api/event';
         try { s = s.normalize('NFKC'); } catch {}
         return s;
     };
-    const _DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Disable-|Set-Service|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|(?:C:\\Windows\\System32|System32\\\\?))/i;
+    const _DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b)/i;
     const isDestructiveCmd = (cmd) => _DESTRUCTIVE_RE.test(cmd) || _DESTRUCTIVE_RE.test(_normalizeCmd(cmd));
 
     // ── AGENT CHECKPOINTING ─────────────────────────────────────────────────
@@ -485,9 +490,51 @@ import { listen } from '@tauri-apps/api/event';
         _lucyFixStore.set(k, v);
     };
 
+    // ── MCP Secrets — Keyring helpers ────────────────────────────────────────
+    async function loadMcpSecrets() {
+        try {
+            const names = await invoke('list_mcp_secrets');
+            const entries = await Promise.all(
+                names.map(async n => {
+                    try { return [n, await invoke('get_mcp_secret', { name: n })]; }
+                    catch(e) { return [n, '']; }
+                })
+            );
+            mcpSecrets = Object.fromEntries(entries);
+        } catch(e) { console.warn('[MCP] keyring load failed:', e); }
+    }
+
+    async function saveMcpSecret(name, value) {
+        await invoke('save_mcp_secret', { name, value });
+        const names = Object.keys({ ...mcpSecrets, [name]: value });
+        await invoke('set_mcp_secret_index', { names });
+    }
+
+    async function deleteMcpSecret(name) {
+        try { await invoke('delete_mcp_secret', { name }); } catch(e) {}
+        const updated = { ...mcpSecrets };
+        delete updated[name];
+        const names = Object.keys(updated);
+        await invoke('set_mcp_secret_index', { names });
+        mcpSecrets = updated;
+    }
+
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // Cargar secretos MCP desde OS Keyring (con migración desde localStorage si existen)
+        try {
+            const legacy = localStorage.getItem('lucy_mcp_secrets');
+            if (legacy) {
+                const legacyObj = JSON.parse(legacy);
+                for (const [k, v] of Object.entries(legacyObj)) {
+                    if (k && v) await saveMcpSecret(k, v);
+                }
+                localStorage.removeItem('lucy_mcp_secrets');
+                console.info('[MCP] Secretos migrados desde localStorage → Keyring');
+            }
+        } catch(e) {}
+        loadMcpSecrets().catch(() => {});
         // Cargar modelos locales (Ollama) — no bloquear si falla
         refreshLocalModels().catch(() => {});
         // Ping periódico al endpoint Ollama (cada 30s) para el indicador de estado
@@ -496,6 +543,21 @@ import { listen } from '@tauri-apps/api/event';
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission().catch(() => {});
         }
+        // Purgar entradas lucy_rsh_* huérfanas (hosts eliminados en el pasado)
+        try {
+            const activeHostIds = new Set($hosts.map(h => h.id));
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k) continue;
+                if (k.startsWith('lucy_rsh_') || k.startsWith('lucy_nxh_')) {
+                    const prefix = k.startsWith('lucy_rsh_') ? 'lucy_rsh_' : 'lucy_nxh_';
+                    const hid = k.slice(prefix.length);
+                    if (!activeHostIds.has(hid)) keysToRemove.push(k);
+                }
+            }
+            keysToRemove.forEach(k => localStorage.removeItem(k));
+        } catch(e) {}
         // Detectar checkpoints de agente interrumpidos en sesiones previas
         try {
             const stale = listStaleCheckpoints();
@@ -503,7 +565,7 @@ import { listen } from '@tauri-apps/api/event';
                 const fresh = stale.filter(s => Date.now() - (s.snap.ts || 0) < 24 * 3600 * 1000);
                 if (fresh.length > 0) {
                     setTimeout(() => {
-                        toast(`⚠️ ${fresh.length} tarea${fresh.length>1?'s':''} de agente quedó interrumpida en sesión previa. Revisa con window.__lucyCheckpoints.list() en consola.`, 'info');
+                        toast(`! ${fresh.length} tarea${fresh.length>1?'s':''} de agente quedó interrumpida en sesión previa. Revisa con window.__lucyCheckpoints.list() en consola.`, 'info');
                     }, 1500);
                     console.warn('[Lucy] Stale agent checkpoints found:', fresh.map(s => ({ tab: s.tabId, goal: s.snap.goal?.slice(0,80), step: s.snap.loop_i, age_min: Math.round((Date.now() - s.snap.ts)/60000) })));
                 }
@@ -557,6 +619,8 @@ import { listen } from '@tauri-apps/api/event';
             }
         };
         document.addEventListener('click', _clickHandler);
+        // Plan card buttons (opus-4-7 #3 Plan/Act/Verify)
+        document.addEventListener('click', handlePlanButtonClick);
 
         window.selectRunbooksDir = async function() {
             try {
@@ -566,7 +630,7 @@ import { listen } from '@tauri-apps/api/event';
                     localStorage.setItem('lucy_runbooks_dir', dir);
                     toast(`Directorio Runbooks: ${dir}`, 'success');
                     if (activeTabId) {
-                        addMsg(activeTabId, { role: 'system', html: `💼 <b>Directorio de Runbooks empresariales</b> configurado: <br><code>${dir}</code><br>Lucy ahora leerá tus manuales locales.` });
+                        addMsg(activeTabId, { role: 'system', html: `⊞ <b>Directorio de Runbooks empresariales</b> configurado: <br><code>${dir}</code><br>Lucy ahora leerá tus manuales locales.` });
                     }
                 }
             } catch(e) {
@@ -658,7 +722,7 @@ import { listen } from '@tauri-apps/api/event';
                     json_data TEXT
                 )
             `);
-            invoke('log_to_file', { message: "[Lucy SQL] Base de datos SQLite inicializada async." });
+            invoke('log_agent_loop', { message: "[Lucy SQL] Base de datos SQLite inicializada async." }).catch(() => {});
         } catch(e) { console.error("[Lucy SQL] Error init DB:", e); }
     }
 
@@ -703,6 +767,7 @@ import { listen } from '@tauri-apps/api/event';
         _actualizarCustomCmdCount();
 
         await _initDB();
+        cargarMemoriasDB(); // non-blocking — cache se llena en segundo plano
         const s = await _leerSesiones();
         if (s.length) {
             tabs = s.map(t => ({
@@ -727,21 +792,29 @@ import { listen } from '@tauri-apps/api/event';
         }
 
         const defaultActions = [
-            { icono:'🖥️', nombre:'Salud del sistema', script:'TOOL_SYSINFO' },
-            { icono:'🌐', nombre:'Flush DNS',           script:'ipconfig /flushdns' },
-            { icono:'🔒', nombre:'Bloquear equipo',     script:'rundll32.exe user32.dll,LockWorkStation' },
-            { icono:'📋', nombre:'Limpiar portapap.',   script:'Set-Clipboard -Value $null' },
-            { icono:'🗑️', nombre:'Vaciar papelera',     script:'Clear-RecycleBin -Force' }
+            { icono:'⊡', nombre:'Salud del sistema', script:'TOOL_SYSINFO' },
+            { icono:'◉', nombre:'Flush DNS',           script:'ipconfig /flushdns' },
+            { icono:'⊗', nombre:'Bloquear equipo',     script:'rundll32.exe user32.dll,LockWorkStation' },
+            { icono:'≡', nombre:'Limpiar portapap.',   script:'Set-Clipboard -Value $null' },
+            { icono:'⊘', nombre:'Vaciar papelera',     script:'Clear-RecycleBin -Force' }
         ];
         const storedActions = localStorage.getItem('lucy_quick_actions');
         quickActions = storedActions ? JSON.parse(storedActions) : [
-    { icono: '🏥', nombre: isEN ? 'System Health' : 'Salud del sistema', script: 'TOOL_SYSINFO' },
-    { icono: '🌐', nombre: 'Flush DNS', script: 'ipconfig /flushdns' },
-    { icono: '🔒', nombre: isEN ? 'Lock System' : 'Bloquear equipo', script: 'rundll32.exe user32.dll,LockWorkStation' },
-    { icono: '🧹', nombre: isEN ? 'Clear Clipboard' : 'Limpiar portapap.', script: 'Set-Clipboard -Value $null' },
-    { icono: '🗑️', nombre: isEN ? 'Empty Trash' : 'Vaciar papelera', script: 'Clear-RecycleBin -Force' }
+    { icono: '⊡', nombre: isEN ? 'System Health' : 'Salud del sistema', script: 'TOOL_SYSINFO' },
+    { icono: '◉', nombre: 'Flush DNS', script: 'ipconfig /flushdns' },
+    { icono: '⊗', nombre: isEN ? 'Lock System' : 'Bloquear equipo', script: 'rundll32.exe user32.dll,LockWorkStation' },
+    { icono: '≡', nombre: isEN ? 'Clear Clipboard' : 'Limpiar portapap.', script: 'Set-Clipboard -Value $null' },
+    { icono: '⊘', nombre: isEN ? 'Empty Trash' : 'Vaciar papelera', script: 'Clear-RecycleBin -Force' }
 ];
-        if (!storedActions) localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
+        // ── Migrate legacy emoji icons → unicode symbols ─────────────────────
+        const _emojiMap = {'🖥️':'⊡','🖥':'⊡','🌐':'◉','🔒':'⊗','📋':'≡','🗑️':'⊘','🗑':'⊘','🧠':'◈','🛡️':'⬡','🛡':'⬡','⚙️':'⚙','📊':'◑','🔍':'◎'};
+        let _migrated = false;
+        quickActions = quickActions.map(a => {
+            const ni = _emojiMap[a.icono];
+            if (ni) { _migrated = true; return { ...a, icono: ni }; }
+            return a;
+        });
+        if (!storedActions || _migrated) localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
 
         // hosts, alertRules, runbooks → cargados automáticamente por persistedWritable en stores.ts
         // Pedir permiso de notificaciones del sistema
@@ -845,9 +918,9 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         if (!t || t.isProcessing) return;
         if (accion.script === 'TOOL_SYSINFO') {
             t.isProcessing = true; refresh(); await scrollChat();
-            addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>🖥️ ${accion.nombre}`});
+            addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>▸ ${accion.nombre}`});
             try { const r=await invoke('get_system_health'); addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r}); }
-            catch(e) { addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️ Error</div>${e}`,style:'border-left-color:#ef4444;'}); }
+            catch(e) { addMsg(tabId,{role:'lucy',html:`<div class="mn">! Error</div>${e}`,style:'border-left-color:#ef4444;'}); }
             fin(tabId); return;
         }
         t.isProcessing = true; startExecTimer(); refresh(); await scrollChat();
@@ -855,19 +928,19 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         try {
             const out = await invoke('execute_powershell',{script:accion.script,forceExecute:false});
             const outTrim = out?.trim() ?? '';
-            addMsg(tabId,{role:'lucy',html:`<div class="mn">⚡ Lucy (Rápida)</div>${accion.nombre} ejecutado.${outTrim?`<br><span style="font-size:11px;color:var(--txt2);font-family:var(--mono);white-space:pre-wrap;"><code>${outTrim}</code></span>`:''}`,style:'border-left-color:#10b981;'});
+            addMsg(tabId,{role:'lucy',html:`<div class="mn">[Quick] Lucy (Rápida)</div>${accion.nombre} ejecutado.${outTrim?`<br><span style="font-size:11px;color:var(--txt2);font-family:var(--mono);white-space:pre-wrap;"><code>${outTrim}</code></span>`:''}`,style:'border-left-color:#10b981;'});
         } catch(err) {
             if(typeof err==='string'&&err.startsWith('SECURITY_BLOCK:')){
                 auditAlerts++;
                 const bw=err.split(':')[1]; const sc=accion.script.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                addMsg(tabId,{role:'lucy',html:`<div class="mn">🛡️ Seguridad</div>Instrucción restringida por la política de seguridad: <code>${bw}</code>. Revisa el panel de autorización debajo.`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
+                addMsg(tabId,{role:'lucy',html:`<div class="mn">[Security] Seguridad</div>Instrucción restringida por la política de seguridad: <code>${bw}</code>. Revisa el panel de autorización debajo.`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
                 pendingSecurityBlock = { tabId, cmd: accion.script, ctx: '', doSpeak: false, blockWord: bw, displayCmd: sc };
             } else {
                 // Auto-diagnóstico: Lucy analiza el error y propone corrección con consentimiento del usuario
                 const errStr = String(err);
                 const msgId  = Date.now();
                 addMsg(tabId,{id:msgId,role:'lucy',
-                    html:`<div class="mn">⚠️ Error</div><span style="font-size:11px;font-family:var(--mono);color:#ff6a6a;white-space:pre-wrap;"><code>${errStr}</code></span><br><span style="color:#475569;font-size:11px;">🔍 Lucy analizando el error…</span>`,
+                    html:`<div class="mn">! Error</div><span style="font-size:11px;font-family:var(--mono);color:#ff6a6a;white-space:pre-wrap;"><code>${errStr}</code></span><br><span style="color:#475569;font-size:11px;">↻ Lucy analizando el error…</span>`,
                     style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
                 refresh();
                 try {
@@ -886,9 +959,9 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         // module-scoped _lucyFixStore (not on window)
                         const fixKey = `fx_${msgId}`;
                         _lucyFixStoreSet(fixKey, { script: fixExec[1], tabId });
-                        fixHtml = `<div class="mn">🔧 Lucy (Diagnóstico)</div>${safeText}<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="msg-btn lucy-fix-btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.25);" data-fix-key="${fixKey}">✓ Aplicar corrección</button><span style="font-size:10px;color:#475569;">Revisa antes de aplicar</span></div>`;
+                        fixHtml = `<div class="mn">▶ Lucy (Diagnóstico)</div>${safeText}<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="msg-btn lucy-fix-btn" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.25);" data-fix-key="${fixKey}">✓ Aplicar corrección</button><span style="font-size:10px;color:#475569;">Revisa antes de aplicar</span></div>`;
                     } else {
-                        fixHtml = `<div class="mn">🔍 Lucy (Diagnóstico)</div>${safeText}`;
+                        fixHtml = `<div class="mn">↻ Lucy (Diagnóstico)</div>${safeText}`;
                     }
                     const m = getTab(tabId)?.messages.find(x=>x.id===msgId);
                     if(m){ m.html = fixHtml; m.rawRole='Lucy'; m.rawContent=fixText; refresh(); }
@@ -911,7 +984,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 addMsg(tabId, { role:'lucy', html:`<div class="mn">✓ Lucy (Corrección aplicada)</div>${out?.trim()||'Ejecutado sin salida.'}`, style:'border-left-color:#10b981;' });
                 _lucyFixStore.delete(key);
             } catch(e2) {
-                addMsg(tabId, { role:'lucy', html:`<div class="mn">⚠️</div>La corrección también falló: ${String(e2)}`, style:'border-left-color:#ef4444;' });
+                addMsg(tabId, { role:'lucy', html:`<div class="mn">!</div>La corrección también falló: ${String(e2)}`, style:'border-left-color:#ef4444;' });
             }
             fin(tabId);
         };
@@ -997,17 +1070,23 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 tags: JSON.stringify(['auto-learned', 'quick-command'])
             };
             await invoke('save_skill', { skill });
+            // Fire-and-forget semantic embedding (Sprint 2). Ollama may be down
+            // — don't fail the save. Combines name + description + triggers so
+            // natural-language search can hit either the label or the intent.
+            const embedText = `${skill.name}\n${skill.description || ''}\n${(pendingLearn.claves || []).join(', ')}`;
+            invoke('upsert_embedding', { entityType: 'skill', entityId: skill.id, text: embedText })
+                .catch(e => console.debug('[embed] skill skipped:', e));
         } catch (err) {
             console.warn('Failed to save skill to database:', err);
             // Continue anyway - localStorage save was successful
         }
 
-        addMsg(pendingLearnTab,{role:'lucy',html:`<div class="mn">🧠 Aprendizaje autorizado</div>Di <i>"${pendingLearn.claves[0]}"</i> para ejecutarlo.`,style:'border-left-color:#a78bfa;background:rgba(180,81,255,0.05);'});
+        addMsg(pendingLearnTab,{role:'lucy',html:`<div class="mn">◈ Aprendizaje autorizado</div>Di <i>"${pendingLearn.claves[0]}"</i> para ejecutarlo.`,style:'border-left-color:#a78bfa;background:rgba(180,81,255,0.05);'});
         if(pendingLearnSpeak) speak("Aprendí la nueva tarea.");
         $showLearnConfirm=false; pendingLearn=null; pendingLearnTab=null;
     }
     function rechazarLearn() {
-        addMsg(pendingLearnTab,{role:'lucy',html:`<div class="mn">🚫 Bloqueado</div>Comando descartado.`,style:'border-left-color:#ef4444;'});
+        addMsg(pendingLearnTab,{role:'lucy',html:`<div class="mn">⊗ Bloqueado</div>Comando descartado.`,style:'border-left-color:#ef4444;'});
         $showLearnConfirm=false; pendingLearn=null; pendingLearnTab=null;
     }
 
@@ -1213,13 +1292,13 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             if (ev.error === 'not-allowed' || ev.error === 'permission-denied') {
                 addMsg(tabId, {
                     role: 'lucy',
-                    html: `<div class="mn">🎤 Micrófono sin permiso</div>Ve a <b>Inicio → Configuración → Privacidad y seguridad → Micrófono</b> y activa el acceso para aplicaciones de escritorio.`,
+                    html: `<div class="mn">⊕ Micrófono sin permiso</div>Ve a <b>Inicio → Configuración → Privacidad y seguridad → Micrófono</b> y activa el acceso para aplicaciones de escritorio.`,
                     style: 'border-left-color:#f59e0b;'
                 });
             } else if (ev.error === 'network') {
                 addMsg(tabId, {
                     role: 'lucy',
-                    html: `<div class="mn">🎤 Error de red</div>El reconocimiento de voz requiere conexión a internet.`,
+                    html: `<div class="mn">⊕ Error de red</div>El reconocimiento de voz requiere conexión a internet.`,
                     style: 'border-left-color:#f59e0b;'
                 });
             }
@@ -1235,11 +1314,21 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         const t = {
             id, title: userLang.startsWith('en') ? 'New Terminal' : 'Nueva Terminal',
             messages: [],
-            attachedFiles: [], inputValue: '', selectedModel: 'gemini-2.5-flash',
+            attachedFiles: [], inputValue: '', selectedModel: 'gemini-3-flash-preview',
             contextMax: 50000, _histIdx: undefined,
             isProcessing: false, usedVoice: false, isListening: false,
+            pendingMessage: null,       // {text, files, usedVoice} — queued while processing
             _committed: '', _shouldListen: false,
             execEngine: 'powershell',   // 'powershell' | 'cmd'
+            // Working memory (opus-4-7 #1) — compact state digest < 500 tokens, always in context
+            workingMemory: {
+                currentHost: null,      // {id, name, type} last successful remote
+                lastCommands: [],       // last 5: {cmd, target, ok, ms, err?, ts}
+                recentErrors: [],       // last 3 error strings (detect retry loops)
+                activeIncident: null,   // {id, phase} when SRE mode
+                turnCount: 0,
+                compactedDigest: '',    // summary of older turns when > 20
+            },
             recognition: _initRecognition(id)
         };
         tabs = [...tabs, t];
@@ -1356,7 +1445,9 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         if (!ctrl) return;
         switch(e.key) {
             case 't': case 'T':
-                e.preventDefault(); crearTab(); break;
+                e.preventDefault();
+                crearTab();
+                break;
             case 'w': case 'W':
                 e.preventDefault();
                 if (activeTabId) {
@@ -1446,6 +1537,12 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 if ($showMemoryModal)    { $showMemoryModal = false; break; }
                 if ($showChipsModal)     { $showChipsModal = false; break; }
                 if (showProfileModal)   { showProfileModal = false; break; }
+                // Escape cancels active processing on current tab
+                if (activeTabId) {
+                    const _et = getTab(activeTabId);
+                    if (_et?.pendingMessage) { _et.pendingMessage = null; refresh(); break; }
+                    if (_et?.isProcessing)   { cancelarEjecucion(activeTabId); break; }
+                }
                 break;
         }
     }
@@ -1465,7 +1562,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             } catch(permErr) {
                 addMsg(tabId, {
                     role: 'lucy',
-                    html: `<div class="mn">🎤 Micrófono sin permiso</div>Windows bloqueó el acceso al micrófono para esta app. Ve a <b>Inicio → Configuración → Privacidad y seguridad → Micrófono</b>, activa <b>"Permitir que las aplicaciones de escritorio accedan al micrófono"</b> y reinicia Lucy.`,
+                    html: `<div class="mn">⊕ Micrófono sin permiso</div>Windows bloqueó el acceso al micrófono para esta app. Ve a <b>Inicio → Configuración → Privacidad y seguridad → Micrófono</b>, activa <b>"Permitir que las aplicaciones de escritorio accedan al micrófono"</b> y reinicia Lucy.`,
                     style: 'border-left-color:#f59e0b;'
                 });
                 refresh();
@@ -1670,6 +1767,29 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         t.messages.push(obj);
         if (t.messages.length > 250) t.messages = t.messages.slice(-250);
         refresh(); scrollChat(); addCopyBtns();
+        // ── Persist visible turns for /recall search (fire-and-forget) ──
+        persistConversationTurn(t, obj);
+    }
+
+    // Persist user/lucy turns to SQLite for cross-session FTS search.
+    // Skips ephemeral/UI-only roles (thinking, streaming, hidden) since
+    // those get rewritten or removed and would pollute search results.
+    function persistConversationTurn(tab, obj) {
+        if (!obj || !tab) return;
+        const role = obj.role || '';
+        // Whitelist roles that represent actual dialogue
+        if (!['user', 'lucy', 'sistema'].includes(role)) return;
+        // Prefer rawContent (pre-formatting text) over HTML
+        const raw = (obj.rawContent ?? obj.content ?? obj.html ?? '').toString();
+        // Strip HTML for cleaner FTS indexing
+        const text = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!text || text.length < 3) return;
+        invoke('save_conversation_turn', {
+            tabId: String(tab.id || ''),
+            tabTitle: String(tab.title || tab.name || ''),
+            role,
+            content: text,
+        }).catch(e => console.warn('[recall] persist failed:', e));
     }
 
     function addThinking(tabId) {
@@ -1688,6 +1808,262 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         const si=ok?'✓':'✗';
         const hl=label||(ok?'Ejecutado':'Error');
         return `<div class="warp-block ${st}"><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span><button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${so||'(sin salida)'}</pre></div>`;
+    }
+
+    // CONFIDENCE tag renderer (opus-4-7 #2) — turns <CONFIDENCE level="high|med|low">reason</CONFIDENCE>
+    // into an inline colored badge. Applied BEFORE markdown parse so badges survive.
+    function renderConfidenceTags(text) {
+        if (!text || !text.includes('<CONFIDENCE')) return text;
+        return text.replace(/<CONFIDENCE\s+level=["']?(high|med|low)["']?\s*>([\s\S]*?)<\/CONFIDENCE>/gi, (_, lvl, reason) => {
+            const L = String(lvl).toLowerCase();
+            const cfg = {
+                high: { bg:'rgba(52,211,153,.12)', bd:'#34d399', fg:'#10b981', ico:'✓', label:'HIGH' },
+                med:  { bg:'rgba(251,191,36,.12)', bd:'#fbbf24', fg:'#d97706', ico:'◐', label:'MED' },
+                low:  { bg:'rgba(248,113,113,.12)', bd:'#f87171', fg:'#ef4444', ico:'⚠', label:'LOW' },
+            }[L] || { bg:'rgba(148,163,184,.12)', bd:'#94a3b8', fg:'#64748b', ico:'?', label:'?' };
+            const safeReason = String(reason).trim().replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return `\n\n<div class="conf-badge" style="display:inline-flex;align-items:center;gap:8px;margin:6px 0;padding:5px 10px;border-left:3px solid ${cfg.bd};background:${cfg.bg};border-radius:3px;font-size:11px;line-height:1.4;">
+                <span style="font-weight:700;color:${cfg.fg};letter-spacing:0.5px;">${cfg.ico} ${cfg.label}</span>
+                <span style="color:var(--txt2,#94a3b8);">${safeReason}</span>
+            </div>\n\n`;
+        });
+    }
+
+    // One-shot markdown renderer that also processes CONFIDENCE badges.
+    function renderLucyMarkdown(text) {
+        const withBadges = renderConfidenceTags(text || '');
+        return DOMPurify.sanitize(marked.parse(withBadges), { ADD_ATTR:['style','data-plan-id','data-plan-action'] });
+    }
+
+    // ── PLAN/ACT/VERIFY (opus-4-7 #3) ──────────────────────────────────────────
+    const _pendingPlans = new Map(); // planId -> { ...plan, tabId, doSpeak }
+
+    function toDryRunCmd(cmd, engine) {
+        if (!cmd) return cmd;
+        const e = (engine || 'powershell').toLowerCase();
+        if (e.startsWith('power') || e === 'local') {
+            if (/-WhatIf\b/i.test(cmd)) return cmd;
+            if (/\b(Stop|Restart|Remove|Set|Disable|Uninstall|Reset)-\w+/i.test(cmd)) {
+                return cmd.trim() + ' -WhatIf';
+            }
+            return `Write-Host "DRY-RUN — would execute:"; Write-Host ${JSON.stringify(cmd)}`;
+        }
+        return `echo "DRY-RUN — would execute:" && echo ${JSON.stringify(cmd)}`;
+    }
+
+    function parsePlanTags(text) {
+        if (!text || !text.includes('<PLAN')) return [];
+        const out = [];
+        const re = /<PLAN\s*([^>]*)>([\s\S]*?)<\/PLAN>/gi;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            const attrs = m[1] || '';
+            const body = m[2] || '';
+            const getAttr = (name) => {
+                const r = new RegExp(`${name}=["']([^"']+)["']`, 'i');
+                return (attrs.match(r) || [])[1] || '';
+            };
+            const getChild = (tag) => {
+                const r = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i');
+                return ((body.match(r) || [])[1] || '').trim();
+            };
+            out.push({
+                raw: m[0],
+                risk: (getAttr('risk') || 'med').toLowerCase(),
+                target: getAttr('target') || 'local',
+                engine: (getAttr('engine') || 'powershell').toLowerCase(),
+                desc: getChild('DESC') || '(sin descripción)',
+                cmd: getChild('CMD'),
+                verify: getChild('VERIFY'),
+                rollback: getChild('ROLLBACK'),
+            });
+        }
+        return out;
+    }
+
+    function renderPlanCard(plan, planId) {
+        const riskCfg = {
+            high: { fg:'#ef4444', bg:'rgba(239,68,68,.08)', bd:'#ef4444', label:'RIESGO ALTO' },
+            med:  { fg:'#d97706', bg:'rgba(217,119,6,.08)',  bd:'#fbbf24', label:'RIESGO MEDIO' },
+            low:  { fg:'#10b981', bg:'rgba(16,185,129,.08)', bd:'#34d399', label:'RIESGO BAJO' },
+        }[plan.risk] || { fg:'#64748b', bg:'rgba(100,116,139,.08)', bd:'#94a3b8', label:'RIESGO ?' };
+        const esc = (s) => String(s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const targetLabel = plan.target === 'local' ? 'Local' : `Remote (${esc(plan.target)})`;
+        return `<div class="plan-card" data-plan-card-id="${planId}" style="margin:10px 0;padding:12px;border-left:4px solid ${riskCfg.bd};background:${riskCfg.bg};border-radius:4px;font-size:12px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <span style="font-weight:700;color:${riskCfg.fg};letter-spacing:0.5px;font-size:11px;">⚑ PLAN · ${riskCfg.label}</span>
+                <span style="color:var(--txt2,#94a3b8);font-size:10px;">${targetLabel} · ${esc(plan.engine)}</span>
+            </div>
+            <div style="margin-bottom:10px;color:var(--txt,#e5e7eb);font-size:13px;">${esc(plan.desc)}</div>
+            <div style="margin-bottom:6px;"><span style="color:var(--txt2,#94a3b8);font-size:10px;">▸ CMD</span><pre style="margin:3px 0;padding:6px 8px;background:rgba(0,0,0,.25);border-radius:3px;font-size:11px;color:#e5e7eb;white-space:pre-wrap;">${esc(plan.cmd)}</pre></div>
+            ${plan.verify ? `<div style="margin-bottom:6px;"><span style="color:var(--txt2,#94a3b8);font-size:10px;">▸ VERIFY</span><pre style="margin:3px 0;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:3px;font-size:11px;color:#cbd5e1;white-space:pre-wrap;">${esc(plan.verify)}</pre></div>` : ''}
+            ${plan.rollback ? `<div style="margin-bottom:6px;"><span style="color:var(--txt2,#94a3b8);font-size:10px;">▸ ROLLBACK</span><pre style="margin:3px 0;padding:6px 8px;background:rgba(0,0,0,.18);border-radius:3px;font-size:11px;color:#cbd5e1;white-space:pre-wrap;">${esc(plan.rollback)}</pre></div>` : ''}
+            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+                <button data-plan-id="${planId}" data-plan-action="execute" style="padding:5px 12px;background:${riskCfg.fg};color:#fff;border:none;border-radius:3px;font-size:11px;font-weight:600;cursor:pointer;">▶ Ejecutar</button>
+                <button data-plan-id="${planId}" data-plan-action="dryrun" style="padding:5px 12px;background:transparent;color:#93c5fd;border:1px solid #3b82f6;border-radius:3px;font-size:11px;cursor:pointer;">⚙ Dry-Run</button>
+                <button data-plan-id="${planId}" data-plan-action="cancel" style="padding:5px 12px;background:transparent;color:#94a3b8;border:1px solid #64748b;border-radius:3px;font-size:11px;cursor:pointer;">✕ Cancelar</button>
+            </div>
+        </div>`;
+    }
+
+    // ── Host preflight cache (30s TTL per host) ───────────────────────────
+    // Avoids 15s WinRM timeouts when host is offline/unreachable.
+    const _preflightCache = new Map(); // hostId -> { ts, ok, err }
+    const PREFLIGHT_TTL_MS = 30_000;
+
+    async function preflightHost(h) {
+        if (!h || !h.host) return { ok: false, err: 'Host inválido' };
+        const key = h.id || h.host;
+        const cached = _preflightCache.get(key);
+        if (cached && (Date.now() - cached.ts) < PREFLIGHT_TTL_MS) {
+            return { ok: cached.ok, err: cached.err, cached: true };
+        }
+        const port = h.port || (h.type === 'linux' ? 22 : 5985);
+        // Test-NetConnection is available on the local (Windows) host and works for both SSH and WinRM ports.
+        const script = `$ErrorActionPreference='Stop'; try { $r = Test-NetConnection -ComputerName '${h.host.replace(/'/g,"''")}' -Port ${port} -InformationLevel Quiet -WarningAction SilentlyContinue; if ($r) { 'OK' } else { throw "TCP ${port} cerrado o host no responde" } } catch { Write-Error $_.Exception.Message }`;
+        const t0 = Date.now();
+        try {
+            const out = await invoke('execute_powershell', { script, forceExecute: true });
+            const ok = String(out || '').trim().toUpperCase().includes('OK');
+            const result = ok
+                ? { ok: true, err: null, ms: Date.now()-t0 }
+                : { ok: false, err: `Puerto ${port} no responde en ${h.host}`, ms: Date.now()-t0 };
+            _preflightCache.set(key, { ts: Date.now(), ...result });
+            return result;
+        } catch (e) {
+            const result = { ok: false, err: `Host ${h.host}:${port} inaccesible — ${String(e).substring(0,200)}`, ms: Date.now()-t0 };
+            _preflightCache.set(key, { ts: Date.now(), ...result });
+            return result;
+        }
+    }
+
+    // Runs an arbitrary command against local or remote target. Shared by execute + verify + rollback.
+    async function _runPlanStep(target, cmd, engine) {
+        if (target === 'local') {
+            return await invoke('execute_powershell', { script: cmd, forceExecute: false });
+        }
+        const hostIdClean = String(target).replace(/^LucyHost_/, '');
+        const h = $hosts.find(x => x.id === hostIdClean || x.name === target);
+        if (!h) throw new Error(`Host '${target}' no configurado`);
+        const pf = await preflightHost(h);
+        if (!pf.ok) throw new Error(`Preflight falló — ${pf.err}`);
+        const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+        return await invoke('execute_shell_cmd', {
+            host: h.host, username: h.username, command: cmd,
+            hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
+            password: pwd, keyPath: h.sshKeyPath || null,
+        });
+    }
+
+    async function executePlan(planId, mode) {
+        const p = _pendingPlans.get(planId);
+        if (!p) return;
+        const { target, engine, desc, cmd, verify, rollback, tabId } = p;
+        const t = getTab(tabId); if (!t) return;
+        const actualCmd = mode === 'dryrun' ? toDryRunCmd(cmd, engine) : cmd;
+        const label = mode === 'dryrun' ? 'DRY-RUN' : 'EJECUTANDO';
+        logTaskEvent(mode === 'dryrun' ? 'plan_dryrun' : 'plan_execute', p.risk || 'med', null, { target, engine }, tabId);
+        addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#a78bfa;">⚑ ${label}</div><div style="font-size:11px;color:var(--txt2);margin:4px 0;">${desc}</div>` });
+        const t0 = Date.now();
+        try {
+            let out;
+            if (target === 'local') {
+                out = await invoke('execute_powershell', { script: actualCmd, forceExecute: false });
+            } else {
+                const hostIdClean = String(target).replace(/^LucyHost_/, '');
+                const h = $hosts.find(x => x.id === hostIdClean || x.name === target);
+                if (!h) throw new Error(`Host '${target}' no configurado`);
+                const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                out = await invoke('execute_shell_cmd', {
+                    host: h.host, username: h.username, command: actualCmd,
+                    hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
+                    password: pwd, keyPath: h.sshKeyPath || null,
+                });
+            }
+            const elapsed = Date.now() - t0;
+            updateWorkingMemory(t, { type:'exec', cmd:actualCmd, target, ok:true, ms:elapsed });
+            const wb = warpBlock(actualCmd, out || '(sin salida)', true, elapsed, mode==='dryrun'?'DRY-RUN':'PLAN');
+            addMsg(tabId, { role:'lucy', html:`<div class="mn">Lucy</div>${wb}`, rawContent:`[${label}] ${actualCmd}\n${out||''}` });
+
+            if (mode !== 'dryrun' && verify) {
+                const vT0 = Date.now();
+                let verifyFailed = false;
+                let verifyErr = '';
+                try {
+                    const vout = await _runPlanStep(target, verify, engine);
+                    const vEl = Date.now() - vT0;
+                    addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#34d399;">✓ VERIFY</div>${warpBlock(verify, vout||'(sin salida)', true, vEl, 'VERIFY')}`, rawContent:`[VERIFY] ${verify}\n${vout||''}` });
+                } catch (ve) {
+                    verifyFailed = true;
+                    verifyErr = String(ve).substring(0, 400);
+                    addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#f59e0b;">⚠ VERIFY failed</div><pre style="color:#f87171;font-size:11px;">${verifyErr}</pre>`, style:'border-left-color:#f59e0b;' });
+                }
+
+                // AUTO-ROLLBACK: si VERIFY falló y hay ROLLBACK definido, ejecutarlo automáticamente.
+                // Cierra el loop Plan/Act/Verify — el sysadmin no tiene que correr el rollback a mano.
+                if (verifyFailed && rollback) {
+                    const rbId = 'rb-' + Date.now().toString(36);
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn" style="color:#ef4444;">⟲ AUTO-ROLLBACK iniciando</div>
+                               <div style="font-size:11px;color:var(--txt2);margin:4px 0;">VERIFY no confirmó el cambio. Ejecutando ROLLBACK para restaurar estado anterior.</div>`,
+                    });
+                    const rbT0 = Date.now();
+                    try {
+                        const rbOut = await _runPlanStep(target, rollback, engine);
+                        const rbEl = Date.now() - rbT0;
+                        logTaskEvent('rollback_success', p.risk || 'med', rbEl, { planId, verify_err: verifyErr }, tabId);
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn" style="color:#34d399;">✓ ROLLBACK completado</div>${warpBlock(rollback, rbOut||'(sin salida)', true, rbEl, 'ROLLBACK')}`,
+                            rawContent: `[ROLLBACK] ${rollback}\n${rbOut||''}`,
+                        });
+                    } catch (rbErr) {
+                        logTaskEvent('rollback_failed', p.risk || 'med', Date.now()-rbT0, { planId, rb_err: String(rbErr).substring(0,200) }, tabId);
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn" style="color:#ef4444;">✗ ROLLBACK FALLÓ — INTERVENCIÓN MANUAL REQUERIDA</div>
+                                   <pre style="color:#f87171;font-size:11px;">${String(rbErr).substring(0,500)}</pre>
+                                   <div style="font-size:11px;color:#fbbf24;margin-top:6px;">⚠ Estado del sistema podría estar inconsistente. Revisa manualmente: <code style="color:#cbd5e1;">${String(rollback).replace(/</g,'&lt;').substring(0,200)}</code></div>`,
+                            style: 'border-left-color:#ef4444;background:rgba(239,68,68,.05);',
+                        });
+                    }
+                } else if (verifyFailed && !rollback) {
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn" style="color:#fbbf24;">ℹ Sin ROLLBACK definido</div><div style="font-size:11px;color:var(--txt2);margin:4px 0;">VERIFY falló pero el PLAN no incluyó &lt;ROLLBACK&gt;. Revisa el estado manualmente.</div>`,
+                        style: 'border-left-color:#fbbf24;',
+                    });
+                }
+            }
+        } catch (e) {
+            updateWorkingMemory(t, { type:'exec', cmd:actualCmd, target, ok:false, ms:Date.now()-t0, err:e });
+            addMsg(tabId, { role:'lucy', html:`<div class="mn">!</div>Error: <pre style="color:#f87171;">${String(e).substring(0,500)}</pre>`, style:'border-left-color:#ef4444;' });
+        } finally {
+            _pendingPlans.delete(planId);
+            fin(tabId);
+        }
+    }
+
+    function handlePlanButtonClick(ev) {
+        const btn = ev.target.closest('[data-plan-id][data-plan-action]');
+        if (!btn) return;
+        ev.preventDefault();
+        const planId = btn.getAttribute('data-plan-id');
+        const action = btn.getAttribute('data-plan-action');
+        if (action === 'cancel') {
+            const p = _pendingPlans.get(planId);
+            logTaskEvent('plan_cancel', p?.risk || 'med', null, null, p?.tabId);
+            _pendingPlans.delete(planId);
+            const card = btn.closest('.plan-card');
+            if (card) { card.style.opacity = '0.4'; card.insertAdjacentHTML('beforeend','<div style="font-size:11px;color:#94a3b8;margin-top:6px;">✕ Plan cancelado</div>'); }
+            return;
+        }
+        if (action === 'execute' || action === 'dryrun') {
+            const card = btn.closest('.plan-card');
+            if (card) card.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+            executePlan(planId, action);
+        }
     }
 
     function autoResize(e){const el=e.target;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}
@@ -1719,7 +2095,18 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
 
     async function process(tabId) {
         const t=getTab(tabId);
-        if(t.isProcessing) return;
+        // ── QUEUE while Lucy is busy — like Gemini/Claude ──────────────────
+        if(t.isProcessing) {
+            const raw = t.inputValue.trim();
+            if (!raw && !t.attachedFiles.length) return;
+            // Only one message in queue at a time
+            t.pendingMessage = { text: raw, files: [...(t.attachedFiles||[])], usedVoice: t.usedVoice };
+            t.inputValue = '';
+            t.attachedFiles = [];
+            t.usedVoice = false;
+            refresh();
+            return;
+        }
         if(t.recognition&&t.isListening){
             t._shouldListen = false; // al enviar, detener el mic definitivamente
             t.recognition.stop();
@@ -1740,7 +2127,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         }
 
         let disp=raw||"Analiza los archivos adjuntos.";
-        if(t.attachedFiles.length){const n=t.attachedFiles.map(f=>f.type==='image'?`🖼️ ${f.name}`:`📄 ${f.name}`).join(', ');disp+=`<br><span style="font-size:0.85em;color:#10b981;">Archivos: ${n}</span>`;}
+        if(t.attachedFiles.length){const n=t.attachedFiles.map(f=>f.type==='image'?`◑ ${f.name}`:`· ${f.name}`).join(', ');disp+=`<br><span style="font-size:0.85em;color:#10b981;">Archivos: ${n}</span>`;}
         addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>${disp}`});
         // U6: auto-rename tab con el primer mensaje del usuario
         if (raw && (t.title === 'Nueva Terminal' || t.title === 'New Terminal')) {
@@ -1756,8 +2143,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         if(found){
             if(found.script==='RESET_APP'){localStorage.clear();if(doSpeak)speak("Reiniciando.");setTimeout(()=>location.reload(),1500);return;}
             if(found.script==='TOOL_SYSINFO'){t.isProcessing=true;refresh();try{const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");}catch(e){addMsg(tabId,{role:'lucy',html:`Error: ${e}`,style:'border-left-color:#ef4444;'});}fin(tabId);return;}
-            try{await invoke('execute_powershell',{script:found.script,forceExecute:false});addMsg(tabId,{role:'lucy',html:`<div class="mn">⚡ Lucy (Rápida)</div>${found.respuesta}`,style:'border-left-color:#10b981;'});if(doSpeak)speak(found.respuesta);fin(tabId);}
-            catch(err){addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️ Aviso</div>Comando falló.`,style:'border-left-color:#f59e0b;',button:{text:'🧠 Intentar con IA',action:()=>runAI(tabId,raw,doSpeak)}});if(doSpeak)speak("Falló.");fin(tabId);}
+            try{await invoke('execute_powershell',{script:found.script,forceExecute:false});addMsg(tabId,{role:'lucy',html:`<div class="mn">[Quick] Lucy (Rápida)</div>${found.respuesta}`,style:'border-left-color:#10b981;'});if(doSpeak)speak(found.respuesta);fin(tabId);}
+            catch(err){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Aviso</div>Comando falló.`,style:'border-left-color:#f59e0b;',button:{text:'↻ Intentar con IA',action:()=>runAI(tabId,raw,doSpeak)}});if(doSpeak)speak("Falló.");fin(tabId);}
         } else { await runAI(tabId,raw,doSpeak); }
     }
 
@@ -1779,8 +2166,143 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     /models · lista todos los modelos disponibles<br>
                     /refresh · re-detecta modelos Ollama<br>
                     /compare &lt;m1,m2,...&gt; &lt;prompt&gt; · ejecuta el mismo prompt en N modelos en paralelo<br>
+                    /recall &lt;query&gt; · busca en el historial de conversaciones pasadas<br>
                     /help · muestra esta ayuda`);
                 return true;
+
+            case 'diagnose-cpu': case 'diagnose-memory': case 'diagnose-disk': {
+                const type = cmd.split('-')[1]; // 'cpu' | 'memory' | 'disk'
+                const hostTarget = arg && arg.trim() ? arg.trim() : 'local';
+
+                // Build multi-command diagnostic suite
+                const suites = {
+                    cpu: [
+                        'Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, CPU, Id, WorkingSet | Format-Table -AutoSize',
+                        'Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess > 0" | Sort-Object PercentProcessorTime -Descending | Select-Object -First 10 Name, PercentProcessorTime, IDProcess | Format-Table -AutoSize',
+                        'Get-Counter "\\Processor(_Total)\\% Processor Time" | Select-Object -ExpandProperty CounterSamples | Select-Object CookedValue',
+                        'wmic process get name,processid,workingsetsize /format:csv | ConvertFrom-Csv | Sort-Object WorkingSetSize -Descending | Select-Object -First 10',
+                    ],
+                    memory: [
+                        'Get-CimInstance Win32_LogicalMemoryConfiguration | Format-List InstallDate, TotalPhysicalMemory',
+                        'Get-Process | Sort-Object WorkingSet -Descending | Select-Object -First 15 Name, @{n="Memory(MB)";e={[Math]::Round($_.WorkingSet/1MB,2)}}, Id | Format-Table -AutoSize',
+                        '[Math]::Round((Get-CimInstance Win32_LogicalMemoryConfiguration).TotalPhysicalMemory / 1GB, 2)',
+                        'Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory | Select-Object AvailableMBytes, CommittedBytes',
+                    ],
+                    disk: [
+                        'Get-Volume | Where-Object DriveLetter -ne $null | Select-Object DriveLetter, FileSystem, HealthStatus, SizeRemaining, Size | Format-Table -AutoSize',
+                        'Get-CimInstance Win32_LogicalDisk | Select-Object Name, @{n="Size(GB)";e={[Math]::Round($_.Size/1GB,2)}}, @{n="Free(GB)";e={[Math]::Round($_.FreeSpace/1GB,2)}}, @{n="Used%";e={[Math]::Round((1-($_.FreeSpace/$_.Size))*100,1)}} | Format-Table -AutoSize',
+                        'Get-Counter "\\PhysicalDisk(_Total)\\% Disk Time" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CounterSamples | Select-Object CookedValue',
+                        'Get-Counter "\\System\\Disk Queue Length" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CounterSamples | Select-Object CookedValue',
+                    ]
+                };
+
+                const commands = suites[type] || suites.cpu;
+                const hostDisplay = hostTarget === 'local' ? 'this machine' : hostTarget;
+
+                sysMsg(`<b>🔍 Quick ${type.toUpperCase()} Diagnosis — ${hostDisplay}</b><br>Executing ${commands.length} commands in parallel…`, 'var(--acc)');
+
+                // Execute all commands in parallel
+                (async () => {
+                    try {
+                        const t0 = Date.now();
+                        if (hostTarget === 'local') {
+                            // Local execution
+                            const promises = commands.map((cmd, i) =>
+                                invoke('execute_powershell', { script: cmd, forceExecute: false })
+                                    .then(out => ({ idx: i, out, error: null }))
+                                    .catch(e => ({ idx: i, out: null, error: String(e) }))
+                            );
+                            const results = await Promise.all(promises);
+                            const elapsed = Date.now() - t0;
+
+                            // Render results as warp blocks
+                            const html = results.map((r, i) => {
+                                const ok = !r.error;
+                                const content = ok ? r.out : `ERROR: ${r.error}`;
+                                const safe = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                const snippet = commands[i].substring(0, 80) + (commands[i].length > 80 ? '…' : '');
+                                return `<div style="margin:12px 0;border-left:3px ${ok?'#34d399':'#f87171'};padding:10px;background:${ok?'rgba(52,211,153,.04)':'rgba(248,113,113,.04)'}">
+                                    <div style="font-size:10px;color:var(--txt2);margin-bottom:6px;"><strong>[${i+1}]</strong> ${snippet}</div>
+                                    <pre style="margin:0;font-size:10px;max-height:150px;overflow:auto;color:#999;">${safe.substring(0, 500)}</pre>
+                                </div>`;
+                            }).join('');
+
+                            addMsg(tabId, {
+                                role: 'lucy',
+                                html: `<div class="mn">Lucy</div><div style="font-size:11px;color:var(--txt2);margin:8px 0;">⚡ ${commands.length} commands, ${elapsed}ms</div>${html}`,
+                                rawContent: results.map(r => r.out || r.error).join('\n---\n')
+                            });
+                        } else {
+                            // Remote execution
+                            const hostIdClean = hostTarget.replace(/^LucyHost_/, '');
+                            const h = $hosts.find(x => x.id === hostIdClean || x.name === hostTarget);
+                            if (!h) throw new Error(`Host '${hostTarget}' not found`);
+
+                            const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                            const promises = commands.map((cmd, i) =>
+                                invoke('execute_shell_cmd', {
+                                    host: h.host, username: h.username, command: cmd,
+                                    hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
+                                    password: pwd, keyPath: h.sshKeyPath || null
+                                })
+                                    .then(out => ({ idx: i, out, error: null }))
+                                    .catch(e => ({ idx: i, out: null, error: String(e) }))
+                            );
+                            const results = await Promise.all(promises);
+                            const elapsed = Date.now() - t0;
+
+                            const html = results.map((r, i) => {
+                                const ok = !r.error;
+                                const content = ok ? r.out : `ERROR: ${r.error}`;
+                                const safe = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                return `<div style="margin:8px 0;border-left:3px ${ok?'#34d399':'#f87171'};padding:8px;background:${ok?'rgba(52,211,153,.04)':'rgba(248,113,113,.04)'}">
+                                    <pre style="margin:0;font-size:10px;max-height:100px;overflow:auto;">${safe.substring(0, 300)}</pre>
+                                </div>`;
+                            }).join('');
+
+                            addMsg(tabId, {
+                                role: 'lucy',
+                                html: `<div class="mn">Lucy</div><div style="font-size:11px;color:var(--txt2);">⚡ ${h.name} (${commands.length} commands, ${elapsed}ms)</div>${html}`,
+                                rawContent: results.map(r => r.out || r.error).join('\n')
+                            });
+                        }
+                    } catch (e) {
+                        sysMsg(`Error: ${String(e).substring(0, 150)}`, 'var(--red)');
+                    }
+                })();
+                return true;
+            }
+
+            case 'recall': {
+                if (!arg) { sysMsg('Uso: <code>/recall &lt;consulta&gt;</code> — busca texto en conversaciones pasadas. Ej: <code>/recall iis reset prod</code>', 'var(--acc)'); return true; }
+                // Fire async search and render results inline
+                (async () => {
+                    try {
+                        const results = await invoke('recall_conversations', { query: arg, limit: 12 });
+                        if (!results || !results.length) {
+                            sysMsg(`Sin coincidencias para <b>"${arg}"</b>.`, 'var(--yellow,#f59e0b)');
+                            return;
+                        }
+                        const fmt = (t) => new Date(t * 1000).toLocaleString();
+                        const rows = results.map(r => {
+                            const icon = r.role === 'user' ? '👤' : r.role === 'lucy' ? '✦' : 'ℹ';
+                            const snippet = r.content.length > 240 ? r.content.slice(0, 240) + '…' : r.content;
+                            const safe = snippet.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            const qRe = new RegExp(`(${arg.split(/\s+/).filter(Boolean).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'ig');
+                            const hl = safe.replace(qRe, '<mark style="background:rgba(250,204,21,.35);color:inherit;">$1</mark>');
+                            const tabLbl = r.tab_title ? ` · <em>${r.tab_title.replace(/</g,'&lt;')}</em>` : '';
+                            return `<div style="margin:6px 0;padding:6px 8px;border-left:2px solid var(--acc);background:rgba(99,102,241,.04);">
+                                <div style="font-size:10px;color:var(--txt2);margin-bottom:3px;">${icon} ${r.role}${tabLbl} · ${fmt(r.created_at)}</div>
+                                <div style="font-size:12px;line-height:1.4;white-space:pre-wrap;">${hl}</div>
+                            </div>`;
+                        }).join('');
+                        sysMsg(`<b>🔍 Recall — ${results.length} coincidencia${results.length > 1 ? 's' : ''} para "${arg}":</b>${rows}`);
+                    } catch (e) {
+                        sysMsg(`Error en /recall: ${String(e).slice(0, 200)}`, 'var(--red)');
+                    }
+                })();
+                return true;
+            }
 
             case 'clear': case 'cls':
                 t.messages = [];
@@ -1856,7 +2378,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
     async function runMultiCompare(tabId, models, prompt) {
         const t = getTab(tabId); if (!t) return;
         addMsg(tabId, { role: 'user', html: `<div class="mn">${lucyConfig.name}</div><pre>/compare ${models.join(',')} ${prompt}</pre>`, rawRole: lucyConfig.name, rawContent: prompt });
-        const placeholder = addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy <span style="font-size:10px;opacity:.6">(compare)</span></div><div class="cmp-grid cmp-cols-${models.length}">${models.map(m => `<div class="cmp-col" data-model="${m}"><div class="cmp-head">${m}</div><div class="cmp-body">⏳ ${isEN?'running':'ejecutando'}…</div><div class="cmp-stat"></div></div>`).join('')}</div>` });
+        const placeholder = addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy <span style="font-size:10px;opacity:.6">(compare)</span></div><div class="cmp-grid cmp-cols-${models.length}">${models.map(m => `<div class="cmp-col" data-model="${m}"><div class="cmp-head">${m}</div><div class="cmp-body">↻ ${isEN?'running':'ejecutando'}…</div><div class="cmp-stat"></div></div>`).join('')}</div>` });
         t.isProcessing = true; refresh();
         const t0 = performance.now();
         const results = await Promise.allSettled(models.map(async (model) => {
@@ -1890,7 +2412,19 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         addThinking(tabId);
         await scrollChat();
         try{
-            const valid=t.messages.filter(m=>m.rawRole); const sel=[];
+            // Compact old turns if tab is long (opus-4-7 #1 — prompt budget)
+            const compaction = compactOldTurns(t);
+            if (compaction.digest) {
+                t.workingMemory ||= {};
+                t.workingMemory.compactedDigest = compaction.digest;
+            }
+            const validAll=t.messages.filter(m=>m.rawRole);
+            // Keep only turns from compaction.keepFrom onwards (verbatim)
+            const validStart = compaction.keepFrom > 0
+                ? t.messages.slice(compaction.keepFrom).filter(m=>m.rawRole)
+                : validAll;
+            const valid = validStart;
+            const sel=[];
             let len=0;
             for(let i=valid.length-1;i>=0;i--){
                 const msg=valid[i];
@@ -1902,13 +2436,13 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             contextUsed=len;
             let ctx='--- HISTORIAL ---\n'+sel.join('\n\n');
             // 📌 Mensajes fijados — siempre se incluyen, sobreviven a la compactación
-            const pinned = valid.filter(m => m.pinned);
+            const pinned = validAll.filter(m => m.pinned);
             if (pinned.length) {
                 ctx = '--- FIJADOS (siempre presentes) ---\n' +
                     pinned.map(m => `${m.rawRole}: ${m.rawContent || ''}`).join('\n\n') +
                     '\n\n' + ctx;
             }
-            ctx += construirContextoMemoria();
+            ctx += construirContextoMemoria(raw, t);
             let imgs=[];
             if(t.attachedFiles.length){const txts=t.attachedFiles.filter(f=>f.type==='text');const pix=t.attachedFiles.filter(f=>f.type==='image');if(txts.length)ctx+='\n\n--- ARCHIVOS ---\n'+txts.map(f=>`[${f.name}]\n${f.content}`).join('\n---\n');if(pix.length)pix.forEach(img=>imgs.push({mimeType:img.mimeType,data:img.content}));}
             t.attachedFiles=[]; refresh();
@@ -1920,7 +2454,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 const urlsToFetch = urlMatches.slice(0, maxUrls).map(m => m[0]);
                 // Mostrar indicador temporal
                 const thinkMsg = getTab(tabId)?.messages.find(m=>m.id==='thinking-'+tabId);
-                if (thinkMsg) { thinkMsg.html = `<span style="color:#3a5a7a;font-size:11px;">🌐 Leyendo documentación (${urlsToFetch.length} URL${urlsToFetch.length>1?'s':''})…</span>`; refresh(); }
+                if (thinkMsg) { thinkMsg.html = `<span style="color:#3a5a7a;font-size:11px;">↻ Leyendo documentación (${urlsToFetch.length} URL${urlsToFetch.length>1?'s':''})…</span>`; refresh(); }
                 const fetchResults = await Promise.allSettled(
                     urlsToFetch.map(u => invoke('fetch_url_content', { url: u }))
                 );
@@ -1985,6 +2519,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 .replace(/<EXECUTE_REG>[\s\S]*?<\/EXECUTE_REG>/gi, '')
                 .replace(/<EXECUTE_CSCRIPT>[\s\S]*?<\/EXECUTE_CSCRIPT>/gi, '')
                 .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
+                .replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
+                .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
                 .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
                 .replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')
                 .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
@@ -1996,7 +2532,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 if (!msg) return;
                 const display = cleanStreamDisplay(_revealed);
                 msg.rawContent = display;
-                const parsed = display ? DOMPurify.sanitize(marked.parse(display)) : '';
+                const withBadges = renderConfidenceTags(display);
+                const parsed = withBadges ? DOMPurify.sanitize(marked.parse(withBadges), { ADD_ATTR:['style'] }) : '';
                 msg.html = `<div class="mn">Lucy</div>${parsed}<span class="stream-cursor"></span>`;
                 refresh(); scrollChat();
             };
@@ -2038,29 +2575,29 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             if (!_isMultiStep) {
                 if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");fin(tabId);return;}
                 if(resp.includes('<TOOL>netconn</TOOL>')){
-                    try{const conns=await invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️ Red</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    try{const conns=await invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Red</div>${e}`,style:'border-left-color:#ef4444;'});}
                     fin(tabId);return;
                 }
                 if(resp.includes('<TOOL>tasklist</TOOL>')){
-                    try{const tasks=await invoke('get_tasklist');const rows=tasks.slice(0,25).map(t=>`${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Procesos)</div><pre style="font-size:11px;">${rows}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️ Tasklist</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    try{const tasks=await invoke('get_tasklist');const rows=tasks.slice(0,25).map(t=>`${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Procesos)</div><pre style="font-size:11px;">${rows}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Tasklist</div>${e}`,style:'border-left-color:#ef4444;'});}
                     fin(tabId);return;
                 }
                 const evtM0=resp.match(/<TOOL>eventlog:([^<:]+):(\d+)(?::([^<]+))?<\/TOOL>/i);
                 if(evtM0){
-                    try{const safeCount=Math.min(parseInt(evtM0[2]),500);const events=await invoke('get_event_log',{logName:evtM0[1],count:safeCount,level:evtM0[3]||null});const rows=events.map(e=>`[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (EventLog: ${evtM0[1]})</div><pre style="font-size:11px;">${rows||'Sin eventos.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️ EventLog</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    try{const safeCount=Math.min(parseInt(evtM0[2]),500);const events=await invoke('get_event_log',{logName:evtM0[1],count:safeCount,level:evtM0[3]||null});const rows=events.map(e=>`[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (EventLog: ${evtM0[1]})</div><pre style="font-size:11px;">${rows||'Sin eventos.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! EventLog</div>${e}`,style:'border-left-color:#ef4444;'});}
                     fin(tabId);return;
                 }
                 const regM0=resp.match(/<TOOL>registry:([^|<]+)\|([^|<]+)\|([^<]*)<\/TOOL>/i);
                 if(regM0){
-                    if(isSensitiveRegistry(regM0[2])){addMsg(tabId,{role:'lucy',html:`<div class="mn">🔒 Registro</div>Acceso denegado a ruta sensible: ${regM0[1]}\\${regM0[2]}`,style:'border-left-color:#ef4444;'});fin(tabId);return;}
-                    try{const val=await invoke('read_registry_value',{hive:regM0[1],keyPath:regM0[2],valueName:regM0[3]||''});addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Registro)</div><code style="font-family:var(--mono);font-size:12px;">${regM0[1]}\\${regM0[2]}\\${regM0[3]||'(Default)'} = ${val}</code>`,rawRole:'Lucy',rawContent:val});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️ Registro</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    if(isSensitiveRegistry(regM0[2])){addMsg(tabId,{role:'lucy',html:`<div class="mn">⊗ Registro</div>Acceso denegado a ruta sensible: ${regM0[1]}\\${regM0[2]}`,style:'border-left-color:#ef4444;'});fin(tabId);return;}
+                    try{const val=await invoke('read_registry_value',{hive:regM0[1],keyPath:regM0[2],valueName:regM0[3]||''});addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Registro)</div><code style="font-family:var(--mono);font-size:12px;">${regM0[1]}\\${regM0[2]}\\${regM0[3]||'(Default)'} = ${val}</code>`,rawRole:'Lucy',rawContent:val});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Registro</div>${e}`,style:'border-left-color:#ef4444;'});}
                     fin(tabId);return;
                 }
             }
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
-            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|fork_task|wait_task):/i;
-            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|fetch:|mcp_discover:)/i;
+            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memory_core_set|memory_core_delete|fork_task|wait_task|cd):/i;
+            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
                 // raw puede venir vacío en auto-retry, así que buscamos el último mensaje user del historial
@@ -2078,7 +2615,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
 
                 let agentResp = resp;
                 let agentCtx = ctx;
-                const MAX_LOOPS = 15;
+                const MAX_LOOPS = 25;
                 const ESCALATED_MAX_TOKENS = 64000; // openclaude pattern
                 let escalatedTokens = null; // null = usar default, número = override
                 let truncationRecoveryCount = 0;
@@ -2115,7 +2652,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     const count = (errorFingerprints.get(fp) || 0) + 1;
                     errorFingerprints.set(fp, count);
                     if (count > MAX_SAME_ERROR) {
-                        return `\n\n[⛔ REPEATED BUILD ERROR — seen ${count} times]\nThis exact error pattern has appeared ${count} times already. STOP retrying the same approach.\nYou MUST pivot: try a completely different strategy, simplify the code, remove the failing dependency, or explain to the user why this approach won't work.`;
+                        return `\n\n[⊗ REPEATED BUILD ERROR — seen ${count} times]\nThis exact error pattern has appeared ${count} times already. STOP retrying the same approach.\nYou MUST pivot: try a completely different strategy, simplify the code, remove the failing dependency, or explain to the user why this approach won't work.`;
                     }
                     return null;
                 };
@@ -2176,7 +2713,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             ? `<pre class="tc-body">${escapeHtml(c.output.length > 4000 ? c.output.slice(0,4000)+'\n… [truncated]' : c.output)}</pre>`
                             : '');
                         const copyBtn = c.output
-                            ? `<button class="tc-copy" data-copy-id="${c.id}" title="Copiar output" onclick="event.preventDefault();event.stopPropagation();navigator.clipboard.writeText(this.parentElement.parentElement.querySelector('.tc-body').textContent);this.textContent='✓';setTimeout(()=>this.textContent='📋',1200);">📋</button>`
+                            ? `<button class="tc-copy" data-copy-id="${c.id}" title="Copiar output" onclick="event.preventDefault();event.stopPropagation();navigator.clipboard.writeText(this.parentElement.parentElement.querySelector('.tc-body').textContent);this.textContent='✓';setTimeout(()=>this.textContent='⊞',1200);">⊞</button>`
                             : '';
                         const preview = c.output
                             ? c.output.split('\n').slice(0, 3).join('\n').slice(0, 240)
@@ -2282,7 +2819,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     }
 
                     if (ctx.length < origLen) {
-                        stepsHtml += `[🗜️ Contexto comprimido] ${(origLen - ctx.length)} chars ahorrados (Phase ${ctx.length < origLen * 0.7 ? '1+2' : '1'})\n`;
+                        stepsHtml += `[⊟ Contexto comprimido] ${(origLen - ctx.length)} chars ahorrados (Phase ${ctx.length < origLen * 0.7 ? '1+2' : '1'})\n`;
                     }
                     return ctx;
                 };
@@ -2336,7 +2873,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 <span><span style="color:var(--acc);">●</span> Files Modified</span> <span style="opacity:0.6">${filesMod.size}</span>
                               </div>
                               <div style="padding:4px;">
-                                ${Array.from(filesMod).map(f => `<button class="lucy-code-btn" data-path="${f.replace(/"/g,'&quot;')}" style="display:block; width:100%; text-align:left; padding:6px 8px; font-family:var(--mono); font-size:11px; background:transparent; border:none; color:#ddd; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">📄 ${f}</button>`).join('')}
+                                ${Array.from(filesMod).map(f => `<button class="lucy-code-btn" data-path="${f.replace(/"/g,'&quot;')}" style="display:block; width:100%; text-align:left; padding:6px 8px; font-family:var(--mono); font-size:11px; background:transparent; border:none; color:#ddd; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">· ${f}</button>`).join('')}
                               </div>
                             </div>
                         `;
@@ -2373,19 +2910,19 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         const parts = [];
                         if (writeOps.length) parts.push(`Modifiqué ${writeOps.length} archivo${writeOps.length>1?'s':''}: ${writeOps.map(w => '`' + (w.label.replace(/^(Edit|Write)\s+/,'')) + '`').join(', ')}`);
                         if (readOps.length) parts.push(`${readOps.length} operación${readOps.length>1?'es':''} de lectura/análisis`);
-                        if (errors) parts.push(`⚠️ ${errors} con error`);
+                        if (errors) parts.push(`! ${errors} con error`);
 
                         let action;
                         if (allFailed) {
-                            action = `❌ Todas las operaciones fallaron. Prueba reformular tu petición con más contexto, o pide que use una estrategia diferente.`;
+                            action = `✗ Todas las operaciones fallaron. Prueba reformular tu petición con más contexto, o pide que use una estrategia diferente.`;
                         } else if (hasErrors && hitLimit) {
-                            action = `⚠️ Se alcanzó el límite de iteraciones con errores pendientes. Puedes decir "continúa" para que retome, o pedir un enfoque diferente.`;
+                            action = `! Se alcanzó el límite de iteraciones con errores pendientes. Puedes decir "continúa" para que retome, o pedir un enfoque diferente.`;
                         } else if (hasErrors) {
-                            action = `⚠️ Algunas operaciones tuvieron errores. Pide "explícame los errores" o "intenta de otra forma" para continuar.`;
+                            action = `! Algunas operaciones tuvieron errores. Pide "explícame los errores" o "intenta de otra forma" para continuar.`;
                         } else if (hitLimit) {
-                            action = `⏱️ Se alcanzó el límite de pasos. Escribe "continúa" para que Lucy retome la tarea donde la dejó.`;
+                            action = `↻ Se alcanzó el límite de pasos. Escribe "continúa" para que Lucy retome la tarea donde la dejó.`;
                         } else {
-                            action = `✅ Operaciones completadas. Pide "explícame los cambios" si necesitas un resumen detallado.`;
+                            action = `✓ Operaciones completadas. Pide "explícame los cambios" si necesitas un resumen detallado.`;
                         }
 
                         displayText = `_${parts.join(' · ')}._\n\n_${action}_`;
@@ -2410,11 +2947,16 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     let toolUsed = false;
                     let lucyText = agentResp;
 
+                    // ── Live Trace: mark the start of a new agent turn ──
+                    pushTrace({ phase: 'llm.turn', label: `Turn ${loop_i + 1}/${MAX_LOOPS}`, step: loop_i + 1, tabId });
+
                     const thM = agentResp.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/i);
                     if (thM) {
                         const chunk = thM[1].trim() + '\n\n';
                         thoughtsAccum += chunk;
                         updateReasoning(chunk);
+                        const _thoughtOneLine = chunk.replace(/\s+/g, ' ').trim();
+                        pushTrace({ phase: 'thought', label: _thoughtOneLine.slice(0, 140) + (_thoughtOneLine.length > 140 ? '…' : ''), step: loop_i + 1, tabId });
                         lucyText = lucyText.replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '');
                     }
 
@@ -2429,7 +2971,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         const parts = sfM[1].split('|||');
                         const directory = parts[0].trim();
                         const pattern = parts[1] ? parts[1].trim() : '';
-                        readOnlyTasks.push({ label: `[🔍 Búsqueda] ${directory} (${pattern})`, fn: () => retryWithBackoff(() => invoke('search_files', {directory:directory, pattern:pattern, fileGlob:null, maxResults:80}), 2, true).then(r => `[SEARCH RESULT] ${r}`) });
+                        readOnlyTasks.push({ label: `[◎ Búsqueda] ${directory} (${pattern})`, fn: () => retryWithBackoff(() => invoke('search_files', {directory:directory, pattern:pattern, fileGlob:null, maxResults:80}), 2, true).then(r => `[SEARCH RESULT] ${r}`) });
                     }
 
                     const lfM = agentResp.match(/<TOOL>locate_file:([^<]+)<\/TOOL>/i);
@@ -2443,14 +2985,14 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     if (idxM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>start_indexer:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[🗃️ Indexer] ${idxM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('start_indexer', {path:idxM[1].trim()}), 2, true).then(r => `[INDEXER INICIADO]\n${r}`) });
+                        readOnlyTasks.push({ label: `[⊞ Indexer] ${idxM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('start_indexer', {path:idxM[1].trim()}), 2, true).then(r => `[INDEXER INICIADO]\n${r}`) });
                     }
 
                     const diffM = agentResp.match(/<TOOL>system_diff:([^<]+)<\/TOOL>/i);
                     if (diffM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>system_diff:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[⚖️ Diff] ${diffM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('system_diff', {category:diffM[1].trim()}), 2, true).then(r => `[SYSTEM DIFF RESULT]\n${r}`) });
+                        readOnlyTasks.push({ label: `[◑ Diff] ${diffM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('system_diff', {category:diffM[1].trim()}), 2, true).then(r => `[SYSTEM DIFF RESULT]\n${r}`) });
                     }
 
                     const mdM = agentResp.match(/<TOOL>mcp_discover:([^<]+)<\/TOOL>/i);
@@ -2458,27 +3000,211 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>mcp_discover:[^<]+<\/TOOL>/gi, '');
                         const mcpSrv = mdM[1].trim();
-                        readOnlyTasks.push({ label: `[🔍 MCP Scanner] ${mcpSrv}`, fn: () => retryWithBackoff(() => invoke('discover_mcp_tools', {serverName: mcpSrv, env: mcpSecrets}), 2, true).then(r => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`) });
+                        readOnlyTasks.push({ label: `[◎ MCP Scanner] ${mcpSrv}`, fn: () => retryWithBackoff(() => invoke('discover_mcp_tools', {serverName: mcpSrv, env: mcpSecrets}), 2, true).then(r => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`) });
                     }
                     const fetchM = agentResp.match(/<TOOL>fetch:([^<]+)<\/TOOL>/i);
                     if (fetchM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>fetch:[^<]+<\/TOOL>/gi, '');
                         const urlQ = fetchM[1].trim();
-                        readOnlyTasks.push({ label: `[🌐 Lector WEB] ${urlQ}`, fn: () => retryWithBackoff(() => invoke('fetch_url_content', {url: urlQ}), 2, true).then(r => `[FETCH RESULT for '${urlQ}']\n${r}`) });
+                        readOnlyTasks.push({ label: `[◉ Lector WEB] ${urlQ}`, fn: () => retryWithBackoff(() => invoke('fetch_url_content', {url: urlQ}), 2, true).then(r => `[FETCH RESULT for '${urlQ}']\n${r}`) });
                     }
                     const webM = agentResp.match(/<TOOL>search_web:([^<]+)<\/TOOL>/i);
                     if (webM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>search_web:[^<]+<\/TOOL>/gi, '');
                         const webQ = webM[1].trim();
-                        readOnlyTasks.push({ label: `[🌐 Web] ${webQ}`, fn: () => retryWithBackoff(() => invoke('search_web', {query: webQ}), 2, true).then(r => `[WEB SEARCH RESULT for '${webQ}']\n${r}`) });
+                        readOnlyTasks.push({ label: `[◉ Web] ${webQ}`, fn: () => retryWithBackoff(() => invoke('search_web', {query: webQ}), 2, true).then(r => `[WEB SEARCH RESULT for '${webQ}']\n${r}`) });
                     }
                     const rbM = agentResp.match(/<TOOL>search_runbooks:([^<]+)<\/TOOL>/i);
                     if (rbM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>search_runbooks:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[📚 Runbooks] ${rbM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('search_runbooks', {dirPath:lucyConfig.runbooksDir, query:rbM[1].trim()}), 2, true).then(r => `[RUNBOOK SEARCH RESULT]\n${r}`) });
+                        readOnlyTasks.push({ label: `[≡ Runbooks] ${rbM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('search_runbooks', {dirPath:lucyConfig.runbooksDir, query:rbM[1].trim()}), 2, true).then(r => `[RUNBOOK SEARCH RESULT]\n${r}`) });
+                    }
+                    // ── semantic: vector search over skills + memories (Sprint 2) ──
+                    const semM = agentResp.match(/<TOOL>semantic:([^<]+)<\/TOOL>/i);
+                    if (semM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>semantic:[^<]+<\/TOOL>/gi, '');
+                        const semQ = semM[1].trim();
+                        readOnlyTasks.push({
+                            label: `[◈ Semántica] ${semQ}`,
+                            fn: () => invoke('semantic_search', { query: semQ, entityType: null, limit: 6, minScore: 0.3, model: null })
+                                .then(hits => {
+                                    if (!Array.isArray(hits) || hits.length === 0) return `[SEMANTIC SEARCH] Sin resultados relevantes para "${semQ}". Prueba search_web o search_runbooks.`;
+                                    const lines = hits.map(h => `• ${h.entity_type}:${h.entity_id} (score=${h.score.toFixed(3)})\n  ${h.text.replace(/\s+/g,' ').slice(0, 220)}`);
+                                    return `[SEMANTIC SEARCH RESULT for '${semQ}']\n${lines.join('\n')}`;
+                                })
+                                .catch(e => `[SEMANTIC SEARCH UNAVAILABLE] ${String(e).slice(0, 180)}. Skills/memories indexing requires a local Ollama with an embedding model (e.g. 'ollama pull nomic-embed-text').`)
+                        });
+                    }
+
+                    // ── graphify: no implementado — redirigir a analyze_code ──
+                    if (/<TOOL>graphify:/i.test(agentResp)) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>graphify:[^<]+<\/TOOL>/gi, '');
+                        toolResults.push(`[GRAPHIFY NOT AVAILABLE]\nEl tool graphify no está implementado en esta instalación. Usa <TOOL>analyze_code:/ruta/al/archivo</TOOL> para obtener el AST (funciones, clases, imports) de archivos Rust, JS o TS. Para explorar la estructura del proyecto usa <TOOL>listdir:/ruta</TOOL> y <TOOL>readfile:/ruta</TOOL>.`);
+                        stepsHtml += `[! graphify] Redirigido a analyze_code\n`;
+                    }
+
+                    // ── memoria_guardar: persiste un hallazgo en la DB entre sesiones ──
+                    const mgM = agentResp.match(/<TOOL>memoria_guardar:([^|]+)\|\|\|([^|<]+)(?:\|\|\|([^<]*))?<\/TOOL>/i);
+                    if (mgM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>memoria_guardar:[^<]+<\/TOOL>/gi, '');
+                        const mgTitle   = mgM[1].trim();
+                        const mgContent = mgM[2].trim();
+                        const mgTags    = mgM[3] ? JSON.stringify(mgM[3].split(',').map(t => t.trim()).filter(Boolean)) : '[]';
+                        const mgFiles   = JSON.stringify([...filesMod]);
+                        const imp = /importance:3/i.test(mgContent) ? 3 : /importance:2/i.test(mgContent) ? 2 : 1;
+                        const _mgCard = newToolCard('◈', `Memoria: ${mgTitle}`, 'write');
+                        try {
+                            const savedId = await invoke('save_agent_memory', {
+                                title: mgTitle, content: mgContent,
+                                tags: mgTags, files: mgFiles,
+                                sessionId: String(agentTaskId), importance: imp
+                            });
+                            // Sprint 2 auto-embed: fire-and-forget so Ollama downtime never blocks memory saves
+                            invoke('upsert_embedding', {
+                                entityType: 'memory',
+                                entityId: String(savedId),
+                                text: `${mgTitle}\n${mgContent}`,
+                                model: null
+                            }).catch(err => console.debug('[embed] memory skipped:', err));
+                            toolResults.push(`[MEMORY SAVED — ID ${savedId}]\n"${mgTitle}" guardado en memoria persistente.`);
+                            stepsHtml += `[◈ Memoria guardada] ${mgTitle}\n`;
+                            finishToolCard(_mgCard, `ID ${savedId}: ${mgTitle}`, true);
+                            cargarMemoriasDB(); // refrescar cache en segundo plano
+                        } catch(e) {
+                            toolResults.push(`[MEMORY SAVE ERROR]\n${e}`);
+                            finishToolCard(_mgCard, String(e), false);
+                        }
+                    }
+
+                    // ── memoria_buscar: busca en la DB de memorias persistentes ──
+                    const mbM = agentResp.match(/<TOOL>memoria_buscar:([^<]+)<\/TOOL>/i);
+                    if (mbM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>memoria_buscar:[^<]+<\/TOOL>/gi, '');
+                        const mbQuery = mbM[1].trim();
+                        readOnlyTasks.push({
+                            label: `[◈ Memoria] ${mbQuery}`,
+                            fn: async () => {
+                                const mems = await invoke('search_agent_memories', { query: mbQuery, limit: 8 });
+                                if (!mems || mems.length === 0) {
+                                    return `[MEMORY SEARCH: "${mbQuery}"]\nNo se encontraron memorias relevantes. Esto puede ser la primera vez que trabajas en esta área.`;
+                                }
+                                const formatted = mems.map(m => {
+                                    const tags = JSON.parse(m.tags || '[]').join(', ');
+                                    const date = new Date(m.created_at * 1000).toLocaleDateString();
+                                    return `## ${m.title} [${date}]${tags ? ` (${tags})` : ''}\n${m.content}`;
+                                }).join('\n\n---\n\n');
+                                return `[MEMORY SEARCH RESULTS for "${mbQuery}" — ${mems.length} encontradas]\n\n${formatted}`;
+                            }
+                        });
+                    }
+
+                    // ── memory_core_set: promueve un hecho al tier CORE (siempre inyectado) ──
+                    for (const coreM of [...agentResp.matchAll(/<TOOL>memory_core_set:([^|]+)\|\|\|([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(coreM[0], '');
+                        const cSection = coreM[1].trim();
+                        const cKey     = coreM[2].trim();
+                        const cValue   = coreM[3].trim();
+                        const _cCard = newToolCard('◆', `Core memory: ${cSection}/${cKey}`, 'write');
+                        try {
+                            const cId = await invoke('memory_core_set', {
+                                section: cSection, key: cKey, value: cValue, pinned: true
+                            });
+                            toolResults.push(`[CORE MEMORY SET — ${cSection}/${cKey}]\n${cValue}`);
+                            stepsHtml += `[◆ Core] ${cSection}.${cKey} = ${cValue}\n`;
+                            finishToolCard(_cCard, `ID ${cId}: ${cKey}`, true);
+                        } catch (e) {
+                            toolResults.push(`[CORE MEMORY ERROR]\n${e}`);
+                            finishToolCard(_cCard, String(e), false);
+                        }
+                    }
+
+                    // ── memory_core_delete: remueve un hecho del tier CORE ──
+                    for (const cdM of [...agentResp.matchAll(/<TOOL>memory_core_delete:([^|]+)\|\|\|([^<]+)<\/TOOL>/gi)]) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(cdM[0], '');
+                        const dSection = cdM[1].trim();
+                        const dKey     = cdM[2].trim();
+                        const _dCard = newToolCard('◆', `Core delete: ${dSection}/${dKey}`, 'write');
+                        try {
+                            await invoke('memory_core_delete', { section: dSection, key: dKey });
+                            toolResults.push(`[CORE MEMORY DELETED — ${dSection}/${dKey}]`);
+                            stepsHtml += `[◆ Core del] ${dSection}.${dKey}\n`;
+                            finishToolCard(_dCard, 'deleted', true);
+                        } catch (e) {
+                            toolResults.push(`[CORE MEMORY DELETE ERROR]\n${e}`);
+                            finishToolCard(_dCard, String(e), false);
+                        }
+                    }
+
+                    // ── fork_task: lanza un sub-agente en segundo plano (fire-and-forget) ──
+                    for (const forkM of [...agentResp.matchAll(/<TOOL>fork_task:([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>fork_task:[^<]+<\/TOOL>/gi, '');
+                        const fTaskId = forkM[1].trim();
+                        const fInstruction = forkM[2].trim();
+
+                        if (forkedTasks[fTaskId]) {
+                            toolResults.push(`[FORK: ${fTaskId}]\nYa existe una tarea con ese ID. Usa <TOOL>wait_task:${fTaskId}</TOOL> para recuperar su resultado.`);
+                            continue;
+                        }
+
+                        const _fCard = newToolCard('⇉', `Fork: ${fTaskId}`, 'read');
+                        stepsHtml += `[⇉ Fork] ${fTaskId}: iniciando...\n`;
+                        renderAgentTask();
+
+                        // Sub-agente de un solo paso — sin tool loop, modelo rápido
+                        const _fPromise = invoke('ask_lucy', {
+                            prompt: `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano. Completa la siguiente tarea y responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas):\n\n${fInstruction}`,
+                            context: agentCtx.substring(Math.max(0, agentCtx.length - 3000)),
+                            userName: lucyConfig.name,
+                            runbooksDir: lucyConfig.runbooksDir || null,
+                            model: 'gemini-2.5-flash',
+                            lang: userLang,
+                            hostsJson: JSON.stringify($hosts),
+                            images: null
+                        }).then(r => {
+                            forkedTasks[fTaskId].status = 'done';
+                            forkedTasks[fTaskId].result = String(r);
+                            finishToolCard(_fCard, String(r), true);
+                            stepsHtml += `[✓ Fork listo] ${fTaskId}\n`;
+                            renderAgentTask();
+                            return String(r);
+                        }).catch(e => {
+                            forkedTasks[fTaskId].status = 'error';
+                            forkedTasks[fTaskId].result = String(e);
+                            finishToolCard(_fCard, String(e), false);
+                            return `[ERROR en sub-tarea] ${e}`;
+                        });
+
+                        forkedTasks[fTaskId] = { promise: _fPromise, status: 'running', result: null };
+                        toolResults.push(`[FORK LAUNCHED: ${fTaskId}]\nSub-tarea iniciada en segundo plano. Continúa con tus siguientes acciones. Usa <TOOL>wait_task:${fTaskId}</TOOL> en un paso posterior para obtener el resultado.`);
+                    }
+
+                    // ── wait_task: espera el resultado de un fork previo ──
+                    for (const wtM of [...agentResp.matchAll(/<TOOL>wait_task:([^<]+)<\/TOOL>/gi)]) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>wait_task:[^<]+<\/TOOL>/gi, '');
+                        const wTaskId = wtM[1].trim();
+                        readOnlyTasks.push({
+                            label: `[↻ Wait] ${wTaskId}`,
+                            fn: async () => {
+                                if (!forkedTasks[wTaskId]) {
+                                    return `[WAIT_TASK ERROR: ${wTaskId}]\nNo se encontró ninguna tarea fork con ese ID. Verifica haber ejecutado <TOOL>fork_task:${wTaskId}|||instrucción</TOOL> antes en esta sesión.`;
+                                }
+                                stepsHtml += `[↻ Esperando fork] ${wTaskId}...\n`;
+                                renderAgentTask();
+                                const result = await forkedTasks[wTaskId].promise;
+                                return `[SUBTASK RESULT: ${wTaskId}]\n${result}`;
+                            }
+                        });
                     }
 
                     const rfM = agentResp.match(/<TOOL>readfile:([^<]+)<\/TOOL>/i);
@@ -2490,7 +3216,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         if (_rfChk.blocked) {
                             toolResults.push(_rfChk.msg);
                         } else {
-                            readOnlyTasks.push({ label: `[📖 Lectura] ${_rfPath}`, fn: () => retryWithBackoff(() => invoke('read_file_content', {path:_rfPath}), 2, true).then(c => { const t2 = c.length > 8000 && !c.includes('ERROR') ? c.substring(0,8000)+'\n... [⚠️ resultado truncado a 8000 chars]' : c; return `[FILE CONTENT: ${_rfPath}]\n${t2}`; }) });
+                            readOnlyTasks.push({ label: `[· Lectura] ${_rfPath}`, fn: () => retryWithBackoff(() => invoke('read_file_content', {path:_rfPath}), 2, true).then(c => { const t2 = c.length > 16000 && !c.includes('ERROR') ? c.substring(0,16000)+'\n... [! archivo truncado a 16000 chars — usa readlines para rangos específicos]' : c; return `[FILE CONTENT: ${_rfPath}]\n${t2}`; }) });
                         }
                     }
 
@@ -2498,45 +3224,45 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     if (rlM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>readlines:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[📖 Rango] ${rlM[1].trim()} (${rlM[2]}-${parseInt(rlM[2])+parseInt(rlM[3])})`, fn: () => retryWithBackoff(() => invoke('read_file_lines', {path:rlM[1].trim(), start:parseInt(rlM[2]), count:parseInt(rlM[3])}), 2, true).then(c => `[FILE LINES: ${rlM[1].trim()} (${rlM[2]}-${parseInt(rlM[2])+parseInt(rlM[3])})]\n${c}`) });
+                        readOnlyTasks.push({ label: `[· Rango] ${rlM[1].trim()} (${rlM[2]}-${parseInt(rlM[2])+parseInt(rlM[3])})`, fn: () => retryWithBackoff(() => invoke('read_file_lines', {path:rlM[1].trim(), start:parseInt(rlM[2]), count:parseInt(rlM[3])}), 2, true).then(c => `[FILE LINES: ${rlM[1].trim()} (${rlM[2]}-${parseInt(rlM[2])+parseInt(rlM[3])})]\n${c}`) });
                     }
 
                     const ldM = agentResp.match(/<TOOL>listdir:([^<]+)<\/TOOL>/i);
                     if (ldM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>listdir:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[📁 Directorio] ${ldM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('list_directory', {path:ldM[1].trim()}), 2, true).then(entries => { const rows = entries.slice(0,100).map(e=>`${e.is_dir?'DIR':'   '} ${e.name}`).join('\n'); return `[DIRECTORY: ${ldM[1].trim()}]\n${rows}`; }) });
+                        readOnlyTasks.push({ label: `[⊞ Directorio] ${ldM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('list_directory', {path:ldM[1].trim()}), 2, true).then(entries => { const rows = entries.slice(0,100).map(e=>`${e.is_dir?'DIR':'   '} ${e.name}`).join('\n'); return `[DIRECTORY: ${ldM[1].trim()}]\n${rows}`; }) });
                     }
 
                     const acAST = agentResp.match(/<TOOL>analyze_code:([^<]+)<\/TOOL>/i);
                     if (acAST) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>analyze_code:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[🌳 AST] ${acAST[1].trim()}`, fn: () => retryWithBackoff(() => invoke('analyze_code', {path:acAST[1].trim()}), 2, true).then(c => `[AST RESULT: ${acAST[1].trim()}]\n${c}`) });
+                        readOnlyTasks.push({ label: `[⊕ AST] ${acAST[1].trim()}`, fn: () => retryWithBackoff(() => invoke('analyze_code', {path:acAST[1].trim()}), 2, true).then(c => `[AST RESULT: ${acAST[1].trim()}]\n${c}`) });
                     }
 
                     // Native read-only tools — también concurrentes
                     if (agentResp.includes('<TOOL>sysinfo</TOOL>')) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>sysinfo<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: '[🖥️ SysInfo] Hardware report', fn: () => retryWithBackoff(() => invoke('get_system_health'), 2, true).then(r => `[SYSINFO RESULT]\n${r}`) });
+                        readOnlyTasks.push({ label: '[⊡ SysInfo] Hardware report', fn: () => retryWithBackoff(() => invoke('get_system_health'), 2, true).then(r => `[SYSINFO RESULT]\n${r}`) });
                     }
                     if (agentResp.includes('<TOOL>netconn</TOOL>')) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>netconn<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: '[🌐 Red] Conexiones de red', fn: () => retryWithBackoff(() => invoke('get_network_connections'), 2, true).then(conns => {
+                        readOnlyTasks.push({ label: '[◉ Red] Conexiones de red', fn: () => retryWithBackoff(() => invoke('get_network_connections'), 2, true).then(conns => {
                             const limit = 50; // Increased from 40 to 50
                             const isTruncated = conns.length > limit;
                             const rows = conns.slice(0, limit).map(c => `${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');
                             const result = `[NETWORK CONNECTIONS (${conns.length} total)]\n${rows || 'Sin conexiones activas.'}`;
                             // Alert if truncated: CRITICAL INFO
-                            return isTruncated ? result + `\n\n⚠️ Mostradas primeras ${limit} de ${conns.length} conexiones. Usa 'netsh interface ipv4 show tcpconnections' si necesitas más.` : result;
+                            return isTruncated ? result + `\n\n! Mostradas primeras ${limit} de ${conns.length} conexiones. Usa 'netsh interface ipv4 show tcpconnections' si necesitas más.` : result;
                         }) });
                     }
                     if (agentResp.includes('<TOOL>tasklist</TOOL>')) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>tasklist<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: '[📋 Procesos] Lista de procesos', fn: () => retryWithBackoff(() => invoke('get_tasklist'), 2, true).then(tasks => { const rows = tasks.slice(0,30).map(t => `${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n'); return `[TASKLIST RESULT]\n${rows}`; }) });
+                        readOnlyTasks.push({ label: '[≡ Procesos] Lista de procesos', fn: () => retryWithBackoff(() => invoke('get_tasklist'), 2, true).then(tasks => { const rows = tasks.slice(0,30).map(t => `${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n'); return `[TASKLIST RESULT]\n${rows}`; }) });
                     }
                     const evtM = agentResp.match(/<TOOL>eventlog:([^<:]+):(\d+)(?::([^<]+))?<\/TOOL>/i);
                     if (evtM) {
@@ -2545,8 +3271,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         // Limit event log queries to max 500 (prevent DOS/memory exhaust)
                         const requestedCount = parseInt(evtM[2]);
                         const safeCount = Math.min(requestedCount, 500);
-                        const countWarning = requestedCount > 500 ? `\n⚠️ Límite de consulta reducido: ${requestedCount} → 500 eventos (protección contra DOS).` : '';
-                        readOnlyTasks.push({ label: `[📜 EventLog] ${evtM[1]}`, fn: () => retryWithBackoff(() => invoke('get_event_log', {logName:evtM[1], count:safeCount, level:evtM[3]||null}), 2, true).then(events => { const rows = events.map(e => `[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n'); return `[EVENTLOG: ${evtM[1]}]\n${rows || 'Sin eventos.'}${countWarning}`; }) });
+                        const countWarning = requestedCount > 500 ? `\n! Límite de consulta reducido: ${requestedCount} → 500 eventos (protección contra DOS).` : '';
+                        readOnlyTasks.push({ label: `[· EventLog] ${evtM[1]}`, fn: () => retryWithBackoff(() => invoke('get_event_log', {logName:evtM[1], count:safeCount, level:evtM[3]||null}), 2, true).then(events => { const rows = events.map(e => `[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n'); return `[EVENTLOG: ${evtM[1]}]\n${rows || 'Sin eventos.'}${countWarning}`; }) });
                     }
                     const regM = agentResp.match(/<TOOL>registry:([^|<]+)\|([^|<]+)\|([^<]*)<\/TOOL>/i);
                     if (regM) {
@@ -2556,10 +3282,17 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         const hive = regM[1].toUpperCase();
                         const keyPath = regM[2];
                         if (isSensitiveRegistry(keyPath)) {
-                            readOnlyTasks.push({ label: `[🔑 Registro] BLOCKED: ${regM[2]}`, fn: () => Promise.resolve(`[REGISTRY BLOCKED]\n⚠️ Access denied to sensitive registry path: ${hive}\\\\${keyPath}\nAllowed: HKLM\\\\Software\\\\*, HKLM\\\\System\\\\CurrentControlSet\\\\Services\\\\*`) });
+                            readOnlyTasks.push({ label: `[⊗ Registro] BLOCKED: ${regM[2]}`, fn: () => Promise.resolve(`[REGISTRY BLOCKED]\n! Access denied to sensitive registry path: ${hive}\\\\${keyPath}\nAllowed: HKLM\\\\Software\\\\*, HKLM\\\\System\\\\CurrentControlSet\\\\Services\\\\*`) });
                         } else {
-                            readOnlyTasks.push({ label: `[🔑 Registro] ${regM[2]}`, fn: () => retryWithBackoff(() => invoke('read_registry_value', {hive:regM[1], keyPath:regM[2], valueName:regM[3]||''}), 2, true).then(val => `[REGISTRY: ${regM[1]}\\\\${regM[2]}\\\\${regM[3]||'(Default)'}] = ${val}`) });
+                            readOnlyTasks.push({ label: `[⊕ Registro] ${regM[2]}`, fn: () => retryWithBackoff(() => invoke('read_registry_value', {hive:regM[1], keyPath:regM[2], valueName:regM[3]||''}), 2, true).then(val => `[REGISTRY: ${regM[1]}\\\\${regM[2]}\\\\${regM[3]||'(Default)'}] = ${val}`) });
                         }
+                    }
+
+                    // ── mcp_query: añadir a readOnlyTasks ANTES de construir cards[] ──
+                    for (const mcpQ of [...agentResp.matchAll(/<TOOL>mcp_query:([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>mcp_query:[\s\S]*?<\/TOOL>/gi, '');
+                        readOnlyTasks.push({ label: `[⊟ MCP] ${mcpQ[1].trim()}`, fn: () => retryWithBackoff(() => invoke('call_mcp_tool', {serverName:mcpQ[1].trim(), query:mcpQ[2].trim(), env: mcpSecrets}), 2, true).then(c => `[MCP ${mcpQ[1].trim()} RESULT]\n`+c) });
                     }
 
                     // Ejecutar todos los read-only tasks en paralelo (con tool cards estilo Antigravity)
@@ -2568,21 +3301,13 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         readOnlyTasks.forEach(t2 => { stepsHtml += t2.label + '\n'; });
                         if (readOnlyTasks.length > 1) stepsHtml += `[⚡ Concurrente]${concurrentLabel}\n`;
 
-                        // Create one card per read-only task
+                        // Create one card per read-only task — AFTER all tasks are collected
                         const cards = readOnlyTasks.map(t2 => {
-                            // label format: "[icon Title] details" — extract first emoji as icon
                             const m = t2.label.match(/^\[(\S+)\s*([^\]]*)\]\s*(.*)$/);
-                            const icon = m ? m[1] : '🔧';
+                            const icon = m ? m[1] : '▶';
                             const lbl  = m ? `${m[2].trim()} ${m[3]}`.trim() : t2.label;
                             return newToolCard(icon, lbl, 'read');
                         });
-
-
-                        for (const mcpQ of [...agentResp.matchAll(/<TOOL>mcp_query:([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
-                            toolUsed = true;
-                            lucyText = lucyText.replace(/<TOOL>mcp_query:[\s\S]*?<\/TOOL>/gi, '');
-                            readOnlyTasks.push({ label: `[MCP ${mcpQ[1].trim()}]`, fn: () => retryWithBackoff(() => invoke('call_mcp_tool', {serverName:mcpQ[1].trim(), query:mcpQ[2].trim(), env: mcpSecrets}), 2, true).then(c => `[MCP ${mcpQ[1].trim()} RESULT]\n`+c) });
-                        }
 
                         const results = await Promise.allSettled(readOnlyTasks.map(t2 => t2.fn()));
                         results.forEach((r, i) => {
@@ -2611,14 +3336,14 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 editCountsByPath.set(path, prevEdits + 1);
                             } else {
                                 editCountsByPath.set(path, prevEdits + 1);
-                                const _editCard = newToolCard('📝', `Edit ${path}`, 'write');
+                                const _editCard = newToolCard('·', `Edit ${path}`, 'write');
                                 try {
                                     const oldStr = parts[1].replace(/\\n/g, '\n');
                                     const newStr = parts.slice(2).join('|||').replace(/\\n/g, '\n');
                                     _editCard.diff = { oldStr, newStr };
                                     const r = await retryWithBackoff(() => invoke('edit_file', {path, oldString:oldStr, newString:newStr, replaceAll:false}), 3, false);
                                     toolResults.push(`[EDIT RESULT] ${r}`);
-                                    stepsHtml += `[📝 Edición] ${path}\n`;
+                                    stepsHtml += `[· Edición] ${path}\n`;
                                     filesMod.add(path);
                                     finishToolCard(_editCard, String(r), true);
                                 } catch(e) {
@@ -2637,11 +3362,11 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>writefile:[^<]+<\/TOOL>/gi, '').replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
                         const _wPath = wfM[1].trim();
-                        const _writeCard = newToolCard('💾', `Write ${_wPath}`, 'write');
+                        const _writeCard = newToolCard('⊞', `Write ${_wPath}`, 'write');
                         try {
                             const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:fcM[1], force:true}), 3, false);
                             toolResults.push(`[WRITE RESULT] ${r}`);
-                            stepsHtml += `[💾 Escritura] ${_wPath}\n`;
+                            stepsHtml += `[⊞ Escritura] ${_wPath}\n`;
                             filesMod.add(_wPath);
                             finishToolCard(_writeCard, String(r), true);
                         } catch(e) {
@@ -2673,36 +3398,50 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         if (execRemoteM) {
                             const hostId = execRemoteM[1];
                             const cmd = execRemoteM[2].trim();
-                            stepsHtml += `[🌐 Remoto] ${cmd.substring(0, 40)}...\n`;
-                            
+                            stepsHtml += `[◉ Remoto] ${cmd.substring(0, 40)}...\n`;
+                            const _lt = traceStart('exec.start', `remote:${hostId} ${cmd.substring(0,60)}`, loop_i + 1, tabId);
+                            let h = null;
                             try {
                                 const t0 = Date.now();
                                 const h_idClean = hostId.replace('LucyHost_', '');
-                                const h = $hosts.find(x => x.id === h_idClean || x.name === hostId);
-                                
+                                h = $hosts.find(x => x.id === h_idClean || x.name === hostId);
+
                                 if (!h) {
                                     throw new Error(`Host '${hostId}' no encontrado en NexShell.`);
                                 }
-                                
+
                                 const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
                                 const out = await invoke('execute_shell_cmd', {
                                     host: h.host, username: h.username, command: cmd,
-                                    hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985), 
+                                    hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
                                     password: pwd, keyPath: h.sshKeyPath||null
                                 });
-                                
+
                                 const elapsed = Date.now() - t0;
                                 const safeOut = (out || '(sin salida)').trim();
                                 agentWarps.push(warpBlock(`[${h.name}] ${cmd}`, safeOut, true, elapsed, h.type==='windows'?'WinRM':'SSH'));
 
-                                // Only truncate if length > 8000 AND doesn't contain ERROR (critical data at tail)
-                                const trunc = safeOut.length > 8000 && !safeOut.includes('ERROR') && !safeOut.includes('Exception')
-                                    ? safeOut.substring(0, 8000) + `\n... [⚠️ resultado truncado a 8000 chars, ver detalles arriba]`
+                                // ── ReAct: infer exit code from remote output ─────────────
+                                const xc = inferExitCode(safeOut);
+                                const excerpt = xc && xc > 0 ? extractErrorExcerpt(safeOut) : '';
+                                _lt.end(xc === 0 || xc == null, excerpt || undefined, xc);
+
+                                // Only truncate if length > 16000 AND doesn't contain ERROR (critical data at tail)
+                                const trunc = safeOut.length > 16000 && !safeOut.includes('ERROR') && !safeOut.includes('Exception')
+                                    ? safeOut.substring(0, 16000) + `\n... [! resultado truncado a 16000 chars, ver detalles arriba]`
                                     : safeOut;
-                                toolResults.push(`[EXECUTION RESULT]\n${trunc}`);
+                                const xcTag = xc != null ? `[EXIT_CODE: ${xc}] ` : '';
+                                toolResults.push(`[EXECUTION RESULT] ${xcTag}\n${trunc}`);
+                                if (xc != null && xc >= 2) {
+                                    toolResults.push(buildReactMarker(loop_i + 1, xc, excerpt, cmd));
+                                    pushTrace({ phase: 'react.reflect', label: `Reflect on remote failure (step ${loop_i + 1})`, detail: excerpt || undefined, step: loop_i + 1, tabId });
+                                }
                             } catch(e) {
                                 agentWarps.push(warpBlock(`[${h ? h.name : 'Remoto'}] ${cmd}`, String(e), false, 0, 'ERR'));
-                                toolResults.push(`[EXECUTION RESULT: COMMAND RETURNED ERROR/NON-ZERO EXIT CODE]\n${e}`);
+                                _lt.end(false, String(e), 2);
+                                toolResults.push(`[EXECUTION RESULT: COMMAND RETURNED ERROR/NON-ZERO EXIT CODE] [EXIT_CODE: 2]\n${e}`);
+                                toolResults.push(buildReactMarker(loop_i + 1, 2, String(e).slice(0, 240), cmd));
+                                pushTrace({ phase: 'react.reflect', label: `Reflect on remote exception (step ${loop_i + 1})`, detail: String(e).slice(0, 240), step: loop_i + 1, tabId });
                             }
                         } else {
                             const execType = (execCmdM && t.execEngine !== 'powershell') ? 'cmd' : execWmicM ? 'wmic' : execNetshM ? 'netsh' : execRegM ? 'reg' : execVbsM ? 'cscript' : 'powershell';
@@ -2713,12 +3452,12 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             const _execBlocked = _execChk.blocked;
                             if (_execBlocked) {
                                 toolResults.push(_execChk.msg);
-                                stepsHtml += `[⛔ Loop bloqueado] ${execType}: ${cmd.substring(0,40)}...\n`;
+                                stepsHtml += `[⊗ Loop bloqueado] ${execType}: ${cmd.substring(0,40)}...\n`;
                                 renderAgentTask();
                             }
                             // ── Detect destructive commands requiring confirmation ──
                             if (!_execBlocked && isDestructiveCmd(cmd)) {
-                                stepsHtml += `[⚠️ DESTRUCTIVO] Comando requiere confirmación.\n`;
+                                stepsHtml += `[! DESTRUCTIVO] Comando requiere confirmación.\n`;
                                 pendingRunAsCmd = { cmd, ctx: agentCtx, doSpeak, tabId, isDestructive: true };
                                 $showRunAsModal = true;
                                 renderAgentTask(lucyText.trim());
@@ -2727,7 +3466,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             }
 
                             if (!_execBlocked && execType === 'powershell' && /start-process\s+powershell\s+-verb\s+runas/i.test(cmd)) {
-                                stepsHtml += `[⚠️ UAC] Elevación de privilegios solicitada.\n`;
+                                stepsHtml += `[! UAC] Elevación de privilegios solicitada.\n`;
                                 pendingRunAsCmd = { cmd, ctx: agentCtx, doSpeak, tabId };
                                 $showRunAsModal = true;
                                 renderAgentTask(lucyText.trim());
@@ -2736,9 +3475,10 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             }
 
                             if (!_execBlocked) {
-                            stepsHtml += `[💻 Ejecución] ${cmd.substring(0, 40)}...\n`;
-                            const _execIcon = {powershell:'⚡',cmd:'💻',wmic:'🔧',netsh:'🌐',reg:'🔑',cscript:'📜'}[execType]||'⚡';
+                            stepsHtml += `[▶ Ejecución] ${cmd.substring(0, 40)}...\n`;
+                            const _execIcon = {powershell:'⚡',cmd:'▶',wmic:'⊕',netsh:'◉',reg:'⊕',cscript:'·'}[execType]||'⚡';
                             const _execCard = newToolCard(_execIcon, `${execType}: ${cmd.substring(0,80)}`, 'exec');
+                            const _lt = traceStart('exec.start', `${execType}: ${cmd.substring(0,80)}`, loop_i + 1, tabId);
                             try {
                                 const t0 = Date.now();
                                 let out;
@@ -2755,21 +3495,37 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 const safeOut = (out || '(sin salida)').trim();
                                 agentWarps.push(warpBlock(cmd, safeOut, true, elapsed, engineLabel));
 
-                                // Only truncate if length > 8000 AND doesn't contain ERROR (critical data at tail)
-                                const trunc = safeOut.length > 8000 && !safeOut.includes('ERROR') && !safeOut.includes('Exception')
-                                    ? safeOut.substring(0, 8000) + `\n... [⚠️ resultado truncado a 8000 chars, ver detalles arriba]`
+                                // ── ReAct: infer exit code / error severity ─────────────
+                                const xc = inferExitCode(safeOut);
+                                const excerpt = xc && xc > 0 ? extractErrorExcerpt(safeOut) : '';
+                                _lt.end(xc === 0 || xc == null, excerpt || undefined, xc);
+
+                                // Only truncate if length > 16000 AND doesn't contain ERROR (critical data at tail)
+                                const trunc = safeOut.length > 16000 && !safeOut.includes('ERROR') && !safeOut.includes('Exception')
+                                    ? safeOut.substring(0, 16000) + `\n... [! resultado truncado a 16000 chars, ver detalles arriba]`
                                     : safeOut;
-                                toolResults.push(`[EXECUTION RESULT]\n${trunc}`);
+                                // Prepend exit code marker so the LLM sees it clearly on next turn
+                                const xcTag = xc != null ? `[EXIT_CODE: ${xc}] ` : '';
+                                toolResults.push(`[EXECUTION RESULT] ${xcTag}\n${trunc}`);
                                 // Check stderr/warnings for repeated error patterns
                                 if (/error|failed|exception/i.test(safeOut)) {
                                     const errDedup = checkErrorRepeat(safeOut);
                                     if (errDedup) toolResults.push(errDedup);
                                 }
+                                // ── ReAct reinforcement: on hard failure, inject a self-check directive ──
+                                if (xc != null && xc >= 2) {
+                                    const marker = buildReactMarker(loop_i + 1, xc, excerpt, cmd);
+                                    toolResults.push(marker);
+                                    pushTrace({ phase: 'react.reflect', label: `Reflect on failure (step ${loop_i + 1})`, detail: excerpt || undefined, step: loop_i + 1, tabId });
+                                }
                                 finishToolCard(_execCard, safeOut, true);
                             } catch(e) {
                                 agentWarps.push(warpBlock(cmd, String(e), false, 0, 'ERR'));
                                 const errDedup = checkErrorRepeat(String(e));
-                                toolResults.push(`[EXECUTION ERROR]\n${e}${errDedup || ''}`);
+                                _lt.end(false, String(e), 2);
+                                toolResults.push(`[EXECUTION ERROR] [EXIT_CODE: 2]\n${e}${errDedup || ''}`);
+                                toolResults.push(buildReactMarker(loop_i + 1, 2, String(e).slice(0, 240), cmd));
+                                pushTrace({ phase: 'react.reflect', label: `Reflect on exception (step ${loop_i + 1})`, detail: String(e).slice(0, 240), step: loop_i + 1, tabId });
                                 finishToolCard(_execCard, String(e), false);
                             }
                             }
@@ -2796,9 +3552,9 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         }
                         toolUsed = true; // Forzar otra iteración
                         toolResults.push('[SYSTEM] Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces. Continue using <EXECUTE> or <TOOL> tags as needed.');
-                        stepsHtml += `[⚠️ Truncado] Auto-continuación (${truncationRecoveryCount}/${MAX_TRUNCATION_RECOVERIES})...\n`;
+                        stepsHtml += `[! Truncado] Auto-continuación (${truncationRecoveryCount}/${MAX_TRUNCATION_RECOVERIES})...\n`;
                     } else if (wasTruncated) {
-                        stepsHtml += `[⛔ Truncado] Límite de recuperaciones alcanzado.\n`;
+                        stepsHtml += `[⊗ Truncado] Límite de recuperaciones alcanzado.\n`;
                     }
 
                     // ── Smart task completion detection ──
@@ -2829,7 +3585,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
 
                     const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
 
-                    stepsHtml += `<span style="opacity:0.6">[🔄 Siguiente turno...]</span>\n`;
+                    stepsHtml += `<span style="opacity:0.6">[↻ Siguiente turno...]</span>\n`;
                     renderAgentTask();
 
                     try {
@@ -2854,7 +3610,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     }
 
                     if (t._cancelled) break;
-                    stepsHtml = stepsHtml.replace(/<span.*\[🔄 Siguiente turno.*span>\n/, '');
+                    stepsHtml = stepsHtml.replace(/<span.*\[↻ Siguiente turno.*span>\n/, '');
                     
                     if (loop_i === MAX_LOOPS - 1) {
                         finishReasoning();
@@ -2867,15 +3623,292 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             }
 
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Lucy',rawContent:resp});
+
+            // ── <REMEMBER> tag parser (Hermes-inspired) ─────────────────────
+            // Format: <REMEMBER category="preference|identity|context|host">key: value</REMEMBER>
+            // Silently persists facts Lucy has learned to the user_profile table.
+            // Stripped from display via cleanStreamDisplay above.
+            const rememberMatches = [...resp.matchAll(/<REMEMBER(?:\s+category="([^"]+)")?>([\s\S]*?)<\/REMEMBER>/gi)];
+            if (rememberMatches.length) {
+                for (const m of rememberMatches) {
+                    const category = (m[1] || 'general').trim();
+                    const body = (m[2] || '').trim();
+                    // Split on first ':' — allow values to contain colons
+                    const colonIdx = body.indexOf(':');
+                    if (colonIdx <= 0 || colonIdx >= body.length - 1) continue;
+                    const key = body.slice(0, colonIdx).trim().toLowerCase().replace(/\s+/g, '_').slice(0, 80);
+                    const value = body.slice(colonIdx + 1).trim().slice(0, 500);
+                    if (!key || !value) continue;
+                    invoke('set_user_profile', { key, value, category }).catch(e => {
+                        console.warn('[remember] save failed:', e);
+                    });
+                }
+                // Refresh cache in background so next turn sees the new facts
+                cargarMemoriasDB();
+            }
+
             const learnM=resp.match(/<LEARN>([\s\S]*?)<\/LEARN>/i);
-            if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{addMsg(tabId,{role:'lucy',html:`<div class="mn">⚠️</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}fin(tabId);return;}
+            if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}fin(tabId);return;}
 
             // ── CODE GENERATION GUARD: if user asked for code, strip <EXECUTE> ──
             let safeResp = resp;
+            // Telemetry: log confidence badges emitted by Lucy (once per response)
+            logConfidenceFromText(safeResp, tabId);
             if (codeGenIntent) {
                 // Convert any <EXECUTE> tags to code blocks so they display as text, not execute
                 safeResp = safeResp.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, code) => '\n```powershell\n' + code.trim() + '\n```\n');
                 safeResp = safeResp.replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, code) => '\n```cmd\n' + code.trim() + '\n```\n');
+            }
+
+            // ── PLAN/ACT/VERIFY (opus-4-7 #3): intercept <PLAN> tags BEFORE any exec ──
+            // Lucy emits PLAN for destructive actions. We render interactive card and
+            // wait for user click (Execute / Dry-Run / Cancel). Strip raw EXECUTE tags
+            // if a PLAN is present (they'd be duplicates).
+            const plans = parsePlanTags(safeResp);
+            if (plans.length && !codeGenIntent) {
+                let cardHtml = '';
+                for (const plan of plans) {
+                    const planId = 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+                    _pendingPlans.set(planId, { ...plan, tabId, doSpeak });
+                    cardHtml += renderPlanCard(plan, planId);
+                    // Strip the raw PLAN tag from safeResp display
+                    safeResp = safeResp.replace(plan.raw, '');
+                }
+                // Also strip any accompanying EXECUTE tags (Lucy shouldn't dual-emit but be safe)
+                safeResp = safeResp.replace(/<EXECUTE[^>]*>[\s\S]*?<\/EXECUTE[^>]*>/gi, '');
+                const prose = safeResp.trim();
+                const proseHtml = prose ? renderLucyMarkdown(prose) : '';
+                addMsg(tabId, {
+                    role: 'lucy',
+                    html: `<div class="mn">Lucy</div>${proseHtml}${cardHtml}`,
+                    rawContent: prose + '\n\n[PLAN pending user action]',
+                });
+                // Don't fin() — wait for user to click. Mark tab not processing so input is usable.
+                t.isProcessing = false; refresh();
+                return;
+            }
+
+            // GUARDIAN: if Lucy emitted a raw destructive <EXECUTE> without <PLAN>, upgrade to PLAN.
+            if (!codeGenIntent) {
+                const execAllForGuard = [
+                    ...safeResp.matchAll(/<EXECUTE_REMOTE\s+target=["']?([^"'>]+)["']?>([\s\S]*?)<\/EXECUTE_REMOTE>/gi),
+                    ...safeResp.matchAll(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi),
+                ];
+                const firstDestructive = execAllForGuard.find(m => {
+                    const isRemote = m[0].startsWith('<EXECUTE_REMOTE');
+                    const c = (isRemote ? m[2] : m[1]).trim();
+                    return isDestructiveCmd(c);
+                });
+                if (firstDestructive) {
+                    const isRemote = firstDestructive[0].startsWith('<EXECUTE_REMOTE');
+                    const cmd = (isRemote ? firstDestructive[2] : firstDestructive[1]).trim();
+                    const target = isRemote ? firstDestructive[1].trim() : 'local';
+                    const synthPlan = {
+                        raw: firstDestructive[0],
+                        risk: 'high',
+                        target,
+                        engine: isRemote ? ($hosts.find(h => h.id === target)?.type === 'linux' ? 'shell' : 'powershell') : 'powershell',
+                        desc: 'Acción destructiva detectada (upgrade automático a PLAN — Lucy omitió el tag)',
+                        cmd,
+                        verify: '',
+                        rollback: '',
+                    };
+                    const planId = 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+                    _pendingPlans.set(planId, { ...synthPlan, tabId, doSpeak });
+                    safeResp = safeResp.replace(firstDestructive[0], '');
+                    const prose = safeResp.replace(/<EXECUTE[^>]*>[\s\S]*?<\/EXECUTE[^>]*>/gi,'').trim();
+                    const proseHtml = prose ? renderLucyMarkdown(prose) : '';
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn" style="color:#f59e0b;">⚠ Lucy (Plan auto-generado)</div>${proseHtml}<div style="font-size:11px;color:#f59e0b;margin:4px 0 8px 0;">Lucy intentó ejecutar un comando destructivo sin <code>&lt;PLAN&gt;</code>. Requerimos tu confirmación.</div>${renderPlanCard(synthPlan, planId)}`,
+                        rawContent: `[GUARDIAN] Comando destructivo: ${cmd}`,
+                    });
+                    t.isProcessing = false; refresh();
+                    return;
+                }
+            }
+
+            // ── BATCH EXECUTE: detect multiple <EXECUTE> and <EXECUTE_REMOTE> tags ────
+            // Strategy: if 2+ read-only commands detected (Get-*, ls, etc.), batch them
+            // in parallel via Promise.allSettled. 60-70% speedup for diagnostics.
+            const allExecTags = [
+                ...safeResp.matchAll(/<EXECUTE_REMOTE\s+target=["']?([^"'>]+)["']?>([\s\S]*?)<\/EXECUTE_REMOTE>/gi),
+                ...safeResp.matchAll(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi)
+            ];
+
+            // Helper: detect if command is read-only (safe to batch)
+            const isReadOnlyCmd = (cmd) => {
+                const ro = /^(Get-|Select-|Where-|Format-|Out-|Measure-|Test-|Find-|grep|ls|cat|head|tail|ps|top|du|df|netstat|ss|lsof|curl|wget|find|locate|file|wc|od)/i;
+                return ro.test(cmd.trim());
+            };
+
+            // Batch if 2+ read-only commands
+            if (allExecTags.length >= 2 && !codeGenIntent) {
+                const readOnlyCmds = [];
+                for (const m of allExecTags) {
+                    const isRemote = m[0].startsWith('<EXECUTE_REMOTE');
+                    const cmd = isRemote ? m[2].trim() : m[1].trim();
+                    if (isReadOnlyCmd(cmd)) {
+                        readOnlyCmds.push({
+                            isRemote,
+                            hostId: isRemote ? m[1].trim() : null,
+                            cmd,
+                            originalMatch: m
+                        });
+                    }
+                }
+
+                // Execute in parallel if we have 2+ read-only commands
+                if (readOnlyCmds.length >= 2) {
+                    const t0 = Date.now();
+                    const batchResults = [];
+                    try {
+                        // Build batch execution promises
+                        const promises = readOnlyCmds.map(async (item) => {
+                            const itemT0 = Date.now();
+                            try {
+                                if (item.isRemote) {
+                                    const hostIdClean = item.hostId.replace(/^LucyHost_/, '');
+                                    const h = $hosts.find(x => x.id === hostIdClean || x.name === item.hostId);
+                                    if (!h) throw new Error(`Host '${item.hostId}' not found`);
+                                    const pf = await preflightHost(h);
+                                    if (!pf.ok) {
+                                        logTaskEvent('preflight_fail', h.type || 'unknown', Date.now()-itemT0, { host: h.name, err: pf.err }, tabId);
+                                        return { hostName: h.name, output: null, error: `Preflight falló — ${pf.err}` };
+                                    }
+                                    const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                                    const out = await invoke('execute_shell_cmd', {
+                                        host: h.host, username: h.username, command: item.cmd,
+                                        hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
+                                        password: pwd, keyPath: h.sshKeyPath || null,
+                                    });
+                                    updateWorkingMemory(t, { type:'exec', cmd:item.cmd, target:h.name, ok:true, ms:Date.now()-itemT0, host:h });
+                                    return { hostName: h.name, output: out, error: null };
+                                } else {
+                                    const out = await invoke('execute_powershell', { script: item.cmd, forceExecute: false });
+                                    updateWorkingMemory(t, { type:'exec', cmd:item.cmd, target:'local', ok:true, ms:Date.now()-itemT0 });
+                                    return { hostName: 'Local', output: out, error: null };
+                                }
+                            } catch (e) {
+                                updateWorkingMemory(t, { type:'exec', cmd:item.cmd, target:item.isRemote?item.hostId:'local', ok:false, ms:Date.now()-itemT0, err:e });
+                                return { error: String(e), output: null };
+                            }
+                        });
+
+                        // Wait all in parallel
+                        const settled = await Promise.allSettled(promises);
+                        const elapsed = Date.now() - t0;
+                        logTaskEvent('batch', String(readOnlyCmds.length), elapsed, { count: readOnlyCmds.length }, tabId);
+
+                        // Render results
+                        const batchHtml = readOnlyCmds.map((item, i) => {
+                            const res = settled[i];
+                            const ok = res.status === 'fulfilled' && !res.value.error;
+                            const output = res.status === 'fulfilled'
+                                ? (res.value.output || res.value.error || 'No output')
+                                : String(res.reason);
+                            const host = res.status === 'fulfilled' ? res.value.hostName : 'Error';
+                            const badge = item.isRemote ? `${host}` : `Local`;
+                            return `<div style="margin:12px 0;padding:10px;border-left:3px ${ok?'#34d399':'#f87171'};background:${ok?'rgba(52,211,153,.04)':'rgba(248,113,113,.04)'}">
+                                <div style="font-size:11px;color:var(--txt2);margin-bottom:6px;font-weight:600;">⚡ ${badge} · ${item.cmd.substring(0,60)}${item.cmd.length>60?'...':''}</div>
+                                <pre style="margin:0;font-size:11px;max-height:200px;overflow:auto;color:#ccc;">${(output||'').substring(0,1000)}</pre>
+                            </div>`;
+                        }).join('');
+
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn">Lucy</div><div style="color:var(--acc);font-size:11px;margin-bottom:8px;">⚡ Batch execution (${readOnlyCmds.length} commands in parallel, ${elapsed}ms)</div>${batchHtml}`,
+                            rawContent: readOnlyCmds.map((item, i) => {
+                                const res = settled[i];
+                                return res.status === 'fulfilled' ? res.value.output : String(res.reason);
+                            }).join('\n---\n'),
+                        });
+
+                        // Strip all exec tags from display so they don't re-execute
+                        safeResp = safeResp.replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
+                                          .replace(/<EXECUTE>[\s\S]*?<\/EXECUTE>/gi, '');
+                        fin(tabId); return;  // Done with batch execution
+                    } catch (e) {
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn">!</div>Batch execution error: <pre style="color:#f87171;">${String(e).substring(0,300)}</pre>`,
+                            style: 'border-left-color:#ef4444;'
+                        });
+                        fin(tabId); return;
+                    }
+                }
+            }
+
+            // ── EXECUTE_REMOTE (single): execute against a configured remote host ────
+            // Fallback for single <EXECUTE_REMOTE> tags (if no batch above)
+            const execRemoteM = safeResp.match(/<EXECUTE_REMOTE\s+target=["']?([^"'>]+)["']?>([\s\S]*?)<\/EXECUTE_REMOTE>/i);
+            if (execRemoteM && !codeGenIntent) {
+                const hostId = execRemoteM[1].trim();
+                const cmd = execRemoteM[2].trim();
+                const hostIdClean = hostId.replace(/^LucyHost_/, '');
+                const h = $hosts.find(x => x.id === hostIdClean || x.name === hostId);
+                if (!h) {
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn">!</div>Lucy intentó ejecutar en host <code>${hostId}</code> pero no está configurado. Revisa la lista de hosts.`,
+                        style: 'border-left-color:#f59e0b;'
+                    });
+                    fin(tabId); return;
+                }
+                const t0 = Date.now();
+                try {
+                    const pf = await preflightHost(h);
+                    if (!pf.ok) {
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn" style="color:#f59e0b;">⚠ Host inaccesible</div><div style="font-size:12px;color:var(--txt2);margin:4px 0;"><b>${h.name}</b> (${h.host}) — preflight falló.</div><pre style="color:#f87171;font-size:11px;">${pf.err}</pre><div style="font-size:11px;color:var(--txt2);margin-top:6px;">Comando no ejecutado. Verifica conectividad, firewall o credenciales de red.</div>`,
+                            style: 'border-left-color:#f59e0b;'
+                        });
+                        logTaskEvent('preflight_fail', h.type || 'unknown', Date.now()-t0, { host: h.name, err: pf.err }, tabId);
+                        fin(tabId); return;
+                    }
+                    const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                    const out = await invoke('execute_shell_cmd', {
+                        host: h.host, username: h.username, command: cmd,
+                        hostType: h.type,
+                        port: h.port || (h.type === 'linux' ? 22 : 5985),
+                        password: pwd, keyPath: h.sshKeyPath || null,
+                    });
+                    const elapsed = Date.now() - t0;
+                    const safeOut = (out || '(sin salida)').trim();
+                    updateWorkingMemory(t, { type:'exec', cmd, target:h.name, ok:true, ms:elapsed, host:h });
+                    const html = `<div class="mn">Lucy</div>` +
+                        `<div style="font-size:12px;color:var(--txt2);margin-bottom:6px;">◉ Ejecutado en <b>${h.name}</b> (${h.type==='linux'?'SSH':'WinRM'}) — ${elapsed}ms</div>` +
+                        warpBlock(cmd, safeOut, true, elapsed, h.type==='windows'?'WinRM':'SSH');
+                    addMsg(tabId, { role: 'lucy', html, rawContent: `[${h.name}] ${cmd}\n${safeOut}` });
+                    t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida (${h.name}): ${safeOut}`});
+                    // Auto-follow-up: ask Lucy to interpret the result
+                    const followPrompt = `[REMOTE EXECUTION RESULT — ${h.name}]\nComando: ${cmd.substring(0,200)}\nSalida:\n${safeOut.substring(0,3000)}\n\nAnaliza brevemente este resultado y dime qué observas. Si necesitas ejecutar otro comando, usa <EXECUTE_REMOTE target="${h.id}">...</EXECUTE_REMOTE>.`;
+                    try {
+                        const follow = await invoke('ask_lucy', {
+                            prompt: followPrompt, context: '', userName: lucyConfig.name,
+                            runbooksDir: lucyConfig.runbooksDir || null,
+                            model: t.selectedModel, lang: userLang,
+                            hostsJson: JSON.stringify($hosts), images: null,
+                        });
+                        const followClean = (follow || '').replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '').trim();
+                        if (followClean) {
+                            addMsg(tabId, {
+                                role: 'lucy',
+                                html: `<div class="mn">Lucy</div>${renderLucyMarkdown(followClean)}`,
+                                rawContent: followClean,
+                            });
+                        }
+                    } catch(e) { console.warn('[remote] follow-up failed:', e); }
+                } catch(e) {
+                    updateWorkingMemory(t, { type:'exec', cmd, target:h.name, ok:false, ms:Date.now()-t0, err:e });
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn">!</div>Error ejecutando en <b>${h.name}</b>: <pre style="color:#f87171;">${String(e).substring(0,500)}</pre>`,
+                        style: 'border-left-color:#ef4444;'
+                    });
+                }
+                fin(tabId); return;
             }
 
             // ── EXECUTE: detect engine from tag or tab setting ────────────────
@@ -2918,6 +3951,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false});
                     else                            out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
                     const elapsed=Date.now()-t0;
+                    updateWorkingMemory(t, { type:'exec', cmd, target:'local', ok:true, ms:elapsed });
                     t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
                     if (elapsed > 30000 && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
                         try { new Notification('Lucy — Comando completado ✓', { body: cmd.substring(0, 80) + (cmd.length > 80 ? '…' : '') + `  (${(elapsed/1000).toFixed(0)}s)` }); } catch(e) {}
@@ -2930,7 +3964,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     }
 
                     const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result. If no output, confirm the command ran successfully.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
-                    const sa=DOMPurify.sanitize(marked.parse(analysis));
+                    const sa=renderLucyMarkdown(analysis);
                     const wb=warpBlock(cmd,out,true,elapsed,engineLabel);
                     addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
                     if(doSpeak)speak(analysis);
@@ -2940,22 +3974,24 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         const parts=err.split(':');
                         const token=parts[1]; const bw=parts[2]||parts[1];
                         const sc=cmd.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                        addMsg(tabId,{role:'lucy',html:`<div class="mn">🛡️ Lucy (Seguridad)</div>Instrucción restringida [${engineLabel}]: <code>${bw}</code>. Revisa el panel de autorización debajo.`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
+                        addMsg(tabId,{role:'lucy',html:`<div class="mn">⬡ Lucy (Seguridad)</div>Instrucción restringida [${engineLabel}]: <code>${bw}</code>. Revisa el panel de autorización debajo.`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
                         pendingSecurityBlock = { tabId, cmd, ctx, doSpeak, blockWord: bw, displayCmd: sc, execType, token };
                         if(doSpeak)speak("Pausado por seguridad.");
                     }else{
                         const elapsed=Date.now()-t0;
+                        updateWorkingMemory(t, { type:'exec', cmd, target:'local', ok:false, ms:elapsed, err });
                         const wb=warpBlock(cmd,String(err),false,elapsed);
                         
                         // --- AGENT LOOP LOGIC ---
                         if (retryCount < 3) {
+                            logTaskEvent('retry', String(retryCount + 1), elapsed, { error: String(err).substring(0,120) }, tabId);
                             const errorSnippet = String(err).substring(0, 500);
                             const sysRet = `El comando falló con esta salida:\n${errorSnippet}\n\nAplica tu regla de auto-corrección. NO pidas perdón, solo envía el nuevo comando corregido en un bloque <EXECUTE>. Céntrate en arreglar el error para lograr el objetivo.`;
                             
                             addMsg(tabId, {
                                 role: 'lucy',
                                 html: `<div class="mn" style="color:#a78bfa;display:flex;align-items:center;gap:6px;">
-                                         <span style="display:inline-block;animation:spin 2s linear infinite;">🔄</span>
+                                         <span style="display:inline-block;animation:spin 2s linear infinite;">↻</span>
                                          <span>Lucy (Autocorrigiendo... Intento ${retryCount + 1}/3)</span>
                                        </div>
                                        <div style="font-size:11px;color:rgba(255,255,255,0.6);font-family:var(--mono);margin:4px 0;white-space:pre-wrap;"><code>${String(err)}</code></div>
@@ -2972,7 +4008,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             return;
                         } else {
                             const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
-                            addMsg(tabId,{role:'lucy',html:`<div class="mn" style="color:#ef4444;">⚠️ Límite de auto-correcciones (3) alcanzado</div>${DOMPurify.sanitize(marked.parse(rec))}${wb}`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);',rawRole:'Lucy',rawContent:rec});
+                            addMsg(tabId,{role:'lucy',html:`<div class="mn" style="color:#ef4444;">! Límite de auto-correcciones (3) alcanzado</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);',rawRole:'Lucy',rawContent:rec});
                             if(doSpeak)speak("No pude solucionar el error tras 3 intentos. Deteniendo proceso.");
                         }
                     }
@@ -2982,19 +4018,19 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     .replace(/<EXECUTE_CMD>[\s\S]*?<\/EXECUTE_CMD>/gi,'').replace('__TRUNCATED__','').trim();
                 // Añadir advertencia visual si la respuesta fue truncada
                 if (safeResp.includes('__TRUNCATED__')) {
-                    clean += '\n\n> ⚠️ **Mi respuesta fue cortada por límite de tokens.** Puedes pedirme que continúe donde me quedé.';
+                    clean += '\n\n> ! **Mi respuesta fue cortada por límite de tokens.** Puedes pedirme que continúe donde me quedé.';
                 }
                 // Transición suave: reutilizar el mensaje streaming existente si aún está
                 const existingStreamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (existingStreamMsg) {
                     existingStreamMsg.id = Date.now();
                     existingStreamMsg.role = 'lucy';
-                    existingStreamMsg.html = `<div class="mn">Lucy</div>${DOMPurify.sanitize(marked.parse(clean))}`;
+                    existingStreamMsg.html = `<div class="mn">Lucy</div>${renderLucyMarkdown(clean)}`;
                     existingStreamMsg.rawRole = 'Lucy';
                     existingStreamMsg.rawContent = clean;
                     refresh();
                 } else {
-                    addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${DOMPurify.sanitize(marked.parse(clean))}`,rawRole:'Lucy',rawContent:clean});
+                    addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
                 }
                 if(doSpeak)speak(clean);
             }
@@ -3019,17 +4055,17 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
             const _outTxtF = out?.trim() || '(sin salida — el comando finalizó sin errores visibles)';
             const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed with security bypass: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxtF.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
-            const sa=DOMPurify.sanitize(marked.parse(analysis));
-            const wb=warpBlock(cmd,out,true,elapsed,'⚠️ Ejecutado con bypass');
+            const sa=renderLucyMarkdown(analysis);
+            const wb=warpBlock(cmd,out,true,elapsed,'! Ejecutado con bypass');
             addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
             if(doSpeak)speak(analysis);
-            if(btn){btn.innerText='✅ Ejecutado';btn.style.background='rgba(16,185,129,0.12)';btn.style.color='#10b981';}
+            if(btn){btn.innerText='✓ Ejecutado';btn.style.background='rgba(16,185,129,0.12)';btn.style.color='#10b981';}
         }catch(e){
             const elapsed=Date.now()-t0;
             const wb=warpBlock(cmd,String(e),false,elapsed,'Bypass fallido');
             const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand with bypass failed: \`${cmd.substring(0,150)}\`\nError: ${String(e).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
-            addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Crítico)</div>${DOMPurify.sanitize(marked.parse(rec))}${wb}`,style:'border-left-color:#f59e0b;',rawRole:'Lucy',rawContent:rec});
-            if(btn){btn.innerText='❌ Error';btn.style.background='rgba(255,68,68,0.12)';btn.style.color='#ef4444';}
+            addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Crítico)</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;',rawRole:'Lucy',rawContent:rec});
+            if(btn){btn.innerText='✗ Error';btn.style.background='rgba(255,68,68,0.12)';btn.style.color='#ef4444';}
         }finally{fin(tabId);}
     }
 
@@ -3045,7 +4081,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         $showRunAsModal = false;
         if (pendingRunAsCmd) {
             const tabId = pendingRunAsCmd.tabId;
-            addMsg(tabId, { role:'lucy', html:`<div class="mn">🛡️ Seguridad</div>Comando con privilegios de administrador cancelado.`, style:'border-left-color:#f59e0b;' });
+            addMsg(tabId, { role:'lucy', html:`<div class="mn">⬡ Seguridad</div>Comando con privilegios de administrador cancelado.`, style:'border-left-color:#f59e0b;' });
             pendingRunAsCmd = null;
             fin(tabId); // Reset isProcessing so the status bar clears
         } else {
@@ -3070,6 +4106,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
     function cancelarEjecucion(tabId) {
         const t = getTab(tabId);
         if (!t || !t.isProcessing) return;
+        t.pendingMessage = null; // discard any queued message on explicit cancel
         // Abortar stream activo si existe
         const stream = _activeStreams.get(tabId);
         if (stream) {
@@ -3081,7 +4118,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         t._cancelled = true;
         addMsg(tabId, {
             role: 'lucy',
-            html: `<div class="mn">⚠️ Cancelado</div>Operación cancelada por el usuario.`,
+            html: `<div class="mn">! Cancelado</div>Operación cancelada por el usuario.`,
             style: 'border-left-color:#f59e0b;'
         });
         fin(tabId);
@@ -3102,7 +4139,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         await runForced(tabId, cmd, ctx, doSpeak, null, et || 'powershell', token);
     }
 
-    function fin(tabId){
+    async function fin(tabId){
         const t=getTab(tabId);
         if (!t) return;
         t.messages=t.messages.filter(m=>m.id!==('thinking-'+tabId));
@@ -3130,6 +4167,17 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         setTimeout(() => {
             document.querySelector('.chat-wrap.on .ibox')?.focus();
         }, 60);
+        // ── AUTO-SEND queued message (like Gemini/Claude behaviour) ─────────
+        if (t.pendingMessage) {
+            const pm = t.pendingMessage;
+            t.pendingMessage = null;
+            t.inputValue = pm.text;
+            t.attachedFiles = pm.files || [];
+            t.usedVoice = pm.usedVoice || false;
+            refresh();
+            await tick();
+            process(tabId);
+        }
     }
     function abrirAudit(){invoke('execute_powershell',{script:`Start-Process notepad "$env:APPDATA\\Lucy\\logs\\lucy_audit.log"`,forceExecute:false}).catch(()=>{});}
 
@@ -3237,26 +4285,208 @@ if (Test-Path $src) {
         localStorage.setItem(MEMORY_KEY, JSON.stringify(items));
     }
 
-    // Extrae hechos clave de la respuesta de Lucy y los persiste automáticamente
-    // Se llama desde runAI después de cada respuesta
+    // Extrae hechos del entorno (hostnames, servidores) de la respuesta de Lucy
     function procesarMemoria(respuesta, prompt) {
         const mem = leerMemoriaPersistente();
-        // Detectar si Lucy aprendió algo nuevo (LEARN ya se maneja aparte)
-        // Aquí guardamos contexto del entorno: hostnames, servidores, preferencias
         const patrones = [
-            /el servidor[^.]*?se llama\s+([A-Z0-9_\-]+)/gi,
-            /hostname[^.]*?es\s+([A-Z0-9_\-]+)/gi,
-            /el equipo[^.]*?([A-Z0-9_\-]+)/gi,
+            /el servidor[^.]*?se llama\s+([A-Z0-9_\-\.]+)/gi,
+            /hostname[^.]*?(?:es|:)\s+([A-Z0-9_\-\.]+)/gi,
+            /(?:servidor|server|host)\s+([A-Z0-9_\-\.]{4,})\b/gi,
         ];
-        // Límite de 20 hechos para no saturar el prompt
-        if (mem.length > 20) mem.splice(0, mem.length - 20);
-        guardarMemoriaPersistente(mem);
+        const nuevos = [];
+        for (const re of patrones) {
+            for (const m of [...respuesta.matchAll(re)]) {
+                const hecho = m[0].trim().slice(0, 120);
+                if (!mem.includes(hecho) && !nuevos.includes(hecho)) {
+                    nuevos.push(hecho);
+                }
+            }
+        }
+        const merged = [...mem, ...nuevos];
+        if (merged.length > 25) merged.splice(0, merged.length - 25);
+        guardarMemoriaPersistente(merged);
     }
 
-    function construirContextoMemoria() {
+    // Cache de memorias DB — se carga una vez en onMount y se actualiza tras guardar
+    let _dbMemoriesCache = [];
+    let _dbUserProfileCache = [];  // Hermes-style persistent facts about the user
+    async function cargarMemoriasDB() {
+        try {
+            _dbMemoriesCache = await invoke('get_recent_memories', { limit: 12 });
+        } catch(e) { _dbMemoriesCache = []; }
+        try {
+            _dbUserProfileCache = await invoke('get_user_profile');
+        } catch(e) { _dbUserProfileCache = []; }
+    }
+
+    // ── QUALITY TELEMETRY (opus-4-7 Tier 2.A) ──────────────────────────────
+    // Best-effort non-blocking logger — never awaits, never throws to caller.
+    function logTaskEvent(eventType, subtype, elapsedMs, metadata, tabId) {
+        try {
+            invoke('log_task_event', {
+                eventType,
+                subtype: subtype || null,
+                elapsedMs: elapsedMs != null ? Number(elapsedMs) : null,
+                metadata: metadata ? (typeof metadata === 'string' ? metadata : JSON.stringify(metadata)) : null,
+                tabId: tabId || null,
+            }).catch(() => {}); // swallow
+        } catch(e) { /* noop */ }
+    }
+
+    // Count confidence badges emitted in a response and log each.
+    function logConfidenceFromText(text, tabId) {
+        if (!text) return;
+        const re = /<CONFIDENCE\s+level=["']?(high|med|low)["']?\s*>/gi;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            logTaskEvent('confidence', String(m[1]).toLowerCase(), null, null, tabId);
+        }
+    }
+
+    // ── WORKING MEMORY (opus-4-7 #1) ─────────────────────────────────────────
+    // Records a command execution into tab.workingMemory. Keeps it bounded.
+    function updateWorkingMemory(tab, ev) {
+        if (!tab) return;
+        tab.workingMemory ||= { currentHost:null, lastCommands:[], recentErrors:[], activeIncident:null, turnCount:0, compactedDigest:'' };
+        const wm = tab.workingMemory;
+        if (ev.type === 'exec') {
+            wm.lastCommands.push({
+                cmd: (ev.cmd || '').slice(0, 160),
+                target: ev.target || 'local',
+                ok: !!ev.ok,
+                ms: ev.ms || 0,
+                ts: Date.now(),
+                err: ev.err ? String(ev.err).slice(0, 200) : null,
+            });
+            if (wm.lastCommands.length > 5) wm.lastCommands.splice(0, wm.lastCommands.length - 5);
+            if (ev.ok && ev.host) {
+                wm.currentHost = { id: ev.host.id, name: ev.host.name, type: ev.host.type };
+            }
+            if (!ev.ok && ev.err) {
+                wm.recentErrors.push(String(ev.err).slice(0, 200));
+                if (wm.recentErrors.length > 3) wm.recentErrors.splice(0, wm.recentErrors.length - 3);
+            }
+            // Telemetry: exec_success / exec_failure + first_try_success signal
+            const sub = (ev.target === 'local') ? 'local' : 'remote';
+            logTaskEvent(ev.ok ? 'exec_success' : 'exec_failure', sub, ev.ms || 0, null, tab.id);
+        } else if (ev.type === 'incident') {
+            wm.activeIncident = ev.incident ? { id: ev.incident.id, phase: ev.incident.phase } : null;
+        } else if (ev.type === 'turn') {
+            wm.turnCount = (wm.turnCount || 0) + 1;
+        }
+    }
+
+    // Builds <500 token digest of tab state. Always injected.
+    function buildWorkingMemoryDigest(tab) {
+        const wm = tab?.workingMemory;
+        if (!wm) return '';
+        const parts = [];
+        if (wm.currentHost) {
+            parts.push(`current_host: ${wm.currentHost.name} (${wm.currentHost.type}, id=${wm.currentHost.id})`);
+        }
+        if (wm.lastCommands.length) {
+            const lines = wm.lastCommands.map(c => {
+                const mark = c.ok ? '✓' : '✗';
+                const detail = c.ok ? `${c.ms}ms` : (c.err ? c.err.slice(0, 80) : 'failed');
+                return `  ${mark} [${c.target}] ${c.cmd.slice(0, 100)}${c.cmd.length>100?'…':''} (${detail})`;
+            }).join('\n');
+            parts.push(`recent_cmds:\n${lines}`);
+        }
+        if (wm.recentErrors.length) {
+            parts.push(`recent_errors:\n${wm.recentErrors.map(e => `  · ${e.slice(0, 120)}`).join('\n')}`);
+        }
+        if (wm.activeIncident) {
+            parts.push(`active_incident: ${wm.activeIncident.id} (phase: ${wm.activeIncident.phase})`);
+        }
+        if (!parts.length) return '';
+        return `\n\n--- WORKING MEMORY (tab state) ---\n${parts.join('\n')}\n(Use this to avoid re-asking the user and to detect retry loops. If last 2 cmds failed the same way, propose a different approach.)`;
+    }
+
+    // Relevance heuristic for lazy slots — avoids inflating system prompt needlessly.
+    function _slotRelevance(userInput) {
+        const s = (userInput || '').toLowerCase();
+        return {
+            host: /\b(host|server|servidor|prod|test|dev|remote|remoto|ssh|winrm|invoke|rdp|iis|sql|nginx|apache|linux|windows)\b/.test(s)
+                  || /[a-z0-9]+-[a-z0-9]+-?\d*/i.test(s), // hostname-like tokens
+            runbook: /\b(how|como|cómo|fix|arregla|troubleshoot|diagnos|procedure|procedimiento|runbook|install|deploy|configure|configura|restart|reinicia|setup)\b/.test(s),
+            environment: /\b(my|mi|mis|environment|entorno|typical|normal|suele|usual|often|siempre)\b/.test(s),
+        };
+    }
+
+    function construirContextoMemoria(userInput, tab) {
         const mem = leerMemoriaPersistente();
-        if (!mem.length) return '';
-        return `\n\n--- MEMORIA PERSISTENTE DEL USUARIO ---\n${mem.map(m => `- ${m}`).join('\n')}\n(Usa este contexto como referencia sobre el entorno del usuario)`;
+        let ctx = '';
+        const rel = _slotRelevance(userInput);
+
+        // [CORE — always] Working memory digest (tab state)
+        ctx += buildWorkingMemoryDigest(tab);
+
+        // [CORE — always] Compacted digest of older turns (if tab > 20 turns)
+        if (tab?.workingMemory?.compactedDigest) {
+            ctx += `\n\n--- CONTEXTO COMPACTADO (turnos antiguos) ---\n${tab.workingMemory.compactedDigest}`;
+        }
+
+        // [CORE — always, compact] User profile identity + preferences
+        if (_dbUserProfileCache.length) {
+            const STALE = 180 * 24 * 3600; // 6 months
+            const now = Math.floor(Date.now() / 1000);
+            const fresh = _dbUserProfileCache.filter(p => (now - p.updated_at) < STALE);
+            if (fresh.length) {
+                const byCat = {};
+                for (const p of fresh) {
+                    (byCat[p.category] ||= []).push(`- ${p.key}: ${p.value}`);
+                }
+                // Always include identity+preference. Host/context only if relevant.
+                const alwaysCats = ['identity', 'preference'];
+                const lazyCats = rel.host ? ['context', 'host'] : [];
+                const includeCats = [...alwaysCats, ...lazyCats];
+                const filtered = Object.entries(byCat).filter(([k]) => includeCats.includes(k));
+                if (filtered.length) {
+                    ctx += `\n\n--- PERFIL DEL USUARIO ---`;
+                    for (const [cat, items] of filtered) {
+                        ctx += `\n[${cat}]\n${items.join('\n')}`;
+                    }
+                    ctx += `\n(Usa <REMEMBER category="preference|identity|context|host">key: value</REMEMBER> para guardar nuevos hechos.)`;
+                }
+            }
+        }
+
+        // [LAZY] Environment facts — only if user mentions env-ish keywords
+        if (rel.environment && mem.length) {
+            ctx += `\n\n--- ENTORNO DETECTADO ---\n${mem.map(m => `- ${m}`).join('\n')}`;
+        }
+
+        // [LAZY] Persistent memories (DB) — only if user mentions runbook/troubleshoot keywords
+        if (rel.runbook && _dbMemoriesCache.length) {
+            const top = _dbMemoriesCache.slice(0, 6); // reduced from 8
+            ctx += `\n\n--- MEMORIA PERSISTENTE (${_dbMemoriesCache.length} entradas, mostrando ${top.length}) ---\n` +
+                top.map(m => {
+                    const date = new Date(m.created_at * 1000).toLocaleDateString();
+                    return `[${date}] **${m.title}**: ${m.content.slice(0, 220)}${m.content.length > 220 ? '…' : ''}`;
+                }).join('\n') +
+                `\n(Usa <TOOL>memoria_buscar:query</TOOL> para buscar memorias específicas)`;
+        }
+        return ctx;
+    }
+
+    // Compacts first half of long tabs into a short digest. Called before building
+    // HISTORIAL when turns > 20. Keeps most-recent 10 verbatim.
+    function compactOldTurns(tab) {
+        if (!tab?.messages) return { keepFrom: 0, digest: '' };
+        const valid = tab.messages.filter(m => m.rawRole);
+        if (valid.length <= 20) return { keepFrom: 0, digest: '' };
+        const half = Math.floor(valid.length / 2);
+        const older = valid.slice(0, half);
+        // Build lightweight digest: user intents + exec outcomes (no raw Lucy prose)
+        const userTurns = older.filter(m => m.rawRole === lucyConfig.name);
+        const lucyExecs = older.filter(m => m.rawRole === 'Lucy' || m.rawRole === 'Sistema');
+        const intents = userTurns.slice(-8).map(m => `· ${String(m.rawContent || '').slice(0, 140).replace(/\s+/g,' ')}`).join('\n');
+        const execCount = lucyExecs.length;
+        const digest = `Se conversaron ${valid.length} turnos (se resumen ${older.length} más antiguos).\nÚltimas intenciones del usuario:\n${intents}\nLucy ejecutó/respondió aprox. ${execCount} acciones previas.`;
+        // Find message index where we keep from
+        const keepMsg = valid[half];
+        const keepIdx = tab.messages.indexOf(keepMsg);
+        return { keepFrom: keepIdx >= 0 ? keepIdx : 0, digest };
     }
 
     // ── 2. VERIFICACIÓN DE DEPENDENCIAS ─────────────────────────────────────
@@ -3327,7 +4557,14 @@ if (Test-Path $src) {
             newApiKeyError = 'La clave no parece válida.'; return;
         }
         try {
-            await invoke('save_secure_config', { apiKey: newApiKey.trim() });
+            // Detectar proveedor por prefijo del modelo activo en la pestaña actual
+            const _activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+            const _model = _activeTab?.selectedModel || 'gemini-2.5-flash';
+            const _provider = _model.startsWith('claude') ? 'anthropic'
+                            : _model.startsWith('gpt')    ? 'openai'
+                            : _model.startsWith('local')  ? 'local'
+                            : 'gemini';
+            await invoke('save_llm_key', { provider: _provider, apiKey: newApiKey.trim() });
             keyringOk = true;
             newApiKey = '';
             $showChangeKeyModal = false;
@@ -3416,7 +4653,7 @@ if (Test-Path $src) {
     // ── PANIC & BUG REPORTER ──────────────────────────────────────────────────
 
     async function panicKill() {
-        tabs = tabs.map(t => ({...t, _cancelled: true}));
+        tabs = tabs.map(t => ({...t, _cancelled: true, pendingMessage: null}));
         if (window.speechSynthesis) window.speechSynthesis.cancel();
         try {
             await invoke('panic_kill_all');
@@ -3457,7 +4694,7 @@ if (Test-Path $src) {
             
             addMsg(activeTabId, {
                 role: 'system',
-                html: `<div style="color:#10b981;">✔️ Reporte de bug generado. Revisa tu carpeta de Descargas.</div>`
+                html: `<div style="color:#10b981;">✓ Reporte de bug generado. Revisa tu carpeta de Descargas.</div>`
             });
             refresh(); scrollChat();
         } catch(e) {
@@ -3479,12 +4716,16 @@ if (Test-Path $src) {
     function sbResizeStart(e) {
         if (sidebarCollapsed) return;
         sidebarResizing = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
         const startX = e.clientX, startW = sidebarWidth;
         const onMove = (ev) => {
             sidebarWidth = Math.max(160, Math.min(420, startW + ev.clientX - startX));
         };
         const onUp = () => {
             sidebarResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
             localStorage.setItem('lucy_sb_w', String(Math.round(sidebarWidth)));
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
@@ -3515,6 +4756,37 @@ if (Test-Path $src) {
         _guardarHostsSeguro($hosts);
         if (dashSelectedHost === id) dashSelectedHost = 'local';
         if (logSelectedHost  === id) logSelectedHost  = 'local';
+        // Limpiar historial de comandos y conversación Lucy NexShell para este host
+        try { localStorage.removeItem(`lucy_rsh_${id}`); } catch(e) {}
+        try { localStorage.removeItem(`lucy_nxh_${id}`); } catch(e) {}
+    }
+
+    // ── FOCUS TRAP ────────────────────────────────────────────────────────────
+    // Svelte action: traps Tab focus within a modal dialog.
+    // Usage: <div use:focusTrap role="dialog">...</div>
+    function focusTrap(node) {
+        const sel = 'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+        const getFocusable = () => [...node.querySelectorAll(sel)];
+        function onKey(e) {
+            if (e.key !== 'Tab') return;
+            const els = getFocusable();
+            if (!els.length) return;
+            const first = els[0], last = els[els.length - 1];
+            if (e.shiftKey) {
+                if (document.activeElement === first || !node.contains(document.activeElement)) {
+                    e.preventDefault(); last.focus();
+                }
+            } else {
+                if (document.activeElement === last || !node.contains(document.activeElement)) {
+                    e.preventDefault(); first.focus();
+                }
+            }
+        }
+        // Auto-focus first focusable on open (deferred so DOM is settled)
+        const first = getFocusable()[0];
+        if (first) setTimeout(() => first.focus(), 30);
+        node.addEventListener('keydown', onKey);
+        return { destroy() { node.removeEventListener('keydown', onKey); } };
     }
 
     function toast(msg, tipo='info') {
@@ -3539,7 +4811,7 @@ if (Test-Path $src) {
 
     function abrirNuevoRunbook() {
         editingRunbook = null;
-        runbookForm = { name: '', icon: '📋', steps: [] };
+        runbookForm = { name: '', icon: '≡', steps: [] };
         runbookStepForm = { label: '', cmd: '' };
         $showRunbookModal = true;
     }
@@ -3584,7 +4856,7 @@ if (Test-Path $src) {
             runbookRunning.results[i].status = 'running';
             runbookRunning = { ...runbookRunning };
             try {
-                const out = await invoke('execute_powershell', { cmd: rb.steps[i].cmd, force: false });
+                const out = await invoke('execute_powershell', { script: rb.steps[i].cmd, forceExecute: false });
                 runbookRunning.results[i].status = 'done';
                 runbookRunning.results[i].output = String(out ?? '').substring(0, 300);
             } catch(e) {
@@ -3659,10 +4931,19 @@ if (Test-Path $src) {
 </script>
 
 <style>
+    /* ── LIVE TRACE floating panel + FAB toggle ── */
     /* ── FUENTE: Inter desde Google Fonts ──────── */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
     /* ── VARIABLES ─────────────────────────────── */
-    :global(:root){--bg:#0f111a;--bg2:#161822;--bg3:#1e2030;--bg4:#262838;--acc:#10b981;--acc-d:rgba(16,185,129,0.08);--acc-b:rgba(16,185,129,0.18);--txt:#e2e8f0;--txt2:#94a3b8;--txt3:#475569;--bdr:#1e293b;--bdr2:#334155;--blue:#60a5fa;--purple:#a78bfa;--amber:#f59e0b;--red:#ef4444;--mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;}
+    :global(:root){--bg:#0f111a;--bg2:#161822;--bg3:#1e2030;--bg4:#262838;--acc:#10b981;--acc-d:rgba(16,185,129,0.08);--acc-b:rgba(16,185,129,0.18);--txt:#e2e8f0;--txt1:#e2e8f0;--txt2:#94a3b8;--txt3:#475569;--bdr:#1e293b;--bdr2:#334155;--blue:#60a5fa;--purple:#a78bfa;--amber:#f59e0b;--red:#ef4444;--mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
+      /* ── Z-INDEX LAYERS (single source of truth) ──────────────────────────
+         900  rshell side panel     1200 tab-picker dropdown
+        2000  primary modals        3000 command palette
+        4000  danger / inline .mb   5000 toasts
+        6000  tutorial overlay      7000 drag-drop overlay
+        9999  loading splash
+      ──────────────────────────────────────────────────────────────────── */
+      --z-rshell:900;--z-tab-pick:1200;--z-modal:2000;--z-palette:3000;--z-mb:4000;--z-toast:5000;--z-tutorial:6000;--z-drag:7000;--z-splash:9999;}
     /* ── RESET ─────────────────────────────────── */
     :global(*,*::before,*::after){box-sizing:border-box;margin:0;padding:0;}
     :global(html,body){height:100%;background:transparent;overflow:hidden;}
@@ -3837,8 +5118,8 @@ if (Test-Path $src) {
     .tab-picker-btn{background:rgba(10,15,20,0.9);border:1px solid var(--bdr);border-bottom:none;border-radius:5px 5px 0 0;color:var(--txt2);cursor:pointer;height:30px;min-width:28px;display:flex;align-items:center;justify-content:center;gap:4px;padding:0 7px;font-size:11px;transition:.15s;align-self:flex-end;margin-bottom:0;}
     .tab-picker-btn:hover{background:rgba(16,185,129,0.07);color:var(--acc);border-color:var(--acc-b);}
     .tab-count{font-size:10px;font-weight:700;color:var(--acc);background:rgba(16,185,129,0.12);padding:1px 5px;border-radius:8px;line-height:1.4;}
-    .tab-picker-backdrop{position:fixed;inset:0;z-index:8999;}
-    .tab-picker-menu{position:absolute;top:calc(100% + 2px);right:0;background:rgba(12,18,28,0.98);border:1px solid var(--bdr2);border-radius:8px;min-width:220px;z-index:9000;box-shadow:0 8px 32px rgba(0,0,0,0.6);overflow:hidden;}
+    .tab-picker-backdrop{position:fixed;inset:0;z-index:var(--z-tab-pick);}
+    .tab-picker-menu{position:absolute;top:calc(100% + 2px);right:0;background:rgba(12,18,28,0.98);border:1px solid var(--bdr2);border-radius:8px;min-width:220px;z-index:calc(var(--z-tab-pick) + 1);box-shadow:0 8px 32px rgba(0,0,0,0.6);overflow:hidden;}
     .tab-picker-header{font-size:10px;color:#334155;letter-spacing:1px;text-transform:uppercase;font-weight:700;padding:8px 12px 6px;border-bottom:1px solid var(--bdr);}
     .tab-picker-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12px;color:var(--txt2);transition:.12s;border-bottom:1px solid rgba(26,32,48,0.4);}
     .tab-picker-item:last-child{border-bottom:none;}
@@ -3905,7 +5186,7 @@ if (Test-Path $src) {
     .sb-bdg.b{background:rgba(59,130,246,.12);color:var(--blue);}
     .sb-bdg.pronto{background:rgba(180,81,255,0.12);color:#a78bfa;font-size:9px;padding:1px 5px;letter-spacing:0.3px;}
     /* ── TOAST ─────────────────────────────────── */
-    .toast{position:fixed;bottom:36px;left:50%;transform:translateX(-50%) translateY(0);background:rgba(14,21,32,0.97);border:1px solid var(--bdr2);border-left:3px solid var(--purple);border-radius:8px;padding:10px 18px;font-size:12px;color:var(--txt);z-index:20000;white-space:nowrap;box-shadow:0 4px 24px rgba(0,0,0,0.5);animation:toast-in .2s ease;}
+    .toast{position:fixed;bottom:36px;left:50%;transform:translateX(-50%) translateY(0);background:rgba(14,21,32,0.97);border:1px solid var(--bdr2);border-left:3px solid var(--purple);border-radius:8px;padding:10px 18px;font-size:12px;color:var(--txt);z-index:var(--z-toast);white-space:nowrap;box-shadow:0 4px 24px rgba(0,0,0,0.5);animation:toast-in .2s ease;}
     .toast.out{animation:toast-out .25s ease forwards;}
     @keyframes toast-in{from{opacity:0;transform:translateX(-50%) translateY(10px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
     @keyframes toast-out{from{opacity:1;transform:translateX(-50%) translateY(0);}to{opacity:0;transform:translateX(-50%) translateY(8px);}}
@@ -4247,14 +5528,14 @@ if (Test-Path $src) {
     :global(:root.light .tool-card .tc-body){color:#475569;background:rgba(0,0,0,.04);}
 
     /* ── REMOTE SHELL ────────────────────────────── */
-    .rshell-overlay{position:fixed;inset:0;right:820px;background:rgba(0,0,0,.75);z-index:900;cursor:pointer;}
-    .rshell-panel{position:fixed;top:0;right:0;bottom:0;display:flex;flex-direction:column;width:820px;max-width:100vw;background:#0b0d16;border-left:1px solid #1e293b;animation:slideIn .2s ease;z-index:901;}
+    .rshell-overlay{position:fixed;inset:0;right:820px;background:rgba(0,0,0,.75);z-index:var(--z-rshell);cursor:pointer;}
+    .rshell-panel{position:fixed;top:0;right:0;bottom:0;display:flex;flex-direction:column;width:820px;max-width:100vw;background:#0b0d16;border-left:1px solid #1e293b;animation:slideIn .2s ease;z-index:calc(var(--z-rshell) + 1);}
     .rshell-hidden{display:none;}
     @keyframes slideIn{from{transform:translateX(60px);opacity:0}to{transform:none;opacity:1}}
     .rshell-ctrl{background:rgba(255,255,255,.05);border:1px solid var(--bdr);border-radius:6px;color:#475569;cursor:pointer;font-size:14px;padding:2px 10px;transition:.15s;line-height:1;}
     .rshell-ctrl:hover{color:var(--txt2);background:rgba(255,255,255,.1);}
     /* Barra flotante minimizada */
-    .rshell-minibars{position:fixed;bottom:28px;right:16px;display:flex;flex-direction:column;gap:6px;z-index:902;transition:all .2s ease;}
+    .rshell-minibars{position:fixed;bottom:28px;right:16px;display:flex;flex-direction:column;gap:6px;z-index:calc(var(--z-rshell) + 2);transition:all .2s ease;}
     .minibars-left{right:auto;left:8px;bottom:64px;}
     .rshell-mini-bar{display:flex;align-items:center;gap:8px;background:#0d0f18;border:1px solid #1e293b;border-radius:8px;padding:7px 12px;font-size:12px;box-shadow:0 4px 20px rgba(0,0,0,.5);transition:border-color .3s,box-shadow .3s;}
     .rshell-mini-bar:hover{border-color:rgba(16,185,129,.15);box-shadow:0 4px 20px rgba(0,0,0,.5),0 0 10px rgba(16,185,129,.06);}
@@ -4421,9 +5702,9 @@ if (Test-Path $src) {
     :global(.ibox){flex:1;background:transparent;border:none;color:white;font-family:inherit;font-size:13px;outline:none;resize:none;min-height:22px;max-height:180px;overflow-y:auto;line-height:1.5;padding:2px 0;}
     :global(.ibox::placeholder){color:#334155;}
     :global(.iside){display:flex;align-items:center;gap:3px;flex-shrink:0;}
-    :global(.ia-btn){background:none;border:none;color:#334155;cursor:pointer;padding:4px 6px;border-radius:5px;font-size:14px;transition:.15s;line-height:1;}
-    :global(.ia-btn:hover){background:rgba(255,255,255,.05);color:#64748b;}
-    :global(.ia-btn:disabled){opacity:.3;cursor:not-allowed;}
+    :global(.ia-btn){background:none;border:none;color:#475569;cursor:pointer;padding:5px 7px;border-radius:6px;font-size:14px;transition:.15s;line-height:1;display:flex;align-items:center;justify-content:center;}
+    :global(.ia-btn:hover){background:rgba(255,255,255,.07);color:#94a3b8;}
+    :global(.ia-btn:disabled){opacity:.25;cursor:not-allowed;}
     :global(.ia-btn.mic-on){color:var(--red);animation:mp 1.5s infinite;}
     :global(.ia-sep){width:1px;height:16px;background:var(--bdr);margin:0 2px;}
     :global(.mbdg){display:flex;align-items:center;gap:4px;font-size:11px;color:#475569;padding:3px 8px;border:1px solid var(--bdr);border-radius:5px;cursor:pointer;background:rgba(0,0,0,.2);transition:.15s;min-width:130px;}
@@ -4434,6 +5715,19 @@ if (Test-Path $src) {
     :global(.sbtn){width:36px;height:36px;border-radius:8px;border:none;cursor:pointer;background:rgba(16,185,129,.12);color:var(--acc);display:flex;align-items:center;justify-content:center;font-size:13px;transition:.15s;flex-shrink:0;}
     :global(.sbtn:hover){background:rgba(16,185,129,.22);}
     :global(.sbtn:disabled){opacity:.35;cursor:not-allowed;}
+    /* Stop button — filled square like Gemini/Claude */
+    :global(.sbtn-stop){background:rgba(239,68,68,.1);color:#ef4444;}
+    :global(.sbtn-stop:hover){background:rgba(239,68,68,.22);transform:scale(1.08);}
+    /* Pending message bar */
+    :global(.pending-msg-bar){display:flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(251,191,36,.06);border-bottom:1px solid rgba(251,191,36,.15);border-radius:8px 8px 0 0;font-size:11px;color:#fbbf24;}
+    :global(.pending-msg-dot){width:6px;height:6px;border-radius:50%;background:#fbbf24;animation:pulse-pending 1.2s ease-in-out infinite;flex-shrink:0;}
+    @keyframes pulse-pending{0%,100%{opacity:1}50%{opacity:.35}}
+    :global(.pending-msg-text){flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85;}
+    :global(.pending-msg-cancel){background:none;border:none;color:#fbbf24;cursor:pointer;opacity:.6;font-size:11px;padding:1px 4px;border-radius:3px;transition:.12s;flex-shrink:0;}
+    :global(.pending-msg-cancel:hover){opacity:1;background:rgba(251,191,36,.12);}
+    /* Panic button — modern icon style */
+    :global(.panic-btn){color:#ef4444 !important;}
+    :global(.panic-btn:hover){color:#f87171 !important;background:rgba(239,68,68,.12) !important;}
     /* ── BOTTOM BAR ────────────────────────────── */
     .bbar{display:flex;flex-direction:row;align-items:center;height:22px;background:#0b0d14;border-top:1px solid var(--bdr);padding:0 12px;font-size:10px;color:var(--txt3);flex-shrink:0;}
     .lang-sel{background:transparent;border:none;color:var(--txt3);font-size:10px;font-family:inherit;cursor:pointer;outline:none;padding:0;margin-right:2px;}
@@ -4474,13 +5768,13 @@ if (Test-Path $src) {
     :global(.td:nth-child(2)){animation-delay:.2s;}
     :global(.td:nth-child(3)){animation-delay:.4s;}
     /* ── DRAG OVERLAY ──────────────────────────── */
-    :global(.drag-ov){position:fixed;inset:0;background:rgba(6,10,15,.9);backdrop-filter:blur(8px);z-index:999999;display:flex;flex-direction:column;justify-content:center;align-items:center;}
+    :global(.drag-ov){position:fixed;inset:0;background:rgba(6,10,15,.9);backdrop-filter:blur(8px);z-index:var(--z-drag);display:flex;flex-direction:column;justify-content:center;align-items:center;}
     :global(.drag-box){text-align:center;border:2px dashed var(--acc);padding:50px 80px;border-radius:20px;background:rgba(16,185,129,.03);}
     :global(.drag-icon){font-size:48px;display:block;margin-bottom:12px;}
     :global(.drag-box h2){color:white;margin:0 0 8px;font-size:20px;}
     :global(.drag-box p){color:var(--txt2);margin:0;font-size:14px;}
     /* ── MODALS ────────────────────────────────── */
-    .mb{position:fixed;inset:0;background:rgba(10,12,20,.92);backdrop-filter:blur(8px);z-index:10000;display:flex;justify-content:center;align-items:center;}
+    .mb{position:fixed;inset:0;background:rgba(10,12,20,.92);backdrop-filter:blur(8px);z-index:var(--z-mb);display:flex;justify-content:center;align-items:center;}
     .mbox{background:rgba(22,24,34,.98);border:1px solid var(--bdr2);border-radius:12px;padding:28px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.5);}
     .mbox.sm{width:380px;}.mbox.md{width:440px;}.mbox.lg{width:520px;}
     .mhdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bdr);padding-bottom:14px;margin-bottom:18px;}
@@ -4649,7 +5943,7 @@ if (Test-Path $src) {
     /* ── UX: LIGHT THEME ────────────────────────────── */
     :global(:root.light){
         --bg:#f0f4f8;--bg2:#e8edf3;--bg3:#dde3ea;--bg4:#c8d4de;
-        --txt:#1a2234;--txt2:#4a5568;--txt3:#94a3b8;
+        --txt:#1a2234;--txt1:#1a2234;--txt2:#4a5568;--txt3:#94a3b8;
         --bdr:#c0ccd8;--bdr2:#a8b8c8;
         --acc:#00a86b;--blue:#2563eb;--purple:#7c3aed;--red:#dc2626;--amber:#d97706;
         --acc-d:rgba(0,168,107,0.1);--acc-b:rgba(0,168,107,0.2);
@@ -4904,7 +6198,7 @@ if (Test-Path $src) {
     .sb-resize-handle.resizing{background:rgba(16,185,129,.4);}
 
     /* ── UX: TOAST STACK ──────────────────────────── */
-    .toast-stack{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;z-index:20000;pointer-events:none;}
+    .toast-stack{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;z-index:var(--z-toast);pointer-events:none;}
     .toast{background:rgba(14,21,32,0.97);border:1px solid var(--bdr2);border-radius:8px;padding:9px 16px;font-size:12px;color:var(--txt);white-space:nowrap;box-shadow:0 4px 24px rgba(0,0,0,0.5);animation:toast-in .2s ease;display:flex;align-items:center;gap:8px;}
     .toast-icon{font-size:13px;font-weight:700;flex-shrink:0;width:16px;text-align:center;}
     .toast-info  {border-left:3px solid var(--purple);}   .toast-info   .toast-icon{color:var(--purple);}
@@ -4996,7 +6290,7 @@ if (Test-Path $src) {
 
   {#if !appReady}
   <!-- Spinner de arranque: cubre el flash entre inicio y verificación del keyring -->
-  <div style="position:fixed;inset:0;background:#060a0f;display:flex;align-items:center;justify-content:center;z-index:99999;flex-direction:column;gap:14px;">
+  <div style="position:fixed;inset:0;background:#060a0f;display:flex;align-items:center;justify-content:center;z-index:var(--z-splash);flex-direction:column;gap:14px;">
     <div style="width:28px;height:28px;border:2px solid #1e293b;border-top-color:#10b981;border-radius:50%;animation:spin .7s linear infinite;"></div>
     <span style="font-size:12px;color:#334155;letter-spacing:1px;">INICIANDO LUCY...</span>
   </div>
@@ -5078,8 +6372,8 @@ if (Test-Path $src) {
     </div>
     <div class="drag-sp" data-tauri-drag-region></div>
     <div class="win-controls">
-      <button class="win-btn-icon" style="color: #ef4444; font-size: 13px;" on:click={panicKill} title={isEN ? 'Stop All Processes (Panic)' : 'Detener todo (Pánico)'}>
-        🛑
+      <button class="win-btn-icon panic-btn" on:click={panicKill} title={isEN ? 'Stop All Processes (Panic)' : 'Detener todo (Pánico)'}>
+        <OctagonX size={14} strokeWidth={2.2} />
       </button>
       <button class="win-btn-icon" on:click={() => { focusMode = !focusMode; }} title={focusMode ? 'Ctrl+M — salir de focus' : 'Ctrl+M — modo focus'}>
         {focusMode ? '⊞' : '⊟'}
@@ -5179,11 +6473,11 @@ if (Test-Path $src) {
         on:click={() => ejecutarDesdeSidebar(accion)} on:keydown
         title="Ejecutar directamente: {accion.nombre}">
         <span class="sb-ico">
-          {#if accion.icono === '🖥️'}<Activity size={18}/>
-          {:else if accion.icono === '🌐'}<Globe size={18}/>
-          {:else if accion.icono === '🔒'}<Lock size={18}/>
-          {:else if accion.icono === '📋'}<ClipboardList size={18}/>
-          {:else if accion.icono === '🗑️'}<Trash2 size={18}/>
+          {#if accion.icono === '⊡'}<Activity size={18}/>
+          {:else if accion.icono === '◉'}<Globe size={18}/>
+          {:else if accion.icono === '⊗'}<Lock size={18}/>
+          {:else if accion.icono === '≡'}<ClipboardList size={18}/>
+          {:else if accion.icono === '⊘'}<Trash2 size={18}/>
           {:else}{accion.icono}{/if}
         </span>
         <span class="sb-txt">{accion.nombre}</span>
@@ -5201,7 +6495,7 @@ if (Test-Path $src) {
           <span>Registros</span>
           <span class="sb-accordion-arrow" class:open={registrosOpen}>{registrosOpen ? '▾' : '▸'}</span>
         {:else}
-          <span style="font-size:10px;">📋</span>
+          <span style="font-size:10px;">≡</span>
         {/if}
       </div>
       {#if registrosOpen || sidebarCollapsed}
@@ -5274,9 +6568,9 @@ if (Test-Path $src) {
 
           <!-- Header con saludo dinámico -->
           <div class="empty-header">
-            <div class="empty-ico">⚡</div>
+            <div class="empty-ico"><Zap size={40} style="color: var(--acc);" /></div>
             <h2 class="empty-title">{greeting}</h2>
-            <p class="empty-subtitle">{isEN ? 'Your SysAdmin AI assistant. Execute commands, analyze logs and automate Windows tasks directly from here.' : 'Tu asistente de SysAdmin con IA. Ejecuta comandos, analiza logs y automatiza tareas de Windows directamente desde aquí.'}</p>
+            <p class="empty-subtitle">{isEN ? 'Enterprise SysAdmin AI — persistent memory, permission rules, cost tracking, MCP servers, parallel sub-agents and streaming shell for Linux & Windows.' : 'IA SysAdmin empresarial — memoria persistente, reglas de permisos, control de costos, servidores MCP, sub-agentes paralelos y shell streaming para Linux y Windows.'}</p>
           </div>
 
           <!-- Grid 2×2: 4 tarjetas informativas -->
@@ -5302,9 +6596,9 @@ if (Test-Path $src) {
                 <li><b>{isEN ? 'System Diagnostics' : 'Diagnóstico de sistema'}</b> — {isEN ? 'RAM, CPU, uptime in real time' : 'RAM, CPU, uptime en tiempo real'}</li>
                 <li><b>{isEN ? 'Log Management' : 'Gestión de logs'}</b> — {isEN ? 'IIS, Event Viewer, auto cleanup' : 'IIS, Event Viewer, limpieza automatizada'}</li>
                 <li><b>{isEN ? 'Network & DNS' : 'Red y DNS'}</b> — {isEN ? 'flush, diagnostics, connectivity checks' : 'flush, diagnóstico, consultas de conectividad'}</li>
-                <li><b>{isEN ? 'Security' : 'Seguridad'}</b> — {isEN ? 'lock workstation, clear clipboard, auditing' : 'bloqueo de equipo, limpieza de portapapeles, auditoría'}</li>
-                <li><b>{isEN ? 'Remote Servers' : 'Servidores remotos'}</b> — {isEN ? 'SSH (Linux) and Invoke-Command (Windows Server)' : 'SSH (Linux) e Invoke-Command (Windows Server)'}</li>
-                <li><b>{isEN ? 'Image Analysis' : 'Análisis de imágenes'}</b> — {isEN ? 'error catching for visual diagnostics' : 'captura de errores para diagnóstico visual'}</li>
+                <li><b>{isEN ? 'Remote Servers' : 'Servidores remotos'}</b> — {isEN ? 'SSH (Linux) and WinRM (Windows) with streaming shell' : 'SSH (Linux) y WinRM (Windows) con shell streaming'}</li>
+                <li><b>{isEN ? 'Security & Audit' : 'Seguridad y Auditoría'}</b> — {isEN ? 'permission rules, command audit log, keyring storage' : 'reglas de permisos, audit log de comandos, almacén de claves'}</li>
+                <li><b>{isEN ? 'Cross-session Memory' : 'Memoria entre sesiones'}</b> — {isEN ? 'SQLite knowledge base with full-text search' : 'base de conocimiento en SQLite con búsqueda de texto completo'}</li>
                 <li><b>{isEN ? 'Report Generation' : 'Generación de reportes'}</b> — {isEN ? 'tell her' : 'dile'} <i>"{isEN ? 'generate a PDF system report' : 'genera un informe del sistema en PDF'}"</i></li>
               </ul>
             </div>
@@ -5334,34 +6628,55 @@ if (Test-Path $src) {
 
             <!-- CARD 5: Novedades (nuevas features) -->
             <div class="empty-section ec5" style="grid-column:1 / -1;border-color:rgba(167,139,250,.25);background:rgba(167,139,250,.04);">
-              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico">✨</span><span>{isEN ? 'New in this version' : 'Novedades en esta versión'}</span></div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'What\'s new — Lucy OS v1.0' : 'Novedades — Lucy OS v1.0'}</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Live reasoning' : 'Razonamiento en vivo'}</b> — {isEN ? 'see Lucy\'s thoughts streaming in real time' : 'observa cómo Lucy piensa en tiempo real'}</li>
-                  <li><b>{isEN ? 'Tool cards' : 'Tool cards'}</b> — {isEN ? 'collapsible cards per tool call with copy button, hover preview, and citations' : 'cards colapsables por cada herramienta con copiar, hover preview y citas numeradas'}</li>
-                  <li><b>{isEN ? 'Diff viewer' : 'Diff viewer'}</b> — {isEN ? 'unified diffs when Lucy edits files' : 'diffs unificados cuando Lucy edita archivos'}</li>
-                  <li><b>{isEN ? 'Slash commands' : 'Slash commands'}</b> — <code>/help</code>, <code>/clear</code>, <code>/theme</code>, <code>/model</code>, <code>/compare</code>, <code>/refresh</code></li>
-                  <li><b>{isEN ? 'Multi-model compare' : 'Comparar modelos'}</b> — <code>/compare m1,m2 prompt</code> {isEN ? 'runs the prompt across N models in parallel' : 'lanza el prompt en N modelos en paralelo'}</li>
-                  <li><b>{isEN ? 'Context pinning' : 'Context pinning'}</b> — 📌 {isEN ? 'on any message to keep it in context across compaction' : 'en cualquier mensaje para fijarlo al contexto'}</li>
+                  <li><b>{isEN ? 'Non-blocking chat' : 'Chat no bloqueante'}</b> — {isEN ? 'type & queue messages while Lucy works, just like Gemini & Claude' : 'escribe y encola mensajes mientras Lucy trabaja, igual que Gemini y Claude'}</li>
+                  <li><b>{isEN ? 'Stop button' : 'Botón de parada'}</b> — {isEN ? 'square button replaces Send while processing — stops Lucy instantly' : 'cuadrado reemplaza Enviar mientras procesa — detiene a Lucy al instante'}</li>
+                  <li><b>{isEN ? 'Persistent memory' : 'Memoria persistente'}</b> — {isEN ? 'Lucy stores facts in SQLite across sessions with full-text search' : 'Lucy guarda hechos en SQLite entre sesiones con búsqueda de texto completo'}</li>
+                  <li><b>{isEN ? 'Sub-agents (fork/wait)' : 'Sub-agentes (fork/wait)'}</b> — {isEN ? 'Lucy can launch parallel sub-tasks and wait for their results' : 'Lucy puede lanzar sub-tareas en paralelo y esperar sus resultados'}</li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Ollama auto-detect' : 'Auto-detección Ollama'}</b> — {isEN ? 'local models discovered automatically with online status dot' : 'modelos locales detectados automáticamente con indicador 🟢/🔴'}</li>
-                  <li><b>{isEN ? 'Workspace presets' : 'Workspace presets'}</b> — {isEN ? 'save model + theme + density as a named mode' : 'guarda modelo + tema + densidad como un modo'}</li>
-                  <li><b>{isEN ? 'Drag & drop files' : 'Drag & drop'}</b> — {isEN ? 'drop files on the input to attach them' : 'suelta archivos sobre el input para adjuntarlos'}</li>
-                  <li><b>{isEN ? 'Density mode' : 'Modo de densidad'}</b> — {isEN ? 'compact vs comfortable spacing' : 'modo compacto o cómodo'}</li>
-                  <li><b>{isEN ? 'Live latency / TPS' : 'Latencia / TPS en vivo'}</b> — {isEN ? 'TTFT and tokens/sec visible during streaming' : 'TTFT y tokens/segundo visibles durante el streaming'}</li>
-                  <li><b>{isEN ? 'Background notifications' : 'Notificaciones de fondo'}</b> — {isEN ? 'native alert when long tasks finish' : 'alerta nativa cuando termina una tarea larga'}</li>
+                  <li><b>{isEN ? 'MCP Servers' : 'Servidores MCP'}</b> — {isEN ? 'connect Git, SQLite, Filesystem, Shodan, VirusTotal via JSON-RPC' : 'conecta Git, SQLite, Filesystem, Shodan, VirusTotal vía JSON-RPC'}</li>
+                  <li><b>{isEN ? 'Cost tracking' : 'Control de costos'}</b> — {isEN ? 'token usage & estimated spend per model visible in the dashboard' : 'uso de tokens y costo estimado por modelo visible en el dashboard'}</li>
+                  <li><b>{isEN ? 'Permission rules' : 'Reglas de permisos'}</b> — {isEN ? 'allow / block / ask regex-based rules for commands and file paths' : 'reglas allow/block/ask basadas en regex para comandos y rutas'}</li>
+                  <li><b>{isEN ? 'Skills & Runbooks' : 'Skills y Runbooks'}</b> — {isEN ? 'persistent scripts with parameters, tags and usage counters in SQLite' : 'scripts persistentes con parámetros, tags y contadores de uso en SQLite'}</li>
+                </ul>
+                <ul class="esec-list">
+                  <li><b>{isEN ? 'Live reasoning' : 'Razonamiento en vivo'}</b> — {isEN ? 'see Lucy\'s thoughts streaming in real time' : 'observa cómo Lucy piensa en tiempo real'}</li>
+                  <li><b>{isEN ? 'Multi-model compare' : 'Comparar modelos'}</b> — <code>/compare m1,m2 prompt</code> {isEN ? 'runs across N models in parallel' : 'lanza en N modelos en paralelo'}</li>
+                  <li><b>{isEN ? 'Context compression' : 'Compresión de contexto'}</b> — {isEN ? '2-phase: local dedup + LLM compression for long agent loops' : '2 fases: dedup local + compresión LLM para loops largos'}</li>
+                  <li><b>{isEN ? 'Error deduplication' : 'Deduplicación de errores'}</b> — {isEN ? 'repeating errors are detected and escalated, not retried indefinitely' : 'errores repetidos se detectan y escalan, no se reintentan indefinidamente'}</li>
                 </ul>
               </div>
             </div>
 
           </div>
 
+          <!-- Fila de Reliability & Safety -->
+          <div class="empty-row2" style="margin-bottom:12px;">
+            <div class="empty-section" style="border-color:rgba(52,211,153,.22);background:rgba(52,211,153,.03);">
+              <div class="esec-hdr" style="color:#34d399;border-color:rgba(52,211,153,.18);">
+                <span class="esec-ico"><ShieldCheck size={16} /></span><span>{isEN ? 'Reliability & Safety' : 'Fiabilidad y Seguridad'}</span>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <ul class="esec-list">
+                  <li><b>PLAN / VERIFY / ROLLBACK</b> — {isEN ? 'for risky changes Lucy proposes a plan with a verification step and rollback command. If verify fails, rollback runs automatically.' : 'para cambios riesgosos Lucy propone un plan con verificación y comando de rollback. Si la verificación falla, el rollback se ejecuta solo.'}</li>
+                  <li><b>{isEN ? 'Host preflight' : 'Preflight de host'}</b> — {isEN ? 'before any remote command Lucy tests TCP reachability and fails fast on unreachable hosts (no more cryptic 15 s WinRM timeouts).' : 'antes de cada comando remoto Lucy prueba conectividad TCP y falla rápido en hosts inaccesibles (se acabaron los timeouts WinRM crípticos de 15 s).'}</li>
+                </ul>
+                <ul class="esec-list">
+                  <li><b>{isEN ? 'Destructive command guardian' : 'Guardián de comandos destructivos'}</b> — {isEN ? 'detects shutdown/reboot/rm -rf/Stop-Service/Restart-Service/etc. and requires explicit confirmation before execution.' : 'detecta shutdown/reboot/rm -rf/Stop-Service/Restart-Service/etc. y exige confirmación explícita antes de ejecutar.'}</li>
+                  <li><b>{isEN ? 'Dry-run mode' : 'Modo Dry-Run'}</b> — {isEN ? 'preview any PLAN with -WhatIf (PowerShell) or command echoing (shell) before committing changes.' : 'previsualiza cualquier PLAN con -WhatIf (PowerShell) o echoing de comando (shell) antes de aplicar cambios.'}</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
           <!-- Fila de memoria personalizada -->
           <div class="empty-row2">
             <div class="empty-section" style="border-color:rgba(180,81,255,.2);background:rgba(180,81,255,.03);">
               <div class="esec-hdr" style="color:#9a6acc;border-color:rgba(180,81,255,.15);">
-                <span class="esec-ico">🧠</span><span>{isEN ? 'How to teach custom memory to Lucy' : 'Cómo enseñarle memoria personalizada a Lucy'}</span>
+                <span class="esec-ico">◈</span><span>{isEN ? 'How to teach custom memory to Lucy' : 'Cómo enseñarle memoria personalizada a Lucy'}</span>
               </div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <ul class="esec-list">
@@ -5375,7 +6690,7 @@ if (Test-Path $src) {
                 <ul class="esec-list">
                   <li><b>{isEN ? 'Custom Commands' : 'Comandos propios'}</b> — {isEN ? 'teach her shortcuts:' : 'enséñale atajos:'}<br>
                     <i>"{isEN ? 'teach her that when I say \'clear IIS logs\' run:' : 'enséñale que cuando diga \'limpia logs IIS\' ejecute:'} <code>Clear-Content C:\inetpub\logs\LogFiles\*</code>"</i></li>
-                  <li>{isEN ? 'Review and delete learned items from' : 'Consulta y elimina lo aprendido desde'} <b>🧠 {isEN ? 'Commands' : 'Comandos'}</b> {isEN ? 'in the left panel' : 'en el panel izquierdo'}</li>
+                  <li>{isEN ? 'Review and delete learned items from' : 'Consulta y elimina lo aprendido desde'} <b>◈ {isEN ? 'Commands' : 'Comandos'}</b> {isEN ? 'in the left panel' : 'en el panel izquierdo'}</li>
                   <li>{isEN ? 'Memory persists between sessions — Lucy remembers your setup' : 'La memoria persiste entre sesiones — Lucy recuerda tu entorno aunque cierres la app'}</li>
                 </ul>
               </div>
@@ -5426,7 +6741,7 @@ if (Test-Path $src) {
                   <!-- Live reasoning panel (Claude/Antigravity-style) -->
                   <div class="msg-reasoning {msg.active ? 'reasoning-active' : 'reasoning-done'} {msg.collapsed ? 'reasoning-collapsed' : ''}">
                     <button type="button" class="reasoning-header" on:click={() => { msg.collapsed = !msg.collapsed; tabs = tabs; }}>
-                      <span class="reasoning-icon">💭</span>
+                      <span class="reasoning-icon">·</span>
                       <span class="reasoning-title">
                         {#if msg.active}Pensando…{:else}Pensó durante {msg.duration.toFixed(1)}s{/if}
                       </span>
@@ -5457,7 +6772,7 @@ if (Test-Path $src) {
                     {#if msg.role !== 'system'}
                       {#if msg.rawRole && (msg.role === 'user' || msg.role === 'lucy')}
                         <button class="msg-pin" class:on={msg.pinned} title={msg.pinned ? (isEN?'Unpin':'Quitar pin') : (isEN?'Pin to context':'Fijar al contexto')}
-                          on:click={() => { msg.pinned = !msg.pinned; tabs = tabs; toast(msg.pinned ? (isEN?'📌 Pinned':'📌 Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}>📌</button>
+                          on:click={() => { msg.pinned = !msg.pinned; tabs = tabs; toast(msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}>·</button>
                       {/if}
                       {@html msg.html}
                       {#if msg.time}<div class="msg-time">{msg.time}</div>{/if}
@@ -5479,7 +6794,7 @@ if (Test-Path $src) {
               {#each tab.attachedFiles as file}
                 <div class="sf-bdg">
                   {#if file.type==='image'}<img src={file.previewUrl} alt="p" style="width:22px;height:22px;object-fit:cover;border-radius:3px;">
-                  {:else}<span>📎</span>{/if}
+                  {:else}<span>·</span>{/if}
                   <span style="font-size:12px;">{file.name}</span>
                   <button class="sf-rm" on:click={() => removeFile(tab.id, file.name)} on:keydown>✕</button>
                 </div>
@@ -5505,7 +6820,7 @@ if (Test-Path $src) {
             {#if pendingSecurityBlock?.tabId === tab.id}
             <div class="sec-banner" role="alert">
               <div class="sec-banner-hdr">
-                <span class="sec-banner-ico">🛡️</span>
+                <span class="sec-banner-ico">⬡</span>
                 <div class="sec-banner-info">
                   <span class="sec-banner-title">Instrucción bloqueada por seguridad</span>
                   <span class="sec-banner-rule">Regla: <code>{pendingSecurityBlock.blockWord}</code></span>
@@ -5514,14 +6829,14 @@ if (Test-Path $src) {
               <code class="sec-banner-cmd">{pendingSecurityBlock.displayCmd}</code>
               <div class="sec-banner-actions">
                 <button class="mbtn ghost" style="font-size:12px;padding:6px 14px;" on:click={limpiarSecurityBlock}>Cancelar</button>
-                <button class="mbtn warn" style="font-size:12px;padding:6px 14px;" on:click={autorizarSecurityBlock}>⚠️ Autorizar y Ejecutar</button>
+                <button class="mbtn warn" style="font-size:12px;padding:6px 14px;" on:click={autorizarSecurityBlock}>! Autorizar y Ejecutar</button>
               </div>
             </div>
             {/if}
 
             {#if showChatSearch && activeTabId === tab.id}
             <div class="chat-search-bar">
-              <span class="cs-ico">🔍</span>
+              <span class="cs-ico">◎</span>
               <input id="chat-search-inp" class="cs-inp" bind:value={chatSearch}
                 placeholder={isEN ? 'Search in conversation…' : 'Buscar en conversación…'}
                 on:keydown={(e) => { if (e.key === 'Escape') { showChatSearch = false; chatSearch = ''; } }} />
@@ -5534,17 +6849,39 @@ if (Test-Path $src) {
               on:dragover|preventDefault={(e) => { e.dataTransfer.dropEffect='copy'; e.currentTarget.classList.add('drag-over'); }}
               on:dragleave={(e) => e.currentTarget.classList.remove('drag-over')}
               on:drop|preventDefault={(e) => { e.currentTarget.classList.remove('drag-over'); handleFileDrop(e, tab.id); }}>
+              <!-- ── PENDING MESSAGE INDICATOR ── -->
+              {#if tab.pendingMessage}
+              <div class="pending-msg-bar">
+                <span class="pending-msg-dot"></span>
+                <span class="pending-msg-text">{isEN ? 'Queued' : 'En espera'}: "{tab.pendingMessage.text.length > 50 ? tab.pendingMessage.text.slice(0,50)+'…' : tab.pendingMessage.text}"</span>
+                <button class="pending-msg-cancel" title={isEN ? 'Cancel queued message' : 'Cancelar mensaje en espera'}
+                  on:click={() => { getTab(tab.id).pendingMessage = null; refresh(); }}>✕</button>
+              </div>
+              {/if}
               <div class="igrp">
                 <textarea class="ibox" rows="1"
-                  placeholder={tab.isProcessing
-                    ? (isEN ? 'Lucy is processing…' : 'Lucy está procesando…')
-                    : ui.cmdPlaceholder}
-                  bind:value={tab.inputValue} on:input={autoResize} on:keydown={(e)=>onKey(e,tab.id)} disabled={tab.isProcessing}></textarea>
+                  placeholder={tab.pendingMessage
+                    ? (isEN ? 'Message queued — waiting for Lucy…' : 'Mensaje en espera — esperando a Lucy…')
+                    : tab.isProcessing
+                      ? (isEN ? 'Type here — will send when Lucy finishes…' : 'Escribe aquí — se enviará cuando Lucy termine…')
+                      : ui.cmdPlaceholder}
+                  bind:value={tab.inputValue}
+                  on:input={autoResize}
+                  on:keydown={(e)=>onKey(e,tab.id)}
+                  disabled={!!tab.pendingMessage}></textarea>
                 <div class="iside">
-                  <button class="ia-btn" title="Adjuntar" on:click={() => attach(tab.id)} disabled={tab.isProcessing}>📎</button>
-                  <button class="ia-btn {tab.isListening?'mic-on':''}" title="Voz" on:click={() => toggleMic(tab.id)} disabled={tab.isProcessing}>🎤</button>
-                  <button class="ia-btn" title="Limpiar sesión (Ctrl+L)" on:click={() => limpiarSesion(tab.id)} disabled={tab.isProcessing}>🗑</button>
-                  <button class="ia-btn" title="Exportar conversación (.md)" on:click={() => exportarConversacion(tab.id)} disabled={tab.isProcessing}>⬇️</button>
+                  <button class="ia-btn" title={isEN ? 'Attach file' : 'Adjuntar archivo'} on:click={() => attach(tab.id)} disabled={!!tab.pendingMessage}>
+                    <Paperclip size={15} strokeWidth={1.8} />
+                  </button>
+                  <button class="ia-btn {tab.isListening?'mic-on':''}" title={isEN ? 'Voice input' : 'Entrada de voz'} on:click={() => toggleMic(tab.id)} disabled={tab.isProcessing && !tab.isListening}>
+                    {#if tab.isListening}<MicOff size={15} strokeWidth={1.8} />{:else}<Mic size={15} strokeWidth={1.8} />{/if}
+                  </button>
+                  <button class="ia-btn" title={isEN ? 'Clear session (Ctrl+L)' : 'Limpiar sesión (Ctrl+L)'} on:click={() => limpiarSesion(tab.id)} disabled={tab.isProcessing}>
+                    <Eraser size={15} strokeWidth={1.8} />
+                  </button>
+                  <button class="ia-btn" title={isEN ? 'Export conversation (.md)' : 'Exportar conversación (.md)'} on:click={() => exportarConversacion(tab.id)} disabled={tab.isProcessing}>
+                    <FileDown size={15} strokeWidth={1.8} />
+                  </button>
                   <div class="ia-sep"></div>
                   <div class="mbdg">
                     {#if tab.selectedModel?.startsWith('local-')}
@@ -5569,7 +6906,18 @@ if (Test-Path $src) {
                   </div>
                 </div>
               </div>
-              <button class="sbtn" on:click={() => process(tab.id)} disabled={tab.isProcessing} style="opacity:{tab.isProcessing?0.4:1};">▶</button>
+              <!-- ── SEND / STOP TOGGLE (Gemini/Claude style) ── -->
+              {#if tab.isProcessing}
+                <button class="sbtn sbtn-stop" on:click={() => cancelarEjecucion(tab.id)}
+                  title={isEN ? 'Stop (Escape)' : 'Detener (Escape)'}>
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
+                    <rect x="1.5" y="1.5" width="10" height="10" rx="2"/>
+                  </svg>
+                </button>
+              {:else}
+                <button class="sbtn" on:click={() => process(tab.id)}
+                  disabled={!tab.inputValue?.trim() && !tab.attachedFiles?.length}>▶</button>
+              {/if}
             </div>
           </div>
         {/each}
@@ -5657,7 +7005,7 @@ if (Test-Path $src) {
   {#if showDragOverlay}
   <div id="drag-ov" class="drag-ov">
     <div class="drag-box">
-      <span class="drag-icon">📥</span>
+      <span class="drag-icon">↓</span>
       <h2>Suelta tu archivo aquí</h2>
       <p>Lucy lo analizará inmediatamente</p>
     </div>
@@ -5677,7 +7025,7 @@ if (Test-Path $src) {
 
   {#if $showNewActionModal}
   <div class="mb">
-    <div class="mbox sm">
+    <div role="dialog" use:focusTrap class="mbox sm">
       <div class="mhdr">
         <h2 class="mtitle"><span style="color:var(--acc);">⚡</span> {editingActionIdx !== null ? 'Editar Accion Directa' : 'Nueva Accion Rapida'}</h2>
         <button class="mclose" on:click={() => $showNewActionModal = false}>✕</button>
@@ -5700,9 +7048,9 @@ if (Test-Path $src) {
 
   {#if $showLearnConfirm && pendingLearn}
   <div class="mb">
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle" style="color:var(--amber);">⚠️ Confirmar aprendizaje</h2>
+        <h2 class="mtitle" style="color:var(--amber);">! Confirmar aprendizaje</h2>
       </div>
       <p style="color:var(--txt2);font-size:13px;margin-bottom:16px;line-height:1.5;">Revisa el script antes de autorizar:</p>
       <div style="background:rgba(0,0,0,.3);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;margin-bottom:18px;">
@@ -5720,9 +7068,9 @@ if (Test-Path $src) {
 
   {#if $showMemoryModal}
   <div class="mb">
-    <div class="mbox lg">
+    <div role="dialog" use:focusTrap class="mbox lg">
       <div class="mhdr">
-        <h2 class="mtitle"><span style="color:var(--purple);">🧠</span> Memoria Personalizada</h2>
+        <h2 class="mtitle"><span style="color:var(--purple);">◈</span> Memoria Personalizada</h2>
         <button class="mclose" on:click={cerrarMemoria}>✕</button>
       </div>
       {#if !learnedCommands.length}
@@ -5730,7 +7078,7 @@ if (Test-Path $src) {
       {:else}
         {#each learnedCommands as cmd, i}
           <div class="mem-item">
-            <button class="mem-del" on:click={() => borrarComando(i)}>🗑️</button>
+            <button class="mem-del" on:click={() => borrarComando(i)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} strokeWidth={2}/></button>
             <p class="mem-keys"><b>Activadores:</b> {cmd.claves.join(', ')}</p>
             <p class="mem-script">{cmd.script}</p>
             <p class="mem-resp"><b>Respuesta:</b> {cmd.respuesta}</p>
@@ -5752,8 +7100,8 @@ if (Test-Path $src) {
   <!-- ── MODAL: CONFIRMACIÓN RUNAS (#20) ── -->
   {#if $showRunAsModal}
   <div class="mb">
-    <div class="mbox sm" style="text-align:center;">
-      <div style="font-size:32px;margin-bottom:12px;">🛡️</div>
+    <div role="dialog" use:focusTrap class="mbox sm" style="text-align:center;">
+      <div style="font-size:32px;margin-bottom:12px;display:flex;justify-content:center;"><ShieldCheck size={32} strokeWidth={1.5} style="color:var(--amber)"/></div>
       <h2 style="color:white;margin:0 0 8px;font-size:16px;font-weight:600;">Comando con privilegios de Administrador</h2>
       <p style="color:var(--txt2);font-size:13px;margin-bottom:8px;line-height:1.5;">
         Lucy quiere ejecutar el siguiente comando con <b style="color:var(--amber);">elevación de permisos (RunAs)</b>:
@@ -5762,7 +7110,7 @@ if (Test-Path $src) {
       <p style="color:#5a4a2a;font-size:12px;margin-bottom:20px;">Windows mostrará un cuadro de confirmación UAC. Solo procede si confías en este comando.</p>
       <div style="display:flex;gap:10px;justify-content:center;">
         <button class="mbtn ghost" on:click={cancelarRunAs}>Cancelar</button>
-        <button class="mbtn warn" on:click={confirmarRunAs}>⚠️ Ejecutar con elevación</button>
+        <button class="mbtn warn" on:click={confirmarRunAs}>! Ejecutar con elevación</button>
       </div>
     </div>
   </div>
@@ -5771,9 +7119,9 @@ if (Test-Path $src) {
   <!-- ── MODAL: HISTORIAL DE COMANDOS (#19) ── -->
   {#if $showHistoryModal}
   <div class="mb" role="button" tabindex="-1" on:click|self={() => $showHistoryModal=false} on:keydown>
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle">🕑 Historial de comandos <span style="color:#334155;font-size:11px;font-weight:400;">(Ctrl+R)</span></h2>
+        <h2 class="mtitle">· Historial de comandos <span style="color:#334155;font-size:11px;font-weight:400;">(Ctrl+R)</span></h2>
         <button class="mclose" on:click={() => $showHistoryModal=false}>✕</button>
       </div>
       <input id="history-input" class="minp" style="margin-bottom:10px;" placeholder="Buscar en historial..." bind:value={historyQuery}>
@@ -5815,22 +7163,39 @@ if (Test-Path $src) {
   <!-- ── MODAL: ALERTAS PROACTIVAS ── -->
   {#if $showAlertsModal}
   <div class="mb">
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle">🔔 Alertas Proactivas</h2>
+        <h2 class="mtitle" style="display:flex;align-items:center;gap:6px;"><Bell size={15} strokeWidth={2}/> Alertas Proactivas</h2>
         <button class="mclose" on:click={() => $showAlertsModal=false}>✕</button>
       </div>
 
       <!-- Alertas activas -->
       {#if $activeAlerts.length}
       <div style="margin-bottom:14px;">
-        <div style="font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;">⚠️ Disparadas ahora</div>
+        <div style="font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;display:flex;align-items:center;gap:5px;"><AlertTriangle size={11} strokeWidth={2}/> Disparadas ahora</div>
         {#each $activeAlerts as al}
         <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(255,68,68,.08);border:1px solid rgba(255,68,68,.2);border-radius:6px;margin-bottom:4px;font-size:12px;">
-          <span style="color:var(--red);font-weight:700;">{al.metric}</span>
+          <span style="color:var(--red);font-weight:700;">{al.metric.toUpperCase()}</span>
           <span style="color:var(--txt2);">{al.hostLabel}</span>
           <span style="color:var(--red);font-weight:700;margin-left:auto;">{al.value}%</span>
           <span style="color:#475569;">(umbral {al.threshold}%)</span>
+          <button style="background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:5px;color:var(--acc);font-size:10px;font-weight:700;padding:2px 8px;cursor:pointer;white-space:nowrap;transition:.12s;flex-shrink:0;"
+            on:mouseenter={e => e.currentTarget.style.background='rgba(16,185,129,.22)'}
+            on:mouseleave={e => e.currentTarget.style.background='rgba(16,185,129,.12)'}
+            on:click={() => {
+              $showAlertsModal = false;
+              const t = getTab(activeTabId);
+              if (t) {
+                t.inputValue = isEN
+                  ? `Alert: ${al.metric.toUpperCase()} is at ${al.value}% on ${al.hostLabel} (threshold ${al.threshold}%). Diagnose the root cause and suggest a fix.`
+                  : `Alerta: ${al.metric.toUpperCase()} al ${al.value}% en ${al.hostLabel} (umbral ${al.threshold}%). Diagnostica la causa raíz y sugiere cómo corregirlo.`;
+                refresh();
+              }
+              tick().then(() => { const el = document.querySelector('.chat-wrap.on .ibox'); if (el) el.focus(); });
+            }}
+            title={isEN ? 'Ask Lucy to diagnose this alert' : 'Pedir a Lucy que diagnostique esta alerta'}>
+            → Ask Lucy
+          </button>
         </div>
         {/each}
       </div>
@@ -5893,9 +7258,9 @@ if (Test-Path $src) {
   <!-- ── MODAL: RUNBOOK ── -->
   {#if $showRunbookModal}
   <div class="mb">
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle">📋 {editingRunbook ? 'Editar Runbook' : 'Nuevo Runbook'}</h2>
+        <h2 class="mtitle" style="display:flex;align-items:center;gap:6px;"><ClipboardList size={15} strokeWidth={2}/> {editingRunbook ? 'Editar Runbook' : 'Nuevo Runbook'}</h2>
         <button class="mclose" on:click={() => $showRunbookModal=false}>✕</button>
       </div>
 
@@ -5957,9 +7322,9 @@ if (Test-Path $src) {
   {#if runbookRunning}
   {@const rb = $runbooks.find(r=>r.id===runbookRunning.rbId)}
   <div class="mb">
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle">{rb?.icon||'📋'} {rb?.name||'Runbook'}</h2>
+        <h2 class="mtitle">{rb?.icon||'≡'} {rb?.name||'Runbook'}</h2>
         {#if runbookRunning.stepIdx < 0}
         <button class="mclose" on:click={() => runbookRunning=null}>✕</button>
         {/if}
@@ -5994,7 +7359,7 @@ if (Test-Path $src) {
   <!-- ── MODAL: MULTI-HOST EXECUTION ── -->
   {#if $showMultiHostModal}
   <div class="mb">
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
         <h2 class="mtitle">⚡ Ejecución Multi-Host</h2>
         <button class="mclose" on:click={() => $showMultiHostModal=false}>✕</button>
@@ -6009,7 +7374,7 @@ if (Test-Path $src) {
         <div class="mh-host-row" class:mh-selected={$multiHostSelected.includes(h.id)} role="button" tabindex="0"
           on:click={() => toggleMultiHostSelect(h.id)} on:keydown>
           <input type="checkbox" checked={$multiHostSelected.includes(h.id)} style="accent-color:var(--acc);" on:click|stopPropagation={() => toggleMultiHostSelect(h.id)}>
-          <span style="font-size:14px;">{h.type==='windows'?'🖥':'🐧'}</span>
+          <span style="display:inline-flex;align-items:center;color:var(--txt2);">{#if h.type==='windows'}<Tv2 size={14}/>{:else}<Terminal size={14}/>{/if}</span>
           <span style="font-size:13px;color:var(--txt);">{h.name}</span>
           <span style="font-size:11px;color:#475569;font-family:var(--mono);margin-left:auto;">{h.host}</span>
           {#if $multiHostResults[h.id]}
@@ -6039,8 +7404,8 @@ if (Test-Path $src) {
 
   {#if $showCloseTabModal}
   <div class="mb">
-    <div class="mbox sm" style="text-align:center;">
-      <div style="font-size:28px;margin-bottom:12px;">🗂️</div>
+    <div role="dialog" use:focusTrap class="mbox sm" style="text-align:center;">
+      <div style="font-size:28px;margin-bottom:12px;">⊞</div>
       <h2 style="color:white;margin:0 0 8px;font-size:16px;font-weight:600;">
         ¿Cerrar "{tabs.find(t=>t.id===pendingCloseTabId)?.title ?? 'esta terminal'}"?
       </h2>
@@ -6058,9 +7423,9 @@ if (Test-Path $src) {
   <!-- ── MODAL: ACERCA DE ── -->
   {#if $showAboutModal}
   <div class="mb">
-    <div class="mbox md">
+    <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle">ℹ️ Acerca de Lucy Assistant</h2>
+        <h2 class="mtitle">· Acerca de Lucy Assistant</h2>
         <button class="mclose" on:click={() => $showAboutModal=false}>✕</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px;">
@@ -6087,7 +7452,7 @@ if (Test-Path $src) {
       {/if}
 
       <div style="display:flex;gap:10px;justify-content:flex-end;">
-        <button class="mbtn ghost" on:click={copiarDiagnostico}>📋 Copiar diagnóstico</button>
+        <button class="mbtn ghost" on:click={copiarDiagnostico} style="display:flex;align-items:center;gap:5px;"><ClipboardList size={13} strokeWidth={2}/> Copiar diagnóstico</button>
         <button class="mbtn ghost" on:click={() => $showAboutModal=false}>Cerrar</button>
       </div>
     </div>
@@ -6098,10 +7463,16 @@ if (Test-Path $src) {
   {#if $showChangeKeyModal}
   <KeyringModal {isEN} on:close={() => $showChangeKeyModal=false} />
   {/if}
+
+  <!-- ── MODAL: CONFIGURACIÓN DE PROVEEDORES (Multi-LLM) ── -->
+  {#if showProviderConfig}
+  <ProviderConfigModal isOpen={true} {isEN} on:close={() => showProviderConfig=false} />
+  {/if}
+
   <!-- ── MODAL: CHIPS EDITABLES ── -->
   {#if $showChipsModal}
   <div class="mb">
-    <div class="mbox sm">
+    <div role="dialog" use:focusTrap class="mbox sm">
       <div class="mhdr">
         <h2 class="mtitle">{editingChipIdx === null ? '＋ Nuevo chip rápido' : '✎ Editar chip'}</h2>
         <button class="mclose" on:click={() => $showChipsModal=false}>✕</button>
@@ -6137,7 +7508,7 @@ if (Test-Path $src) {
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="mb" on:click={() => showSettingsModal = false}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="mbox settings-modal" on:click|stopPropagation>
+    <div role="dialog" use:focusTrap class="mbox settings-modal" on:click|stopPropagation>
       <div class="mhdr">
         <h3>{isEN ? 'Settings' : 'Configuración'}</h3>
         <button class="mclose" on:click={() => showSettingsModal = false}>✕</button>
@@ -6152,16 +7523,26 @@ if (Test-Path $src) {
                 <div style="display:flex;gap:6px;align-items:center;">
                   <input type="text" value={k} disabled style="background:#0f172a;color:#94a3b8;border:1px solid #1e293b;border-radius:4px;padding:4px;width:120px;font-size:11px;" />
                   <input type="password" value={v} disabled style="background:#0f172a;color:#94a3b8;border:1px solid #1e293b;border-radius:4px;padding:4px;flex:1;font-size:11px;" />
-                  <button on:click={() => { delete mcpSecrets[k]; mcpSecrets = mcpSecrets; localStorage.setItem('lucy_mcp_secrets', JSON.stringify(mcpSecrets)); }} style="background:transparent;border:none;color:#ef4444;cursor:pointer;">⨯</button>
+                  <button on:click={() => deleteMcpSecret(k)} style="background:transparent;border:none;color:#ef4444;cursor:pointer;">⨯</button>
                 </div>
               {/each}
               <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                <input id="newMcpK" type="text" placeholder="Ej. GOOGLE_SHEETS_KEY" style="background:#1e293b;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px;width:120px;font-size:11px;" />
-                <input id="newMcpV" type="password" placeholder="Valor Secreto" style="background:#1e293b;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px;flex:1;font-size:11px;" />
-                <button on:click={() => { 
-                  let k = document.getElementById('newMcpK').value.trim();
-                  let v = document.getElementById('newMcpV').value.trim();
-                  if(k && v){ mcpSecrets[k] = v; mcpSecrets = mcpSecrets; localStorage.setItem('lucy_mcp_secrets', JSON.stringify(mcpSecrets)); document.getElementById('newMcpK').value=''; document.getElementById('newMcpV').value=''; }
+                <input type="text" bind:value={_newMcpK} placeholder="Ej. GOOGLE_SHEETS_KEY" style="background:#1e293b;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px;width:120px;font-size:11px;" />
+                <input type="password" bind:value={_newMcpV} placeholder="Valor Secreto" style="background:#1e293b;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px;flex:1;font-size:11px;" />
+                <button on:click={async () => {
+                  const k = _newMcpK.trim();
+                  const v = _newMcpV.trim();
+                  if (k && v) {
+                    try {
+                      await saveMcpSecret(k, v);
+                      mcpSecrets = { ...mcpSecrets, [k]: v };
+                      _newMcpK = '';
+                      _newMcpV = '';
+                      toast(isEN ? `Secret '${k}' saved to Keyring` : `Secreto '${k}' guardado en Keyring`, 'success');
+                    } catch(e) {
+                      toast(`Error guardando secreto: ${e}`, 'error');
+                    }
+                  }
                 }} class="settings-btn" style="padding:4px 8px;">Agregar</button>
               </div>
             </div>
@@ -6174,8 +7555,8 @@ if (Test-Path $src) {
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Mode' : 'Modo'}</span>
             <div style="display:flex;gap:6px;">
-              <button class="settings-btn" class:settings-btn-on={darkMode} on:click={() => { if(!darkMode) toggleTheme(); }}>🌙 {isEN ? 'Dark' : 'Oscuro'}</button>
-              <button class="settings-btn" class:settings-btn-on={!darkMode} on:click={() => { if(darkMode) toggleTheme(); }}>☀️ {isEN ? 'Light' : 'Claro'}</button>
+              <button class="settings-btn" class:settings-btn-on={darkMode} on:click={() => { if(!darkMode) toggleTheme(); }}>○ {isEN ? 'Dark' : 'Oscuro'}</button>
+              <button class="settings-btn" class:settings-btn-on={!darkMode} on:click={() => { if(darkMode) toggleTheme(); }}>◎ {isEN ? 'Light' : 'Claro'}</button>
             </div>
           </div>
 
@@ -6349,15 +7730,15 @@ if (Test-Path $src) {
               {isEN ? 'Cost Dashboard' : 'Dashboard de Costos'}
               <span class="help-i" title={isEN ? 'View tokens consumed, cost per model and daily summary' : 'Visualiza tokens consumidos, costo por modelo y resumen diario'}>ⓘ</span>
             </span>
-            <button class="settings-btn" on:click={() => { showSettingsModal = false; setView('costs'); }}>
-              💰 {isEN ? 'Open' : 'Abrir'}
+            <button class="settings-btn" style="display:inline-flex;align-items:center;gap:5px;" on:click={() => { showSettingsModal = false; setView('costs'); }}>
+              <DollarSign size={13}/> {isEN ? 'Open' : 'Abrir'}
             </button>
           </div>
 
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Report Bug' : 'Reportar Bug'}</span>
-            <button class="settings-btn" on:click={() => { showSettingsModal = false; exportBugReport(); }}>
-              🐞 {isEN ? 'Export Bug Report' : 'Exportar Reporte'}
+            <button class="settings-btn" style="display:inline-flex;align-items:center;gap:5px;" on:click={() => { showSettingsModal = false; exportBugReport(); }}>
+              <Bug size={13}/> {isEN ? 'Export Bug Report' : 'Exportar Reporte'}
             </button>
           </div>
         </div>
@@ -6367,12 +7748,14 @@ if (Test-Path $src) {
   </div>
   {/if}
 
-  <!-- ── PROFILE MODAL ── -->
+  <!-- ── PROFILE MODAL (lazy) ── -->
   {#if showProfileModal}
-  <ProfileModal {isEN}
-    on:close={() => showProfileModal = false}
-    on:toast={e => toast(e.detail.msg, e.detail.type)}
-  />
+  {#await lazyProfile() then ProfileModal}
+    <svelte:component this={ProfileModal} {isEN}
+      on:close={() => showProfileModal = false}
+      on:toast={e => toast(e.detail.msg, e.detail.type)}
+    />
+  {/await}
   {/if}
 
   <!-- ── COMMAND PALETTE (Ctrl+P) ── -->
@@ -6383,19 +7766,29 @@ if (Test-Path $src) {
     on:done={() => showTutorial = false}
     on:navigate={e => { if (e.detail !== activeView) setView(e.detail); }} />
 
-  <!-- ── PERMISSION RULES MODAL ── -->
-  <PermissionRulesModal
-    bind:isOpen={showPermissionRulesModal}
-    {isEN}
-    on:toast={e => toast(e.detail.msg, e.detail.type)}
-  />
+  <!-- ── PERMISSION RULES MODAL (lazy) ── -->
+  {#if showPermissionRulesModal}
+  {#await lazyPermissions() then PermissionRulesComp}
+    <svelte:component this={PermissionRulesComp}
+      isOpen={showPermissionRulesModal}
+      on:close={() => showPermissionRulesModal = false}
+      {isEN}
+      on:toast={e => toast(e.detail.msg, e.detail.type)}
+    />
+  {/await}
+  {/if}
 
-  <!-- ── SKILLS MANAGER MODAL ── -->
-  <SkillsManagerModal
-    bind:isOpen={showSkillsManagerModal}
-    {isEN}
-    on:toast={e => toast(e.detail.msg, e.detail.type)}
-  />
+  <!-- ── SKILLS MANAGER MODAL (lazy) ── -->
+  {#if showSkillsManagerModal}
+  {#await lazySkills() then SkillsManagerComp}
+    <svelte:component this={SkillsManagerComp}
+      isOpen={showSkillsManagerModal}
+      on:close={() => showSkillsManagerModal = false}
+      {isEN}
+      on:toast={e => toast(e.detail.msg, e.detail.type)}
+    />
+  {/await}
+  {/if}
 
   <!-- NexShell overlay/panel/modals moved to NexShellView.svelte -->
 

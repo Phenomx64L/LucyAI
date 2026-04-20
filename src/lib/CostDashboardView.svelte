@@ -1,6 +1,7 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { getCostSummary } from '$lib/lucy-api';
+    import { IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
     import { costSummaryDay, costSummaryMonth, costSummaryAll, tokenBudgetConfig } from '$lib/stores';
 
     const dispatch = createEventDispatcher();
@@ -167,8 +168,8 @@
 
     <!-- Budget Alert -->
     {#if budgetAlert && $tokenBudgetConfig.enabled}
-        <div class="budget-alert">
-            ⚠️ {lang.budgetAlert}: {budgetPercentage}% {lang.spent}
+        <div class="budget-alert" style="display:flex;align-items:center;gap:6px;">
+            <AlertTriangle size={13} strokeWidth={2}/> {lang.budgetAlert}: {budgetPercentage}% {lang.spent}
         </div>
     {/if}
 
