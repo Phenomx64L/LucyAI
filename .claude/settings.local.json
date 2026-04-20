@@ -113,7 +113,13 @@
       "Bash(npm uninstall *)",
       "Bash(grep -E \"^server-2\\\\.svelte$\")",
       "Bash(grep -iE \"\\\\.\\(rar|log|txt|7z|zip\\)$|patch.*\\\\.\\(c|m\\)?js$|apply.*\\\\.\\(c|m\\)?js$|sync_lucy|test-guards|lucy-safe|svelte_errors|hola21|rdp_security|FACEBOOK\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(gh release *)",
+      "Bash(git add *)"
     ]
   }
 }

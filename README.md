@@ -57,9 +57,9 @@ Valid CORE sections: `user_facts`, `preferences`, `rules`, `environment`. Only t
 
 ## Demo Video
 
-[![Lucy AI Demo](https://img.youtube.com/vi/-baowyd16kc/maxresdefault.jpg)](https://www.youtube.com/watch?v=-baowyd16kc)
+[![Lucy AI Demo](https://img.youtube.com/vi/Moo_gfYI5h8/maxresdefault.jpg)](https://www.youtube.com/watch?v=Moo_gfYI5h8)
 
-**[Watch Full Demo on YouTube](https://www.youtube.com/watch?v=-baowyd16kc)** — See Lucy in action managing infrastructure, running compliance checks, and automating SysAdmin tasks.
+**[Watch Full Demo on YouTube](https://www.youtube.com/watch?v=Moo_gfYI5h8)** — See Lucy in action: self-correcting agent loops, local semantic search, tiered memory, compliance checks, and full SysAdmin automation.
 
 ## Core Features: The Agentic OS
 
@@ -100,6 +100,19 @@ Lucy has evolved from a conversational tool into a fully **Autonomous Agentic OS
 ![Audit Trail](docs/screenshots/Screenshot_9.png)
 ![Remote Shell (NexShell)](docs/screenshots/Screenshot_10.png)
 ![Skills & Automation](docs/screenshots/Screenshot_11.png)
+
+### v1.2.0 — ReAct, Semantic Search & Tiered Memory
+![ReAct Self-Correction Loop](docs/screenshots/Screenshot_12.png)
+![Semantic Search with Ollama](docs/screenshots/Screenshot_13.png)
+![Tiered Memory — CORE injection](docs/screenshots/Screenshot_14.png)
+![Working Memory & Session Summaries](docs/screenshots/Screenshot_15.png)
+![Episodic Memory with FTS + Vectors](docs/screenshots/Screenshot_16.png)
+![Incident Response Mode](docs/screenshots/Screenshot_17.png)
+![Cost Dashboard & Token Tracking](docs/screenshots/Screenshot_18.png)
+![Permission Rules Engine](docs/screenshots/Screenshot_19.png)
+![Skills Manager with Parameters](docs/screenshots/Screenshot_20.png)
+![Multi-Provider LLM Config](docs/screenshots/Screenshot_21.png)
+![Live Agent Execution](docs/screenshots/Screenshot_22.png)
 
 ## Prerequisites
 
