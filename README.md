@@ -83,23 +83,23 @@ Lucy has evolved from a conversational tool into a fully **Autonomous Agentic OS
 ## Screenshots
 
 ### Main Interface & Dashboard
-![Setup & Dashboard](docs/screenshots/Screenshot_1.png)
-![Main Interface](docs/screenshots/Screenshot_2.png)
+![Setup & Dashboard](docs/screenshots/Screenshot_1_v2.png)
+![Main Interface](docs/screenshots/Screenshot_2_v2.png)
 
 ### AI Chat & Features
-![Chat Interface](docs/screenshots/Screenshot_3.png)
-![Chat Interaction](docs/screenshots/Screenshot_4.png)
-![Feature Settings](docs/screenshots/Screenshot_5.png)
+![Chat Interface](docs/screenshots/Screenshot_3_v2.png)
+![Chat Interaction](docs/screenshots/Screenshot_4_v2.png)
+![Feature Settings](docs/screenshots/Screenshot_5_v2.png)
 
 ### Infrastructure & Compliance
-![Inventory View](docs/screenshots/Screenshot_6.png)
-![Compliance Scanning](docs/screenshots/Screenshot_7.png)
-![Log Analysis](docs/screenshots/Screenshot_8.png)
+![Inventory View](docs/screenshots/Screenshot_6_v2.png)
+![Compliance Scanning](docs/screenshots/Screenshot_7_v2.png)
+![Log Analysis](docs/screenshots/Screenshot_8_v2.png)
 
 ### Advanced Features
-![Audit Trail](docs/screenshots/Screenshot_9.png)
-![Remote Shell (NexShell)](docs/screenshots/Screenshot_10.png)
-![Skills & Automation](docs/screenshots/Screenshot_11.png)
+![Audit Trail](docs/screenshots/Screenshot_9_v2.png)
+![Remote Shell (NexShell)](docs/screenshots/Screenshot_10_v2.png)
+![Skills & Automation](docs/screenshots/Screenshot_11_v2.png)
 
 ### v1.2.0 — ReAct, Semantic Search & Tiered Memory
 ![ReAct Self-Correction Loop](docs/screenshots/Screenshot_12.png)
