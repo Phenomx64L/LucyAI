@@ -26,7 +26,7 @@
 - 🐙 [GitHub](https://github.com/Phenomx64L)
 - 💼 SysAdmin + Full-Stack Developer
 
-*Lucy fue concebida y construida como respuesta a problemas reales de administración de infraestructura. Cada decisión arquitectónica refleja 10+ años de experiencia en SysAdmin.*
+*Lucy was conceived and built as a response to real-world infrastructure administration challenges. Every architectural decision reflects 10+ years of SysAdmin experience.*
 
 ---
 
