@@ -14,8 +14,19 @@
   <img src="https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Svelte-5-orange?logo=svelte" alt="Svelte 5" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
+  <img src="https://img.shields.io/badge/license-GPLv3-green" alt="GPLv3 License" />
 </p>
+
+---
+
+## 👤 Author & Maintainer
+
+**Iván Eduardo Luna** (@Phenomx64L)
+- 🔗 [LinkedIn](https://linkedin.com/in/phenomx64l)
+- 🐙 [GitHub](https://github.com/Phenomx64L)
+- 💼 SysAdmin + Full-Stack Developer
+
+*Lucy fue concebida y construida como respuesta a problemas reales de administración de infraestructura. Cada decisión arquitectónica refleja 10+ años de experiencia en SysAdmin.*
 
 ---
 
@@ -301,7 +312,8 @@ Love Lucy? Consider supporting development! Your contribution helps improve the 
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.
+This ensures that any modifications or derivatives of Lucy remain Open Source and credit the original author.
 
 ---
 

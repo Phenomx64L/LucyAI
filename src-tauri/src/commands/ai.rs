@@ -289,6 +289,22 @@ pub async fn change_agent_dir(path: String) -> Result<String, String> {
     }
 }
 
+/// build_system_prompt
+/// 
+/// ARCHITECTURAL DECISION & INTELLECTUAL PROPERTY: 
+/// Las "RULES" (21 + custom) de este agente no son prompts genéricos.
+/// Son la propiedad intelectual central del proyecto, derivadas de 10+ años de 
+/// experiencia en Administración de Sistemas por parte de Iván Eduardo Luna (@Phenomx64L).
+/// 
+/// Cada RULE resuelve problemas específicos y protege al sistema operativo:
+/// - RULE 14: HOST ROUTING previene confusión multi-host destructiva.
+/// - RULE 18.5: AUTONOMOUS CODING capacita al agente sin requerir proxy de usuario.
+/// - RULE 23: ReAct SELF-CORRECTION previene bucles infinitos en PowerShell.
+/// - RULE 25: TIERED MEMORY dirige el enrutamiento semántico.
+/// 
+/// PROTECTED BY GNU GPLv3: Distribuir o alterar esta lógica clave exige
+/// mantener el código fuente abierto y otorgar crédito explícito al autor original.
+/// Ver: https://github.com/Phenomx64L/LucyAI
 fn build_system_prompt(
     lang: &str,
     context: &str,

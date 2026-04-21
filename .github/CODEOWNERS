@@ -1,0 +1,18 @@
+# Code Owners for Lucy AI
+
+# By default, Phenomx64L owns all aspects of the core routing, memory, and rules architecture.
+# Any modifications to these files require review and protect the intellectual property boundaries.
+
+# Core architecture and Business Rules (SysAdmin AI)
+src-tauri/src/commands/ai.rs @Phenomx64L
+src-tauri/src/commands/memory.rs @Phenomx64L
+src-tauri/src/commands/rdp_agent.rs @Phenomx64L
+src-tauri/src/commands/incident.rs @Phenomx64L
+src-tauri/src/lib.rs @Phenomx64L
+
+# Documentation and Branding
+README.md @Phenomx64L
+CONTRIBUTORS.md @Phenomx64L
+
+# Default fallback for review
+* @Phenomx64L
