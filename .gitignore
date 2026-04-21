@@ -20,6 +20,7 @@ Thumbs.db
 .idea
 *.swp
 *.swo
+.claude
 
 # Vite
 vite.config.js.timestamp-*
