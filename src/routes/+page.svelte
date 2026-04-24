@@ -33,7 +33,7 @@ import { listen } from '@tauri-apps/api/event';
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import { countUp }     from '$lib/actions';
-    import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline } from '$lib/models.js';
+    import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
              alertRules, activeAlerts, runbooks,
@@ -543,6 +543,8 @@ import { listen } from '@tauri-apps/api/event';
         refreshLocalModels().catch(() => {});
         // Ping periódico al endpoint Ollama (cada 30s) para el indicador de estado
         setInterval(() => { refreshLocalModels().catch(() => {}); }, 30000);
+        // Cargar modelos NVIDIA NIM — solo si la key está configurada
+        refreshNvidiaModels().catch(() => {});
         // Notification API permission (no bloqueante)
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission().catch(() => {});
@@ -4649,12 +4651,13 @@ if (Test-Path $src) {
             newApiKeyError = 'La clave no parece válida.'; return;
         }
         try {
-            // Detectar proveedor por prefijo del modelo activo en la pestaña actual
+            // Detectar proveedor por prefijo/formato del modelo activo
             const _activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
             const _model = _activeTab?.selectedModel || 'gemini-2.5-flash';
             const _provider = _model.startsWith('claude') ? 'anthropic'
                             : _model.startsWith('gpt')    ? 'openai'
                             : _model.startsWith('local')  ? 'local'
+                            : _model.includes('/')        ? 'nvidia'
                             : 'gemini';
             await invoke('save_llm_key', { provider: _provider, apiKey: newApiKey.trim() });
             keyringOk = true;
@@ -7012,6 +7015,8 @@ if (Test-Path $src) {
                   <div class="mbdg">
                     {#if tab.selectedModel?.startsWith('local-')}
                       <span class="ollama-dot" class:on={$ollamaOnline} title={$ollamaOnline ? 'Ollama online' : 'Ollama offline'}></span>
+                    {:else if tab.selectedModel?.includes('/')}
+                      <span class="ollama-dot" class:on={$nvidiaConfigured} title={$nvidiaConfigured ? 'NVIDIA NIM ✓' : 'NVIDIA API Key no configurada'}></span>
                     {/if}
                     <select bind:value={tab.selectedModel} disabled={tab.isProcessing}
                       title={getModelDescription(tab.selectedModel, isEN)}>
@@ -7019,6 +7024,10 @@ if (Test-Path $src) {
                         <optgroup label={group.label}>
                           {#if group.label.includes('Locales')}
                             {#each $localModels as opt}
+                              <option value={opt.id}>{opt.icon} {isEN ? opt.nameEn : opt.nameEs}</option>
+                            {/each}
+                          {:else if group.provider === 'nvidia' && $nvidiaModels.length > 0}
+                            {#each $nvidiaModels as opt}
                               <option value={opt.id}>{opt.icon} {isEN ? opt.nameEn : opt.nameEs}</option>
                             {/each}
                           {:else}

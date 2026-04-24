@@ -13,6 +13,7 @@ export const ollamaOnline = writable(false);
 /** Pick a friendly icon based on model family. */
 function pickIcon(name) {
     const n = name.toLowerCase();
+    if (n.includes('nemotron')) return '⚡';
     if (n.includes('qwen')) return '🐉';
     if (n.includes('llama')) return '🦙';
     if (n.includes('deepseek')) return '🐋';
@@ -51,6 +52,37 @@ export async function refreshLocalModels() {
     return get(localModels);
 }
 
+// NVIDIA NIM writable store — populated dynamically by refreshNvidiaModels()
+export const nvidiaModels = writable([]);
+export const nvidiaConfigured = writable(false);
+
+/** Fetch available NVIDIA NIM models and update the store + LLM_GROUPS. */
+export async function refreshNvidiaModels() {
+    try {
+        const names = await invoke('list_nvidia_models');
+        nvidiaConfigured.set(true);
+        if (Array.isArray(names) && names.length > 0) {
+            const opts = names.map(n => {
+                const parts = n.split('/');
+                const shortName = parts[parts.length - 1] || n;
+                return {
+                    id: n,
+                    icon: pickIcon(n),
+                    nameEn: `${shortName} — NVIDIA NIM`,
+                    nameEs: `${shortName} — NVIDIA NIM`
+                };
+            });
+            nvidiaModels.set(opts);
+            const grp = LLM_GROUPS.find(g => g.provider === 'nvidia');
+            if (grp) grp.options = opts;
+            return opts;
+        }
+    } catch (_) {
+        nvidiaConfigured.set(false);
+    }
+    return [];
+}
+
 export const LLM_GROUPS = [
     {
         label: "── Anthropic Claude (Native Computer Use) ──",
@@ -82,6 +114,22 @@ export const LLM_GROUPS = [
             { id: "gpt-4o", icon: "✦", nameEn: "GPT-4o — Multimodal Intelligence", nameEs: "GPT-4o — Inteligencia Multimodal" },
             { id: "gpt-4-turbo", icon: "▸", nameEn: "GPT-4 Turbo — Fast & Capable", nameEs: "GPT-4 Turbo — Rápido y Capaz" },
             { id: "gpt-4o-mini", icon: "▸", nameEn: "GPT-4o Mini — Fast & Cost Effective", nameEs: "GPT-4o Mini — Rápido y Económico" },
+        ]
+    },
+    {
+        label: "── NVIDIA NIM (build.nvidia.com) ──",
+        provider: "nvidia",
+        credential_key: "nvidia_api_key",
+        options: [
+            { id: "meta/llama-3.1-70b-instruct",        icon: "🦙", nameEn: "Llama 3.1 70B — Balanced Power",           nameEs: "Llama 3.1 70B — Potencia Equilibrada" },
+            { id: "meta/llama-3.3-70b-instruct",        icon: "🦙", nameEn: "Llama 3.3 70B — Latest Llama",            nameEs: "Llama 3.3 70B — Llama más Reciente" },
+            { id: "meta/llama-3.1-405b-instruct",       icon: "🦙", nameEn: "Llama 3.1 405B — Max Intelligence",       nameEs: "Llama 3.1 405B — Máxima Inteligencia" },
+            { id: "nvidia/nemotron-3-super-120b-a12b",  icon: "⚡", nameEn: "Nemotron 3 Super 120B — NVIDIA Flagship", nameEs: "Nemotron 3 Super 120B — NVIDIA Flagship" },
+            { id: "nvidia/nemotron-4-340b-instruct",    icon: "⚡", nameEn: "Nemotron 4 340B — NVIDIA Max",            nameEs: "Nemotron 4 340B — NVIDIA Máximo" },
+            { id: "mistralai/mistral-large-2-instruct", icon: "🌬️", nameEn: "Mistral Large 2 — Code & Reasoning",     nameEs: "Mistral Large 2 — Código y Razonamiento" },
+            { id: "mistralai/mistral-7b-instruct-v0.3", icon: "🌬️", nameEn: "Mistral 7B — Fast & Lightweight",        nameEs: "Mistral 7B — Rápido y Ligero" },
+            { id: "google/gemma-4-31b-it",              icon: "💎", nameEn: "Gemma 4 31B (NIM) — Google via NVIDIA",  nameEs: "Gemma 4 31B (NIM) — Google vía NVIDIA" },
+            { id: "microsoft/phi-3.5-mini-instruct",    icon: "🔷", nameEn: "Phi-3.5 Mini — Fast & Efficient",        nameEs: "Phi-3.5 Mini — Rápido y Eficiente" },
         ]
     },
     {

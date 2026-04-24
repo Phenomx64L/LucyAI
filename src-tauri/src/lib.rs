@@ -55,6 +55,7 @@ pub fn run() {
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,
+            ai::list_nvidia_models,
             ai::fetch_url_content,
             ai::search_runbooks,
             ai::change_agent_dir,

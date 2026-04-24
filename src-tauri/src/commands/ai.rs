@@ -470,18 +470,23 @@ pub async fn ask_lucy(
     runbooks_dir: Option<String>,
     max_tokens_override: Option<u32>,
 ) -> Result<String, String> {
-    let is_allowed = ALLOWED_MODELS.contains(&model.as_str()) || model.starts_with("local-");
+    // NVIDIA NIM models use "owner/model-name" format (e.g. "meta/llama-3.1-70b-instruct").
+    // Allow them via the contains('/') check; len < 120 prevents oversized inputs.
+    let is_allowed = ALLOWED_MODELS.contains(&model.as_str())
+        || model.starts_with("local-")
+        || (model.contains('/') && !model.contains("..") && model.len() < 120);
     if !is_allowed {
         return Err(format!("Modelo '{}' no permitido. Selecciona un modelo válido desde el selector.", model));
     }
 
-    let provider = if model.starts_with("gpt-") { "openai" } 
-                   else if model.starts_with("claude-") { "anthropic" } 
-                   else if model.starts_with("local-") { "local" }
-                   else { "gemini" };
+    let provider = if model.starts_with("gpt-")    { "openai" }
+                   else if model.starts_with("claude-") { "anthropic" }
+                   else if model.starts_with("local-")  { "local" }
+                   else if model.contains('/')          { "nvidia" }
+                   else                                 { "gemini" };
 
     let entry = Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
-    let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
+    let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada. Configúrala en Ajustes.", provider))?;
 
     let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
     let user_lang = lang.as_deref().unwrap_or("es-MX");
@@ -503,11 +508,24 @@ pub async fn ask_lucy(
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
+        "nvidia" => {
+            // NVIDIA NIM — OpenAI-compatible endpoint (build.nvidia.com)
+            let payload = json!({
+                "model": model,
+                "messages": [{"role": "user", "content": final_prompt}],
+                "max_tokens": 4096,
+                "temperature": 0.2,
+                "top_p": 0.9
+            });
+            HTTP_CLIENT.post("https://integrate.api.nvidia.com/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&payload)
+        },
         "local" => {
             // Le quitamos el prefijo "local-" y aplicamos parámetros de coherencia para Qwen
             let actual_model = model.replace("local-", "");
-            let payload = json!({ 
-                "model": actual_model, 
+            let payload = json!({
+                "model": actual_model,
                 "messages": [{"role": "user", "content": final_prompt}],
                 "options": {
                     "temperature": 0.2,
@@ -532,7 +550,6 @@ pub async fn ask_lucy(
             }
             let payload = json!({ "contents": [{ "parts": parts }] });
             // SECURITY: use x-goog-api-key header instead of ?key= query param
-            // so the key is never exposed in error messages, logs, or network traces.
             let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model);
             HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
@@ -559,20 +576,19 @@ pub async fn ask_lucy(
     }
 
     let text_result = match provider {
-        "openai" | "local" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
+        "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
         "anthropic" => v["content"].get(0).and_then(|c| c["text"].as_str()),
         _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
     };
 
     if let Some(t) = text_result {
         if let Some((input_tokens, output_tokens)) = match provider {
-            "openai" | "local" => extract_tokens_openai(&v),
+            "openai" | "local" | "nvidia" => extract_tokens_openai(&v),
             "anthropic" => extract_tokens_anthropic(&v),
             _ => extract_tokens_gemini(&v),
         } {
             let _ = log_usage_internal(&model, input_tokens, output_tokens, "ask_lucy", &user_name).await;
         }
-
         Ok(t.to_string())
     } else {
         Err(format!("Respuesta API ({}): {}", provider, body_text))
@@ -595,18 +611,21 @@ pub async fn ask_lucy_stream(
     runbooks_dir: Option<String>,
     max_tokens_override: Option<u32>,
 ) -> Result<String, String> {
-    let is_allowed = ALLOWED_MODELS.contains(&model.as_str()) || model.starts_with("local-");
+    let is_allowed = ALLOWED_MODELS.contains(&model.as_str())
+        || model.starts_with("local-")
+        || (model.contains('/') && !model.contains("..") && model.len() < 120);
     if !is_allowed {
         return Err(format!("Modelo '{}' no permitido.", model));
     }
 
-    let provider = if model.starts_with("gpt-") { "openai" } 
-                   else if model.starts_with("claude-") { "anthropic" } 
-                   else if model.starts_with("local-") { "local" }
-                   else { "gemini" };
+    let provider = if model.starts_with("gpt-")        { "openai" }
+                   else if model.starts_with("claude-") { "anthropic" }
+                   else if model.starts_with("local-")  { "local" }
+                   else if model.contains('/')          { "nvidia" }
+                   else                                 { "gemini" };
 
     let entry = Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
-    let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
+    let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada. Configúrala en Ajustes.", provider))?;
 
     let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
     let user_lang = lang.as_deref().unwrap_or("es-MX");
@@ -628,12 +647,25 @@ pub async fn ask_lucy_stream(
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
+        "nvidia" => {
+            // NVIDIA NIM streaming — OpenAI SSE-compatible
+            let payload = json!({
+                "model": model,
+                "messages": [{"role": "user", "content": final_prompt}],
+                "stream": true,
+                "max_tokens": 4096,
+                "temperature": 0.2,
+                "top_p": 0.9
+            });
+            HTTP_CLIENT.post("https://integrate.api.nvidia.com/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&payload)
+        },
         "local" => {
-            // Le quitamos el prefijo "local-" y aplicamos parámetros de coherencia para Qwen
             let actual_model = model.replace("local-", "");
-            let payload = json!({ 
-                "model": actual_model, 
-                "messages": [{"role": "user", "content": final_prompt}], 
+            let payload = json!({
+                "model": actual_model,
+                "messages": [{"role": "user", "content": final_prompt}],
                 "stream": true,
                 "options": {
                     "temperature": 0.2,
@@ -730,7 +762,7 @@ pub async fn ask_lucy_stream(
 
                     if input_tokens == 0 && output_tokens == 0 {
                         if let Some((in_t, out_t)) = match provider {
-                            "openai" | "local" => extract_tokens_openai(&v),
+                            "openai" | "local" | "nvidia" => extract_tokens_openai(&v),
                             "anthropic" => extract_tokens_anthropic(&v),
                             _ => extract_tokens_gemini(&v),
                         } {
@@ -740,7 +772,7 @@ pub async fn ask_lucy_stream(
                     }
 
                     let text_chunk = match provider {
-                        "openai" | "local" => v["choices"].get(0).and_then(|c| c["delta"]["content"].as_str()),
+                        "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["delta"]["content"].as_str()),
                         "anthropic" => v["delta"]["text"].as_str(),
                         _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
                     };
@@ -785,10 +817,11 @@ pub fn log_agent_loop(message: String) {
 // ==========================================
 #[tauri::command]
 pub async fn generate_skill_template(idea: String, model: String) -> Result<String, String> {
-    let provider = if model.starts_with("gpt-") { "openai" } 
-                   else if model.starts_with("claude-") { "anthropic" } 
-                   else if model.starts_with("local-") { "local" }
-                   else { "gemini" };
+    let provider = if model.starts_with("gpt-")        { "openai" }
+                   else if model.starts_with("claude-") { "anthropic" }
+                   else if model.starts_with("local-")  { "local" }
+                   else if model.contains('/')          { "nvidia" }
+                   else                                 { "gemini" };
 
     let entry = keyring::Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
     let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
@@ -809,6 +842,17 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
         "openai" => {
             let payload = serde_json::json!({ "model": model, "messages": [{"role": "user", "content": sys_prompt}] });
             crate::state::HTTP_CLIENT.post("https://api.openai.com/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&payload)
+        },
+        "nvidia" => {
+            let payload = serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": sys_prompt}],
+                "max_tokens": 1024,
+                "temperature": 0.1
+            });
+            crate::state::HTTP_CLIENT.post("https://integrate.api.nvidia.com/v1/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -833,7 +877,7 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
     if status.is_success() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
             let text = match provider {
-                "openai" | "local" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
+                "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
                 "anthropic" => v["content"].get(0).and_then(|c| c["text"].as_str()),
                 _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
             };
@@ -845,4 +889,46 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
     } else {
         Err(format!("Respuesta API ({}): {}", provider, body_text))
     }
+}
+
+// ── NVIDIA NIM — listar modelos disponibles ───────────────────────────────────
+
+/// Consulta el catálogo de modelos de NVIDIA NIM (build.nvidia.com).
+/// Requiere que la NVIDIA API key esté configurada en Ajustes.
+#[tauri::command]
+pub async fn list_nvidia_models() -> Result<Vec<String>, String> {
+    let entry = keyring::Entry::new("LucySysAdmin", "nvidia_api_key")
+        .map_err(|e| e.to_string())?;
+    let api_key = entry.get_password()
+        .map_err(|_| "NVIDIA API Key no configurada. Consíguela gratis en build.nvidia.com".to_string())?;
+
+    let res = crate::state::HTTP_CLIENT
+        .get("https://integrate.api.nvidia.com/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Error de red al consultar NVIDIA NIM: {}", e))?;
+
+    if !res.status().is_success() {
+        let code = res.status().as_u16();
+        return Err(match code {
+            401 => "NVIDIA API Key inválida o sin permisos. Verifica en build.nvidia.com".to_string(),
+            429 => "Rate limit de NVIDIA NIM alcanzado. Intenta más tarde.".to_string(),
+            _   => format!("NVIDIA NIM respondió HTTP {}", code),
+        });
+    }
+
+    let json: serde_json::Value = res.json().await
+        .map_err(|e| format!("Respuesta JSON inválida de NVIDIA NIM: {}", e))?;
+
+    let models = json["data"].as_array()
+        .ok_or_else(|| "Respuesta NVIDIA sin campo 'data'".to_string())?;
+
+    let mut names: Vec<String> = models
+        .iter()
+        .filter_map(|m| m["id"].as_str().map(String::from))
+        .collect();
+    names.sort();
+    Ok(names)
 }

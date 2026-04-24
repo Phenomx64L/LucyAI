@@ -11,7 +11,7 @@ use serde_json;
 
 #[tauri::command]
 pub fn save_llm_key(provider: String, api_key: String) -> Result<(), String> {
-    if !["gemini", "anthropic", "openai", "local"].contains(&provider.as_str()) {
+    if !["gemini", "anthropic", "openai", "local", "nvidia"].contains(&provider.as_str()) {
         return Err("Proveedor no válido.".to_string());
     }
     let key_name = format!("{}_api_key", provider);
@@ -30,7 +30,7 @@ pub fn save_llm_key(provider: String, api_key: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_configured_providers() -> Result<Vec<String>, String> {
     let mut configured = Vec::new();
-    for provider in ["gemini", "anthropic", "openai", "local"] {
+    for provider in ["gemini", "anthropic", "openai", "local", "nvidia"] {
         let key_name = format!("{}_api_key", provider);
         if let Ok(entry) = Entry::new("LucySysAdmin", &key_name) {
             if entry.get_password().is_ok() {
@@ -63,9 +63,12 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
                 .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01")
         },
+        "nvidia" => {
+            HTTP_CLIENT.get("https://integrate.api.nvidia.com/v1/models")
+                .header("Authorization", format!("Bearer {}", key))
+        },
         "local" => {
             // Para modelos locales, aceptaremos la URL proporcionada asumiendo que el usuario sabe lo que hace.
-            // Ping a la IP puede fallar si la herramienta aun no es lanzada (ej: Ollama).
             return Ok(());
         },
         _ => return Err("Proveedor desconocido.".to_string())
@@ -75,6 +78,7 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
     
     // Anthropic returns 404 (Not Found) or 400 for structural errors if the Key is VALID.
     // If Key is INVALID it strictly returns 401 Unauthorized.
+    // NVIDIA returns 200 on /v1/models if key is valid, 401 if not.
     if res.status().is_success() || (provider == "anthropic" && res.status().as_u16() != 401) {
         write_app_log("INFO", &format!("API key de {} verificada correctamente.", provider));
         Ok(())

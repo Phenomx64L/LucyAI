@@ -1,7 +1,8 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { IconKey as Key, IconWorld as Globe, IconDeviceFloppy as Save, IconAlertCircle as AlertCircle, IconCircleCheck as CheckCircle, IconSparkles, IconBrandGoogle, IconBrandOpenai, IconServer2 } from '@tabler/icons-svelte';
+    import { IconKey as Key, IconWorld as Globe, IconDeviceFloppy as Save, IconAlertCircle as AlertCircle, IconCircleCheck as CheckCircle, IconSparkles, IconBrandGoogle, IconBrandOpenai, IconServer2, IconBolt } from '@tabler/icons-svelte';
+    import { refreshNvidiaModels } from '$lib/models.js';
 
     const dispatch = createEventDispatcher();
 
@@ -13,17 +14,19 @@
     let loading = false;
     let error = '';
     let success = '';
-    let activeTab = 'anthropic'; // 'anthropic', 'gemini', 'openai', 'ollama'
+    let activeTab = 'anthropic'; // 'anthropic', 'gemini', 'openai', 'nvidia', 'ollama'
     let credentials = {
         anthropic: { key: '', configured: false },
         gemini: { key: '', configured: false },
         openai: { key: '', configured: false },
+        nvidia: { key: '', configured: false },
         ollama: { endpoint: 'http://localhost:11434', configured: false }
     };
     let healthStatus = {
         anthropic: null,
         gemini: null,
         openai: null,
+        nvidia: null,
         ollama: null
     };
 
@@ -48,6 +51,12 @@
                 placeholder: 'sk-...',
                 hint: 'Obtén tu clave en https://platform.openai.com/account/api-keys',
                 feature: 'GPT-4 Vision + Análisis JSON'
+            },
+            nvidia: {
+                label: 'NVIDIA NIM API Key',
+                placeholder: 'nvapi-...',
+                hint: 'Obtén tu clave gratis en https://build.nvidia.com → Get API Key',
+                feature: 'Llama 3.1/3.3, Nemotron, Mistral, Gemma 4 y más'
             },
             ollama: {
                 label: 'Endpoint Ollama',
@@ -89,6 +98,12 @@
                 hint: 'Get your key at https://platform.openai.com/account/api-keys',
                 feature: 'GPT-4 Vision + JSON Analysis'
             },
+            nvidia: {
+                label: 'NVIDIA NIM API Key',
+                placeholder: 'nvapi-...',
+                hint: 'Get your free key at https://build.nvidia.com → Get API Key',
+                feature: 'Llama 3.1/3.3, Nemotron, Mistral, Gemma 4 and more'
+            },
             ollama: {
                 label: 'Ollama Endpoint',
                 placeholder: 'http://localhost:11434',
@@ -118,19 +133,20 @@
         success = '';
 
         try {
-            // Save to keyring via Tauri
-            if (credentials[activeTab].key || credentials[activeTab].endpoint) {
-                const key = `${activeTab}_api_key`;
-                const value = credentials[activeTab].key || credentials[activeTab].endpoint;
+            const value = credentials[activeTab].key || credentials[activeTab].endpoint || '';
+            if (!value.trim()) { error = l.required; return; }
 
-                await invoke('save_credential', { key, value });
-                credentials[activeTab].configured = true;
-                success = l.success;
+            // save_llm_key handles gemini / anthropic / openai / nvidia / local
+            await invoke('save_llm_key', { provider: activeTab === 'ollama' ? 'local' : activeTab, apiKey: value.trim() });
+            credentials[activeTab].configured = true;
+            success = l.success;
 
-                setTimeout(() => { success = ''; }, 3000);
-            } else {
-                error = l.required;
+            // If NVIDIA key saved, refresh model list immediately
+            if (activeTab === 'nvidia') {
+                refreshNvidiaModels().catch(() => {});
             }
+
+            setTimeout(() => { success = ''; }, 3000);
         } catch (e) {
             error = String(e);
         } finally {
@@ -143,14 +159,13 @@
         error = '';
 
         try {
-            const result = await invoke('check_provider_health', { provider: activeTab });
-            healthStatus[activeTab] = result;
-            if (result.status === 'ok') {
-                success = l.health.ok;
-                setTimeout(() => { success = ''; }, 3000);
-            } else {
-                error = result.message || l.health.error;
-            }
+            const value = credentials[activeTab].key || credentials[activeTab].endpoint || '';
+            if (!value.trim()) { error = l.required; loading = false; return; }
+
+            await invoke('test_api_key', { provider: activeTab === 'ollama' ? 'local' : activeTab, apiKey: value.trim() });
+            healthStatus[activeTab] = { status: 'ok' };
+            success = l.health.ok;
+            setTimeout(() => { success = ''; }, 3000);
         } catch (e) {
             error = String(e);
             healthStatus[activeTab] = { status: 'error', message: String(e) };
@@ -218,6 +233,16 @@
                     </button>
                     <button
                         class="tab"
+                        class:active={activeTab === 'nvidia'}
+                        on:click={() => activeTab = 'nvidia'}
+                    >
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBolt size={14} strokeWidth={1.8} color="#76b900" />NVIDIA</span>
+                        {#if credentials.nvidia.configured}
+                            <CheckCircle size={14} color="#10b981" />
+                        {/if}
+                    </button>
+                    <button
+                        class="tab"
                         class:active={activeTab === 'ollama'}
                         on:click={() => activeTab = 'ollama'}
                     >
@@ -273,6 +298,21 @@
                             </label>
                             <p class="hint">
                                 <Key size={14} /> {l.openai.hint}
+                            </p>
+                        </div>
+                    {:else if activeTab === 'nvidia'}
+                        <div class="config-section">
+                            <div class="feature-badge" style="background:rgba(118,185,0,0.15);color:#76b900;">{l.nvidia.feature}</div>
+                            <label>
+                                <span>{l.nvidia.label}</span>
+                                <input
+                                    type="password"
+                                    bind:value={credentials.nvidia.key}
+                                    placeholder={l.nvidia.placeholder}
+                                />
+                            </label>
+                            <p class="hint">
+                                <Key size={14} /> {l.nvidia.hint}
                             </p>
                         </div>
                     {:else if activeTab === 'ollama'}

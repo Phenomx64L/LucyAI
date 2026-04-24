@@ -38,8 +38,10 @@ pub static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
         .expect("Error creando cliente HTTP global")
 });
 
-/// Whitelist explícita de modelos Gemini permitidos.
+/// Whitelist explícita de modelos permitidos.
 /// Previene llamadas a endpoints arbitrarios si el frontend envía un modelo inválido.
+/// Los modelos NVIDIA NIM tienen formato "owner/model-name" y se validan
+/// por la regla `model.contains('/')` en ai.rs (no se listan aquí).
 pub const ALLOWED_MODELS: &[&str] = &[
     // Gemini 3.1
     "gemini-3.1-pro-preview",
@@ -50,6 +52,7 @@ pub const ALLOWED_MODELS: &[&str] = &[
     "gemini-2.5-pro",
     "gemini-2.5-flash-lite-preview",
     // Anthropic Claude
+    "claude-opus-4-5",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-3-7-sonnet-20250219",
@@ -58,6 +61,7 @@ pub const ALLOWED_MODELS: &[&str] = &[
     // OpenAI GPT
     "gpt-4o",
     "gpt-4o-mini",
+    "gpt-4-turbo",
     "o1",
     "o3-mini",
     "o4-mini",
