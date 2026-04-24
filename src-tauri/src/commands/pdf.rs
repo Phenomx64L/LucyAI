@@ -87,6 +87,16 @@ pub async fn pdf_ingest(
     path: String,
     chunk_size: Option<u32>,
 ) -> Result<PdfIngestResult, String> {
+    // SECURITY: validate path before touching the filesystem
+    // 1. No path traversal sequences
+    if path.contains("..") {
+        return Err("Invalid path: path traversal sequences (..) are not allowed.".to_string());
+    }
+    // 2. Must be a PDF file
+    if !path.to_lowercase().ends_with(".pdf") {
+        return Err("Only .pdf files can be ingested. Please select a PDF document.".to_string());
+    }
+
     let p = Path::new(&path);
     if !p.exists() {
         return Err(format!("File not found: {}", path));

@@ -276,8 +276,18 @@ pub async fn execute_cscript(script_content: String, force_execute: bool) -> Res
     let op = if bypassed { "CSCRIPT_BYPASS" } else { "CSCRIPT_EXEC" };
     audit(&format!("[{}] [HOST:{}] [{}]", ts(), host(), op));
 
+    // SECURITY: use PID + nanoseconds so the name is unpredictable and unique.
+    // Timestamp-only names (seconds) are guessable and allow local race conditions.
+    let tmp_nonce = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+        let n  = CTR.fetch_add(1, Ordering::Relaxed);
+        ns ^ ((std::process::id() as u64) << 32) ^ (n << 16)
+    };
     let tmp_path = std::env::temp_dir()
-        .join(format!("lucy_{}.vbs", Local::now().format("%Y%m%d%H%M%S")));
+        .join(format!("lucy_{:x}.vbs", tmp_nonce));
     std::fs::write(&tmp_path, &script_content)
         .map_err(|e| format!("Error escribiendo VBS temporal: {}", e))?;
 
@@ -632,6 +642,15 @@ pub async fn write_file_content(path: String, content: String, force: bool) -> R
     let resolved = resolve_path(&path);
     let p = resolved.as_path();
 
+    // SECURITY: reject path traversal sequences BEFORE canonicalize.
+    // canonicalize() silently falls back on non-existent files, leaving
+    // ".." components unresolved and bypassing the blocked-path check.
+    {
+        let raw = resolved.to_string_lossy();
+        if raw.contains("..") {
+            return Err("Ruta inválida: componentes '..' (path traversal) no permitidos.".to_string());
+        }
+    }
     // DEFENSA: Resolver la ruta para evitar Path Traversal (ej. \..\..\Windows)
     let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let lower = canonical.to_string_lossy().to_lowercase().replace('/', "\\");
@@ -856,6 +875,13 @@ pub async fn edit_file(
         return Err(format!("Archivo no encontrado: {}", resolved.display()));
     }
 
+    // SECURITY: reject ".." before canonicalize (same as write_file_content)
+    {
+        let raw = resolved.to_string_lossy();
+        if raw.contains("..") {
+            return Err("Ruta inválida: componentes '..' (path traversal) no permitidos.".to_string());
+        }
+    }
     // DEFENSA: Resolver la ruta para evitar Path Traversal (ej. \..\..\Windows)
     let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let lower = canonical.to_string_lossy().to_lowercase().replace('/', "\\");

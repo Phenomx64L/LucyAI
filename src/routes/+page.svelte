@@ -578,9 +578,20 @@ import { listen } from '@tauri-apps/api/event';
             }
         } catch (e) { console.warn('[checkpoint] scan failed:', e); }
         // Capturar errores JS no manejados — los muestra en pantalla en vez de quedarse negro
-        window.onerror = (msg, src, line, col, err) => {
+        // SECURITY: usar textContent/createElement en lugar de innerHTML para evitar XSS
+        const _safeErrorScreen = (title, detail) => {
             document.body.style.cssText = 'background:#0b0d16;color:#ef4444;font-family:monospace;padding:20px;';
-            document.body.innerHTML = `<h3 style="color:#ef4444">Lucy — Error de inicio</h3><pre style="color:#94a3b8;font-size:11px;">${msg}\n${src}:${line}:${col}\n${err?.stack||''}</pre>`;
+            const h3 = document.createElement('h3');
+            h3.style.color = '#ef4444';
+            h3.textContent = title;
+            const pre = document.createElement('pre');
+            pre.style.cssText = 'color:#94a3b8;font-size:11px;white-space:pre-wrap;word-break:break-all;';
+            pre.textContent = String(detail).slice(0, 2000); // cap to avoid flooding
+            document.body.replaceChildren(h3, pre);
+        };
+        window.onerror = (msg, src, line, col, err) => {
+            _safeErrorScreen('Lucy — Error de inicio',
+                `${msg}\n${src}:${line}:${col}\n${err?.stack||''}`);
             return false;
         };
         window.onunhandledrejection = (e) => {
@@ -592,8 +603,8 @@ import { listen } from '@tauri-apps/api/event';
             }
             // Solo mostrar pantalla de error si ocurre durante la inicialización
             if (!appReady) {
-                document.body.style.cssText = 'background:#0b0d16;color:#ef4444;font-family:monospace;padding:20px;';
-                document.body.innerHTML = `<h3 style="color:#ef4444">Lucy — Promise Error</h3><pre style="color:#94a3b8;font-size:11px;">${e.reason?.stack||e.reason||'Unknown'}</pre>`;
+                _safeErrorScreen('Lucy — Promise Error',
+                    e.reason?.stack || e.reason || 'Unknown');
             } else {
                 console.error('[Lucy] Unhandled rejection en runtime:', e.reason);
             }
@@ -2666,6 +2677,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 let agentToolCards = []; // Antigravity-style collapsible tool cards
 
                 const escapeHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                // SECURITY: alias for brevity when building stepsHtml — always escape user-controlled content
+                const esc = escapeHtml;
                 const newToolCard = (icon, label, kind='read') => {
                     const card = {
                         id: 'tc-' + Math.random().toString(36).slice(2,9),
@@ -2877,7 +2890,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 <span><span style="color:var(--acc);">●</span> Files Modified</span> <span style="opacity:0.6">${filesMod.size}</span>
                               </div>
                               <div style="padding:4px;">
-                                ${Array.from(filesMod).map(f => `<button class="lucy-code-btn" data-path="${f.replace(/"/g,'&quot;')}" style="display:block; width:100%; text-align:left; padding:6px 8px; font-family:var(--mono); font-size:11px; background:transparent; border:none; color:#ddd; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">· ${f}</button>`).join('')}
+                                ${Array.from(filesMod).map(f => `<button class="lucy-code-btn" data-path="${escapeHtml(f)}" style="display:block; width:100%; text-align:left; padding:6px 8px; font-family:var(--mono); font-size:11px; background:transparent; border:none; color:#ddd; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">· ${escapeHtml(f)}</button>`).join('')}
                               </div>
                             </div>
                         `;
@@ -3077,7 +3090,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 model: null
                             }).catch(err => console.debug('[embed] memory skipped:', err));
                             toolResults.push(`[MEMORY SAVED — ID ${savedId}]\n"${mgTitle}" guardado en memoria persistente.`);
-                            stepsHtml += `[◈ Memoria guardada] ${mgTitle}\n`;
+                            stepsHtml += `[◈ Memoria guardada] ${esc(mgTitle)}\n`;
                             finishToolCard(_mgCard, `ID ${savedId}: ${mgTitle}`, true);
                             cargarMemoriasDB(); // refrescar cache en segundo plano
                         } catch(e) {
@@ -3148,7 +3161,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 section: cSection, key: cKey, value: cValue, pinned: true
                             });
                             toolResults.push(`[CORE MEMORY SET — ${cSection}/${cKey}]\n${cValue}`);
-                            stepsHtml += `[◆ Core] ${cSection}.${cKey} = ${cValue}\n`;
+                            stepsHtml += `[◆ Core] ${esc(cSection)}.${esc(cKey)} = ${esc(cValue)}\n`;
                             finishToolCard(_cCard, `ID ${cId}: ${cKey}`, true);
                         } catch (e) {
                             toolResults.push(`[CORE MEMORY ERROR]\n${e}`);
@@ -3166,7 +3179,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         try {
                             await invoke('memory_core_delete', { section: dSection, key: dKey });
                             toolResults.push(`[CORE MEMORY DELETED — ${dSection}/${dKey}]`);
-                            stepsHtml += `[◆ Core del] ${dSection}.${dKey}\n`;
+                            stepsHtml += `[◆ Core del] ${esc(dSection)}.${esc(dKey)}\n`;
                             finishToolCard(_dCard, 'deleted', true);
                         } catch (e) {
                             toolResults.push(`[CORE MEMORY DELETE ERROR]\n${e}`);
@@ -3197,7 +3210,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         }
 
                         const _fCard = newToolCard('⇉', `Fork: ${fTaskId}`, 'read');
-                        stepsHtml += `[⇉ Fork] ${fTaskId}: iniciando...\n`;
+                        stepsHtml += `[⇉ Fork] ${esc(fTaskId)}: iniciando...\n`;
                         renderAgentTask();
 
                         // Elegir el modelo del sub-agente respetando la preferencia del usuario
@@ -3232,7 +3245,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             invoke('fork_update', { taskId: fTaskId, status: 'done', result: resultStr, errorMsg: null })
                                 .catch(console.debug);
                             finishToolCard(_fCard, resultStr.substring(0, 120), true);
-                            stepsHtml += `[✓ Fork listo] ${fTaskId}\n`;
+                            stepsHtml += `[✓ Fork listo] ${esc(fTaskId)}\n`;
                             renderAgentTask();
                             return resultStr;
                         }).catch(e => {
@@ -3258,7 +3271,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         readOnlyTasks.push({
                             label: `[↻ Wait] ${wTaskId}`,
                             fn: async () => {
-                                stepsHtml += `[↻ Esperando fork] ${wTaskId}...\n`;
+                                stepsHtml += `[↻ Esperando fork] ${esc(wTaskId)}...\n`;
                                 renderAgentTask();
 
                                 // 1. En memoria (sesión actual)
@@ -3422,7 +3435,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                     _editCard.diff = { oldStr, newStr };
                                     const r = await retryWithBackoff(() => invoke('edit_file', {path, oldString:oldStr, newString:newStr, replaceAll:false}), 3, false);
                                     toolResults.push(`[EDIT RESULT] ${r}`);
-                                    stepsHtml += `[· Edición] ${path}\n`;
+                                    stepsHtml += `[· Edición] ${esc(path)}\n`;
                                     filesMod.add(path);
                                     finishToolCard(_editCard, String(r), true);
                                 } catch(e) {
@@ -3445,7 +3458,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         try {
                             const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:fcM[1], force:true}), 3, false);
                             toolResults.push(`[WRITE RESULT] ${r}`);
-                            stepsHtml += `[⊞ Escritura] ${_wPath}\n`;
+                            stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
                             finishToolCard(_writeCard, String(r), true);
                         } catch(e) {
@@ -3477,7 +3490,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         if (execRemoteM) {
                             const hostId = execRemoteM[1];
                             const cmd = execRemoteM[2].trim();
-                            stepsHtml += `[◉ Remoto] ${cmd.substring(0, 40)}...\n`;
+                            stepsHtml += `[◉ Remoto] ${esc(cmd.substring(0, 40))}...\n`;
                             const _lt = traceStart('exec.start', `remote:${hostId} ${cmd.substring(0,60)}`, loop_i + 1, tabId);
                             let h = null;
                             try {
@@ -3531,7 +3544,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             const _execBlocked = _execChk.blocked;
                             if (_execBlocked) {
                                 toolResults.push(_execChk.msg);
-                                stepsHtml += `[⊗ Loop bloqueado] ${execType}: ${cmd.substring(0,40)}...\n`;
+                                stepsHtml += `[⊗ Loop bloqueado] ${esc(execType)}: ${esc(cmd.substring(0,40))}...\n`;
                                 renderAgentTask();
                             }
                             // ── Detect destructive commands requiring confirmation ──
@@ -3554,7 +3567,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             }
 
                             if (!_execBlocked) {
-                            stepsHtml += `[▶ Ejecución] ${cmd.substring(0, 40)}...\n`;
+                            stepsHtml += `[▶ Ejecución] ${esc(cmd.substring(0, 40))}...\n`;
                             const _execIcon = {powershell:'⚡',cmd:'▶',wmic:'⊕',netsh:'◉',reg:'⊕',cscript:'·'}[execType]||'⚡';
                             const _execCard = newToolCard(_execIcon, `${execType}: ${cmd.substring(0,80)}`, 'exec');
                             const _lt = traceStart('exec.start', `${execType}: ${cmd.substring(0,80)}`, loop_i + 1, tabId);
@@ -3682,7 +3695,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             }
                         }, tabId);
                     } catch(e) {
-                        stepsHtml += `[ERROR] ${e}\n`;
+                        stepsHtml += `[ERROR] ${esc(String(e))}\n`;
                         finishReasoning();
                         renderAgentTask();
                         break;

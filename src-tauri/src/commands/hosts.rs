@@ -6,6 +6,36 @@ use serde_json::json;
 use crate::state::CREATE_NO_WINDOW;
 use crate::utils::shell::ensure_trusted_host;
 
+// ── SECURITY helpers ─────────────────────────────────────────────────────────
+
+/// Validate that a host string is a safe IP or hostname (no shell metacharacters).
+/// Allows: alphanumeric, dots, hyphens, underscores, IPv6 brackets and colons.
+fn validate_host(host: &str) -> Result<(), String> {
+    if host.is_empty() || host.len() > 253 {
+        return Err("Host inválido: vacío o demasiado largo.".to_string());
+    }
+    if !host.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '[' | ']' | ':')) {
+        return Err(format!(
+            "Host inválido '{}': solo se permiten IPs y nombres DNS (sin caracteres especiales).", host
+        ));
+    }
+    Ok(())
+}
+
+/// Validate that a username contains only safe characters.
+/// Allows: alphanumeric, dots, hyphens, underscores, backslash (domain\user), @
+fn validate_username(user: &str) -> Result<(), String> {
+    if user.is_empty() || user.len() > 128 {
+        return Err("Username inválido: vacío o demasiado largo.".to_string());
+    }
+    if !user.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '\\' | '@')) {
+        return Err(format!(
+            "Username inválido '{}': solo se permiten caracteres alfanuméricos, '.', '-', '_', '\\\\', '@'.", user
+        ));
+    }
+    Ok(())
+}
+
 // ── WINDOWS REMOTO (WinRM via PowerShell) ─────────────────────────────────────
 
 #[tauri::command]
@@ -15,6 +45,8 @@ pub async fn execute_remote_windows(
     password: String,
     command: String,
 ) -> Result<String, String> {
+    validate_host(&host)?;
+    validate_username(&username)?;
     let pw_esc = password.replace('\'', "''");
     let ps = format!(
         "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
@@ -44,6 +76,8 @@ pub async fn get_remote_health_windows(
     username: String,
     password: String,
 ) -> Result<serde_json::Value, String> {
+    validate_host(&host)?;
+    validate_username(&username)?;
     let script = r#"
         $os    = Get-WmiObject Win32_OperatingSystem
         $cpu   = (Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1).CounterSamples[0].CookedValue
@@ -277,6 +311,8 @@ pub async fn execute_shell_cmd(
             Err(if stderr.trim().is_empty() { stdout } else { stderr })
         }
     } else {
+        validate_host(&host)?;
+        validate_username(&username)?;
         ensure_trusted_host(&host);
         let pwd = password.unwrap_or_default();
         let pw_esc = pwd.replace('\'', "''");

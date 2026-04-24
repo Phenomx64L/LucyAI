@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src https://generativelanguage.googleapis.com https:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' mediastream:"
+      "csp": "default-src 'self'; connect-src https: http://localhost:* http://127.0.0.1:*; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; media-src 'self' mediastream:"
     }
   },
   "bundle": {

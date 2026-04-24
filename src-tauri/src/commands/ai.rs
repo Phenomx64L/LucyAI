@@ -531,8 +531,10 @@ pub async fn ask_lucy(
                 for img in imgs { parts.push(json!({ "inlineData": { "mimeType": img["mimeType"], "data": img["data"] } })); }
             }
             let payload = json!({ "contents": [{ "parts": parts }] });
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model, api_key);
-            HTTP_CLIENT.post(&url).json(&payload)
+            // SECURITY: use x-goog-api-key header instead of ?key= query param
+            // so the key is never exposed in error messages, logs, or network traces.
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model);
+            HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
     };
 
@@ -655,8 +657,9 @@ pub async fn ask_lucy_stream(
                 for img in imgs { parts.push(json!({ "inlineData": { "mimeType": img["mimeType"], "data": img["data"] } })); }
             }
             let payload = json!({ "contents": [{ "parts": parts }] });
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}", model, api_key);
-            HTTP_CLIENT.post(&url).json(&payload)
+            // SECURITY: API key in header, not query string
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse", model);
+            HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
     };
 
@@ -816,10 +819,10 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
                 .header("anthropic-version", "2023-06-01")
                 .json(&payload)
         },
-        _ => { // gemini
+        _ => { // gemini — SECURITY: key in header, not URL
             let payload = serde_json::json!({ "contents": [{ "parts": [{"text": sys_prompt}] }] });
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}", model, api_key);
-            crate::state::HTTP_CLIENT.post(&url).json(&payload)
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model);
+            crate::state::HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
     };
 
