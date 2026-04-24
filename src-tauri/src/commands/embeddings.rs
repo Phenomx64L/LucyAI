@@ -123,6 +123,39 @@ async fn embed_via_ollama(text: &str, model: Option<String>) -> Result<(Vec<f32>
     Ok((v, m))
 }
 
+// ── Internal helper (used by pdf.rs and other sibling modules) ────────────
+
+/// Compute and upsert an embedding without the text-dedup check.
+/// Skips silently if Ollama is unavailable — embeddings are best-effort.
+pub(crate) async fn embed_and_store(
+    entity_type: String,
+    entity_id: String,
+    text: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    let (v, used_model) = embed_via_ollama(&text, model).await?;
+    let dims = v.len() as i64;
+    let blob = vec_to_blob(&v);
+    let id = generate_id();
+    shared_db(|conn| {
+        conn.execute(
+            "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+               text  = excluded.text,
+               vec   = excluded.vec,
+               dims  = excluded.dims,
+               model = excluded.model,
+               created_at = strftime('%s','now')",
+            params![id, entity_type, entity_id, text, blob, dims, used_model],
+        ).map_err(|e| format!("embed_and_store: {}", e))?;
+        Ok(())
+    })
+}
+
 // ── Tauri commands ─────────────────────────────────────────────────────────
 
 /// Compute an embedding for arbitrary text and return the raw vector.

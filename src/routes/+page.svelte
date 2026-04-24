@@ -28,6 +28,7 @@ import { listen } from '@tauri-apps/api/event';
     const lazyPermissions  = () => _lazyPermissions  || (_lazyPermissions  = import('$lib/PermissionRulesModal.svelte').then(m => m.default));
     const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
     import ForksMonitorPanel from '$lib/ForksMonitorPanel.svelte';
+    import PdfIngestPanel    from '$lib/PdfIngestPanel.svelte';
     const lazyProfile      = () => _lazyProfile       || (_lazyProfile       = import('$lib/ProfileModal.svelte').then(m => m.default));
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
@@ -219,6 +220,7 @@ import { listen } from '@tauri-apps/api/event';
     let showPermissionRulesModal = false;
     let showSkillsManagerModal = false;
     let showForksMonitor       = false;
+    let showPdfPanel           = false;
     // NexShell filter/sort state moved to NexShellView.svelte
     let viewFading         = false;      // fade de transición entre vistas
     let focusMode          = false;      // Ctrl+M — oculta sidebar para máximo espacio
@@ -2598,7 +2600,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             }
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
-            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memory_core_set|memory_core_delete|fork_task|wait_task|cd):/i;
+            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search):/i;
             const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
@@ -3103,6 +3105,32 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                     return `## ${m.title} [${date}]${tags ? ` (${tags})` : ''}\n${m.content}`;
                                 }).join('\n\n---\n\n');
                                 return `[MEMORY SEARCH RESULTS for "${mbQuery}" — ${mems.length} encontradas]\n\n${formatted}`;
+                            }
+                        });
+                    }
+
+                    // ── pdf_search: búsqueda semántica en PDFs ingresados ──
+                    const pdfM = agentResp.match(/<TOOL>pdf_search:([^<]+)<\/TOOL>/i);
+                    if (pdfM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>pdf_search:[^<]+<\/TOOL>/gi, '');
+                        const pdfQuery = pdfM[1].trim();
+                        readOnlyTasks.push({
+                            label: `[📄 PDF Search] ${pdfQuery}`,
+                            fn: async () => {
+                                try {
+                                    const hits = await invoke('pdf_search', { query: pdfQuery, limit: 5 });
+                                    if (!hits || hits.length === 0) {
+                                        return `[PDF SEARCH: "${pdfQuery}"]\nNo se encontraron fragmentos relevantes en los PDFs ingresados. Asegúrate de haber ingresado el documento primero usando el panel PDF (sidebar).`;
+                                    }
+                                    const formatted = hits.map((h, i) => {
+                                        const score = (h.score * 100).toFixed(0);
+                                        return `### Resultado ${i+1} (relevancia: ${score}%)\n${h.text}`;
+                                    }).join('\n\n---\n\n');
+                                    return `[PDF SEARCH RESULTS for "${pdfQuery}" — ${hits.length} fragmentos]\n\n${formatted}`;
+                                } catch (e) {
+                                    return `[PDF SEARCH ERROR: ${e}]\nTip: requiere Ollama corriendo con el modelo nomic-embed-text. Alternativamente usa <TOOL>memoria_buscar:${pdfQuery}</TOOL> para búsqueda por palabras clave.`;
+                                }
                             }
                         });
                     }
@@ -5232,7 +5260,18 @@ if (Test-Path $src) {
         box-shadow:0 16px 48px rgba(0,0,0,.55);
         overflow:hidden;
     }
-    
+    /* PDF panel floating overlay */
+    .pdf-panel-overlay{
+        position:fixed; right:16px; bottom:80px;
+        width:440px; max-width:calc(100vw - 32px);
+        height:500px; max-height:calc(100vh - 120px);
+        z-index:4200;
+        border-radius:10px;
+        border:1px solid rgba(99,102,241,.3);
+        box-shadow:0 16px 48px rgba(0,0,0,.55);
+        overflow:hidden;
+    }
+
     /* ── ACCIONES RÁPIDAS (NUEVO) ──────────────── */
     .sb-action-item { position: relative; }
     .sb-del { position: absolute; right: 10px; background: transparent; border: none; color: var(--red); opacity: 0; cursor: pointer; transition: 0.2s; font-size: 10px; }
@@ -6601,6 +6640,11 @@ if (Test-Path $src) {
         class:sb-it-active={showForksMonitor}>
         <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Sub-Agents' : 'Sub-Agentes'}</span>
       </div>
+      <div class="sb-it" role="button" tabindex="0" on:click={() => showPdfPanel = !showPdfPanel} on:keydown
+        title={isEN ? 'PDF Intelligence — Ingest manuals & docs' : 'PDF Intelligence — Ingresa manuales y docs'}
+        class:sb-it-active={showPdfPanel}>
+        <span class="sb-ico">📄</span><span class="sb-txt">{isEN ? 'PDF Docs' : 'PDF Docs'}</span>
+      </div>
       <div class="sb-it" role="button" tabindex="0" on:click={() => showSettingsModal = true} on:keydown
         title={isEN ? 'Settings & Preferences' : 'Configuración y Preferencias'}>
         <span class="sb-ico"><Settings size={18}/></span><span class="sb-txt">{isEN ? 'Settings' : 'Configuración'}</span>
@@ -7868,6 +7912,16 @@ if (Test-Path $src) {
         {isEN}
         tabId={activeTabId || ''}
         on:close={() => showForksMonitor = false}
+      />
+    </div>
+  {/if}
+
+  <!-- ── PDF INTELLIGENCE PANEL (Sprint 4 Pillar 4) ── -->
+  {#if showPdfPanel}
+    <div class="pdf-panel-overlay">
+      <PdfIngestPanel
+        {isEN}
+        on:close={() => showPdfPanel = false}
       />
     </div>
   {/if}

@@ -442,6 +442,7 @@ fn build_system_prompt(
         • WORKING — Per-session compressed summaries of long agent loops. You do NOT write these directly; the UI may compress raw context into <TOOL>memory_working_append</TOOL> automatically.\n\
         • EPISODIC — Long-term searchable knowledge (memoria_guardar / memoria_buscar / semantic). This is where general discoveries go.\n\
         DECISION GUIDE: Is this fact true across ALL future sessions AND short enough to always carry? → CORE. Is it a useful but situational fact? → memoria_guardar. Is it just session scratch? → don't persist.\n\
+        RULE 26 — PDF INTELLIGENCE: Users can ingest PDF manuals/documentation using the PDF panel (sidebar). When ingested, content is stored as episodic memories (session_id = 'pdf:{{doc_id}}') AND as semantic vectors. When the user asks about content that may be in a manual or document: (1) Try FTS search first: <TOOL>memoria_buscar:exact terms from likely section</TOOL>. (2) For semantic/conceptual search: <TOOL>pdf_search:natural language question</TOOL>. Each result shows the source filename and the relevant passage. Always cite the document name and section when using PDF content. If no results found, tell the user no PDF has been ingested yet and suggest dragging the file to the PDF panel in the sidebar.\n\
         {core_mem}\n\
         {ctx}
         {hosts}

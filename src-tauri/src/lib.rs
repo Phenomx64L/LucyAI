@@ -4,7 +4,7 @@ mod state;
 mod utils;
 mod commands;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, shell, system, ui, embeddings, memory};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, shell, system, ui, embeddings, memory, pdf};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -203,6 +203,11 @@ pub fn run() {
             metrics::fork_get,
             metrics::fork_list,
             metrics::fork_clear,
+            // PDF Intelligence — Sprint 4 Pillar 4
+            pdf::pdf_ingest,
+            pdf::pdf_list_docs,
+            pdf::pdf_delete_doc,
+            pdf::pdf_search,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

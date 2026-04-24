@@ -408,6 +408,20 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_entity ON embeddings(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_type ON embeddings(entity_type);
 
+-- ── PDF Intelligence (Sprint 4 Pillar 4) ────────────────────────────────────
+-- Tracks every ingested PDF. Chunks live in agent_memories
+-- (session_id = 'pdf:{id}') and embeddings table (entity_type = 'pdf_chunk').
+CREATE TABLE IF NOT EXISTS pdf_documents (
+    id          TEXT    PRIMARY KEY,
+    filename    TEXT    NOT NULL,
+    path        TEXT    NOT NULL,
+    page_count  INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    ingested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    status      TEXT    NOT NULL DEFAULT 'ingesting'  -- 'ingesting'|'done'|'error'
+);
+CREATE INDEX IF NOT EXISTS idx_pdf_docs_ingested ON pdf_documents(ingested_at DESC);
+
 -- Create indexes for fast queries
 CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp);
 CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
@@ -415,6 +429,18 @@ CREATE INDEX IF NOT EXISTS idx_permission_rules_enabled ON permission_rules(enab
 CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
 CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
 "#;
+
+// ── PDF Intelligence (Sprint 4 Pillar 4) ──────────────────────────────────
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PdfDocument {
+    pub id:          String,
+    pub filename:    String,
+    pub path:        String,
+    pub page_count:  i64,   // 0 until extraction (pdf-extract doesn't report pages)
+    pub chunk_count: i64,
+    pub ingested_at: i64,
+    pub status:      String,  // 'ingesting' | 'done' | 'error'
+}
 
 /// Price constants per 1K tokens (as of 2026)
 pub const ANTHROPIC_INPUT_PRICE_PER_1K: f64 = 0.003;
