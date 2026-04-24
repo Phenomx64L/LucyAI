@@ -6,7 +6,7 @@
 // `with_db()`. This avoids opening a new file handle on every Tauri call,
 // gives us PRAGMA WAL once, and serializes writes safely.
 
-use crate::utils::db::{TokenUsage, PermissionRule, Skill, AgentMemory, generate_id, calculate_cost, INIT_SQL};
+use crate::utils::db::{TokenUsage, PermissionRule, Skill, AgentMemory, ForkResult, generate_id, calculate_cost, INIT_SQL};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -779,5 +779,149 @@ pub async fn log_task_event(
             rusqlite::params![&id, &tab_id, &event_type, &subtype, &elapsed_ms, &metadata],
         ).map_err(|e| format!("insert task_event: {}", e))?;
         Ok(())
+    })
+}
+
+// ── Fork Results (Sprint 4 — Persistent Parallel Agents) ──────────────────
+// Four commands cover the full lifecycle:
+//   fork_save   — called immediately when a fork is launched (status='running')
+//   fork_update — called when fork finishes or errors (sets result / error_msg)
+//   fork_get    — retrieve a single fork by task_id (for wait_task resolution)
+//   fork_list   — list all forks for a tab (for the ForksMonitorPanel)
+//   fork_clear  — prune rows older than N days (housekeeping)
+
+/// Persist a newly launched fork as 'running'. Returns the row id.
+#[tauri::command]
+pub async fn fork_save(
+    task_id: String,
+    tab_id: String,
+    session_id: String,
+    model: String,
+    instruction: String,
+) -> Result<String, String> {
+    let id = generate_id();
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO fork_results
+             (id, task_id, tab_id, session_id, model, instruction, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running')",
+            rusqlite::params![&id, &task_id, &tab_id, &session_id, &model, &instruction],
+        ).map_err(|e| format!("fork_save: {}", e))?;
+        Ok(id.clone())
+    })
+}
+
+/// Mark a fork as done or error. Stores result text or error message.
+#[tauri::command]
+pub async fn fork_update(
+    task_id: String,
+    status: String,   // 'done' | 'error'
+    result: Option<String>,
+    error_msg: Option<String>,
+) -> Result<(), String> {
+    with_db(|conn| {
+        conn.execute(
+            "UPDATE fork_results
+             SET status = ?1, result = ?2, error_msg = ?3,
+                 finished_at = strftime('%s','now')
+             WHERE task_id = ?4 AND status = 'running'",
+            rusqlite::params![&status, &result, &error_msg, &task_id],
+        ).map_err(|e| format!("fork_update: {}", e))?;
+        Ok(())
+    })
+}
+
+/// Retrieve a single fork by task_id (most recent first).
+#[tauri::command]
+pub async fn fork_get(task_id: String) -> Result<Option<ForkResult>, String> {
+    with_db(|conn| {
+        let r = conn.query_row(
+            "SELECT id, task_id, tab_id, session_id, model, instruction,
+                    status, result, error_msg, created_at, finished_at
+             FROM fork_results WHERE task_id = ?1
+             ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![&task_id],
+            |row| Ok(ForkResult {
+                id:          row.get(0)?,
+                task_id:     row.get(1)?,
+                tab_id:      row.get(2)?,
+                session_id:  row.get(3)?,
+                model:       row.get(4)?,
+                instruction: row.get(5)?,
+                status:      row.get(6)?,
+                result:      row.get(7)?,
+                error_msg:   row.get(8)?,
+                created_at:  row.get(9)?,
+                finished_at: row.get(10)?,
+            }),
+        ).ok();
+        Ok(r)
+    })
+}
+
+/// List all forks for a given tab (newest first, max 100).
+#[tauri::command]
+pub async fn fork_list(
+    tab_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<ForkResult>, String> {
+    let lim = limit.unwrap_or(50) as i64;
+    with_db(|conn| {
+        // Inline mapper per branch — rusqlite's query_map consumes the FnMut
+        // so we cannot share one closure across two branches.
+        fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ForkResult> {
+            Ok(ForkResult {
+                id:          row.get(0)?,
+                task_id:     row.get(1)?,
+                tab_id:      row.get(2)?,
+                session_id:  row.get(3)?,
+                model:       row.get(4)?,
+                instruction: row.get(5)?,
+                status:      row.get(6)?,
+                result:      row.get(7)?,
+                error_msg:   row.get(8)?,
+                created_at:  row.get(9)?,
+                finished_at: row.get(10)?,
+            })
+        }
+        let rows: Vec<ForkResult> = if let Some(ref tid) = tab_id {
+            let mut stmt = conn.prepare(
+                "SELECT id, task_id, tab_id, session_id, model, instruction,
+                        status, result, error_msg, created_at, finished_at
+                 FROM fork_results WHERE tab_id = ?1
+                 ORDER BY created_at DESC LIMIT ?2"
+            ).map_err(|e| format!("fork_list prepare (tab): {}", e))?;
+            let v: Vec<ForkResult> = stmt.query_map(rusqlite::params![tid, lim], read_row)
+                .map_err(|e| format!("fork_list query (tab): {}", e))?
+                .filter_map(|r| r.ok()).collect();
+            v
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, task_id, tab_id, session_id, model, instruction,
+                        status, result, error_msg, created_at, finished_at
+                 FROM fork_results
+                 ORDER BY created_at DESC LIMIT ?1"
+            ).map_err(|e| format!("fork_list prepare (all): {}", e))?;
+            let v: Vec<ForkResult> = stmt.query_map(rusqlite::params![lim], read_row)
+                .map_err(|e| format!("fork_list query (all): {}", e))?
+                .filter_map(|r| r.ok()).collect();
+            v
+        };
+        Ok(rows)
+    })
+}
+
+/// Prune finished forks older than `days` (default 7). Returns deleted count.
+#[tauri::command]
+pub async fn fork_clear(days: Option<u32>) -> Result<u32, String> {
+    let cutoff_days = days.unwrap_or(7) as i64;
+    with_db(|conn| {
+        let n = conn.execute(
+            "DELETE FROM fork_results
+             WHERE status != 'running'
+               AND created_at < strftime('%s','now') - ?1 * 86400",
+            rusqlite::params![cutoff_days],
+        ).map_err(|e| format!("fork_clear: {}", e))?;
+        Ok(n as u32)
     })
 }

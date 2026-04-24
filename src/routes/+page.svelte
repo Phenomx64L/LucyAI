@@ -27,6 +27,7 @@ import { listen } from '@tauri-apps/api/event';
     let _lazyProfile       = null;
     const lazyPermissions  = () => _lazyPermissions  || (_lazyPermissions  = import('$lib/PermissionRulesModal.svelte').then(m => m.default));
     const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
+    import ForksMonitorPanel from '$lib/ForksMonitorPanel.svelte';
     const lazyProfile      = () => _lazyProfile       || (_lazyProfile       = import('$lib/ProfileModal.svelte').then(m => m.default));
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
@@ -217,6 +218,7 @@ import { listen } from '@tauri-apps/api/event';
     let activeView         = 'terminal'; // 'terminal' | 'dashboard' | 'logviewer' | 'nexshell'
     let showPermissionRulesModal = false;
     let showSkillsManagerModal = false;
+    let showForksMonitor       = false;
     // NexShell filter/sort state moved to NexShellView.svelte
     let viewFading         = false;      // fade de transición entre vistas
     let focusMode          = false;      // Ctrl+M — oculta sidebar para máximo espacio
@@ -3144,15 +3146,25 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         }
                     }
 
-                    // ── fork_task: lanza un sub-agente en segundo plano (fire-and-forget) ──
+                    // ── fork_task: lanza sub-agente persistente (Sprint 4 — resultados en SQLite) ──
+                    // Límite de concurrencia: máx 8 forks simultáneos para no saturar la RAM.
+                    const MAX_CONCURRENT_FORKS = 8;
                     for (const forkM of [...agentResp.matchAll(/<TOOL>fork_task:([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>fork_task:[^<]+<\/TOOL>/gi, '');
                         const fTaskId = forkM[1].trim();
                         const fInstruction = forkM[2].trim();
 
+                        // Verificar si ya existe (en memoria o en SQLite)
                         if (forkedTasks[fTaskId]) {
-                            toolResults.push(`[FORK: ${fTaskId}]\nYa existe una tarea con ese ID. Usa <TOOL>wait_task:${fTaskId}</TOOL> para recuperar su resultado.`);
+                            toolResults.push(`[FORK: ${fTaskId}]\nYa existe una tarea con ese ID en esta sesión. Usa <TOOL>wait_task:${fTaskId}</TOOL> para recuperar su resultado.`);
+                            continue;
+                        }
+
+                        // Límite de concurrencia
+                        const runningCount = Object.values(forkedTasks).filter(f => f.status === 'running').length;
+                        if (runningCount >= MAX_CONCURRENT_FORKS) {
+                            toolResults.push(`[FORK BLOCKED: ${fTaskId}]\nLímite de ${MAX_CONCURRENT_FORKS} forks simultáneos alcanzado. Espera que alguno termine antes de lanzar más.`);
                             continue;
                         }
 
@@ -3160,35 +3172,57 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         stepsHtml += `[⇉ Fork] ${fTaskId}: iniciando...\n`;
                         renderAgentTask();
 
-                        // Sub-agente de un solo paso — sin tool loop, modelo rápido
+                        // Elegir el modelo del sub-agente respetando la preferencia del usuario
+                        const forkModel = subAgentModel === 'ollama'
+                            ? (activeTab?.selectedModel?.startsWith('local-') ? activeTab.selectedModel : 'gemini-2.5-flash')
+                            : (activeTab?.selectedModel || 'gemini-2.5-flash');
+
+                        // Persistir en SQLite inmediatamente como 'running'
+                        const fDbId = await invoke('fork_save', {
+                            taskId: fTaskId,
+                            tabId: tabId || '',
+                            sessionId: String(agentTaskId),
+                            model: forkModel,
+                            instruction: fInstruction
+                        }).catch(() => null);
+
+                        // Sub-agente de un solo paso — sin tool loop, modelo configurable
                         const _fPromise = invoke('ask_lucy', {
                             prompt: `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano. Completa la siguiente tarea y responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas):\n\n${fInstruction}`,
                             context: agentCtx.substring(Math.max(0, agentCtx.length - 3000)),
                             userName: lucyConfig.name,
                             runbooksDir: lucyConfig.runbooksDir || null,
-                            model: 'gemini-2.5-flash',
+                            model: forkModel,
                             lang: userLang,
                             hostsJson: JSON.stringify($hosts),
                             images: null
                         }).then(r => {
+                            const resultStr = String(r);
                             forkedTasks[fTaskId].status = 'done';
-                            forkedTasks[fTaskId].result = String(r);
-                            finishToolCard(_fCard, String(r), true);
+                            forkedTasks[fTaskId].result = resultStr;
+                            // Persistir resultado en SQLite
+                            invoke('fork_update', { taskId: fTaskId, status: 'done', result: resultStr, errorMsg: null })
+                                .catch(console.debug);
+                            finishToolCard(_fCard, resultStr.substring(0, 120), true);
                             stepsHtml += `[✓ Fork listo] ${fTaskId}\n`;
                             renderAgentTask();
-                            return String(r);
+                            return resultStr;
                         }).catch(e => {
+                            const errStr = String(e);
                             forkedTasks[fTaskId].status = 'error';
-                            forkedTasks[fTaskId].result = String(e);
-                            finishToolCard(_fCard, String(e), false);
-                            return `[ERROR en sub-tarea] ${e}`;
+                            forkedTasks[fTaskId].result = errStr;
+                            // Persistir error en SQLite
+                            invoke('fork_update', { taskId: fTaskId, status: 'error', result: null, errorMsg: errStr })
+                                .catch(console.debug);
+                            finishToolCard(_fCard, errStr, false);
+                            return `[ERROR en sub-tarea] ${errStr}`;
                         });
 
-                        forkedTasks[fTaskId] = { promise: _fPromise, status: 'running', result: null };
-                        toolResults.push(`[FORK LAUNCHED: ${fTaskId}]\nSub-tarea iniciada en segundo plano. Continúa con tus siguientes acciones. Usa <TOOL>wait_task:${fTaskId}</TOOL> en un paso posterior para obtener el resultado.`);
+                        forkedTasks[fTaskId] = { promise: _fPromise, status: 'running', result: null, dbId: fDbId };
+                        toolResults.push(`[FORK LAUNCHED: ${fTaskId}] — modelo: ${forkModel}\nSub-tarea iniciada en segundo plano (resultado persiste en SQLite). Continúa con tus siguientes acciones. Usa <TOOL>wait_task:${fTaskId}</TOOL> en un paso posterior para obtener el resultado.`);
                     }
 
-                    // ── wait_task: espera el resultado de un fork previo ──
+                    // ── wait_task: espera resultado (memoria RAM o fallback a SQLite) ──
                     for (const wtM of [...agentResp.matchAll(/<TOOL>wait_task:([^<]+)<\/TOOL>/gi)]) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>wait_task:[^<]+<\/TOOL>/gi, '');
@@ -3196,13 +3230,30 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         readOnlyTasks.push({
                             label: `[↻ Wait] ${wTaskId}`,
                             fn: async () => {
-                                if (!forkedTasks[wTaskId]) {
-                                    return `[WAIT_TASK ERROR: ${wTaskId}]\nNo se encontró ninguna tarea fork con ese ID. Verifica haber ejecutado <TOOL>fork_task:${wTaskId}|||instrucción</TOOL> antes en esta sesión.`;
-                                }
                                 stepsHtml += `[↻ Esperando fork] ${wTaskId}...\n`;
                                 renderAgentTask();
-                                const result = await forkedTasks[wTaskId].promise;
-                                return `[SUBTASK RESULT: ${wTaskId}]\n${result}`;
+
+                                // 1. En memoria (sesión actual)
+                                if (forkedTasks[wTaskId]) {
+                                    const result = await forkedTasks[wTaskId].promise;
+                                    return `[SUBTASK RESULT: ${wTaskId}]\n${result}`;
+                                }
+
+                                // 2. Fallback a SQLite (fork de sesión anterior o tab diferente)
+                                try {
+                                    const dbFork = await invoke('fork_get', { taskId: wTaskId });
+                                    if (dbFork) {
+                                        if (dbFork.status === 'done' && dbFork.result) {
+                                            return `[SUBTASK RESULT (persisted): ${wTaskId}]\n${dbFork.result}`;
+                                        } else if (dbFork.status === 'error') {
+                                            return `[SUBTASK ERROR (persisted): ${wTaskId}]\n${dbFork.error_msg || 'Error desconocido'}`;
+                                        } else {
+                                            return `[SUBTASK STILL RUNNING: ${wTaskId}]\nLa tarea sigue en progreso. Reintenta <TOOL>wait_task:${wTaskId}</TOOL> en unos momentos.`;
+                                        }
+                                    }
+                                } catch (_) { /* no hay DB entry */ }
+
+                                return `[WAIT_TASK ERROR: ${wTaskId}]\nNo se encontró ninguna tarea fork con ese ID. Verifica haber ejecutado <TOOL>fork_task:${wTaskId}|||instrucción</TOOL> antes en esta sesión.`;
                             }
                         });
                     }
@@ -5168,6 +5219,19 @@ if (Test-Path $src) {
     .sb-it.dim{opacity:.35;cursor:default;}
     .sb-it.dim::before{display:none;}
     .sb-it.dim:hover{background:none;color:var(--txt2);}
+    .sb-it-active{background:rgba(99,102,241,.12)!important;color:#818cf8!important;}
+    .sb-it-active::before{background:#818cf8!important;transform:scaleY(1)!important;opacity:1!important;}
+    /* Forks monitor floating panel */
+    .forks-monitor-overlay{
+        position:fixed; right:16px; bottom:80px;
+        width:480px; max-width:calc(100vw - 32px);
+        height:520px; max-height:calc(100vh - 120px);
+        z-index:4200;
+        border-radius:10px;
+        border:1px solid rgba(99,102,241,.3);
+        box-shadow:0 16px 48px rgba(0,0,0,.55);
+        overflow:hidden;
+    }
     
     /* ── ACCIONES RÁPIDAS (NUEVO) ──────────────── */
     .sb-action-item { position: relative; }
@@ -6532,6 +6596,11 @@ if (Test-Path $src) {
         title={isEN ? 'Manage skills and runbooks' : 'Gestionar skills y runbooks'}>
         <span class="sb-ico"><Zap size={18}/></span><span class="sb-txt">{isEN ? 'Skills' : 'Skills'}</span>
       </div>
+      <div class="sb-it" role="button" tabindex="0" on:click={() => showForksMonitor = !showForksMonitor} on:keydown
+        title={isEN ? 'Sub-Agent Monitor (fork_task results)' : 'Monitor de Sub-Agentes (resultados fork_task)'}
+        class:sb-it-active={showForksMonitor}>
+        <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Sub-Agents' : 'Sub-Agentes'}</span>
+      </div>
       <div class="sb-it" role="button" tabindex="0" on:click={() => showSettingsModal = true} on:keydown
         title={isEN ? 'Settings & Preferences' : 'Configuración y Preferencias'}>
         <span class="sb-ico"><Settings size={18}/></span><span class="sb-txt">{isEN ? 'Settings' : 'Configuración'}</span>
@@ -7791,6 +7860,17 @@ if (Test-Path $src) {
   {/if}
 
   <!-- NexShell overlay/panel/modals moved to NexShellView.svelte -->
+
+  <!-- ── FORKS MONITOR PANEL (Sprint 4 — Persistent Sub-Agents) ── -->
+  {#if showForksMonitor}
+    <div class="forks-monitor-overlay">
+      <ForksMonitorPanel
+        {isEN}
+        tabId={activeTabId || ''}
+        on:close={() => showForksMonitor = false}
+      />
+    </div>
+  {/if}
 
 </div><!-- /root -->
 

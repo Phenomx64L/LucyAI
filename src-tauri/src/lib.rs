@@ -197,6 +197,12 @@ pub fn run() {
             memory::memory_working_list,
             memory::memory_working_clear,
             memory::memory_stats,
+            // Fork persistence — Parallel Agents (Sprint 4 Pillar 1)
+            metrics::fork_save,
+            metrics::fork_update,
+            metrics::fork_get,
+            metrics::fork_list,
+            metrics::fork_clear,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

@@ -108,6 +108,21 @@ pub struct IncidentAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkResult {
+    pub id:          String,
+    pub task_id:     String,
+    pub tab_id:      String,
+    pub session_id:  String,
+    pub model:       String,
+    pub instruction: String,
+    pub status:      String,   // 'running' | 'done' | 'error'
+    pub result:      Option<String>,
+    pub error_msg:   Option<String>,
+    pub created_at:  i64,
+    pub finished_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMemory {
     pub id:         i64,
     pub session_id: String,
@@ -283,6 +298,27 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_conv_turns_created ON conversation_turns(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conv_turns_tab     ON conversation_turns(tab_id, created_at);
+
+-- ── Fork Results (Sprint 4 — Persistent Parallel Agents) ──────────────────
+-- Stores sub-agent fork results across sessions. In-memory forkedTasks{} is
+-- ephemeral; this table survives tab switches, reloads, and app restarts.
+-- Results are automatically pruned after 7 days.
+CREATE TABLE IF NOT EXISTS fork_results (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,       -- unique name given by LLM (e.g. 'check_cpu')
+    tab_id      TEXT NOT NULL DEFAULT '',
+    session_id  TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
+    instruction TEXT NOT NULL,       -- original prompt sent to sub-agent
+    status      TEXT NOT NULL DEFAULT 'running', -- 'running'|'done'|'error'
+    result      TEXT,                -- sub-agent response (NULL while running)
+    error_msg   TEXT,                -- error detail if status='error'
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_fork_tab     ON fork_results(tab_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fork_status  ON fork_results(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fork_task_id ON fork_results(task_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS conversation_turns_fts
     USING fts5(content, tab_title, role, content='conversation_turns', content_rowid='id');
