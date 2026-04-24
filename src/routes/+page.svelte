@@ -430,6 +430,19 @@ import { listen } from '@tauri-apps/api/event';
     const _DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b)/i;
     const isDestructiveCmd = (cmd) => _DESTRUCTIVE_RE.test(cmd) || _DESTRUCTIVE_RE.test(_normalizeCmd(cmd));
 
+    // ── NVIDIA CUSTOM MODEL RESOLVER ────────────────────────────────────────
+    // When a tab selects 'nvidia-custom', the real model ID is stored in
+    // tab.nvidiaCustomModel (typed by the user). All API call sites must
+    // use getEffectiveModel(tab) instead of tab.selectedModel directly.
+    function getEffectiveModel(tab) {
+        if (!tab) return 'gemini-2.5-flash';
+        if (tab.selectedModel === 'nvidia-custom') {
+            const m = (tab.nvidiaCustomModel || '').trim();
+            return m || 'nvidia-custom';  // fallback keeps it invalid so Rust returns a clear error
+        }
+        return tab.selectedModel || 'gemini-2.5-flash';
+    }
+
     // ── AGENT CHECKPOINTING ─────────────────────────────────────────────────
     // Persist in-flight agent state to localStorage so a reload mid-task
     // doesn't silently erase everything. Minimal, no auto-resume — just
@@ -964,7 +977,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     const fix = await invoke('ask_lucy', {
                         prompt: `[AUTOFIX ANALYSIS] Action "${accion.nombre}" failed.\nScript: ${accion.script}\nError: ${errStr}\n\nRespond ONLY with either:\n1. A single PowerShell fix command inside <EXECUTE></EXECUTE> tags AND a 1-line Spanish explanation before it.\n2. Or if no fix is needed (e.g. already done), just a short Spanish explanation without <EXECUTE>.`,
                         context: '', userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
-                        model: activeTab?.selectedModel || 'gemini-2.5-flash',
+                        model: getEffectiveModel(activeTab) || 'gemini-2.5-flash',
                         images: null, lang: userLang, hostsJson: null
                     });
                     const fixExec = fix.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i);
@@ -1331,7 +1344,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         const t = {
             id, title: userLang.startsWith('en') ? 'New Terminal' : 'Nueva Terminal',
             messages: [],
-            attachedFiles: [], inputValue: '', selectedModel: 'gemini-3-flash-preview',
+            attachedFiles: [], inputValue: '', selectedModel: 'gemini-3-flash-preview', nvidiaCustomModel: '',
             contextMax: 50000, _histIdx: undefined,
             isProcessing: false, usedVoice: false, isListening: false,
             pendingMessage: null,       // {text, files, usedVoice} — queued while processing
@@ -2514,7 +2527,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
 `;
 
             t._cancelled = false; // Reset bandera de cancelación
-            const aiParams = {prompt:raw||"Analiza esto.",context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
+            const aiParams = {prompt:raw||"Analiza esto.",context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
 
             // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
             const codeGenIntent = /dame\s+(un\s+)?script|escrib[ea]\s+(un\s+)?script|crea\s+(un\s+)?script|genera\s+(un\s+)?script|give\s+me\s+(a\s+)?script|write\s+(a\s+)?script|create\s+(a\s+)?script|generate\s+(a\s+)?script|hazme\s+(un\s+)?script|necesito\s+(un\s+)?script|quiero\s+(un\s+)?script|dame\s+.*c[oó]digo|dame\s+.*powershell|haz\s+.*script/i.test(raw);
@@ -3632,7 +3645,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     saveAgentCheckpoint(tabId, {
                         loop_i, goal: originalUserGoal, stepsHtml, agentCtx,
                         editCountsByPath, toolCallCounts, filesMod, agentToolCards,
-                        model: t.selectedModel, title: t.titulo || ''
+                        model: getEffectiveModel(t), title: t.titulo || ''
                     });
 
                     // Si la respuesta fue truncada, escalar tokens y forzar continuación (patrón openclaude)
@@ -3675,9 +3688,9 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
 
                     // ── Apply reactive compact if context is growing ──
-                    let compressedCtx = await compressContext(agentCtx, t.selectedModel, loop_i);
+                    let compressedCtx = await compressContext(agentCtx, getEffectiveModel(t), loop_i);
 
-                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
+                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
 
                     stepsHtml += `<span style="opacity:0.6">[↻ Siguiente turno...]</span>\n`;
                     renderAgentTask();
@@ -3982,7 +3995,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         const follow = await invoke('ask_lucy', {
                             prompt: followPrompt, context: '', userName: lucyConfig.name,
                             runbooksDir: lucyConfig.runbooksDir || null,
-                            model: t.selectedModel, lang: userLang,
+                            model: getEffectiveModel(t), lang: userLang,
                             hostsJson: JSON.stringify($hosts), images: null,
                         });
                         const followClean = (follow || '').replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '').trim();
@@ -4057,7 +4070,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         throw new Error(_outTxt);
                     }
 
-                    const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result. If no output, confirm the command ran successfully.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
+                    const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result. If no output, confirm the command ran successfully.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
                     const sa=renderLucyMarkdown(analysis);
                     const wb=warpBlock(cmd,out,true,elapsed,engineLabel);
                     addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
@@ -4101,7 +4114,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             await runAI(tabId, '', doSpeak, retryCount + 1);
                             return;
                         } else {
-                            const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
+                            const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
                             addMsg(tabId,{role:'lucy',html:`<div class="mn" style="color:#ef4444;">! Límite de auto-correcciones (3) alcanzado</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);',rawRole:'Lucy',rawContent:rec});
                             if(doSpeak)speak("No pude solucionar el error tras 3 intentos. Deteniendo proceso.");
                         }
@@ -4148,7 +4161,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             const elapsed=Date.now()-t0;
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
             const _outTxtF = out?.trim() || '(sin salida — el comando finalizó sin errores visibles)';
-            const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed with security bypass: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxtF.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
+            const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed with security bypass: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxtF.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
             const sa=renderLucyMarkdown(analysis);
             const wb=warpBlock(cmd,out,true,elapsed,'! Ejecutado con bypass');
             addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
@@ -4157,7 +4170,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         }catch(e){
             const elapsed=Date.now()-t0;
             const wb=warpBlock(cmd,String(e),false,elapsed,'Bypass fallido');
-            const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand with bypass failed: \`${cmd.substring(0,150)}\`\nError: ${String(e).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:t.selectedModel,lang:userLang,hostsJson:null,images:null});
+            const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand with bypass failed: \`${cmd.substring(0,150)}\`\nError: ${String(e).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
             addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Crítico)</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;',rawRole:'Lucy',rawContent:rec});
             if(btn){btn.innerText='✗ Error';btn.style.background='rgba(255,68,68,0.12)';btn.style.color='#ef4444';}
         }finally{fin(tabId);}
@@ -4653,7 +4666,7 @@ if (Test-Path $src) {
         try {
             // Detectar proveedor por prefijo/formato del modelo activo
             const _activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
-            const _model = _activeTab?.selectedModel || 'gemini-2.5-flash';
+            const _model = getEffectiveModel(_activeTab) || 'gemini-2.5-flash';
             const _provider = _model.startsWith('claude') ? 'anthropic'
                             : _model.startsWith('gpt')    ? 'openai'
                             : _model.startsWith('local')  ? 'local'
@@ -5829,6 +5842,9 @@ if (Test-Path $src) {
     :global(.mbdg){display:flex;align-items:center;gap:4px;font-size:11px;color:#475569;padding:3px 8px;border:1px solid var(--bdr);border-radius:5px;cursor:pointer;background:rgba(0,0,0,.2);transition:.15s;min-width:130px;}
     :global(.mbdg:hover){border-color:var(--bdr2);color:var(--txt2);}
     :global(.mbdg select){background:none;border:none;outline:none;color:inherit;font:inherit;cursor:pointer;appearance:none;padding:0;width:100%;}
+    :global(.nvidia-custom-input){background:none;border:none;border-left:1px solid var(--bdr);outline:none;color:var(--acc);font:inherit;font-size:11px;padding:0 0 0 6px;min-width:220px;width:auto;cursor:text;}
+    :global(.nvidia-custom-input::placeholder){color:#476;font-style:italic;}
+    :global(.nvidia-custom-input:focus){color:var(--txt);}
     :global(.mbdg option){background:#131825;color:var(--txt);}
     :global(.mbdg optgroup){background:#060a0f;color:#475569;font-size:10px;font-weight:700;letter-spacing:.3px;}
     :global(.sbtn){width:36px;height:36px;border-radius:8px;border:none;cursor:pointer;background:rgba(16,185,129,.12);color:var(--acc);display:flex;align-items:center;justify-content:center;font-size:13px;transition:.15s;flex-shrink:0;}
@@ -7015,7 +7031,7 @@ if (Test-Path $src) {
                   <div class="mbdg">
                     {#if tab.selectedModel?.startsWith('local-')}
                       <span class="ollama-dot" class:on={$ollamaOnline} title={$ollamaOnline ? 'Ollama online' : 'Ollama offline'}></span>
-                    {:else if tab.selectedModel?.includes('/')}
+                    {:else if tab.selectedModel?.includes('/') || tab.selectedModel === 'nvidia-custom'}
                       <span class="ollama-dot" class:on={$nvidiaConfigured} title={$nvidiaConfigured ? 'NVIDIA NIM ✓' : 'NVIDIA API Key no configurada'}></span>
                     {/if}
                     <select bind:value={tab.selectedModel} disabled={tab.isProcessing}
@@ -7038,6 +7054,16 @@ if (Test-Path $src) {
                         </optgroup>
                       {/each}
                     </select>
+                    {#if tab.selectedModel === 'nvidia-custom'}
+                      <input
+                        class="nvidia-custom-input"
+                        type="text"
+                        bind:value={tab.nvidiaCustomModel}
+                        disabled={tab.isProcessing}
+                        placeholder="owner/model  (ej: nicoboss/DeepSeek-R1-Distill-Qwen-32B-Uncensored)"
+                        title={isEN ? 'Type the exact NVIDIA NIM model ID (owner/model-name)' : 'Escribe el ID exacto del modelo NVIDIA NIM (owner/model-name)'}
+                      />
+                    {/if}
                   </div>
                 </div>
               </div>

@@ -135,6 +135,7 @@ export const LLM_GROUPS = [
             { id: "mistralai/mistral-7b-instruct-v0.3", icon: "🌬️", nameEn: "Mistral 7B — Fast & Lightweight",        nameEs: "Mistral 7B — Rápido y Ligero" },
             { id: "google/gemma-4-31b-it",              icon: "💎", nameEn: "Gemma 4 31B (NIM) — Google via NVIDIA",  nameEs: "Gemma 4 31B (NIM) — Google vía NVIDIA" },
             { id: "microsoft/phi-3.5-mini-instruct",    icon: "🔷", nameEn: "Phi-3.5 Mini — Fast & Efficient",        nameEs: "Phi-3.5 Mini — Rápido y Eficiente" },
+            { id: "nvidia-custom",                      icon: "✏️", nameEn: "Custom NVIDIA Model — type owner/model", nameEs: "Modelo NVIDIA Personalizado — escribe owner/model" },
         ]
     },
     {
