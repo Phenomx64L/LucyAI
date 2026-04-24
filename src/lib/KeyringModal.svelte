@@ -2,21 +2,23 @@
     import { createEventDispatcher, onMount } from 'svelte';
     import { IconShieldExclamation as ShieldAlert, IconShieldCheck as ShieldCheck, IconKey as Key, IconShield as Shield } from '@tabler/icons-svelte';
     import { testApiKey, saveLlmKey, getConfiguredProviders } from '$lib/lucy-api';
+    import { refreshNvidiaModels } from '$lib/models.js';
 
     const dispatch = createEventDispatcher();
     export let isEN = false;
 
-    type Provider = 'gemini' | 'anthropic' | 'openai' | 'local';
+    type Provider = 'gemini' | 'anthropic' | 'openai' | 'nvidia' | 'local';
 
     const providers: { id: Provider, name: string, icon: typeof Shield }[] = [
-        { id: 'gemini', name: 'Google Gemini', icon: Shield },
-        { id: 'anthropic', name: 'Anthropic Claude', icon: Shield },
-        { id: 'openai', name: 'OpenAI GPT', icon: Shield },
-        { id: 'local', name: 'Endpoint Local', icon: Shield },
+        { id: 'gemini',    name: 'Google Gemini',    icon: Shield },
+        { id: 'anthropic', name: 'Anthropic Claude',  icon: Shield },
+        { id: 'openai',    name: 'OpenAI GPT',        icon: Shield },
+        { id: 'nvidia',    name: 'NVIDIA NIM',        icon: Shield },
+        { id: 'local',     name: 'Endpoint Local',    icon: Shield },
     ];
 
     let activeTab: Provider = 'gemini';
-    let keys: Record<Provider, string> = { gemini: '', anthropic: '', openai: '', local: '' };
+    let keys: Record<Provider, string> = { gemini: '', anthropic: '', openai: '', nvidia: '', local: '' };
     let configured: string[] = [];
 
     let loading = false;
@@ -49,7 +51,11 @@
             if (!configured.includes(activeTab)) {
                 configured = [...configured, activeTab];
             }
-            keys[activeTab] = ''; // Limpiar el input después de guardar
+            keys[activeTab] = '';
+            // Si se guardó NVIDIA, actualizar el catálogo de modelos inmediatamente
+            if (activeTab === 'nvidia') {
+                refreshNvidiaModels().catch(() => {});
+            }
         } catch (e: any) {
             errorMsg = e.toString();
         } finally {
@@ -112,16 +118,18 @@
                 <label for="kp">
                     {#if activeTab === 'local'}
                         {isEN ? 'Local Endpoint URL' : 'URL del Endpoint Local (Compatible con OpenAI API)'}
+                    {:else if activeTab === 'nvidia'}
+                        {isEN ? 'NVIDIA NIM API Key — get it free at build.nvidia.com' : 'NVIDIA NIM API Key — gratis en build.nvidia.com'}
                     {:else}
                         API Key ({providers.find(p => p.id === activeTab)?.name})
                     {/if}
                 </label>
-                <input 
-                    id="kp" 
-                    type={activeTab === 'local' ? 'text' : 'password'} 
-                    bind:value={keys[activeTab]} 
+                <input
+                    id="kp"
+                    type={activeTab === 'local' ? 'text' : 'password'}
+                    bind:value={keys[activeTab]}
                     disabled={loading}
-                    placeholder={activeTab === 'local' ? 'http://localhost:11434/v1/chat/completions' : 'sk-...'}
+                    placeholder={activeTab === 'local' ? 'http://localhost:11434/v1/chat/completions' : activeTab === 'nvidia' ? 'nvapi-...' : 'sk-...'}
                     on:keydown={(e) => e.key === 'Enter' && handleSave()}
                 />
             </div>
