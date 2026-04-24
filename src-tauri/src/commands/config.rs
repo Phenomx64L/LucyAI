@@ -64,8 +64,20 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
                 .header("anthropic-version", "2023-06-01")
         },
         "nvidia" => {
-            HTTP_CLIENT.get("https://nim.api.nvidia.com/v1/models")
-                .header("Authorization", format!("Bearer {}", key))
+            // NVIDIA NIM free tier does not expose GET /v1/models on nim.api.nvidia.com.
+            // Validate by format only: all NIM keys start with "nvapi-" and are ~80 chars.
+            // Real validation happens on the first actual inference call.
+            if !key.starts_with("nvapi-") {
+                return Err(
+                    "La clave NVIDIA NIM debe comenzar con 'nvapi-'. \
+                     Consíguela en build.nvidia.com → selecciona un modelo → 'Get API Key'.".to_string()
+                );
+            }
+            if key.len() < 30 {
+                return Err("La clave NVIDIA NIM parece incompleta (muy corta).".to_string());
+            }
+            write_app_log("INFO", "Clave NVIDIA NIM validada por formato (nvapi-...).");
+            return Ok(());
         },
         "local" => {
             // Para modelos locales, aceptaremos la URL proporcionada asumiendo que el usuario sabe lo que hace.
@@ -75,10 +87,8 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
     };
 
     let res = req.send().await.map_err(|e| format!("Error de red al verificar clave: {}", e))?;
-    
-    // Anthropic returns 404 (Not Found) or 400 for structural errors if the Key is VALID.
-    // If Key is INVALID it strictly returns 401 Unauthorized.
-    // NVIDIA returns 200 on /v1/models if key is valid, 401 if not.
+
+    // Anthropic returns 404/400 for structural errors when the Key IS VALID; only 401 = invalid.
     if res.status().is_success() || (provider == "anthropic" && res.status().as_u16() != 401) {
         write_app_log("INFO", &format!("API key de {} verificada correctamente.", provider));
         Ok(())
