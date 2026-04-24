@@ -530,7 +530,7 @@ pub async fn ask_lucy(
                 "temperature": 0.2,
                 "top_p": 0.9
             });
-            HTTP_CLIENT.post("https://integrate.api.nvidia.com/v1/chat/completions")
+            HTTP_CLIENT.post("https://nim.api.nvidia.com/v1/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -683,7 +683,7 @@ pub async fn ask_lucy_stream(
                 "temperature": 0.2,
                 "top_p": 0.9
             });
-            HTTP_CLIENT.post("https://integrate.api.nvidia.com/v1/chat/completions")
+            HTTP_CLIENT.post("https://nim.api.nvidia.com/v1/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -878,7 +878,7 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
                 "max_tokens": 1024,
                 "temperature": 0.1
             });
-            crate::state::HTTP_CLIENT.post("https://integrate.api.nvidia.com/v1/chat/completions")
+            crate::state::HTTP_CLIENT.post("https://nim.api.nvidia.com/v1/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -929,7 +929,7 @@ pub async fn list_nvidia_models() -> Result<Vec<String>, String> {
         .map_err(|_| "NVIDIA API Key no configurada. Consíguela gratis en build.nvidia.com".to_string())?;
 
     let res = crate::state::HTTP_CLIENT
-        .get("https://integrate.api.nvidia.com/v1/models")
+        .get("https://nim.api.nvidia.com/v1/models")
         .header("Authorization", format!("Bearer {}", api_key))
         .timeout(std::time::Duration::from_secs(10))
         .send()

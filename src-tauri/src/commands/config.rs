@@ -64,7 +64,7 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
                 .header("anthropic-version", "2023-06-01")
         },
         "nvidia" => {
-            HTTP_CLIENT.get("https://integrate.api.nvidia.com/v1/models")
+            HTTP_CLIENT.get("https://nim.api.nvidia.com/v1/models")
                 .header("Authorization", format!("Bearer {}", key))
         },
         "local" => {
