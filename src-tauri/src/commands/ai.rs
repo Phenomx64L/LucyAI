@@ -471,12 +471,25 @@ pub async fn ask_lucy(
     max_tokens_override: Option<u32>,
 ) -> Result<String, String> {
     // NVIDIA NIM models use "owner/model-name" format (e.g. "meta/llama-3.1-70b-instruct").
-    // Allow them via the contains('/') check; len < 120 prevents oversized inputs.
-    let is_allowed = ALLOWED_MODELS.contains(&model.as_str())
+    // UUID-only strings (8-4-4-4-12 hex) are internal function IDs — never valid model names.
+    let is_uuid = {
+        let p: Vec<&str> = model.split('-').collect();
+        p.len() == 5 && p[0].len() == 8 && p[1].len() == 4 && p[2].len() == 4
+            && p[3].len() == 4 && p[4].len() == 12
+            && p.iter().all(|s| s.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    let is_allowed = !is_uuid && (
+        ALLOWED_MODELS.contains(&model.as_str())
         || model.starts_with("local-")
-        || (model.contains('/') && !model.contains("..") && model.len() < 120);
+        || (model.contains('/') && !model.contains("..") && model.len() < 120)
+    );
     if !is_allowed {
-        return Err(format!("Modelo '{}' no permitido. Selecciona un modelo válido desde el selector.", model));
+        return Err(format!(
+            "Modelo '{}' no permitido. {}",
+            model,
+            if is_uuid { "Los IDs UUID internos de NVIDIA no son nombres de modelo válidos. Selecciona un modelo del catálogo." }
+            else       { "Selecciona un modelo válido desde el selector." }
+        ));
     }
 
     let provider = if model.starts_with("gpt-")    { "openai" }
@@ -611,11 +624,24 @@ pub async fn ask_lucy_stream(
     runbooks_dir: Option<String>,
     max_tokens_override: Option<u32>,
 ) -> Result<String, String> {
-    let is_allowed = ALLOWED_MODELS.contains(&model.as_str())
+    let is_uuid = {
+        let p: Vec<&str> = model.split('-').collect();
+        p.len() == 5 && p[0].len() == 8 && p[1].len() == 4 && p[2].len() == 4
+            && p[3].len() == 4 && p[4].len() == 12
+            && p.iter().all(|s| s.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    let is_allowed = !is_uuid && (
+        ALLOWED_MODELS.contains(&model.as_str())
         || model.starts_with("local-")
-        || (model.contains('/') && !model.contains("..") && model.len() < 120);
+        || (model.contains('/') && !model.contains("..") && model.len() < 120)
+    );
     if !is_allowed {
-        return Err(format!("Modelo '{}' no permitido.", model));
+        return Err(format!(
+            "Modelo '{}' no permitido. {}",
+            model,
+            if is_uuid { "ID UUID interno de NVIDIA — selecciona un modelo del catálogo." }
+            else       { "Selecciona un modelo válido desde el selector." }
+        ));
     }
 
     let provider = if model.starts_with("gpt-")        { "openai" }
@@ -925,10 +951,37 @@ pub async fn list_nvidia_models() -> Result<Vec<String>, String> {
     let models = json["data"].as_array()
         .ok_or_else(|| "Respuesta NVIDIA sin campo 'data'".to_string())?;
 
+    // NVIDIA NIM /v1/models returns objects where:
+    //   - "id"   may be an internal UUID (e.g. "b0fcd392-e905-4ab4-8eb9-...")
+    //   - "name" (or "root") contains the real model path (e.g. "meta/llama-3.1-70b-instruct")
+    // Strategy: prefer "name", then "root", then "id" — but only if it contains '/'
+    // which is the canonical format for NIM model identifiers.
     let mut names: Vec<String> = models
         .iter()
-        .filter_map(|m| m["id"].as_str().map(String::from))
+        .filter_map(|m| {
+            // Try name → root → id (only if it looks like "owner/model")
+            m["name"].as_str()
+                .filter(|s| s.contains('/'))
+                .or_else(|| m["root"].as_str().filter(|s| s.contains('/')))
+                .or_else(|| m["id"].as_str().filter(|s| s.contains('/')))
+                .map(String::from)
+        })
         .collect();
+
+    // Deduplicate and sort
     names.sort();
+    names.dedup();
+
+    if names.is_empty() {
+        // Fallback: return the raw IDs so the user can see what the API sent
+        // (helps diagnose unexpected response formats)
+        eprintln!("[nvidia] /v1/models devolvió 0 IDs con formato owner/model. Respuesta raw: {}",
+            serde_json::to_string(&json).unwrap_or_default().chars().take(500).collect::<String>());
+        return Err(
+            "NVIDIA NIM no devolvió modelos en formato esperado (owner/model). \
+             Verifica que tu API key tenga acceso a modelos en build.nvidia.com".to_string()
+        );
+    }
+
     Ok(names)
 }

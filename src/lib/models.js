@@ -56,13 +56,18 @@ export async function refreshLocalModels() {
 export const nvidiaModels = writable([]);
 export const nvidiaConfigured = writable(false);
 
+/** UUID regex — NVIDIA /v1/models returns internal function IDs we must discard. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Fetch available NVIDIA NIM models and update the store + LLM_GROUPS. */
 export async function refreshNvidiaModels() {
     try {
         const names = await invoke('list_nvidia_models');
         nvidiaConfigured.set(true);
         if (Array.isArray(names) && names.length > 0) {
-            const opts = names.map(n => {
+            // Filter out any UUID-style IDs that slipped through
+            const valid = names.filter(n => n.includes('/') && !UUID_RE.test(n));
+            const opts = (valid.length > 0 ? valid : names).map(n => {
                 const parts = n.split('/');
                 const shortName = parts[parts.length - 1] || n;
                 return {
