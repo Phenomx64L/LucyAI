@@ -105,7 +105,59 @@ import { listen } from '@tauri-apps/api/event';
     let _newMcpK = '';
     let _newMcpV = '';
 
-    let subAgentModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_subagent')) || 'ollama';
+    // Sub-agent mode (Plan A — improved UX)
+    //   'auto'   → pick cheapest reachable cloud model (preferred default)
+    //   'ollama' → use a local-* model if available, otherwise warn the user
+    //   'cloud'  → use the same model as the main tab (no cost savings)
+    //   'gemini-2.5-flash' / 'gpt-4o-mini' / 'claude-haiku-*' / 'local-*' / etc.
+    //              → explicit model id (advanced)
+    let subAgentModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_subagent')) || 'auto';
+    let configuredProvs    = [];   // populated in onMount; drives the "auto" picker
+
+    // Verifier sub-agent (Plan C — Plan→Execute→Verify)
+    //   'off'      → no verification (legacy behaviour)
+    //   'critical' → only verify final answers that involved EXECUTE_CMD / writefile
+    //   'always'   → verify every final answer
+    let verifierMode       = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_verifier_mode')) || 'off';
+    let verifierModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_verifier_model')) || 'auto';
+
+    /** Picks the actual model id to invoke for a sub-agent, given the user's
+     *  preference, the active tab's main model, and reachability of providers.
+     *  Returns a concrete model id (never 'auto'/'ollama'/'cloud'). */
+    function pickSubAgentModel(mode, mainModel) {
+        const hasProv = (p) => configuredProvs.includes(p);
+        const ollamaUp = !!$ollamaOnline;
+
+        // Explicit concrete model id → use as-is (advanced override)
+        if (mode && mode !== 'auto' && mode !== 'ollama' && mode !== 'cloud') return mode;
+
+        if (mode === 'cloud') return mainModel || 'gemini-2.5-flash';
+
+        if (mode === 'ollama') {
+            // Only honour 'ollama' if a local model is currently selected AND ollama is up.
+            if (ollamaUp && mainModel?.startsWith('local-')) return mainModel;
+            // Otherwise fall through to auto picking (no silent gemini surprise).
+            mode = 'auto';
+        }
+
+        // 'auto' — pick the cheapest available cloud model in priority order.
+        if (ollamaUp && Array.isArray($localModels) && $localModels.some(m => m.id?.startsWith('local-') && m.id !== 'local-custom')) {
+            const firstReal = $localModels.find(m => m.id?.startsWith('local-') && m.id !== 'local-custom');
+            if (firstReal) return firstReal.id;
+        }
+        if (hasProv('gemini'))    return 'gemini-2.5-flash';
+        if (hasProv('openai'))    return 'gpt-4o-mini';
+        if (hasProv('anthropic')) return 'claude-3-5-sonnet-latest';
+        if (hasProv('nvidia'))    return 'meta/llama-3.3-70b-instruct';
+        // Last resort — same as main
+        return mainModel || 'gemini-2.5-flash';
+    }
+
+    /** Reactive label that shows the user which model their sub-agent setting
+     *  is going to actually invoke right now — eliminates the "I picked Ollama
+     *  but Gemini ran" surprise. */
+    $: subAgentEffective = pickSubAgentModel(subAgentModel, activeTab?.selectedModel);
+    $: verifierEffective = pickSubAgentModel(verifierModel, activeTab?.selectedModel);
 
     let tabs               = [];
     let activeTabId        = null;
@@ -683,6 +735,7 @@ import { listen } from '@tauri-apps/api/event';
             const provs = await invoke('get_configured_providers');
             let hasKey = Array.isArray(provs) && provs.length > 0;
             keyringOk = hasKey;
+            configuredProvs = Array.isArray(provs) ? provs : [];   // drives sub-agent auto-picker
             const savedName = localStorage.getItem('lucy_user_name');
             const savedLang = localStorage.getItem('lucy_user_lang');
             const savedRb   = localStorage.getItem('lucy_runbooks_dir');
@@ -2977,11 +3030,24 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     refresh(); scrollChat();
                 };
 
+                // ── Plan C — track whether this task touched anything risky.
+                // Used by the verifier when its mode is 'critical': only verify
+                // answers that actually mutated state (executed cmds, wrote files,
+                // edited code, etc.) — read-only Q&A is left alone.
+                let taskTouchedRiskyOps = false;
+                // Whether the verifier already ran one auto-refine round.
+                // Hard-cap to 1 to keep latency bounded and avoid infinite loops.
+                let verifierRefinedOnce = false;
+
                 for (let loop_i = 0; loop_i < MAX_LOOPS; loop_i++) {
                     if (t._cancelled) break;
                     let toolResults = [];
                     let toolUsed = false;
                     let lucyText = agentResp;
+                    // Detect risky tags in the agent response BEFORE this loop's parsing.
+                    if (/<EXECUTE_CMD|<EXECUTE\b|<TOOL>(writefile|editfile|panic_kill|cd_change|fork_task)/i.test(agentResp)) {
+                        taskTouchedRiskyOps = true;
+                    }
 
                     // ── Live Trace: mark the start of a new agent turn ──
                     pushTrace({ phase: 'llm.turn', label: `Turn ${loop_i + 1}/${MAX_LOOPS}`, step: loop_i + 1, tabId });
@@ -3232,10 +3298,10 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         stepsHtml += `[⇉ Fork] ${esc(fTaskId)}: iniciando...\n`;
                         renderAgentTask();
 
-                        // Elegir el modelo del sub-agente respetando la preferencia del usuario
-                        const forkModel = subAgentModel === 'ollama'
-                            ? (activeTab?.selectedModel?.startsWith('local-') ? activeTab.selectedModel : 'gemini-2.5-flash')
-                            : (activeTab?.selectedModel || 'gemini-2.5-flash');
+                        // Elegir el modelo del sub-agente con el helper unificado.
+                        // Honra la preferencia del usuario y nunca cae en silencio a Gemini Flash:
+                        // si pidió 'ollama' pero no hay local activo, sube a 'auto' (proveedor más barato disponible).
+                        const forkModel = pickSubAgentModel(subAgentModel, activeTab?.selectedModel);
 
                         // Persistir en SQLite inmediatamente como 'running'
                         const fDbId = await invoke('fork_save', {
@@ -3680,8 +3746,110 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     }
 
                     if (!shouldContinue) {
+                        // ── Plan C: Verifier sub-agent ────────────────────────────────
+                        // Before showing the final answer, optionally have a different
+                        // model critique it. If concerns are found AND we haven't yet
+                        // refined, feed the critique back as a continuation turn.
+                        const wantVerify = (verifierMode === 'always')
+                                       || (verifierMode === 'critical' && taskTouchedRiskyOps);
+                        if (wantVerify && !verifierRefinedOnce && cleanText && cleanText.length > 40) {
+                            const verifyCard = newToolCard('✦', isEN ? 'Self-review' : 'Auto-revisión', 'read');
+                            stepsHtml += `[✦ ${isEN ? 'Verifier reviewing…' : 'Verificador revisando…'}]\n`;
+                            renderAgentTask();
+
+                            const verModel = pickSubAgentModel(verifierModel, getEffectiveModel(t));
+                            const verPrompt =
+                                `You are a strict, impartial verifier. A primary AI agent just produced the FINAL ANSWER below in response to the USER GOAL. Your job: review the answer for correctness, completeness, hallucinations, security/safety issues, and unmet parts of the goal. Be terse.\n\n` +
+                                `=== USER GOAL ===\n${originalUserGoal}\n\n` +
+                                `=== PRIMARY AGENT'S FINAL ANSWER ===\n${cleanText.slice(0, 6000)}\n\n` +
+                                `=== INSTRUCTIONS ===\nRespond in EXACTLY one of these two formats — nothing else:\n` +
+                                `1. If the answer is correct, complete and safe:\n   VERIFIED\n` +
+                                `2. If you find any concrete problem (bug, missing step, wrong value, hallucinated fact, security issue, unanswered part of the goal):\n   CONCERNS:\n   - <short specific concern 1>\n   - <short specific concern 2>\n   ...\nDo NOT nitpick style. Only flag substantive issues. Maximum 4 bullet points.`;
+
+                            let verdict = '';
+                            try {
+                                verdict = String(await invoke('ask_lucy', {
+                                    prompt: verPrompt,
+                                    context: '',
+                                    userName: lucyConfig.name,
+                                    runbooksDir: lucyConfig.runbooksDir || null,
+                                    model: verModel,
+                                    lang: userLang,
+                                    hostsJson: JSON.stringify($hosts),
+                                    images: null
+                                }));
+                            } catch (e) {
+                                console.warn('[verifier] failed:', e);
+                                finishToolCard(verifyCard, isEN ? 'verifier offline' : 'verificador no disponible', false);
+                                stepsHtml += `[✦ ${isEN ? 'Verifier skipped' : 'Verificador omitido'}: ${esc(String(e).slice(0,80))}]\n`;
+                            }
+
+                            const verdictTrim = verdict.trim();
+                            const isOk = /^\s*VERIFIED\b/i.test(verdictTrim);
+                            const concernsMatch = verdictTrim.match(/CONCERNS\s*:?\s*([\s\S]*)/i);
+
+                            if (isOk || !concernsMatch) {
+                                // Either explicitly verified, or verifier returned nothing useful → trust the answer.
+                                finishToolCard(verifyCard, isEN ? 'verified' : 'verificado', true);
+                                stepsHtml += `[✓ ${isEN ? 'Verified by' : 'Verificado por'} ${esc(verModel)}]\n`;
+                                const badge = `<span class="verify-badge ok" title="${isEN ? 'Reviewed by ' + verModel : 'Revisado por ' + verModel}">✓ ${isEN ? 'verified' : 'verificado'}</span>`;
+                                finishReasoning();
+                                renderAgentTask(cleanText + '\n' + badge);
+                                clearAgentCheckpoint(tabId);
+                                break;
+                            } else {
+                                // Concerns found → feed them back to the main agent for ONE refinement pass.
+                                const concerns = concernsMatch[1].trim().slice(0, 1500);
+                                finishToolCard(verifyCard, isEN ? 'concerns found — refining' : 'observaciones — refinando', false);
+                                stepsHtml += `[⚠ ${isEN ? 'Verifier raised concerns — refining answer' : 'Verificador encontró observaciones — refinando respuesta'}]\n`;
+                                renderAgentTask();
+
+                                verifierRefinedOnce = true;
+                                agentCtx += `\n\n--- VERIFIER FEEDBACK (model: ${verModel}) ---\n${concerns}\n--- END FEEDBACK ---`;
+                                // Force one more main-agent turn with the concerns as input.
+                                // Reuse the existing continuation prompt path by NOT breaking and
+                                // letting the loop fall through to the next-turn prompt below.
+                                const refineParams = {
+                                    prompt: `[REFINEMENT TURN — your previous final answer was reviewed by a verifier sub-agent (${verModel}) and the following concerns were raised. Address them concretely, then deliver an UPDATED final answer in Markdown with NO tool tags.]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n\n=== YOUR PREVIOUS ANSWER ===\n${cleanText.slice(0, 4000)}\n\n=== VERIFIER CONCERNS ===\n${concerns}\n\nProduce the corrected final answer now. Keep what was right; fix what the verifier flagged. Wrap your reasoning in <THOUGHT>...</THOUGHT> (under 80 words).`,
+                                    context: agentCtx.slice(-4000),
+                                    userName: lucyConfig.name,
+                                    runbooksDir: lucyConfig.runbooksDir || null,
+                                    model: getEffectiveModel(t),
+                                    lang: userLang,
+                                    hostsJson: JSON.stringify($hosts),
+                                    images: null
+                                };
+                                try {
+                                    let _lastL = 0;
+                                    agentResp = await askLucyStream(refineParams, (acc) => {
+                                        const m = acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/i);
+                                        if (m && m[1].length > _lastL) {
+                                            updateReasoning(m[1].slice(_lastL));
+                                            _lastL = m[1].length;
+                                        }
+                                    }, tabId);
+                                    // Loop continues — the parser at the top of the next iteration
+                                    // will detect that the new agentResp has no tool tags and exit
+                                    // cleanly with the refined answer + a "refined" badge below.
+                                    continue;
+                                } catch (e) {
+                                    stepsHtml += `[ERROR refining] ${esc(String(e))}\n`;
+                                    // Fall through to show the original answer with a warn badge.
+                                    const badge = `<span class="verify-badge warn" title="${esc(concerns).slice(0,200)}">⚠ ${isEN ? 'concerns noted' : 'observaciones'}</span>`;
+                                    finishReasoning();
+                                    renderAgentTask(cleanText + '\n' + badge + `<div class="verify-concerns"><strong>${isEN ? 'Verifier concerns' : 'Observaciones del verificador'}</strong>${esc(concerns).replace(/\n/g, '<br>')}</div>`);
+                                    clearAgentCheckpoint(tabId);
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Standard exit (verifier off, or refinement already happened).
                         finishReasoning();
-                        renderAgentTask(cleanText);
+                        const refinedBadge = verifierRefinedOnce
+                            ? `\n<span class="verify-badge refined" title="${isEN ? 'Refined after self-review' : 'Refinada tras auto-revisión'}">✦ ${isEN ? 'refined' : 'refinada'}</span>`
+                            : '';
+                        renderAgentTask(cleanText + refinedBadge);
                         clearAgentCheckpoint(tabId);
                         break;  // ← Only exit if NO tools used AND no work remaining indicators
                     }
@@ -6128,6 +6296,16 @@ if (Test-Path $src) {
     .settings-section-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);font-weight:600;padding-bottom:4px;border-bottom:1px solid var(--bdr);}
     .settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;}
     .settings-label{font-size:12px;color:var(--txt2);white-space:nowrap;}
+    .effective-model-hint{font-size:10.5px;color:var(--txt2);opacity:0.85;font-family:var(--mono,ui-monospace,monospace);}
+    .effective-model-hint code{background:rgba(99,102,241,0.10);border:1px solid rgba(99,102,241,0.25);color:#a5b4fc;padding:1px 7px;border-radius:4px;font-size:10.5px;}
+    .effective-model-hint .warn-dot{color:#fbbf24;margin-right:5px;font-size:11px;}
+    /* Verifier badges (Plan C) */
+    .verify-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:9px;margin-left:8px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;vertical-align:middle;}
+    .verify-badge.ok{background:rgba(52,211,153,0.10);color:#34d399;border:1px solid rgba(52,211,153,0.25);}
+    .verify-badge.refined{background:rgba(99,102,241,0.10);color:#a5b4fc;border:1px solid rgba(99,102,241,0.25);}
+    .verify-badge.warn{background:rgba(251,191,36,0.10);color:#fbbf24;border:1px solid rgba(251,191,36,0.25);}
+    .verify-concerns{margin-top:8px;padding:8px 12px;background:rgba(251,191,36,0.06);border-left:2px solid rgba(251,191,36,0.40);border-radius:0 6px 6px 0;font-size:11.5px;color:#fcd34d;line-height:1.55;}
+    .verify-concerns strong{color:#fbbf24;font-size:10px;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:4px;}
     .settings-value{font-size:12px;color:var(--acc);font-family:var(--mono);}
     .settings-select{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);font-size:12px;font-family:inherit;border-radius:6px;padding:4px 8px;cursor:pointer;outline:none;min-width:140px;}
     .settings-select:hover{border-color:var(--acc-b);}
@@ -7742,10 +7920,56 @@ if (Test-Path $src) {
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Sub-Agents Model' : 'Modelo P. Sub-Agentes'}</span>
             <select bind:value={subAgentModel} on:change={() => { try{ localStorage.setItem('lucy_subagent', subAgentModel); }catch(e){} }} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+              <option value="auto">{isEN ? 'Auto (cheapest available)' : 'Auto (más barato disponible)'}</option>
               <option value="ollama">{isEN ? 'Local Ollama (Fast/Free)' : 'Ollama Local (Rápido/Gratis)'}</option>
               <option value="cloud">{isEN ? 'Cloud (Main LLM)' : 'Nube (Igual al Principal)'}</option>
             </select>
           </div>
+          <div class="settings-row" style="margin-top:-4px; padding-top:0;">
+            <span class="settings-label" style="font-size:10px; opacity:0.6;">↳ {isEN ? 'Will use' : 'Se usará'}:</span>
+            <span class="effective-model-hint">
+              {#if subAgentModel === 'ollama' && (!$ollamaOnline || !activeTab?.selectedModel?.startsWith('local-'))}
+                <span class="warn-dot" title={isEN ? 'Ollama not selected on this tab — falling back' : 'Ollama no está seleccionado en esta pestaña — usando alternativa'}>⚠</span>
+              {/if}
+              <code>{subAgentEffective}</code>
+            </span>
+          </div>
+
+          <!-- ── Plan C: Verifier sub-agent ─────────────────────────────────── -->
+          <div class="settings-row">
+            <span class="settings-label" title={isEN
+                ? 'A second model reviews Lucy’s final answer before showing it to you. Catches mistakes a single pass would miss.'
+                : 'Un segundo modelo revisa la respuesta final de Lucy antes de mostrártela. Detecta errores que un solo paso pasaría por alto.'}>
+              {isEN ? 'Verifier sub-agent' : 'Sub-agente verificador'}
+              <span style="opacity:0.5; cursor:help;">ⓘ</span>
+            </span>
+            <select bind:value={verifierMode} on:change={() => { try{ localStorage.setItem('lucy_verifier_mode', verifierMode); }catch(e){} }} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+              <option value="off">{isEN ? 'Off' : 'Desactivado'}</option>
+              <option value="critical">{isEN ? 'Only for risky tasks' : 'Solo tareas críticas'}</option>
+              <option value="always">{isEN ? 'Always (every answer)' : 'Siempre (cada respuesta)'}</option>
+            </select>
+          </div>
+          {#if verifierMode !== 'off'}
+          <div class="settings-row">
+            <span class="settings-label">{isEN ? 'Verifier model' : 'Modelo verificador'}</span>
+            <select bind:value={verifierModel} on:change={() => { try{ localStorage.setItem('lucy_verifier_model', verifierModel); }catch(e){} }} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+              <option value="auto">{isEN ? 'Auto (different from main)' : 'Auto (distinto al principal)'}</option>
+              <option value="ollama">{isEN ? 'Local Ollama' : 'Ollama Local'}</option>
+              <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+              <option value="claude-3-5-sonnet-latest">Claude 3.5 Sonnet</option>
+              <option value="gpt-4o">GPT-4o</option>
+              <option value="gpt-4o-mini">GPT-4o mini</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            </select>
+          </div>
+          <div class="settings-row" style="margin-top:-4px; padding-top:0;">
+            <span class="settings-label" style="font-size:10px; opacity:0.6;">↳ {isEN ? 'Will use' : 'Se usará'}:</span>
+            <span class="effective-model-hint">
+              <code>{verifierEffective}</code>
+            </span>
+          </div>
+          {/if}
 
           {#if darkMode}
           <div class="settings-row">
