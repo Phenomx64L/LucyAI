@@ -213,10 +213,18 @@ CREATE TRIGGER IF NOT EXISTS agent_memories_ai
         INSERT INTO agent_memories_fts(rowid, title, content, tags)
         VALUES (new.id, new.title, new.content, new.tags);
     END;
+-- NOTE: agent_memories_fts is a regular (own-content) FTS5 table, so the
+-- 'delete' command form (only valid for contentless / external-content FTS5)
+-- is NOT allowed here. Use a normal DELETE instead.
 CREATE TRIGGER IF NOT EXISTS agent_memories_ad
     AFTER DELETE ON agent_memories BEGIN
-        INSERT INTO agent_memories_fts(agent_memories_fts, rowid, title, content, tags)
-        VALUES ('delete', old.id, old.title, old.content, old.tags);
+        DELETE FROM agent_memories_fts WHERE rowid = old.id;
+    END;
+CREATE TRIGGER IF NOT EXISTS agent_memories_au
+    AFTER UPDATE ON agent_memories BEGIN
+        DELETE FROM agent_memories_fts WHERE rowid = old.id;
+        INSERT INTO agent_memories_fts(rowid, title, content, tags)
+            VALUES (new.id, new.title, new.content, new.tags);
     END;
 
 -- ── SRE / Incident Response (Nivel 4) ────────────────────────────────────

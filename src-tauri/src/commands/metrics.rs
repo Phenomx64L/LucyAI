@@ -65,6 +65,15 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
          PRAGMA busy_timeout=5000;",
     ).map_err(|e| format!("Failed to set pragmas: {}", e))?;
 
+    // Migration: drop legacy broken FTS5 triggers from older DB versions.
+    // The original `agent_memories_ad` used the contentless-FTS 'delete' command
+    // on a regular FTS5 table, which fails with "SQL logic error" on every
+    // delete. We drop it here so the corrected version below can be created.
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS agent_memories_ad;\
+         DROP TRIGGER IF EXISTS agent_memories_au;",
+    ).map_err(|e| format!("Failed to drop legacy triggers: {}", e))?;
+
     // Schema is idempotent (CREATE IF NOT EXISTS) — execute_batch handles
     // multiple statements + line comments natively, no manual splitting needed.
     conn.execute_batch(INIT_SQL)

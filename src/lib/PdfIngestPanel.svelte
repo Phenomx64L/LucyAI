@@ -21,6 +21,7 @@
     let progressMap  = {};          // doc_id → PdfProgress (per-doc)
     let error        = null;
     let unlisten     = null;
+    let confirmDel   = null;       // {id, filename} | null — drives the in-app confirm modal
 
     // ── Helpers ───────────────────────────────────────────────────────────
     function timeAgo(ts) {
@@ -88,9 +89,14 @@
     }
 
     // ── Delete ────────────────────────────────────────────────────────────
-    async function deleteDoc(id, filename) {
-        if (!confirm(t(`¿Eliminar "${filename}" y todos sus chunks?`,
-                       `Delete "${filename}" and all its chunks?`))) return;
+    function deleteDoc(id, filename) {
+        // Show the in-app confirm modal instead of the native browser confirm()
+        confirmDel = { id, filename };
+    }
+    async function confirmDelete() {
+        if (!confirmDel) return;
+        const { id } = confirmDel;
+        confirmDel = null;
         try {
             await invoke('pdf_delete_doc', { docId: id });
             await loadDocs();
@@ -98,6 +104,7 @@
             error = String(e);
         }
     }
+    function cancelDelete() { confirmDel = null; }
 
     // ── Drag & drop ───────────────────────────────────────────────────────
     function onDragOver(e) {
@@ -278,6 +285,37 @@
             'Lucy automatically searches PDFs when answering questions.'
         )}</span>
     </div>
+
+    <!-- ── In-app delete confirmation (replaces native browser confirm()) ── -->
+    {#if confirmDel}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="cf-overlay" on:click|self={cancelDelete}>
+        <div class="cf-modal" role="dialog" aria-modal="true">
+            <div class="cf-hdr">
+                <span class="cf-ico">🗑</span>
+                <span class="cf-title">{t('Eliminar documento', 'Delete document')}</span>
+            </div>
+            <div class="cf-body">
+                <p class="cf-msg">
+                    {t('¿Eliminar este documento y todos sus chunks?',
+                       'Delete this document and all its chunks?')}
+                </p>
+                <code class="cf-fname">{confirmDel.filename}</code>
+                <p class="cf-warn">
+                    {t('Esta acción no se puede deshacer.', 'This action cannot be undone.')}
+                </p>
+            </div>
+            <div class="cf-actions">
+                <button class="cf-btn cancel" on:click={cancelDelete}>
+                    {t('Cancelar', 'Cancel')}
+                </button>
+                <button class="cf-btn danger" on:click={confirmDelete}>
+                    {t('Eliminar', 'Delete')}
+                </button>
+            </div>
+        </div>
+    </div>
+    {/if}
 </div>
 
 <style>
@@ -434,4 +472,61 @@
     /* Scrollbar */
     .docs-list::-webkit-scrollbar { width: 4px; }
     .docs-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    /* In-app confirm modal (no browser confirm()) */
+    .cf-overlay {
+        position: absolute; inset: 0;
+        background: rgba(6,10,15,0.78); backdrop-filter: blur(4px);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 50; animation: cf-fade .15s ease;
+    }
+    @keyframes cf-fade { from { opacity: 0 } to { opacity: 1 } }
+    .cf-modal {
+        width: min(360px, 88%);
+        background: #0f172a; color: #e2e8f0;
+        border: 1px solid rgba(239,68,68,0.35);
+        border-radius: 10px; overflow: hidden;
+        box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+    }
+    .cf-hdr {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px;
+        background: rgba(239,68,68,0.10);
+        border-bottom: 1px solid rgba(239,68,68,0.20);
+    }
+    .cf-ico   { font-size: 16px; }
+    .cf-title { font-weight: 700; font-size: 12px; color: #f87171; letter-spacing: .3px; text-transform: uppercase; }
+    .cf-body  { padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+    .cf-msg   { margin: 0; font-size: 12px; color: #e2e8f0; }
+    .cf-fname {
+        display: block; font-family: var(--mono, ui-monospace, monospace);
+        font-size: 11px; color: #cbd5e1;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 5px; padding: 6px 8px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .cf-warn  { margin: 0; font-size: 10px; color: #94a3b8; }
+    .cf-actions {
+        display: flex; justify-content: flex-end; gap: 8px;
+        padding: 10px 14px;
+        border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .cf-btn {
+        padding: 6px 14px; border-radius: 6px; font-size: 12px;
+        font-weight: 600; cursor: pointer; border: 1px solid;
+        transition: background .15s, color .15s;
+    }
+    .cf-btn.cancel {
+        background: rgba(255,255,255,0.04);
+        border-color: rgba(255,255,255,0.08);
+        color: #cbd5e1;
+    }
+    .cf-btn.cancel:hover { background: rgba(255,255,255,0.08); color: #fff; }
+    .cf-btn.danger {
+        background: rgba(239,68,68,0.15);
+        border-color: rgba(239,68,68,0.40);
+        color: #f87171;
+    }
+    .cf-btn.danger:hover { background: rgba(239,68,68,0.28); color: #fecaca; }
 </style>
