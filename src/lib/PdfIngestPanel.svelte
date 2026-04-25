@@ -120,14 +120,27 @@
             error = t('Solo se aceptan archivos .pdf', 'Only .pdf files are accepted');
             return;
         }
-        // Tauri's webview exposes the native path on the File object
-        const path = f.path || (await f.arrayBuffer && f.name); // fallback
-        if (!path || !path.includes('/') && !path.includes('\\')) {
-            error = t('No se pudo obtener la ruta del archivo. Usa el botón "Abrir PDF".',
-                      'Could not get file path. Use the "Open PDF" button.');
-            return;
+        // Tauri webviews don't expose File.path → read bytes and write to a
+        // temp file via the backend, then ingest by path.
+        try {
+            const buf  = await f.arrayBuffer();
+            const b64  = arrayBufferToBase64(buf);
+            const path = await invoke('save_temp_pdf', { filename: f.name, dataB64: b64 });
+            await ingestFile(path);
+        } catch (err) {
+            error = t(`No se pudo procesar el PDF: ${err}`, `Could not process PDF: ${err}`);
         }
-        await ingestFile(path);
+    }
+
+    /** Convert an ArrayBuffer to base64 in chunks (avoid stack overflow on large PDFs). */
+    function arrayBufferToBase64(buf) {
+        const bytes = new Uint8Array(buf);
+        const CHUNK = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        return btoa(binary);
     }
 
     // ── Progress listener ─────────────────────────────────────────────────

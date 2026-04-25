@@ -169,6 +169,30 @@ pub fn pick_file_path() -> Result<String, String> {
     }
 }
 
+/// Escribe bytes (base64) en un archivo PDF temporal y devuelve la ruta absoluta.
+/// Lo usa PdfIngestPanel cuando se arrastra un PDF desde el explorador, ya que
+/// Tauri no expone `File.path` en el webview.
+#[tauri::command]
+pub fn save_temp_pdf(filename: String, data_b64: String) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+    // Sanitiza el nombre: solo conserva alfanuméricos, guiones, puntos y _ ; obliga .pdf
+    let safe: String = filename.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .collect();
+    let safe = if safe.to_lowercase().ends_with(".pdf") { safe } else { format!("{}.pdf", safe) };
+    let bytes = general_purpose::STANDARD.decode(&data_b64)
+        .map_err(|e| format!("Base64 inválido: {}", e))?;
+    // Validación mínima: cabecera %PDF
+    if bytes.len() < 5 || &bytes[..5] != b"%PDF-" {
+        return Err("El archivo no parece ser un PDF válido (falta cabecera %PDF).".to_string());
+    }
+    let mut path = std::env::temp_dir();
+    path.push(format!("lucy_pdf_{}_{}", std::process::id(), safe));
+    std::fs::write(&path, &bytes)
+        .map_err(|e| format!("Error escribiendo PDF temporal: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// Diálogo especializado para seleccionar archivos PDF.
 /// Filtra por extensión .pdf y muestra un título contextual.
 #[tauri::command]
