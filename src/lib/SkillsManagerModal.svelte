@@ -1,6 +1,7 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    import ConfirmModal from '$lib/ConfirmModal.svelte';
     import { IconBolt as Zap, IconTrash as Trash2, IconPlus as Plus, IconEdit as Edit2, IconPlayerPlay as Play, IconChevronDown as ChevronDown, IconSparkles as Sparkles } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
@@ -268,8 +269,15 @@
         clearInterval(timerInterval);
     }
 
-    async function deleteSkill(id) {
-        if (!confirm(lang.delete + '?')) return;
+    let pendingDelete = null;   // {id, name} | null
+    function deleteSkill(id) {
+        const sk = skills.find(s => s.id === id);
+        pendingDelete = { id, name: sk?.name || '' };
+    }
+    async function confirmDeleteSkill() {
+        if (!pendingDelete) return;
+        const { id } = pendingDelete;
+        pendingDelete = null;
         loading = true;
         try {
             await invoke('delete_skill', { skillId: id });
@@ -628,6 +636,20 @@
         </div>
     </div>
 {/if}
+
+<ConfirmModal
+    open={pendingDelete !== null}
+    variant="danger"
+    title={lang.delete}
+    message={isEN
+        ? 'Delete this skill? This action cannot be undone.'
+        : '¿Eliminar esta skill? Esta acción no se puede deshacer.'}
+    detail={pendingDelete?.name || ''}
+    confirmLabel={lang.delete}
+    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    on:confirm={confirmDeleteSkill}
+    on:cancel={() => pendingDelete = null}
+/>
 
 <style>
     .modal-overlay {

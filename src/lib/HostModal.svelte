@@ -9,6 +9,7 @@
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { focusTrap } from '$lib/actions';
+    import ConfirmModal from '$lib/ConfirmModal.svelte';
     import { IconPencil as Pencil, IconPlus as Plus, IconX as X, IconTag as Tag, IconPalette as Palette, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTrash as Trash2 } from '@tabler/icons-svelte';
 
     /** Controls visibility; supports bind:show */
@@ -125,11 +126,12 @@
         dispatch('cancel');
     }
 
-    function eliminar() {
-        if (confirm("${isEN ? 'Are you sure you want to delete this host? This action cannot be undone.' : '¿Estás seguro de que deseas eliminar este host? Esta acción no se puede deshacer.'}")) {
-            dispatch('delete', editingHost.id);
-            show = false;
-        }
+    let confirmDelete = false;
+    function eliminar() { confirmDelete = true; }
+    function doDelete() {
+        confirmDelete = false;
+        dispatch('delete', editingHost.id);
+        show = false;
     }
 </script>
 
@@ -323,6 +325,20 @@
   </div>
 </div>
 {/if}
+
+<ConfirmModal
+    open={confirmDelete}
+    variant="danger"
+    title={isEN ? 'Delete host' : 'Eliminar host'}
+    message={isEN
+        ? 'Are you sure you want to delete this host? This action cannot be undone.'
+        : '¿Estás seguro de que deseas eliminar este host? Esta acción no se puede deshacer.'}
+    detail={editingHost?.name || ''}
+    confirmLabel={isEN ? 'Delete' : 'Eliminar'}
+    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    on:confirm={doDelete}
+    on:cancel={() => confirmDelete = false}
+/>
 
 <style>
   /* ── Overlay ────────────────────────────────────────────────────────────── */

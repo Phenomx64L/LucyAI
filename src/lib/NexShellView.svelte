@@ -11,6 +11,7 @@
     import TurnLoopPanel from '$lib/TurnLoopPanel.svelte';
     import SkillBrowserModal from '$lib/SkillBrowserModal.svelte';
     import IncidentPanel from '$lib/IncidentPanel.svelte';
+    import PromptModal from '$lib/PromptModal.svelte';
     import { IconRocket as Rocket, IconHash as Hash, IconGitBranch as GitBranch, IconSparkles as Sparkles, IconMicrophone as Mic, IconClock as Timer, IconRadio as Radio, IconWorld as Globe, IconBookmark as BookMarked, IconFolderCog as FolderSync, IconActivity as Activity, IconDeviceDesktop as Monitor, IconServer as Server, IconX as X, IconPlayerPlay as Play, IconFolderOpen as FolderOpen, IconBook2 as BookOpen, IconAntenna as Antenna, IconUpload as Upload, IconDownload as Download, IconArrowUp as ArrowUp, IconArrowDown as ArrowDown, IconCpu as Cpu, IconCamera as Camera, IconCircleCheck as CheckCircle, IconAlertCircle as AlertCircle, IconPlayerPause as Pause, IconMessageCircle as MessageCircle, IconLoader as Loader, IconBolt as Zap, IconEdit as Edit2, IconPlug as Plug, IconRefresh as RefreshCw, IconTrash as Trash2, IconFileText as FileText, IconAlarm as Siren } from '@tabler/icons-svelte';
     import {
         createTurnLoop, extractCommand, extractVerdict, cleanAiResponse,
@@ -61,7 +62,7 @@
                 .join('\n');
 
             if (!content.trim()) {
-                alert(isEN ? 'No logs available' : 'No hay logs disponibles');
+                toast(isEN ? 'No logs available' : 'No hay logs disponibles', 'info');
                 return;
             }
 
@@ -1701,7 +1702,10 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     // Ending an incident happens either by the user (panel abandon button)
     // or by the LLM calling finalize during REPORT → DONE transition.
 
-    async function startIncidentMode(shellId) {
+    // Two-step in-app prompt flow that replaces the chained window.prompt() calls
+    let incidentPrompt = null;   // {step:'title'|'description', shellId, title?} | null
+
+    function startIncidentMode(shellId) {
         const s = getShell(shellId);
         if (!s) return;
         if (s.incidentId) {
@@ -1710,25 +1714,34 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             rshellSessions = [...rshellSessions];
             return;
         }
+        incidentPrompt = { step: 'title', shellId };
+    }
 
-        const title = prompt(
-            isEN ? 'Incident title (1 line):' : 'Título del incidente (1 línea):',
-            isEN ? 'Investigating…' : 'Investigando…'
-        );
-        if (!title || !title.trim()) return;
+    function onIncidentPromptSubmit(value) {
+        if (!incidentPrompt) return;
+        if (incidentPrompt.step === 'title') {
+            const title = (value || '').trim();
+            if (!title) { incidentPrompt = null; return; }
+            // advance to description step
+            incidentPrompt = { step: 'description', shellId: incidentPrompt.shellId, title };
+        } else {
+            const description = (value || '').trim();
+            const { shellId, title } = incidentPrompt;
+            incidentPrompt = null;
+            void doStartIncident(shellId, title, description);
+        }
+    }
 
-        const description = prompt(
-            isEN ? 'Context / symptoms (optional):' : 'Contexto / síntomas (opcional):',
-            ''
-        ) || '';
-
+    async function doStartIncident(shellId, title, description) {
+        const s = getShell(shellId);
+        if (!s) return;
         try {
             const incident = await invoke('incident_start', {
                 args: {
                     shell_id: shellId,
                     host_name: s.host?.name || 'local',
-                    title: title.trim(),
-                    description: description.trim(),
+                    title,
+                    description,
                     max_loops: 5,
                 }
             });
@@ -2704,6 +2717,32 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
   on:cancel={guardCancel}
 />
 {/if}
+
+<!-- ── In-app two-step prompt for starting an incident (replaces window.prompt()) ── -->
+<PromptModal
+  open={incidentPrompt?.step === 'title'}
+  title={isEN ? 'Start incident' : 'Iniciar incidente'}
+  label={isEN ? 'Incident title (1 line)' : 'Título del incidente (1 línea)'}
+  defaultValue={isEN ? 'Investigating…' : 'Investigando…'}
+  placeholder={isEN ? 'Brief summary' : 'Resumen breve'}
+  confirmLabel={isEN ? 'Next' : 'Siguiente'}
+  cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+  on:submit={(e) => onIncidentPromptSubmit(e.detail)}
+  on:cancel={() => incidentPrompt = null}
+/>
+<PromptModal
+  open={incidentPrompt?.step === 'description'}
+  title={isEN ? 'Start incident' : 'Iniciar incidente'}
+  label={isEN ? 'Context / symptoms (optional)' : 'Contexto / síntomas (opcional)'}
+  defaultValue=""
+  placeholder={isEN ? 'What are you seeing? Any errors, timing, scope…' : '¿Qué estás viendo? Errores, timing, alcance…'}
+  multiline={true}
+  required={false}
+  confirmLabel={isEN ? 'Start' : 'Iniciar'}
+  cancelLabel={isEN ? 'Back' : 'Atrás'}
+  on:submit={(e) => onIncidentPromptSubmit(e.detail)}
+  on:cancel={() => incidentPrompt = null}
+/>
 
 <style>
     /* ══════════════════════════════════════════════════════════════════════════ */

@@ -1,6 +1,7 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    import ConfirmModal from '$lib/ConfirmModal.svelte';
     import { IconSettings as Settings, IconTrash as Trash2, IconPlus as Plus, IconCheck as Check, IconX as X } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
@@ -122,8 +123,15 @@
         loading = false;
     }
 
-    async function deleteRule(id) {
-        if (!confirm(lang.delete + '?')) return;
+    let pendingDelete = null;   // {id, pattern} | null
+    function deleteRule(id) {
+        const r = rules.find(rl => rl.id === id);
+        pendingDelete = { id, pattern: r?.pattern || '' };
+    }
+    async function confirmDeleteRule() {
+        if (!pendingDelete) return;
+        const { id } = pendingDelete;
+        pendingDelete = null;
         loading = true;
         try {
             await invoke('delete_permission_rule', { ruleId: id });
@@ -339,6 +347,20 @@
         </div>
     </div>
 {/if}
+
+<ConfirmModal
+    open={pendingDelete !== null}
+    variant="danger"
+    title={lang.delete}
+    message={isEN
+        ? 'Delete this permission rule?'
+        : '¿Eliminar esta regla de permisos?'}
+    detail={pendingDelete?.pattern || ''}
+    confirmLabel={lang.delete}
+    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    on:confirm={confirmDeleteRule}
+    on:cancel={() => pendingDelete = null}
+/>
 
 <style>
     .modal-overlay {

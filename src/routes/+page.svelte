@@ -29,6 +29,7 @@ import { listen } from '@tauri-apps/api/event';
     const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
     import ForksMonitorPanel from '$lib/ForksMonitorPanel.svelte';
     import PdfIngestPanel    from '$lib/PdfIngestPanel.svelte';
+    import PromptModal       from '$lib/PromptModal.svelte';
     const lazyProfile      = () => _lazyProfile       || (_lazyProfile       = import('$lib/ProfileModal.svelte').then(m => m.default));
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
@@ -162,9 +163,12 @@ import { listen } from '@tauri-apps/api/event';
     let uiDensity          = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_density')) || 'comfortable';
     let workspacePresets   = (() => { try { return JSON.parse(localStorage.getItem('lucy_presets') || '[]'); } catch { return []; } })();
 
-    function saveWorkspacePreset() {
-        const name = prompt(isEN ? 'Preset name:' : 'Nombre del preset:');
-        if (!name) return;
+    let showPresetPrompt = false;
+    function saveWorkspacePreset() { showPresetPrompt = true; }
+    function commitPresetName(name) {
+        showPresetPrompt = false;
+        if (!name?.trim()) return;
+        name = name.trim();
         const t = getTab(activeTabId);
         const preset = {
             name,
@@ -1641,7 +1645,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 }
             }
             if (agregados > 0) refresh();
-        } catch(e) { alert("Error adjuntando archivos: " + e); }
+        } catch(e) { toast(`${isEN ? 'Error attaching files' : 'Error adjuntando archivos'}: ${e}`, 'error'); }
     }
 
     function removeFile(tabId, name) { const t=getTab(tabId); t.attachedFiles=t.attachedFiles.filter(f=>f.name!==name); refresh(); }
@@ -7987,6 +7991,18 @@ if (Test-Path $src) {
       />
     </div>
   {/if}
+
+  <!-- ── Workspace preset name prompt (replaces window.prompt()) ── -->
+  <PromptModal
+    open={showPresetPrompt}
+    title={isEN ? 'Save preset' : 'Guardar preset'}
+    label={isEN ? 'Preset name' : 'Nombre del preset'}
+    placeholder={isEN ? 'My workspace' : 'Mi workspace'}
+    confirmLabel={isEN ? 'Save' : 'Guardar'}
+    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    on:submit={(e) => commitPresetName(e.detail)}
+    on:cancel={() => showPresetPrompt = false}
+  />
 
 </div><!-- /root -->
 

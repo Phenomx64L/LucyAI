@@ -14,6 +14,7 @@
 <script>
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onDestroy } from 'svelte';
+    import ConfirmModal from '$lib/ConfirmModal.svelte';
     import { IconAlertTriangle as AlertTriangle, IconActivity as Activity, IconSearch as Search, IconBulb as Lightbulb, IconCircleCheck as CheckCircle2, IconCircleX as XCircle, IconFileText as FileText, IconRotate2 as RotateCcw, IconFlag as Flag } from '@tabler/icons-svelte';
 
     export let incidentId = null;
@@ -104,8 +105,10 @@
         }
     }
 
-    async function abandonIncident() {
-        if (!confirm(isEN ? 'Abandon this incident?' : '¿Abandonar este incidente?')) return;
+    let showAbandonConfirm = false;
+    function abandonIncident() { showAbandonConfirm = true; }
+    async function doAbandon() {
+        showAbandonConfirm = false;
         try {
             await invoke('incident_finalize', {
                 args: {
@@ -293,6 +296,20 @@
     {/if}
 </div>
 {/if}
+
+<ConfirmModal
+    open={showAbandonConfirm}
+    variant="warn"
+    icon="🏳"
+    title={isEN ? 'Abandon incident' : 'Abandonar incidente'}
+    message={isEN
+        ? 'Abandon this incident? It will be marked as unresolved.'
+        : '¿Abandonar este incidente? Se marcará como sin resolver.'}
+    confirmLabel={isEN ? 'Abandon' : 'Abandonar'}
+    cancelLabel={isEN ? 'Cancel' : 'Cancelar'}
+    on:confirm={doAbandon}
+    on:cancel={() => showAbandonConfirm = false}
+/>
 
 <style>
     .inc-panel {
