@@ -169,6 +169,20 @@ pub fn pick_file_path() -> Result<String, String> {
     }
 }
 
+/// Diálogo especializado para seleccionar archivos PDF.
+/// Filtra por extensión .pdf y muestra un título contextual.
+#[tauri::command]
+pub fn pick_pdf_path() -> Result<String, String> {
+    match rfd::FileDialog::new()
+        .set_title("Seleccionar documento PDF")
+        .add_filter("Documentos PDF", &["pdf"])
+        .pick_file()
+    {
+        Some(p) => Ok(p.to_string_lossy().to_string()),
+        None    => Ok(String::new()),  // empty = user cancelled
+    }
+}
+
 /// Abre un diálogo "Guardar como…" y escribe bytes (base64) en la ruta elegida.
 #[tauri::command]
 pub fn save_file_dialog(default_name: String, data_b64: String, filter_name: String, extensions: Vec<String>) -> Result<String, String> {

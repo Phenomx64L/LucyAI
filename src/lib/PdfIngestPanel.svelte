@@ -80,10 +80,7 @@
 
     async function pickAndIngest() {
         try {
-            const path = await invoke('pick_file_path', {
-                title: t('Seleccionar PDF', 'Select PDF'),
-                filters: [{ name: 'PDF', extensions: ['pdf'] }],
-            });
+            const path = await invoke('pick_pdf_path');
             if (path) await ingestFile(path);
         } catch (e) {
             error = String(e);
@@ -105,11 +102,16 @@
     // ── Drag & drop ───────────────────────────────────────────────────────
     function onDragOver(e) {
         e.preventDefault();
+        e.stopPropagation();
         dragging = true;
     }
-    function onDragLeave() { dragging = false; }
+    function onDragLeave(e) {
+        e.stopPropagation();
+        dragging = false;
+    }
     async function onDrop(e) {
         e.preventDefault();
+        e.stopPropagation();
         dragging = false;
         const files = e.dataTransfer?.files;
         if (!files || files.length === 0) return;

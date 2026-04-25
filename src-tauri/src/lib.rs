@@ -81,6 +81,7 @@ pub fn run() {
             ui::pick_and_read_file,
             ui::pick_multiple_files,
             ui::pick_file_path,
+            ui::pick_pdf_path,
             ui::pick_directory,
             ui::save_file_dialog,
             // Sistema local
