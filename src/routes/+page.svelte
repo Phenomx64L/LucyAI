@@ -5294,7 +5294,7 @@ if (Test-Path $src) {
         position:fixed; right:16px; bottom:80px;
         width:440px; max-width:calc(100vw - 32px);
         height:500px; max-height:calc(100vh - 120px);
-        z-index:4200;
+        z-index:7500;  /* above --z-drag (7000) so drag overlay can't cover the panel */
         border-radius:10px;
         border:1px solid rgba(99,102,241,.3);
         box-shadow:0 16px 48px rgba(0,0,0,.55);
@@ -6414,9 +6414,23 @@ if (Test-Path $src) {
     on:wheel={onGlobalWheel}
     on:contextmenu|preventDefault
     on:dragover|preventDefault
-    on:dragenter|preventDefault={() => showDragOverlay = true}
+    on:dragenter|preventDefault={(e) => {
+      // Don't show the main drop overlay if the drag is happening over the PDF panel
+      if (showPdfPanel && e.target?.closest?.('.pdf-panel-overlay')) {
+        showDragOverlay = false;
+        return;
+      }
+      showDragOverlay = true;
+    }}
     on:dragleave={(e) => { if(e.target.id==='drag-ov') showDragOverlay = false; }}
-    on:drop|preventDefault={onDrop}
+    on:drop|preventDefault={(e) => {
+      // Let the PDF panel handle drops on itself
+      if (showPdfPanel && e.target?.closest?.('.pdf-panel-overlay')) {
+        showDragOverlay = false;
+        return;
+      }
+      onDrop(e);
+    }}
     on:paste={onPaste}
 />
 
