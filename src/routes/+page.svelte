@@ -8,7 +8,7 @@ import { listen } from '@tauri-apps/api/event';
     import DOMPurify from 'dompurify';
     import Database from '@tauri-apps/plugin-sql';
     import SetupOverlay    from '$lib/SetupOverlay.svelte';
-    import { IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles, IconTerminal2 as TerminalSquare, IconFileText as ScrollText, IconNetwork as Network, IconShieldCheck as ShieldCheck, IconClipboardList as ClipboardList, IconActivity as Activity, IconWorld as Globe, IconLock as Lock, IconEraser as Eraser, IconTrash as Trash2, IconSettings as Settings, IconDeviceDesktop as Monitor, IconServer as Server, IconRocket as Rocket, IconBrain as Brain, IconBolt as Zap, IconTool as Wrench, IconDownload as Download, IconSchool as GraduationCap, IconFileCode as FileCode, IconCurrencyDollar as DollarSign, IconOctagonMinus as OctagonX, IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconFileDownload as FileDown, IconBug as Bug, IconUser as User, IconDeviceTv as Tv2, IconTerminal as Terminal, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTag as Tag, IconBell as Bell, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import { IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles, IconTerminal2 as TerminalSquare, IconFileText as ScrollText, IconNetwork as Network, IconShieldCheck as ShieldCheck, IconClipboardList as ClipboardList, IconActivity as Activity, IconWorld as Globe, IconLock as Lock, IconEraser as Eraser, IconTrash as Trash2, IconSettings as Settings, IconDeviceDesktop as Monitor, IconServer as Server, IconRocket as Rocket, IconBrain as Brain, IconBolt as Zap, IconTool as Wrench, IconDownload as Download, IconSchool as GraduationCap, IconFileCode as FileCode, IconCurrencyDollar as DollarSign, IconOctagonMinus as OctagonX, IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconBug as Bug, IconUser as User, IconDeviceTv as Tv2, IconTerminal as Terminal, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTag as Tag, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconBook2 as Book2, IconFileTypePdf as FilePdf } from '@tabler/icons-svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
     import TutorialOverlay from '$lib/TutorialOverlay.svelte';
@@ -27,6 +27,8 @@ import { listen } from '@tauri-apps/api/event';
     let _lazyProfile       = null;
     const lazyPermissions  = () => _lazyPermissions  || (_lazyPermissions  = import('$lib/PermissionRulesModal.svelte').then(m => m.default));
     const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
+    let _lazyRemoteDiff    = null;
+    const lazyRemoteDiff   = () => _lazyRemoteDiff   || (_lazyRemoteDiff   = import('$lib/RemoteFileDiffModal.svelte').then(m => m.default));
     import ForksMonitorPanel from '$lib/ForksMonitorPanel.svelte';
     import PdfIngestPanel    from '$lib/PdfIngestPanel.svelte';
     import PromptModal       from '$lib/PromptModal.svelte';
@@ -34,6 +36,12 @@ import { listen } from '@tauri-apps/api/event';
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import { countUp }     from '$lib/actions';
+    import { safeParseLS, safeSetLS, safeSetLSString } from '$lib/safe-ls';
+    import { debug } from '$lib/debug';
+    import { renderMd } from '$lib/md-render';
+    import { escapeHtml, normalizeForMatch, formatTime } from '$lib/text-utils';
+    import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
+    import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
@@ -44,6 +52,7 @@ import { listen } from '@tauri-apps/api/event';
              showRunAsModal, showHistoryModal, showCloseTabModal,
              multiHostSelected, multiHostCmd, multiHostResults, multiHostRunning,
              activeProfileHosts,
+             costSummaryMonth, tokenBudgetConfig,
              initHostsFromKeyring } from '$lib/stores';
     // ── Syntax highlighting: solo los lenguajes usados en SysAdmin ───────────
     import hljs            from 'highlight.js/lib/core';
@@ -65,19 +74,7 @@ import { listen } from '@tauri-apps/api/event';
     let appReady           = false;
     let appVersion         = '---';
 
-    // ── IDIOMAS SOPORTADOS ────────────────────────
-    const LANGS = [
-        { code: 'es-MX', label: '🇲🇽 Español (México)',   stt: 'es-MX', tts: 'es-MX' },
-        { code: 'es-ES', label: '🇪🇸 Español (España)',   stt: 'es-ES', tts: 'es-ES' },
-        { code: 'en-US', label: '🇺🇸 English (US)',        stt: 'en-US', tts: 'en-US' },
-        { code: 'en-GB', label: '🇬🇧 English (UK)',        stt: 'en-GB', tts: 'en-GB' },
-        { code: 'pt-BR', label: '🇧🇷 Português (Brasil)',  stt: 'pt-BR', tts: 'pt-BR' },
-        { code: 'fr-FR', label: '🇫🇷 Français',           stt: 'fr-FR', tts: 'fr-FR' },
-        { code: 'de-DE', label: '🇩🇪 Deutsch',            stt: 'de-DE', tts: 'de-DE' },
-        { code: 'it-IT', label: '🇮🇹 Italiano',           stt: 'it-IT', tts: 'it-IT' },
-        { code: 'ja-JP', label: '🇯🇵 日本語',             stt: 'ja-JP', tts: 'ja-JP' },
-        { code: 'zh-CN', label: '🇨🇳 中文 (简体)',         stt: 'zh-CN', tts: 'zh-CN' },
-    ];
+    // LANGS comes from $lib/constants — same shape, easier to test and reuse.
     let userLang           = 'es-MX'; // idioma activo — persiste en localStorage
     $: activeLang = LANGS.find(l => l.code === userLang) || LANGS[0];
     $: isEN = userLang.startsWith('en');
@@ -111,15 +108,15 @@ import { listen } from '@tauri-apps/api/event';
     //   'cloud'  → use the same model as the main tab (no cost savings)
     //   'gemini-2.5-flash' / 'gpt-4o-mini' / 'claude-haiku-*' / 'local-*' / etc.
     //              → explicit model id (advanced)
-    let subAgentModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_subagent')) || 'auto';
+    let subAgentModel      = safeGetLS('lucy_subagent', 'auto');
     let configuredProvs    = [];   // populated in onMount; drives the "auto" picker
 
     // Verifier sub-agent (Plan C — Plan→Execute→Verify)
     //   'off'      → no verification (legacy behaviour)
     //   'critical' → only verify final answers that involved EXECUTE_CMD / writefile
     //   'always'   → verify every final answer
-    let verifierMode       = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_verifier_mode')) || 'off';
-    let verifierModel      = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_verifier_model')) || 'auto';
+    let verifierMode       = safeGetLS('lucy_verifier_mode', 'off');
+    let verifierModel      = safeGetLS('lucy_verifier_model', 'auto');
 
     /** Picks the actual model id to invoke for a sub-agent, given the user's
      *  preference, the active tab's main model, and reachability of providers.
@@ -167,12 +164,12 @@ import { listen } from '@tauri-apps/api/event';
     let registrosOpen      = false;  // accordion sidebar "Registros"
     let showSettingsModal     = false;  // modal de Configuración/Preferencias
     let showProviderConfig    = false;  // modal de Configuración de Proveedores (IA múltiples)
-    let currentTheme = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_warp_theme')) || 'default'; // 'default' | 'ocean' | 'hacker'
+    let currentTheme = safeGetLS('lucy_warp_theme', 'default'); // 'default' | 'ocean' | 'hacker'
     function setWarpTheme(t) {
         currentTheme = t;
-        try { localStorage.setItem('lucy_warp_theme', t); } catch(_) {}
+        safeSetLSString('lucy_warp_theme', t);
     }
-    let sidebarWidth       = parseInt(localStorage?.getItem('lucy_sb_w') ?? '210'); // ancho del sidebar expandido
+    let sidebarWidth       = parseInt(safeGetLS('lucy_sb_w', '210')); // ancho del sidebar expandido
     let contextUsed        = 0;
     let auditAlerts        = 0;
     // ── RUNАС CONFIRMATION ────────────────────────────────
@@ -183,6 +180,13 @@ import { listen } from '@tauri-apps/api/event';
     // ── EXEC TIMER (U3) ──────────────────────────────────
     let _execSecs  = 0;   // segundos transcurridos en la ejecución actual
     let _execTimer = null; // ref al setInterval del contador
+    // ── Lifecycle: refs a todos los timers/listeners de larga duración para
+    // limpiarlos en onDestroy. Sin esto, recargar el módulo (HMR) o salir/volver
+    // al SetupOverlay deja timers huérfanos consumiendo CPU + memoria.
+    let _ollamaPingInterval = null;       // refresh local models every 30s
+    let _footerCostInterval = null;       // refresh monthly cost every 5 min
+    let _qlOverHandler      = null;       // delegated mouseover for quick-look popover
+    let _qlOutHandler       = null;       // delegated mouseout for quick-look popover
     // ── HISTORY SEARCH ────────────────────────────────────
     // showHistoryModal → stores.ts
     let historyQuery       = '';
@@ -212,53 +216,119 @@ import { listen } from '@tauri-apps/api/event';
     let depStatus          = null;
     // ── COMMAND PALETTE ───────────────────────────
     let showPalette        = false;
-    let uiDensity          = (typeof localStorage !== 'undefined' && localStorage.getItem('lucy_density')) || 'comfortable';
-    let workspacePresets   = (() => { try { return JSON.parse(localStorage.getItem('lucy_presets') || '[]'); } catch { return []; } })();
+    let uiDensity          = safeGetLS('lucy_density', 'comfortable');
+    let workspacePresets   = safeParseLS('lucy_presets', []);
 
     let showPresetPrompt = false;
     function saveWorkspacePreset() { showPresetPrompt = true; }
+    // ── v2: snapshot extendido (vista, sidebar, focus, tabs) ──
     function commitPresetName(name) {
         showPresetPrompt = false;
         if (!name?.trim()) return;
         name = name.trim();
         const t = getTab(activeTabId);
+        // v2 extras: tabs snapshot (title + model only — no message history) + view + sidebar state
+        const tabSnapshot = (tabs || []).map(tt => ({
+            title: String(tt.title || ''),
+            model: String(tt.selectedModel || 'gemini-2.5-flash'),
+        }));
         const preset = {
+            v: 2,
             name,
             model: t?.selectedModel || 'gemini-2.5-flash',
             theme: currentTheme,
             density: uiDensity,
             personality: lucyPersonality,
-            ts: Date.now()
+            // v2 fields
+            view: activeView,
+            sidebarCollapsed: !!sidebarCollapsed,
+            focusMode: !!focusMode,
+            tabs: tabSnapshot,
+            lang: userLang,
+            ts: Date.now(),
+            lastApplied: null,
         };
         workspacePresets = [...workspacePresets.filter(p => p.name !== name), preset];
-        localStorage.setItem('lucy_presets', JSON.stringify(workspacePresets));
-        toast(isEN ? `Preset "${name}" saved` : `Preset "${name}" guardado`, 'ok');
+        safeSetLS('lucy_presets', workspacePresets);
+        toast(isEN ? `Preset "${name}" saved (${tabSnapshot.length} tabs)` : `Preset "${name}" guardado (${tabSnapshot.length} tabs)`, 'ok');
     }
 
     function applyWorkspacePreset(p) {
         if (!p) return;
         const t = getTab(activeTabId);
         if (t) t.selectedModel = p.model;
-        currentTheme = p.theme; localStorage.setItem('lucy_warp_theme', p.theme);
-        uiDensity = p.density || 'comfortable'; localStorage.setItem('lucy_density', uiDensity);
+        currentTheme = p.theme; safeSetLSString('lucy_warp_theme', p.theme);
+        uiDensity = p.density || 'comfortable'; safeSetLSString('lucy_density', uiDensity);
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
-        if (p.personality) { lucyPersonality = p.personality; localStorage.setItem('lucy_personality', p.personality); }
+        if (p.personality) { lucyPersonality = p.personality; safeSetLSString('lucy_personality', p.personality); }
+        // v2 fields — apply only if preset is v2 to avoid breaking older presets
+        if (p.v >= 2) {
+            if (p.view && p.view !== activeView) setView(p.view);
+            if (typeof p.sidebarCollapsed === 'boolean') sidebarCollapsed = p.sidebarCollapsed;
+            if (typeof p.focusMode === 'boolean') focusMode = p.focusMode;
+            if (p.lang && p.lang !== userLang) {
+                userLang = p.lang;
+                safeSetLSString('lucy_user_lang', p.lang);
+            }
+        }
+        // Track last-applied so the user sees freshness in the UI
+        const now = Date.now();
+        workspacePresets = workspacePresets.map(x => x.name === p.name ? { ...x, lastApplied: now } : x);
+        safeSetLS('lucy_presets', workspacePresets);
         refresh();
         toast(isEN ? `Applied "${p.name}"` : `Aplicado "${p.name}"`, 'ok');
     }
 
     function deleteWorkspacePreset(name) {
         workspacePresets = workspacePresets.filter(p => p.name !== name);
-        localStorage.setItem('lucy_presets', JSON.stringify(workspacePresets));
+        safeSetLS('lucy_presets', workspacePresets);
+    }
+    // Pretty "ago" formatter for preset cards
+    function _agoStr(ts) {
+        if (!ts) return '';
+        const diff = Date.now() - ts;
+        const m = Math.round(diff / 60000);
+        if (m < 1) return isEN ? 'just now' : 'ahora';
+        if (m < 60) return `${m}${isEN ? 'm ago' : 'm'}`;
+        const h = Math.round(m / 60);
+        if (h < 24) return `${h}${isEN ? 'h ago' : 'h'}`;
+        const d = Math.round(h / 24);
+        if (d < 30) return `${d}${isEN ? 'd ago' : 'd'}`;
+        return new Date(ts).toLocaleDateString(userLang);
     }
     let showTutorial       = false;    // guided tour overlay
     let _clickHandler      = null;     // ref al event listener de links externos
 
     // --- ACCIONES RÁPIDAS DINÁMICAS ---
     let quickActions = [];
+    // ── Direct Actions: curated Tabler icon palette ──
+    // Stored in `accion.icono` as a stable key string (e.g. 'activity').
+    // Legacy emojis/symbols are migrated to keys on app load (see _legacyIconMap below).
+    const ICON_PALETTE = [
+        { key: 'activity',  icon: Activity,      label_es: 'Salud',       label_en: 'Health' },
+        { key: 'globe',     icon: Globe,         label_es: 'Red',         label_en: 'Network' },
+        { key: 'lock',      icon: Lock,          label_es: 'Bloqueo',     label_en: 'Lock' },
+        { key: 'clipboard', icon: ClipboardList, label_es: 'Lista',       label_en: 'List' },
+        { key: 'trash',     icon: Trash2,        label_es: 'Eliminar',    label_en: 'Delete' },
+        { key: 'brain',     icon: Brain,         label_es: 'Memoria',     label_en: 'Memory' },
+        { key: 'shield',    icon: ShieldCheck,   label_es: 'Seguridad',   label_en: 'Security' },
+        { key: 'bolt',      icon: Zap,           label_es: 'Rápida',      label_en: 'Quick' },
+        { key: 'wrench',    icon: Wrench,        label_es: 'Herramienta', label_en: 'Tool' },
+        { key: 'terminal',  icon: Terminal,      label_es: 'Consola',     label_en: 'Console' },
+        { key: 'server',    icon: Server,        label_es: 'Servidor',    label_en: 'Server' },
+        { key: 'download',  icon: Download,      label_es: 'Descarga',    label_en: 'Download' },
+        { key: 'bug',       icon: Bug,           label_es: 'Debug',       label_en: 'Debug' },
+        { key: 'monitor',   icon: Monitor,       label_es: 'Pantalla',    label_en: 'Display' },
+        { key: 'key',       icon: Key,           label_es: 'Credencial',  label_en: 'Credential' },
+        { key: 'folder',    icon: FolderOpen,    label_es: 'Archivos',    label_en: 'Files' },
+        { key: 'bell',      icon: Bell,          label_es: 'Alerta',      label_en: 'Alert' },
+        { key: 'rocket',    icon: Rocket,        label_es: 'Lanzar',      label_en: 'Launch' },
+    ];
+    const ICON_MAP = Object.fromEntries(ICON_PALETTE.map(p => [p.key, p.icon]));
     // showNewActionModal → stores.ts
     let newActionName    = '';
     let newActionScript  = '';
+    let newActionIcon    = 'bolt';   // palette key — see ICON_PALETTE below
     let editingActionIdx = null; // null = nueva acción, número = editar existente
     
     // ── TOAST ────────────────────────────────────
@@ -280,6 +350,69 @@ import { listen } from '@tauri-apps/api/event';
     // NexShell filter/sort state moved to NexShellView.svelte
     let viewFading         = false;      // fade de transición entre vistas
     let focusMode          = false;      // Ctrl+M — oculta sidebar para máximo espacio
+    let showShortcutsOverlay = false;    // `?` key — keyboard cheat-sheet overlay
+
+    // ── Remote File Diff modal — open via /editremote command or AI tool tag ──
+    let showRemoteDiff   = false;
+    let remoteDiffHost   = null;   // host object from $hosts
+    let remoteDiffPath   = '';
+    function openRemoteDiff(hostNameOrId, filePath) {
+        const h = $hosts.find(x => x.id === hostNameOrId
+            || x.name === hostNameOrId
+            || x.host === hostNameOrId);
+        if (!h) {
+            toast(isEN
+                ? `Host "${hostNameOrId}" not found in configured hosts`
+                : `Host "${hostNameOrId}" no encontrado en hosts configurados`,
+                'error');
+            return;
+        }
+        remoteDiffHost = h;
+        remoteDiffPath = filePath || '';
+        showRemoteDiff = true;
+    }
+
+    // ── Cost predictor (inline) ──────────────────────────────────────────────
+    // Cheap heuristic estimate so the user can budget BEFORE hitting Enter.
+    // Updates reactively from activeTab.inputValue + attached files + active model.
+    // Pricing constants must match src-tauri/src/utils/db.rs (calculate_cost).
+    function _predictCost(model, inputChars, isCode) {
+        // ~4 chars per token for ES/EN avg; bump 15% to stay conservative with system prompt overhead
+        const inputTokens = Math.ceil(inputChars * 1.15 / 4);
+        // Rough output budget: code/script answers run longer; agent loops can fan out
+        const outputTokens = isCode ? 1400 : 700;
+        const lc = (model || '').toLowerCase();
+        let inP = 0.0005, outP = 0.0015; // gemini default (cheapest)
+        if (lc.includes('claude'))      { inP = 0.003;  outP = 0.015; }
+        else if (lc.includes('gpt'))    { inP = 0.03;   outP = 0.06; }
+        else if (lc.includes('o1') || lc.includes('o3') || lc.includes('o4')) { inP = 0.015; outP = 0.06; }
+        else if (lc.includes('gemini')) { inP = 0.0005; outP = 0.0015; }
+        else if (lc.includes('local-')) { inP = 0;      outP = 0; }   // local Ollama = free
+        else if (lc.includes('/'))      { inP = 0.0008; outP = 0.0024; } // NVIDIA NIM rough avg
+        const cost = (inputTokens / 1000) * inP + (outputTokens / 1000) * outP;
+        return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cost };
+    }
+    $: costPrediction = (() => {
+        if (!activeTab) return null;
+        const text = (activeTab.inputValue || '');
+        const filesChars = (activeTab.attachedFiles || []).reduce((s, f) => s + (f.size || (f.name?.length || 0) * 8), 0);
+        const totalChars = text.length + filesChars;
+        if (totalChars < 8) return null; // too short to bother
+        const m = getEffectiveModel(activeTab);
+        const isCode = /\b(script|c[oó]digo|powershell|bash|python|sql|yaml|json|terraform|kubernetes|docker)\b/i.test(text);
+        const p = _predictCost(m, totalChars, isCode);
+        // Severity: free if local, warn at $0.01, high at $0.05
+        let level = 'ok';
+        if (p.cost === 0) level = 'free';
+        else if (p.cost >= 0.05) level = 'high';
+        else if (p.cost >= 0.01) level = 'warn';
+        return { ...p, level, model: m };
+    })();
+    function _formatTokens(n) {
+        if (n < 1000) return String(n);
+        if (n < 100000) return (n / 1000).toFixed(1).replace('.0','') + 'k';
+        return Math.round(n / 1000) + 'k';
+    }
     let darkMode           = localStorage?.getItem('lucy_dark') !== 'false'; // tema oscuro/claro
     // ── UX: ZOOM & FONT ───────────────────────────
     let uiZoom             = parseFloat(localStorage?.getItem('lucy_zoom') ?? '1');
@@ -357,6 +490,18 @@ import { listen } from '@tauri-apps/api/event';
     // showChipsModal → stores.ts
     let editingChipIdx = null; // null = nuevo, número = editar existente
     let chipForm       = { label: '', clave: '' };
+    // Collapsed state for the chips bar (persisted). Default: expanded if ≤3 chips, collapsed otherwise.
+    let chipsCollapsed = (() => {
+        const v = safeGetLS('lucy_chips_collapsed', '');
+        return v === '' ? null : v === '1';   // empty → decide on load based on chip count
+    })();
+    function toggleChipsCollapsed() {
+        // First click materializes the implicit default into an explicit choice
+        chipsCollapsed = !(chipsCollapsed === null ? userChips.length > 3 : chipsCollapsed);
+        safeSetLSString('lucy_chips_collapsed', chipsCollapsed ? '1' : '0');
+    }
+    // Effective collapsed state: falls back to "auto-collapse if many chips" when user hasn't picked yet.
+    $: chipsHidden = chipsCollapsed === null ? userChips.length > 3 : chipsCollapsed;
     
     // ── COMMAND PALETTE items (unfiltered — CommandPalette component handles query) ──
     $: allPaletteItems = [
@@ -388,7 +533,7 @@ import { listen } from '@tauri-apps/api/event';
         ...$hosts.map(h => ({ icon:h.type==='windows'?'⊡':'◈', label:`Conectar a ${h.name}`, cat:'Host',
             action:()=>{dashSelectedHost=h.id;setView('dashboard');showPalette=false;} })),
         // Comandos aprendidos
-        ...(() => { try { return JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]'); } catch(e) { return []; } })().map(c => ({ icon:'◈', label:c.claves?.[0]||'', cat:'Aprendido',
+        ...safeParseLS('lucy_custom_commands', []).map(c => ({ icon:'◈', label:c.claves?.[0]||'', cat:'Aprendido',
             action:()=>{if(activeTabId){const t=getTab(activeTabId);if(t){t.inputValue=c.claves[0];refresh();}}showPalette=false;} })),
     ];
     // ── DAILY TIPS — rota uno por día del mes (índice = día % total) ───────────
@@ -462,29 +607,11 @@ import { listen } from '@tauri-apps/api/event';
         "whatsapp":"whatsapp:","youtube":"https://www.youtube.com","github":"https://github.com"
     };
 
-    const ahora = () => new Date().toLocaleTimeString(userLang,{hour:'2-digit',minute:'2-digit'});
-    const limpiar = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[.,:;!?¡¿]/g,"").toLowerCase().trim();
+    // Component-scoped wrapper: passes userLang to the pure formatTime helper.
+    const ahora = () => formatTime(userLang);
+    const limpiar = (t) => normalizeForMatch(t);
 
-    // ── SHARED: Destructive command detection (used by agent loop + direct path) ──
-    // Normalize-then-match so trivial obfuscation (backticks, string concat,
-    // env-var expansion) can't bypass the destructive-cmd gate.
-    const _normalizeCmd = (cmd) => {
-        let s = String(cmd || '');
-        s = s.replace(/`([^\r\n])/g, '$1');              // PS backtick escapes
-        s = s.replace(/\^([^\r\n])/g, '$1');             // cmd caret escapes
-        for (let i = 0; i < 6; i++) {                      // 'a'+'b' → 'ab'
-            const before = s;
-            s = s.replace(/(['"])([^'"`]*)\1\s*\+\s*(['"])([^'"`]*)\3/g, (_m, q1, a, _q2, b) => `${q1}${a}${b}${q1}`);
-            if (s === before) break;
-        }
-        const envMap = { systemroot:'C:\\Windows', windir:'C:\\Windows', systemdrive:'C:', programfiles:'C:\\Program Files', 'programfiles(x86)':'C:\\Program Files (x86)', programdata:'C:\\ProgramData', temp:'C:\\Windows\\Temp', tmp:'C:\\Windows\\Temp' };
-        s = s.replace(/%([A-Za-z_][A-Za-z0-9_()]*)%/g, (_m, n) => envMap[n.toLowerCase()] || `%${n}%`);
-        s = s.replace(/\$\{?env:([A-Za-z_][A-Za-z0-9_()]*)\}?/gi, (_m, n) => envMap[n.toLowerCase()] || `$env:${n}`);
-        try { s = s.normalize('NFKC'); } catch {}
-        return s;
-    };
-    const _DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b)/i;
-    const isDestructiveCmd = (cmd) => _DESTRUCTIVE_RE.test(cmd) || _DESTRUCTIVE_RE.test(_normalizeCmd(cmd));
+    // _normalizeCmd / isDestructiveCmd / DESTRUCTIVE_RE come from $lib/security (pure, framework-free).
 
     // ── NVIDIA CUSTOM MODEL RESOLVER ────────────────────────────────────────
     // When a tab selects 'nvidia-custom', the real model ID is stored in
@@ -520,14 +647,14 @@ import { listen } from '@tauri-apps/api/event';
                 model: data.model || '',
                 title: data.title || '',
             };
-            localStorage.setItem(_CKPT_PREFIX + tabId, JSON.stringify(snap));
+            safeSetLS(_CKPT_PREFIX + tabId, snap);
         } catch (e) {
             // Quota exceeded or tab closed — non-fatal
             console.warn('[checkpoint] save failed:', e);
         }
     };
     const clearAgentCheckpoint = (tabId) => {
-        try { localStorage.removeItem(_CKPT_PREFIX + tabId); } catch {}
+        safeRemoveLS(_CKPT_PREFIX + tabId);
     };
     const listStaleCheckpoints = () => {
         const out = [];
@@ -536,7 +663,7 @@ import { listen } from '@tauri-apps/api/event';
                 const k = localStorage.key(i);
                 if (!k || !k.startsWith(_CKPT_PREFIX)) continue;
                 try {
-                    const snap = JSON.parse(localStorage.getItem(k) || '{}');
+                    const snap = safeParseLS(k, {});
                     out.push({ key: k, tabId: k.slice(_CKPT_PREFIX.length), snap });
                 } catch {}
             }
@@ -597,13 +724,12 @@ import { listen } from '@tauri-apps/api/event';
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
         // Cargar secretos MCP desde OS Keyring (con migración desde localStorage si existen)
         try {
-            const legacy = localStorage.getItem('lucy_mcp_secrets');
-            if (legacy) {
-                const legacyObj = JSON.parse(legacy);
+            const legacyObj = safeParseLS('lucy_mcp_secrets', null);
+            if (legacyObj) {
                 for (const [k, v] of Object.entries(legacyObj)) {
                     if (k && v) await saveMcpSecret(k, v);
                 }
-                localStorage.removeItem('lucy_mcp_secrets');
+                safeRemoveLS('lucy_mcp_secrets');
                 console.info('[MCP] Secretos migrados desde localStorage → Keyring');
             }
         } catch(e) {}
@@ -611,7 +737,8 @@ import { listen } from '@tauri-apps/api/event';
         // Cargar modelos locales (Ollama) — no bloquear si falla
         refreshLocalModels().catch(() => {});
         // Ping periódico al endpoint Ollama (cada 30s) para el indicador de estado
-        setInterval(() => { refreshLocalModels().catch(() => {}); }, 30000);
+        // Stored in module ref so onDestroy can clear it (prevents HMR-induced timer leaks)
+        _ollamaPingInterval = setInterval(() => { refreshLocalModels().catch(() => {}); }, 30000);
         // Cargar modelos NVIDIA NIM — solo si la key está configurada
         refreshNvidiaModels().catch(() => {});
         // Notification API permission (no bloqueante)
@@ -631,7 +758,7 @@ import { listen } from '@tauri-apps/api/event';
                     if (!activeHostIds.has(hid)) keysToRemove.push(k);
                 }
             }
-            keysToRemove.forEach(k => localStorage.removeItem(k));
+            keysToRemove.forEach(k => safeRemoveLS(k));
         } catch(e) {}
         // Detectar checkpoints de agente interrumpidos en sesiones previas
         try {
@@ -645,7 +772,7 @@ import { listen } from '@tauri-apps/api/event';
                     console.warn('[Lucy] Stale agent checkpoints found:', fresh.map(s => ({ tab: s.tabId, goal: s.snap.goal?.slice(0,80), step: s.snap.loop_i, age_min: Math.round((Date.now() - s.snap.ts)/60000) })));
                 }
                 // Auto-purge entries older than 24h
-                stale.filter(s => !fresh.includes(s)).forEach(s => { try { localStorage.removeItem(s.key); } catch {} });
+                stale.filter(s => !fresh.includes(s)).forEach(s => safeRemoveLS(s.key));
             }
         } catch (e) { console.warn('[checkpoint] scan failed:', e); }
         // Capturar errores JS no manejados — los muestra en pantalla en vez de quedarse negro
@@ -708,12 +835,103 @@ import { listen } from '@tauri-apps/api/event';
         // Plan card buttons (opus-4-7 #3 Plan/Act/Verify)
         document.addEventListener('click', handlePlanButtonClick);
 
+        // ── Quick-look popover for tool-card refs ([1] [2]…) ──────────────
+        // Delegated mouseover/mouseout handler: shows a floating preview of the
+        // tool card's output/label/status without requiring click + scroll.
+        let _qlPopover = null;
+        let _qlAnchor  = null;
+        let _qlHideTimer = null;
+        const _ensureQlPopover = () => {
+            if (_qlPopover) return _qlPopover;
+            _qlPopover = document.createElement('div');
+            _qlPopover.className = 'ql-popover';
+            _qlPopover.setAttribute('role', 'tooltip');
+            _qlPopover.setAttribute('aria-hidden', 'true');
+            _qlPopover.innerHTML = `
+                <div class="ql-head">
+                  <span class="ql-icon"></span>
+                  <span class="ql-label"></span>
+                  <span class="ql-status"></span>
+                </div>
+                <pre class="ql-body"></pre>
+                <div class="ql-foot">${isEN ? 'Click to expand' : 'Click para expandir'}</div>
+            `;
+            // Keep popover alive while the user hovers it (lets them select text)
+            _qlPopover.addEventListener('mouseenter', () => { if (_qlHideTimer) { clearTimeout(_qlHideTimer); _qlHideTimer = null; } });
+            _qlPopover.addEventListener('mouseleave', _scheduleQlHide);
+            document.body.appendChild(_qlPopover);
+            return _qlPopover;
+        };
+        const _scheduleQlHide = () => {
+            if (_qlHideTimer) clearTimeout(_qlHideTimer);
+            _qlHideTimer = setTimeout(() => {
+                if (_qlPopover) {
+                    _qlPopover.classList.remove('ql-show');
+                    _qlPopover.setAttribute('aria-hidden', 'true');
+                }
+                _qlAnchor = null;
+                _qlHideTimer = null;
+            }, 120);
+        };
+        const _showQlFor = (anchor) => {
+            const preview = anchor.getAttribute('data-preview') || '';
+            const label   = anchor.getAttribute('data-label')   || '';
+            const status  = anchor.getAttribute('data-status')  || 'done';
+            const icon    = anchor.getAttribute('data-icon')    || '';
+            if (!preview && !label) return; // nothing useful to show
+            const pop = _ensureQlPopover();
+            pop.querySelector('.ql-icon').textContent = icon;
+            pop.querySelector('.ql-label').textContent = label;
+            const st = pop.querySelector('.ql-status');
+            st.textContent = status === 'error' ? '✕' : status === 'running' ? '↻' : '✓';
+            st.className = 'ql-status ql-st-' + status;
+            pop.querySelector('.ql-body').textContent = preview || (isEN ? '(no output)' : '(sin salida)');
+            pop.classList.add('ql-show');
+            pop.setAttribute('aria-hidden', 'false');
+            // Position: anchored above the link, clamped to viewport
+            const r = anchor.getBoundingClientRect();
+            // Reset to measure natural size
+            pop.style.left = '0px';
+            pop.style.top = '0px';
+            const pw = pop.offsetWidth;
+            const ph = pop.offsetHeight;
+            let left = r.left + (r.width / 2) - (pw / 2);
+            let top  = r.top - ph - 10;
+            // Clamp horizontally
+            left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+            // Flip below if not enough space above
+            if (top < 8) top = r.bottom + 10;
+            pop.style.left = left + 'px';
+            pop.style.top  = top + 'px';
+        };
+        const _qlOver = (e) => {
+            const a = e.target?.closest?.('a.tc-ref');
+            if (!a || a === _qlAnchor) return;
+            _qlAnchor = a;
+            if (_qlHideTimer) { clearTimeout(_qlHideTimer); _qlHideTimer = null; }
+            _showQlFor(a);
+        };
+        const _qlOut = (e) => {
+            const a = e.target?.closest?.('a.tc-ref');
+            if (!a) return;
+            // Only schedule hide if we're really leaving the anchor
+            const next = e.relatedTarget;
+            if (next && next.closest && (next.closest('a.tc-ref') === a || next.closest('.ql-popover'))) return;
+            _scheduleQlHide();
+        };
+        // Stored in module refs so onDestroy can detach them (prevents stale listeners
+        // accumulating across HMR reloads or sub-mount/unmount cycles).
+        _qlOverHandler = _qlOver;
+        _qlOutHandler  = _qlOut;
+        document.addEventListener('mouseover', _qlOverHandler);
+        document.addEventListener('mouseout',  _qlOutHandler);
+
         window.selectRunbooksDir = async function() {
             try {
                 const dir = await invoke('pick_directory', {});
                 if (dir) {
                     lucyConfig.runbooksDir = dir;
-                    localStorage.setItem('lucy_runbooks_dir', dir);
+                    safeSetLSString('lucy_runbooks_dir', dir);
                     toast(`Directorio Runbooks: ${dir}`, 'success');
                     if (activeTabId) {
                         addMsg(activeTabId, { role: 'system', html: `⊞ <b>Directorio de Runbooks empresariales</b> configurado: <br><code>${dir}</code><br>Lucy ahora leerá tus manuales locales.` });
@@ -731,14 +949,25 @@ import { listen } from '@tauri-apps/api/event';
             } catch (e) {
                 console.warn('Failed to initialize metrics database:', e);
             }
+            // ── Footer cost: pull monthly summary on boot, refresh every 5 min ──
+            // Fire-and-forget so a missing/empty DB never blocks startup.
+            const refreshFooterCost = async () => {
+                try {
+                    const m = await invoke('get_cost_summary', { period: 'month' });
+                    if (m && typeof m === 'object') costSummaryMonth.set(m);
+                } catch (_) { /* ignore — footer will simply not show the cost */ }
+            };
+            refreshFooterCost();
+            // Stored in module ref so onDestroy can clear it (was leaking on HMR / overlay return)
+            _footerCostInterval = setInterval(refreshFooterCost, 5 * 60 * 1000);
 
             const provs = await invoke('get_configured_providers');
             let hasKey = Array.isArray(provs) && provs.length > 0;
             keyringOk = hasKey;
             configuredProvs = Array.isArray(provs) ? provs : [];   // drives sub-agent auto-picker
-            const savedName = localStorage.getItem('lucy_user_name');
-            const savedLang = localStorage.getItem('lucy_user_lang');
-            const savedRb   = localStorage.getItem('lucy_runbooks_dir');
+            const savedName = safeGetLS('lucy_user_name', '');
+            const savedLang = safeGetLS('lucy_user_lang', '');
+            const savedRb   = safeGetLS('lucy_runbooks_dir', '');
             if (savedLang) userLang = savedLang;
             if (hasKey && savedName) {
                 lucyConfig = { name: savedName, runbooksDir: savedRb || '' };
@@ -758,7 +987,7 @@ import { listen } from '@tauri-apps/api/event';
             appReady = true;
             if (!darkMode) document.documentElement.classList.add('light');
             // Show tutorial on first ever launch (after a brief delay for the UI to settle)
-            if (!localStorage.getItem('lucy_tutorial_done') && !showSetupOverlay) {
+            if (!safeGetLS('lucy_tutorial_done', '') && !showSetupOverlay) {
                 setTimeout(() => { showTutorial = true; }, 1200);
             }
         }
@@ -766,9 +995,19 @@ import { listen } from '@tauri-apps/api/event';
 
     // Cleanup al destruir el componente — evita memory leaks
     onDestroy(() => {
-        if (_clickHandler) document.removeEventListener('click', _clickHandler);
+        // ── Timers ──
+        if (_saveTimer)            { clearTimeout(_saveTimer);          _saveTimer = null; }
+        if (_execTimer)            { clearTimeout(_execTimer);          _execTimer = null; }
+        if (_ollamaPingInterval)   { clearInterval(_ollamaPingInterval); _ollamaPingInterval = null; }
+        if (_footerCostInterval)   { clearInterval(_footerCostInterval); _footerCostInterval = null; }
+        // ── Document-level listeners ──
+        if (_clickHandler)   document.removeEventListener('click', _clickHandler);
+        if (typeof handlePlanButtonClick === 'function') {
+            try { document.removeEventListener('click', handlePlanButtonClick); } catch {}
+        }
+        if (_qlOverHandler)  document.removeEventListener('mouseover', _qlOverHandler);
+        if (_qlOutHandler)   document.removeEventListener('mouseout',  _qlOutHandler);
         // Dashboard/LogViewer cleanup handled by their own onDestroy
-        if (_saveTimer) clearTimeout(_saveTimer);
     });
 
     // Versión del esquema de datos en localStorage — incrementar al cambiar la estructura
@@ -777,26 +1016,24 @@ import { listen } from '@tauri-apps/api/event';
     function _migrarDatos() {
         // Migración de sesiones: añadir versión si no existe
         try {
-            const raw = localStorage.getItem('lucy_sessions_svelte');
-            if (raw) {
-                const parsed = JSON.parse(raw);
+            const parsed = safeParseLS('lucy_sessions_svelte', null);
+            if (parsed) {
                 // Si es un array directo (v0, sin versión), envolver en objeto versionado
                 if (Array.isArray(parsed)) {
-                    localStorage.setItem('lucy_sessions_svelte', JSON.stringify({ version: SCHEMA_VERSION, data: parsed }));
+                    safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: parsed });
                 }
             }
-        } catch(e) { localStorage.removeItem('lucy_sessions_svelte'); }
+        } catch(e) { safeRemoveLS('lucy_sessions_svelte'); }
 
         // Migración de hosts: igual patrón
         try {
-            const rawH = localStorage.getItem('lucy_hosts');
-            if (rawH) {
-                const parsed = JSON.parse(rawH);
-                if (Array.isArray(parsed)) {
-                    localStorage.setItem('lucy_hosts', JSON.stringify({ version: SCHEMA_VERSION, data: parsed }));
+            const parsedH = safeParseLS('lucy_hosts', null);
+            if (parsedH) {
+                if (Array.isArray(parsedH)) {
+                    safeSetLS('lucy_hosts', { version: SCHEMA_VERSION, data: parsedH });
                 }
             }
-        } catch(e) { localStorage.removeItem('lucy_hosts'); }
+        } catch(e) { safeRemoveLS('lucy_hosts'); }
     }
 
     async function _initDB() {
@@ -824,24 +1061,22 @@ import { listen } from '@tauri-apps/api/event';
         
         // Fallback or Migration from old localStorage
         try {
-            const raw = localStorage.getItem('lucy_sessions_svelte');
-            if (!raw) return [];
-            const parsed = JSON.parse(raw);
+            const parsed = safeParseLS('lucy_sessions_svelte', null);
+            if (!parsed) return [];
             return Array.isArray(parsed) ? parsed : (parsed.data || []);
         } catch(e) { return []; }
     }
 
     function _leerHosts() {
         try {
-            const raw = localStorage.getItem('lucy_hosts');
-            if (!raw) return [];
-            const parsed = JSON.parse(raw);
+            const parsed = safeParseLS('lucy_hosts', null);
+            if (!parsed) return [];
             return Array.isArray(parsed) ? parsed : (parsed.data || []);
         } catch(e) { return []; }
     }
 
     function _actualizarCustomCmdCount() {
-        try { customCmdCount = JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]').length; }
+        try { customCmdCount = safeParseLS('lucy_custom_commands', []).length; }
         catch(e) { customCmdCount = 0; }
     }
 
@@ -849,7 +1084,7 @@ import { listen } from '@tauri-apps/api/event';
         // Migración de datos antes de cargar
         _migrarDatos();
 
-        const g = JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]');
+        const g = safeParseLS('lucy_custom_commands', []);
         comandosExt = [...cmdRapidos, ...g];
         _actualizarCustomCmdCount();
 
@@ -879,36 +1114,32 @@ import { listen } from '@tauri-apps/api/event';
         }
 
         const defaultActions = [
-            { icono:'⊡', nombre:'Salud del sistema', script:'TOOL_SYSINFO' },
-            { icono:'◉', nombre:'Flush DNS',           script:'ipconfig /flushdns' },
-            { icono:'⊗', nombre:'Bloquear equipo',     script:'rundll32.exe user32.dll,LockWorkStation' },
-            { icono:'≡', nombre:'Limpiar portapap.',   script:'Set-Clipboard -Value $null' },
-            { icono:'⊘', nombre:'Vaciar papelera',     script:'Clear-RecycleBin -Force' }
-        ];
-        const storedActions = localStorage.getItem('lucy_quick_actions');
-        quickActions = storedActions ? JSON.parse(storedActions) : [
-    { icono: '⊡', nombre: isEN ? 'System Health' : 'Salud del sistema', script: 'TOOL_SYSINFO' },
-    { icono: '◉', nombre: 'Flush DNS', script: 'ipconfig /flushdns' },
-    { icono: '⊗', nombre: isEN ? 'Lock System' : 'Bloquear equipo', script: 'rundll32.exe user32.dll,LockWorkStation' },
-    { icono: '≡', nombre: isEN ? 'Clear Clipboard' : 'Limpiar portapap.', script: 'Set-Clipboard -Value $null' },
-    { icono: '⊘', nombre: isEN ? 'Empty Trash' : 'Vaciar papelera', script: 'Clear-RecycleBin -Force' }
+    { icono: 'activity',  nombre: isEN ? 'System Health'   : 'Salud del sistema',  script: 'TOOL_SYSINFO' },
+    { icono: 'globe',     nombre: 'Flush DNS',                                      script: 'ipconfig /flushdns' },
+    { icono: 'lock',      nombre: isEN ? 'Lock System'     : 'Bloquear equipo',    script: 'rundll32.exe user32.dll,LockWorkStation' },
+    { icono: 'clipboard', nombre: isEN ? 'Clear Clipboard' : 'Limpiar portapap.',  script: 'Set-Clipboard -Value $null' },
+    { icono: 'trash',     nombre: isEN ? 'Empty Trash'     : 'Vaciar papelera',    script: 'Clear-RecycleBin -Force' }
 ];
-        // ── Migrate legacy emoji icons → unicode symbols ─────────────────────
-        const _emojiMap = {'🖥️':'⊡','🖥':'⊡','🌐':'◉','🔒':'⊗','📋':'≡','🗑️':'⊘','🗑':'⊘','🧠':'◈','🛡️':'⬡','🛡':'⬡','⚙️':'⚙','📊':'◑','🔍':'◎'};
+        quickActions = safeParseLS('lucy_quick_actions', defaultActions);
+        // Legacy icon migration (emojis & unicode → palette keys) lives in $lib/constants
+        // as LEGACY_ICON_MAP — single source of truth.
         let _migrated = false;
         quickActions = quickActions.map(a => {
-            const ni = _emojiMap[a.icono];
+            // Already a palette key? leave it alone
+            if (ICON_MAP[a.icono]) return a;
+            const ni = LEGACY_ICON_MAP[a.icono];
             if (ni) { _migrated = true; return { ...a, icono: ni }; }
-            return a;
+            // Unknown → default to 'bolt' so it renders consistently with the rest
+            _migrated = true;
+            return { ...a, icono: 'bolt' };
         });
-        if (!storedActions || _migrated) localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
+        if (!storedActions || _migrated) safeSetLS('lucy_quick_actions', quickActions);
 
         // hosts, alertRules, runbooks → cargados automáticamente por persistedWritable en stores.ts
         // Pedir permiso de notificaciones del sistema
         try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch(e) {}
         // Cargar chips personalizados de la barra inferior
-        const storedChips = localStorage.getItem('lucy_user_chips');
-        userChips = storedChips ? JSON.parse(storedChips) : [
+        const defaultChips = [
     { label: isEN ? 'mute audio' : 'silencia', clave: isEN ? 'mute' : 'silencia' },
     { label: isEN ? 'volume down' : 'baja el volumen', clave: isEN ? 'volume down' : 'baja el volumen' },
     { label: isEN ? 'volume up' : 'sube el volumen', clave: isEN ? 'volume up' : 'sube el volumen' },
@@ -917,43 +1148,48 @@ import { listen } from '@tauri-apps/api/event';
     { label: isEN ? 'prev song' : 'anterior', clave: 'cancion anterior' },
     { label: isEN ? 'lock system' : 'bloquear', clave: 'bloquear' }
 ];
-
-if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChips));
+        userChips = safeParseLS('lucy_user_chips', defaultChips);
+        if (!storedChips) safeSetLS('lucy_user_chips', userChips);
 
     }
 
     // Funciones para Acciones Rápidas en Sidebar
     function guardarNuevaAccion() {
         if (!newActionName.trim() || !newActionScript.trim()) return;
+        const iconKey = ICON_MAP[newActionIcon] ? newActionIcon : 'bolt';
         if (editingActionIdx !== null) {
             quickActions[editingActionIdx].nombre = newActionName;
             quickActions[editingActionIdx].script = newActionScript;
+            quickActions[editingActionIdx].icono  = iconKey;
             quickActions = [...quickActions];
         } else {
-            quickActions = [...quickActions, { icono: "⚡", nombre: newActionName, script: newActionScript }];
+            quickActions = [...quickActions, { icono: iconKey, nombre: newActionName, script: newActionScript }];
         }
-        localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
+        safeSetLS('lucy_quick_actions', quickActions);
         $showNewActionModal = false;
         newActionName = '';
         newActionScript = '';
+        newActionIcon = 'bolt';
+        editingActionIdx = null;
     }
 
-    
+
     function abrirEditarAccionRapida(i) {
         editingActionIdx = i;
         newActionName = quickActions[i].nombre;
         newActionScript = quickActions[i].script;
+        newActionIcon = ICON_MAP[quickActions[i].icono] ? quickActions[i].icono : 'bolt';
         $showNewActionModal = true;
     }
     function eliminarAccionRapida(i) {
         quickActions.splice(i, 1);
         quickActions = [...quickActions];
-        localStorage.setItem('lucy_quick_actions', JSON.stringify(quickActions));
+        safeSetLS('lucy_quick_actions', quickActions);
     }
 
     // ── CHIPS EDITABLES (barra inferior) ────────────────────────────────────
     function _persistirChips() {
-        localStorage.setItem('lucy_user_chips', JSON.stringify(userChips));
+        safeSetLS('lucy_user_chips', userChips);
     }
 
     function abrirNuevoChip() {
@@ -1039,7 +1275,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     });
                     const fixExec = fix.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i);
                     const fixText = fix.replace(/<EXECUTE>[\s\S]*?<\/EXECUTE>/gi,'').trim();
-                    const safeText = DOMPurify.sanitize(marked.parse(fixText));
+                    const safeText = renderMd(fixText);
                     let fixHtml;
                     if (fixExec) {
                         // Guardar script en Map global — evitar incrustar código en onclick (SyntaxError)
@@ -1095,7 +1331,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             
             // Backup garantizado en localStorage (max ~5MB, manejable para texto)
             try {
-                localStorage.setItem('lucy_sessions_svelte', JSON.stringify({ version: SCHEMA_VERSION, data }));
+                safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data });
             } catch(e) {
                 console.warn("[Lucy] localStorage limit exceeded, relying on SQLite", e);
             }
@@ -1121,11 +1357,11 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         }, 500);
     }
 
-    function abrirMemoria() { learnedCommands = JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]'); $showMemoryModal = true; }
+    function abrirMemoria() { learnedCommands = safeParseLS('lucy_custom_commands', []); $showMemoryModal = true; }
     function cerrarMemoria() { $showMemoryModal = false; }
     function borrarComando(i) {
         learnedCommands.splice(i,1); learnedCommands=[...learnedCommands];
-        localStorage.setItem('lucy_custom_commands',JSON.stringify(learnedCommands));
+        safeSetLS('lucy_custom_commands', learnedCommands);
         comandosExt = [...cmdRapidos, ...learnedCommands];
         _actualizarCustomCmdCount();
     }
@@ -1134,8 +1370,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         if (!pendingLearn) return;
 
         // Save to localStorage (backward compatibility)
-        const g = JSON.parse(localStorage.getItem('lucy_custom_commands')||'[]');
-        g.push(pendingLearn); localStorage.setItem('lucy_custom_commands',JSON.stringify(g));
+        const g = safeParseLS('lucy_custom_commands', []);
+        g.push(pendingLearn); safeSetLS('lucy_custom_commands', g);
         comandosExt = [...cmdRapidos,...g];
         _actualizarCustomCmdCount();
 
@@ -1162,7 +1398,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             // natural-language search can hit either the label or the intent.
             const embedText = `${skill.name}\n${skill.description || ''}\n${(pendingLearn.claves || []).join(', ')}`;
             invoke('upsert_embedding', { entityType: 'skill', entityId: skill.id, text: embedText })
-                .catch(e => console.debug('[embed] skill skipped:', e));
+                .catch(e => debug.log('[embed] skill skipped:', e));
         } catch (err) {
             console.warn('Failed to save skill to database:', err);
             // Continue anyway - localStorage save was successful
@@ -1445,6 +1681,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         if (t.recognition && t.isListening) t.recognition.stop();
         tabs = tabs.filter(x => x.id !== id);
         if (tabs.length && activeTabId === id) activeTabId = tabs[tabs.length-1].id;
+        // Free per-tab CWD entry on the backend so the map doesn't grow unbounded
+        invoke('drop_tab_cwd', { tabId: String(id) }).catch(e => debug.log('[cwd] drop failed:', e));
         persistir();
     }
 
@@ -1508,7 +1746,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         e.preventDefault();
         const delta = e.deltaY < 0 ? 0.05 : -0.05;
         uiZoom = Math.max(0.7, Math.min(1.6, +(uiZoom + delta).toFixed(2)));
-        localStorage.setItem('lucy_zoom', String(uiZoom));
+        safeSetLSString('lucy_zoom', String(uiZoom));
     }
 
     // ── ATAJOS DE TECLADO GLOBALES ────────────────────────────────────────────
@@ -1528,6 +1766,23 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             if (e.key === 'u' || e.key === 'U') { e.preventDefault(); e.stopPropagation(); return; }
             // Ctrl+R — block page refresh
             if (e.key === 'r' || e.key === 'R') { e.preventDefault(); e.stopPropagation(); return; }
+        }
+        // ── `?` (Shift+/) — toggle keyboard shortcuts overlay ─────────────
+        // Only trigger when NOT typing in an input/textarea/contentEditable.
+        if (e.key === '?' && !ctrl && !e.altKey) {
+            const tgt = e.target;
+            const isTyping = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
+            if (!isTyping) {
+                e.preventDefault();
+                showShortcutsOverlay = !showShortcutsOverlay;
+                return;
+            }
+        }
+        // Esc closes the shortcuts overlay if it's open
+        if (e.key === 'Escape' && showShortcutsOverlay) {
+            e.preventDefault();
+            showShortcutsOverlay = false;
+            return;
         }
         if (!ctrl) return;
         switch(e.key) {
@@ -1596,15 +1851,15 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 break;
             case '0':
                 e.preventDefault();
-                uiZoom = 1; localStorage.setItem('lucy_zoom', '1');
+                uiZoom = 1; safeSetLSString('lucy_zoom', '1');
                 break;
             case '=': case '+':
                 e.preventDefault();
-                uiZoom = Math.min(1.6, +(uiZoom + 0.1).toFixed(2)); localStorage.setItem('lucy_zoom', String(uiZoom));
+                uiZoom = Math.min(1.6, +(uiZoom + 0.1).toFixed(2)); safeSetLSString('lucy_zoom', String(uiZoom));
                 break;
             case '-':
                 e.preventDefault();
-                uiZoom = Math.max(0.7, +(uiZoom - 0.1).toFixed(2)); localStorage.setItem('lucy_zoom', String(uiZoom));
+                uiZoom = Math.max(0.7, +(uiZoom - 0.1).toFixed(2)); safeSetLSString('lucy_zoom', String(uiZoom));
                 break;
             case 'Escape':
                 if (showChatSearch)     { showChatSearch = false; chatSearch = ''; break; }
@@ -1919,7 +2174,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
     // One-shot markdown renderer that also processes CONFIDENCE badges.
     function renderLucyMarkdown(text) {
         const withBadges = renderConfidenceTags(text || '');
-        return DOMPurify.sanitize(marked.parse(withBadges), { ADD_ATTR:['style','data-plan-id','data-plan-action'] });
+        return renderMd(withBadges, { mode: 'badges' });
     }
 
     // ── PLAN/ACT/VERIFY (opus-4-7 #3) ──────────────────────────────────────────
@@ -2248,7 +2503,8 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 sysMsg(`<b>Comandos disponibles:</b><br>
                     /clear · limpia el chat actual<br>
                     /model &lt;nombre&gt; · cambia modelo (parcial: "qwen", "flash", "sonnet")<br>
-                    /theme &lt;nombre&gt; · default, ocean, hacker, sunset, forest, twilight, mocha<br>
+                    /theme &lt;nombre&gt; · default, ocean, hacker, sunset, forest, twilight, mocha, graphite, midnight, amoled, nord<br>
+                    /editremote &lt;host&gt; &lt;ruta&gt; · edita archivo remoto con diff visual antes de aplicar<br>
                     /tab &lt;texto&gt; · saltar a otra pestaña por título<br>
                     /models · lista todos los modelos disponibles<br>
                     /refresh · re-detecta modelos Ollama<br>
@@ -2276,10 +2532,12 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         'Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory | Select-Object AvailableMBytes, CommittedBytes',
                     ],
                     disk: [
+                        // Primary: Get-PSDrive — always available, never silent-fails
+                        'Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null } | Select-Object Name, @{n="Used(GB)";e={[Math]::Round($_.Used/1GB,2)}}, @{n="Free(GB)";e={[Math]::Round($_.Free/1GB,2)}}, @{n="Total(GB)";e={[Math]::Round(($_.Used+$_.Free)/1GB,2)}}, @{n="%Used";e={if(($_.Used+$_.Free) -gt 0){[Math]::Round($_.Used/($_.Used+$_.Free)*100,1)}else{0}}} | Format-Table -AutoSize',
                         'Get-Volume | Where-Object DriveLetter -ne $null | Select-Object DriveLetter, FileSystem, HealthStatus, SizeRemaining, Size | Format-Table -AutoSize',
-                        'Get-CimInstance Win32_LogicalDisk | Select-Object Name, @{n="Size(GB)";e={[Math]::Round($_.Size/1GB,2)}}, @{n="Free(GB)";e={[Math]::Round($_.FreeSpace/1GB,2)}}, @{n="Used%";e={[Math]::Round((1-($_.FreeSpace/$_.Size))*100,1)}} | Format-Table -AutoSize',
+                        // Win32_LogicalDisk as fallback, with explicit DriveType=3 filter for fixed disks
+                        '$d = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction SilentlyContinue; if ($d) { $d | Select-Object DeviceID, @{n="Size(GB)";e={[Math]::Round($_.Size/1GB,2)}}, @{n="Free(GB)";e={[Math]::Round($_.FreeSpace/1GB,2)}}, @{n="Used%";e={if($_.Size -gt 0){[Math]::Round((1-($_.FreeSpace/$_.Size))*100,1)}else{0}}} | Format-Table -AutoSize } else { "Win32_LogicalDisk returned no fixed drives (DriveType=3)." }',
                         'Get-Counter "\\PhysicalDisk(_Total)\\% Disk Time" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CounterSamples | Select-Object CookedValue',
-                        'Get-Counter "\\System\\Disk Queue Length" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CounterSamples | Select-Object CookedValue',
                     ]
                 };
 
@@ -2396,8 +2654,21 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 tabs = tabs;
                 return true;
 
+            case 'editremote':
+            case 'edit-remote':
+            case 'edr': {
+                // Usage: /editremote <host> <path>
+                if (!arg) { sysMsg(`Uso: /editremote &lt;host&gt; &lt;ruta&gt;<br>Ej: /editremote PARROT /etc/nginx/nginx.conf`); return true; }
+                const sp = arg.indexOf(' ');
+                if (sp < 0) { sysMsg(`Falta la ruta. Uso: /editremote &lt;host&gt; &lt;ruta&gt;`, 'var(--red)'); return true; }
+                const hostName = arg.slice(0, sp).trim();
+                const filePath = arg.slice(sp + 1).trim();
+                openRemoteDiff(hostName, filePath);
+                return true;
+            }
+
             case 'theme': {
-                const valid = ['default','ocean','hacker','sunset','forest','twilight','mocha'];
+                const valid = ['default','ocean','hacker','sunset','forest','twilight','mocha','graphite','midnight','amoled','nord'];
                 if (!arg) { sysMsg(`Tema actual: <b>${currentTheme}</b>. Disponibles: ${valid.join(', ')}`); return true; }
                 if (!valid.includes(arg)) { sysMsg(`Tema "${arg}" no existe. Usa: ${valid.join(', ')}`, 'var(--red)'); return true; }
                 setWarpTheme(arg);
@@ -2479,7 +2750,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
         }));
         const cols = models.map((model, i) => {
             const v = results[i].value || { ok:false, text:'(no result)', ms:0 };
-            const bodyHtml = v.ok ? DOMPurify.sanitize(marked.parse(v.text || '')) : `<span style="color:#f87171">${escapeHtml(v.text)}</span>`;
+            const bodyHtml = v.ok ? renderMd(v.text || '') : `<span style="color:#f87171">${escapeHtml(v.text)}</span>`;
             return `<div class="cmp-col" data-model="${model}">
                 <div class="cmp-head">${model}${v.ok ? '' : ' ✕'}</div>
                 <div class="cmp-body">${bodyHtml}</div>
@@ -2560,7 +2831,9 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
             const streamMsgId = 'streaming-' + tabId;
             // Limpiar thinking Y cualquier streaming previo huérfano para evitar duplicate keys
             t.messages = t.messages.filter(m => m.id !== 'thinking-'+tabId && m.id !== streamMsgId);
-            t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-cursor"></span>', time: ahora() });
+            // Initial state: show "thinking dots" until the first token arrives, then
+            // they're replaced by streamed text + the cursor. Gives feedback during TTFT.
+            t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: ahora() });
             refresh(); await scrollChat();
 
             if (lucyPersonality === 'concise') ctx += '\n[STYLE: Ultra-short, direct answers only. No preambles or summaries.]';
@@ -2581,6 +2854,25 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
 
 - If you need to use <EXECUTE>: ONLY if user explicitly says "run", "execute", "test it", or "check if..."
 - Always ask before attempting privilege elevation (RunAs, sudo, etc.)
+
+[SYNTHESIS PROTOCOL — MANDATORY when the user asks for analysis]:
+If the user's request contains ANY of: "correlaciona", "correlate", "diagnostica", "diagnose",
+"dime si", "tell me if", "explain why", "analiza", "analyze", "compara", "compare",
+"resumen", "summary", "reporte", "report", "qué pasó", "what happened", "is the bottleneck",
+"cuál es la causa", "root cause", "consolidad", "consolidat", "dame los que estén" —
+you MUST end your final turn with a NARRATIVE response in Markdown that:
+  1. Synthesizes the findings from ALL gathered tool outputs (do not just list raw data).
+  2. Answers the user's specific question DIRECTLY (e.g. "the bottleneck is X because Y").
+  3. Provides a concrete recommendation or next-step suggestion when applicable.
+NEVER end such a task with only "Operations completed" or "Pide explícame los cambios".
+The user already asked for the analysis — DELIVER it on this turn, not the next.
+
+[PDF GENERATION — full path mandatory]:
+When generating PDFs via Edge Headless, NEVER call \`msedge\` as a bare command (it is not in PATH).
+Use ONE of these patterns instead:
+  • Full path: & 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' --headless --disable-gpu --print-to-pdf="OUT.pdf" "file:///INPUT.html"
+  • Discovery first: Use <TOOL>locate_file:msedge.exe</TOOL> to find the executable, then quote the full path with the call operator (&).
+  • Fallback: If Edge is missing, try Chrome's full path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'.
 `;
 
             t._cancelled = false; // Reset bandera de cancelación
@@ -2620,7 +2912,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                 const display = cleanStreamDisplay(_revealed);
                 msg.rawContent = display;
                 const withBadges = renderConfidenceTags(display);
-                const parsed = withBadges ? DOMPurify.sanitize(marked.parse(withBadges), { ADD_ATTR:['style'] }) : '';
+                const parsed = withBadges ? renderMd(withBadges) : '';
                 msg.html = `<div class="mn">Lucy</div>${parsed}<span class="stream-cursor"></span>`;
                 refresh(); scrollChat();
             };
@@ -2771,51 +3063,100 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     card.output = output || '';
                     renderAgentTask();
                 };
+                // Render a single tool card (extracted so it can be reused inside grouped runs)
+                const renderSingleCardHtml = (c) => {
+                    const statusColor = c.status === 'running' ? '#a78bfa'
+                                      : c.status === 'error' ? '#ef4444'
+                                      : '#10b981';
+                    const statusIcon = c.status === 'running'
+                        ? `<span class="tc-spinner"></span>`
+                        : c.status === 'error' ? '✕' : '✓';
+                    const dur = c.duration > 0 ? `<span class="tc-dur">${c.duration.toFixed(2)}s</span>` : '';
+                    let diffHtml = '';
+                    if (c.diff) {
+                        const oldLines = c.diff.oldStr.split('\n');
+                        const newLines = c.diff.newStr.split('\n');
+                        const max = Math.max(oldLines.length, newLines.length);
+                        const rows = [];
+                        for (let i = 0; i < max; i++) {
+                            const o = oldLines[i] ?? '';
+                            const n = newLines[i] ?? '';
+                            if (o === n) rows.push(`<div class="tc-d-eq"> ${escapeHtml(o)}</div>`);
+                            else {
+                                if (o) rows.push(`<div class="tc-d-rm">- ${escapeHtml(o)}</div>`);
+                                if (n) rows.push(`<div class="tc-d-ad">+ ${escapeHtml(n)}</div>`);
+                            }
+                        }
+                        diffHtml = `<div class="tc-diff">${rows.join('')}</div>`;
+                    }
+                    const body = diffHtml || (c.output
+                        ? `<pre class="tc-body">${escapeHtml(c.output.length > 4000 ? c.output.slice(0,4000)+'\n… [truncated]' : c.output)}</pre>`
+                        : '');
+                    const copyBtn = c.output
+                        ? `<button class="tc-copy" data-copy-id="${c.id}" title="Copiar output" onclick="event.preventDefault();event.stopPropagation();navigator.clipboard.writeText(this.parentElement.parentElement.querySelector('.tc-body').textContent);this.textContent='✓';setTimeout(()=>this.textContent='⊞',1200);">⊞</button>`
+                        : '';
+                    const preview = c.output
+                        ? c.output.split('\n').slice(0, 3).join('\n').slice(0, 240)
+                        : '';
+                    // Auto-expand:
+                    //   - errors (so the user immediately sees what failed)
+                    //   - write operations (so the just-generated code is visible without a click,
+                    //     fixing the "the code I saw streaming disappeared" UX bug)
+                    //   - explicit diffs (rendered diff is the whole point)
+                    const _autoOpen = (c.status === 'error') || (c.kind === 'write') || !!c.diff;
+                    return `<details id="tc-${c.id}" class="tool-card tc-${c.status}" ${_autoOpen ? 'open' : ''}>
+                        <summary class="tc-head" title="${escapeHtml(preview)}">
+                          <span class="tc-icon">${c.icon}</span>
+                          <span class="tc-label">${escapeHtml(c.label)}</span>
+                          ${dur}
+                          ${copyBtn}
+                          <span class="tc-status" style="color:${statusColor}">${statusIcon}</span>
+                        </summary>
+                        ${body}
+                    </details>`;
+                };
+
                 const renderToolCardsHtml = () => {
                     if (agentToolCards.length === 0) return '';
-                    return agentToolCards.map(c => {
-                        const statusColor = c.status === 'running' ? '#a78bfa'
-                                          : c.status === 'error' ? '#ef4444'
-                                          : '#10b981';
-                        const statusIcon = c.status === 'running'
-                            ? `<span class="tc-spinner"></span>`
-                            : c.status === 'error' ? '✕' : '✓';
-                        const dur = c.duration > 0 ? `<span class="tc-dur">${c.duration.toFixed(2)}s</span>` : '';
-                        let diffHtml = '';
-                        if (c.diff) {
-                            const oldLines = c.diff.oldStr.split('\n');
-                            const newLines = c.diff.newStr.split('\n');
-                            const max = Math.max(oldLines.length, newLines.length);
-                            const rows = [];
-                            for (let i = 0; i < max; i++) {
-                                const o = oldLines[i] ?? '';
-                                const n = newLines[i] ?? '';
-                                if (o === n) rows.push(`<div class="tc-d-eq"> ${escapeHtml(o)}</div>`);
-                                else {
-                                    if (o) rows.push(`<div class="tc-d-rm">- ${escapeHtml(o)}</div>`);
-                                    if (n) rows.push(`<div class="tc-d-ad">+ ${escapeHtml(n)}</div>`);
-                                }
-                            }
-                            diffHtml = `<div class="tc-diff">${rows.join('')}</div>`;
+                    // ── Group consecutive cards with identical label+icon (e.g. repeated `Wait market_analysis`)
+                    // Reduces visual noise from polling-style operations without losing per-call detail.
+                    const groups = [];
+                    for (const c of agentToolCards) {
+                        const last = groups[groups.length - 1];
+                        if (last && last[0].label === c.label && last[0].icon === c.icon) {
+                            last.push(c);
+                        } else {
+                            groups.push([c]);
                         }
-                        const body = diffHtml || (c.output
-                            ? `<pre class="tc-body">${escapeHtml(c.output.length > 4000 ? c.output.slice(0,4000)+'\n… [truncated]' : c.output)}</pre>`
-                            : '');
-                        const copyBtn = c.output
-                            ? `<button class="tc-copy" data-copy-id="${c.id}" title="Copiar output" onclick="event.preventDefault();event.stopPropagation();navigator.clipboard.writeText(this.parentElement.parentElement.querySelector('.tc-body').textContent);this.textContent='✓';setTimeout(()=>this.textContent='⊞',1200);">⊞</button>`
-                            : '';
-                        const preview = c.output
-                            ? c.output.split('\n').slice(0, 3).join('\n').slice(0, 240)
-                            : '';
-                        return `<details id="tc-${c.id}" class="tool-card tc-${c.status}" ${c.status==='error'?'open':''}>
-                            <summary class="tc-head" title="${escapeHtml(preview)}">
-                              <span class="tc-icon">${c.icon}</span>
-                              <span class="tc-label">${escapeHtml(c.label)}</span>
+                    }
+                    return groups.map(group => {
+                        if (group.length === 1) return renderSingleCardHtml(group[0]);
+                        // Aggregate group status: error wins, then running, else done
+                        const anyErr = group.some(c => c.status === 'error');
+                        const anyRun = group.some(c => c.status === 'running');
+                        const groupStatus = anyErr ? 'error' : anyRun ? 'running' : 'done';
+                        const totalDur = group.reduce((s, c) => s + (c.duration || 0), 0);
+                        const statusColor = groupStatus === 'running' ? '#a78bfa'
+                                          : groupStatus === 'error' ? '#ef4444'
+                                          : '#10b981';
+                        const statusIcon = groupStatus === 'running'
+                            ? `<span class="tc-spinner"></span>`
+                            : groupStatus === 'error' ? '✕' : '✓';
+                        const dur = totalDur > 0 ? `<span class="tc-dur">${totalDur.toFixed(2)}s</span>` : '';
+                        const errCount = group.filter(c => c.status === 'error').length;
+                        const errBadge = errCount > 0 ? `<span class="tc-err-badge" title="${errCount} con error">! ${errCount}</span>` : '';
+                        const head = group[0];
+                        // Render children as plain (un-collapsible) inline rows to keep the group compact.
+                        const children = group.map(c => renderSingleCardHtml(c)).join('');
+                        return `<details class="tool-card tc-group tc-${groupStatus}" ${anyErr?'open':''}>
+                            <summary class="tc-head" title="${escapeHtml(head.label)} — ${group.length} ejecuciones">
+                              <span class="tc-icon">${head.icon}</span>
+                              <span class="tc-label">${escapeHtml(head.label)} <span class="tc-count">×${group.length}</span></span>
+                              ${errBadge}
                               ${dur}
-                              ${copyBtn}
                               <span class="tc-status" style="color:${statusColor}">${statusIcon}</span>
                             </summary>
-                            ${body}
+                            <div class="tc-group-body">${children}</div>
                         </details>`;
                     }).join('');
                 };
@@ -2931,7 +3272,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     if (extraChunk) reasoningMsg.content += extraChunk;
                     reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
                     reasoningMsg.html = reasoningMsg.content
-                        ? DOMPurify.sanitize(marked.parse(reasoningMsg.content))
+                        ? renderMd(reasoningMsg.content)
                         : '';
                     t.messages = [...t.messages];
                     refresh();
@@ -2978,11 +3319,19 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     ` : '';
 
                     const toolCardsHtml = renderToolCardsHtml();
-                    // Citations footer: numbered links to each tool card
+                    // Citations footer: numbered links to each tool card.
+                    // Each ref carries a data-preview attribute (first 3 lines of output, escaped)
+                    // for the quick-look hover popover (delegated handler in onMount).
                     const citationsHtml = agentToolCards.length > 0 ? `
                         <div class="tc-refs">
                             <span class="tc-refs-label">Refs:</span>
-                            ${agentToolCards.map((c, i) => `<a class="tc-ref" href="#tc-${c.id}" onclick="event.preventDefault();const el=document.getElementById('tc-${c.id}');if(el){el.open=true;el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.add('tc-flash');setTimeout(()=>el.classList.remove('tc-flash'),1400);}" title="${escapeHtml(c.label)}">[${i+1}]</a>`).join('')}
+                            ${agentToolCards.map((c, i) => {
+                                const preview = c.output
+                                    ? c.output.split('\n').slice(0, 6).join('\n').slice(0, 360)
+                                    : (c.diff ? `[diff]\n${(c.diff.oldStr||'').slice(0,140)}\n──→\n${(c.diff.newStr||'').slice(0,140)}` : '');
+                                const status = c.status || 'done';
+                                return `<a class="tc-ref" href="#tc-${c.id}" data-preview="${escapeHtml(preview)}" data-label="${escapeHtml(c.label)}" data-status="${status}" data-icon="${escapeHtml(c.icon || '')}" onclick="event.preventDefault();const el=document.getElementById('tc-${c.id}');if(el){el.open=true;el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.add('tc-flash');setTimeout(()=>el.classList.remove('tc-flash'),1400);}" title="${escapeHtml(c.label)}">[${i+1}]</a>`;
+                            }).join('')}
                         </div>
                     ` : '';
                     // Fallback contextual: 5 variantes según resultado
@@ -3016,13 +3365,28 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
 
                         displayText = `_${parts.join(' · ')}._\n\n_${action}_`;
                     }
+                    // Particle burst feedback when agent finishes successfully with non-trivial output.
+                    // Conditions: finalText present, no errors, did meaningful work (≥2 tool cards or wrote files).
+                    const _allErrors  = agentToolCards.length > 0 && agentToolCards.every(c => c.status === 'error');
+                    const _anyError   = agentToolCards.some(c => c.status === 'error');
+                    const _didReal    = (filesMod.size > 0) || (agentToolCards.filter(c => c.status === 'done').length >= 2);
+                    const _showBurst  = !!finalText && !_anyError && !_allErrors && _didReal && !agentMsg._burstFired;
+                    if (_showBurst) agentMsg._burstFired = true;
+                    const burstHtml = _showBurst
+                        ? `<div class="agent-burst" aria-hidden="true">
+                              <span></span><span></span><span></span><span></span>
+                              <span></span><span></span><span></span><span></span>
+                              <span></span><span></span><span></span><span></span>
+                           </div>`
+                        : '';
                     agentMsg.html = `<div class="mn">Lucy <span style="font-size:10px; opacity:0.6">(Agent)</span></div>
+                        ${burstHtml}
                         ${thoughtHtml}
                         ${toolCardsHtml}
                         ${stepsBlock}
                         ${filesHtml}
                         ${agentWarps.join('')}
-                        ${displayText ? DOMPurify.sanitize(marked.parse(displayText)) : ''}
+                        ${displayText ? renderMd(displayText) : ''}
                         ${citationsHtml}
                     `;
                     agentMsg.rawContent = displayText; // for search
@@ -3122,7 +3486,18 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                     if (rbM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>search_runbooks:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[≡ Runbooks] ${rbM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('search_runbooks', {dirPath:lucyConfig.runbooksDir, query:rbM[1].trim()}), 2, true).then(r => `[RUNBOOK SEARCH RESULT]\n${r}`) });
+                        const rbQuery = rbM[1].trim();
+                        const rbDir = (lucyConfig.runbooksDir || '').trim();
+                        if (!rbDir) {
+                            // Short-circuit: no runbooks dir configured → don't burn a Rust roundtrip
+                            // and give the agent actionable guidance instead of "directory not found".
+                            readOnlyTasks.push({
+                                label: `[≡ Runbooks] ${rbQuery}`,
+                                fn: () => Promise.resolve(`[RUNBOOK SEARCH RESULT]\nNo runbooks directory is configured. The user has not set lucyConfig.runbooksDir yet. Inform the user that they need to configure a runbooks directory in Settings → Runbooks Directory before search_runbooks can work, and proceed with the rest of the task using alternative sources (search_web, semantic, or built-in skills).`)
+                            });
+                        } else {
+                            readOnlyTasks.push({ label: `[≡ Runbooks] ${rbQuery}`, fn: () => retryWithBackoff(() => invoke('search_runbooks', {dirPath:rbDir, query:rbQuery}), 2, true).then(r => `[RUNBOOK SEARCH RESULT]\n${r}`) });
+                        }
                     }
                     // ── semantic: vector search over skills + memories (Sprint 2) ──
                     const semM = agentResp.match(/<TOOL>semantic:([^<]+)<\/TOOL>/i);
@@ -3173,7 +3548,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                                 entityId: String(savedId),
                                 text: `${mgTitle}\n${mgContent}`,
                                 model: null
-                            }).catch(err => console.debug('[embed] memory skipped:', err));
+                            }).catch(err => debug.log('[embed] memory skipped:', err));
                             toolResults.push(`[MEMORY SAVED — ID ${savedId}]\n"${mgTitle}" guardado en memoria persistente.`);
                             stepsHtml += `[◈ Memoria guardada] ${esc(mgTitle)}\n`;
                             finishToolCard(_mgCard, `ID ${savedId}: ${mgTitle}`, true);
@@ -3328,7 +3703,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             forkedTasks[fTaskId].result = resultStr;
                             // Persistir resultado en SQLite
                             invoke('fork_update', { taskId: fTaskId, status: 'done', result: resultStr, errorMsg: null })
-                                .catch(console.debug);
+                                .catch(debug.log);
                             finishToolCard(_fCard, resultStr.substring(0, 120), true);
                             stepsHtml += `[✓ Fork listo] ${esc(fTaskId)}\n`;
                             renderAgentTask();
@@ -3339,7 +3714,7 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                             forkedTasks[fTaskId].result = errStr;
                             // Persistir error en SQLite
                             invoke('fork_update', { taskId: fTaskId, status: 'error', result: null, errorMsg: errStr })
-                                .catch(console.debug);
+                                .catch(debug.log);
                             finishToolCard(_fCard, errStr, false);
                             return `[ERROR en sub-tarea] ${errStr}`;
                         });
@@ -3539,16 +3914,25 @@ if (!storedChips) localStorage.setItem('lucy_user_chips', JSON.stringify(userChi
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>writefile:[^<]+<\/TOOL>/gi, '').replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
                         const _wPath = wfM[1].trim();
+                        const _fileContent = fcM[1];
                         const _writeCard = newToolCard('⊞', `Write ${_wPath}`, 'write');
                         try {
-                            const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:fcM[1], force:true}), 3, false);
+                            const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
                             toolResults.push(`[WRITE RESULT] ${r}`);
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
-                            finishToolCard(_writeCard, String(r), true);
+                            // ── UX: preserve the actual file content inside the tool card so the
+                            // user can see what was written without opening the file. Without this,
+                            // the streamed code disappears at loop end leaving only "Files Modified"
+                            // (which is confusing — see GitHub issue with screenshots).
+                            const _summary = `✓ ${String(r).trim()}\n\n──── File content (${_fileContent.length} chars) ────\n${_fileContent}`;
+                            finishToolCard(_writeCard, _summary, true);
                         } catch(e) {
+                            // On error: still include the content the agent tried to write so the
+                            // user can copy it manually if the failure was just a permission issue.
+                            const _errSummary = `✗ ${String(e)}\n\n──── Attempted content (${_fileContent.length} chars) ────\n${_fileContent}`;
                             toolResults.push(`[WRITE ERROR] ${e}`);
-                            finishToolCard(_writeCard, String(e), false);
+                            finishToolCard(_writeCard, _errSummary, false);
                         }
                     }
 
@@ -4481,15 +4865,15 @@ if (Test-Path $src) {
         if (!input || !input.trim()) return;
         const key = `lucy_hist_${tabId}`;
         try {
-            const hist = JSON.parse(localStorage.getItem(key) || '[]');
+            const hist = safeParseLS(key, []);
             const filtered = hist.filter(c => c !== input.trim());
             filtered.push(input.trim());
-            localStorage.setItem(key, JSON.stringify(filtered.slice(-200)));
+            safeSetLS(key, filtered.slice(-200));
         } catch(e) {}
     }
 
     function getTabHistory(tabId) {
-        try { return JSON.parse(localStorage.getItem(`lucy_hist_${tabId}`) || '[]'); }
+        try { return safeParseLS(`lucy_hist_${tabId}`, []); }
         catch(e) { return []; }
     }
 
@@ -4557,11 +4941,11 @@ if (Test-Path $src) {
     const MEMORY_KEY = 'lucy_persistent_memory';
 
     function leerMemoriaPersistente() {
-        try { return JSON.parse(localStorage.getItem(MEMORY_KEY) || '[]'); } catch(e) { return []; }
+        try { return safeParseLS(MEMORY_KEY, []); } catch(e) { return []; }
     }
 
     function guardarMemoriaPersistente(items) {
-        localStorage.setItem(MEMORY_KEY, JSON.stringify(items));
+        safeSetLS(MEMORY_KEY, items);
     }
 
     // Extrae hechos del entorno (hostnames, servidores) de la respuesta de Lucy
@@ -4852,37 +5236,13 @@ if (Test-Path $src) {
         } catch(e) { newApiKeyError = `Error: ${e}`; }
     }
 
-    // ── 5. EXPORTAR CONVERSACIÓN ──────────────────────────────────────────────
-    async function exportarConversacion(tabId) {
-        const t = getTab(tabId);
-        if (!t) return;
-        const msgs = t.messages.filter(m => m.role !== 'hidden' && m.role !== 'system');
-        if (!msgs.length) { toast('No hay conversación para exportar', 'info'); return; }
-        const fecha = new Date().toLocaleDateString(userLang).replace(/[\/\.]/g,'-');
-        const titulo = t.title.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g,'_').substring(0, 50);
-        let md = `# ${t.title}\n*Exportado: ${new Date().toLocaleString(userLang)}*\n*Lucy Assistant v${appVersion}*\n\n---\n\n`;
-        for (const m of msgs) {
-            const autor = m.role === 'user' ? `**${lucyConfig.name}**` : '**Lucy**';
-            // Quitar HTML para el export Markdown
-            const texto = (m.rawContent || m.html || '')
-                .replace(/<[^>]*>/g, '').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').trim();
-            if (texto) md += `${autor} *(${m.time || ''})*\n\n${texto}\n\n---\n\n`;
-        }
-        // Guardar via PowerShell en la carpeta de Descargas
-        const scriptGuardar = `$path = "$env:USERPROFILE\\Downloads\\Lucy_${titulo}_${fecha}.md"; [System.IO.File]::WriteAllText($path, @'\n${md.replace(/'/g,"''")}'\n@, [System.Text.Encoding]::UTF8); Write-Output $path`;
-        try {
-            const ruta = await invoke('execute_powershell', { script: scriptGuardar, bypassToken: null });
-            toast(`Conversación guardada en: ${ruta.trim()}`, 'info');
-        } catch(e) { toast(`Error al exportar: ${e}`, 'error'); }
-    }
-
     // ── 6. METADATOS DE HOSTS EN KEYRING ──────────────────────────────────────
     // Los hosts se guardan cifrados en Keyring además de localStorage (solo metadata pública en LS)
     // La función _leerHosts ya existe — aquí agregamos guardar seguro
     function _guardarHostsSeguro(hostsArr) {
         // En localStorage solo guardamos datos no sensibles (nombre, tipo) — sin IP ni usuario
         const publica = hostsArr.map(h => ({ id: h.id, name: h.name, type: h.type }));
-        localStorage.setItem('lucy_hosts', JSON.stringify({ version: SCHEMA_VERSION, data: publica }));
+        safeSetLS('lucy_hosts', { version: SCHEMA_VERSION, data: publica });
         // Los datos completos van al Keyring via save_host_credential (ya implementado)
         // Cada host con credenciales se guarda con su objeto completo cifrado
         const completo = JSON.stringify(hostsArr);
@@ -4945,6 +5305,125 @@ if (Test-Path $src) {
         } catch(e) { console.error('Panic kill:', e); }
     }
 
+    // ── Backup / Restore de configuración ──────────────────────────────────
+    // Exporta TODA la config local (localStorage) + skills + reglas de permisos
+    // a un archivo .lucybackup (JSON con un envelope versionado).
+    // Las contraseñas / API keys NUNCA se exportan: viven en el OS keychain.
+    // _BACKUP_KEYS and _BACKUP_VERSION come from $lib/constants (single source of truth).
+    async function exportConfig() {
+        try {
+            const ls = {};
+            for (const k of _BACKUP_KEYS) {
+                const v = safeGetLS(k, '');
+                if (v) ls[k] = v;
+            }
+            // Pull skills + permission rules from SQLite (best-effort)
+            let skills = [];
+            let permissionRules = [];
+            try { skills = await invoke('list_skills', { category: null }) || []; } catch (_) {}
+            try { permissionRules = await invoke('list_permission_rules', { appliesTo: null }) || []; } catch (_) {}
+            const envelope = {
+                kind: 'lucybackup',
+                version: _BACKUP_VERSION,
+                exported_at: new Date().toISOString(),
+                lucy_version: appVersion,
+                // SECURITY: API keys, passwords, and SSH keys are intentionally NOT included.
+                // They live in the OS keychain and must be re-entered after restore.
+                disclaimer: 'Credentials (API keys, passwords, SSH keys) are stored in the OS keychain and are NOT included.',
+                local_storage: ls,
+                skills,
+                permission_rules: permissionRules,
+            };
+            const json = JSON.stringify(envelope, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().slice(0, 10);
+            a.href = url;
+            a.download = `lucy_${stamp}.lucybackup`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toast(isEN
+                ? `Backup exported (${skills.length} skills, ${permissionRules.length} rules)`
+                : `Respaldo exportado (${skills.length} skills, ${permissionRules.length} reglas)`,
+                'info');
+        } catch (e) {
+            console.warn('exportConfig failed:', e);
+            toast((isEN ? 'Backup failed: ' : 'Falló el respaldo: ') + String(e).slice(0, 80), 'error');
+        }
+    }
+    let _restorePendingEnv = null;     // parsed envelope awaiting confirmation
+    let showRestoreConfirm = false;
+    function importConfigPick() {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.lucybackup,.json,application/json';
+        inp.onchange = async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                const env = JSON.parse(text);
+                if (env?.kind !== 'lucybackup' || typeof env.version !== 'number') {
+                    throw new Error(isEN ? 'Not a valid .lucybackup file' : 'No es un archivo .lucybackup válido');
+                }
+                if (env.version > _BACKUP_VERSION) {
+                    throw new Error(isEN
+                        ? `Backup is from a newer Lucy (v${env.version}). Update Lucy first.`
+                        : `Respaldo de una versión más nueva (v${env.version}). Actualiza Lucy primero.`);
+                }
+                _restorePendingEnv = env;
+                showRestoreConfirm = true;
+            } catch (err) {
+                toast((isEN ? 'Invalid backup: ' : 'Respaldo inválido: ') + String(err).slice(0, 100), 'error');
+            }
+        };
+        inp.click();
+    }
+    async function applyRestore() {
+        const env = _restorePendingEnv;
+        showRestoreConfirm = false;
+        _restorePendingEnv = null;
+        if (!env) return;
+        try {
+            // 1) localStorage
+            const ls = env.local_storage || {};
+            let lsCount = 0;
+            for (const [k, v] of Object.entries(ls)) {
+                if (_BACKUP_KEYS.includes(k) && typeof v === 'string') {
+                    safeSetLSString(k, v);
+                    lsCount++;
+                }
+            }
+            // 2) skills (best-effort, don't fail the whole restore on individual errors)
+            let skillsRestored = 0;
+            for (const sk of (env.skills || [])) {
+                try {
+                    await invoke('save_skill', { skill: sk });
+                    skillsRestored++;
+                } catch (_) {}
+            }
+            // 3) permission rules
+            let rulesRestored = 0;
+            for (const r of (env.permission_rules || [])) {
+                try {
+                    await invoke('save_permission_rule', { rule: r });
+                    rulesRestored++;
+                } catch (_) {}
+            }
+            toast(isEN
+                ? `Restored ${lsCount} settings, ${skillsRestored} skills, ${rulesRestored} rules. Reloading…`
+                : `Restaurado: ${lsCount} ajustes, ${skillsRestored} skills, ${rulesRestored} reglas. Recargando…`,
+                'info');
+            // Soft reload after a brief delay so the toast is visible
+            setTimeout(() => window.location.reload(), 1200);
+        } catch (e) {
+            toast((isEN ? 'Restore failed: ' : 'Falló restauración: ') + String(e).slice(0, 100), 'error');
+        }
+    }
+
     async function exportBugReport() {
         try {
             const report = {
@@ -4987,8 +5466,15 @@ if (Test-Path $src) {
     function toggleTheme() {
         darkMode = !darkMode;
         document.documentElement.classList.toggle('light', !darkMode);
-        localStorage.setItem('lucy_dark', String(darkMode));
+        safeSetLSString('lucy_dark', String(darkMode));
         toast(darkMode ? 'Tema oscuro activado' : 'Tema claro activado', 'info');
+    }
+
+    // ── UI Density changes ────────────────────────────────────────────────────
+    function setUiDensity(val) {
+        uiDensity = val;
+        safeSetLSString('lucy_density', val);
+        document.body.classList.toggle('density-compact', val === 'compact');
     }
 
     // ── SIDEBAR DRAG-TO-RESIZE ────────────────────────────────────────────────
@@ -5006,7 +5492,7 @@ if (Test-Path $src) {
             sidebarResizing = false;
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
-            localStorage.setItem('lucy_sb_w', String(Math.round(sidebarWidth)));
+            safeSetLSString('lucy_sb_w', String(Math.round(sidebarWidth)));
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
         };
@@ -5037,8 +5523,8 @@ if (Test-Path $src) {
         if (dashSelectedHost === id) dashSelectedHost = 'local';
         if (logSelectedHost  === id) logSelectedHost  = 'local';
         // Limpiar historial de comandos y conversación Lucy NexShell para este host
-        try { localStorage.removeItem(`lucy_rsh_${id}`); } catch(e) {}
-        try { localStorage.removeItem(`lucy_nxh_${id}`); } catch(e) {}
+        safeRemoveLS(`lucy_rsh_${id}`);
+        safeRemoveLS(`lucy_nxh_${id}`);
     }
 
     // ── FOCUS TRAP ────────────────────────────────────────────────────────────
@@ -5279,15 +5765,56 @@ if (Test-Path $src) {
       --msg-user-bg:rgba(48,34,22,.70);--msg-user-bdr:rgba(220,180,130,.32);
       --msg-lucy-bg:rgba(24,16,10,.55);--msg-lucy-bdr:rgba(200,150,90,.32);
     }
+    /* ── New themes (v1.3) ──────────────────────────────────────── */
+    /* Graphite — neutral grayscale; ideal for distraction-free SysAdmin work */
+    :global(.root[data-theme="graphite"]){
+      --bg-top:#3a3d42;--bg-mid:#1e2024;--bg-bottom:#0a0b0d;
+      --sidebar-overlay:rgba(10,11,13,.55);--border-glass:rgba(255,255,255,.07);
+      --msg-user-bg:rgba(50,54,60,.72);--msg-user-bdr:rgba(180,180,190,.26);
+      --msg-lucy-bg:rgba(28,30,34,.55);--msg-lucy-bdr:rgba(140,140,150,.28);
+    }
+    /* Midnight — deep navy with cyan halo (Tokyo Night vibe) */
+    :global(.root[data-theme="midnight"]){
+      --bg-top:#1a3050;--bg-mid:#0d1830;--bg-bottom:#050912;
+      --sidebar-overlay:rgba(5,9,18,.55);--border-glass:rgba(125,200,255,.10);
+      --msg-user-bg:rgba(22,40,72,.72);--msg-user-bdr:rgba(125,200,255,.32);
+      --msg-lucy-bg:rgba(10,22,42,.55);--msg-lucy-bdr:rgba(90,210,255,.30);
+    }
+    /* AMOLED — pure black for OLED + max contrast + accessibility */
+    :global(.root[data-theme="amoled"]){
+      --bg-top:#0a0a0a;--bg-mid:#050505;--bg-bottom:#000000;
+      --sidebar-overlay:rgba(0,0,0,.72);--border-glass:rgba(255,255,255,.10);
+      --msg-user-bg:rgba(28,28,28,.78);--msg-user-bdr:rgba(120,170,255,.34);
+      --msg-lucy-bg:rgba(10,10,10,.65);--msg-lucy-bdr:rgba(16,185,129,.34);
+    }
+    /* Nord — cool slate-blue; scientifically gentle on the eyes for long sessions */
+    :global(.root[data-theme="nord"]){
+      --bg-top:#3b4252;--bg-mid:#2e3440;--bg-bottom:#1a1c22;
+      --sidebar-overlay:rgba(26,28,34,.55);--border-glass:rgba(180,200,230,.08);
+      --msg-user-bg:rgba(55,65,84,.72);--msg-user-bdr:rgba(143,188,187,.32);
+      --msg-lucy-bg:rgba(38,46,60,.58);--msg-lucy-bdr:rgba(136,192,208,.32);
+    }
     /* Warp theme — only active in DARK mode (light mode keeps its own bg).
        Radial peak shifted DOWN to 50% 18% so it sits BELOW the opaque titlebar
-       (~38px ≈ 5% of viewport) and is actually visible. */
+       (~38px ≈ 5% of viewport) and is actually visible.
+       LIVING BACKGROUND: subtle slow breathing — the radial peak drifts
+       and pulses on a 14s cycle. Anchored via background-size to ensure the
+       linear bottom layer stays static. */
     :global(:root:not(.light)) .root[data-theme]{
       background:
         radial-gradient(ellipse 90% 70% at 50% 18%, var(--bg-top) 0%, transparent 55%),
         linear-gradient(180deg, var(--bg-mid) 0%, var(--bg-bottom) 100%) !important;
+      background-size: 100% 100%, 100% 100%;
       transition:background .5s ease;
+      animation: lucy-living-bg 14s ease-in-out infinite;
     }
+    @keyframes lucy-living-bg{
+      0%, 100% { background-size: 100% 100%, 100% 100%; }
+      50%      { background-size: 108% 108%, 100% 100%; }
+    }
+    /* AMOLED keeps absolute-black to honor OLED battery savings — no breathing */
+    :global(:root:not(.light)) .root[data-theme="amoled"]{ animation:none; }
+    /* prefers-reduced-motion already disables this in the global rule below */
     :global(:root:not(.light)) .root[data-theme] .body,
     :global(:root:not(.light)) .root[data-theme] .panel,
     :global(:root:not(.light)) .root[data-theme] .sbar,
@@ -5345,7 +5872,54 @@ if (Test-Path $src) {
       transition:background-color .5s ease;
     }
     /* Theme picker — used inside Settings modal */
-    .theme-picker-inline{display:flex;gap:8px;align-items:center;}
+    .theme-picker-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;max-width:240px;}
+    /* New stacked layout: label on top, swatches in a clean grid below.
+       Used for the Warp Theme picker when there are many swatches. */
+    .settings-row-stacked{flex-direction:column;align-items:stretch;gap:10px;}
+    .settings-row-stacked-hdr{display:flex;justify-content:space-between;align-items:center;}
+    .theme-name-active{
+      font-family:var(--mono);font-size:10px;font-weight:600;
+      color:var(--acc);background:rgba(16,185,129,.08);
+      padding:2px 8px;border-radius:9px;letter-spacing:.3px;
+      text-transform:lowercase;
+    }
+    .theme-picker-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fill, minmax(28px, 1fr));
+      gap:10px;
+      padding:8px 4px 2px;
+      max-width:100%;
+    }
+    .theme-picker-grid .theme-dot{
+      width:28px;height:28px;justify-self:center;
+      transition: transform .25s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  box-shadow .25s ease,
+                  border-color .2s ease;
+      will-change: transform;
+    }
+    /* Magnetic hover: dot scales up + neighbours scale slightly less ("magnetic field") */
+    .theme-picker-grid .theme-dot:hover{
+      transform: scale(1.28);
+      box-shadow: 0 4px 14px rgba(0,0,0,.45), 0 0 0 2px rgba(255,255,255,.10);
+      z-index: 2;
+    }
+    /* Sibling magnetic effect: when ANY swatch is hovered, the picker expands gap to feel "alive" */
+    .theme-picker-grid:hover{ gap: 12px; }
+    /* Click feedback: squash & stretch */
+    .theme-picker-grid .theme-dot:active{
+      transform: scale(0.86);
+      transition: transform .08s ease;
+    }
+    /* Active swatch — animated breathing ring instead of static border */
+    .theme-picker-grid .theme-dot.active{
+      animation: theme-active-ring 2.4s ease-in-out infinite;
+    }
+    @keyframes theme-active-ring{
+      0%, 100% { box-shadow: 0 0 0 2px rgba(16,185,129,.45), 0 0 8px rgba(16,185,129,.35); }
+      50%      { box-shadow: 0 0 0 3px rgba(16,185,129,.65), 0 0 14px rgba(16,185,129,.55); }
+    }
+    /* Light theme overrides */
+    :global(:root.light .theme-name-active){color:#0f7b5a;background:rgba(15,123,90,.10);}
     :global(.settings-btn-on){
       background:rgba(16,185,129,.15) !important;
       border-color:rgba(16,185,129,.45) !important;
@@ -5371,6 +5945,11 @@ if (Test-Path $src) {
     .theme-dot-forest  {background:linear-gradient(180deg,#2a3a2e 0%,#070a08 100%);}
     .theme-dot-twilight{background:linear-gradient(180deg,#36304a 0%,#09070d 100%);}
     .theme-dot-mocha   {background:linear-gradient(180deg,#3e2f23 0%,#0a0704 100%);}
+    /* New theme dots (v1.3) */
+    .theme-dot-graphite{background:linear-gradient(180deg,#3a3d42 0%,#0a0b0d 100%);}
+    .theme-dot-midnight{background:linear-gradient(180deg,#1a3050 0%,#050912 100%);}
+    .theme-dot-amoled  {background:linear-gradient(180deg,#1a1a1a 0%,#000000 100%);border-color:rgba(255,255,255,.20);}
+    .theme-dot-nord    {background:linear-gradient(180deg,#3b4252 0%,#1a1c22 100%);}
     /* ── TITLEBAR ──────────────────────────────── */
     .tb{display:flex;align-items:center;height:38px;background:#0b0d14;border-bottom:1px solid var(--bdr);padding:0 0 0 14px;user-select:none;-webkit-app-region:drag;flex-shrink:0;}
     :global(#tabs-list,.win-btn,.btn-new,.tb-btns,.tabs-area){-webkit-app-region:no-drag;}
@@ -5384,7 +5963,7 @@ if (Test-Path $src) {
     :global(.tab){display:flex;align-items:center;gap:6px;padding:0 12px;height:34px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
     :global(.tab:hover){background:rgba(255,255,255,0.03);color:#94a3b8;}
     :global(.tab.active){background:var(--bg2);color:var(--acc);border-color:var(--bdr);border-top:2px solid var(--acc);}
-    :global(.tab-title-txt){max-width:120px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
+    :global(.tab-title-txt){max-width:170px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
     :global(.tab-rename-input){background:rgba(0,0,0,.4);border:1px solid var(--acc-b);border-radius:3px;color:var(--acc);font-size:12px;font-family:inherit;padding:1px 5px;width:110px;outline:none;-webkit-app-region:no-drag;}
     :global(.tdot){width:6px;height:6px;border-radius:50%;background:var(--purple);opacity:.6;flex-shrink:0;}
     :global(.tx){font-size:10px;color:transparent;padding:1px 3px;border-radius:3px;flex-shrink:0;}
@@ -5425,16 +6004,39 @@ if (Test-Path $src) {
     /* ── BODY ──────────────────────────────────── */
     .body{display:flex;flex-direction:row;flex:1;overflow:hidden;min-height:0;}
     /* ── SIDEBAR ───────────────────────────────── */
-    .sidebar{display:flex;flex-direction:column;background:#12141e;border-right:1px solid var(--bdr);overflow-y:auto;overflow-x:hidden;transition:width .2s ease;flex-shrink:0;padding:8px 0 6px;}
+    .sidebar{
+      display:flex;flex-direction:column;background:#12141e;border-right:1px solid var(--bdr);
+      overflow-y:auto;overflow-x:hidden;
+      /* Spring-style collapse: ease-out cubic-bezier with slight overshoot feel.
+         Width is the only animated property → no layout thrashing. */
+      transition:width .32s cubic-bezier(0.16, 1, 0.3, 1);
+      flex-shrink:0;padding:8px 0 6px;
+      will-change:width;
+    }
+    /* Sidebar items fade-shrink slightly during collapse so the icons re-center smoothly */
+    .sidebar .sb-it,
+    .sidebar .sb-lbl,
+    .sidebar .sb-div{
+      transition: padding .28s cubic-bezier(0.16, 1, 0.3, 1),
+                  opacity  .22s ease,
+                  transform .28s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    /* Text inside sidebar items fades out faster than the width animates,
+       so the user perceives "icons settle in place" rather than "text squeeze" */
+    .sidebar .sb-txt{transition: opacity .14s ease;}
+    .sidebar.closed .sb-txt{opacity:0;}
     .sidebar.open{width:210px;}
     .sidebar.closed{width:46px;}
     .sb-tog{background:none;border:none;color:var(--txt2);cursor:pointer;font-size:12px;padding:4px 10px;margin-bottom:6px;display:flex;align-items:center;gap:5px;border-radius:4px;transition:.15s;width:100%;}
     .sb-tog:hover{background:rgba(255,255,255,.04);color:var(--txt);}
     .sb-togtxt{font-size:11px;white-space:nowrap;}
-    .sb-lbl{font-size:10px;color:#334155;letter-spacing:1px;padding:6px 14px 4px;text-transform:uppercase;font-weight:700;white-space:nowrap;}
+    .sb-lbl{font-size:9.5px;color:#64748b;letter-spacing:1.4px;padding:10px 14px 5px;text-transform:uppercase;font-weight:800;white-space:nowrap;display:flex;align-items:center;gap:8px;}
+    .sb-lbl::after{content:'';flex:1;height:1px;background:linear-gradient(to right, rgba(100,116,139,.18), transparent);}
     .sidebar.closed .sb-lbl{display:none;}
-    .sb-div{height:1px;background:var(--bdr);margin:6px 12px;}
-    .sidebar.closed .sb-div{margin:6px 8px;}
+    .sb-div{height:1px;background:linear-gradient(to right, transparent, var(--bdr) 20%, var(--bdr) 80%, transparent);margin:8px 10px;opacity:.7;}
+    .sidebar.closed .sb-div{margin:8px 6px;}
+    /* Light theme: stronger contrast for section headers */
+    :global(:root.light .sb-lbl::after){background:linear-gradient(to right, rgba(15,23,42,.15), transparent);}
     /* Punto 7: sidebar items con borde izquierdo animado (::before scaleY) */
     .sb-it{display:flex;align-items:center;gap:8px;padding:6px 14px;padding-left:16px;font-size:12px;color:var(--txt2);cursor:pointer;transition:background .12s,color .12s;white-space:nowrap;position:relative;}
     .sb-it::before{content:'';position:absolute;left:0;top:18%;bottom:18%;width:2px;border-radius:1px;background:var(--acc);transform:scaleY(0);transform-origin:center;transition:transform .18s cubic-bezier(.4,0,.2,1),opacity .15s;opacity:0;pointer-events:none;}
@@ -5475,9 +6077,14 @@ if (Test-Path $src) {
 
     /* ── ACCIONES RÁPIDAS (NUEVO) ──────────────── */
     .sb-action-item { position: relative; }
-    .sb-del { position: absolute; right: 10px; background: transparent; border: none; color: var(--red); opacity: 0; cursor: pointer; transition: 0.2s; font-size: 10px; }
-    .sb-action-item:hover .sb-del { opacity: 1; }
-    .sidebar.closed .sb-del { display: none; }
+    .sb-del { position: absolute; right: 10px; background: transparent; border: none; color: var(--red); opacity: 0; cursor: pointer; transition: 0.2s; font-size: 10px; padding:2px 4px; border-radius:3px;}
+    .sb-edit{ position: absolute; right: 30px; background: transparent; border: none; color: var(--txt2); opacity: 0; cursor: pointer; transition: 0.2s; font-size: 11px; padding:2px 4px; border-radius:3px;}
+    .sb-action-item:hover .sb-del,
+    .sb-action-item:hover .sb-edit { opacity: 1; }
+    .sb-del:hover{ background: rgba(239,68,68,.12); }
+    .sb-edit:hover{ background: rgba(16,185,129,.10); color: var(--acc); }
+    .sidebar.closed .sb-del,
+    .sidebar.closed .sb-edit { display: none; }
     
     .sb-ico{font-size:13px;width:16px;text-align:center;flex-shrink:0;}
     .sb-txt{flex:1;}
@@ -5532,6 +6139,77 @@ if (Test-Path $src) {
     .preset-apply:hover{background:rgba(99,102,241,.18);}
     .preset-del{background:transparent;border:none;color:var(--txt3);cursor:pointer;padding:4px 8px;font-size:10px;border-left:1px solid rgba(99,102,241,.25);}
     .preset-del:hover{color:#f87171;background:rgba(239,68,68,.1);}
+    /* ── Workspace Presets v2: card grid ── */
+    :global(.preset-grid){display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:8px;margin-top:6px;}
+    :global(.preset-card){
+      background:rgba(99,102,241,.06);
+      border:1px solid rgba(99,102,241,.22);
+      border-radius:8px;
+      padding:9px 10px 7px;
+      display:flex;flex-direction:column;gap:5px;
+      cursor:pointer;
+      transition:.15s ease;
+      position:relative;
+      overflow:hidden;
+    }
+    :global(.preset-card)::before{
+      content:'';position:absolute;top:0;left:0;right:0;height:2px;
+      background:linear-gradient(to right, rgba(99,102,241,.5), rgba(167,139,250,.3));
+      opacity:.7;
+    }
+    :global(.preset-card:hover){
+      background:rgba(99,102,241,.12);
+      border-color:rgba(99,102,241,.45);
+      transform:translateY(-1px);
+      box-shadow:0 4px 12px rgba(99,102,241,.15);
+    }
+    /* Theme accent on the top border */
+    :global(.preset-card-ocean)::before    {background:linear-gradient(to right, #2a4a6e, #122236);}
+    :global(.preset-card-hacker)::before   {background:linear-gradient(to right, #1b3a1b, #020602);}
+    :global(.preset-card-sunset)::before   {background:linear-gradient(to right, #5a2b2b, #1a0d0d);}
+    :global(.preset-card-forest)::before   {background:linear-gradient(to right, #2b4a35, #040f09);}
+    :global(.preset-card-twilight)::before {background:linear-gradient(to right, #3a2b5a, #08040f);}
+    :global(.preset-card-mocha)::before    {background:linear-gradient(to right, #4a3b2b, #0f0a04);}
+    :global(.preset-card-graphite)::before {background:linear-gradient(to right, #3a3d42, #0a0b0d);}
+    :global(.preset-card-midnight)::before {background:linear-gradient(to right, #1a3050, #050912);}
+    :global(.preset-card-amoled)::before   {background:linear-gradient(to right, #1a1a1a, #000000);}
+    :global(.preset-card-nord)::before     {background:linear-gradient(to right, #3b4252, #1a1c22);}
+    :global(.preset-card-hdr){display:flex;justify-content:space-between;align-items:center;gap:6px;}
+    :global(.preset-card-name){
+      font-weight:700;font-size:12px;color:var(--txt);
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    :global(.preset-card-del){
+      background:transparent;border:none;color:var(--txt3);
+      cursor:pointer;font-size:10px;padding:1px 4px;border-radius:3px;
+      flex-shrink:0;opacity:.5;transition:.15s;
+    }
+    :global(.preset-card:hover .preset-card-del){opacity:1;}
+    :global(.preset-card-del:hover){color:var(--red);background:rgba(239,68,68,.10);}
+    :global(.preset-card-meta){display:flex;flex-wrap:wrap;gap:4px;}
+    :global(.preset-tag){
+      font-family:var(--mono);font-size:9.5px;font-weight:600;
+      padding:2px 6px;border-radius:6px;letter-spacing:.2px;
+      background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.06);
+      color:var(--txt2);
+    }
+    :global(.preset-card-foot){display:flex;flex-wrap:wrap;gap:4px;align-items:center;}
+    :global(.preset-foot-tag){
+      font-size:9px;color:var(--txt3);font-family:var(--mono);
+      letter-spacing:.2px;
+    }
+    :global(.preset-foot-applied){color:var(--acc);}
+    :global(.preset-foot-v2){
+      background:rgba(167,139,250,.10);color:#a78bfa;
+      padding:1px 5px;border-radius:5px;font-weight:700;font-size:8.5px;
+    }
+    /* Light theme */
+    :global(:root.light .preset-card){background:rgba(99,102,241,.05);border-color:rgba(99,102,241,.25);}
+    :global(:root.light .preset-card:hover){background:rgba(99,102,241,.10);box-shadow:0 4px 12px rgba(99,102,241,.12);}
+    :global(:root.light .preset-card-name){color:#1e293b;}
+    :global(:root.light .preset-tag){background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.08);color:#475569;}
+    :global(:root.light .preset-foot-v2){color:#6366f1;background:rgba(99,102,241,.10);}
     .msg-pin{position:absolute;top:6px;right:6px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:12px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;}
     .msg-pin:hover{opacity:1;background:rgba(167,139,250,.15);}
     .msg-pin.on{opacity:1;color:#fbbf24;text-shadow:0 0 6px rgba(251,191,36,.5);}
@@ -5630,7 +6308,33 @@ if (Test-Path $src) {
     /* markdown */
     :global(.msg-lucy p){margin:0 0 6px;}:global(.msg-lucy p:last-child){margin-bottom:0;}
     /* ── CODE BLOCK con header ─────────────────── */
-    :global(.code-wrap){margin:8px 0;border:1px solid var(--bdr);border-radius:8px;overflow:hidden;background:#0a0c15;}
+    :global(.code-wrap){
+      margin:8px 0;border:1px solid var(--bdr);border-radius:8px;overflow:hidden;background:#0a0c15;
+      position:relative;
+      /* When a runnable code block appears: brief attention sweep so the user notices it */
+      animation: code-block-arrive .55s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes code-block-arrive{
+      0%   { opacity: 0; transform: translateY(4px) scale(0.99); border-color: rgba(255,255,255,.04); }
+      55%  { opacity: 1; transform: translateY(0)   scale(1);    border-color: rgba(16,185,129,.45); box-shadow: 0 0 14px rgba(16,185,129,.12); }
+      100% { opacity: 1; transform: none;                                    border-color: var(--bdr);                box-shadow: none; }
+    }
+    /* Typewriter scan: a soft horizontal sweep that crosses runnable code
+       blocks once, suggesting "Lucy just generated this".
+       Only active for elements containing .run-inline-btn (i.e. runnable). */
+    :global(.code-wrap:has(.run-inline-btn))::before{
+      content:'';position:absolute;top:0;left:-30%;
+      width:30%;height:100%;
+      background:linear-gradient(110deg, transparent 30%, rgba(16,185,129,.10) 50%, transparent 70%);
+      pointer-events:none;
+      animation: code-typewriter-scan 1.6s ease-out 0.15s 1 forwards;
+    }
+    @keyframes code-typewriter-scan{
+      0%   { left: -30%; opacity: 0; }
+      15%  { opacity: 1; }
+      85%  { opacity: 1; }
+      100% { left: 130%; opacity: 0; }
+    }
     :global(.code-header){display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#0d0f18;border-bottom:1px solid var(--bdr);height:32px;}
     :global(.code-lang){font-size:10px;font-weight:600;color:#0f7b5a;letter-spacing:.5px;text-transform:uppercase;font-family:var(--mono);}
     :global(.copy-btn){background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.12);border-radius:4px;color:#0d9668;font-size:10px;padding:3px 10px;cursor:pointer;font-family:inherit;transition:.15s;font-weight:500;line-height:1.4;}
@@ -5693,19 +6397,44 @@ if (Test-Path $src) {
       transition:background .25s, border-color .25s;
     }
     .msg-reasoning.reasoning-active{
-      background:linear-gradient(110deg, rgba(167,139,250,.06) 0%, rgba(99,102,241,.10) 50%, rgba(167,139,250,.06) 100%);
-      background-size:200% 100%;
-      animation:reasonShimmer 2.4s linear infinite;
+      /* Triple-layer shimmer: a diagonal sweep + a soft radial glow + the base bg.
+         Each layer animates independently for a richer "thinking is happening" feel. */
+      background:
+        radial-gradient(circle at 0% 50%, rgba(167,139,250,.18) 0%, transparent 25%),
+        linear-gradient(110deg, rgba(167,139,250,.06) 0%, rgba(99,102,241,.14) 50%, rgba(167,139,250,.06) 100%),
+        rgba(99,102,241,.04);
+      background-size: 100% 100%, 250% 100%, 100% 100%;
+      background-repeat: no-repeat;
+      animation: reasonShimmer 3.2s linear infinite, reasonGlow 4s ease-in-out infinite;
       border-left-color:#a78bfa;
-      box-shadow:0 0 0 1px rgba(167,139,250,.10), 0 4px 18px -8px rgba(99,102,241,.35);
+      box-shadow:
+        0 0 0 1px rgba(167,139,250,.10),
+        0 4px 18px -8px rgba(99,102,241,.35),
+        inset 0 0 30px -10px rgba(167,139,250,.08);
+      position:relative;
+    }
+    /* Subtle scanning line that crosses the panel diagonally */
+    .msg-reasoning.reasoning-active::before{
+      content:'';position:absolute;inset:0;pointer-events:none;
+      background:linear-gradient(110deg, transparent 45%, rgba(167,139,250,.08) 50%, transparent 55%);
+      background-size: 250% 100%;
+      animation: reasonScan 2.4s ease-in-out infinite;
     }
     .msg-reasoning.reasoning-done{
       background:rgba(255,255,255,.015);
       border-left-color:rgba(167,139,250,.35);
     }
     @keyframes reasonShimmer{
-      0%{background-position:0% 50%;}
-      100%{background-position:200% 50%;}
+      0%{background-position: 0% 50%, 0% 50%, 0% 0%;}
+      100%{background-position: 0% 50%, 250% 50%, 0% 0%;}
+    }
+    @keyframes reasonScan{
+      0%   { background-position: -120% 0%; }
+      100% { background-position:  120% 0%; }
+    }
+    @keyframes reasonGlow{
+      0%, 100% { box-shadow: 0 0 0 1px rgba(167,139,250,.10), 0 4px 18px -8px rgba(99,102,241,.35), inset 0 0 30px -10px rgba(167,139,250,.08); }
+      50%      { box-shadow: 0 0 0 1px rgba(167,139,250,.18), 0 6px 28px -8px rgba(99,102,241,.55), inset 0 0 40px -10px rgba(167,139,250,.18); }
     }
     .reasoning-header{
       display:flex;align-items:center;gap:8px;
@@ -5771,6 +6500,27 @@ if (Test-Path $src) {
     }
     :global(.tool-card.tc-done){border-left-color:#10b981;}
     :global(.tool-card.tc-error){border-left-color:#ef4444;background:rgba(239,68,68,.04);}
+    /* Birth animation: pop + ripple ring when a tool card is appended.
+       Ripple uses ::after with absolute positioning. Animation runs once. */
+    :global(.tool-card){
+      animation: tc-birth .42s cubic-bezier(0.34,1.56,0.64,1) both;
+      position:relative;
+    }
+    :global(.tool-card.tc-running)::after{
+      content:'';position:absolute;left:-2px;top:-2px;bottom:-2px;width:3px;
+      background:linear-gradient(180deg, transparent, #a78bfa, transparent);
+      animation:tc-running-pulse 1.6s ease-in-out infinite;
+      pointer-events:none;
+    }
+    @keyframes tc-birth{
+      0%   { opacity:0; transform: translateY(-6px) scale(0.96); }
+      55%  { opacity:1; transform: translateY(1px)  scale(1.01); }
+      100% { opacity:1; transform: translateY(0)    scale(1); }
+    }
+    @keyframes tc-running-pulse{
+      0%,100% { opacity:0.25; transform: translateY(0); }
+      50%     { opacity:0.85; transform: translateY(0); }
+    }
     :global(.tool-card .tc-head){
       display:flex;align-items:center;gap:9px;
       padding:7px 11px;
@@ -5830,6 +6580,109 @@ if (Test-Path $src) {
     :global(:root.light .tool-card .tc-head){color:#334155;}
     :global(:root.light .tool-card .tc-label){color:#475569;}
     :global(:root.light .tool-card .tc-body){color:#475569;background:rgba(0,0,0,.04);}
+    /* ── Particle burst on successful agent completion ── */
+    /* 12 particles emit radially from the agent message badge, each with a
+       slightly randomized angle/distance via nth-child overrides. Pure CSS,
+       runs once and self-cleans (animation: forwards but particles fade). */
+    :global(.agent-burst){
+      position:relative;width:0;height:0;
+      pointer-events:none;
+      margin-left:14px;
+    }
+    :global(.agent-burst > span){
+      position:absolute;
+      width:6px;height:6px;border-radius:50%;
+      background:radial-gradient(circle, var(--acc) 0%, transparent 70%);
+      box-shadow:0 0 8px rgba(16,185,129,.85);
+      opacity:0;
+      animation: agent-particle 1.05s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    /* 12 directions × subtle distance variation */
+    :global(.agent-burst > span:nth-child(1))  { --tx: 32px;  --ty: -8px;  --rot:  10deg; animation-delay: 0ms;  }
+    :global(.agent-burst > span:nth-child(2))  { --tx: 26px;  --ty: -22px; --rot:  35deg; animation-delay: 30ms; background:radial-gradient(circle, #34d399 0%, transparent 70%); }
+    :global(.agent-burst > span:nth-child(3))  { --tx: 12px;  --ty: -36px; --rot:  60deg; animation-delay: 60ms; }
+    :global(.agent-burst > span:nth-child(4))  { --tx: -8px;  --ty: -32px; --rot:  90deg; animation-delay: 90ms; background:radial-gradient(circle, #6ee7b7 0%, transparent 70%); }
+    :global(.agent-burst > span:nth-child(5))  { --tx: -22px; --ty: -22px; --rot: 120deg; animation-delay: 110ms;}
+    :global(.agent-burst > span:nth-child(6))  { --tx: -32px; --ty: -6px;  --rot: 150deg; animation-delay: 130ms; background:radial-gradient(circle, var(--acc) 0%, transparent 70%); }
+    :global(.agent-burst > span:nth-child(7))  { --tx: -28px; --ty: 12px;  --rot: 200deg; animation-delay: 0ms;   }
+    :global(.agent-burst > span:nth-child(8))  { --tx: -16px; --ty: 26px;  --rot: 230deg; animation-delay: 40ms;  background:radial-gradient(circle, #34d399 0%, transparent 70%); }
+    :global(.agent-burst > span:nth-child(9))  { --tx: 6px;   --ty: 32px;  --rot: 260deg; animation-delay: 70ms;  }
+    :global(.agent-burst > span:nth-child(10)) { --tx: 22px;  --ty: 24px;  --rot: 290deg; animation-delay: 100ms; background:radial-gradient(circle, #6ee7b7 0%, transparent 70%); }
+    :global(.agent-burst > span:nth-child(11)) { --tx: 32px;  --ty: 8px;   --rot: 330deg; animation-delay: 130ms; }
+    :global(.agent-burst > span:nth-child(12)) { --tx: 36px;  --ty: -2px;  --rot: 355deg; animation-delay: 50ms;  }
+    @keyframes agent-particle{
+      0%   { opacity: 0;   transform: translate(0,0) scale(0.4) rotate(var(--rot)); }
+      15%  { opacity: 1;   transform: translate(calc(var(--tx) * 0.25), calc(var(--ty) * 0.25)) scale(1.1) rotate(var(--rot)); }
+      70%  { opacity: 0.8; transform: translate(var(--tx), var(--ty)) scale(0.85) rotate(var(--rot)); }
+      100% { opacity: 0;   transform: translate(calc(var(--tx) * 1.2), calc(var(--ty) * 1.2 + 4px)) scale(0.4) rotate(var(--rot)); }
+    }
+    /* Light theme particles use a darker green so they're visible on white */
+    :global(:root.light .agent-burst > span){
+      background:radial-gradient(circle, #0f7b5a 0%, transparent 70%);
+      box-shadow:0 0 6px rgba(15,123,90,.85);
+    }
+
+    /* ── 3D flip when expanding/collapsing tool cards ── */
+    /* The body of a <details> element animates from the top edge, giving a
+       subtle "page turn" feel without breaking the underlying browser semantics. */
+    :global(.tool-card[open] > .tc-body),
+    :global(.tool-card[open] > .tc-diff),
+    :global(.tool-card[open] > .tc-group-body){
+      animation: tc-flip-open .32s cubic-bezier(0.16, 1, 0.3, 1);
+      transform-origin: top center;
+      perspective: 600px;
+    }
+    @keyframes tc-flip-open{
+      0%   { opacity: 0; transform: rotateX(-12deg) translateY(-4px); filter: blur(1px); }
+      60%  { opacity: 1; }
+      100% { opacity: 1; transform: rotateX(0)      translateY(0);   filter: blur(0); }
+    }
+    /* Caret indicator on the head — rotates 90deg when expanded.
+       Adds a tiny visual hint that the card is interactive. */
+    :global(.tool-card .tc-head)::before{
+      content:'›';
+      display:inline-block;
+      color:var(--txt3);font-family:var(--mono);font-size:11px;
+      width:10px;
+      transition: transform .2s cubic-bezier(0.16,1,0.3,1), color .15s;
+      transform: rotate(0deg);
+      flex-shrink:0;
+    }
+    :global(.tool-card[open] > .tc-head)::before{
+      transform: rotate(90deg);
+      color:var(--acc);
+    }
+
+    /* ── Grouped tool cards (collapsed runs of identical fork/wait calls) ── */
+    :global(.tool-card.tc-group > .tc-head){background:rgba(167,139,250,.04);}
+    :global(.tool-card.tc-group .tc-count){
+      display:inline-block;margin-left:6px;
+      font-family:var(--mono);font-size:10px;font-weight:700;
+      color:#a78bfa;background:rgba(167,139,250,.12);
+      padding:1px 7px;border-radius:9px;letter-spacing:.2px;
+    }
+    :global(.tool-card.tc-group .tc-err-badge){
+      font-family:var(--mono);font-size:10px;font-weight:700;
+      color:#ef4444;background:rgba(239,68,68,.10);
+      padding:1px 6px;border-radius:8px;letter-spacing:.2px;
+    }
+    :global(.tool-card.tc-group .tc-group-body){
+      padding:6px 8px 6px 22px;
+      background:rgba(0,0,0,.10);
+      border-top:1px solid rgba(255,255,255,.04);
+      display:flex;flex-direction:column;gap:4px;
+    }
+    /* Children inside a group are denser — they don't need their own border-left or large padding. */
+    :global(.tool-card.tc-group .tc-group-body .tool-card){
+      border-left-width:2px;border-radius:4px;
+      background:rgba(255,255,255,.015);
+    }
+    :global(.tool-card.tc-group .tc-group-body .tc-head){padding:4px 9px;font-size:11px;}
+    :global(.tool-card.tc-group .tc-group-body .tc-label){font-size:10.5px;}
+    :global(:root.light .tool-card.tc-group > .tc-head){background:rgba(99,102,241,.06);}
+    :global(:root.light .tool-card.tc-group .tc-count){color:#6366f1;background:rgba(99,102,241,.10);}
+    :global(:root.light .tool-card.tc-group .tc-group-body){background:rgba(99,102,241,.03);border-top-color:rgba(99,102,241,.10);}
+    :global(:root.light .tool-card.tc-group .tc-group-body .tool-card){background:rgba(255,255,255,.5);}
 
     /* ── REMOTE SHELL ────────────────────────────── */
     .rshell-overlay{position:fixed;inset:0;right:820px;background:rgba(0,0,0,.75);z-index:var(--z-rshell);cursor:pointer;}
@@ -5983,8 +6836,36 @@ if (Test-Path $src) {
     :global(.sf-rm){background:none;border:none;color:var(--red);cursor:pointer;font-weight:bold;padding:0 3px;font-size:12px;line-height:1;}
     /* ── CHIPS ─────────────────────────────────── */
     :global(.chips){display:flex;align-items:center;gap:5px;padding:5px 14px;overflow-x:auto;border-top:1px solid #131825;flex-shrink:0;}
-    :global(.chips-lucy-label){flex-shrink:0;font-size:10px;font-weight:700;color:rgba(16,185,129,.4);letter-spacing:.5px;padding:2px 6px 2px 0;border-right:1px solid rgba(16,185,129,.1);margin-right:3px;white-space:nowrap;cursor:default;user-select:none;}
+    :global(.chips.chips-collapsed){padding:3px 14px;}
+    :global(.chips-lucy-label){flex-shrink:0;font-size:10px;font-weight:700;color:rgba(16,185,129,.4);letter-spacing:.5px;padding:2px 6px 2px 0;white-space:nowrap;user-select:none;}
+    :global(.chips:not(.chips-collapsed) .chips-lucy-label){border-right:1px solid rgba(16,185,129,.1);margin-right:3px;}
     :global(.chips::-webkit-scrollbar){display:none;}
+    /* Toggle button that opens/closes the chips bar */
+    :global(.chips-toggle){
+      display:inline-flex;align-items:center;gap:5px;
+      background:transparent;border:none;cursor:pointer;
+      padding:0;flex-shrink:0;
+      transition:opacity .15s;
+    }
+    :global(.chips-toggle:hover){opacity:.85;}
+    :global(.chips-toggle:hover .chips-lucy-label){color:rgba(16,185,129,.7);}
+    :global(.chips-count){
+      display:inline-block;font-family:var(--mono);font-size:10px;font-weight:700;
+      color:rgba(16,185,129,.55);background:rgba(16,185,129,.08);
+      padding:1px 6px;border-radius:8px;letter-spacing:.2px;
+    }
+    :global(.chips-chevron){
+      font-size:9px;color:rgba(16,185,129,.45);
+      transition:transform .15s;user-select:none;
+      width:10px;text-align:center;
+    }
+    /* Light theme overrides */
+    :global(:root.light .chips){border-top-color:rgba(0,0,0,.08);}
+    :global(:root.light .chips-lucy-label){color:rgba(15,123,90,.7);}
+    :global(:root.light .chips:not(.chips-collapsed) .chips-lucy-label){border-right-color:rgba(15,123,90,.18);}
+    :global(:root.light .chips-count){color:#0f7b5a;background:rgba(15,123,90,.10);}
+    :global(:root.light .chips-chevron){color:rgba(15,123,90,.55);}
+    :global(:root.light .chips-toggle:hover .chips-lucy-label){color:#0f7b5a;}
     :global(.chip){display:flex;align-items:center;gap:4px;white-space:nowrap;background:rgba(16,185,129,.04);border:1px solid rgba(16,185,129,.09);color:#0d9668;border-radius:12px;padding:3px 10px;font-size:11px;cursor:pointer;transition:.15s;flex-shrink:0;font-family:inherit;}
     :global(.chip:hover){background:rgba(16,185,129,.09);border-color:rgba(16,185,129,.2);}
     :global(.chip-user){background:rgba(59,130,246,.06);border-color:rgba(59,130,246,.15);color:#4a7aaa;}
@@ -6047,11 +6928,289 @@ if (Test-Path $src) {
     .bi:last-child{border-right:none;margin-right:0;}
     .bi.r{margin-left:auto;}
     .cok{color:var(--acc);}.cy{color:var(--amber);}.cr{color:var(--red);}
+    /* Model badge in footer — uses blue accent so it's visually distinct from cost/stream */
+    .cm{color:#7dd3fc;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.2px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;}
+    :global(:root.light .cm){color:#0369a1;}
     .ctx-track{display:inline-block;width:50px;height:3px;background:var(--bdr);border-radius:2px;margin:0 4px;vertical-align:middle;position:relative;overflow:hidden;}
     .ctx-fill{position:absolute;left:0;top:0;height:100%;background:var(--acc);border-radius:2px;transition:width .3s;}
+    /* Budget progress bar inside footer "Cost:" cell */
+    .cost-budget-track{display:inline-block;width:42px;height:3px;background:var(--bdr);border-radius:2px;margin-left:5px;vertical-align:middle;position:relative;overflow:hidden;}
+    .cost-budget-fill{position:absolute;left:0;top:0;height:100%;border-radius:2px;transition:width .4s ease;}
+    .cost-budget-fill.cok-bg{background:var(--acc);}
+    .cost-budget-fill.cy-bg{background:var(--amber);}
+    .cost-budget-fill.cr-bg{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.45);}
+    /* ── Cost predictor chip (inline next to model badge) ── */
+    :global(.cost-predict){
+      display:inline-flex;align-items:center;gap:5px;
+      font-family:var(--mono);font-size:10px;font-weight:600;
+      padding:3px 8px;border-radius:9px;letter-spacing:.2px;
+      cursor:help;user-select:none;
+      transition:.18s ease;
+      animation:cp-fade .25s ease;
+      white-space:nowrap;
+    }
+    @keyframes cp-fade{from{opacity:0;transform:translateY(-2px);}to{opacity:1;transform:none;}}
+    :global(.cost-predict .cp-icon){opacity:.7;font-size:10px;}
+    :global(.cost-predict .cp-tokens){opacity:.85;}
+    :global(.cost-predict .cp-cost){font-weight:700;letter-spacing:.1px;}
+    :global(.cost-predict-ok){
+      color:#a78bfa;background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.20);
+    }
+    :global(.cost-predict-warn){
+      color:#fbbf24;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.30);
+    }
+    :global(.cost-predict-high){
+      color:#ef4444;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);
+      box-shadow:0 0 8px rgba(239,68,68,.25);
+    }
+    :global(.cost-predict-free){
+      color:var(--acc);background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);
+    }
+    :global(.cost-predict-free .cp-icon){color:var(--acc);animation:cp-pulse 2s ease-in-out infinite;}
+    @keyframes cp-pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+    /* Light theme */
+    :global(:root.light .cost-predict-ok){color:#6366f1;background:rgba(99,102,241,.08);border-color:rgba(99,102,241,.25);}
+    :global(:root.light .cost-predict-warn){color:#92400e;background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.35);}
+    :global(:root.light .cost-predict-high){color:#991b1b;background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.45);}
+    :global(:root.light .cost-predict-free){color:#0f7b5a;background:rgba(15,123,90,.10);border-color:rgba(15,123,90,.30);}
+
+    /* ── Quick-look popover for tool-card refs ── */
+    :global(.ql-popover){
+      position:fixed;z-index:9500;
+      width:min(420px, 90vw);
+      max-height:280px;
+      background:linear-gradient(180deg, rgba(15,23,42,.97), rgba(8,12,22,.99));
+      border:1px solid rgba(167,139,250,.40);
+      border-radius:8px;
+      box-shadow:0 12px 36px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04);
+      display:flex;flex-direction:column;
+      opacity:0;visibility:hidden;transform:translateY(4px);
+      transition:opacity .12s ease, transform .15s cubic-bezier(0.16,1,0.3,1), visibility 0s linear .15s;
+      pointer-events:none;
+      font-size:11px;
+      overflow:hidden;
+    }
+    :global(.ql-popover.ql-show){
+      opacity:1;visibility:visible;transform:translateY(0);
+      transition:opacity .15s ease, transform .18s cubic-bezier(0.16,1,0.3,1), visibility 0s linear 0s;
+      pointer-events:auto;
+    }
+    :global(.ql-popover .ql-head){
+      display:flex;align-items:center;gap:8px;
+      padding:7px 11px;
+      background:rgba(167,139,250,.08);
+      border-bottom:1px solid rgba(167,139,250,.18);
+    }
+    :global(.ql-popover .ql-icon){font-size:13px;color:#a78bfa;flex-shrink:0;}
+    :global(.ql-popover .ql-label){
+      flex:1;font-family:var(--mono);font-size:11px;font-weight:600;
+      color:#cbd5e1;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+    :global(.ql-popover .ql-status){
+      flex-shrink:0;font-size:11px;font-weight:700;
+      width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+      border-radius:50%;
+    }
+    :global(.ql-popover .ql-st-done){color:#10b981;background:rgba(16,185,129,.10);}
+    :global(.ql-popover .ql-st-error){color:#ef4444;background:rgba(239,68,68,.10);}
+    :global(.ql-popover .ql-st-running){color:#a78bfa;background:rgba(167,139,250,.10);}
+    :global(.ql-popover .ql-body){
+      margin:0;padding:8px 11px;
+      font-family:var(--mono);font-size:10.5px;line-height:1.55;
+      color:#94a3b8;
+      background:rgba(0,0,0,.22);
+      white-space:pre-wrap;word-break:break-word;
+      max-height:200px;overflow-y:auto;
+      flex:1;
+    }
+    :global(.ql-popover .ql-foot){
+      padding:5px 11px;
+      font-size:9.5px;color:var(--txt3);
+      background:rgba(0,0,0,.18);
+      border-top:1px solid rgba(255,255,255,.04);
+      text-align:center;letter-spacing:.3px;
+      text-transform:uppercase;
+    }
+    /* Light theme variants */
+    :global(:root.light .ql-popover){
+      background:linear-gradient(180deg, #ffffff, #f8fafc);
+      border-color:rgba(99,102,241,.40);
+      box-shadow:0 12px 36px rgba(15,23,42,.20);
+    }
+    :global(:root.light .ql-popover .ql-head){background:rgba(99,102,241,.08);border-bottom-color:rgba(99,102,241,.20);}
+    :global(:root.light .ql-popover .ql-icon){color:#6366f1;}
+    :global(:root.light .ql-popover .ql-label){color:#1e293b;}
+    :global(:root.light .ql-popover .ql-body){color:#475569;background:rgba(0,0,0,.04);}
+    :global(:root.light .ql-popover .ql-foot){background:rgba(241,245,249,.6);}
+
+    /* ── Keyboard Shortcuts Overlay (?) ── */
+    :global(.ks-overlay){
+      position:fixed;inset:0;z-index:var(--z-modal,8500);
+      background:rgba(2,4,8,.72);backdrop-filter:blur(8px);
+      display:flex;align-items:center;justify-content:center;
+      animation:ks-fade .15s ease;
+      padding:24px;
+    }
+    @keyframes ks-fade{from{opacity:0}to{opacity:1}}
+    @keyframes ks-slide{from{transform:translateY(8px) scale(.985);opacity:0}to{transform:none;opacity:1}}
+    :global(.ks-modal){
+      background:linear-gradient(180deg, rgba(15,23,42,.96), rgba(8,12,22,.98));
+      border:1px solid rgba(99,102,241,.30);
+      border-radius:14px;
+      width:min(720px, 96vw);max-height:88vh;
+      display:flex;flex-direction:column;
+      box-shadow:0 24px 64px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04);
+      animation:ks-slide .18s cubic-bezier(0.16,1,0.3,1);
+      overflow:hidden;
+    }
+    :global(.ks-hdr){
+      display:flex;align-items:center;justify-content:space-between;
+      padding:14px 18px;
+      border-bottom:1px solid rgba(99,102,241,.18);
+      background:rgba(99,102,241,.06);
+    }
+    :global(.ks-hdr-l){display:flex;align-items:center;gap:10px;color:#a5b4fc;}
+    :global(.ks-hdr-icon){display:inline-flex;color:#a5b4fc;}
+    :global(.ks-title){font-size:14px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#c7d2fe;margin:0;}
+    :global(.ks-close){
+      background:transparent;border:1px solid rgba(255,255,255,.08);color:var(--txt2);
+      width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:13px;
+      transition:.15s;
+    }
+    :global(.ks-close:hover){background:rgba(239,68,68,.10);color:var(--red);border-color:rgba(239,68,68,.25);}
+    :global(.ks-body){
+      padding:14px 18px 8px;overflow-y:auto;
+      display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:18px 24px;
+    }
+    :global(.ks-section){display:flex;flex-direction:column;gap:6px;}
+    :global(.ks-section-title){
+      font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:800;
+      color:var(--acc);
+      padding-bottom:4px;border-bottom:1px solid rgba(16,185,129,.15);
+      margin-bottom:4px;
+    }
+    :global(.ks-row){
+      display:flex;align-items:center;justify-content:space-between;
+      padding:5px 2px;font-size:12px;color:var(--txt2);
+      gap:10px;
+    }
+    :global(.ks-row .ks-label){flex:1;}
+    :global(.ks-key){
+      display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:600;
+      background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
+      border-bottom-width:2px;
+      color:var(--txt);
+      padding:2px 7px;border-radius:5px;
+      min-width:20px;text-align:center;line-height:1.4;
+      box-shadow:0 1px 0 rgba(0,0,0,.35);
+    }
+    :global(.ks-key-inline){background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.32);color:var(--acc);}
+    :global(.ks-plus){font-size:9px;color:var(--txt3);margin:0 2px;}
+    :global(.ks-foot){
+      padding:10px 18px;border-top:1px solid rgba(255,255,255,.05);
+      font-size:11px;color:var(--txt3);text-align:center;
+      background:rgba(0,0,0,.18);
+    }
+    /* Light theme variants */
+    :global(:root.light .ks-overlay){background:rgba(180,190,210,.55);}
+    :global(:root.light .ks-modal){
+      background:linear-gradient(180deg, #ffffff, #f8fafc);
+      border-color:rgba(99,102,241,.35);
+      box-shadow:0 24px 64px rgba(15,23,42,.18);
+    }
+    :global(:root.light .ks-hdr){background:rgba(99,102,241,.08);border-bottom-color:rgba(99,102,241,.20);}
+    :global(:root.light .ks-hdr-l), :global(:root.light .ks-title){color:#4338ca;}
+    :global(:root.light .ks-key){
+      background:#f1f5f9;border-color:#cbd5e1;color:#1e293b;
+      box-shadow:0 1px 0 #cbd5e1;
+    }
+    :global(:root.light .ks-key-inline){background:rgba(15,123,90,.10);border-color:rgba(15,123,90,.32);color:#0f7b5a;}
+    :global(:root.light .ks-foot){background:rgba(241,245,249,.6);border-top-color:#e2e8f0;}
+
+    /* Direct Actions: icon picker grid inside the modal */
+    :global(.action-icon-grid){
+      display:grid;
+      grid-template-columns:repeat(auto-fill, minmax(38px, 1fr));
+      gap:6px;
+      max-height:160px;overflow-y:auto;
+      padding:8px;
+      background:rgba(0,0,0,.18);
+      border:1px solid var(--bdr);
+      border-radius:6px;
+    }
+    :global(.action-icon-btn){
+      display:flex;align-items:center;justify-content:center;
+      width:38px;height:38px;
+      background:rgba(255,255,255,.02);
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:6px;
+      color:var(--txt2);
+      cursor:pointer;
+      transition:.15s ease;
+      padding:0;
+    }
+    :global(.action-icon-btn:hover){
+      background:rgba(16,185,129,.08);
+      border-color:rgba(16,185,129,.25);
+      color:var(--acc);
+      transform:translateY(-1px);
+    }
+    :global(.action-icon-btn.active){
+      background:rgba(16,185,129,.16);
+      border-color:rgba(16,185,129,.55);
+      color:var(--acc);
+      box-shadow:0 0 0 2px rgba(16,185,129,.12);
+    }
+    :global(:root.light .action-icon-grid){background:rgba(0,0,0,.04);border-color:#cbd5e1;}
+    :global(:root.light .action-icon-btn){background:rgba(255,255,255,.6);border-color:#cbd5e1;color:#475569;}
+    :global(:root.light .action-icon-btn:hover){background:rgba(15,123,90,.08);border-color:rgba(15,123,90,.30);color:#0f7b5a;}
+    :global(:root.light .action-icon-btn.active){background:rgba(15,123,90,.15);border-color:rgba(15,123,90,.55);color:#0f7b5a;box-shadow:0 0 0 2px rgba(15,123,90,.12);}
+
+    /* Settings → System Health pills */
+    .settings-health-pills{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .health-pill{
+      display:inline-flex;align-items:center;gap:6px;
+      font-family:var(--mono);font-size:10.5px;font-weight:600;
+      padding:3px 10px;border-radius:10px;
+      letter-spacing:.2px;
+      transition:.15s;
+    }
+    .health-pill .health-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+    .health-pill.health-ok{color:var(--acc);background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.25);}
+    .health-pill.health-ok .health-dot{background:var(--acc);box-shadow:0 0 5px rgba(16,185,129,.6);}
+    .health-pill.health-warn{color:var(--amber);background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.30);}
+    .health-pill.health-warn .health-dot{background:var(--amber);box-shadow:0 0 5px rgba(245,158,11,.6);}
+    .health-pill.health-err{color:var(--red);background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);}
+    .health-pill.health-err .health-dot{background:var(--red);box-shadow:0 0 5px rgba(239,68,68,.6);animation:health-pulse 1.5s ease-in-out infinite;}
+    @keyframes health-pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+    /* Light theme variants */
+    :global(:root.light .health-pill.health-ok){color:#0f7b5a;background:rgba(15,123,90,.10);border-color:rgba(15,123,90,.30);}
+    :global(:root.light .health-pill.health-ok .health-dot){background:#0f7b5a;}
+    :global(:root.light .health-pill.health-warn){color:#92400e;background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.40);}
+    :global(:root.light .health-pill.health-warn .health-dot){background:#d97706;}
+    :global(:root.light .health-pill.health-err){color:#991b1b;background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.45);}
+    :global(:root.light .health-pill.health-err .health-dot){background:#dc2626;}
     /* ── TYPING ────────────────────────────────── */
     :global(.typing){align-self:flex-start;display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid var(--acc);border-radius:0 10px 10px 10px;color:var(--txt2);font-style:italic;font-size:12px;}
     :global(.stream-cursor){display:inline-block;width:2.5px;height:14px;background:var(--acc);border-radius:1px;vertical-align:middle;animation:stream-blink .8s ease-in-out infinite;box-shadow:0 0 8px rgba(16,185,129,.55),0 0 14px rgba(16,185,129,.25);margin-left:2px;}
+    /* Thinking dots — shown before first token streams in (TTFT phase) */
+    :global(.stream-thinking){
+      display:inline-flex;gap:5px;align-items:center;
+      padding:4px 0;margin-left:4px;
+    }
+    :global(.stream-thinking span){
+      width:7px;height:7px;border-radius:50%;
+      background:var(--acc);
+      box-shadow:0 0 6px rgba(16,185,129,.45);
+      animation:stream-think-bounce 1.1s ease-in-out infinite;
+    }
+    :global(.stream-thinking span:nth-child(2)){animation-delay:.16s;}
+    :global(.stream-thinking span:nth-child(3)){animation-delay:.32s;}
+    @keyframes stream-think-bounce{
+      0%, 80%, 100% { transform: translateY(0)   scale(0.8); opacity:.45; }
+      40%           { transform: translateY(-5px) scale(1.1); opacity:1; }
+    }
     :global(.streaming-active){
       position:relative;
       box-shadow:0 0 0 1px rgba(16,185,129,.10), 0 6px 22px -10px rgba(16,185,129,.30);
@@ -6516,13 +7675,35 @@ if (Test-Path $src) {
 
     /* ── UX: TOAST STACK ──────────────────────────── */
     .toast-stack{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;z-index:var(--z-toast);pointer-events:none;}
-    .toast{background:rgba(14,21,32,0.97);border:1px solid var(--bdr2);border-radius:8px;padding:9px 16px;font-size:12px;color:var(--txt);white-space:nowrap;box-shadow:0 4px 24px rgba(0,0,0,0.5);animation:toast-in .2s ease;display:flex;align-items:center;gap:8px;}
-    .toast-icon{font-size:13px;font-weight:700;flex-shrink:0;width:16px;text-align:center;}
+    .toast{
+      background:rgba(14,21,32,0.97);border:1px solid var(--bdr2);border-radius:8px;
+      padding:9px 16px;font-size:12px;color:var(--txt);white-space:nowrap;
+      box-shadow:0 6px 24px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.25);
+      display:flex;align-items:center;gap:8px;
+      /* Spring entry: overshoots slightly then settles — bouncy "pop" feel */
+      animation:toast-spring .42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+    .toast-icon{font-size:13px;font-weight:700;flex-shrink:0;width:16px;text-align:center;animation:toast-icon-rotate .55s cubic-bezier(0.34,1.56,0.64,1) both;}
     .toast-info  {border-left:3px solid var(--purple);}   .toast-info   .toast-icon{color:var(--purple);}
     .toast-success{border-left:3px solid var(--acc);}     .toast-success .toast-icon{color:var(--acc);}
     .toast-error  {border-left:3px solid var(--red);}     .toast-error   .toast-icon{color:var(--red);}
     .toast-warn   {border-left:3px solid var(--amber);}   .toast-warn    .toast-icon{color:var(--amber);}
-    @keyframes toast-in{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+    /* Spring (overshoot) entry — leaves smoothly with a slight slide */
+    @keyframes toast-spring{
+      0%   { opacity:0; transform:translateY(28px) scale(0.92); }
+      60%  { opacity:1; transform:translateY(-3px) scale(1.02); }
+      80%  { transform:translateY(1px) scale(0.998); }
+      100% { opacity:1; transform:translateY(0)    scale(1); }
+    }
+    /* Subtle icon rotate for extra "alive" feel */
+    @keyframes toast-icon-rotate{
+      0%   { transform: rotate(-12deg) scale(0.6); opacity:0.4; }
+      60%  { transform: rotate(4deg)  scale(1.12); opacity:1; }
+      100% { transform: rotate(0deg)  scale(1);   opacity:1; }
+    }
+    /* Backwards compatibility alias for any code that uses .out */
+    .toast.out{animation:toast-out .22s ease forwards;}
+    @keyframes toast-out{0%{opacity:1;transform:translateY(0);}100%{opacity:0;transform:translateY(8px) scale(0.96);}}
 
     /* ── UX: SKELETON LOADERS ─────────────────────── */
     @keyframes sk-shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
@@ -6554,12 +7735,31 @@ if (Test-Path $src) {
     :global(.hljs-subst),:global(.hljs-symbol)              { color:#eeffff; }
     /* ── Punto 12: dc-bar animada al cargar métricas ─────────────────── */
     :global(.dc-bar-fill){ transition: width .8s cubic-bezier(.4,0,.2,1); }
-    /* ── View Transitions API (Punto 6) ─────────────────────────────────── */
-    /* Aplica cuando document.startViewTransition() está disponible (Chrome/Edge 111+) */
-    :global(::view-transition-old(root)){animation:vt-out .14s ease forwards;}
-    :global(::view-transition-new(root)){animation:vt-in  .22s ease forwards;}
-    @keyframes vt-out{to{opacity:0;}}
-    @keyframes vt-in {from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:translateY(0);}}
+    /* ── View Transitions API ─────────────────────────────────────────────── */
+    /* Smooth cross-fade + slight scale/translate when switching views.
+       WebView2 (Chromium) supports startViewTransition() natively. */
+    :global(::view-transition-old(root)){animation:vt-out .18s cubic-bezier(0.4,0,1,1) forwards;}
+    :global(::view-transition-new(root)){animation:vt-in  .28s cubic-bezier(0.16,1,0.3,1) forwards;}
+    @keyframes vt-out{
+      0%   { opacity: 1; transform: scale(1)        translateY(0); filter: blur(0); }
+      100% { opacity: 0; transform: scale(0.985)    translateY(-3px); filter: blur(2px); }
+    }
+    @keyframes vt-in{
+      0%   { opacity: 0; transform: scale(1.005)    translateY(6px); filter: blur(2px); }
+      60%  { opacity: 1; }
+      100% { opacity: 1; transform: scale(1)        translateY(0); filter: blur(0); }
+    }
+    /* Tag persistent UI chrome with view-transition-name so it animates independently
+       from the main content area (avoids whole-screen flash). */
+    :global(.sidebar){view-transition-name: lucy-sidebar;}
+    :global(.bbar){view-transition-name: lucy-footer;}
+    :global(.tabs-bar){view-transition-name: lucy-tabs;}
+    :global(::view-transition-old(lucy-sidebar)),
+    :global(::view-transition-new(lucy-sidebar)),
+    :global(::view-transition-old(lucy-footer)),
+    :global(::view-transition-new(lucy-footer)),
+    :global(::view-transition-old(lucy-tabs)),
+    :global(::view-transition-new(lucy-tabs)){animation:none !important;}
 
     /* ── prefers-reduced-motion — desactiva todas las animaciones ────── */
     @media(prefers-reduced-motion:reduce){
@@ -6655,7 +7855,7 @@ if (Test-Path $src) {
                 on:click|stopPropagation
               >
             {:else}
-              <span class="tab-title-txt" role="button" tabindex="0" on:dblclick|stopPropagation={() => iniciarRename(tab.id)} title="Doble clic para renombrar">{tab.title}</span>
+              <span class="tab-title-txt" role="button" tabindex="0" on:dblclick|stopPropagation={() => iniciarRename(tab.id)} title={`${tab.title}\n(${isEN ? 'Double-click to rename' : 'Doble clic para renombrar'})`}>{tab.title}</span>
             {/if}
             <span class="tx" role="button" tabindex="0" on:click={(e) => cerrarTab(tab.id, e)} on:keydown>✕</span>
           </div>
@@ -6795,7 +7995,7 @@ if (Test-Path $src) {
             <span>{isEN ? 'Direct actions' : 'Acciones directas'}</span>
             <span class="sb-noai-badge" title={isEN ? "These buttons execute PowerShell scripts directly, bypassing Lucy" : "Estos botones ejecutan scripts de PowerShell directamente, sin pasar por Lucy"}>{isEN ? 'NO AI' : 'SIN IA'}</span>
           </div>
-          <button on:click={() => { editingActionIdx = null; newActionName = ''; newActionScript = ''; $showNewActionModal = true; }} style="background:none; border:none; color:var(--acc); cursor:pointer; font-size:16px; font-weight:bold; line-height:1; padding:0 5px;" title={isEN ? "Add direct action" : "Añadir acción directa"}>+</button>
+          <button on:click={() => { editingActionIdx = null; newActionName = ''; newActionScript = ''; newActionIcon = 'bolt'; $showNewActionModal = true; }} style="background:none; border:none; color:var(--acc); cursor:pointer; font-size:16px; font-weight:bold; line-height:1; padding:0 5px;" title={isEN ? "Add direct action" : "Añadir acción directa"}>+</button>
         {/if}
       </div>
 
@@ -6804,16 +8004,17 @@ if (Test-Path $src) {
         on:click={() => ejecutarDesdeSidebar(accion)} on:keydown
         title="Ejecutar directamente: {accion.nombre}">
         <span class="sb-ico">
-          {#if accion.icono === '⊡'}<Activity size={18}/>
-          {:else if accion.icono === '◉'}<Globe size={18}/>
-          {:else if accion.icono === '⊗'}<Lock size={18}/>
-          {:else if accion.icono === '≡'}<ClipboardList size={18}/>
-          {:else if accion.icono === '⊘'}<Trash2 size={18}/>
-          {:else}{accion.icono}{/if}
+          {#if ICON_MAP[accion.icono]}
+            <svelte:component this={ICON_MAP[accion.icono]} size={18}/>
+          {:else}
+            <!-- Fallback for any unrecognized icon: render as raw text/emoji -->
+            <span style="font-size:13px;">{accion.icono}</span>
+          {/if}
         </span>
         <span class="sb-txt">{accion.nombre}</span>
         {#if !sidebarCollapsed}
-        <button class="sb-del" on:click|stopPropagation={() => eliminarAccionRapida(i)} title="Eliminar">✖</button>
+        <button class="sb-edit" on:click|stopPropagation={() => abrirEditarAccionRapida(i)} title={isEN ? 'Edit' : 'Editar'}>✎</button>
+        <button class="sb-del" on:click|stopPropagation={() => eliminarAccionRapida(i)} title={isEN ? 'Delete' : 'Eliminar'}>✖</button>
         {/if}
       </div>
       {/each}
@@ -6871,7 +8072,7 @@ if (Test-Path $src) {
       <div class="sb-it" role="button" tabindex="0" on:click={() => showPdfPanel = !showPdfPanel} on:keydown
         title={isEN ? 'PDF Intelligence — Ingest manuals & docs' : 'PDF Intelligence — Ingresa manuales y docs'}
         class:sb-it-active={showPdfPanel}>
-        <span class="sb-ico">📄</span><span class="sb-txt">{isEN ? 'PDF Docs' : 'PDF Docs'}</span>
+        <span class="sb-ico"><FilePdf size={18}/></span><span class="sb-txt">{isEN ? 'PDF Docs' : 'PDF Docs'}</span>
       </div>
       <div class="sb-it" role="button" tabindex="0" on:click={() => showSettingsModal = true} on:keydown
         title={isEN ? 'Settings & Preferences' : 'Configuración y Preferencias'}>
@@ -7142,20 +8343,28 @@ if (Test-Path $src) {
               {/each}
             </div>
 
-            <div class="chips">
-              <span class="chips-lucy-label" title={isEN ? "These shortcuts send a direct message to Lucy (processed by AI)" : "Estos atajos envían un mensaje directo a Lucy (pasan por la IA)"}>Lucy ↗</span>
-              {#each userChips as chip, i}
-                <div class="chip-wrap">
-                  <button class="chip chip-user" on:click={() => runChipLabel(chip.clave)} disabled={tab.isProcessing}
-                    title="Enviar a Lucy: {chip.clave}">{chip.label}</button>
-                  <div class="chip-actions">
-                    <button class="chip-act" on:click|stopPropagation={() => abrirEditarChip(i)} title="Editar">✎</button>
-                    <button class="chip-act chip-del" on:click|stopPropagation={() => eliminarChip(i)} title="Eliminar">✕</button>
+            <div class="chips" class:chips-collapsed={chipsHidden}>
+              <button class="chips-toggle" on:click={toggleChipsCollapsed}
+                title={chipsHidden
+                  ? (isEN ? `Show ${userChips.length} Lucy shortcuts` : `Mostrar ${userChips.length} atajos de Lucy`)
+                  : (isEN ? 'Hide Lucy shortcuts' : 'Ocultar atajos de Lucy')}>
+                <span class="chips-lucy-label">Lucy ↗</span>
+                {#if chipsHidden}<span class="chips-count">{userChips.length}</span>{/if}
+                <span class="chips-chevron">{chipsHidden ? '▸' : '▾'}</span>
+              </button>
+              {#if !chipsHidden}
+                {#each userChips as chip, i}
+                  <div class="chip-wrap">
+                    <button class="chip chip-user" on:click={() => runChipLabel(chip.clave)} disabled={tab.isProcessing}
+                      title="Enviar a Lucy: {chip.clave}">{chip.label}</button>
+                    <div class="chip-actions">
+                      <button class="chip-act" on:click|stopPropagation={() => abrirEditarChip(i)} title="Editar">✎</button>
+                      <button class="chip-act chip-del" on:click|stopPropagation={() => eliminarChip(i)} title="Eliminar">✕</button>
+                    </div>
                   </div>
-                </div>
-              {/each}
-              
-              <button class="chip chip-add" on:click={abrirNuevoChip} title={isEN ? "Add message shortcut for Lucy" : "Agregar atajo de mensaje para Lucy"}>＋</button>
+                {/each}
+                <button class="chip chip-add" on:click={abrirNuevoChip} title={isEN ? "Add message shortcut for Lucy" : "Agregar atajo de mensaje para Lucy"}>＋</button>
+              {/if}
             </div>
 
             {#if pendingSecurityBlock?.tabId === tab.id}
@@ -7220,10 +8429,22 @@ if (Test-Path $src) {
                   <button class="ia-btn" title={isEN ? 'Clear session (Ctrl+L)' : 'Limpiar sesión (Ctrl+L)'} on:click={() => limpiarSesion(tab.id)} disabled={tab.isProcessing}>
                     <Eraser size={15} strokeWidth={1.8} />
                   </button>
-                  <button class="ia-btn" title={isEN ? 'Export conversation (.md)' : 'Exportar conversación (.md)'} on:click={() => exportarConversacion(tab.id)} disabled={tab.isProcessing}>
-                    <FileDown size={15} strokeWidth={1.8} />
-                  </button>
                   <div class="ia-sep"></div>
+                  {#if tab.id === activeTabId && costPrediction}
+                    <span class="cost-predict cost-predict-{costPrediction.level}"
+                      title={costPrediction.level === 'free'
+                        ? (isEN ? 'Local model — no API cost' : 'Modelo local — sin costo de API')
+                        : `${isEN ? 'Estimated cost' : 'Costo estimado'}: $${costPrediction.cost.toFixed(4)}\n${isEN ? 'Input' : 'Entrada'}: ~${costPrediction.inputTokens} tokens\n${isEN ? 'Output' : 'Salida'}: ~${costPrediction.outputTokens} tokens (${isEN ? 'estimated' : 'estimado'})\n${isEN ? 'Model' : 'Modelo'}: ${costPrediction.model}`}>
+                      {#if costPrediction.level === 'free'}
+                        <span class="cp-icon">●</span>{isEN ? 'free' : 'gratis'}
+                      {:else}
+                        <span class="cp-icon">≈</span>
+                        <span class="cp-tokens">{_formatTokens(costPrediction.totalTokens)}</span>
+                        <span class="cp-cost">${costPrediction.cost < 0.001 ? costPrediction.cost.toFixed(4) : costPrediction.cost.toFixed(3)}</span>
+                      {/if}
+                    </span>
+                    <div class="ia-sep"></div>
+                  {/if}
                   <div class="mbdg">
                     {#if tab.selectedModel?.startsWith('local-')}
                       <span class="ollama-dot" class:on={$ollamaOnline} title={$ollamaOnline ? 'Ollama online' : 'Ollama offline'}></span>
@@ -7346,9 +8567,41 @@ if (Test-Path $src) {
 
       {#if !showSetupOverlay}
       <div class="bbar">
-        <div class="bi"><span>Audit:</span><span class="cok">{isEN ? 'active' : 'activo'}</span></div>
-        <div class="bi"><span>Keyring:</span><span class="{keyringOk?'cok':'cr'}">{keyringOk?'seguro':'error'}</span></div>
         {#if hostName !== '---'}<div class="bi"><span>Host:</span><span style="color:#0f7b5a;">{lucyConfig.name} · {hostName}</span></div>{/if}
+        {#if activeTab}
+          {@const _model = getEffectiveModel(activeTab)}
+          {@const _shortModel = _model.includes('/') ? _model.split('/').pop() : _model}
+          <div class="bi" title={`${isEN ? 'Active model in this tab' : 'Modelo activo en esta pestaña'}: ${_model}`}>
+            <span>{isEN ? 'Model:' : 'Modelo:'}</span><span class="cm">◇ {_shortModel}</span>
+          </div>
+        {/if}
+        {#if $costSummaryMonth && $costSummaryMonth.total_cost > 0}
+          {@const _budget = $tokenBudgetConfig?.monthlyLimit || 0}
+          {@const _pct = _budget > 0 ? ($costSummaryMonth.total_cost / _budget) * 100 : 0}
+          {@const _critical = _budget > 0 && _pct >= ($tokenBudgetConfig?.alertThreshold || 80)}
+          {@const _warn = _budget > 0 && _pct >= 60 && !_critical}
+          <div class="bi" title={_budget > 0
+            ? `${isEN ? 'This month' : 'Este mes'}: $${$costSummaryMonth.total_cost.toFixed(4)} de $${_budget.toFixed(2)} (${_pct.toFixed(1)}%) · ${$costSummaryMonth.total_tokens.toLocaleString()} tokens · ${$costSummaryMonth.request_count} ${isEN?'requests':'consultas'}`
+            : `${isEN ? 'This month' : 'Este mes'}: $${$costSummaryMonth.total_cost.toFixed(4)} · ${$costSummaryMonth.total_tokens.toLocaleString()} tokens`}>
+            <span>{isEN ? 'Cost:' : 'Costo:'}</span>
+            <span class="{_critical ? 'cr' : _warn ? 'cy' : 'cok'}">${$costSummaryMonth.total_cost.toFixed(_budget > 0 && _budget < 1 ? 4 : 3)}</span>
+            {#if _budget > 0}
+              <span class="cost-budget-track" title="Budget: ${_budget.toFixed(2)}">
+                <span class="cost-budget-fill {_critical ? 'cr-bg' : _warn ? 'cy-bg' : 'cok-bg'}" style="width:{Math.min(100, _pct).toFixed(1)}%;"></span>
+              </span>
+            {/if}
+          </div>
+        {/if}
+        {#if activeTab?._streamTPS && activeTab._streamTPS > 0}
+          <div class="bi" title={`${isEN ? 'Tokens per second' : 'Tokens por segundo'}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
+            <span>{isEN ? 'Stream:' : 'Stream:'}</span><span class="cok">~{activeTab._streamTPS} t/s</span>
+          </div>
+        {/if}
+        {#if !keyringOk}
+          <div class="bi" title={isEN ? 'Keyring unavailable — credentials cannot be saved securely' : 'Keyring no disponible — las credenciales no se pueden guardar de forma segura'}>
+            <span>⚠</span><span class="cr">{isEN ? 'Keyring failed' : 'Keyring falló'}</span>
+          </div>
+        {/if}
         {#if auditAlerts > 0}<div class="bi"><span>Alertas:</span><span class="cy">{auditAlerts} bypass</span></div>{/if}
         <div class="bi r" style="opacity:0.6; font-size:12px;">
           Lucy OS v{appVersion} · {userLang}
@@ -7384,20 +8637,43 @@ if (Test-Path $src) {
   <div class="mb">
     <div role="dialog" use:focusTrap class="mbox sm">
       <div class="mhdr">
-        <h2 class="mtitle"><span style="color:var(--acc);">⚡</span> {editingActionIdx !== null ? 'Editar Accion Directa' : 'Nueva Accion Rapida'}</h2>
+        <h2 class="mtitle">
+          <span style="color:var(--acc);display:inline-flex;align-items:center;vertical-align:middle;"><Zap size={16}/></span>
+          {editingActionIdx !== null
+            ? (isEN ? 'Edit Direct Action' : 'Editar Acción Directa')
+            : (isEN ? 'New Direct Action'  : 'Nueva Acción Directa')}
+        </h2>
         <button class="mclose" on:click={() => $showNewActionModal = false}>✕</button>
       </div>
       <div style="text-align:left;margin-bottom:12px;">
-        <label style="color:var(--txt2);font-size:12px;font-weight:600;display:block;margin-bottom:5px;" for="na-name">Nombre visible *</label>
-        <input id="na-name" class="minp" type="text" placeholder="Ej. Ver procesos activos" bind:value={newActionName}>
+        <label style="color:var(--txt2);font-size:12px;font-weight:600;display:block;margin-bottom:5px;" for="na-name">{isEN ? 'Visible name' : 'Nombre visible'} *</label>
+        <input id="na-name" class="minp" type="text" placeholder="{isEN ? 'e.g. View active processes' : 'Ej. Ver procesos activos'}" bind:value={newActionName}>
       </div>
-      <div style="text-align:left;margin-bottom:22px;">
-        <label style="color:var(--txt2);font-size:12px;font-weight:600;display:block;margin-bottom:5px;" for="na-script">Script de PowerShell *</label>
+      <div style="text-align:left;margin-bottom:14px;">
+        <label style="color:var(--txt2);font-size:12px;font-weight:600;display:block;margin-bottom:5px;" for="na-script">{isEN ? 'PowerShell script' : 'Script de PowerShell'} *</label>
         <input id="na-script" class="minp" type="text" placeholder="Get-Process" bind:value={newActionScript} style="font-family:var(--mono);">
       </div>
+      <div style="text-align:left;margin-bottom:22px;">
+        <label style="color:var(--txt2);font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span>{isEN ? 'Icon' : 'Icono'}</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--acc);background:rgba(16,185,129,.08);padding:1px 7px;border-radius:8px;letter-spacing:.2px;">{newActionIcon}</span>
+        </label>
+        <div class="action-icon-grid">
+          {#each ICON_PALETTE as item}
+            <button type="button"
+              class="action-icon-btn"
+              class:active={newActionIcon === item.key}
+              on:click={() => newActionIcon = item.key}
+              title="{isEN ? item.label_en : item.label_es} ({item.key})"
+              aria-label={item.key}>
+              <svelte:component this={item.icon} size={18} strokeWidth={1.8}/>
+            </button>
+          {/each}
+        </div>
+      </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
-        <button class="mbtn ghost" on:click={() => $showNewActionModal = false}>Cancelar</button>
-        <button class="mbtn pri" on:click={guardarNuevaAccion}>Guardar Acción</button>
+        <button class="mbtn ghost" on:click={() => $showNewActionModal = false}>{isEN ? 'Cancel' : 'Cancelar'}</button>
+        <button class="mbtn pri" on:click={guardarNuevaAccion}>{isEN ? 'Save Action' : 'Guardar Acción'}</button>
       </div>
     </div>
   </div>
@@ -7919,7 +9195,7 @@ if (Test-Path $src) {
 
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Sub-Agents Model' : 'Modelo P. Sub-Agentes'}</span>
-            <select bind:value={subAgentModel} on:change={() => { try{ localStorage.setItem('lucy_subagent', subAgentModel); }catch(e){} }} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+            <select bind:value={subAgentModel} on:change={() => safeSetLSString('lucy_subagent', subAgentModel)} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
               <option value="auto">{isEN ? 'Auto (cheapest available)' : 'Auto (más barato disponible)'}</option>
               <option value="ollama">{isEN ? 'Local Ollama (Fast/Free)' : 'Ollama Local (Rápido/Gratis)'}</option>
               <option value="cloud">{isEN ? 'Cloud (Main LLM)' : 'Nube (Igual al Principal)'}</option>
@@ -7943,7 +9219,7 @@ if (Test-Path $src) {
               {isEN ? 'Verifier sub-agent' : 'Sub-agente verificador'}
               <span style="opacity:0.5; cursor:help;">ⓘ</span>
             </span>
-            <select bind:value={verifierMode} on:change={() => { try{ localStorage.setItem('lucy_verifier_mode', verifierMode); }catch(e){} }} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+            <select bind:value={verifierMode} on:change={() => safeSetLSString('lucy_verifier_mode', verifierMode)} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
               <option value="off">{isEN ? 'Off' : 'Desactivado'}</option>
               <option value="critical">{isEN ? 'Only for risky tasks' : 'Solo tareas críticas'}</option>
               <option value="always">{isEN ? 'Always (every answer)' : 'Siempre (cada respuesta)'}</option>
@@ -7952,7 +9228,7 @@ if (Test-Path $src) {
           {#if verifierMode !== 'off'}
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Verifier model' : 'Modelo verificador'}</span>
-            <select bind:value={verifierModel} on:change={() => { try{ localStorage.setItem('lucy_verifier_model', verifierModel); }catch(e){} }} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+            <select bind:value={verifierModel} on:change={() => safeSetLSString('lucy_verifier_model', verifierModel)} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
               <option value="auto">{isEN ? 'Auto (different from main)' : 'Auto (distinto al principal)'}</option>
               <option value="ollama">{isEN ? 'Local Ollama' : 'Ollama Local'}</option>
               <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
@@ -7972,9 +9248,12 @@ if (Test-Path $src) {
           {/if}
 
           {#if darkMode}
-          <div class="settings-row">
-            <span class="settings-label">{isEN ? 'Warp Theme' : 'Tema Warp'}</span>
-            <div class="theme-picker-inline" title={isEN ? 'Theme' : 'Tema'}>
+          <div class="settings-row settings-row-stacked">
+            <div class="settings-row-stacked-hdr">
+              <span class="settings-label">{isEN ? 'Warp Theme' : 'Tema Warp'}</span>
+              <span class="theme-name-active">{currentTheme}</span>
+            </div>
+            <div class="theme-picker-grid" title={isEN ? 'Theme' : 'Tema'}>
               <button type="button" class="theme-dot theme-dot-default" class:active={currentTheme === 'default'}
                 aria-label="Default" title="Default — neutro" on:click={() => setWarpTheme('default')}></button>
               <button type="button" class="theme-dot theme-dot-ocean" class:active={currentTheme === 'ocean'}
@@ -7989,6 +9268,14 @@ if (Test-Path $src) {
                 aria-label="Twilight" title={isEN ? 'Twilight — soft lavender' : 'Twilight — lavanda suave'} on:click={() => setWarpTheme('twilight')}></button>
               <button type="button" class="theme-dot theme-dot-mocha" class:active={currentTheme === 'mocha'}
                 aria-label="Mocha" title={isEN ? 'Mocha — warm coffee tones' : 'Mocha — tonos café cálidos'} on:click={() => setWarpTheme('mocha')}></button>
+              <button type="button" class="theme-dot theme-dot-graphite" class:active={currentTheme === 'graphite'}
+                aria-label="Graphite" title={isEN ? 'Graphite — neutral gray, distraction-free' : 'Graphite — gris neutro, sin distracciones'} on:click={() => setWarpTheme('graphite')}></button>
+              <button type="button" class="theme-dot theme-dot-midnight" class:active={currentTheme === 'midnight'}
+                aria-label="Midnight" title={isEN ? 'Midnight — deep navy with cyan halo' : 'Midnight — navy profundo con halo cyan'} on:click={() => setWarpTheme('midnight')}></button>
+              <button type="button" class="theme-dot theme-dot-amoled" class:active={currentTheme === 'amoled'}
+                aria-label="AMOLED" title={isEN ? 'AMOLED — pure black for OLED screens' : 'AMOLED — negro puro para pantallas OLED'} on:click={() => setWarpTheme('amoled')}></button>
+              <button type="button" class="theme-dot theme-dot-nord" class:active={currentTheme === 'nord'}
+                aria-label="Nord" title={isEN ? 'Nord — cool slate-blue, eye-friendly' : 'Nord — azul gris frío, descansa la vista'} on:click={() => setWarpTheme('nord')}></button>
             </div>
           </div>
           {/if}
@@ -7996,7 +9283,7 @@ if (Test-Path $src) {
           <div class="settings-row">
             <label class="settings-label" for="set-font">{isEN ? 'Code Font' : 'Fuente de código'}</label>
             <select id="set-font" class="settings-select" bind:value={uiFont}
-              on:change={() => localStorage.setItem('lucy_font', uiFont)}>
+              on:change={() => safeSetLSString('lucy_font', uiFont)}>
               <option value="default">JetBrains Mono</option>
               <option value="Fira Code">Fira Code</option>
               <option value="Cascadia Code">Cascadia Code</option>
@@ -8023,7 +9310,7 @@ if (Test-Path $src) {
               <span class="help-i" title={isEN ? 'Concise: short answers. Balanced: default. Detailed: in-depth explanations with examples' : 'Concisa: respuestas breves. Normal: equilibrada. Detallada: explicaciones a fondo con ejemplos'}>ⓘ</span>
             </label>
             <select id="set-personality" class="settings-select" bind:value={lucyPersonality}
-              on:change={() => localStorage.setItem('lucy_personality', lucyPersonality)}>
+              on:change={() => safeSetLSString('lucy_personality', lucyPersonality)}>
               <option value="concise">{isEN ? 'Concise' : 'Concisa'}</option>
               <option value="balanced">{isEN ? 'Balanced' : 'Normal'}</option>
               <option value="detailed">{isEN ? 'Detailed' : 'Detallada'}</option>
@@ -8067,28 +9354,50 @@ if (Test-Path $src) {
               <span class="help-i" title={isEN ? 'Compact mode reduces padding so more conversation fits on screen' : 'El modo compacto reduce los márgenes para mostrar más conversación en pantalla'}>ⓘ</span>
             </span>
             <select class="settings-select" bind:value={uiDensity}
-              on:change={() => { localStorage.setItem('lucy_density', uiDensity); document.body.classList.toggle('density-compact', uiDensity === 'compact'); }}>
+              on:change={() => setUiDensity(uiDensity)}>
               <option value="comfortable">{isEN ? 'Comfortable' : 'Cómoda'}</option>
               <option value="compact">{isEN ? 'Compact' : 'Compacta'}</option>
             </select>
           </div>
 
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="settings-row settings-row-stacked">
+            <div class="settings-row-stacked-hdr">
               <span class="settings-label">
                 {isEN ? 'Workspace Presets' : 'Presets de workspace'}
-                <span class="help-i" title={isEN ? 'Save current model + theme + density + personality as a named preset (e.g. Dev mode, Incident mode)' : 'Guarda modelo + tema + densidad + personalidad actuales como un preset con nombre (ej: Modo dev, Modo incidente)'}>ⓘ</span>
+                <span class="help-i" title={isEN
+                  ? 'A preset captures: model, theme, density, personality, view, sidebar/focus state, language, and tabs (title + model). Useful for switching contexts: "Dev mode", "Incident response", "Demo".'
+                  : 'Un preset captura: modelo, tema, densidad, personalidad, vista, estado del sidebar/focus, idioma y pestañas (título + modelo). Útil para alternar contextos: "Modo dev", "Modo incidente", "Demo".'}>ⓘ</span>
               </span>
               <button class="settings-btn" on:click={saveWorkspacePreset}>+ {isEN ? 'Save current' : 'Guardar actual'}</button>
             </div>
             {#if workspacePresets.length === 0}
-              <span style="color:var(--txt3);font-size:11px;">{isEN ? 'No presets saved yet' : 'Sin presets guardados'}</span>
+              <div style="color:var(--txt3);font-size:11px;font-style:italic;padding:6px 0;">{isEN ? 'No presets saved yet' : 'Sin presets guardados'}</div>
             {:else}
-              <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                {#each workspacePresets as p (p.name)}
-                  <div class="preset-chip">
-                    <button class="preset-apply" on:click={() => applyWorkspacePreset(p)} title="{p.model} · {p.theme}">{p.name}</button>
-                    <button class="preset-del" on:click={() => deleteWorkspacePreset(p.name)} title="Delete">✕</button>
+              <div class="preset-grid">
+                {#each [...workspacePresets].sort((a,b) => (b.lastApplied||b.ts||0) - (a.lastApplied||a.ts||0)) as p (p.name)}
+                  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                  <div class="preset-card preset-card-{p.theme || 'default'}" on:click={() => applyWorkspacePreset(p)} role="button" tabindex="0" title={isEN ? 'Click to apply' : 'Click para aplicar'}>
+                    <div class="preset-card-hdr">
+                      <span class="preset-card-name">{p.name}</span>
+                      <button class="preset-card-del" on:click|stopPropagation={() => deleteWorkspacePreset(p.name)} title={isEN ? 'Delete preset' : 'Eliminar preset'}>✕</button>
+                    </div>
+                    <div class="preset-card-meta">
+                      <span class="preset-tag" title={isEN ? 'Model' : 'Modelo'}>◇ {(p.model || '').split('/').pop().slice(0,18)}</span>
+                      {#if p.v >= 2 && p.tabs?.length}
+                        <span class="preset-tag" title={isEN ? 'Tabs snapshot' : 'Pestañas guardadas'}>⊞ {p.tabs.length}</span>
+                      {/if}
+                      {#if p.v >= 2 && p.view && p.view !== 'terminal'}
+                        <span class="preset-tag" title="View">▤ {p.view}</span>
+                      {/if}
+                    </div>
+                    <div class="preset-card-foot">
+                      {#if p.lastApplied}
+                        <span class="preset-foot-tag preset-foot-applied">★ {_agoStr(p.lastApplied)}</span>
+                      {:else if p.ts}
+                        <span class="preset-foot-tag">{isEN ? 'saved' : 'creado'} {_agoStr(p.ts)}</span>
+                      {/if}
+                      {#if p.v >= 2}<span class="preset-foot-tag preset-foot-v2">v2</span>{/if}
+                    </div>
                   </div>
                 {/each}
               </div>
@@ -8139,10 +9448,50 @@ if (Test-Path $src) {
           </div>
 
           <div class="settings-row">
+            <span class="settings-label">
+              {isEN ? 'Backup & Restore' : 'Respaldo y Restauración'}
+              <span class="help-i" title={isEN
+                ? 'Export all settings, skills, permission rules, hosts metadata, runbooks. API keys & passwords are NEVER included (they stay in the OS keychain).'
+                : 'Exporta ajustes, skills, reglas de permisos, metadata de hosts, runbooks. Las API keys y contraseñas NUNCA se incluyen (quedan en el keychain del sistema).'}>ⓘ</span>
+            </span>
+            <div style="display:flex;gap:6px;">
+              <button class="settings-btn" style="display:inline-flex;align-items:center;gap:5px;" on:click={() => { showSettingsModal = false; exportConfig(); }}>
+                <Download size={13}/> {isEN ? 'Export' : 'Exportar'}
+              </button>
+              <button class="settings-btn" style="display:inline-flex;align-items:center;gap:5px;" on:click={() => { showSettingsModal = false; importConfigPick(); }}>
+                <FolderOpen size={13}/> {isEN ? 'Import' : 'Importar'}
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-row">
             <span class="settings-label">{isEN ? 'Report Bug' : 'Reportar Bug'}</span>
             <button class="settings-btn" style="display:inline-flex;align-items:center;gap:5px;" on:click={() => { showSettingsModal = false; exportBugReport(); }}>
               <Bug size={13}/> {isEN ? 'Export Bug Report' : 'Exportar Reporte'}
             </button>
+          </div>
+
+          <!-- ── System Health (moved from footer — only shows real status, not decorative "all good") ── -->
+          <div class="settings-row settings-health-row">
+            <span class="settings-label">
+              {isEN ? 'System Health' : 'Salud del sistema'}
+              <span class="help-i" title={isEN ? 'Diagnostic indicators for audit log and credential keyring' : 'Indicadores de diagnóstico para audit log y keyring de credenciales'}>ⓘ</span>
+            </span>
+            <div class="settings-health-pills">
+              <span class="health-pill {auditAlerts > 0 ? 'health-warn' : 'health-ok'}"
+                title={isEN
+                  ? `Audit log: writing to %APPDATA%\\Lucy\\logs\\lucy_audit.log${auditAlerts > 0 ? ` · ${auditAlerts} bypass events` : ''}`
+                  : `Audit log: escribiendo en %APPDATA%\\Lucy\\logs\\lucy_audit.log${auditAlerts > 0 ? ` · ${auditAlerts} eventos bypass` : ''}`}>
+                <span class="health-dot"></span> Audit
+                {#if auditAlerts > 0}<span style="opacity:.8">· {auditAlerts}</span>{/if}
+              </span>
+              <span class="health-pill {keyringOk ? 'health-ok' : 'health-err'}"
+                title={keyringOk
+                  ? (isEN ? 'OS keychain available — credentials encrypted at rest' : 'OS keychain disponible — credenciales cifradas en disco')
+                  : (isEN ? 'OS keychain UNAVAILABLE — credentials cannot be saved securely' : 'OS keychain NO DISPONIBLE — las credenciales no se pueden guardar de forma segura')}>
+                <span class="health-dot"></span> Keyring
+              </span>
+            </div>
           </div>
         </div>
 
@@ -8163,6 +9512,104 @@ if (Test-Path $src) {
 
   <!-- ── COMMAND PALETTE (Ctrl+P) ── -->
   <CommandPalette bind:show={showPalette} allItems={allPaletteItems} {isEN} />
+
+  <!-- ── RESTORE BACKUP CONFIRMATION ── -->
+  {#if showRestoreConfirm && _restorePendingEnv}
+  <div class="mb">
+    <div role="dialog" use:focusTrap class="mbox sm">
+      <div class="mhdr">
+        <h2 class="mtitle">
+          <span style="color:var(--amber);display:inline-flex;align-items:center;vertical-align:middle;"><AlertTriangle size={16}/></span>
+          {isEN ? 'Confirm Restore' : 'Confirmar Restauración'}
+        </h2>
+        <button class="mclose" on:click={() => { showRestoreConfirm = false; _restorePendingEnv = null; }}>✕</button>
+      </div>
+      <p style="color:var(--txt2);font-size:12.5px;line-height:1.6;margin-bottom:14px;">
+        {isEN
+          ? 'This will overwrite your current settings, skills, and permission rules with the contents of the backup. Lucy will reload after restore.'
+          : 'Esto sobrescribirá tus ajustes actuales, skills y reglas de permisos con el contenido del respaldo. Lucy se recargará después.'}
+      </p>
+      <div style="background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.20);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11px;font-family:var(--mono);color:var(--txt2);">
+        <div><b style="color:#a5b4fc;">{isEN ? 'Backup details' : 'Detalles del respaldo'}</b></div>
+        <div>{isEN ? 'Exported' : 'Exportado'}: {new Date(_restorePendingEnv.exported_at).toLocaleString(userLang)}</div>
+        <div>{isEN ? 'From Lucy' : 'Desde Lucy'}: v{_restorePendingEnv.lucy_version || '?'}</div>
+        <div>{isEN ? 'Settings' : 'Ajustes'}: {Object.keys(_restorePendingEnv.local_storage || {}).length}</div>
+        <div>Skills: {(_restorePendingEnv.skills || []).length}</div>
+        <div>{isEN ? 'Rules' : 'Reglas'}: {(_restorePendingEnv.permission_rules || []).length}</div>
+      </div>
+      <div style="font-size:11px;color:var(--amber);margin-bottom:14px;display:flex;align-items:flex-start;gap:6px;">
+        <span style="flex-shrink:0;"><AlertTriangle size={12}/></span>
+        <span>{isEN
+          ? 'API keys and passwords are NOT in the backup — you will need to re-enter them.'
+          : 'Las API keys y contraseñas NO están en el respaldo — tendrás que volver a ingresarlas.'}</span>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="mbtn ghost" on:click={() => { showRestoreConfirm = false; _restorePendingEnv = null; }}>
+          {isEN ? 'Cancel' : 'Cancelar'}
+        </button>
+        <button class="mbtn warn" on:click={applyRestore}>
+          {isEN ? 'Restore & Reload' : 'Restaurar y Recargar'}
+        </button>
+      </div>
+    </div>
+  </div>
+  {/if}
+
+  <!-- ── KEYBOARD SHORTCUTS OVERLAY (?) ── -->
+  {#if showShortcutsOverlay}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="ks-overlay" on:click|self={() => showShortcutsOverlay = false}>
+    <div role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts" class="ks-modal">
+      <div class="ks-hdr">
+        <div class="ks-hdr-l">
+          <span class="ks-hdr-icon"><Terminal size={16}/></span>
+          <h2 class="ks-title">{isEN ? 'Keyboard Shortcuts' : 'Atajos de Teclado'}</h2>
+        </div>
+        <button class="ks-close" on:click={() => showShortcutsOverlay = false} title="Esc">✕</button>
+      </div>
+      <div class="ks-body">
+        <div class="ks-section">
+          <div class="ks-section-title">{isEN ? 'Tabs & Navigation' : 'Pestañas y navegación'}</div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'New tab' : 'Nueva pestaña'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">T</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Close tab' : 'Cerrar pestaña'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">W</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Switch tab' : 'Cambiar pestaña'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">Tab</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Jump to tab #N' : 'Ir a pestaña N'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">1-9</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Command palette' : 'Paleta de comandos'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">P</kbd></div>
+        </div>
+
+        <div class="ks-section">
+          <div class="ks-section-title">{isEN ? 'Chat & AI' : 'Chat e IA'}</div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Send message' : 'Enviar mensaje'}</span><kbd class="ks-key">Enter</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Newline in input' : 'Nueva línea'}</span><kbd class="ks-key">Shift</kbd><span class="ks-plus">+</span><kbd class="ks-key">Enter</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Focus input' : 'Enfocar input'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">Shift</kbd><span class="ks-plus">+</span><kbd class="ks-key">K</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Clear current session' : 'Limpiar sesión'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">L</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Search in chat' : 'Buscar en chat'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">F</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Command history' : 'Historial'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">R</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Browse history (input)' : 'Historial (en input)'}</span><kbd class="ks-key">↑</kbd><span class="ks-plus">/</span><kbd class="ks-key">↓</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Paste image (vision)' : 'Pegar imagen (visión)'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">V</kbd></div>
+        </div>
+
+        <div class="ks-section">
+          <div class="ks-section-title">{isEN ? 'View & Display' : 'Vista y display'}</div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Focus mode' : 'Modo focus'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">M</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Zoom in' : 'Zoom +'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">+</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Zoom out' : 'Zoom −'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">−</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Reset zoom' : 'Reset zoom'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">0</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Zoom (mouse)' : 'Zoom (rueda)'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">Wheel</kbd></div>
+        </div>
+
+        <div class="ks-section">
+          <div class="ks-section-title">{isEN ? 'This overlay' : 'Este overlay'}</div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Show / hide shortcuts' : 'Mostrar / ocultar atajos'}</span><kbd class="ks-key">?</kbd></div>
+          <div class="ks-row"><span class="ks-label">{isEN ? 'Close overlay' : 'Cerrar overlay'}</span><kbd class="ks-key">Esc</kbd></div>
+        </div>
+      </div>
+      <div class="ks-foot">
+        <span>{isEN ? 'Press' : 'Presiona'} <kbd class="ks-key ks-key-inline">?</kbd> {isEN ? 'anywhere to toggle this panel' : 'en cualquier lugar para alternar este panel'}</span>
+      </div>
+    </div>
+  </div>
+  {/if}
 
   <!-- ── TUTORIAL OVERLAY (first run + on demand) ── -->
   <TutorialOverlay bind:show={showTutorial} {isEN}
@@ -8186,8 +9633,24 @@ if (Test-Path $src) {
   {#await lazySkills() then SkillsManagerComp}
     <svelte:component this={SkillsManagerComp}
       isOpen={showSkillsManagerModal}
+      activeModel={getEffectiveModel(activeTab)}
+      configuredProviders={configuredProvs}
       on:close={() => showSkillsManagerModal = false}
       {isEN}
+      on:toast={e => toast(e.detail.msg, e.detail.type)}
+    />
+  {/await}
+  {/if}
+
+  <!-- ── REMOTE FILE DIFF MODAL (lazy) — /editremote command ── -->
+  {#if showRemoteDiff && remoteDiffHost}
+  {#await lazyRemoteDiff() then RemoteDiffComp}
+    <svelte:component this={RemoteDiffComp}
+      open={showRemoteDiff}
+      host={remoteDiffHost}
+      initialPath={remoteDiffPath}
+      {isEN}
+      on:close={() => { showRemoteDiff = false; remoteDiffHost = null; remoteDiffPath = ''; }}
       on:toast={e => toast(e.detail.msg, e.detail.type)}
     />
   {/await}

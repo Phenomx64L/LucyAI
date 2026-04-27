@@ -1,0 +1,47 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; color: #333; }
+        .header { border-bottom: 2px solid #0078d4; padding-bottom: 10px; margin-bottom: 30px; }
+        .host-card { background: #f3f2f1; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        .metric-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .metric-table th, .metric-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        .recommendation { color: #d83b01; font-weight: bold; }
+        .chart-placeholder { background: #e1dfdd; height: 150px; display: flex; align-items: center; justify-content: center; margin: 10px 0; border: 1px dashed #605e5c; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Capacity Planning Report - Q3</h1>
+        <p>Prepared for: Luna | Date: 25/04/2026</p>
+    </div>
+
+    <h2>1. Executive Summary</h2>
+    <p>Analysis of AD (Windows) and PARROT (Linux) based on available historical telemetry and current snapshots.</p>
+
+    <h2>2. Host: AD (192.168.1.100)</h2>
+    <div class="host-card">
+        <p><strong>Observed Load:</strong> Low (CPU < 12%)</p>
+        <p><strong>Memory Pressure:</strong> High (Available RAM < 700MB)</p>
+        <div class="chart-placeholder">[CPU/RAM Trend Chart]</div>
+        <p class="recommendation">Recommendation: Upgrade RAM by 4GB or migrate to Azure D2s_v5 (Approx $0.15/hr).</p>
+    </div>
+
+    <h2>3. Host: PARROT (192.168.3.37)</h2>
+    <div class="host-card">
+        <p><strong>Historical Window:</strong> 8 Days (sa17 - sa25)</p>
+        <div class="chart-placeholder">[IOPS/Net Throughput Chart]</div>
+        <p class="recommendation">Recommendation: Maintain current specs; IOPS are within healthy thresholds for Q3 projection.</p>
+    </div>
+
+    <h2>4. Cost Projection (Q3)</h2>
+    <table class="metric-table">
+        <tr><th>Source</th><th>Instance Type</th><th>Est. Monthly Cost</th></tr>
+        <tr><td>Azure</td><td>Standard_D2s_v5</td><td>$108.00</td></tr>
+        <tr><td>AWS</td><td>m5.large</td><td>$115.20</td></tr>
+    </table>
+</body>
+</html>

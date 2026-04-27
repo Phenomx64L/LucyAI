@@ -3,6 +3,7 @@
     import { getCostSummary } from '$lib/lucy-api';
     import { IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
     import { costSummaryDay, costSummaryMonth, costSummaryAll, tokenBudgetConfig } from '$lib/stores';
+    import { countUp } from '$lib/actions';
 
     const dispatch = createEventDispatcher();
 
@@ -178,15 +179,21 @@
         <div class="metrics-grid">
             <div class="metric-card">
                 <div class="metric-label">{lang.totalCost}</div>
-                <div class="metric-value">${currentSummary.total_cost.toFixed(2)}</div>
+                <div class="metric-value">
+                    <span use:countUp={{ target: currentSummary.total_cost, prefix: '$', suffix: '', decimals: 2, duration: 1100 }}></span>
+                </div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">{lang.totalTokens}</div>
-                <div class="metric-value">{currentSummary.total_tokens.toLocaleString()}</div>
+                <div class="metric-value">
+                    <span use:countUp={{ target: currentSummary.total_tokens, suffix: '', thousands: true, duration: 1100 }}></span>
+                </div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">{lang.requests}</div>
-                <div class="metric-value">{currentSummary.request_count}</div>
+                <div class="metric-value">
+                    <span use:countUp={{ target: currentSummary.request_count, suffix: '', thousands: true, duration: 900 }}></span>
+                </div>
             </div>
             {#if selectedPeriod === 'month' && $tokenBudgetConfig.enabled}
                 <div class="metric-card budget">

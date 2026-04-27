@@ -2,7 +2,9 @@
 // Windows Credential Manager (keyring) para API key y contraseñas de hosts.
 
 use keyring::Entry;
-use crate::state::HTTP_CLIENT;
+// SECURITY: config.rs solo hace test_api_key (healthcheck rápido).
+// Usa HTTP_CLIENT_FAST (15s) en lugar del HTTP_CLIENT de streaming.
+use crate::state::HTTP_CLIENT_FAST as HTTP_CLIENT;
 use crate::utils::logging::write_app_log;
 use crate::utils::shell::validate_host_id;
 use serde_json;

@@ -1149,6 +1149,42 @@ pub async fn search_web(query: String) -> Result<String, String> {
     if results.is_empty() {
         return Ok("No results found or HTML format changed.".to_string());
     }
-    
+
     Ok(results.join("\n\n"))
+}
+
+// ── PER-TAB CWD ──────────────────────────────────────────────────────────────
+// Stability fix: cada chat tab puede tener su propia working directory para que
+// `cd` en una pestaña no afecte a otras. La frontend llama estas funciones al
+// cambiar/cerrar pestañas.
+//
+// SECURITY: la ruta se valida (no `..`, no metacharacters) antes de almacenar.
+
+#[tauri::command]
+pub async fn set_tab_cwd(tab_id: String, path: String) -> Result<(), String> {
+    if tab_id.is_empty() || tab_id.len() > 128 {
+        return Err("tab_id inválido (1-128 chars)".to_string());
+    }
+    if !tab_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
+        return Err("tab_id contiene caracteres no permitidos (solo a-z, 0-9, _, -)".to_string());
+    }
+    if path.is_empty() || path.len() > 4096 {
+        return Err("Ruta inválida (vacía o demasiado larga)".to_string());
+    }
+    if path.contains("..") {
+        return Err("Ruta inválida: '..' (path traversal) no permitido".to_string());
+    }
+    crate::state::set_cwd_for(Some(&tab_id), path)
+}
+
+#[tauri::command]
+pub async fn drop_tab_cwd(tab_id: String) -> Result<(), String> {
+    if tab_id.is_empty() { return Ok(()); }
+    crate::state::drop_tab_cwd(&tab_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_tab_cwd(tab_id: Option<String>) -> Result<String, String> {
+    Ok(crate::state::get_cwd_for(tab_id.as_deref()))
 }

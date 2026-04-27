@@ -2877,6 +2877,46 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     }
     .ns-card-connecting{
         border-color:rgba(255,200,0,.3)!important;
+        position:relative;
+        overflow:hidden;
+    }
+    /* Diagonal shimmer that sweeps across cards in "connecting" state */
+    .ns-card-connecting::before{
+        content:'';position:absolute;top:0;left:-50%;width:50%;height:100%;
+        background:linear-gradient(110deg, transparent 35%, rgba(255,200,0,.12) 50%, transparent 65%);
+        animation: ns-card-shimmer 1.4s ease-in-out infinite;
+        pointer-events:none;
+    }
+    @keyframes ns-card-shimmer{
+        0%   { left:-50%; }
+        100% { left:120%; }
+    }
+    /* Pulsing dot + outer ring for the connecting indicator */
+    .ns-card-connecting .ns-conn-pill{
+        position:relative;
+    }
+    .ns-card-connecting .ns-conn-pill::after{
+        content:'';position:absolute;left:6px;top:50%;width:4px;height:4px;
+        border-radius:50%;background:rgba(255,200,0,.85);
+        transform:translateY(-50%) scale(1);
+        animation:ns-conn-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes ns-conn-pulse{
+        0%,100% { transform:translateY(-50%) scale(1);    box-shadow:0 0 0 0   rgba(255,200,0,.55); }
+        70%     { transform:translateY(-50%) scale(1.15); box-shadow:0 0 0 6px rgba(255,200,0,0); }
+    }
+    /* Subtle pop animation when a connected card transitions to "on" state */
+    .ns-card-on{
+        animation: ns-card-pop .42s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    @keyframes ns-card-pop{
+        0%   { transform: scale(1); }
+        50%  { transform: scale(1.018); }
+        100% { transform: scale(1); }
+    }
+    /* Original connecting border (kept after the shimmer additions) */
+    .ns-card-connecting-orig{
+        border-color:rgba(255,200,0,.3)!important;
         box-shadow:0 0 10px rgba(255,200,0,.06);
     }
     .ns-card-focused{ border-color:rgba(16,185,129,.45)!important;background:rgba(16,185,129,.05)!important;box-shadow:0 0 0 1px rgba(16,185,129,.2),0 0 18px rgba(16,185,129,.1)!important; }

@@ -14,9 +14,12 @@ fn validate_host(host: &str) -> Result<(), String> {
     if host.is_empty() || host.len() > 253 {
         return Err("Host inválido: vacío o demasiado largo.".to_string());
     }
-    if !host.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '[' | ']' | ':')) {
+    // SECURITY: ASCII-only — rechaza caracteres Unicode look-alike
+    // (ej. U+FF07 fullwidth apostrophe, U+02BB modifier letter) que `is_alphanumeric`
+    // (Unicode-aware) aceptaría pero PowerShell/SSH podrían interpretar como meta-chars.
+    if !host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '[' | ']' | ':')) {
         return Err(format!(
-            "Host inválido '{}': solo se permiten IPs y nombres DNS (sin caracteres especiales).", host
+            "Host inválido '{}': solo se permiten IPs y nombres DNS ASCII (sin caracteres especiales o Unicode).", host
         ));
     }
     Ok(())
@@ -28,9 +31,11 @@ fn validate_username(user: &str) -> Result<(), String> {
     if user.is_empty() || user.len() > 128 {
         return Err("Username inválido: vacío o demasiado largo.".to_string());
     }
-    if !user.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '\\' | '@')) {
+    // SECURITY: ASCII-only para evitar Unicode trickery (look-alike chars que pasen
+    // el filtro pero confundan a PowerShell/SSH). is_alphanumeric() acepta Unicode.
+    if !user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '\\' | '@')) {
         return Err(format!(
-            "Username inválido '{}': solo se permiten caracteres alfanuméricos, '.', '-', '_', '\\\\', '@'.", user
+            "Username inválido '{}': solo se permiten caracteres ASCII alfanuméricos, '.', '-', '_', '\\\\', '@'.", user
         ));
     }
     Ok(())
@@ -47,6 +52,16 @@ pub async fn execute_remote_windows(
 ) -> Result<String, String> {
     validate_host(&host)?;
     validate_username(&username)?;
+
+    // Check permission rules before executing
+    let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
+    match perm.action.as_str() {
+        "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
+        "ask" => return Err(format!("Comando requiere aprobación: {}. Crea una regla 'allow' en Permisos para ejecutar.", perm.reason)),
+        "allow" => {}, // Continue with execution
+        _ => return Err(format!("Acción de permiso inválida: {}", perm.action)),
+    }
+
     let pw_esc = password.replace('\'', "''");
     let ps = format!(
         "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
@@ -160,6 +175,15 @@ pub async fn execute_remote_linux(
     port: Option<u16>,
     key_path: Option<String>,
 ) -> Result<String, String> {
+    // Check permission rules before executing
+    let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
+    match perm.action.as_str() {
+        "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
+        "ask" => return Err(format!("Comando requiere aprobación: {}. Crea una regla 'allow' en Permisos para ejecutar.", perm.reason)),
+        "allow" => {}, // Continue with execution
+        _ => return Err(format!("Acción de permiso inválida: {}", perm.action)),
+    }
+
     let port_str = port.unwrap_or(22).to_string();
     let mut cmd = Command::new("ssh");
     cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
@@ -278,6 +302,15 @@ pub async fn execute_shell_cmd(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<String, String> {
+    // Check permission rules before executing
+    let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
+    match perm.action.as_str() {
+        "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
+        "ask" => return Err(format!("Comando requiere aprobación: {}. Crea una regla 'allow' en Permisos para ejecutar.", perm.reason)),
+        "allow" => {}, // Continue with execution
+        _ => return Err(format!("Acción de permiso inválida: {}", perm.action)),
+    }
+
     if host_type == "linux" {
         let port_str = port.unwrap_or(22).to_string();
         let full_cmd = format!("{}@{}", username, host);
@@ -497,4 +530,142 @@ printf '{"hostname":"%s","os":"%s","shell":"%s","kernel":"%s","user":"%s","cwd":
         serde_json::from_str(&raw)
             .map_err(|e| format!("Bootstrap JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(300)]))
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REMOTE FILE OPS — read/write archivos remotos vía base64 para diff preview
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Flujo de trabajo:
+//   1. Frontend llama read_remote_file(host, ...) → recibe contenido UTF-8
+//   2. Usuario edita en un componente local (modal con diff visual)
+//   3. Frontend llama write_remote_file con el nuevo contenido
+//   4. El backend hace backup automático antes de sobrescribir (.lucy.bak)
+//
+// SECURITY:
+//   - Las rutas se validan: deben ser absolutas, no contener `..`
+//   - Tamaño máximo 1 MB para evitar OOM
+//   - El contenido se transporta como base64 para evitar problemas de escaping
+//   - Se respetan las permission rules igual que execute_remote_*
+
+use base64::Engine as _;
+
+const MAX_REMOTE_FILE_BYTES: usize = 1_048_576; // 1 MB
+
+fn validate_remote_path(p: &str) -> Result<(), String> {
+    if p.is_empty() { return Err("Ruta vacía".to_string()); }
+    if p.len() > 4096 { return Err("Ruta demasiado larga (>4096)".to_string()); }
+    if p.contains("..") { return Err("Ruta inválida: '..' no permitido (path traversal)".to_string()); }
+    if p.contains('\0') { return Err("Ruta inválida: contiene byte nulo".to_string()); }
+    // Whitelist de caracteres comunes en paths Linux y Windows
+    if !p.chars().all(|c| c.is_ascii_alphanumeric()
+        || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | ' ' | '(' | ')' | '~')) {
+        return Err(format!("Ruta inválida: contiene caracteres no permitidos"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn read_remote_file(
+    host: String,
+    username: String,
+    path: String,
+    host_type: String,
+    port: Option<u16>,
+    password: Option<String>,
+    key_path: Option<String>,
+) -> Result<String, String> {
+    validate_remote_path(&path)?;
+
+    // Build a remote command that base64-encodes the file content. Both bash and PowerShell
+    // can do this without external dependencies.
+    let remote_cmd = if host_type == "linux" {
+        // Use coreutils base64 on Linux. Filename quoted with single quotes (already validated).
+        format!("base64 -w 0 '{}' 2>&1 | head -c 4194304", path.replace('\'', "'\\''"))
+    } else {
+        // PowerShell on Windows
+        format!(
+            "[Convert]::ToBase64String([System.IO.File]::ReadAllBytes('{}'))",
+            path.replace('\'', "''")
+        )
+    };
+
+    // Reuse execute_shell_cmd for transport — it already enforces permission rules + audit
+    let b64 = execute_shell_cmd(host, username, remote_cmd, host_type, port, password, key_path).await?;
+    let b64_clean = b64.trim().replace(['\n', '\r', ' '], "");
+
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&b64_clean)
+        .map_err(|e| format!("Error decodificando base64 desde host: {} (¿el archivo existe?)", e))?;
+
+    if bytes.len() > MAX_REMOTE_FILE_BYTES {
+        return Err(format!("Archivo demasiado grande ({} bytes, máx 1 MB para edición remota)", bytes.len()));
+    }
+
+    String::from_utf8(bytes)
+        .map_err(|_| "El archivo contiene bytes no-UTF8 — solo se admiten archivos de texto para edición".to_string())
+}
+
+#[tauri::command]
+pub async fn write_remote_file(
+    host: String,
+    username: String,
+    path: String,
+    content: String,
+    host_type: String,
+    port: Option<u16>,
+    password: Option<String>,
+    key_path: Option<String>,
+    create_backup: Option<bool>,
+) -> Result<String, String> {
+    validate_remote_path(&path)?;
+    if content.len() > MAX_REMOTE_FILE_BYTES {
+        return Err(format!("Contenido demasiado grande ({} bytes, máx 1 MB)", content.len()));
+    }
+
+    let backup = create_backup.unwrap_or(true);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+
+    let remote_cmd = if host_type == "linux" {
+        // 1) backup (if requested), 2) decode b64 to file via printf+base64
+        let path_esc = path.replace('\'', "'\\''");
+        let backup_cmd = if backup {
+            format!("[ -f '{p}' ] && cp -p '{p}' '{p}.lucy.bak' 2>/dev/null; ", p = path_esc)
+        } else {
+            String::new()
+        };
+        format!(
+            "{backup}printf '%s' '{b64}' | base64 -d > '{path}' && echo 'OK:{bytes}'",
+            backup = backup_cmd,
+            b64 = b64,
+            path = path_esc,
+            bytes = content.len()
+        )
+    } else {
+        // PowerShell
+        let path_esc = path.replace('\'', "''");
+        let backup_cmd = if backup {
+            format!("if (Test-Path '{p}') {{ Copy-Item '{p}' '{p}.lucy.bak' -Force }}; ", p = path_esc)
+        } else {
+            String::new()
+        };
+        format!(
+            "{backup}$bytes = [Convert]::FromBase64String('{b64}'); [System.IO.File]::WriteAllBytes('{path}', $bytes); Write-Output 'OK:{bytes_len}'",
+            backup = backup_cmd,
+            b64 = b64,
+            path = path_esc,
+            bytes_len = content.len()
+        )
+    };
+
+    let result = execute_shell_cmd(host, username, remote_cmd, host_type, port, password, key_path).await?;
+
+    if !result.contains("OK:") {
+        return Err(format!("Error escribiendo archivo remoto: {}", result.trim()));
+    }
+
+    Ok(if backup {
+        format!("{} bytes escritos. Backup: {}.lucy.bak", content.len(), path)
+    } else {
+        format!("{} bytes escritos.", content.len())
+    })
 }

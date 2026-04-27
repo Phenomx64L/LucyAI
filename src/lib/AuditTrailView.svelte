@@ -11,18 +11,74 @@
 
     let filterHost   = 'all';
     let filterSource = 'all';
+    let filterStatus = 'all';     // 'all' | 'success' | 'fail'
+    let filterRange  = 'all';     // 'all' | '1h' | '24h' | '7d'
     let searchQuery  = '';
 
+    // Resolve filter range to an absolute timestamp threshold
+    function _rangeMs(range) {
+        switch (range) {
+            case '1h':  return Date.now() - 3600_000;
+            case '24h': return Date.now() - 86400_000;
+            case '7d':  return Date.now() - 7*86400_000;
+            default: return 0; // 'all' — no lower bound
+        }
+    }
+    function _entryTs(e) {
+        const t = e?.timestamp;
+        if (typeof t === 'number') return t;
+        const parsed = Date.parse(t);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    $: rangeFloor = _rangeMs(filterRange);
     $: entries = [...$auditTrail]
         .filter(e => filterHost   === 'all' || e.hostId === filterHost)
         .filter(e => filterSource === 'all' || e.source === filterSource)
-        .filter(e => !searchQuery || e.command.toLowerCase().includes(searchQuery.toLowerCase()) || e.hostName.toLowerCase().includes(searchQuery.toLowerCase()) || e.outputPreview.toLowerCase().includes(searchQuery.toLowerCase()))
+        .filter(e => filterStatus === 'all'
+            || (filterStatus === 'success' && e.exitCode === 0)
+            || (filterStatus === 'fail' && e.exitCode !== null && e.exitCode !== 0))
+        .filter(e => rangeFloor === 0 || _entryTs(e) >= rangeFloor)
+        .filter(e => !searchQuery
+            || e.command.toLowerCase().includes(searchQuery.toLowerCase())
+            || e.hostName.toLowerCase().includes(searchQuery.toLowerCase())
+            || e.outputPreview.toLowerCase().includes(searchQuery.toLowerCase()))
         .reverse();
 
     $: totalEntries   = $auditTrail.length;
+    $: visibleEntries = entries.length;
     $: uniqueHosts    = [...new Set($auditTrail.map(e => e.hostId))];
     $: failedCount    = $auditTrail.filter(e => e.exitCode !== null && e.exitCode !== 0).length;
     $: sourceCounts   = $auditTrail.reduce((acc, e) => { acc[e.source] = (acc[e.source]||0)+1; return acc; }, {});
+
+    // Activity heatmap: 24 buckets covering the visible range (or last 24h if 'all')
+    $: heatmap = (() => {
+        const N = 24;
+        const span = filterRange === '1h' ? 3600_000
+                   : filterRange === '24h' ? 86400_000
+                   : filterRange === '7d' ? 7*86400_000
+                   : 86400_000; // 'all' → just show last 24h activity
+        const now = Date.now();
+        const bucketSize = span / N;
+        const buckets = new Array(N).fill(0);
+        const failed  = new Array(N).fill(0);
+        for (const e of $auditTrail) {
+            const ts = _entryTs(e);
+            const age = now - ts;
+            if (age < 0 || age > span) continue;
+            const idx = N - 1 - Math.min(N-1, Math.floor(age / bucketSize));
+            buckets[idx]++;
+            if (e.exitCode !== null && e.exitCode !== 0) failed[idx]++;
+        }
+        const max = Math.max(1, ...buckets);
+        return { buckets, failed, max, span };
+    })();
+    function _heatLabel() {
+        const span = heatmap.span;
+        if (span <= 3600_000)  return isEN ? 'Last hour'  : 'Última hora';
+        if (span <= 86400_000) return isEN ? 'Last 24h'   : 'Últimas 24h';
+        return isEN ? 'Last 7 days' : 'Últimos 7 días';
+    }
 
     function toast(msg, type='info') { dispatch('toast', { msg, type }); }
 
@@ -95,7 +151,7 @@
 
   <!-- Stats bar -->
   <div class="at-stats">
-    <span class="at-stat">{totalEntries} {isEN ? 'entries' : 'entradas'}</span>
+    <span class="at-stat">{visibleEntries} / {totalEntries} {isEN ? 'entries' : 'entradas'}</span>
     <span class="at-stat">{uniqueHosts.length} hosts</span>
     {#if failedCount > 0}<span class="at-stat" style="color:var(--red)">{failedCount} {isEN ? 'failed' : 'fallidos'}</span>{/if}
     {#each Object.entries(sourceCounts) as [src, cnt]}
@@ -103,10 +159,39 @@
     {/each}
   </div>
 
+  <!-- Activity heatmap (24 buckets over the active range) -->
+  <div class="at-heatmap" title={isEN ? 'Activity over time — failed runs in red' : 'Actividad en el tiempo — rojos = fallos'}>
+    <span class="at-heat-label">{_heatLabel()}</span>
+    <div class="at-heat-bars">
+      {#each heatmap.buckets as count, i}
+        <div class="at-heat-bar"
+          style="height:{Math.max(2, (count / heatmap.max) * 22)}px;background:{heatmap.failed[i] > 0 ? 'rgba(239,68,68,.55)' : count > 0 ? 'var(--acc)' : 'rgba(255,255,255,.04)'};"
+          title="{count} {isEN ? 'commands' : 'comandos'}{heatmap.failed[i] > 0 ? ` · ${heatmap.failed[i]} ${isEN ? 'failed' : 'fallidos'}` : ''}"></div>
+      {/each}
+    </div>
+    <span class="at-heat-meta">{heatmap.buckets.reduce((s,n)=>s+n,0)} {isEN ? 'cmd' : 'cmd'}</span>
+  </div>
+
+  <!-- Quick filter chips -->
+  <div class="at-quick-filters">
+    <span class="at-qf-label">{isEN ? 'Range:' : 'Rango:'}</span>
+    {#each [['all', isEN?'All':'Todo'], ['1h', '1h'], ['24h', '24h'], ['7d', '7d']] as [val, label]}
+      <button class="at-qf-chip" class:active={filterRange === val} on:click={() => filterRange = val}>{label}</button>
+    {/each}
+    <span class="at-qf-sep"></span>
+    <span class="at-qf-label">{isEN ? 'Status:' : 'Estado:'}</span>
+    <button class="at-qf-chip" class:active={filterStatus === 'all'}     on:click={() => filterStatus = 'all'}>{isEN ? 'All' : 'Todo'}</button>
+    <button class="at-qf-chip at-qf-ok" class:active={filterStatus === 'success'} on:click={() => filterStatus = 'success'}>✓ OK</button>
+    <button class="at-qf-chip at-qf-err" class:active={filterStatus === 'fail'}    on:click={() => filterStatus = 'fail'}>✗ {isEN ? 'Failed' : 'Fallidos'}</button>
+  </div>
+
   <!-- Search -->
   <div class="at-search">
     <input class="at-search-inp" type="text" bind:value={searchQuery}
       placeholder={isEN ? 'Search commands, hosts, output...' : 'Buscar comandos, hosts, salida...'}>
+    {#if searchQuery}
+      <button class="at-search-clear" on:click={() => searchQuery = ''} title={isEN ? 'Clear' : 'Limpiar'}>✕</button>
+    {/if}
   </div>
 
   <div class="at-scroll">
@@ -153,9 +238,37 @@
     .at-stats{display:flex;gap:12px;padding:8px 16px;font-size:11px;color:#4a5a6a;border-bottom:1px solid rgba(26,32,48,.3);flex-shrink:0;}
     .at-stat{display:flex;align-items:center;gap:4px;}
 
-    .at-search{padding:8px 16px;flex-shrink:0;}
-    .at-search-inp{width:100%;background:rgba(0,0,0,.2);border:1px solid var(--bdr);color:var(--txt);padding:6px 10px;border-radius:6px;font-size:12px;outline:none;font-family:inherit;}
+    /* Activity heatmap row */
+    .at-heatmap{display:flex;align-items:center;gap:10px;padding:6px 16px 6px;border-bottom:1px solid rgba(26,32,48,.3);flex-shrink:0;}
+    .at-heat-label{font-size:9.5px;color:var(--txt3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px;flex-shrink:0;min-width:80px;}
+    .at-heat-bars{flex:1;display:flex;align-items:flex-end;gap:1.5px;height:24px;background:rgba(0,0,0,.18);padding:1px 4px;border-radius:4px;}
+    .at-heat-bar{flex:1;border-radius:1px;transition:opacity .15s;cursor:default;min-height:2px;}
+    .at-heat-bar:hover{opacity:.7;}
+    .at-heat-meta{font-size:9.5px;color:var(--txt3);font-family:var(--mono);flex-shrink:0;min-width:60px;text-align:right;}
+
+    /* Quick filter chips */
+    .at-quick-filters{display:flex;align-items:center;gap:4px;padding:6px 16px;border-bottom:1px solid rgba(26,32,48,.3);flex-shrink:0;flex-wrap:wrap;}
+    .at-qf-label{font-size:10px;color:var(--txt3);font-weight:600;letter-spacing:.3px;margin-right:2px;}
+    .at-qf-sep{width:1px;height:14px;background:rgba(255,255,255,.08);margin:0 6px;}
+    .at-qf-chip{
+      background:transparent;border:1px solid rgba(255,255,255,.06);
+      color:var(--txt2);font-size:10.5px;font-family:var(--mono);font-weight:600;
+      padding:2px 8px;border-radius:9px;cursor:pointer;transition:.12s;
+    }
+    .at-qf-chip:hover{background:rgba(255,255,255,.04);color:var(--txt);}
+    .at-qf-chip.active{background:rgba(16,185,129,.10);border-color:rgba(16,185,129,.35);color:var(--acc);}
+    .at-qf-chip.at-qf-ok.active{background:rgba(16,185,129,.10);border-color:rgba(16,185,129,.35);color:var(--acc);}
+    .at-qf-chip.at-qf-err.active{background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.35);color:var(--red);}
+
+    .at-search{padding:8px 16px;flex-shrink:0;position:relative;}
+    .at-search-inp{width:100%;background:rgba(0,0,0,.2);border:1px solid var(--bdr);color:var(--txt);padding:6px 28px 6px 10px;border-radius:6px;font-size:12px;outline:none;font-family:inherit;}
     .at-search-inp:focus{border-color:var(--acc-b);}
+    .at-search-clear{
+      position:absolute;right:22px;top:50%;transform:translateY(-50%);
+      background:transparent;border:none;color:var(--txt3);cursor:pointer;
+      font-size:11px;padding:2px 6px;border-radius:3px;
+    }
+    .at-search-clear:hover{background:rgba(255,255,255,.06);color:var(--txt);}
 
     .at-scroll{flex:1;overflow-y:auto;padding:0 16px 16px;}
 

@@ -9,6 +9,30 @@
     // Props
     export let isOpen = false;
     export let isEN = false;
+    export let activeModel = 'gemini-2.5-flash';     // user's currently active model
+    export let configuredProviders = [];              // list of providers with API keys configured
+
+    // Resolve which model to use for AI generation: prefer the user's active model,
+    // but fall back gracefully if no key is configured for it.
+    function resolveAIModel() {
+        const m = (activeModel || '').toLowerCase();
+        const provider = m.startsWith('gpt-')        ? 'openai'
+                       : m.startsWith('claude-')     ? 'anthropic'
+                       : m.startsWith('local-')      ? 'local'
+                       : m.includes('/')             ? 'nvidia'
+                       :                                'gemini';
+        const provs = (configuredProviders || []).map(String);
+        if (provs.length === 0) return { model: activeModel, provider, hasKey: false };
+        if (provs.includes(provider)) return { model: activeModel, provider, hasKey: true };
+        // Active provider has no key — fall back to the first configured one
+        const fb = provs[0];
+        const fbModel = fb === 'openai'    ? 'gpt-4o-mini'
+                      : fb === 'anthropic' ? 'claude-haiku-4-5'
+                      : fb === 'nvidia'    ? 'meta/llama-3.1-8b-instruct'
+                      : fb === 'local'     ? 'local-llama'
+                      :                       'gemini-2.5-flash';
+        return { model: fbModel, provider: fb, hasKey: true, fallback: true };
+    }
 
     // Internal state
     let loading = false;
@@ -214,59 +238,104 @@
 
     async function generateSkillWithAI() {
         const idea = aiIdea.trim();
-        if (!idea) { aiError = 'Describe quǸ skill quieres generar'; return; }
+        if (!idea) { aiError = isEN ? 'Describe what skill you want to generate' : 'Describe qué skill quieres generar'; return; }
+
+        // Resolve model up-front and surface key/provider issues BEFORE spinning.
+        const resolved = resolveAIModel();
+        if (!resolved.hasKey) {
+            aiError = isEN
+                ? 'No API keys configured. Open Settings → API Key to add one (Gemini is free).'
+                : 'Sin API keys configuradas. Abre Settings → API Key para agregar una (Gemini es gratis).';
+            return;
+        }
+        if (resolved.fallback) {
+            toast(
+                isEN
+                  ? `Active model has no key — falling back to ${resolved.provider} (${resolved.model})`
+                  : `Modelo activo sin key — usando ${resolved.provider} (${resolved.model})`,
+                'info'
+            );
+        }
+
         aiError = '';
         loading = true; error = '';
         loadingSecs = 0;
-        
-        timerInterval = setInterval(() => {
-            loadingSecs++;
-        }, 1000);
+
+        // Use reassignment (not ++) for guaranteed Svelte reactivity in older runtimes
+        if (timerInterval) clearInterval(timerInterval);
+        timerInterval = setInterval(() => { loadingSecs = loadingSecs + 1; }, 1000);
 
         try {
-            // Re-enforcamos el requerimiento al final
-            const ideaStrict = idea + " (Responde SOLO con JSON, nada más)";
-            
-            // 20 second timeout protect en Frontend
-            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Tiempo de espera agotado (20s). Los servidores de Gemini están sobrecargados o hay latencia de red.')), 20000));
+            // Re-enforce the JSON-only requirement at the end of the prompt
+            const ideaStrict = idea + " (Responde SOLO con JSON crudo, sin markdown, sin backticks, sin texto adicional)";
+
+            // 30 s frontend race — backend already has its own 25 s timeout, so this is a safety net.
+            const timeoutPromise = new Promise((_, reject) => setTimeout(
+                () => reject(new Error(isEN
+                    ? 'Frontend timeout (30s). Try a faster model or check your connection.'
+                    : 'Timeout del frontend (30s). Prueba un modelo más rápido o revisa tu conexión.')),
+                30000));
+
             const raw = await Promise.race([
-                invoke('generate_skill_template', {
-                    idea: ideaStrict,
-                    model: 'gemini-2.5-flash'
-                }),
+                invoke('generate_skill_template', { idea: ideaStrict, model: resolved.model }),
                 timeoutPromise
             ]);
-            
+
             clearInterval(timerInterval);
-            
-            // Extraer JSON del texto de respuesta
+            timerInterval = null;
+
+            // Extract JSON object from response (handles cases where AI prepends/appends prose)
             const txt = String(raw);
             const m = txt.match(/\{[\s\S]*\}/);
-            if (!m) throw new Error('La IA no devolvió JSON válido. Respuesta:\n' + txt.slice(0, 100));
-            
-            const parsed = JSON.parse(m[0]);
-            
+            if (!m) {
+                throw new Error((isEN ? 'AI did not return valid JSON. Response: ' : 'La IA no devolvió JSON válido. Respuesta: ')
+                    + txt.slice(0, 200));
+            }
+
+            let parsed;
+            try {
+                parsed = JSON.parse(m[0]);
+            } catch (parseErr) {
+                throw new Error((isEN ? 'JSON parse error: ' : 'Error al parsear JSON: ')
+                    + parseErr.message + '\n\n' + (isEN ? 'AI response: ' : 'Respuesta IA: ') + m[0].slice(0, 300));
+            }
+
+            // Validate category against the form's actual options. AI is instructed to use
+            // these three values; if it returns something else, default to quick_cmd.
+            const VALID_CATEGORIES = ['quick_cmd', 'runbook', 'macro'];
+            const cat = VALID_CATEGORIES.includes(parsed.category) ? parsed.category : 'quick_cmd';
+
+            // Sanity check: skill must have a name and a script
+            if (!parsed.name || !parsed.script) {
+                throw new Error(isEN
+                    ? `AI returned an incomplete skill (missing ${!parsed.name ? 'name' : 'script'}). Try again with a clearer description.`
+                    : `La IA devolvió un skill incompleto (falta ${!parsed.name ? 'nombre' : 'script'}). Intenta con una descripción más clara.`);
+            }
+
             newSkill = {
-                name: parsed.name || 'Skill generada',
-                category: ['monitoring','admin','network','security','diagnostics'].includes(parsed.category) ? parsed.category : 'admin',
-                description: parsed.description || '',
-                script: parsed.script || '',
+                id: '',
+                name: String(parsed.name).slice(0, 80),
+                category: cat,
+                description: String(parsed.description || '').slice(0, 500),
+                script: String(parsed.script || ''),
                 parameters: parsed.parameters ? JSON.stringify(parsed.parameters, null, 2) : '[]',
                 triggers: parsed.triggers ? JSON.stringify(parsed.triggers, null, 2) : '[]',
                 tags: parsed.tags ? JSON.stringify(parsed.tags, null, 2) : '[]',
                 enabled: true
             };
             aiPromptOpen = false;
-            formOpen = true; // abrir form con la data rellenada
-            toast('Skill generada por IA — revisa y guarda', 'success');
+            formOpen = true; // open form pre-filled
+            toast(isEN ? 'Skill generated by AI — review & save' : 'Skill generada por IA — revisa y guarda', 'success');
         } catch (e) {
-            clearInterval(timerInterval);
-            error = String(e);
-            aiError = String(e).slice(0, 400); // mostrar error directo en la caja
-            toast('Error de IA: ' + String(e).slice(0, 50), 'error');
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+            const msg = String(e?.message || e);
+            error = msg;
+            aiError = msg.slice(0, 600); // show fuller error in modal
+            toast((isEN ? 'AI error: ' : 'Error de IA: ') + msg.slice(0, 80), 'error');
+        } finally {
+            loading = false;
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
         }
-        loading = false;
-        clearInterval(timerInterval);
     }
 
     let pendingDelete = null;   // {id, name} | null

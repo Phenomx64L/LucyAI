@@ -87,6 +87,35 @@
   --bg-bottom:       #0f0a04;
   --sidebar-overlay: rgba(24, 15, 6, 0.55);
 }
+/* ── New themes (v1.3) ─────────────────────────────────────────── */
+/* Graphite — pure neutral gray, zero color cast (minimalism) */
+[data-theme="graphite"] {
+  --bg-top:          #3a3d42;
+  --bg-mid:          #1e2024;
+  --bg-bottom:       #0a0b0d;
+  --sidebar-overlay: rgba(10, 11, 13, 0.55);
+}
+/* Midnight — deep navy with cyan halo (Tokyo Night vibe) */
+[data-theme="midnight"] {
+  --bg-top:          #1a3050;
+  --bg-mid:          #0d1830;
+  --bg-bottom:       #050912;
+  --sidebar-overlay: rgba(5, 9, 18, 0.55);
+}
+/* AMOLED — pure black for OLED screens / max contrast / accessibility */
+[data-theme="amoled"] {
+  --bg-top:          #0a0a0a;
+  --bg-mid:          #050505;
+  --bg-bottom:       #000000;
+  --sidebar-overlay: rgba(0, 0, 0, 0.70);
+}
+/* Nord — cool slate-blue, scientifically gentle on the eyes */
+[data-theme="nord"] {
+  --bg-top:          #3b4252;
+  --bg-mid:          #2e3440;
+  --bg-bottom:       #1a1c22;
+  --sidebar-overlay: rgba(26, 28, 34, 0.55);
+}
 
 /* Top-to-bottom gradient background. Used on the .root container.
    background-attachment:fixed keeps the gradient stable while content scrolls. */
@@ -138,6 +167,11 @@
 .theme-dot-forest  { background: linear-gradient(180deg, #253A2A 0%, #0D1A12 100%); }
 .theme-dot-twilight{ background: linear-gradient(180deg, #35254A 0%, #170D1A 100%); }
 .theme-dot-mocha   { background: linear-gradient(180deg, #3A2E25 0%, #1A120D 100%); }
+/* New theme dots (v1.3) */
+.theme-dot-graphite{ background: linear-gradient(180deg, #3a3d42 0%, #0a0b0d 100%); }
+.theme-dot-midnight{ background: linear-gradient(180deg, #1a3050 0%, #050912 100%); }
+.theme-dot-amoled  { background: linear-gradient(180deg, #1a1a1a 0%, #000000 100%); border-color: rgba(255,255,255,0.20); }
+.theme-dot-nord    { background: linear-gradient(180deg, #3b4252 0%, #1a1c22 100%); }
 
 
 /* ── RESET ───────────────────────────────────────────────── */

@@ -34,14 +34,26 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     ];
     let mut was_blocked_but_bypassed = false;
 
+    // Limpiar tokens expirados antes de cualquier validación (TTL 5 min)
+    crate::state::purge_expired_bypass_tokens();
+
     if let Some(ref token) = bypass_token {
-        let mut tokens_map = crate::state::BYPASS_TOKENS.lock().unwrap();
-        if let Some(authorized_script) = tokens_map.get(token) {
-            if authorized_script == &script {
-                was_blocked_but_bypassed = true;
-                let _ = writeln!(log_file, "[{}] [HOST: {}] [AUTHORIZED_BYPASS] Token consumido para: {}", timestamp, user, script);
-                write_app_log("WARNING", "Usuario autorizó comando destructivo vía token");
-                tokens_map.remove(token);
+        // Mutex poisoning fail-safe: si el lock está poisoned, fallar con error claro
+        // en lugar de panic-ear el proceso entero (crash global en producción).
+        match crate::state::BYPASS_TOKENS.lock() {
+            Ok(mut tokens_map) => {
+                if let Some((authorized_script, _expiry)) = tokens_map.get(token) {
+                    if authorized_script == &script {
+                        was_blocked_but_bypassed = true;
+                        let _ = writeln!(log_file, "[{}] [HOST: {}] [AUTHORIZED_BYPASS] Token consumido para: {}", timestamp, user, script);
+                        write_app_log("WARNING", "Usuario autorizó comando destructivo vía token");
+                        tokens_map.remove(token);
+                    }
+                }
+            }
+            Err(e) => {
+                write_app_log("ERROR", &format!("BYPASS_TOKENS mutex poisoned: {}", e));
+                return Err("Error interno: estado de tokens corrupto. Reinicia Lucy.".to_string());
             }
         }
     }
@@ -49,14 +61,46 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     if !was_blocked_but_bypassed {
         for blocked in blocklist.iter() {
             if script_lower.contains(blocked) {
-                let new_token = format!("{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-                crate::state::BYPASS_TOKENS.lock().unwrap().insert(new_token.clone(), script.clone());
+                // Token criptográficamente seguro (256 bits OsRng) con TTL 5 min
+                let new_token = crate::state::generate_secure_token();
+                let expiry = std::time::Instant::now()
+                    + std::time::Duration::from_secs(crate::state::BYPASS_TOKEN_TTL_SECS);
+                match crate::state::BYPASS_TOKENS.lock() {
+                    Ok(mut t) => { t.insert(new_token.clone(), (script.clone(), expiry)); }
+                    Err(e) => {
+                        write_app_log("ERROR", &format!("BYPASS_TOKENS mutex poisoned during insert: {}", e));
+                        return Err("Error interno: no se pudo registrar token de seguridad. Reinicia Lucy.".to_string());
+                    }
+                }
 
                 let _ = writeln!(log_file, "[{}] [HOST: {}] [BLOCKED_PENDING_AUTH] Script: {}", timestamp, user, script);
                 write_app_log("WARNING", &format!("Bloqueado comando prohibido: {}", blocked));
                 return Err(format!("SECURITY_BLOCK:{}:{}", new_token, blocked));
             }
         }
+    }
+
+    // Check permission rules ALWAYS — even when a bypass token authorized the
+    // hardcoded blocklist. User-defined "block" rules must override token bypass.
+    // Fail-closed: a DB error blocks execution, matching the other exec paths.
+    let perm = crate::commands::metrics::check_permission(script.clone(), "command".to_string())
+        .await
+        .map_err(|e| {
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [PERMISSION_CHECK_ERROR] {} - Script: {}", timestamp, user, e, script);
+            write_app_log("ERROR", &format!("check_permission falló: {}", e));
+            format!("Error verificando permisos (fail-closed): {}", e)
+        })?;
+    match perm.action.as_str() {
+        "block" => {
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [BLOCKED_BY_RULE] Rule: {} - Script: {}", timestamp, user, perm.reason, script);
+            return Err(format!("Permiso denegado: {}", perm.reason));
+        }
+        "ask" => {
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [PERMISSION_REQUIRED] Rule: {} - Script: {}", timestamp, user, perm.reason, script);
+            return Err(format!("Comando requiere aprobación: {}. Crea una regla 'allow' en Permisos para ejecutar.", perm.reason));
+        }
+        "allow" => {}, // Continue with execution
+        _ => return Err(format!("Acción de permiso inválida: {}", perm.action)),
     }
 
     if was_blocked_but_bypassed {
@@ -137,6 +181,15 @@ pub async fn stream_shell_cmd(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<(), String> {
+    // Check permission rules before executing
+    let perm = crate::commands::metrics::check_permission(command.clone(), "command".to_string()).await?;
+    match perm.action.as_str() {
+        "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
+        "ask" => return Err(format!("Comando requiere aprobación: {}. Crea una regla 'allow' en Permisos para ejecutar.", perm.reason)),
+        "allow" => {}, // Continue with execution
+        _ => return Err(format!("Acción de permiso inválida: {}", perm.action)),
+    }
+
     if host_type == "linux" {
         let port_str = port.unwrap_or(22).to_string();
         let key_path_clone = key_path.clone();

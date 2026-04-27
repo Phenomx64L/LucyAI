@@ -8,7 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 use keyring::Entry;
-use crate::state::HTTP_CLIENT;
+// SECURITY: providers.rs hace healthchecks/list endpoints, no streaming.
+// Usa HTTP_CLIENT_FAST (15s timeout) para mitigar slow-loris attacks.
+use crate::state::HTTP_CLIENT_FAST as HTTP_CLIENT;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProviderHealth {

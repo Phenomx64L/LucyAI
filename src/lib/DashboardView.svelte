@@ -39,6 +39,30 @@
         dispatch('toast', { msg, type });
     }
 
+    // ── Severity color encoding (UNIFIED across dashboard) ──────────────────
+    // Standard thresholds: warn ≥60, critical ≥80 (CPU/RAM); disk uses 75/90.
+    // Returns CSS var name OR hex (when needed for inline SVG sparklines).
+    const _SEV_HEX = { critical:'#ef4444', warn:'#f59e0b', okGreen:'#10b981', okBlue:'#3b9eff' };
+    function sevVar(v, okVar = 'var(--acc)', { warn = 60, crit = 80 } = {}) {
+        if (v >= crit) return 'var(--red)';
+        if (v >= warn) return 'var(--amber)';
+        return okVar;
+    }
+    function sevHex(v, okHex = _SEV_HEX.okGreen, { warn = 60, crit = 80 } = {}) {
+        if (v >= crit) return _SEV_HEX.critical;
+        if (v >= warn) return _SEV_HEX.warn;
+        return okHex;
+    }
+    // Disk uses higher thresholds — storage tolerates more before being critical.
+    const diskSevVar = (v) => sevVar(v, 'var(--blue)', { warn: 75, crit: 90 });
+    // CPU per-core: same thresholds, returns rgba for the bar fill (with ok-shade variation).
+    function coreBarColor(v) {
+        if (v >= 80) return 'rgba(239,68,68,.85)';
+        if (v >= 60) return 'rgba(245,158,11,.80)';
+        if (v >= 40) return 'rgba(16,185,129,.65)';
+        return 'rgba(16,185,129,.45)';
+    }
+
     // ── Dashboard lifecycle ──────────────────────────────────────────────────
 
     async function startDashboard() {
@@ -87,9 +111,21 @@
 
     // ── Sparklines / metrics history ─────────────────────────────────────────
 
+    // SECURITY: defensive sanitizer for the `color` arg.
+    // Today every caller passes a hardcoded hex from sevHex(), but if a future
+    // refactor ever lets user data flow into this function, an unrestricted
+    // string could inject arbitrary CSS/SVG via the @html sink that renders this.
+    // Whitelist: 7-char hex (`#RRGGBB`) or 9-char hex (`#RRGGBBAA`) only.
+    const _SPARK_COLOR_RE = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
+    function _safeColor(c) {
+        if (typeof c === 'string' && _SPARK_COLOR_RE.test(c)) return c;
+        return '#10b981'; // fallback to brand green
+    }
+
     function sparklineSvg(history, key, color = '#10b981', w = 70, h = 24) {
         const data = (history || []).map(h => h[key] ?? 0);
         if (data.length < 2) return '';
+        const safeC = _safeColor(color);  // hex-validated
         const min = Math.min(...data), max = Math.max(...data);
         const range = max - min || 1;
         const pts = data.map((v, i) => {
@@ -98,7 +134,50 @@
             return `${x.toFixed(1)},${y.toFixed(1)}`;
         }).join(' ');
         const last = pts.trim().split(' ').pop().split(',');
-        return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/><circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${color}"/></svg>`;
+        // Compute approximate path length for stroke-dasharray draw animation.
+        // (Cheap rough estimate — exact length would need getTotalLength on a real DOM node.)
+        const approxLen = w * 1.6;
+        // Build a closed area polygon for a subtle filled gradient under the line
+        const areaPts = `0,${h} ${pts} ${w},${h}`;
+        // Inline animation via SMIL would be more ergonomic, but CSS keyframes on the path
+        // are more performant. Use a unique keyframe per render to retrigger draw on update.
+        // SECURITY: drawKey is built from numeric Math.random() → no injection vector.
+        const drawKey = `spkdraw-${Math.floor(Math.random() * 100000)}`;
+        return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" class="spark-svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="spkg-${drawKey}" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%"   stop-color="${safeC}" stop-opacity="0.32"/>
+                <stop offset="100%" stop-color="${safeC}" stop-opacity="0"/>
+              </linearGradient>
+              <style>
+                @keyframes ${drawKey} {
+                  0%   { stroke-dashoffset: ${approxLen.toFixed(0)}; opacity: 0.2; }
+                  60%  { opacity: 0.85; }
+                  100% { stroke-dashoffset: 0; opacity: 0.85; }
+                }
+                @keyframes ${drawKey}-area {
+                  0%   { opacity: 0; }
+                  70%  { opacity: 0; }
+                  100% { opacity: 1; }
+                }
+                @keyframes ${drawKey}-dot {
+                  0%   { transform: scale(0); opacity: 0; }
+                  85%  { transform: scale(0); opacity: 0; }
+                  100% { transform: scale(1); opacity: 1; }
+                }
+                .spk-line-${drawKey} {
+                  stroke-dasharray: ${approxLen.toFixed(0)};
+                  stroke-dashoffset: ${approxLen.toFixed(0)};
+                  animation: ${drawKey} 700ms cubic-bezier(0.16,1,0.3,1) forwards;
+                }
+                .spk-area-${drawKey} { opacity: 0; animation: ${drawKey}-area 900ms cubic-bezier(0.16,1,0.3,1) forwards; }
+                .spk-dot-${drawKey}  { transform-origin: ${last[0]}px ${last[1]}px; transform: scale(0); animation: ${drawKey}-dot 900ms cubic-bezier(0.34,1.56,0.64,1) forwards; }
+              </style>
+            </defs>
+            <polygon class="spk-area-${drawKey}" points="${areaPts}" fill="url(#spkg-${drawKey})"/>
+            <polyline class="spk-line-${drawKey}" points="${pts}" fill="none" stroke="${safeC}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle class="spk-dot-${drawKey}" cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${safeC}"/>
+        </svg>`;
     }
 
     function pushMetricsHistory(hostId, metrics) {
@@ -227,26 +306,26 @@
         <div class="dc-label">CPU</div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;">
           <div>
-            <div class="dc-value" style="color:{dashMetrics.cpu.global>85?'var(--red)':dashMetrics.cpu.global>60?'var(--amber)':'var(--acc)'}">
+            <div class="dc-value" style="color:{sevVar(dashMetrics.cpu.global, 'var(--acc)')}">
               <span use:countUp={{ target: dashMetrics.cpu.global, suffix: '%', duration: 900 }}></span>
             </div>
-            <div class="dc-bar"><div class="dc-bar-fill" style="width:{dashMetrics.cpu.global}%;background:{dashMetrics.cpu.global>85?'var(--red)':dashMetrics.cpu.global>60?'var(--amber)':'var(--acc)'}"></div></div>
+            <div class="dc-bar"><div class="dc-bar-fill" style="width:{dashMetrics.cpu.global}%;background:{sevVar(dashMetrics.cpu.global, 'var(--acc)')}"></div></div>
             <div class="dc-sub">{dashMetrics.cpu.cores} {isEN ? 'cores' : 'núcleos'}</div>
           </div>
-          <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'cpu',dashMetrics.cpu.global>85?'#ef4444':dashMetrics.cpu.global>60?'#f59e0b':'#10b981')}</div>
+          <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'cpu',sevHex(dashMetrics.cpu.global))}</div>
         </div>
       </div>
       <div class="dash-card">
         <div class="dc-label">RAM</div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;">
           <div>
-            <div class="dc-value" style="color:{dashMetrics.memory.percent>85?'var(--red)':dashMetrics.memory.percent>70?'var(--amber)':'var(--blue)'}">
+            <div class="dc-value" style="color:{sevVar(dashMetrics.memory.percent, 'var(--blue)')}">
               <span use:countUp={{ target: dashMetrics.memory.percent, suffix: '%', duration: 900 }}></span>
             </div>
-            <div class="dc-bar"><div class="dc-bar-fill" style="width:{dashMetrics.memory.percent}%;background:{dashMetrics.memory.percent>85?'var(--red)':dashMetrics.memory.percent>70?'var(--amber)':'var(--blue)'}"></div></div>
+            <div class="dc-bar"><div class="dc-bar-fill" style="width:{dashMetrics.memory.percent}%;background:{sevVar(dashMetrics.memory.percent, 'var(--blue)')}"></div></div>
             <div class="dc-sub">{(dashMetrics.memory.used_mb/1024).toFixed(1)} / {(dashMetrics.memory.total_mb/1024).toFixed(1)} GB</div>
           </div>
-          <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'ram',dashMetrics.memory.percent>85?'#ef4444':dashMetrics.memory.percent>70?'#f59e0b':'#3b9eff')}</div>
+          <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'ram',sevHex(dashMetrics.memory.percent, _SEV_HEX.okBlue))}</div>
         </div>
       </div>
       <div class="dash-card">
@@ -265,7 +344,7 @@
       <div class="core-grid">
         {#each dashMetrics.cpu.per_core as usage, i}
         <div class="core-item">
-          <div class="core-bar-wrap"><div class="core-bar-fill" style="height:{usage}%;background:{usage>85?'rgba(239,68,68,.85)':usage>60?'rgba(245,158,11,.8)':usage>40?'rgba(16,185,129,.65)':'rgba(16,185,129,.45)'};"></div></div>
+          <div class="core-bar-wrap"><div class="core-bar-fill" style="height:{usage}%;background:{coreBarColor(usage)};"></div></div>
           <div class="core-label">C{i}</div>
           <div class="core-pct">{usage}%</div>
         </div>
@@ -279,8 +358,8 @@
       {#each dashMetrics.disks as disk}
       <div class="disk-row">
         <div class="disk-name">{disk.name||disk.mount}</div>
-        <div class="disk-bar-wrap"><div class="disk-bar-fill" style="width:{disk.percent}%;background:{disk.percent>90?'var(--red)':disk.percent>75?'var(--amber)':'var(--blue)'}"></div></div>
-        <div class="disk-pct" style="color:{disk.percent>90?'var(--red)':disk.percent>75?'var(--amber)':'var(--txt2)'}">{disk.percent}%</div>
+        <div class="disk-bar-wrap"><div class="disk-bar-fill" style="width:{disk.percent}%;background:{diskSevVar(disk.percent)}"></div></div>
+        <div class="disk-pct" style="color:{disk.percent >= 75 ? diskSevVar(disk.percent) : 'var(--txt2)'}">{disk.percent}%</div>
         <div class="disk-size">{disk.used_gb}G / {disk.total_gb}G</div>
       </div>
       {/each}
@@ -295,7 +374,7 @@
           {#each dashMetrics.top_processes as p}
           <tr>
             <td style="font-family:var(--mono);font-size:11px;color:var(--txt);">{p.name}</td>
-            <td style="color:{Number(p.cpu)>50?'var(--amber)':'var(--txt2)'}">{p.cpu}</td>
+            <td style="color:{sevVar(Number(p.cpu) || 0, 'var(--txt2)')}">{p.cpu}</td>
             <td style="color:var(--blue)">{typeof p.mem_mb==='number'?p.mem_mb.toLocaleString():p.mem_mb}</td>
             <td style="color:#334155">{p.pid||'-'}</td>
           </tr>

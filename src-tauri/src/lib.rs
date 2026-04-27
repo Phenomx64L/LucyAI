@@ -95,6 +95,8 @@ pub fn run() {
             hosts::get_remote_health_linux,
             hosts::execute_shell_cmd,
             hosts::nexshell_bootstrap,
+            hosts::read_remote_file,
+            hosts::write_remote_file,
             // Ejecución local alternativa (CMD, WMIC, netsh, reg, cscript, nativa)
             local::execute_cmd,
             local::execute_wmic,
@@ -115,6 +117,9 @@ pub fn run() {
             local::analyze_code,
             local::system_diff,
             local::search_web,
+            local::set_tab_cwd,
+            local::drop_tab_cwd,
+            local::get_tab_cwd,
             local::open_vscode,
             local::panic_kill_all,
             local::launch_rdp,

@@ -55,15 +55,16 @@ pub fn ensure_trusted_host(host: &str) {
         .output();
 }
 
-/// Valida que un host_id solo contenga caracteres alfanuméricos, guion o guion bajo.
-/// Previene inyecciones en las claves del Windows Credential Manager.
+/// Valida que un host_id solo contenga caracteres alfanuméricos ASCII, guion o guion bajo.
+/// SECURITY: Usa is_ascii_alphanumeric() (no is_alphanumeric()) para rechazar
+/// Unicode look-alikes que podrían inyectarse en las claves del Credential Manager.
 pub fn validate_host_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 128 {
         return Err("host_id inválido: longitud fuera de rango (1-128)".to_string());
     }
-    if !id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         return Err(format!(
-            "host_id '{}' contiene caracteres no permitidos (solo a-z, 0-9, _ y -)", id
+            "host_id '{}' contiene caracteres no permitidos (solo a-z ASCII, 0-9, _ y -)", id
         ));
     }
     Ok(())

@@ -341,7 +341,7 @@ fn build_system_prompt(
         RULE 5: Silently correct phonetically mistranscribed words.\n\
         RULE 6: If the user teaches you a command, respond ONLY with <LEARN>key1,key2|powershell_command|response</LEARN>.\n\
         RULE 6b — PERSONAL MEMORY: When the user reveals stable personal facts, preferences, or environment info worth remembering across sessions, silently emit a <REMEMBER> tag ALONGSIDE your normal response (not instead of it). The tag is stripped from display and persisted to the user profile. Format: <REMEMBER category=\"identity|preference|context|host\">key: value</REMEMBER>. Valid categories: 'identity' (name, role, org), 'preference' (verbose/concise, shell, language), 'context' (projects, responsibilities), 'host' (info tied to a specific server). Only remember FACTS — not conversational filler. Do NOT re-remember facts already shown in the '--- PERFIL DEL USUARIO ---' section. Examples: <REMEMBER category=\"preference\">preferred_shell: PowerShell 7</REMEMBER>, <REMEMBER category=\"context\">main_project: Lucy Tauri assistant</REMEMBER>.\n\
-        RULE 7: You can create PDFs using Edge Headless.\n\
+        RULE 7 — PDF GENERATION: To create PDFs use Edge Headless. CRITICAL: 'msedge' is NOT in the system PATH on most installations. NEVER call it as a bare command. Use ONE of these patterns: (a) Quote the full path with the call operator: & 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' --headless --disable-gpu --print-to-pdf=\"OUT.pdf\" \"file:///INPUT.html\"; (b) Discover first: emit <TOOL>locate_file:msedge.exe</TOOL>, then use the returned path quoted with &; (c) Fallback to Chrome: & 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' with the same flags. If a previous turn already produced 'msedge no se reconoce' / 'CommandNotFoundException', do NOT retry the bare command — switch to a quoted full path immediately.\n\
         RULE 8: For Linux use native ssh. For Windows Server use Invoke-Command -ComputerName. EXCEPTION: if the context says \"ACTIVE REMOTE SHELL\", the session is already established — generate RAW commands only, NO Invoke-Command, NO -ComputerName, NO -Credential wrappers.\n\
         RULE 9: <TOOL>sysinfo</TOOL> is ONLY for LOCAL machine hardware queries: CPU usage, RAM, disk, system health, uptime. NEVER use sysinfo for: code analysis, file review, bug detection, logic verification, architecture analysis, or ANY question about code/files/projects. For REMOTE hosts, use Invoke-Command or SSH with the host details. EXCEPTION: if context says \"ACTIVE REMOTE SHELL\", generate raw commands — the WinRM/SSH tunnel is already open.\n\
         RULE 10: To keep the machine awake use PowerToys Awake.\n\
@@ -855,14 +855,19 @@ pub async fn generate_skill_template(idea: String, model: String) -> Result<Stri
     let sys_prompt = format!(r#"Eres un generador estricto de JSON. Crea una "skill" de automatización de Windows/Powershell para la siguiente idea: {}.
 Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando esta estructura:
 {{
-  "name": "Nombre corto descriptivo",
-  "category": "monitoring|admin|network|security|diagnostics",
-  "description": "Qué hace la skill",
-  "script": "El script ps1. Usa {{paramName}} para parámetros.",
+  "name": "Nombre corto descriptivo (max 40 chars, único, sin espacios al inicio/fin)",
+  "category": "quick_cmd | runbook | macro",
+  "description": "Qué hace la skill (1-2 líneas claras)",
+  "script": "El script PowerShell completo. Usa {{{{paramName}}}} para variables que el usuario debe proporcionar.",
   "parameters": [{{"name":"paramName","type":"string","required":true,"description":"Para qué es"}}],
-  "triggers": ["frase natural 1", "frase 2"],
+  "triggers": ["frase natural 1", "frase 2", "alias corto"],
   "tags": ["tag1", "tag2"]
-}}"#, idea);
+}}
+REGLAS:
+- "category" SOLO acepta uno de: quick_cmd, runbook, macro. Usa "quick_cmd" para comandos de una línea, "runbook" para procedimientos multi-paso, "macro" para automatizaciones complejas con condicionales.
+- Si la idea no requiere parámetros, devuelve "parameters": [].
+- "triggers" debe tener al menos 2 frases en español natural que un SysAdmin diría para invocar esta skill.
+- NO uses markdown, NO uses backticks, SOLO el objeto JSON crudo."#, idea);
 
     let req = match provider {
         "openai" => {
@@ -896,7 +901,17 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
         }
     };
 
-    let res = req.send().await.map_err(|e| format!("Error de conexión: {}", e))?;
+    // Hard timeout so the spinner never hangs forever — fail-fast with a useful message.
+    let req = req.timeout(std::time::Duration::from_secs(25));
+    let res = req.send().await.map_err(|e| {
+        if e.is_timeout() {
+            format!("Tiempo de espera agotado (25s) llamando al proveedor '{}'. Verifica conexión a internet o cambia de modelo.", provider)
+        } else if e.is_connect() {
+            format!("No se pudo conectar al proveedor '{}'. Verifica conexión a internet.", provider)
+        } else {
+            format!("Error de conexión ({}): {}", provider, e)
+        }
+    })?;
     let status = res.status();
     let body_text = res.text().await.map_err(|e| e.to_string())?;
 
@@ -908,12 +923,27 @@ Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks, respetando 
                 _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
             };
             if let Some(t) = text {
-                return Ok(t.to_string());
+                let trimmed = t.trim();
+                if trimmed.is_empty() {
+                    return Err(format!("El proveedor '{}' devolvió respuesta vacía. Intenta de nuevo o cambia de modelo.", provider));
+                }
+                return Ok(trimmed.to_string());
             }
         }
-        Ok(body_text)
+        // Couldn't extract content — return the raw body so the user can see what came back.
+        Err(format!("Respuesta inesperada de '{}' (sin contenido reconocible): {}", provider, &body_text[..body_text.len().min(400)]))
     } else {
-        Err(format!("Respuesta API ({}): {}", provider, body_text))
+        // Surface common API errors with actionable hints
+        let hint = if status.as_u16() == 401 || status.as_u16() == 403 {
+            format!(" → API Key inválida o sin permisos. Configúrala en Settings → API Key.")
+        } else if status.as_u16() == 429 {
+            " → Rate limit alcanzado. Espera un momento o cambia de modelo.".to_string()
+        } else if status.as_u16() >= 500 {
+            format!(" → El servidor de '{}' está caído. Intenta otro proveedor.", provider)
+        } else {
+            String::new()
+        };
+        Err(format!("API '{}' respondió {} {}{}", provider, status.as_u16(), &body_text[..body_text.len().min(300)], hint))
     }
 }
 

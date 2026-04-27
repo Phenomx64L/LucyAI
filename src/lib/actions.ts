@@ -67,28 +67,42 @@ export function focusTrap(node: HTMLElement) {
  */
 export function countUp(
     node: HTMLElement,
-    options: { target: number; suffix?: string; duration?: number }
+    options: { target: number; suffix?: string; prefix?: string; duration?: number; decimals?: number; thousands?: boolean }
 ) {
     let rafId: number;
 
-    function animate(to: number, suffix: string, duration: number) {
+    function fmt(v: number, decimals: number, thousands: boolean): string {
+        if (decimals > 0) {
+            // Use toFixed for clean trailing zeros (e.g. 1.234 → "1.234").
+            // Then apply thousands separator on the integer part if requested.
+            const fixed = v.toFixed(decimals);
+            if (!thousands) return fixed;
+            const [intPart, decPart] = fixed.split('.');
+            return Number(intPart).toLocaleString() + '.' + decPart;
+        }
+        const r = Math.round(v);
+        return thousands ? r.toLocaleString() : String(r);
+    }
+
+    function animate(to: number, prefix: string, suffix: string, duration: number, decimals: number, thousands: boolean) {
         if (rafId) cancelAnimationFrame(rafId);
         const start   = performance.now();
         const step    = (now: number) => {
             const p      = Math.min((now - start) / duration, 1);
             const eased  = 1 - Math.pow(1 - p, 3); // cubic ease-out
-            node.textContent = Math.round(to * eased) + suffix;
+            node.textContent = prefix + fmt(to * eased, decimals, thousands) + suffix;
             if (p < 1) rafId = requestAnimationFrame(step);
         };
         rafId = requestAnimationFrame(step);
     }
 
-    const { target, suffix = '%', duration = 900 } = options;
-    animate(target, suffix, duration);
+    const { target, prefix = '', suffix = '%', duration = 900, decimals = 0, thousands = false } = options;
+    animate(target, prefix, suffix, duration, decimals, thousands);
 
     return {
-        update({ target: t, suffix: s = '%', duration: d = 900 }: typeof options) {
-            animate(t, s, d);
+        update(opts: typeof options) {
+            const { target: t, prefix: p2 = '', suffix: s = '%', duration: d = 900, decimals: dec = 0, thousands: th = false } = opts;
+            animate(t, p2, s, d, dec, th);
         },
         destroy() { if (rafId) cancelAnimationFrame(rafId); },
     };
