@@ -39,9 +39,10 @@ import { listen } from '@tauri-apps/api/event';
     import { safeParseLS, safeSetLS, safeSetLSString, safeGetLS, safeRemoveLS } from '$lib/safe-ls';
     import { debug } from '$lib/debug';
     import { renderMd } from '$lib/md-render';
-    import { escapeHtml, normalizeForMatch, formatTime } from '$lib/text-utils';
+    import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens } from '$lib/text-utils';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
+    import { predictCost as _libPredictCost } from '$lib/cost-predictor';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
@@ -373,26 +374,10 @@ import { listen } from '@tauri-apps/api/event';
         showRemoteDiff = true;
     }
 
-    // ── Cost predictor (inline) ──────────────────────────────────────────────
-    // Cheap heuristic estimate so the user can budget BEFORE hitting Enter.
-    // Updates reactively from activeTab.inputValue + attached files + active model.
-    // Pricing constants must match src-tauri/src/utils/db.rs (calculate_cost).
-    function _predictCost(model, inputChars, isCode) {
-        // ~4 chars per token for ES/EN avg; bump 15% to stay conservative with system prompt overhead
-        const inputTokens = Math.ceil(inputChars * 1.15 / 4);
-        // Rough output budget: code/script answers run longer; agent loops can fan out
-        const outputTokens = isCode ? 1400 : 700;
-        const lc = (model || '').toLowerCase();
-        let inP = 0.0005, outP = 0.0015; // gemini default (cheapest)
-        if (lc.includes('claude'))      { inP = 0.003;  outP = 0.015; }
-        else if (lc.includes('gpt'))    { inP = 0.03;   outP = 0.06; }
-        else if (lc.includes('o1') || lc.includes('o3') || lc.includes('o4')) { inP = 0.015; outP = 0.06; }
-        else if (lc.includes('gemini')) { inP = 0.0005; outP = 0.0015; }
-        else if (lc.includes('local-')) { inP = 0;      outP = 0; }   // local Ollama = free
-        else if (lc.includes('/'))      { inP = 0.0008; outP = 0.0024; } // NVIDIA NIM rough avg
-        const cost = (inputTokens / 1000) * inP + (outputTokens / 1000) * outP;
-        return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cost };
-    }
+    // ── Cost predictor (lib/cost-predictor.ts) ───────────────────────────────
+    // Pre-flight token/cost estimate for the current input. Updates reactively
+    // as the user types so they can choose a cheaper model before pressing Enter.
+    // Single source of truth: $lib/cost-predictor (also reusable in tests).
     $: costPrediction = (() => {
         if (!activeTab) return null;
         const text = (activeTab.inputValue || '');
@@ -400,20 +385,25 @@ import { listen } from '@tauri-apps/api/event';
         const totalChars = text.length + filesChars;
         if (totalChars < 8) return null; // too short to bother
         const m = getEffectiveModel(activeTab);
-        const isCode = /\b(script|c[oó]digo|powershell|bash|python|sql|yaml|json|terraform|kubernetes|docker)\b/i.test(text);
-        const p = _predictCost(m, totalChars, isCode);
-        // Severity: free if local, warn at $0.01, high at $0.05
+        // Use prompt + filesChars as the "context" estimate fed into the model.
+        const est = _libPredictCost(text, filesChars, m);
+        // Map estimate.usd to a UI severity level.
         let level = 'ok';
-        if (p.cost === 0) level = 'free';
-        else if (p.cost >= 0.05) level = 'high';
-        else if (p.cost >= 0.01) level = 'warn';
-        return { ...p, level, model: m };
+        if (est.provider === 'local')  level = 'free';
+        else if (est.usd >= 0.05)      level = 'high';
+        else if (est.usd >= 0.01)      level = 'warn';
+        // Backwards-compatible shape: keep field names callers already use.
+        return {
+            inputTokens:  est.inputTokens,
+            outputTokens: est.outputTokens,
+            totalTokens:  est.inputTokens + est.outputTokens,
+            cost:         est.usd,
+            confidence:   est.confidence,
+            level,
+            model: m,
+        };
     })();
-    function _formatTokens(n) {
-        if (n < 1000) return String(n);
-        if (n < 100000) return (n / 1000).toFixed(1).replace('.0','') + 'k';
-        return Math.round(n / 1000) + 'k';
-    }
+    const _formatTokens = _libFormatTokens;
     let darkMode           = localStorage?.getItem('lucy_dark') !== 'false'; // tema oscuro/claro
     // ── UX: ZOOM & FONT ───────────────────────────
     let uiZoom             = parseFloat(localStorage?.getItem('lucy_zoom') ?? '1');
@@ -519,6 +509,12 @@ import { listen } from '@tauri-apps/api/event';
         // Terminales
         { icon:'＋', label:'Nueva terminal',          cat:'Terminal',    action:()=>{crearTab();showPalette=false;}, hint:'Ctrl+T' },
         { icon:'⌫', label:'Limpiar sesión actual',   cat:'Terminal',    action:()=>{if(activeTabId)limpiarSesion(activeTabId);showPalette=false;}, hint:'Ctrl+L' },
+        { icon:'≡', label: isEN ? 'Export tab as Notebook (.lucynote)' : 'Exportar pestaña como Notebook (.lucynote)',
+                                                       cat: isEN ? 'Terminal' : 'Terminal',
+                                                       action:()=>{showPalette=false; exportActiveTabAsNotebook('lucynote');} },
+        { icon:'≡', label: isEN ? 'Export tab as Markdown (.md)' : 'Exportar pestaña como Markdown (.md)',
+                                                       cat: isEN ? 'Terminal' : 'Terminal',
+                                                       action:()=>{showPalette=false; exportActiveTabAsNotebook('md');} },
         // Herramientas
         { icon:'▸', label:'Ver Tutorial',             cat:'Ayuda',       action:()=>{showTutorial=true;showPalette=false;}, hint:'?' },
         { icon:'·', label:'Acerca de Lucy',          cat:'Sistema',     action:()=>{abrirAcercaDe();showPalette=false;} },
@@ -5393,6 +5389,31 @@ if (Test-Path $src) {
     }
     let _restorePendingEnv = null;     // parsed envelope awaiting confirmation
     let showRestoreConfirm = false;
+
+    // ── NOTEBOOK EXPORT ──────────────────────────────────────────────────────
+    // Turn the active chat tab into a portable .lucynote (or markdown) file.
+    // Useful for post-mortems, runbooks, knowledge sharing.
+    async function exportActiveTabAsNotebook(format = 'lucynote') {
+        const t = getTab(activeTabId);
+        if (!t) { toast(isEN ? 'No active tab' : 'Sin pestaña activa', 'warn'); return; }
+        if (!Array.isArray(t.messages) || t.messages.length === 0) {
+            toast(isEN ? 'Tab is empty' : 'La pestaña está vacía', 'warn');
+            return;
+        }
+        try {
+            const { buildNotebook, downloadNotebook, downloadNotebookMarkdown } = await import('$lib/notebook');
+            const nb = buildNotebook(t, { lang: userLang, lucyVersion: appVersion, title: t.title });
+            if (format === 'md') downloadNotebookMarkdown(nb);
+            else                 downloadNotebook(nb);
+            toast(isEN
+                ? `Exported as ${format === 'md' ? 'Markdown' : '.lucynote'} (${nb.cells.length} cells)`
+                : `Exportado como ${format === 'md' ? 'Markdown' : '.lucynote'} (${nb.cells.length} celdas)`,
+                'ok');
+        } catch (e) {
+            console.warn('exportActiveTabAsNotebook failed:', e);
+            toast((isEN ? 'Export failed: ' : 'Fallo al exportar: ') + String(e).slice(0, 80), 'error');
+        }
+    }
     function importConfigPick() {
         const inp = document.createElement('input');
         inp.type = 'file';

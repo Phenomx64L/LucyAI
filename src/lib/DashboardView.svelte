@@ -2,7 +2,9 @@
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { countUp } from '$lib/actions';
-    import { IconChartBar as BarChart3, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconTrendingUp as TrendingUp } from '@tabler/icons-svelte';
+    import { IconChartBar as BarChart3, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconTrendingUp as TrendingUp, IconActivityHeartbeat as Heartbeat } from '@tabler/icons-svelte';
+    import { detectAnomaly } from '$lib/anomaly';
+    import { safeParseLS, safeSetLS } from '$lib/safe-ls';
 
     const dispatch = createEventDispatcher();
 
@@ -191,7 +193,7 @@
         });
         if (metricsHistory[hostId].length > METRICS_HIST_MAX) metricsHistory[hostId].shift();
         metricsHistory = { ...metricsHistory };
-        try { localStorage.setItem('lucy_metrics_history', JSON.stringify(metricsHistory)); } catch(e) {}
+        safeSetLS('lucy_metrics_history', metricsHistory);
     }
 
     // ── Proactive alerts ─────────────────────────────────────────────────────
@@ -243,11 +245,30 @@
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     onMount(() => {
-        try { metricsHistory = JSON.parse(localStorage.getItem('lucy_metrics_history') || '{}'); } catch(e) { metricsHistory = {}; }
-        try { alertRules = JSON.parse(localStorage.getItem('lucy_alert_rules') || '[]'); } catch(e) { alertRules = []; }
+        metricsHistory = safeParseLS('lucy_metrics_history', {});
+        alertRules     = safeParseLS('lucy_alert_rules', []);
         try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch(e) {}
         startDashboard();
     });
+
+    // ── Anomaly detection (statistical, no ML) ────────────────────────────
+    // For each metric, derive z-score against the rolling history window.
+    // Only "strong" / "extreme" anomalies surface to the UI to avoid noise.
+    $: anomalyCpu = (() => {
+        const h = metricsHistory[dashSelectedHost] || [];
+        if (h.length < 4 || !dashMetrics?.cpu) return null;
+        // Exclude the current sample from history (avoid self-bias)
+        const past = h.slice(0, -1).map(s => s.cpu);
+        const r = detectAnomaly(past, dashMetrics.cpu.global);
+        return r.severity === 'normal' || r.severity === 'mild' ? null : r;
+    })();
+    $: anomalyRam = (() => {
+        const h = metricsHistory[dashSelectedHost] || [];
+        if (h.length < 4 || !dashMetrics?.memory) return null;
+        const past = h.slice(0, -1).map(s => s.ram);
+        const r = detectAnomaly(past, dashMetrics.memory.percent);
+        return r.severity === 'normal' || r.severity === 'mild' ? null : r;
+    })();
 
     onDestroy(() => {
         stopDashboard();
@@ -302,8 +323,18 @@
   {/if}
   <div class="dash-scroll">
     <div class="dash-cards">
-      <div class="dash-card">
-        <div class="dc-label">CPU</div>
+      <div class="dash-card" class:anomaly-card={anomalyCpu}>
+        <div class="dc-label">
+          CPU
+          {#if anomalyCpu}
+            <span class="anomaly-badge"
+                  class:extreme={anomalyCpu.severity === 'extreme'}
+                  title={isEN ? `Statistical anomaly: ${anomalyCpu.message}` : `Anomalía estadística: ${anomalyCpu.message}`}>
+              <Heartbeat size={10} strokeWidth={2.5}/>
+              {Math.abs(anomalyCpu.sigma).toFixed(1)}σ
+            </span>
+          {/if}
+        </div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;">
           <div>
             <div class="dc-value" style="color:{sevVar(dashMetrics.cpu.global, 'var(--acc)')}">
@@ -315,8 +346,18 @@
           <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'cpu',sevHex(dashMetrics.cpu.global))}</div>
         </div>
       </div>
-      <div class="dash-card">
-        <div class="dc-label">RAM</div>
+      <div class="dash-card" class:anomaly-card={anomalyRam}>
+        <div class="dc-label">
+          RAM
+          {#if anomalyRam}
+            <span class="anomaly-badge"
+                  class:extreme={anomalyRam.severity === 'extreme'}
+                  title={isEN ? `Statistical anomaly: ${anomalyRam.message}` : `Anomalía estadística: ${anomalyRam.message}`}>
+              <Heartbeat size={10} strokeWidth={2.5}/>
+              {Math.abs(anomalyRam.sigma).toFixed(1)}σ
+            </span>
+          {/if}
+        </div>
         <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;">
           <div>
             <div class="dc-value" style="color:{sevVar(dashMetrics.memory.percent, 'var(--blue)')}">
@@ -480,4 +521,32 @@
     :global(:root.light) .disk-size{color:var(--txt2);}
     :global(:root.light) .proc-table th{color:var(--txt2);background:var(--bg3);}
     :global(:root.light) .alert-dismiss{color:var(--red);}
+
+    /* ── Anomaly detection badge ──────────────────────────────────────── */
+    .anomaly-badge {
+        display:inline-flex; align-items:center; gap:3px;
+        margin-left:6px; padding:1px 6px;
+        font-size:9px; font-weight:600; letter-spacing:.3px;
+        border-radius:8px;
+        background:rgba(245,158,11,0.12);
+        color:#fbbf24;
+        border:1px solid rgba(245,158,11,0.30);
+        animation: anomaly-pulse 2.4s ease-in-out infinite;
+    }
+    .anomaly-badge.extreme {
+        background:rgba(239,68,68,0.14);
+        color:#f87171;
+        border-color:rgba(239,68,68,0.40);
+    }
+    .anomaly-card {
+        position:relative;
+        box-shadow: 0 0 0 1px rgba(245,158,11,0.18) inset;
+    }
+    .anomaly-card:has(.anomaly-badge.extreme) {
+        box-shadow: 0 0 0 1px rgba(239,68,68,0.30) inset;
+    }
+    @keyframes anomaly-pulse {
+        0%, 100% { opacity: 0.85; }
+        50%      { opacity: 1; }
+    }
 </style>

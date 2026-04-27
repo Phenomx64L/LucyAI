@@ -16,6 +16,24 @@
     let rules = [];
     let testCmd = '';
     let testResult = null;
+    let searchQuery = '';
+    let actionFilter = 'all';   // 'all' | 'allow' | 'block' | 'ask'
+
+    // ── Fuzzy filter ────────────────────────────────────────────────────────
+    // Substring + diacritics-insensitive match against pattern + description.
+    // Cheap, predictable — no Levenshtein needed for the small N we expect.
+    function _normalize(s) {
+        return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    }
+    $: filteredRules = (() => {
+        const q = _normalize(searchQuery.trim());
+        return rules.filter(r => {
+            if (actionFilter !== 'all' && r.action !== actionFilter) return false;
+            if (!q) return true;
+            const hay = _normalize((r.pattern || '') + ' ' + (r.description || '') + ' ' + (r.applies_to || ''));
+            return hay.includes(q);
+        });
+    })();
     let editingRule = null;
     let formOpen = false;
     let newRule = {
@@ -300,6 +318,23 @@
                         {#if rules.length === 0}
                             <div class="no-rules">{lang.noRules}</div>
                         {:else}
+                            <div class="rules-toolbar">
+                                <input type="text" class="rules-search"
+                                    placeholder={isEN ? 'Search by pattern or description…' : 'Buscar por patrón o descripción…'}
+                                    bind:value={searchQuery} />
+                                <select class="rules-filter" bind:value={actionFilter} aria-label={lang.action}>
+                                    <option value="all">{isEN ? 'All actions' : 'Todas las acciones'}</option>
+                                    <option value="allow">{lang.allow}</option>
+                                    <option value="block">{lang.block}</option>
+                                    <option value="ask">{lang.ask}</option>
+                                </select>
+                                <span class="rules-count">
+                                    {filteredRules.length}/{rules.length}
+                                </span>
+                            </div>
+                            {#if filteredRules.length === 0}
+                                <div class="no-rules">{isEN ? 'No rules match the filter.' : 'Ninguna regla coincide con el filtro.'}</div>
+                            {:else}
                             <table class="rules-table">
                                 <thead>
                                     <tr>
@@ -312,7 +347,7 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {#each rules as rule (rule.id)}
+                                    {#each filteredRules as rule (rule.id)}
                                         <tr>
                                             <td class="priority">{rule.priority}</td>
                                             <td class="pattern" title={rule.pattern}>{rule.pattern.substring(0, 30)}{rule.pattern.length > 30 ? '...' : ''}</td>
@@ -337,6 +372,7 @@
                                     {/each}
                                 </tbody>
                             </table>
+                            {/if}
                         {/if}
                         <button class="btn-add" on:click={openAddForm}>
                             <Plus size={16} /> {lang.add}
@@ -762,5 +798,33 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+    }
+    /* ── Search/filter toolbar ────────────────────────────────────────── */
+    .rules-toolbar {
+        display:flex; align-items:center; gap:8px;
+        margin-bottom:10px;
+    }
+    .rules-search {
+        flex:1; min-width:0;
+        background:var(--bg2, #0f172a);
+        border:1px solid var(--bdr, #334155);
+        color:var(--txt, #e2e8f0);
+        font-size:12px; font-family:inherit;
+        padding:6px 10px; border-radius:6px;
+        outline:none;
+    }
+    .rules-search:focus { border-color:var(--acc, #10b981); }
+    .rules-filter {
+        background:var(--bg2, #0f172a);
+        border:1px solid var(--bdr, #334155);
+        color:var(--txt, #e2e8f0);
+        font-size:12px; font-family:inherit;
+        padding:6px 8px; border-radius:6px;
+        cursor:pointer;
+    }
+    .rules-count {
+        font-size:11px; color:var(--txt2, #94a3b8);
+        font-family:var(--mono, monospace);
+        white-space:nowrap;
     }
 </style>
