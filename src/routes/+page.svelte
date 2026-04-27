@@ -2828,6 +2828,8 @@ import { listen } from '@tauri-apps/api/event';
     async function runAI(tabId,raw,doSpeak,retryCount = 0){
         const t=getTab(tabId);
         t.isProcessing=true; startExecTimer(); refresh();
+        // Hoisted refs so catch/finally can clean up even on unexpected throws.
+        let _reasoningTickerRef = null;
         // Mostrar indicador "Lucy pensando" inline
         addThinking(tabId);
         await scrollChat();
@@ -3345,11 +3347,28 @@ Use ONE of these patterns instead:
                     t.messages = [...t.messages];
                     refresh();
                 };
+                // BUG FIX: the duration timer only advanced when new THOUGHT chunks
+                // arrived. When the model used <TOOL> tags without much THOUGHT,
+                // the user saw "Pensando... 0.0s" frozen for the whole run.
+                // Drive the timer independently with a low-cost ticker (250ms).
+                _reasoningTickerRef = setInterval(() => {
+                    if (!reasoningMsg.active) return;
+                    reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
+                    t.messages = [...t.messages];
+                    refresh();
+                }, 250);
                 const finishReasoning = () => {
                     reasoningMsg.active = false;
                     reasoningMsg.collapsed = true;
                     reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
-                    t.messages = [...t.messages];
+                    if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+                    // Drop the bubble entirely if it never accumulated any reasoning
+                    // text — avoids an empty "Pensó durante 0.0s" placeholder.
+                    if (!reasoningMsg.content || !reasoningMsg.content.trim()) {
+                        t.messages = t.messages.filter(m => m.id !== reasoningMsg.id);
+                    } else {
+                        t.messages = [...t.messages];
+                    }
                     refresh();
                 };
 
@@ -4766,7 +4785,23 @@ Use ONE of these patterns instead:
                 if(doSpeak)speak(clean);
             }
         }catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});}
-        finally{fin(tabId);}
+        finally{
+            // Belt-and-braces: stop the reasoning ticker even if finishReasoning()
+            // wasn't reached (early throw, cancellation, etc.).
+            if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+            // Drop any lingering empty `streaming` skeleton bubbles — they show as
+            // a ghost placeholder under the user message when the loop ends without
+            // streaming text (the second screenshot bug).
+            try {
+                const tt = getTab(tabId);
+                if (tt && Array.isArray(tt.messages)) {
+                    tt.messages = tt.messages.filter(m =>
+                        !(m.role === 'streaming' && (!m.rawContent || !m.rawContent.trim()))
+                    );
+                }
+            } catch {}
+            fin(tabId);
+        }
     }
 
     async function runForced(tabId,cmd,ctx,doSpeak,btn,execType='powershell',token=null){
