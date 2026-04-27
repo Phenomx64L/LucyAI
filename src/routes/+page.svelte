@@ -2796,6 +2796,35 @@ import { listen } from '@tauri-apps/api/event';
         t.isProcessing = false; refresh(); scrollChat();
     }
 
+    // ── Multi-intent prompt detection ────────────────────────────────────────
+    // Decides whether the user's prompt asks for MORE than one thing.
+    // Critical for the quick-tool shortcut path: if the user says
+    //   "check my specs AND search the web for tweaks"
+    // and Lucy emits just <TOOL>sysinfo</TOOL>, we must NOT short-circuit
+    // after the tool — the agent loop has to continue with the search.
+    //
+    // Heuristics (kept simple — false-positives are cheap, false-negatives
+    // are the bug we want to avoid):
+    //   1. Sequencing connectors ("y luego", "después", "una vez", "con eso", …)
+    //   2. ≥2 imperative verbs in the same sentence
+    //   3. Explicit research/web language coupled with any other action
+    function isMultiIntentPrompt(text) {
+        if (!text || typeof text !== 'string') return false;
+        const p = text.toLowerCase();
+        // 1. Sequencing connectors that imply "do X, then Y"
+        const seq = /\b(?:y\s+(?:luego|despu[eé]s|tambi[eé]n|haz|busca|verifica|comprueba|checa|investiga|consulta|compara)|luego|despu[eé]s|tras\s+eso|antes\s+(?:de\s+|checa|verifica|haz)|una\s+vez|con\s+eso|entonces|adem[aá]s|posteriormente|then|after\s+that|once\s+you)\b/i;
+        if (seq.test(p)) return true;
+        // 2. Multiple imperative verbs (≥2) → multi-step intent
+        const verbs = /\b(verifica|busca|investiga|checa|chequea|consulta|compara|analiza|haz|hazlo|dame|mu[eé]strame|lista|ejecuta|corre|instala|actualiza|descarga|guarda|crea|edita|abre|env[ií]a|prueba|valida|revisa|inspecciona|detecta|search|check|verify|investigate|analyze|compare|list|run|create|edit|fetch|download|install|update)\b/g;
+        const matches = p.match(verbs);
+        if (matches && matches.length >= 2) return true;
+        // 3. Web/research request paired with hardware/system action
+        const wantsWeb = /\b(internet|web|google|busca\s+en\s+l[ií]nea|search\s+online|investiga\s+en|search\s+the\s+web|navega)\b/i.test(p);
+        const wantsLocal = /\b(specs?|especificaciones|hardware|sistema|gpu|cpu|memoria|disco|configuraci[oó]n|configuracion)\b/i.test(p);
+        if (wantsWeb && wantsLocal) return true;
+        return false;
+    }
+
     async function runAI(tabId,raw,doSpeak,retryCount = 0){
         const t=getTab(tabId);
         t.isProcessing=true; startExecTimer(); refresh();
@@ -2983,8 +3012,14 @@ Use ONE of these patterns instead:
             const _hasToolResp = resp.includes('<TOOL>') || resp.includes('<EXECUTE') || /<THOUGHT>/i.test(resp);
             if (_hasToolResp) t.messages = t.messages.filter(m => m.id !== streamMsgId);
             // ── Quick native tools: solo para respuestas simples sin plan multi-paso ──
+            // BUG FIX: si el prompt original tiene MÚLTIPLES intenciones (verifica X y luego
+            // busca Y), no podemos cortar después del primer tool. Antes: el usuario pedía
+            // "checa specs y busca tweaks" → Lucy ejecutaba TOOL>sysinfo y se detenía,
+            // dejando la búsqueda colgada. Ahora: detectamos multi-intent y caemos al
+            // agent loop completo para que la respuesta del tool se reinyecte como contexto.
             const _isMultiStep = /<THOUGHT>/i.test(resp) || (resp.includes('<TOOL>') && resp.includes('<EXECUTE'));
-            if (!_isMultiStep) {
+            const _userMultiIntent = isMultiIntentPrompt(raw);
+            if (!_isMultiStep && !_userMultiIntent) {
                 if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");fin(tabId);return;}
                 if(resp.includes('<TOOL>netconn</TOOL>')){
                     try{const conns=await invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Red</div>${e}`,style:'border-left-color:#ef4444;'});}
