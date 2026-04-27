@@ -188,8 +188,10 @@
 </script>
 
 {#if isOpen}
-    <div class="modal-overlay" on:click={() => dispatch('close')}>
-        <div class="modal-content" on:click|stopPropagation>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-overlay" role="presentation" on:click={() => dispatch('close')}
+         on:keydown={(e) => { if (e.key === 'Escape') dispatch('close'); }}>
+        <div class="modal-content" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header">
                 <div class="header-content">
                     <h2>{l.title}</h2>

@@ -49,3 +49,21 @@ pub fn rotate_audit_log() {
         }
     }
 }
+
+/// Rota cualquier log con tamaño máximo configurable y N archivos históricos.
+/// Útil para `lucy_agent_loop.log` y futuros logs verbose.
+pub fn rotate_log(file_name: &str, max_size_bytes: u64, keep: usize) {
+    let dir = get_logs_dir();
+    let main = dir.join(file_name);
+    let Ok(meta) = std::fs::metadata(&main) else { return; };
+    if meta.len() <= max_size_bytes { return; }
+
+    // Shift histories backwards: .{keep-1}.log → discard, ..., .1.log → .2.log
+    let stem = file_name.trim_end_matches(".log");
+    for i in (1..keep).rev() {
+        let from = dir.join(format!("{}.{}.log", stem, i));
+        let to   = dir.join(format!("{}.{}.log", stem, i + 1));
+        let _ = std::fs::rename(&from, &to);
+    }
+    let _ = std::fs::rename(&main, dir.join(format!("{}.1.log", stem)));
+}

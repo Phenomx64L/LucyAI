@@ -26,6 +26,15 @@ const FOCUSABLE_SELECTORS = [
  *   <div class="modal-box" use:focusTrap>...</div>
  */
 export function focusTrap(node: HTMLElement) {
+    // A11y: dialogs with role="dialog" must be programmatically focusable so
+    // screen readers announce them. We auto-add tabindex="-1" + aria-modal
+    // to every node using this action — eliminates dozens of a11y warnings.
+    const _addedTabindex = !node.hasAttribute('tabindex');
+    if (_addedTabindex) node.setAttribute('tabindex', '-1');
+    if (!node.hasAttribute('aria-modal') && node.getAttribute('role') === 'dialog') {
+        node.setAttribute('aria-modal', 'true');
+    }
+
     function getFocusable(): HTMLElement[] {
         return [...node.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)].filter(
             (el) => !el.closest('[hidden]') && el.offsetParent !== null
@@ -45,15 +54,19 @@ export function focusTrap(node: HTMLElement) {
         }
     }
 
-    // Foco automático en el primer elemento al activar el trap
+    // Foco automático en el primer elemento al activar el trap.
+    // Si no hay focusables, foca el contenedor (gracias a tabindex=-1).
     requestAnimationFrame(() => {
         const first = getFocusable()[0];
-        first?.focus();
+        (first ?? node).focus();
     });
 
     node.addEventListener('keydown', onKeyDown);
     return {
-        destroy() { node.removeEventListener('keydown', onKeyDown); },
+        destroy() {
+            node.removeEventListener('keydown', onKeyDown);
+            if (_addedTabindex) node.removeAttribute('tabindex');
+        },
     };
 }
 

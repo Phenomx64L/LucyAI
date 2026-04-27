@@ -51,7 +51,8 @@ pub async fn call_mcp_tool(server_name: String, query: String, env: Option<HashM
         }
     });
     
-    let mut init_str = serde_json::to_string(&init_req).unwrap();
+    let mut init_str = serde_json::to_string(&init_req)
+        .map_err(|e| format!("MCP serialize init: {}", e))?;
     init_str.push('\n');
     stdin.write_all(init_str.as_bytes()).await.map_err(|e: std::io::Error| e.to_string())?;
 
@@ -80,7 +81,8 @@ pub async fn call_mcp_tool(server_name: String, query: String, env: Option<HashM
     }
 
     let init_notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    let mut notif_str = serde_json::to_string(&init_notif).unwrap();
+    let mut notif_str = serde_json::to_string(&init_notif)
+        .map_err(|e| format!("MCP serialize notif: {}", e))?;
     notif_str.push('\n');
     let _ = stdin.write_all(notif_str.as_bytes()).await;
 
@@ -91,7 +93,8 @@ pub async fn call_mcp_tool(server_name: String, query: String, env: Option<HashM
         "params": { "name": tool_name, "arguments": args_json }
     });
 
-    let mut tool_str = serde_json::to_string(&tool_req).unwrap();
+    let mut tool_str = serde_json::to_string(&tool_req)
+        .map_err(|e| format!("MCP serialize tool: {}", e))?;
     tool_str.push('\n');
     stdin.write_all(tool_str.as_bytes()).await.map_err(|e: std::io::Error| e.to_string())?;
 
@@ -170,7 +173,8 @@ pub async fn discover_mcp_tools(server_name: String, env: Option<HashMap<String,
         }
     });
 
-    let mut init_str = serde_json::to_string(&init_req).unwrap();
+    let mut init_str = serde_json::to_string(&init_req)
+        .map_err(|e| format!("MCP serialize init: {}", e))?;
     init_str.push('\n');
     stdin.write_all(init_str.as_bytes()).await.map_err(|e: std::io::Error| e.to_string())?;
 
@@ -199,12 +203,14 @@ pub async fn discover_mcp_tools(server_name: String, env: Option<HashMap<String,
     }
 
     let init_notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    let mut notif_str = serde_json::to_string(&init_notif).unwrap();
+    let mut notif_str = serde_json::to_string(&init_notif)
+        .map_err(|e| format!("MCP serialize notif: {}", e))?;
     notif_str.push('\n');
     let _ = stdin.write_all(notif_str.as_bytes()).await;
 
     let list_req = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
-    let mut list_str = serde_json::to_string(&list_req).unwrap();
+    let mut list_str = serde_json::to_string(&list_req)
+        .map_err(|e| format!("MCP serialize list: {}", e))?;
     list_str.push('\n');
     stdin.write_all(list_str.as_bytes()).await.map_err(|e: std::io::Error| e.to_string())?;
 

@@ -832,6 +832,8 @@ pub async fn ask_lucy_stream(
 #[tauri::command]
 pub fn log_agent_loop(message: String) {
     use std::io::Write;
+    // Rotate at 10 MB, keep 3 historical files (~40 MB max disk footprint).
+    crate::utils::logging::rotate_log("lucy_agent_loop.log", 10 * 1024 * 1024, 3);
     let path = crate::utils::logging::get_logs_dir().join("lucy_agent_loop.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), message);

@@ -187,6 +187,7 @@ import { listen } from '@tauri-apps/api/event';
     let _footerCostInterval = null;       // refresh monthly cost every 5 min
     let _qlOverHandler      = null;       // delegated mouseover for quick-look popover
     let _qlOutHandler       = null;       // delegated mouseout for quick-look popover
+    let _qlPopover          = null;       // singleton tooltip element (cleaned in onDestroy)
     // ── HISTORY SEARCH ────────────────────────────────────
     // showHistoryModal → stores.ts
     let historyQuery       = '';
@@ -838,7 +839,7 @@ import { listen } from '@tauri-apps/api/event';
         // ── Quick-look popover for tool-card refs ([1] [2]…) ──────────────
         // Delegated mouseover/mouseout handler: shows a floating preview of the
         // tool card's output/label/status without requiring click + scroll.
-        let _qlPopover = null;
+        // _qlPopover is hoisted to component scope so onDestroy can clean it up.
         let _qlAnchor  = null;
         let _qlHideTimer = null;
         const _ensureQlPopover = () => {
@@ -1007,6 +1008,21 @@ import { listen } from '@tauri-apps/api/event';
         }
         if (_qlOverHandler)  document.removeEventListener('mouseover', _qlOverHandler);
         if (_qlOutHandler)   document.removeEventListener('mouseout',  _qlOutHandler);
+        // ── Dangling singletons in document.body (created lazily, never removed) ──
+        if (_qlPopover && _qlPopover.parentNode) {
+            try { _qlPopover.parentNode.removeChild(_qlPopover); } catch {}
+            _qlPopover = null;
+        }
+        // ── Active streaming AI requests — cancel + unlisten ──
+        try {
+            for (const [, st] of _activeStreams.entries()) {
+                if (st) {
+                    st.cancelled = true;
+                    if (typeof st.unlisten === 'function') { try { st.unlisten(); } catch {} }
+                }
+            }
+            _activeStreams.clear();
+        } catch {}
         // Dashboard/LogViewer cleanup handled by their own onDestroy
     });
 
@@ -1507,7 +1523,12 @@ import { listen } from '@tauri-apps/api/event';
 
             const header = document.createElement('div');
             header.className = 'code-header';
-            header.innerHTML = `<span class="code-lang">${langLabel}</span>`;
+            // SECURITY: langLabel may originate from AI-emitted ```<lang> markdown.
+            // Using textContent (not innerHTML) prevents XSS via crafted lang strings.
+            const langSpan = document.createElement('span');
+            langSpan.className = 'code-lang';
+            langSpan.textContent = langLabel;
+            header.appendChild(langSpan);
             const btn = document.createElement('button');
             btn.className = 'copy-btn';
             btn.textContent = 'copiar';
@@ -2485,7 +2506,21 @@ import { listen } from '@tauri-apps/api/event';
             if(!found){const m=cmd.match(/^(abre|inicia|lanza|ejecuta)\s+(.+)$/);if(m){const a=m[2].trim();const mapped=mapeoApps[a];if(mapped){found={script:`start ${mapped}`,respuesta:`Iniciando ${a}...`};}else if(/^[a-zA-Z0-9_\-. ]+$/.test(a)){found={script:`start ${a}`,respuesta:`Iniciando ${a}...`};}}}}
         }
         if(found){
-            if(found.script==='RESET_APP'){localStorage.clear();if(doSpeak)speak("Reiniciando.");setTimeout(()=>location.reload(),1500);return;}
+            if(found.script==='RESET_APP'){
+                // SECURITY: only clear Lucy-owned keys — never localStorage.clear()
+                // (which would nuke unrelated app state if this code ever ran in a browser)
+                try {
+                    const toRemove = [];
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && k.startsWith('lucy_')) toRemove.push(k);
+                    }
+                    toRemove.forEach(k => safeRemoveLS(k));
+                } catch(_) {}
+                if(doSpeak)speak("Reiniciando.");
+                setTimeout(()=>location.reload(),1500);
+                return;
+            }
             if(found.script==='TOOL_SYSINFO'){t.isProcessing=true;refresh();try{const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");}catch(e){addMsg(tabId,{role:'lucy',html:`Error: ${e}`,style:'border-left-color:#ef4444;'});}fin(tabId);return;}
             try{await invoke('execute_powershell',{script:found.script,forceExecute:false});addMsg(tabId,{role:'lucy',html:`<div class="mn">[Quick] Lucy (Rápida)</div>${found.respuesta}`,style:'border-left-color:#10b981;'});if(doSpeak)speak(found.respuesta);fin(tabId);}
             catch(err){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Aviso</div>Comando falló.`,style:'border-left-color:#f59e0b;',button:{text:'↻ Intentar con IA',action:()=>runAI(tabId,raw,doSpeak)}});if(doSpeak)speak("Falló.");fin(tabId);}
@@ -5530,11 +5565,18 @@ if (Test-Path $src) {
     }
 
     // ── FOCUS TRAP ────────────────────────────────────────────────────────────
-    // Svelte action: traps Tab focus within a modal dialog.
+    // Svelte action: traps Tab focus within a modal dialog + auto-applies
+    // tabindex="-1" + aria-modal="true" so screen readers announce dialogs
+    // (eliminates dozens of a11y warnings).
     // Usage: <div use:focusTrap role="dialog">...</div>
     function focusTrap(node) {
         const sel = 'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
         const getFocusable = () => [...node.querySelectorAll(sel)];
+        const _addedTabindex = !node.hasAttribute('tabindex');
+        if (_addedTabindex) node.setAttribute('tabindex', '-1');
+        if (!node.hasAttribute('aria-modal') && node.getAttribute('role') === 'dialog') {
+            node.setAttribute('aria-modal', 'true');
+        }
         function onKey(e) {
             if (e.key !== 'Tab') return;
             const els = getFocusable();
@@ -5550,11 +5592,19 @@ if (Test-Path $src) {
                 }
             }
         }
-        // Auto-focus first focusable on open (deferred so DOM is settled)
-        const first = getFocusable()[0];
-        if (first) setTimeout(() => first.focus(), 30);
+        // Auto-focus first focusable on open (deferred so DOM is settled).
+        // Falls back to focusing the dialog container itself when no children are focusable.
+        setTimeout(() => {
+            const first = getFocusable()[0];
+            (first ?? node).focus();
+        }, 30);
         node.addEventListener('keydown', onKey);
-        return { destroy() { node.removeEventListener('keydown', onKey); } };
+        return {
+            destroy() {
+                node.removeEventListener('keydown', onKey);
+                if (_addedTabindex) node.removeAttribute('tabindex');
+            },
+        };
     }
 
     function toast(msg, tipo='info') {

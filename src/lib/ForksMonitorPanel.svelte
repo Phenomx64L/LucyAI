@@ -140,18 +140,18 @@
                     {#if expandedId === fork.id}
                         <div class="fork-detail">
                             <div class="detail-section">
-                                <label>{t('Instrucción', 'Instruction')}</label>
+                                <span class="section-label">{t('Instrucción', 'Instruction')}</span>
                                 <pre class="detail-pre instruction">{fork.instruction}</pre>
                             </div>
                             {#if fork.status === 'done' && fork.result}
                                 <div class="detail-section">
-                                    <label>{t('Resultado', 'Result')}</label>
+                                    <span class="section-label">{t('Resultado', 'Result')}</span>
                                     <pre class="detail-pre result">{fork.result}</pre>
                                 </div>
                             {/if}
                             {#if fork.status === 'error' && fork.error_msg}
                                 <div class="detail-section error-detail">
-                                    <label>{t('Error', 'Error')}</label>
+                                    <span class="section-label">{t('Error', 'Error')}</span>
                                     <pre class="detail-pre error-pre">{fork.error_msg}</pre>
                                 </div>
                             {/if}
@@ -260,7 +260,7 @@
     /* Expanded detail */
     .fork-detail { padding: 8px 14px 12px 38px; }
     .detail-section { margin-bottom: 10px; }
-    .detail-section label {
+    .detail-section .section-label {
         display: block; font-size: 10px; font-weight: 600;
         text-transform: uppercase; letter-spacing: 0.05em;
         color: var(--text-muted, #64748b); margin-bottom: 4px;
@@ -277,7 +277,7 @@
     .detail-pre.instruction { color: #94a3b8; }
     .detail-pre.result      { color: #a7f3d0; }
     .detail-pre.error-pre   { color: #fca5a5; }
-    .error-detail label     { color: #f87171; }
+    .error-detail .section-label { color: #f87171; }
 
     .running-indicator {
         display: flex; align-items: center; gap: 8px;
