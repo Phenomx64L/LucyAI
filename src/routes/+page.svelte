@@ -36,7 +36,7 @@ import { listen } from '@tauri-apps/api/event';
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import { countUp }     from '$lib/actions';
-    import { safeParseLS, safeSetLS, safeSetLSString } from '$lib/safe-ls';
+    import { safeParseLS, safeSetLS, safeSetLSString, safeGetLS, safeRemoveLS } from '$lib/safe-ls';
     import { debug } from '$lib/debug';
     import { renderMd } from '$lib/md-render';
     import { escapeHtml, normalizeForMatch, formatTime } from '$lib/text-utils';
@@ -1120,6 +1120,7 @@ import { listen } from '@tauri-apps/api/event';
     { icono: 'clipboard', nombre: isEN ? 'Clear Clipboard' : 'Limpiar portapap.',  script: 'Set-Clipboard -Value $null' },
     { icono: 'trash',     nombre: isEN ? 'Empty Trash'     : 'Vaciar papelera',    script: 'Clear-RecycleBin -Force' }
 ];
+        const hadStoredActions = safeGetLS('lucy_quick_actions', '') !== '';
         quickActions = safeParseLS('lucy_quick_actions', defaultActions);
         // Legacy icon migration (emojis & unicode → palette keys) lives in $lib/constants
         // as LEGACY_ICON_MAP — single source of truth.
@@ -1133,7 +1134,7 @@ import { listen } from '@tauri-apps/api/event';
             _migrated = true;
             return { ...a, icono: 'bolt' };
         });
-        if (!storedActions || _migrated) safeSetLS('lucy_quick_actions', quickActions);
+        if (!hadStoredActions || _migrated) safeSetLS('lucy_quick_actions', quickActions);
 
         // hosts, alertRules, runbooks → cargados automáticamente por persistedWritable en stores.ts
         // Pedir permiso de notificaciones del sistema
@@ -1148,8 +1149,9 @@ import { listen } from '@tauri-apps/api/event';
     { label: isEN ? 'prev song' : 'anterior', clave: 'cancion anterior' },
     { label: isEN ? 'lock system' : 'bloquear', clave: 'bloquear' }
 ];
+        const hadStoredChips = safeGetLS('lucy_user_chips', '') !== '';
         userChips = safeParseLS('lucy_user_chips', defaultChips);
-        if (!storedChips) safeSetLS('lucy_user_chips', userChips);
+        if (!hadStoredChips) safeSetLS('lucy_user_chips', userChips);
 
     }
 
