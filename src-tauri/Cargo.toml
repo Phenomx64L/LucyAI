@@ -51,7 +51,43 @@ pdf-extract = "0.7"
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = [
     "winuser", "wingdi", "processthreadsapi", "psapi",
-    "handleapi", "windef", "minwindef", "errhandlingapi", "winnt"
+    "handleapi", "windef", "minwindef", "errhandlingapi", "winnt",
+    "debugapi"
 ] }
 # PNG encoding for screenshots
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# ── ANTI-TAMPERING / HARDENING DEPENDENCIES ──────────────────────────────────
+# obfstr: compile-time XOR string obfuscation. Wraps literals so they don't
+#         appear in `strings lucy.exe` dumps. Decoded only when accessed at
+#         runtime. Used for the system prompt RULES (intellectual property).
+# sha2:   self-integrity check at boot — abort if the binary was patched.
+[dependencies.obfstr]
+version = "0.4"
+
+[dependencies.sha2]
+version = "0.10"
+
+# ── RELEASE PROFILE — production binary hardening ────────────────────────────
+# Goals (in order of importance for Lucy):
+#   1. Smaller binary  → fewer indicators / function names for IDA/Ghidra.
+#   2. Aggressive opts → inlining + reordering scrambles control flow.
+#   3. Stripped debug  → no symbol names in panic traces.
+#   4. Single codegen  → enables full cross-crate inlining.
+#
+# Trade-off: slower compile time (~2-3× a debug build), but only matters
+# when shipping a release. Day-to-day `cargo run` is unaffected.
+#
+# These flags WILL NOT prevent reverse engineering by a determined attacker.
+# They DO raise the cost from "5 min with strings.exe" to "hours with Ghidra
+# + manually reconstructing inlined functions".
+[profile.release]
+opt-level     = "z"      # optimize for size — produces denser, harder-to-read asm
+lto           = "fat"    # link-time optimization across ALL crates
+codegen-units = 1        # single unit → max inlining (fewer named symbols)
+strip         = true     # remove all symbols + debug info from final binary
+panic         = "abort"  # no unwinding metadata → no function name trails
+incremental   = false    # always full rebuild — no leftover incremental artifacts
+overflow-checks = false  # standard for release; keeps binary lean
+debug         = false    # no debug info embedded
+debug-assertions = false

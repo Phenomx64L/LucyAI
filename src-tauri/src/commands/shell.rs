@@ -26,11 +26,19 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     let mut log_file = OpenOptions::new().create(true).append(true).open(&audit_path)
         .map_err(|e| { write_app_log("ERROR", &format!("No se pudo abrir audit log: {}", e)); format!("Error audit log: {}", e) })?;
 
-    let blocklist = [
-        "remove-item -recurse", "rm -rf", "format-volume", "clear-disk",
-        "net user", "disable-netadapter", "stop-process -name lsass",
-        "-encodedcommand", "invoke-expression", "iex ", "iex(", "&{", "& {",
-        "downloadstring", "downloadfile", "webclient",
+    // SECURITY: blocklist strings are XOR-obfuscated at compile time so they
+    // don't appear verbatim in `strings lucy.exe`. An attacker dumping
+    // strings gets garbage; the blocklist is decoded only inside this
+    // function. `to_string()` lifts the obfstr-temporaries onto the heap so
+    // they live long enough to be borrowed by the iteration loop below.
+    use obfstr::obfstr as s;
+    let blocklist: [String; 16] = [
+        s!("remove-item -recurse").into(), s!("rm -rf").into(), s!("format-volume").into(),
+        s!("clear-disk").into(), s!("net user").into(), s!("disable-netadapter").into(),
+        s!("stop-process -name lsass").into(), s!("-encodedcommand").into(),
+        s!("invoke-expression").into(), s!("iex ").into(), s!("iex(").into(),
+        s!("&{").into(), s!("& {").into(),
+        s!("downloadstring").into(), s!("downloadfile").into(), s!("webclient").into(),
     ];
     let mut was_blocked_but_bypassed = false;
 

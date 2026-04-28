@@ -40,6 +40,33 @@ pub fn run() {
                 }
             });
 
+            // ── BOOT-TIME INTEGRITY CHECK ─────────────────────────────────
+            // Logged-only by design: a Mismatch could legitimately mean the
+            // user just installed a new release. Hard-failing would lock
+            // them out. Code signing + a signed updater that rewrites the
+            // anchor are the right answer for stronger enforcement.
+            match crate::utils::integrity::check_self_integrity() {
+                crate::utils::integrity::IntegrityVerdict::Mismatch { .. } => {
+                    crate::utils::logging::write_app_log(
+                        "WARNING",
+                        "Integrity anchor mismatch — binary may have been patched, or a fresh release was installed."
+                    );
+                }
+                crate::utils::integrity::IntegrityVerdict::FirstBoot => {
+                    crate::utils::logging::write_app_log(
+                        "INFO",
+                        "Integrity anchor written (first boot of this binary)."
+                    );
+                }
+                _ => {}
+            }
+            if crate::utils::integrity::debugger_present() {
+                crate::utils::logging::write_app_log(
+                    "WARNING",
+                    "Debugger detected attached at startup."
+                );
+            }
+
             // Initialize the shared metrics/indexer DB once at startup.
             // Failing here would leave commands unable to read/write, so log and continue.
             if let Err(e) = metrics::init(&app.handle()) {
