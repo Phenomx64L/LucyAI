@@ -33,6 +33,18 @@ export interface MemoryInfo {
     percent: number;
 }
 
+export interface HardwareSpecs {
+    cpu_model?: string;
+    cpu_current_ghz?: number | null;
+    cpu_max_ghz?: number | null;
+    gpu_model?: string;
+    gpu_vram_mb?: number | null;
+    machine_manufacturer?: string;
+    machine_model?: string;
+    serial_number?: string;
+    driver_url?: string;
+}
+
 export interface SystemHealth {
     hostname: string;
     os: string;
@@ -42,6 +54,7 @@ export interface SystemHealth {
     memory: MemoryInfo;
     disks: DiskInfo[];
     top_processes: ProcessInfo[];
+    hardware?: HardwareSpecs;
 }
 
 export interface FilePayload {

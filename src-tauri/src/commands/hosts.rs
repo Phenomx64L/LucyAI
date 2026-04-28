@@ -6,6 +6,26 @@ use serde_json::json;
 use crate::state::CREATE_NO_WINDOW;
 use crate::utils::shell::ensure_trusted_host;
 
+fn driver_url_from_manufacturer(manufacturer: &str, model: &str) -> String {
+    let m = manufacturer.to_lowercase();
+    let query = format!("{} {} drivers", manufacturer, model).replace(' ', "+");
+    if m.contains("dell") {
+        "https://www.dell.com/support/home".to_string()
+    } else if m.contains("hp") || m.contains("hewlett") {
+        "https://support.hp.com".to_string()
+    } else if m.contains("lenovo") {
+        "https://pcsupport.lenovo.com".to_string()
+    } else if m.contains("asus") {
+        "https://www.asus.com/support".to_string()
+    } else if m.contains("acer") {
+        "https://www.acer.com/support".to_string()
+    } else if m.contains("msi") {
+        "https://www.msi.com/support".to_string()
+    } else {
+        format!("https://www.google.com/search?q={}", query)
+    }
+}
+
 // ── WINDOWS REMOTO (WinRM via PowerShell) ─────────────────────────────────────
 
 #[tauri::command]
@@ -48,6 +68,13 @@ pub async fn get_remote_health_windows(
         $os    = Get-WmiObject Win32_OperatingSystem
         $cpu   = (Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1).CounterSamples[0].CookedValue
         $cores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+        $cpui  = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, CurrentClockSpeed, MaxClockSpeed
+        $sys   = Get-CimInstance Win32_ComputerSystem | Select-Object -First 1 Manufacturer, Model
+        $gpu   = Get-CimInstance Win32_VideoController | Select-Object -First 1 Name, AdapterRAM
+        $bios  = Get-CimInstance Win32_BIOS | Select-Object -First 1 SerialNumber
+        $csp   = Get-CimInstance Win32_ComputerSystemProduct | Select-Object -First 1 IdentifyingNumber
+        $serial = $bios.SerialNumber
+        if (-not $serial) { $serial = $csp.IdentifyingNumber }
         $disk  = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null } |
                 Select-Object @{N='name';E={$_.Name}}, @{N='used_gb';E={[Math]::Round($_.Used/1GB,1)}}, @{N='free_gb';E={[Math]::Round($_.Free/1GB,1)}}, @{N='total_gb';E={[Math]::Round(($_.Used+$_.Free)/1GB,1)}}
         $procs = Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 |
@@ -61,6 +88,14 @@ pub async fn get_remote_health_windows(
             cpu_cores     = [int]$cores
             mem_total_mb  = [Math]::Round($os.TotalVisibleMemorySize / 1KB, 0)
             mem_free_mb   = [Math]::Round($os.FreePhysicalMemory / 1KB, 0)
+            cpu_name      = $cpui.Name
+            cpu_current_mhz = [double]$cpui.CurrentClockSpeed
+            cpu_max_mhz   = [double]$cpui.MaxClockSpeed
+            manufacturer  = $sys.Manufacturer
+            model         = $sys.Model
+            gpu_name      = $gpu.Name
+            gpu_vram_mb   = if ($gpu.AdapterRAM) { [math]::Round($gpu.AdapterRAM / 1MB, 0) } else { $null }
+            serial_number = $serial
             disks         = $disk
             top_processes = $procs
         } | ConvertTo-Json -Depth 5
@@ -95,6 +130,8 @@ pub async fn get_remote_health_windows(
     let mem_free  = v["mem_free_mb"].as_f64().unwrap_or(0.0) as u64;
     let mem_used  = mem_total.saturating_sub(mem_free);
     let mem_pct   = if mem_total > 0 { (mem_used as f64 / mem_total as f64) * 100.0 } else { 0.0 };
+    let manufacturer = v["manufacturer"].as_str().unwrap_or("Unknown");
+    let model = v["model"].as_str().unwrap_or("Unknown");
 
     Ok(json!({
         "hostname":      v["hostname"],
@@ -112,7 +149,18 @@ pub async fn get_remote_health_windows(
             "percent":  (mem_pct * 10.0).round() / 10.0
         },
         "disks":         v["disks"],
-        "top_processes": v["top_processes"]
+        "top_processes": v["top_processes"],
+        "hardware": {
+            "cpu_model": v["cpu_name"],
+            "cpu_current_ghz": v["cpu_current_mhz"].as_f64().map(|mhz| (mhz / 1000.0 * 100.0).round() / 100.0),
+            "cpu_max_ghz": v["cpu_max_mhz"].as_f64().map(|mhz| (mhz / 1000.0 * 100.0).round() / 100.0),
+            "gpu_model": v["gpu_name"],
+            "gpu_vram_mb": v["gpu_vram_mb"],
+            "machine_manufacturer": manufacturer,
+            "machine_model": model,
+            "serial_number": v["serial_number"],
+            "driver_url": driver_url_from_manufacturer(manufacturer, model)
+        }
     }))
 }
 
@@ -169,6 +217,20 @@ MEM_TOTAL=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 MEM_AVAIL=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
 MEM_USED=$((MEM_TOTAL - MEM_AVAIL))
 MEM_PCT=$(awk "BEGIN{if($MEM_TOTAL>0) printf \"%.1f\", $MEM_USED/$MEM_TOTAL*100; else print 0}")
+CPU_MODEL=$(lscpu 2>/dev/null | awk -F: '/Model name/{gsub(/^[ \t]+/,"",$2); print $2; exit}')
+[ -z "$CPU_MODEL" ] && CPU_MODEL=$(awk -F: '/model name/{gsub(/^[ \t]+/,"",$2); print $2; exit}' /proc/cpuinfo 2>/dev/null)
+CPU_MHZ=$(awk -F: '/cpu MHz/{gsub(/^[ \t]+/,"",$2); print $2; exit}' /proc/cpuinfo 2>/dev/null)
+CPU_GHZ=$(awk "BEGIN{if(\"$CPU_MHZ\"!=\"\") printf \"%.2f\", $CPU_MHZ/1000; else print \"\"}")
+CPU_GHZ_JSON=$CPU_GHZ
+[ -z "$CPU_GHZ_JSON" ] && CPU_GHZ_JSON=null
+MFR=$(cat /sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null | tr -d '"\\')
+MODEL=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null | tr -d '"\\')
+SERIAL=$(cat /sys/devices/virtual/dmi/id/product_serial 2>/dev/null | tr -d '"\\')
+[ -z "$MFR" ] && MFR="Unknown"
+[ -z "$MODEL" ] && MODEL="Unknown"
+[ -z "$SERIAL" ] && SERIAL="N/A"
+GPU_MODEL=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' | head -1 | cut -d: -f3- | sed 's/^[ \t]*//')
+[ -z "$GPU_MODEL" ] && GPU_MODEL="N/A"
 
 OS_NAME=$(grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '"\\')
 [ -z "$OS_NAME" ] && OS_NAME=$(grep '^NAME=' /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '"\\')
@@ -186,11 +248,12 @@ PROCS_JSON=$(ps aux --no-headers --sort=-%mem 2>/dev/null | head -5 | awk '{
     printf "{\"name\":\"%s\",\"cpu\":\"%s\",\"mem_mb\":%d,\"pid\":%s},", name, $3, $6/1024, $2
 }' | sed 's/,$//')
 
-printf '{"hostname":"%s","os":"%s","uptime_h":%d,"timestamp":"%s","cpu":{"global":%s,"cores":%d,"per_core":[]},"memory":{"total_mb":%d,"used_mb":%d,"percent":%s},"disks":[%s],"top_processes":[%s]}' \
+printf '{"hostname":"%s","os":"%s","uptime_h":%d,"timestamp":"%s","cpu":{"global":%s,"cores":%d,"per_core":[]},"memory":{"total_mb":%d,"used_mb":%d,"percent":%s},"disks":[%s],"top_processes":[%s],"hardware":{"cpu_model":"%s","cpu_current_ghz":%s,"cpu_max_ghz":null,"gpu_model":"%s","gpu_vram_mb":null,"machine_manufacturer":"%s","machine_model":"%s","serial_number":"%s","driver_url":"https://www.google.com/search?q=%s+%s+drivers"}}' \
     "$HOSTNAME" "$OS_NAME" "$UPTIME_H" "$TIMESTAMP" \
     "$CPU_USED" "$CORES" \
     "$MEM_TOTAL" "$MEM_USED" "$MEM_PCT" \
-    "$DISKS_JSON" "$PROCS_JSON"
+    "$DISKS_JSON" "$PROCS_JSON" \
+    "$CPU_MODEL" "$CPU_GHZ_JSON" "$GPU_MODEL" "$MFR" "$MODEL" "$SERIAL" "$MFR" "$MODEL"
 "#;
 
     let port_str = port.unwrap_or(22).to_string();

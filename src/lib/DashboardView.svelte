@@ -39,6 +39,32 @@
         dispatch('toast', { msg, type });
     }
 
+    function fmtGHz(v) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return 'N/A';
+      return `${Number(v).toFixed(2)} GHz`;
+    }
+
+    function maskSerial(serial) {
+      if (!serial || serial === 'N/A') return 'N/A';
+      const clean = String(serial).trim();
+      if (clean.length <= 6) return clean;
+      return `${clean.slice(0, 3)}***${clean.slice(-3)}`;
+    }
+
+    async function copySerialToClipboard() {
+      const serial = dashMetrics?.hardware?.serial_number;
+      if (!serial || serial === 'N/A') {
+        toast(isEN ? 'No serial available to copy.' : 'No hay serial disponible para copiar.', 'warn');
+        return;
+      }
+      try {
+        await invoke('copy_to_clipboard', { text: String(serial) });
+        toast(isEN ? 'Serial copied to clipboard.' : 'Serial copiado al portapapeles.', 'success');
+      } catch (e) {
+        toast(isEN ? 'Could not copy serial.' : 'No se pudo copiar el serial.', 'error');
+      }
+    }
+
     // ── Dashboard lifecycle ──────────────────────────────────────────────────
 
     async function startDashboard() {
@@ -259,6 +285,35 @@
         {/if}
       </div>
     </div>
+    <div class="dash-section">
+      <div class="ds-title">{isEN ? 'Machine Specs' : 'Specs de la máquina'}</div>
+      <div class="spec-grid">
+        <div class="spec-item"><span class="spec-k">CPU</span><span class="spec-v">{dashMetrics.hardware?.cpu_model || 'N/A'}</span></div>
+        <div class="spec-item"><span class="spec-k">{isEN ? 'CPU Current' : 'CPU actual'}</span><span class="spec-v">{fmtGHz(dashMetrics.hardware?.cpu_current_ghz)}</span></div>
+        <div class="spec-item"><span class="spec-k">{isEN ? 'CPU Max' : 'CPU máx'}</span><span class="spec-v">{fmtGHz(dashMetrics.hardware?.cpu_max_ghz)}</span></div>
+        <div class="spec-item"><span class="spec-k">GPU</span><span class="spec-v">{dashMetrics.hardware?.gpu_model || 'N/A'}</span></div>
+        <div class="spec-item"><span class="spec-k">{isEN ? 'GPU VRAM' : 'VRAM GPU'}</span><span class="spec-v">{dashMetrics.hardware?.gpu_vram_mb ? `${dashMetrics.hardware.gpu_vram_mb} MB` : 'N/A'}</span></div>
+        <div class="spec-item"><span class="spec-k">{isEN ? 'Manufacturer' : 'Fabricante'}</span><span class="spec-v">{dashMetrics.hardware?.machine_manufacturer || 'N/A'}</span></div>
+        <div class="spec-item"><span class="spec-k">{isEN ? 'Model' : 'Modelo'}</span><span class="spec-v">{dashMetrics.hardware?.machine_model || 'N/A'}</span></div>
+        <div class="spec-item">
+          <span class="spec-k">{isEN ? 'Serial Number' : 'Número de serie'}</span>
+          <div class="spec-row">
+            <span class="spec-v">{maskSerial(dashMetrics.hardware?.serial_number)}</span>
+            <button class="spec-copy-btn" on:click={copySerialToClipboard}>
+              {isEN ? 'Copy' : 'Copiar'}
+            </button>
+          </div>
+        </div>
+        <div class="spec-item">
+          <span class="spec-k">{isEN ? 'Drivers' : 'Drivers'}</span>
+          {#if dashMetrics.hardware?.driver_url}
+            <a class="spec-link" href={dashMetrics.hardware.driver_url} target="_blank" rel="noreferrer">{isEN ? 'Open support URL' : 'Abrir URL de soporte'}</a>
+          {:else}
+            <span class="spec-v">N/A</span>
+          {/if}
+        </div>
+      </div>
+    </div>
     {#if dashMetrics.cpu.per_core?.length}
     <div class="dash-section">
       <div class="ds-title">{isEN ? 'CPU Cores' : 'Núcleos CPU'}</div>
@@ -344,6 +399,15 @@
     /* ── Dashboard sections ───────────────────────── */
     .dash-section{background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;margin-bottom:12px;}
     .ds-title{font-size:11px;color:#475569;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;}
+    .spec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px 14px;}
+    .spec-item{display:flex;flex-direction:column;gap:3px;padding:7px 8px;border:1px solid var(--bdr);border-radius:6px;background:rgba(255,255,255,.01);}
+    .spec-k{font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:.2px;}
+    .spec-v{font-size:12px;color:var(--txt);}
+    .spec-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+    .spec-copy-btn{border:1px solid var(--bdr);background:var(--bg3);color:var(--txt2);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer;}
+    .spec-copy-btn:hover{color:var(--txt);background:var(--bdr2);}
+    .spec-link{font-size:12px;color:var(--blue);text-decoration:none;}
+    .spec-link:hover{text-decoration:underline;}
 
     /* ── CPU cores ─────────────────────────────────── */
     .core-grid{display:flex;gap:6px;flex-wrap:wrap;}
