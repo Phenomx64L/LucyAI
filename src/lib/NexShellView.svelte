@@ -5,6 +5,7 @@
     import { IconShield as Shield, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
     import { tick, createEventDispatcher, onDestroy } from 'svelte';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
+    import { staggerIn } from '$lib/stagger';
     import { logAuditEntry } from '$lib/audit';
     import { analyzeCommand, shouldBlock, checkPermissionRules } from '$lib/hooks/command-guard';
     import { guardConfig } from '$lib/stores';
@@ -1917,8 +1918,10 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
       {#each nsHostsSorted as h, i (h.id)}
         {@const sess = rshellSessions.find(s => s.host.id === h.id)}
         {@const isActive = sess?.id === activeShellId}
+        <!-- in:staggerIn runs ONLY on mount — re-renders won't replay it,
+             so cards never disappear when sessions update. -->
         <div class="ns-host-card {sess ? (sess.connected ? 'ns-card-on' : 'ns-card-connecting') : ''} {isActive ? 'ns-card-focused' : ''}"
-            style="--i: {i};"
+          in:staggerIn={{ index: i, step: 32 }}
           role="button" tabindex="0"
           on:click={() => { if(sess) activeShellId = sess.id; }}
           on:keydown={(e) => e.key==='Enter' && sess && (activeShellId = sess.id)}>
@@ -2852,7 +2855,16 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         background:var(--panel);
     }
 
-    /* Host card */
+    /* Host card.
+       BUG FIX: previously had `opacity:0` + CSS animation with delay. Each
+       time rshellSessions updated, Svelte re-emitted the {#each} and the
+       animation replayed — if a new render arrived before the delay
+       elapsed, the card stuck at opacity:0 forever. Result: hosts
+       disappeared while the counter still said 3 (visible in user repro
+       once 3 sessions were live).
+       Now the entrance is driven by Svelte's `in:` transition (in the
+       template), which only runs on mount/unmount — not on re-renders.
+       The CSS holds only the resting state (always visible). */
     .ns-host-card{
         margin:4px 8px;
         background:rgba(255,255,255,.04);
@@ -2860,9 +2872,6 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         border-radius:10px;
         padding:10px 12px;
         transition:border-color .2s, box-shadow .2s, transform .2s;
-        animation: fade-slide-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-        animation-delay: calc(var(--i) * 0.04s);
-        opacity: 0;
         cursor:default;
     }
     .ns-host-card:hover{

@@ -42,11 +42,13 @@
 
 <style>
     .orb-wrap {
+        /* Footer is 22px tall; sit JUST above it with 12px clearance so the
+           orb never overlaps the language code / cost summary on the right. */
         position: fixed;
-        right: 14px;
-        bottom: 14px;
-        width: 14px;
-        height: 14px;
+        right: 12px;
+        bottom: 32px;
+        width: 12px;
+        height: 12px;
         z-index: 50;
         pointer-events: auto;
         cursor: default;
@@ -55,7 +57,7 @@
 
     /* Core dot — solid color, sharp. */
     .orb-core {
-        position: absolute; inset: 4px;
+        position: absolute; inset: 3px;
         border-radius: 50%;
         background: var(--state-color, var(--accent));
         box-shadow: 0 0 6px var(--state-color, var(--accent)),
