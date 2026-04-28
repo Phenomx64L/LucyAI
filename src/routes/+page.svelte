@@ -21,6 +21,8 @@ import { listen } from '@tauri-apps/api/event';
     import AuditTrailView  from '$lib/AuditTrailView.svelte';
     import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
     import ProfileSwitcher from '$lib/ProfileSwitcher.svelte';
+    import StatusOrb        from '$lib/StatusOrb.svelte';
+    import { staggerIn }    from '$lib/stagger';
     // ── Lazy-loaded: solo se descargan cuando el usuario los abre por primera vez ──
     let _lazyPermissions   = null;
     let _lazySkills        = null;
@@ -442,6 +444,31 @@ import { listen } from '@tauri-apps/api/event';
     let logSelectedHost    = 'local';  // kept for host deletion cleanup
 
     $: activeTab    = tabs.find(t => t.id === activeTabId);
+
+    // ── Lucy global state (drives StatusOrb + data-state on <body>) ─────────
+    // Order matters: error wins over executing wins over thinking wins over idle.
+    // - 'thinking'  : LLM is streaming a response (any active reasoning bubble)
+    // - 'executing' : a tool/command is currently running (isProcessing AND
+    //                 we have evidence of an active stream/exec)
+    // - 'error'     : last completion ended with an error within last ~3s
+    let _lastErrorAt = 0;
+    $: lucyState = (() => {
+        if (Date.now() - _lastErrorAt < 3000) return 'error';
+        if (!activeTab) return 'idle';
+        if (activeTab.isProcessing) {
+            // If any reasoning msg is active OR tokens are streaming → thinking
+            const reasoningActive = (activeTab.messages || []).some(m => m.role === 'reasoning' && m.active);
+            if (reasoningActive) return 'thinking';
+            return 'executing';
+        }
+        return 'idle';
+    })();
+    // Project state onto <body> so any descendant (input bar, future widgets)
+    // can read --state-color / --state-glow without prop drilling.
+    $: if (typeof document !== 'undefined' && appReady) {
+        document.body.dataset.state = lucyState;
+    }
+
     $: contextMax   = activeTab?.contextMax ?? 50000;
     $: ctxPct       = Math.min(100, Math.round((contextUsed / contextMax) * 100));
     $: modelLabel = (() => {
@@ -4795,7 +4822,10 @@ Use ONE of these patterns instead:
                 }
                 if(doSpeak)speak(clean);
             }
-        }catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});}
+        }catch(e){
+            _lastErrorAt = Date.now();
+            addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});
+        }
         finally{
             // Belt-and-braces: stop the reasoning ticker even if finishReasoning()
             // wasn't reached (early throw, cancellation, etc.).
@@ -7035,9 +7065,41 @@ if (Test-Path $src) {
     :global(.chip:hover){background:rgba(16,185,129,.1);color:#0d9668;border-color:rgba(16,185,129,.22);}
     :global(.chip:disabled){opacity:.3;cursor:not-allowed;}
     /* ── INPUT ─────────────────────────────────── */
-    :global(.ibar){display:flex;flex-direction:row;align-items:flex-end;gap:8px;padding:10px 14px;background:#12141e;border-top:1px solid var(--bdr);flex-shrink:0;}
-    :global(.igrp){display:flex;align-items:flex-end;gap:6px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);border-radius:10px;flex:1;padding:7px 10px;transition:border-color .2s;}
-    :global(.igrp:focus-within){border-color:rgba(16,185,129,.2);}
+    :global(.ibar){display:flex;flex-direction:row;align-items:flex-end;gap:8px;padding:10px 14px;background:#12141e;border-top:1px solid var(--bdr);flex-shrink:0;position:relative;}
+    /* ── State-aware input border + glow (Cursor-style) ─────────────────────
+       The .igrp wrapper picks up the global --state-color set by <body>'s
+       data-state attribute. When Lucy is thinking the input glows blue,
+       executing → amber, error → red, idle → green. The transition is fast
+       enough to feel responsive but slow enough to read as a deliberate
+       state change, not a flicker. */
+    :global(.igrp){
+        display:flex;align-items:flex-end;gap:6px;
+        background:rgba(255,255,255,.025);
+        border:1px solid rgba(255,255,255,.07);
+        border-radius:10px;flex:1;padding:7px 10px;
+        transition: border-color var(--motion-base) var(--ease-out),
+                    box-shadow   var(--motion-base) var(--ease-out),
+                    background   var(--motion-base) var(--ease-out);
+    }
+    /* Idle / inactive: neutral border. */
+    :global(body[data-state="idle"]) :global(.igrp:focus-within){
+        border-color: color-mix(in srgb, var(--state-color, var(--accent)) 45%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-color, var(--accent)) 8%, transparent),
+                    0 0 14px color-mix(in srgb, var(--state-color, var(--accent)) 18%, transparent);
+    }
+    /* Active states: glow even WITHOUT focus, so the user always knows. */
+    :global(body[data-state="thinking"]) :global(.igrp),
+    :global(body[data-state="executing"]) :global(.igrp),
+    :global(body[data-state="error"]) :global(.igrp){
+        border-color: color-mix(in srgb, var(--state-color) 55%, transparent);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--state-color) 20%, transparent),
+                    0 0 22px color-mix(in srgb, var(--state-color) 22%, transparent);
+        background: color-mix(in srgb, var(--state-color) 4%, rgba(255,255,255,.025));
+    }
+    /* Tight focus-within fallback for older browsers without color-mix. */
+    @supports not (color: color-mix(in srgb, red 50%, blue)) {
+        :global(.igrp:focus-within){border-color: var(--state-color, rgba(16,185,129,.4));}
+    }
     :global(.ibox){flex:1;background:transparent;border:none;color:white;font-family:inherit;font-size:13px;outline:none;resize:none;min-height:22px;max-height:180px;overflow-y:auto;line-height:1.5;padding:2px 0;}
     :global(.ibox::placeholder){color:#334155;}
     :global(.iside){display:flex;align-items:center;gap:3px;flex-shrink:0;}
@@ -9159,8 +9221,9 @@ if (Test-Path $src) {
       </div>
       <div style="margin-bottom:14px;">
         <div style="font-size:12px;color:var(--txt2);font-weight:600;margin-bottom:6px;">Seleccionar hosts ({$multiHostSelected.length} seleccionados)</div>
-        {#each $hosts as h}
+        {#each $hosts as h, _hi (h.id)}
         <div class="mh-host-row" class:mh-selected={$multiHostSelected.includes(h.id)} role="button" tabindex="0"
+          in:staggerIn={{ index: _hi, step: 28 }}
           on:click={() => toggleMultiHostSelect(h.id)} on:keydown>
           <input type="checkbox" checked={$multiHostSelected.includes(h.id)} style="accent-color:var(--acc);" on:click|stopPropagation={() => toggleMultiHostSelect(h.id)}>
           <span style="display:inline-flex;align-items:center;color:var(--txt2);">{#if h.type==='windows'}<Tv2 size={14}/>{:else}<Terminal size={14}/>{/if}</span>
@@ -9668,6 +9731,15 @@ if (Test-Path $src) {
 
   <!-- ── COMMAND PALETTE (Ctrl+P) ── -->
   <CommandPalette bind:show={showPalette} allItems={allPaletteItems} {isEN} />
+
+  <!-- ── AMBIENT STATUS ORB (bottom-right) ── -->
+  <!-- Reflects Lucy's current state: idle / thinking / executing / error.
+       Set as data-state on <body> (via reactive block) so the input bar
+       and any future state-aware element follows the same hue. -->
+  <StatusOrb state={lucyState} visible={appReady && !showSetupOverlay}
+             label={isEN
+                ? `Lucy: ${lucyState}`
+                : `Lucy: ${lucyState === 'idle' ? 'inactiva' : lucyState === 'thinking' ? 'pensando' : lucyState === 'executing' ? 'ejecutando' : 'error'}`} />
 
   <!-- ── RESTORE BACKUP CONFIRMATION ── -->
   {#if showRestoreConfirm && _restorePendingEnv}

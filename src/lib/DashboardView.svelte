@@ -323,7 +323,7 @@
   {/if}
   <div class="dash-scroll">
     <div class="dash-cards">
-      <div class="dash-card" class:anomaly-card={anomalyCpu}>
+      <div class="dash-card lucy-card-hover" class:anomaly-card={anomalyCpu}>
         <div class="dc-label">
           CPU
           {#if anomalyCpu}
@@ -346,7 +346,7 @@
           <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'cpu',sevHex(dashMetrics.cpu.global))}</div>
         </div>
       </div>
-      <div class="dash-card" class:anomaly-card={anomalyRam}>
+      <div class="dash-card lucy-card-hover" class:anomaly-card={anomalyRam}>
         <div class="dc-label">
           RAM
           {#if anomalyRam}
@@ -369,7 +369,7 @@
           <div class="dc-sparkline">{@html sparklineSvg(metricsHistory[dashSelectedHost],'ram',sevHex(dashMetrics.memory.percent, _SEV_HEX.okBlue))}</div>
         </div>
       </div>
-      <div class="dash-card">
+      <div class="dash-card lucy-card-hover">
         <div class="dc-label">{isEN ? 'System' : 'Sistema'}</div>
         <div class="dc-value" style="font-size:13px;color:var(--txt);">{dashMetrics.hostname}</div>
         <div class="dc-sub">{dashMetrics.os}</div>

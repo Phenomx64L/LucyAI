@@ -2,6 +2,7 @@
     import { createEventDispatcher } from 'svelte';
     import { auditTrail } from '$lib/stores';
     import { exportAuditPdf } from '$lib/reports/ReportGenerator';
+    import { staggerIn } from '$lib/stagger';
     import { IconClipboardList as ClipboardList, IconDownload as Download, IconTrash as Trash2, IconFileText as FileText, IconSparkles as Sparkles, IconBook2 as BookOpen, IconShieldCheck as ShieldCheck, IconRadio as Radio, IconKeyboard as Keyboard, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
 
     const dispatch = createEventDispatcher();
@@ -195,8 +196,9 @@
   </div>
 
   <div class="at-scroll">
-    {#each entries as e, i}
-    <div class="at-entry" class:fail={e.exitCode !== null && e.exitCode !== 0}>
+    {#each entries as e, i (e.id ?? `${e.timestamp}-${i}`)}
+    <div class="at-entry" class:fail={e.exitCode !== null && e.exitCode !== 0}
+         in:staggerIn={{ index: i, step: 24, duration: 220 }}>
       <div class="at-entry-meta">
         <span class="at-ts">{fmtDate(e.timestamp)}</span>
         <span class="at-host">{e.hostName}</span>

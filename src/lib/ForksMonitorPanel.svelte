@@ -6,6 +6,7 @@
 
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+    import { staggerIn } from '$lib/stagger';
 
     export let isEN     = false;
     export let tabId    = '';
@@ -122,8 +123,9 @@
                 <small>{t('Cuando Lucy use fork_task, los resultados aparecerán aquí y persistirán entre sesiones.', 'When Lucy uses fork_task, results will appear here and persist across sessions.')}</small>
             </div>
         {:else}
-            {#each forks as fork (fork.id)}
-                <div class="fork-row" class:expanded={expandedId === fork.id}>
+            {#each forks as fork, _fi (fork.id)}
+                <div class="fork-row" class:expanded={expandedId === fork.id}
+                     in:staggerIn={{ index: _fi, step: 26 }}>
                     <!-- Row header -->
                     <button class="fork-row-btn" on:click={() => toggleExpand(fork.id)}>
                         <span class="f-status {statusClass(fork.status)}">{statusIcon(fork.status)}</span>

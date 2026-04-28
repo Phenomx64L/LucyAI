@@ -2,13 +2,27 @@
    LUCY ASSISTANT — Design System v3.0  "Dark SOC"
    ============================================================ */
 
-/* Inter — UI font (installed locally or via system) */
+/* ──────────────────────────────────────────────────────────────────────
+   TYPOGRAPHY — Variable fonts only, both for UI and code.
+   • Inter Variable: smoother weight transitions, sharper rendering at
+     intermediate weights (used for hover state thickening).
+   • JetBrains Mono Variable: same benefits for code blocks.
+   Both fall back to system equivalents if not installed.
+   ────────────────────────────────────────────────────────────────────── */
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: local('Inter'), local('Inter Variable');
+  src: local('Inter Variable'), local('InterVariable'), local('Inter');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: local('JetBrains Mono Variable'), local('JetBrainsMono Variable'), local('JetBrains Mono');
 }
 
 :root {
@@ -49,6 +63,58 @@
   --bg-bottom:       #0d1117;
   --sidebar-overlay: rgba(13, 17, 23, 0.65);
   --border-glass:    rgba(255, 255, 255, 0.08);
+
+  /* ── MOTION SYSTEM — unified durations + easings ───────────────────────
+     One source of truth for every transition/animation. The previous
+     codebase had 250+ hand-rolled timings (".15s", "200ms", "0.3s")
+     that drifted over time. These tokens give Lucy a single tactile
+     identity. Pick by *intent*, not by number:
+
+     instant     → focus rings, hover color shifts (sub-perceptual)
+     fast        → buttons, toggles, tooltips
+     base        → element appearance/disappearance
+     slow        → layout shifts, panel slides
+     deliberate  → modal entrance, important reveals
+
+     ease-out    → standard "Linear/Vercel" curve, natural deceleration
+     ease-spring → bounce on completion (success states, modal entrances)
+     ease-back   → overshoot then settle (playful, use sparingly)
+     ────────────────────────────────────────────────────────────────────── */
+  --motion-instant:    80ms;
+  --motion-fast:       160ms;
+  --motion-base:       240ms;
+  --motion-slow:       400ms;
+  --motion-deliberate: 600ms;
+
+  --ease-out:          cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring:       cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-back:         cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* Stagger delays for entering lists (multiply by item index). */
+  --stagger-step:      30ms;
+
+  /* ── ATMOSPHERIC STATE — drives the input border + status orb ───────── */
+  --state-color:       var(--accent);          /* current active state hue */
+  --state-glow:        var(--accent-glow);     /* matching glow */
+  --state-pulse:       4s;                     /* breathe period — slows with idle */
+}
+
+/* State variants: set --state-color/--state-glow on a parent (e.g. body or
+   .input-area) and the input border, status orb, etc. follow. */
+[data-state="thinking"] {
+  --state-color: var(--blue);
+  --state-glow:  var(--blue-glow);
+  --state-pulse: 1.6s;
+}
+[data-state="executing"] {
+  --state-color: var(--amber);
+  --state-glow:  var(--amber-glow);
+  --state-pulse: 1.2s;
+}
+[data-state="error"] {
+  --state-color: var(--red);
+  --state-glow:  var(--red-glow);
+  --state-pulse: 0.6s;
 }
 
 [data-theme="ocean"] {
@@ -888,6 +954,111 @@ body > div, #svelte { height: 100%; display: contents; }
   height: 18px;
 }
   
-/* �� MICRO-ANIMATIONS �� */  
-@keyframes fade-slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }  
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } } 
+/* ── MICRO-ANIMATIONS ─────────────────────────────────────────────────── */
+@keyframes fade-slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fade-in       { from { opacity: 0; } to { opacity: 1; } }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CURSOR-INSPIRED ATMOSPHERE
+   Subtle layered effects that give Lucy a "living" feel without adding
+   noise. Each one is opt-in via a class so legacy components keep working.
+   ────────────────────────────────────────────────────────────────────── */
+
+/* Ambient mesh gradient — soft, slow-breathing colored fog behind everything.
+   Scoped to body::before so no DOM markup is needed. The scale + filter are
+   the trick: a tiny 60% layer scaled up to fill creates a blurred halo
+   without backdrop-filter overhead.
+   Honors prefers-reduced-motion: no animation when user opts out. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -10%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(at 20% 20%, color-mix(in srgb, var(--state-color, var(--accent)) 5%, transparent) 0%, transparent 45%),
+    radial-gradient(at 80% 75%, color-mix(in srgb, var(--blue, #3b9eff) 4%, transparent) 0%, transparent 50%),
+    radial-gradient(at 50% 50%, color-mix(in srgb, var(--purple, #a78bfa) 3%, transparent) 0%, transparent 55%);
+  animation: ambient-drift 30s ease-in-out infinite alternate;
+  opacity: 0.85;
+  transition: background var(--motion-deliberate, 600ms) var(--ease-out, ease-out);
+}
+@keyframes ambient-drift {
+  0%   { transform: translate3d(0,    0,    0) scale(1);    }
+  50%  { transform: translate3d(-2%, -1%, 0) scale(1.04);   }
+  100% { transform: translate3d(2%,   1%,  0) scale(1);     }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
+}
+/* Reduce ambient on light theme so it doesn't wash out content. */
+:root.light body::before { opacity: 0.4; }
+
+/* Cursor-style subtle button hover scale. Apply via .lucy-btn class on
+   any button you want to feel responsive. Doesn't affect existing buttons
+   unless they opt in. */
+.lucy-btn {
+  transition: transform var(--motion-fast, 160ms) var(--ease-out, ease-out),
+              box-shadow var(--motion-fast, 160ms) var(--ease-out, ease-out),
+              background var(--motion-fast, 160ms) var(--ease-out, ease-out),
+              color var(--motion-fast, 160ms) var(--ease-out, ease-out);
+}
+.lucy-btn:hover  { transform: translateY(-1px) scale(1.015); }
+.lucy-btn:active { transform: translateY(0)    scale(0.985); }
+
+/* Card lift-on-hover. Same opt-in pattern. */
+.lucy-card-hover {
+  transition: transform var(--motion-base, 240ms) var(--ease-out, ease-out),
+              box-shadow var(--motion-base, 240ms) var(--ease-out, ease-out),
+              border-color var(--motion-base, 240ms) var(--ease-out, ease-out);
+}
+.lucy-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18),
+              0 0 0 1px color-mix(in srgb, var(--state-color, var(--accent)) 14%, transparent);
+}
+
+/* Focus ring (Cursor-style: tight, glowy, keyboard only). */
+*:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--bg-base, #0d1117),
+    0 0 0 4px color-mix(in srgb, var(--state-color, var(--accent)) 60%, transparent),
+    0 0 14px color-mix(in srgb, var(--state-color, var(--accent)) 30%, transparent);
+  border-radius: 6px;
+  transition: box-shadow var(--motion-instant, 80ms) var(--ease-out, ease-out);
+}
+
+/* Spring entrance for modals — subtle overshoot then settle.
+   Apply with class="modal-spring" on your dialog box. */
+@keyframes modal-spring-in {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.97); }
+  60%  { opacity: 1; transform: translateY(-2px) scale(1.005); }
+  100% { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.modal-spring {
+  animation: modal-spring-in var(--motion-deliberate, 600ms) var(--ease-spring, ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-spring { animation: fade-in var(--motion-fast, 160ms) ease-out both; }
+}
+
+/* Shimmer for "thinking" states — gradient sweep on a transparent overlay.
+   Apply with class="lucy-shimmer". Used by the reasoning bubble border. */
+@keyframes lucy-shimmer-sweep {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.lucy-shimmer {
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--state-color, var(--accent)) 18%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: lucy-shimmer-sweep 2.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lucy-shimmer { animation: none; background: color-mix(in srgb, var(--state-color, var(--accent)) 6%, transparent); }
+}
