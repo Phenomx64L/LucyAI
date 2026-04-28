@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-7dd3fc" alt="v1.2.0" />
+  <img src="https://img.shields.io/badge/version-1.2.1-7dd3fc" alt="v1.2.1" />
   <img src="https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Svelte-5-orange?logo=svelte" alt="Svelte 5" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
@@ -35,6 +35,67 @@
 Lucy is a desktop AI assistant designed for system administrators. It combines a conversational LLM interface with real infrastructure tooling — remote shell execution, log analysis, CIS compliance scanning, and credential management — all from a single, secure desktop app.
 
 Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs natively on Windows with minimal resource overhead.
+
+## What's New in v1.2.1
+
+A focused **stability + observability + visual refinement** release. No breaking changes — every existing flow keeps working, just feels sharper.
+
+### 🛡️ Reliability
+- **Multi-step prompt fix** — Lucy used to stop mid-task when given prompts like *"check my specs **and** search the web for tweaks"*. A premature short-circuit in the response parser killed the agent loop after the first tool. Now Lucy detects multi-intent prompts (sequencing connectors, ≥2 imperative verbs, web+system pairing) and stays in the agent loop until the full task is done.
+- **NexShell host cards no longer vanish** — connecting to multiple hosts could leave the *Configured Hosts* panel empty while the counter still said `3`. Caused by a CSS animation race (`opacity:0` + delayed entrance + frequent reactive churn). Migrated to a Svelte `in:` transition that runs only on mount.
+- **"Thinking…" timer ticks again** — the reasoning bubble showed `0.0s` frozen when the model emitted only tool tags. Added an independent 250ms ticker, hoisted to a runAI-scoped ref so cancellations / errors clean it up too.
+- **Skeleton zombie purge** — empty `streaming` placeholder bubbles no longer linger after the agent loop ends.
+
+### 🔍 Observability
+- **Statistical anomaly detection** on Dashboard CPU / RAM cards — a discrete `σ` badge surfaces when a value deviates ≥3σ from the host's recent rolling window. Pure stats, no ML, opt-out via `prefers-reduced-motion`.
+- **Live cost predictor** in the input bar — estimates tokens & USD before you press Enter, with confidence levels (low/med/high) based on historical samples per model.
+- **Notebook export** — turn any chat tab into a portable `.lucynote` (JSON envelope) or `.md` runbook via the Command Palette. Cells preserve `user / lucy / thought / command / tool` semantics for replay.
+- **Fuzzy search in Permission Rules** — diacritics-insensitive substring + action filter (allow/block/ask) over patterns and descriptions.
+
+### 🎨 Visual identity (Tier 1: Cursor-aesthetic foundation)
+- **Unified motion tokens** — replaced 250+ ad-hoc timings with `--motion-instant/fast/base/slow/deliberate` + `--ease-out / --ease-spring / --ease-back`. Single tactile identity across every transition.
+- **Ambient state indicator** in the footer — a 12px orb that breathes with Lucy's state (idle = soft green pulse, thinking = fast cyan, executing = amber sweep, error = red flash). Inspired by Cursor + Linear status dots.
+- **State-aware input border** — the input glow + ring color follow Lucy's current state, so the user always knows whether they're waiting or free to type.
+- **Mesh gradient ambient** — three subtle radial gradients drift at 30s cycle behind the UI; picks up the state color so the whole window tints with Lucy's mood (clamped to 0.85 opacity, 0.4 on light themes).
+- **Stagger reveal** on Audit Trail / Multi-host modal / ForksMonitor lists.
+- **Hover lift + glow** on Dashboard cards.
+- **Variable fonts** — Inter Variable + JetBrains Mono Variable explicitly declared.
+- **Versioned tutorial** — onboarding tour re-opens automatically when the build version changes, with new spotlights for the v1.2.1 features.
+
+### 🔒 Hardening (free anti-tampering layers)
+- **Release profile**: `lto="fat"`, `opt-level="z"`, `codegen-units=1`, `strip=true`, `panic="abort"`. Smaller, denser binary; no symbol trail for Ghidra/IDA.
+- **String obfuscation** (`obfstr`) on the PowerShell blocklist — `strings lucy.exe | grep` no longer reveals the list of dangerous patterns Lucy refuses to run.
+- **Boot-time integrity check** (TOFU) — SHA-256 of the running `.exe` compared against `%APPDATA%\Lucy\.integrity`. Logged-only by design (a fresh release legitimately mismatches the anchor).
+- **Win32 `IsDebuggerPresent`** check at boot.
+- **Vite production hardening** — sourcemaps off, console.log/debug/trace stripped, banner comments removed.
+
+### ♿ Accessibility & quality
+- **0 warnings** across `svelte-check` + `cargo check` (down from 28 + 15).
+- **0 unhandled `localStorage` calls** across the codebase (all migrated to `safe-ls` wrappers that never throw on quota / corruption).
+- `focusTrap` action now auto-applies `tabindex="-1"` + `aria-modal="true"` to every dialog using it — fixed ~10 dialog warnings without touching call sites.
+- Form labels in `PermissionRulesModal`, `SkillsManagerModal`, and the new-action modal now have proper `for/id` associations.
+
+### 🐛 Security audit
+- **XSS fix** in code-block rendering: `langLabel` (AI-controlled markdown lang string) is now `textContent`-rendered, not `innerHTML`.
+- 6× `unwrap()` → `map_err` in MCP serialization (no more panic on edge-case JSON).
+- `npm audit` from 5 vulns (2 high) → 3 low (transitive `cookie` only — not exploitable in a Tauri webview).
+- `RESET_APP` only clears Lucy-prefixed `localStorage` keys instead of `localStorage.clear()`.
+
+### 📚 New library modules
+| Module | Purpose |
+|--------|---------|
+| `$lib/anomaly.ts` | z-score statistical anomaly detection |
+| `$lib/cost-predictor.ts` | pre-flight token + USD estimation |
+| `$lib/notebook.ts` | export/import chat sessions as `.lucynote` |
+| `$lib/safe-ls.ts` | localStorage wrappers that never throw |
+| `$lib/security.ts` | destructive command pattern detection |
+| `$lib/text-utils.ts` | escape/format/normalize helpers |
+| `$lib/md-render.ts` | sanitized markdown rendering with LRU cache |
+| `$lib/constants.ts` | LANGS, BACKUP_KEYS, ICON_MAP, COST_PER_1K |
+| `$lib/debug.ts` | DEV-gated logger with ring buffer |
+| `$lib/stagger.ts` | Svelte stagger transitions for list reveals |
+
+---
 
 ## What's New in v1.2.0
 
