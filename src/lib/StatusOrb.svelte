@@ -19,6 +19,8 @@
     export let state = 'idle';     // 'idle' | 'thinking' | 'executing' | 'error'
     export let label = '';         // optional tooltip label (visible on hover)
     export let visible = true;     // hide when in setup overlay etc.
+    export let inline = false;     // true → render as inline element in a footer/bar
+                                   // false → fixed bottom-right (legacy ambient mode)
 
     // Track the last error briefly so we can flash red even if state flips
     // back to idle quickly.
@@ -28,7 +30,8 @@
 </script>
 
 {#if visible}
-<div class="orb-wrap" data-state={effective} title={label || effective}
+<div class="orb-wrap" class:orb-inline={inline} data-state={effective}
+     title={label || effective}
      aria-label="Lucy status: {effective}" role="status">
     <div class="orb-pulse"></div>
     <div class="orb-core"></div>
@@ -41,9 +44,9 @@
 {/if}
 
 <style>
+    /* Default mode: fixed ambient (legacy). The instance in +page.svelte uses
+       `inline={true}` and lives inside the footer .bbar — see .orb-inline. */
     .orb-wrap {
-        /* Footer is 22px tall; sit JUST above it with 12px clearance so the
-           orb never overlaps the language code / cost summary on the right. */
         position: fixed;
         right: 12px;
         bottom: 32px;
@@ -52,7 +55,18 @@
         z-index: 50;
         pointer-events: auto;
         cursor: default;
-        /* Tooltip handled by browser via title attr. */
+    }
+
+    /* Inline mode: flowing element inside a status bar.
+       No fixed positioning, smaller, vertically centered with surrounding
+       text. Matches the visual weight of other footer items. */
+    .orb-wrap.orb-inline {
+        position: relative;
+        right: auto;
+        bottom: auto;
+        margin-left: 8px;
+        align-self: center;
+        flex-shrink: 0;
     }
 
     /* Core dot — solid color, sharp. */

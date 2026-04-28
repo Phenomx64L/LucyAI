@@ -8824,6 +8824,12 @@ if (Test-Path $src) {
         <div class="bi r" style="opacity:0.6; font-size:12px;">
           Lucy OS v{appVersion} · {userLang}
         </div>
+        <!-- Inline status orb — last item in the footer, sits to the right
+             of the version label without overlapping anything. -->
+        <StatusOrb state={lucyState} visible={appReady && !showSetupOverlay} inline={true}
+                   label={isEN
+                      ? `Lucy: ${lucyState}`
+                      : `Lucy: ${lucyState === 'idle' ? 'inactiva' : lucyState === 'thinking' ? 'pensando' : lucyState === 'executing' ? 'ejecutando' : 'error'}`} />
       </div>
       {/if}
 
@@ -9732,14 +9738,10 @@ if (Test-Path $src) {
   <!-- ── COMMAND PALETTE (Ctrl+P) ── -->
   <CommandPalette bind:show={showPalette} allItems={allPaletteItems} {isEN} />
 
-  <!-- ── AMBIENT STATUS ORB (bottom-right) ── -->
-  <!-- Reflects Lucy's current state: idle / thinking / executing / error.
-       Set as data-state on <body> (via reactive block) so the input bar
-       and any future state-aware element follows the same hue. -->
-  <StatusOrb state={lucyState} visible={appReady && !showSetupOverlay}
-             label={isEN
-                ? `Lucy: ${lucyState}`
-                : `Lucy: ${lucyState === 'idle' ? 'inactiva' : lucyState === 'thinking' ? 'pensando' : lucyState === 'executing' ? 'ejecutando' : 'error'}`} />
+  <!-- StatusOrb is now integrated INLINE inside the footer (.bbar)
+       — see the bottom of the .ws block. Eliminates the prior overlap
+       with the language code. -->
+
 
   <!-- ── RESTORE BACKUP CONFIRMATION ── -->
   {#if showRestoreConfirm && _restorePendingEnv}
