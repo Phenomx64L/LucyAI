@@ -213,8 +213,10 @@
 </script>
 
 {#if isOpen}
-    <div class="modal-overlay" on:click={closeModal}>
-        <div class="modal-content" on:click|stopPropagation>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-overlay" role="presentation" on:click={closeModal}
+         on:keydown={(e) => { if (e.key === 'Escape') closeModal(); }}>
+        <div class="modal-content" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <!-- Header -->
             <div class="modal-header">
                 <h2><Settings size={20} /> {lang.title}</h2>
@@ -235,8 +237,9 @@
                             <h3>{editingRule ? 'Edit' : 'New'} Rule</h3>
 
                             <div class="form-group">
-                                <label>{lang.pattern}</label>
+                                <label for="prm-pattern">{lang.pattern}</label>
                                 <input
+                                    id="prm-pattern"
                                     type="text"
                                     bind:value={newRule.pattern}
                                     placeholder="e.g. netsh.*interface|C:\\Users\\.*\.exe"
@@ -245,16 +248,16 @@
 
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>{lang.action}</label>
-                                    <select bind:value={newRule.action}>
+                                    <label for="prm-action">{lang.action}</label>
+                                    <select id="prm-action" bind:value={newRule.action}>
                                         <option value="allow">{lang.allow}</option>
                                         <option value="block">{lang.block}</option>
                                         <option value="ask">{lang.ask}</option>
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label>{lang.appliesTo}</label>
-                                    <select bind:value={newRule.applies_to}>
+                                    <label for="prm-applies">{lang.appliesTo}</label>
+                                    <select id="prm-applies" bind:value={newRule.applies_to}>
                                         <option value="command">{lang.command}</option>
                                         <option value="file_path">{lang.filePath}</option>
                                         <option value="registry">{lang.registry}</option>
@@ -263,14 +266,14 @@
                             </div>
 
                             <div class="form-group">
-                                <label>{lang.description}</label>
-                                <textarea bind:value={newRule.description} placeholder="Optional description"></textarea>
+                                <label for="prm-desc">{lang.description}</label>
+                                <textarea id="prm-desc" bind:value={newRule.description} placeholder="Optional description"></textarea>
                             </div>
 
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>{lang.priority}</label>
-                                    <input type="number" bind:value={newRule.priority} min="0" />
+                                    <label for="prm-priority">{lang.priority}</label>
+                                    <input id="prm-priority" type="number" bind:value={newRule.priority} min="0" />
                                 </div>
                                 <div class="form-group checkbox">
                                     <label>

@@ -2088,18 +2088,29 @@ import { listen } from '@tauri-apps/api/event';
 
         window.speechSynthesis.cancel();
 
-        // Esperar voces si aún no se cargaron (necesario en Tauri WebView)
+        // Esperar voces si aún no se cargaron (necesario en Tauri WebView).
+        // BUG FIX: si el setTimeout(2s) ganaba la carrera, el listener
+        // 'voiceschanged' quedaba registrado para siempre. Cada llamada a
+        // speak() en tab nuevo añadía otro listener huérfano.
         let voces = window.speechSynthesis.getVoices();
         if (!voces.length) {
             await new Promise(resolve => {
+                let _settled = false;
                 const onVoicesChanged = () => {
+                    if (_settled) return;
+                    _settled = true;
                     voces = window.speechSynthesis.getVoices();
                     window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
                     resolve();
                 };
                 window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
-                // Timeout de seguridad — si en 2s no llegan voces, continuar igual
-                setTimeout(resolve, 2000);
+                // Timeout de seguridad — siempre limpia el listener.
+                setTimeout(() => {
+                    if (_settled) return;
+                    _settled = true;
+                    window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+                    resolve();
+                }, 2000);
             });
             voces = window.speechSynthesis.getVoices();
         }
@@ -7607,7 +7618,9 @@ if (Test-Path $src) {
     .verify-badge.refined{background:rgba(99,102,241,0.10);color:#a5b4fc;border:1px solid rgba(99,102,241,0.25);}
     .verify-badge.warn{background:rgba(251,191,36,0.10);color:#fbbf24;border:1px solid rgba(251,191,36,0.25);}
     .verify-concerns{margin-top:8px;padding:8px 12px;background:rgba(251,191,36,0.06);border-left:2px solid rgba(251,191,36,0.40);border-radius:0 6px 6px 0;font-size:11.5px;color:#fcd34d;line-height:1.55;}
-    .verify-concerns strong{color:#fbbf24;font-size:10px;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:4px;}
+    /* :global because <strong> is emitted via renderAgentTask @html — Svelte's
+       static analyzer otherwise can't see the match and warns "unused". */
+    .verify-concerns :global(strong){color:#fbbf24;font-size:10px;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:4px;}
     .settings-value{font-size:12px;color:var(--acc);font-family:var(--mono);}
     .settings-select{background:var(--bg3);border:1px solid var(--bdr);color:var(--txt);font-size:12px;font-family:inherit;border-radius:6px;padding:4px 8px;cursor:pointer;outline:none;min-width:140px;}
     .settings-select:hover{border-color:var(--acc-b);}
@@ -8538,7 +8551,7 @@ if (Test-Path $src) {
             </div>
             {/if}
 
-            <div class="ibar"
+            <div class="ibar" role="region" aria-label={isEN ? 'Message input area' : 'Área de entrada de mensaje'}
               on:dragover|preventDefault={(e) => { e.dataTransfer.dropEffect='copy'; e.currentTarget.classList.add('drag-over'); }}
               on:dragleave={(e) => e.currentTarget.classList.remove('drag-over')}
               on:drop|preventDefault={(e) => { e.currentTarget.classList.remove('drag-over'); handleFileDrop(e, tab.id); }}>
@@ -8797,11 +8810,11 @@ if (Test-Path $src) {
         <input id="na-script" class="minp" type="text" placeholder="Get-Process" bind:value={newActionScript} style="font-family:var(--mono);">
       </div>
       <div style="text-align:left;margin-bottom:22px;">
-        <label style="color:var(--txt2);font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div class="ico-picker-lbl" style="color:var(--txt2);font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px;">
           <span>{isEN ? 'Icon' : 'Icono'}</span>
           <span style="font-family:var(--mono);font-size:10px;color:var(--acc);background:rgba(16,185,129,.08);padding:1px 7px;border-radius:8px;letter-spacing:.2px;">{newActionIcon}</span>
-        </label>
-        <div class="action-icon-grid">
+        </div>
+        <div class="action-icon-grid" role="radiogroup" aria-label={isEN ? 'Icon' : 'Icono'}>
           {#each ICON_PALETTE as item}
             <button type="button"
               class="action-icon-btn"
@@ -9284,7 +9297,7 @@ if (Test-Path $src) {
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="mb" on:click={() => showSettingsModal = false}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div role="dialog" use:focusTrap class="mbox settings-modal" on:click|stopPropagation>
+    <div role="dialog" tabindex="-1" aria-modal="true" use:focusTrap class="mbox settings-modal" on:click|stopPropagation>
       <div class="mhdr">
         <h3>{isEN ? 'Settings' : 'Configuración'}</h3>
         <button class="mclose" on:click={() => showSettingsModal = false}>✕</button>

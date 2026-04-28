@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{AppHandle, Emitter};
 
+#[allow(dead_code)]   // referenced by upcoming dynamic-chunking variant
 const CHUNK_SIZE: usize    = 2_500;  // chars per chunk  (~1-2 pages of dense text)
 const CHUNK_OVERLAP: usize = 200;    // chars shared with next chunk (context continuity)
 

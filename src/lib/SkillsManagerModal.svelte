@@ -47,15 +47,16 @@
     let skillParams = {};
 
     // ── Favorites (localStorage, no backend needed) ─────────────────────────
+    import { safeParseLS, safeSetLS } from '$lib/safe-ls';
     let favorites = new Set();
     function loadFavorites() {
-        try { favorites = new Set(JSON.parse(localStorage.getItem('lucy_skill_favorites') || '[]')); }
-        catch { favorites = new Set(); }
+        const arr = safeParseLS('lucy_skill_favorites', []);
+        favorites = new Set(Array.isArray(arr) ? arr : []);
     }
     function toggleFavorite(id) {
         if (favorites.has(id)) favorites.delete(id); else favorites.add(id);
         favorites = new Set(favorites); // trigger Svelte reactivity
-        try { localStorage.setItem('lucy_skill_favorites', JSON.stringify([...favorites])); } catch {}
+        safeSetLS('lucy_skill_favorites', [...favorites]);
     }
 
     let newSkill = {
@@ -466,8 +467,10 @@
 </script>
 
 {#if isOpen}
-    <div class="modal-overlay" on:click={closeModal}>
-        <div class="modal-content" role="dialog" on:click|stopPropagation>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-overlay" role="presentation" on:click={closeModal}
+         on:keydown={(e) => { if (e.key === 'Escape') closeModal(); }}>
+        <div class="modal-content" role="dialog" aria-modal="true" tabindex={-1} on:click|stopPropagation>
             <!-- Header -->
             <div class="modal-header">
                 <h2><Zap size={20} /> {lang.title}</h2>
@@ -494,8 +497,9 @@
                                 <h4>{lang.enterParams}</h4>
                                 {#each Object.keys(skillParams) as param}
                                     <div class="param-input">
-                                        <label>{param}</label>
+                                        <label for={`skp-${param}`}>{param}</label>
                                         <input
+                                            id={`skp-${param}`}
                                             type="text"
                                             bind:value={skillParams[param]}
                                             placeholder="Enter value"
@@ -527,8 +531,9 @@
                         <h3>{editingSkill ? lang.edit : lang.add} Skill</h3>
 
                         <div class="form-group">
-                            <label>{lang.name}</label>
+                            <label for="sk-name">{lang.name}</label>
                             <input
+                                id="sk-name"
                                 type="text"
                                 bind:value={newSkill.name}
                                 placeholder="e.g. restart-service"
@@ -537,8 +542,8 @@
 
                         <div class="form-row">
                             <div class="form-group">
-                                <label>{lang.category}</label>
-                                <select bind:value={newSkill.category}>
+                                <label for="sk-category">{lang.category}</label>
+                                <select id="sk-category" bind:value={newSkill.category}>
                                     <option value="quick_cmd">{lang.quickCmd}</option>
                                     <option value="runbook">{lang.runbook}</option>
                                     <option value="macro">{lang.macro}</option>
@@ -553,27 +558,29 @@
                         </div>
 
                         <div class="form-group">
-                            <label>{lang.description}</label>
-                            <textarea bind:value={newSkill.description} placeholder="Optional description"></textarea>
+                            <label for="sk-desc">{lang.description}</label>
+                            <textarea id="sk-desc" bind:value={newSkill.description} placeholder="Optional description"></textarea>
                         </div>
 
                         <div class="form-group">
-                            <label>{lang.script}</label>
-                            <textarea bind:value={newSkill.script} placeholder={'Script content (supports {variable} substitution)'}></textarea>
+                            <label for="sk-script">{lang.script}</label>
+                            <textarea id="sk-script" bind:value={newSkill.script} placeholder={'Script content (supports {variable} substitution)'}></textarea>
                         </div>
 
                         <div class="form-row">
                             <div class="form-group">
-                                <label>{lang.parameters}</label>
+                                <label for="sk-params">{lang.parameters}</label>
                                 <textarea
+                                    id="sk-params"
                                     bind:value={newSkill.parameters}
                                     placeholder="JSON array of parameters"
                                     rows="3"
                                 ></textarea>
                             </div>
                             <div class="form-group">
-                                <label>{lang.triggers}</label>
+                                <label for="sk-triggers">{lang.triggers}</label>
                                 <textarea
+                                    id="sk-triggers"
                                     bind:value={newSkill.triggers}
                                     placeholder="JSON array of trigger phrases"
                                     rows="3"
@@ -582,8 +589,9 @@
                         </div>
 
                         <div class="form-group">
-                            <label>{lang.tags}</label>
+                            <label for="sk-tags">{lang.tags}</label>
                             <textarea
+                                id="sk-tags"
                                 bind:value={newSkill.tags}
                                 placeholder="JSON array of tags"
                                 rows="2"

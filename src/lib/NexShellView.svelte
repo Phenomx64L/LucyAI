@@ -4,6 +4,7 @@
     import { LLM_GROUPS, getModelDescription } from '$lib/models.js';
     import { IconShield as Shield, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
     import { tick, createEventDispatcher, onDestroy } from 'svelte';
+    import { safeParseLS, safeSetLS } from '$lib/safe-ls';
     import { logAuditEntry } from '$lib/audit';
     import { analyzeCommand, shouldBlock, checkPermissionRules } from '$lib/hooks/command-guard';
     import { guardConfig } from '$lib/stores';
@@ -1263,16 +1264,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     // ── Persistent command history per host ────────────────────────────────
     function rsSaveHistory(hostId, cmd) {
         const key = `lucy_rsh_${hostId}`;
-        try {
-            const hist = JSON.parse(localStorage.getItem(key) || '[]');
-            const filtered = hist.filter(c => c !== cmd);
-            filtered.push(cmd);
-            localStorage.setItem(key, JSON.stringify(filtered.slice(-100)));
-        } catch(e) {}
+        const hist = safeParseLS(key, []);
+        const filtered = hist.filter(c => c !== cmd);
+        filtered.push(cmd);
+        safeSetLS(key, filtered.slice(-100));
     }
 
     function rsGetHistory(hostId) {
-        try { return JSON.parse(localStorage.getItem(`lucy_rsh_${hostId}`) || '[]'); } catch(e) { return []; }
+        return safeParseLS(`lucy_rsh_${hostId}`, []);
     }
 
     // ── Persistent Lucy conversation per host ───────────────────────────────
@@ -1281,25 +1280,21 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     const _LUCY_CONV_MAX   = 60;   // últimas N entradas lucy para no crecer indefinidamente
 
     function rsSaveLucyConv(hostId, history) {
-        try {
-            const entries = history
-                .filter(e => _LUCY_CONV_TYPES.has(e.type))
-                .slice(-_LUCY_CONV_MAX)
-                .map(e => ({ type: e.type, text: e.text, time: e.time }));
-            localStorage.setItem(`lucy_nxh_${hostId}`, JSON.stringify(entries));
-        } catch(e) {}
+        const entries = history
+            .filter(e => _LUCY_CONV_TYPES.has(e.type))
+            .slice(-_LUCY_CONV_MAX)
+            .map(e => ({ type: e.type, text: e.text, time: e.time }));
+        safeSetLS(`lucy_nxh_${hostId}`, entries);
     }
 
     function rsLoadLucyConv(hostId) {
-        try {
-            const raw = localStorage.getItem(`lucy_nxh_${hostId}`);
-            if (!raw) return [];
-            return JSON.parse(raw).map(e => ({
-                ...e,
-                id: 'r-' + Math.random().toString(36).slice(2, 9),
-                restored: true,   // marca visual opcional
-            }));
-        } catch(e) { return []; }
+        const arr = safeParseLS(`lucy_nxh_${hostId}`, []);
+        if (!Array.isArray(arr)) return [];
+        return arr.map(e => ({
+            ...e,
+            id: 'r-' + Math.random().toString(36).slice(2, 9),
+            restored: true,   // marca visual opcional
+        }));
     }
 
     function rsKeyDirect(e, id) {
@@ -1489,13 +1484,13 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     // ── Playbooks ───────────────────────────────────────────────────────────
     function rsGetPlaybooks(hostId) {
-        try { return JSON.parse(localStorage.getItem(`lucy_pb_${hostId}`) || '[]'); } catch(e) { return []; }
+        return safeParseLS(`lucy_pb_${hostId}`, []);
     }
 
     function rsSavePlaybook(hostId, pb) {
         const pbs = rsGetPlaybooks(hostId).filter(p => p.id !== pb.id);
         pbs.push(pb);
-        localStorage.setItem(`lucy_pb_${hostId}`, JSON.stringify(pbs));
+        safeSetLS(`lucy_pb_${hostId}`, pbs);
     }
 
     function rsDeletePlaybook(hostId, pbId) {
@@ -2019,7 +2014,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
         <!-- Active session shell content -->
         {#each rshellSessions.filter(s => s.id === activeShellId) as s (s.id)}
-        <div class="ns-shell-wrap"
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions
+             Ctrl+F search shortcut MUST be captured at the wrapper level to
+             work regardless of which inner element has focus. The inner
+             search panel + terminal already provide proper interactive UI. -->
+        <div class="ns-shell-wrap" role="region" aria-label="NexShell session"
           on:keydown={(e) => { if (e.ctrlKey && e.key === 'f') { e.preventDefault(); nsSearchOpen(s.id); } }}>
 
           <!-- Shell header -->
@@ -2148,9 +2147,9 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             <!-- Provider & Model selector row (Claude only for Computer Use) -->
             <div class="rdp-agent-config-row">
               <Plug size={14} style="color:#8b5cf6;flex-shrink:0;margin-right:4px;" />
-              <label style="font-size:11px;color:#888;flex-shrink:0;">
+              <span style="font-size:11px;color:#888;flex-shrink:0;">
                 {isEN ? 'Vision Engine:' : 'Motor de Visión:'}
-              </label>
+              </span>
               <!-- Fixed to Claude Sonnet 4.5 — empirically the most reliable for GUI
                    Computer Use (OSWorld benchmark leader, ~5x cheaper than Opus,
                    faster iteration loops). Not user-configurable to prevent

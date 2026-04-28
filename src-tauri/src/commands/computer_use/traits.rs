@@ -2,9 +2,10 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::commands::computer_use::types::{ComputerAction, ActionResult, ComputeConfig};
+use crate::commands::computer_use::types::{ComputerAction, ComputeConfig};
 
 /// Common interface for all Computer Use providers
+#[allow(dead_code)]   // optional methods reserved for future provider routing
 #[async_trait]
 pub trait ComputerUseProvider: Send + Sync {
     /// Get the provider name (for logging/debugging)
@@ -69,8 +70,8 @@ Example: [{"action": "left_click", "coordinate": [100, 200]}]"#
     /// Optional: Custom logic to build the API request
     async fn build_request(
         &self,
-        config: &ComputeConfig,
-        messages: &[Value],
+        _config: &ComputeConfig,
+        _messages: &[Value],
     ) -> Result<(String, Value), String> {
         Err("Not implemented".into())
     }

@@ -26,9 +26,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
-use crate::state::HTTP_CLIENT;
-use crate::commands::computer_use::{ComputerUseProvider, create_provider, types::{ComputeConfig, ComputerAction}};
-use keyring::Entry;
+use crate::commands::computer_use::{create_provider, types::{ComputeConfig, ComputerAction}};
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 

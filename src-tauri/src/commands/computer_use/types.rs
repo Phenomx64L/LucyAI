@@ -47,12 +47,14 @@ impl ComputerAction {
     }
 
     /// Convert to JSON
+    #[allow(dead_code)]
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::json!({}))
     }
 }
 
 /// Result from executing an action
+#[allow(dead_code)]   // reserved for upcoming computer_use providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
     /// Base64-encoded PNG screenshot (if applicable)
@@ -67,14 +69,17 @@ pub struct ActionResult {
 #[derive(Debug, Clone)]
 pub struct ComputeConfig {
     pub model: String,
+    #[allow(dead_code)]
     pub api_key: String,
     pub task: String,
+    #[allow(dead_code)]
     pub max_steps: u32,
     pub window_width: i32,
     pub window_height: i32,
 }
 
 /// Message turn in the conversation
+#[allow(dead_code)]   // reserved for upcoming computer_use providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageTurn {
     pub role: String, // "user" or "assistant"

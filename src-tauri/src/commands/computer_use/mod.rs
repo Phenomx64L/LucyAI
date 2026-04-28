@@ -18,7 +18,6 @@ pub mod ollama;
 pub mod types;
 
 pub use traits::ComputerUseProvider;
-pub use types::{ComputerAction, ActionResult};
 
 /// Factory function to create the appropriate provider based on model name
 pub fn create_provider(model: &str) -> Box<dyn ComputerUseProvider> {

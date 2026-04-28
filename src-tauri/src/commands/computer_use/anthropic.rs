@@ -11,6 +11,7 @@ use crate::commands::computer_use::types::{ComputerAction, ComputeConfig};
 use crate::commands::computer_use::traits::ComputerUseProvider;
 
 pub struct AnthropicProvider {
+    #[allow(dead_code)]   // surfaced via trait::get_model()
     model: String,
 }
 
@@ -42,7 +43,7 @@ impl ComputerUseProvider for AnthropicProvider {
     async fn query_llm(
         &self,
         config: &ComputeConfig,
-        screenshot_b64: &str,
+        _screenshot_b64: &str,
         messages: &[Value],
     ) -> Result<(Vec<ComputerAction>, String, bool), String> {
         let api_key = Entry::new("LucySysAdmin", "anthropic_api_key")

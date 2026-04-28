@@ -396,7 +396,8 @@
   }
   .hm-pick:hover { border-color: var(--acc, #10b981); }
   .hm-note       { font-size: 10px; color: #2a4a3a; margin: 4px 0 0; }
-  .hm-note code  { color: var(--acc, #10b981); }
+  /* :global so <code> rendered inside .hm-note via {@html} or markdown gets the color */
+  .hm-note :global(code) { color: var(--acc, #10b981); }
 
   /* ── Info box ───────────────────────────────────────────────────────────── */
   .hm-info {
