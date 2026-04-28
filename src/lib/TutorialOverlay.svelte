@@ -83,8 +83,13 @@
             dEN: 'Every executed command, invoked skill and agent decision is logged with timestamp, user, target host and result. Export to PDF for SOX, ISO 27001 audits or forensic evidence.',
         },
         {
-            sel: ['.sidebar .sb-it[title*="Skills"]', '.sidebar .sb-it[title*="abilidades"]'],
-            fallback: '.sidebar',
+            // BUG FIX: previous selectors used S-capital "Skills" but the actual
+            // title attribute is "Manage skills and runbooks" / "Gestionar
+            // skills y runbooks" — lowercase. CSS attribute selectors are
+            // case-sensitive on values. Without a match the fallback ".sidebar"
+            // fired and the spotlight illuminated the ENTIRE sidebar.
+            sel: ['.sidebar .sb-it[title*="skills"]', '.sidebar .sb-it[title*="Skills"]'],
+            fallback: '.sidebar .sb-it[title*="killbook"], .sidebar .sb-it[title*="runbook"]',
             tip: 'right',
             view: 'terminal',
             tES: '▸ Skills Manager',
@@ -113,9 +118,12 @@
             dEN: 'Instant metrics for local or remote hosts. Monitor CPU, Memory, Disk and Network via vector graphs. A panoramic view of your infrastructure\'s performance.',
         },
         {
-            sel: ['.dash-card', '.dash-cards'],
-            fallback: '.dash-cards',
-            tip: 'right',
+            // .dash-cards (plural — the GRID) covers all three cards in one
+            // spotlight rect. Singular .dash-card would only highlight the
+            // first one and leave the others outside the cutout.
+            sel: ['.dash-cards', '.dash-card'],
+            fallback: '.dash-scroll',
+            tip: 'top',
             view: 'dashboard',
             tES: '✦ NUEVO — Detección de Anomalías',
             tEN: '✦ NEW — Anomaly Detection',
@@ -123,7 +131,11 @@
             dEN: 'CPU & RAM cards now show a <b>σ badge</b> (sigma) when a value deviates statistically from the host\'s recent average. Surfaces only on <b>strong</b> (≥3σ) or <b>extreme</b> (≥4σ) anomalies — no false alarms. Catches suspicious spikes without hand-tuning fixed thresholds.',
         },
         {
-            sel: ['.ibar', '.igrp'],
+            // .igrp is the inner input wrapper (textarea + chips). Tighter
+            // bounding box than .ibar (which also includes side buttons).
+            // Spotlight reads as "the input itself", which is what the
+            // tutorial copy talks about.
+            sel: ['.igrp', '.ibar'],
             fallback: '.ibar',
             tip: 'top',
             view: 'terminal',
@@ -133,10 +145,16 @@
             dEN: 'While you type in the input, Lucy estimates how many <b>tokens</b> and how much <b>USD</b> your prompt will cost before sending. Useful for picking a cheaper model when the task is exploratory. Shown next to the active model when the prompt exceeds ~8 characters.',
         },
         {
-            sel: ['.bbar', '.ws'],
+            // The footer (.bbar) is only 22px tall — too thin for the spotlight
+            // ring to read. We pad the spotlight artificially via the new
+            // `padY` field (consumed in calcSpot) so the highlight reads as a
+            // band, not a pencil-line. Tip is 'top' so the tooltip floats
+            // above the band, never crashing into the input above.
+            sel: ['.bbar'],
             fallback: '.bbar',
             tip: 'top',
             view: 'terminal',
+            padY: 6,
             tES: '✦ NUEVO — Indicador de Estado',
             tEN: '✦ NEW — Status Indicator',
             dES: 'En la <b>esquina inferior derecha del footer</b> verás un punto que respira con el estado de Lucy: <br>• <span style="color:#10b981;">●</span> verde lento → inactiva, lista<br>• <span style="color:#3b9eff;">●</span> azul rápido → pensando<br>• <span style="color:#f59e0b;">●</span> ámbar con arco → ejecutando<br>• <span style="color:#ef4444;">●</span> rojo flash → error reciente<br><br>El borde del input también adopta el color del estado.',
@@ -211,13 +229,17 @@
         }
         if (!el && c.fallback) el = document.querySelector(c.fallback);
         if (el) {
-            const r   = el.getBoundingClientRect();
-            const pad = 10;
+            const r    = el.getBoundingClientRect();
+            const pad  = 10;
+            // padY: per-step vertical inflation. Useful for very thin
+            // elements (footer status bar at 22px) where the default 10px
+            // padding still produces a band too small to read.
+            const padY = (c.padY ?? 0) + pad;
             spot = {
                 x: Math.max(0,     r.left   - pad),
-                y: Math.max(0,     r.top    - pad),
-                w: Math.min(W - 4, r.width  + pad * 2),
-                h: Math.min(H - 4, r.height + pad * 2),
+                y: Math.max(0,     r.top    - padY),
+                w: Math.min(W - 4, r.width  + pad  * 2),
+                h: Math.min(H - 4, r.height + padY * 2),
                 r: 10,
             };
         } else {
