@@ -7,24 +7,40 @@
 ──────────────────────────────────────────────────────────────────────────── -->
 <script>
     import { createEventDispatcher, tick, onMount, onDestroy } from 'svelte';
+    import { safeSetLSString } from '$lib/safe-ls';
 
     export let show = false;
     export let isEN = false;
 
     const dispatch = createEventDispatcher();
 
+    // Bumped per release. Keep in sync with package.json + Cargo.toml.
+    const LUCY_VERSION = '1.2.1';
+
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout
     // view: which activeView the parent must switch to before spotlighting
+    // welcome=true skips the spotlight (centered card) for the intro step.
                 const STEPS = [
+        {
+            sel: ['.bbar', '.ws'],
+            fallback: 'body',
+            tip: 'top',
+            view: 'terminal',
+            welcome: true,
+            tES: `✦ Bienvenido a Lucy v${LUCY_VERSION}`,
+            tEN: `✦ Welcome to Lucy v${LUCY_VERSION}`,
+            dES: 'Hola — esta es una <b>versión renovada</b> con foco en estabilidad, observabilidad y experiencia visual. <br><br>Lo nuevo en v' + LUCY_VERSION + ':<br>• <b>Indicador de estado ambient</b> en el footer (idle / pensando / ejecutando)<br>• <b>Detección de anomalías</b> estadísticas en CPU/RAM<br>• <b>Predictor de costo</b> en vivo en el input<br>• <b>Notebook export</b> para reusar conversaciones<br>• <b>Búsqueda fuzzy</b> en Reglas de Permisos<br>• Bug fixes: NexShell, multi-step agent, timer "pensando"<br><br>Vamos a recorrer la interfaz.',
+            dEN: `Hi — this is a <b>refreshed release</b> focused on stability, observability and visual polish. <br><br>What's new in v${LUCY_VERSION}:<br>• <b>Ambient status indicator</b> in the footer (idle / thinking / executing)<br>• <b>Statistical anomaly detection</b> on CPU/RAM<br>• <b>Live cost predictor</b> in the input<br>• <b>Notebook export</b> to replay sessions<br>• <b>Fuzzy search</b> in Permission Rules<br>• Bug fixes: NexShell, multi-step agent, "thinking" timer<br><br>Let's walk through the interface.`,
+        },
         {
             sel: ['.chat-wrap.on .chat-area', '.chat-wrap.on', '.panel'],
             tip: 'left',
             view: 'terminal',
             tES: '↗ Terminal IA — Bucle Agéntico',
             tEN: '↗ AI Terminal — Agentic Loop',
-            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea. Incluye <b>PLAN/VERIFY/ROLLBACK</b> — para cambios riesgosos Lucy propone un plan, verifica el resultado y revierte automáticamente si falla.',
-            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and auto-execute</b> commands until the task is complete. Includes <b>PLAN/VERIFY/ROLLBACK</b> — for risky changes Lucy proposes a plan, verifies the outcome, and auto-rolls back if it fails.',
+            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea. Incluye <b>PLAN/VERIFY/ROLLBACK</b> — para cambios riesgosos Lucy propone un plan, verifica el resultado y revierte automáticamente si falla. <br><br><b>NUEVO en v1.2.1</b>: cuando le pides múltiples cosas en un solo mensaje (ej. "checa specs y busca en internet"), Lucy ya no se detiene a media tarea.',
+            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and auto-execute</b> commands until the task is complete. Includes <b>PLAN/VERIFY/ROLLBACK</b> — for risky changes Lucy proposes a plan, verifies the outcome, and auto-rolls back if it fails. <br><br><b>NEW in v1.2.1</b>: when you give Lucy multi-step prompts (e.g. "check my specs and search the web"), it no longer stops mid-task.',
         },
         {
             sel: ['.sidebar .sb-it[title*="NexShell"]', '.sidebar .sb-it[title*="exShell"]'],
@@ -95,6 +111,47 @@
             tEN: '◑ Metrics Dashboard',
             dES: 'Métricas instantáneas locales o de hosts remotos. Monitorea CPU, Memoria, Disco y red a través de gráficas vectoriales. Una vista panorámica del rendimiento de toda tu infraestructura.',
             dEN: 'Instant metrics for local or remote hosts. Monitor CPU, Memory, Disk and Network via vector graphs. A panoramic view of your infrastructure\'s performance.',
+        },
+        {
+            sel: ['.dash-card', '.dash-cards'],
+            fallback: '.dash-cards',
+            tip: 'right',
+            view: 'dashboard',
+            tES: '✦ NUEVO — Detección de Anomalías',
+            tEN: '✦ NEW — Anomaly Detection',
+            dES: 'Las cards de CPU y RAM ahora muestran un <b>badge σ</b> (sigma) cuando un valor se desvía estadísticamente del promedio reciente del host. Solo aparece para anomalías <b>fuertes</b> (≥3σ) o <b>extremas</b> (≥4σ) — sin alarmismo. Detecta picos sospechosos sin necesidad de configurar umbrales fijos.',
+            dEN: 'CPU & RAM cards now show a <b>σ badge</b> (sigma) when a value deviates statistically from the host\'s recent average. Surfaces only on <b>strong</b> (≥3σ) or <b>extreme</b> (≥4σ) anomalies — no false alarms. Catches suspicious spikes without hand-tuning fixed thresholds.',
+        },
+        {
+            sel: ['.ibar', '.igrp'],
+            fallback: '.ibar',
+            tip: 'top',
+            view: 'terminal',
+            tES: '✦ NUEVO — Predictor de Costo',
+            tEN: '✦ NEW — Cost Predictor',
+            dES: 'Mientras escribes en el input, Lucy estima cuántos <b>tokens</b> y cuánto <b>USD</b> costará tu prompt antes de enviarlo. Útil para elegir un modelo más barato cuando la tarea es exploratoria. Aparece junto al modelo activo cuando el prompt supera ~8 caracteres.',
+            dEN: 'While you type in the input, Lucy estimates how many <b>tokens</b> and how much <b>USD</b> your prompt will cost before sending. Useful for picking a cheaper model when the task is exploratory. Shown next to the active model when the prompt exceeds ~8 characters.',
+        },
+        {
+            sel: ['.bbar', '.ws'],
+            fallback: '.bbar',
+            tip: 'top',
+            view: 'terminal',
+            tES: '✦ NUEVO — Indicador de Estado',
+            tEN: '✦ NEW — Status Indicator',
+            dES: 'En la <b>esquina inferior derecha del footer</b> verás un punto que respira con el estado de Lucy: <br>• <span style="color:#10b981;">●</span> verde lento → inactiva, lista<br>• <span style="color:#3b9eff;">●</span> azul rápido → pensando<br>• <span style="color:#f59e0b;">●</span> ámbar con arco → ejecutando<br>• <span style="color:#ef4444;">●</span> rojo flash → error reciente<br><br>El borde del input también adopta el color del estado.',
+            dEN: 'In the <b>bottom-right of the footer</b> you\'ll see a dot that breathes with Lucy\'s state: <br>• <span style="color:#10b981;">●</span> slow green → idle, ready<br>• <span style="color:#3b9eff;">●</span> fast blue → thinking<br>• <span style="color:#f59e0b;">●</span> amber with arc → executing<br>• <span style="color:#ef4444;">●</span> red flash → recent error<br><br>The input border also adopts the state color.',
+        },
+        {
+            sel: ['body'],
+            fallback: 'body',
+            tip: 'top',
+            view: 'terminal',
+            welcome: true,
+            tES: '✦ Atajos esenciales',
+            tEN: '✦ Essential shortcuts',
+            dES: '<b>Ctrl+P</b> · Paleta de comandos (busca cualquier vista, host o acción) — incluye <b>Exportar pestaña como Notebook</b>.<br><b>Ctrl+T</b> · Nueva terminal.<br><b>Ctrl+L</b> · Limpiar sesión actual.<br><b>Ctrl+F</b> · Buscar en NexShell.<br><b>Ctrl+Shift+Enter</b> · Ejecutar en background.<br><b>Tab</b> · Autocompletar comandos.<br><b>Esc</b> · Cancelar el agente o cerrar modal.',
+            dEN: '<b>Ctrl+P</b> · Command palette (find any view, host or action) — includes <b>Export tab as Notebook</b>.<br><b>Ctrl+T</b> · New terminal.<br><b>Ctrl+L</b> · Clear current session.<br><b>Ctrl+F</b> · Find in NexShell.<br><b>Ctrl+Shift+Enter</b> · Run in background.<br><b>Tab</b> · Autocomplete commands.<br><b>Esc</b> · Cancel the agent or close modal.',
         }
     ];
 
@@ -140,6 +197,13 @@
         W = window.innerWidth;
         H = window.innerHeight;
         const c = STEPS[step] || STEPS[0];
+        // Welcome / overview steps don't spotlight a specific element —
+        // they show a centered card over the whole screen with no cutout.
+        if (c.welcome) {
+            spot = { x: W / 2 - 200, y: H / 2 - 80, w: 400, h: 160, r: 14, welcome: true };
+            ready = true;
+            return;
+        }
         let el = null;
         for (const sel of c.sel) {
             el = document.querySelector(sel);
@@ -172,6 +236,13 @@
         const cy  = s.y + s.h / 2;
         const p   = 14;
 
+        // Welcome / overview steps: center the card horizontally + vertically.
+        if (s.welcome) {
+            const left = Math.max(p, w / 2 - TW / 2);
+            const top  = Math.max(p, h / 2 - TH / 2);
+            return `left:${left}px;top:${top}px;`;
+        }
+
         if (pos === 'right') {
             const left = Math.min(s.x + s.w + p, w - TW - p);
             const top  = Math.max(p, Math.min(cy - TH / 2, h - TH - p));
@@ -201,7 +272,10 @@
     function prev() { if (step > 0) goToStep(step - 1); }
     function done() {
         show = false;
-        localStorage.setItem('lucy_tutorial_done', '1');
+        // Versioned tutorial flag: re-shows the tour after a release bump
+        // when the user upgrades. Keeps onboarding fresh without nagging
+        // users who finished it on this version.
+        safeSetLSString('lucy_tutorial_done', LUCY_VERSION);
         dispatch('done');
     }
     function onKey(e) {
@@ -226,14 +300,14 @@
   <defs>
     <mask id="tut-hole">
       <rect width="100%" height="100%" fill="white"/>
-      {#if ready}
+      {#if ready && !spot.welcome}
         <rect x={spot.x} y={spot.y} width={spot.w} height={spot.h}
               rx={spot.r} fill="black"/>
       {/if}
     </mask>
   </defs>
   <rect width="100%" height="100%" fill="rgba(2,6,12,0.88)" mask="url(#tut-hole)"/>
-  {#if ready}
+  {#if ready && !spot.welcome}
     <rect x={spot.x - 1} y={spot.y - 1}
           width={spot.w + 2} height={spot.h + 2}
           rx={spot.r + 1}

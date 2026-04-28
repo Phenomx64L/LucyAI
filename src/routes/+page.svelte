@@ -1011,7 +1011,15 @@ import { listen } from '@tauri-apps/api/event';
             appReady = true;
             if (!darkMode) document.documentElement.classList.add('light');
             // Show tutorial on first ever launch (after a brief delay for the UI to settle)
-            if (!safeGetLS('lucy_tutorial_done', '') && !showSetupOverlay) {
+            // Show the tutorial when:
+            //   • the user has never completed it (flag is empty), OR
+            //   • the stored flag is from an older Lucy version → we want
+            //     them to see the new what's-new step + new feature spots.
+            // The flag stores the version that completed it; appVersion is
+            // the current build (semver from tauri.conf).
+            const _tutFlag = safeGetLS('lucy_tutorial_done', '');
+            const _tutNeedsRerun = !_tutFlag || (_tutFlag !== '1' && _tutFlag !== appVersion);
+            if (_tutNeedsRerun && !showSetupOverlay) {
                 setTimeout(() => { showTutorial = true; }, 1200);
             }
         }

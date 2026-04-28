@@ -7,6 +7,7 @@
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { focusTrap } from '$lib/actions';
+    import { safeSetLSString } from '$lib/safe-ls';
 
     // ── Props ────────────────────────────────────────────────────────────────
     /** Lista completa de idiomas soportados: { code, label, stt, tts } */
@@ -25,6 +26,10 @@
     let setupLoading = false;
     let setupError   = '';
     let setupStep    = 'form'; // 'form' | 'success'
+    let showWhatsNew = false;  // toggle the "What's new in 1.2.1" panel
+
+    // Bumped each release. Keep in sync with package.json + Cargo.toml.
+    const LUCY_VERSION = '1.2.1';
 
     // ── Helpers de i18n ──────────────────────────────────────────────────────
     $: t = (es, pt, en, fr = en, de = en) =>
@@ -55,8 +60,8 @@
             // 2. Persistir en Windows Credential Manager
             await invoke('save_llm_key', { provider: setupProv, apiKey: key });
 
-            localStorage.setItem('lucy_user_name', name);
-            localStorage.setItem('lucy_user_lang', setupLang);
+            safeSetLSString('lucy_user_name', name);
+            safeSetLSString('lucy_user_lang', setupLang);
 
             // 3. Mostrar animación de éxito
             setupStep = 'success';
@@ -108,7 +113,10 @@
 
     {:else}
       <!-- ── Formulario ─────────────────────────────────────────────────── -->
-      <div class="so-icon">⚡</div>
+      <div class="so-header">
+        <div class="so-icon">⚡</div>
+        <span class="so-version-badge" title="Lucy Assistant v{LUCY_VERSION}">v{LUCY_VERSION}</span>
+      </div>
       <h2 class="so-title">Lucy Assistant</h2>
       <p class="so-subtitle">
         {t(
@@ -117,6 +125,79 @@
           'Your AI-powered SysAdmin assistant · Initial setup'
         )}
       </p>
+
+      <!-- ── What's new in 1.2.1 (collapsible) ─────────────────────────── -->
+      <button class="so-whatsnew-toggle" type="button" on:click={() => showWhatsNew = !showWhatsNew}>
+        <span class="so-spark">✦</span>
+        <span>{t(
+          `Novedades en v${LUCY_VERSION}`,
+          `Novidades em v${LUCY_VERSION}`,
+          `What's new in v${LUCY_VERSION}`,
+          `Nouveautés en v${LUCY_VERSION}`,
+          `Neu in v${LUCY_VERSION}`
+        )}</span>
+        <span class="so-chevron" class:open={showWhatsNew}>▸</span>
+      </button>
+      {#if showWhatsNew}
+        <ul class="so-whatsnew-list">
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'Indicador de estado ambient (idle / pensando / ejecutando) en el footer',
+              'Indicador de estado ambient (idle / pensando / executando) no rodapé',
+              'Ambient status indicator (idle / thinking / executing) in the footer'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'Detección de anomalías estadísticas en CPU / RAM (z-score)',
+              'Detecção de anomalias estatísticas em CPU / RAM (z-score)',
+              'Statistical anomaly detection on CPU / RAM (z-score)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet warn">●</span>
+            {t(
+              'Predictor de costo en vivo · estima tokens y USD antes de enviar',
+              'Preditor de custo em tempo real · estima tokens e USD antes de enviar',
+              'Live cost predictor · estimates tokens & USD before sending'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'Exportar conversación como Notebook reutilizable (.lucynote / .md)',
+              'Exportar conversa como Notebook reutilizável (.lucynote / .md)',
+              'Export conversation as a reusable Notebook (.lucynote / .md)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'Búsqueda fuzzy en Reglas de Permisos · filtrar por acción',
+              'Busca fuzzy em Regras de Permissões · filtrar por ação',
+              'Fuzzy search in Permission Rules · filter by action'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet danger">●</span>
+            {t(
+              'Hardening: ofuscación de blocklist, integrity check, release LTO',
+              'Hardening: ofuscação de blocklist, integrity check, release LTO',
+              'Hardening: blocklist obfuscation, integrity check, release LTO'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'Lucy ya no se detiene a media tarea cuando le pides múltiples cosas',
+              'Lucy não para mais no meio da tarefa quando você pede várias coisas',
+              'Lucy no longer stops mid-task when given multi-step prompts'
+            )}
+          </li>
+        </ul>
+      {/if}
 
       <!-- Idioma -->
       <div class="so-field">
@@ -223,9 +304,74 @@
   }
 
   /* ── Cabecera ─────────────────────────────────────────────────────────────── */
-  .so-icon  { font-size: 34px; color: var(--acc, #10b981); margin-bottom: 12px; }
+  .so-header {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; margin-bottom: 12px; position: relative;
+  }
+  .so-icon  { font-size: 34px; color: var(--acc, #10b981); line-height: 1; }
+  .so-version-badge {
+    position: absolute; top: 0; right: 0;
+    font-size: 9px; font-weight: 700;
+    color: var(--acc, #10b981);
+    background: rgba(16,185,129,0.10);
+    border: 1px solid rgba(16,185,129,0.25);
+    padding: 2px 7px; border-radius: 10px;
+    font-family: var(--mono, monospace);
+    letter-spacing: 0.3px;
+    box-shadow: 0 0 12px rgba(16,185,129,0.18);
+  }
   .so-title { color: white; margin: 0 0 6px; font-size: 17px; font-weight: 600; }
-  .so-subtitle { color: var(--txt2, #7a8a9a); font-size: 12px; margin-bottom: 22px; line-height: 1.5; }
+  .so-subtitle { color: var(--txt2, #7a8a9a); font-size: 12px; margin-bottom: 16px; line-height: 1.5; }
+
+  /* ── What's new (collapsible teaser) ──────────────────────────────────── */
+  .so-whatsnew-toggle {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%;
+    background: rgba(167,139,250,0.06);
+    border: 1px solid rgba(167,139,250,0.20);
+    color: #c4b5fd;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    font-size: 11.5px; font-weight: 600; font-family: inherit;
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, transform 80ms ease;
+  }
+  .so-whatsnew-toggle:hover {
+    background: rgba(167,139,250,0.10);
+    border-color: rgba(167,139,250,0.35);
+  }
+  .so-whatsnew-toggle:active { transform: scale(0.985); }
+  .so-spark { color: #a78bfa; font-size: 11px; }
+  .so-chevron {
+    margin-left: auto;
+    font-size: 10px;
+    transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .so-chevron.open { transform: rotate(90deg); }
+  .so-whatsnew-list {
+    list-style: none; padding: 0; margin: 0 0 18px;
+    text-align: left;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    border: 1px solid rgba(167,139,250,0.12);
+    padding: 10px 12px;
+    animation: so-list-in 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .so-whatsnew-list li {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 11.5px; color: var(--txt, #cbd5e1); line-height: 1.5;
+    padding: 4px 0;
+  }
+  .so-bullet { font-size: 8px; line-height: 1.6; flex-shrink: 0; }
+  .so-bullet.ok     { color: #10b981; }
+  .so-bullet.info   { color: #3b9eff; }
+  .so-bullet.warn   { color: #f59e0b; }
+  .so-bullet.danger { color: #ef4444; }
+  @keyframes so-list-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 
   /* ── Campos ───────────────────────────────────────────────────────────────── */
   .so-field { text-align: left; margin-bottom: 12px; }
