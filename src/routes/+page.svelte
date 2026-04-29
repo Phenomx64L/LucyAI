@@ -7141,8 +7141,28 @@ if (Test-Path $src) {
     @supports not (color: color-mix(in srgb, red 50%, blue)) {
         :global(.igrp:focus-within){border-color: var(--state-color, rgba(16,185,129,.4));}
     }
-    :global(.ibox){flex:1;background:transparent;border:none;color:white;font-family:inherit;font-size:13px;outline:none;resize:none;min-height:22px;max-height:180px;overflow-y:auto;line-height:1.5;padding:2px 0;}
+    /* User-feedback driven sizing: the input area used to feel cramped at
+       22px min-height. Bumping the minimum to 90px gives ~5 readable lines
+       of room before the textarea has to scroll, and the maximum to 320px
+       lets longer prompts breathe before forcing the user to scroll. The
+       icons row (.iside) below stays anchored to the .igrp's flex-end so
+       it always hugs the bottom of the input, not the bottom of a fixed
+       22px stub. */
+    :global(.ibox){
+        flex:1;
+        background:transparent;border:none;
+        color:white;font-family:inherit;font-size:13px;
+        outline:none;resize:none;
+        min-height:90px;
+        max-height:320px;
+        overflow-y:auto;
+        line-height:1.5;
+        padding:2px 0;
+    }
     :global(.ibox::placeholder){color:#334155;}
+    /* The input wrapper now stretches its textarea to fill — align-items
+       was 'flex-end' so chips/icons hugged the bottom; we keep that for the
+       icons row but make the textarea row consume vertical space. */
     :global(.iside){display:flex;align-items:center;gap:3px;flex-shrink:0;}
     :global(.ia-btn){background:none;border:none;color:#475569;cursor:pointer;padding:5px 7px;border-radius:6px;font-size:14px;transition:.15s;line-height:1;display:flex;align-items:center;justify-content:center;}
     :global(.ia-btn:hover){background:rgba(255,255,255,.07);color:#94a3b8;}
