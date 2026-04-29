@@ -965,10 +965,11 @@ body > div, #svelte { height: 100%; display: contents; }
    ────────────────────────────────────────────────────────────────────── */
 
 /* Ambient mesh gradient — soft, slow-breathing colored fog behind everything.
-   Scoped to body::before so no DOM markup is needed. The scale + filter are
-   the trick: a tiny 60% layer scaled up to fill creates a blurred halo
-   without backdrop-filter overhead.
-   Honors prefers-reduced-motion: no animation when user opts out. */
+   TUNED DOWN from the original Tier 1 commit: opacity 0.85 → 0.45 and the
+   per-color alphas halved. Earlier user feedback noted the chat cards felt
+   "compressed"; the dominant cause was over-bright ambient + a too-loud
+   *:focus-visible ring (also fixed). Keep the breathing alive but make it
+   read as atmosphere, not as foreground UI. */
 body::before {
   content: '';
   position: fixed;
@@ -976,23 +977,23 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(at 20% 20%, color-mix(in srgb, var(--state-color, var(--accent)) 5%, transparent) 0%, transparent 45%),
-    radial-gradient(at 80% 75%, color-mix(in srgb, var(--blue, #3b9eff) 4%, transparent) 0%, transparent 50%),
-    radial-gradient(at 50% 50%, color-mix(in srgb, var(--purple, #a78bfa) 3%, transparent) 0%, transparent 55%);
-  animation: ambient-drift 30s ease-in-out infinite alternate;
-  opacity: 0.85;
+    radial-gradient(at 20% 20%, color-mix(in srgb, var(--state-color, var(--accent)) 3%, transparent) 0%, transparent 45%),
+    radial-gradient(at 80% 75%, color-mix(in srgb, var(--blue, #3b9eff) 2%, transparent) 0%, transparent 50%),
+    radial-gradient(at 50% 50%, color-mix(in srgb, var(--purple, #a78bfa) 2%, transparent) 0%, transparent 55%);
+  animation: ambient-drift 40s ease-in-out infinite alternate;
+  opacity: 0.45;
   transition: background var(--motion-deliberate, 600ms) var(--ease-out, ease-out);
 }
 @keyframes ambient-drift {
   0%   { transform: translate3d(0,    0,    0) scale(1);    }
-  50%  { transform: translate3d(-2%, -1%, 0) scale(1.04);   }
+  50%  { transform: translate3d(-2%, -1%, 0) scale(1.03);   }
   100% { transform: translate3d(2%,   1%,  0) scale(1);     }
 }
 @media (prefers-reduced-motion: reduce) {
   body::before { animation: none; }
 }
-/* Reduce ambient on light theme so it doesn't wash out content. */
-:root.light body::before { opacity: 0.4; }
+/* Reduce further on light theme so it doesn't wash out content. */
+:root.light body::before { opacity: 0.20; }
 
 /* Cursor-style subtle button hover scale. Apply via .lucy-btn class on
    any button you want to feel responsive. Doesn't affect existing buttons
@@ -1018,15 +1019,24 @@ body::before {
               0 0 0 1px color-mix(in srgb, var(--state-color, var(--accent)) 14%, transparent);
 }
 
-/* Focus ring (Cursor-style: tight, glowy, keyboard only). */
-*:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--bg-base, #0d1117),
-    0 0 0 4px color-mix(in srgb, var(--state-color, var(--accent)) 60%, transparent),
-    0 0 14px color-mix(in srgb, var(--state-color, var(--accent)) 30%, transparent);
+/* Focus ring (Cursor-style: tight, keyboard only).
+   Scoped to interactive elements ONLY — earlier this rule used `*:focus-visible`
+   which painted a thick double-ring around any focusable card or chat msg
+   (e.g. when a child button got focus, the whole card lit up). Now restricted
+   to actual controls, with a single outline that doesn't compete with the
+   state-aware input glow. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--state-color, var(--accent)) 65%, transparent);
+  outline-offset: 1px;
   border-radius: 6px;
-  transition: box-shadow var(--motion-instant, 80ms) var(--ease-out, ease-out);
+  transition: outline-color var(--motion-instant, 80ms) var(--ease-out, ease-out);
 }
 
 /* Spring entrance for modals — subtle overshoot then settle.

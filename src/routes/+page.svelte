@@ -2842,6 +2842,39 @@ import { listen } from '@tauri-apps/api/event';
         t.isProcessing = false; refresh(); scrollChat();
     }
 
+    // ── <REMEMBER> tag extractor (shared helper) ─────────────────────────────
+    // Scans an LLM response for <REMEMBER category="...">key: value</REMEMBER>
+    // tags and persists them to the user_profile table. Idempotent — safe to
+    // call from both the simple-response path AND each agent-loop turn.
+    //
+    // Returns the number of facts persisted (useful for logging/telemetry).
+    function extractAndPersistMemory(text) {
+        if (!text || typeof text !== 'string') return 0;
+        const matches = [...text.matchAll(/<REMEMBER(?:\s+category="([^"]+)")?>([\s\S]*?)<\/REMEMBER>/gi)];
+        if (!matches.length) return 0;
+        let persisted = 0;
+        for (const m of matches) {
+            const category = (m[1] || 'general').trim();
+            const body = (m[2] || '').trim();
+            // Split on first ':' — allow values to contain colons.
+            const colonIdx = body.indexOf(':');
+            if (colonIdx <= 0 || colonIdx >= body.length - 1) continue;
+            const key = body.slice(0, colonIdx).trim().toLowerCase().replace(/\s+/g, '_').slice(0, 80);
+            const value = body.slice(colonIdx + 1).trim().slice(0, 500);
+            if (!key || !value) continue;
+            invoke('set_user_profile', { key, value, category }).catch(e => {
+                console.warn('[remember] save failed:', e);
+            });
+            persisted++;
+        }
+        if (persisted > 0) {
+            // Refresh in-memory cache so next turn sees the new facts immediately.
+            cargarMemoriasDB();
+            debug.log(`[remember] persisted ${persisted} fact(s)`);
+        }
+        return persisted;
+    }
+
     // ── Multi-intent prompt detection ────────────────────────────────────────
     // Decides whether the user's prompt asks for MORE than one thing.
     // Critical for the quick-tool shortcut path: if the user says
@@ -3110,6 +3143,11 @@ Use ONE of these patterns instead:
 
                 let agentResp = resp;
                 let agentCtx = ctx;
+                // Process REMEMBER tags emitted in the FIRST turn before
+                // entering the loop — covers the most common case where the
+                // user says "memorize X" and the model immediately replies
+                // with <REMEMBER>...</REMEMBER> + a <THOUGHT>/<TOOL>.
+                extractAndPersistMemory(agentResp);
                 const MAX_LOOPS = 25;
                 const ESCALATED_MAX_TOKENS = 64000; // openclaude pattern
                 let escalatedTokens = null; // null = usar default, número = override
@@ -4345,6 +4383,8 @@ Use ONE of these patterns instead:
                                             _lastL = m[1].length;
                                         }
                                     }, tabId);
+                                    // Refinement turn may also emit <REMEMBER> tags.
+                                    extractAndPersistMemory(agentResp);
                                     // Loop continues — the parser at the top of the next iteration
                                     // will detect that the new agentResp has no tool tags and exit
                                     // cleanly with the refined answer + a "refined" badge below.
@@ -4404,10 +4444,14 @@ Use ONE of these patterns instead:
                         renderAgentTask();
                         break;
                     }
+                    // Persist any <REMEMBER> tags emitted in this continuation turn.
+                    // Same fix as the first-turn extraction above — without this,
+                    // facts the model decides to remember mid-loop got dropped.
+                    extractAndPersistMemory(agentResp);
 
                     if (t._cancelled) break;
                     stepsHtml = stepsHtml.replace(/<span.*\[↻ Siguiente turno.*span>\n/, '');
-                    
+
                     if (loop_i === MAX_LOOPS - 1) {
                         finishReasoning();
                         renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.`);
@@ -4421,27 +4465,14 @@ Use ONE of these patterns instead:
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Lucy',rawContent:resp});
 
             // ── <REMEMBER> tag parser (Hermes-inspired) ─────────────────────
-            // Format: <REMEMBER category="preference|identity|context|host">key: value</REMEMBER>
-            // Silently persists facts Lucy has learned to the user_profile table.
-            // Stripped from display via cleanStreamDisplay above.
-            const rememberMatches = [...resp.matchAll(/<REMEMBER(?:\s+category="([^"]+)")?>([\s\S]*?)<\/REMEMBER>/gi)];
-            if (rememberMatches.length) {
-                for (const m of rememberMatches) {
-                    const category = (m[1] || 'general').trim();
-                    const body = (m[2] || '').trim();
-                    // Split on first ':' — allow values to contain colons
-                    const colonIdx = body.indexOf(':');
-                    if (colonIdx <= 0 || colonIdx >= body.length - 1) continue;
-                    const key = body.slice(0, colonIdx).trim().toLowerCase().replace(/\s+/g, '_').slice(0, 80);
-                    const value = body.slice(colonIdx + 1).trim().slice(0, 500);
-                    if (!key || !value) continue;
-                    invoke('set_user_profile', { key, value, category }).catch(e => {
-                        console.warn('[remember] save failed:', e);
-                    });
-                }
-                // Refresh cache in background so next turn sees the new facts
-                cargarMemoriasDB();
-            }
+            // BUG FIX: this used to live ONLY here, AFTER the agent-loop early
+            // return at line ~4418. Any response containing <TOOL>, <EXECUTE>
+            // or <THOUGHT> entered the agent loop and never reached this code,
+            // so every REMEMBER tag emitted alongside tool calls was silently
+            // discarded — Lucy "forgot" facts users explicitly asked her to
+            // memorize. Now extracted into a helper that ALSO runs inside the
+            // agent loop on every agentResp turn (see end of agent-loop block).
+            extractAndPersistMemory(resp);
 
             const learnM=resp.match(/<LEARN>([\s\S]*?)<\/LEARN>/i);
             if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}fin(tabId);return;}
@@ -7095,14 +7126,16 @@ if (Test-Path $src) {
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-color, var(--accent)) 8%, transparent),
                     0 0 14px color-mix(in srgb, var(--state-color, var(--accent)) 18%, transparent);
     }
-    /* Active states: glow even WITHOUT focus, so the user always knows. */
+    /* Active states: glow even WITHOUT focus, so the user always knows.
+       Toned down vs. Tier 1: 22px outer glow → 12px, 4% bg tint → 2.5%.
+       Still readable as a state change without dominating the layout. */
     :global(body[data-state="thinking"]) :global(.igrp),
     :global(body[data-state="executing"]) :global(.igrp),
     :global(body[data-state="error"]) :global(.igrp){
-        border-color: color-mix(in srgb, var(--state-color) 55%, transparent);
-        box-shadow: 0 0 0 1px color-mix(in srgb, var(--state-color) 20%, transparent),
-                    0 0 22px color-mix(in srgb, var(--state-color) 22%, transparent);
-        background: color-mix(in srgb, var(--state-color) 4%, rgba(255,255,255,.025));
+        border-color: color-mix(in srgb, var(--state-color) 45%, transparent);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--state-color) 14%, transparent),
+                    0 0 12px color-mix(in srgb, var(--state-color) 14%, transparent);
+        background: color-mix(in srgb, var(--state-color) 2.5%, rgba(255,255,255,.025));
     }
     /* Tight focus-within fallback for older browsers without color-mix. */
     @supports not (color: color-mix(in srgb, red 50%, blue)) {
