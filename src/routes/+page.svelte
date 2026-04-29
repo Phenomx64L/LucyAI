@@ -7110,12 +7110,20 @@ if (Test-Path $src) {
        data-state attribute. When Lucy is thinking the input glows blue,
        executing → amber, error → red, idle → green. The transition is fast
        enough to feel responsive but slow enough to read as a deliberate
-       state change, not a flicker. */
+       state change, not a flicker.
+
+       LAYOUT: stacked vertically (column). The textarea now spans the full
+       width and the icon row sits below it. The previous row layout
+       squeezed the textarea into ~50% because .iside (cost predictor +
+       model picker + send) is a wide cluster with flex-shrink:0. */
     :global(.igrp){
-        display:flex;align-items:flex-end;gap:6px;
+        display:flex;
+        flex-direction:column;
+        align-items:stretch;
+        gap:6px;
         background:rgba(255,255,255,.025);
         border:1px solid rgba(255,255,255,.07);
-        border-radius:10px;flex:1;padding:7px 10px;
+        border-radius:10px;flex:1;padding:8px 10px;
         transition: border-color var(--motion-base) var(--ease-out),
                     box-shadow   var(--motion-base) var(--ease-out),
                     background   var(--motion-base) var(--ease-out);
@@ -7160,10 +7168,21 @@ if (Test-Path $src) {
         padding:2px 0;
     }
     :global(.ibox::placeholder){color:#334155;}
-    /* The input wrapper now stretches its textarea to fill — align-items
-       was 'flex-end' so chips/icons hugged the bottom; we keep that for the
-       icons row but make the textarea row consume vertical space. */
-    :global(.iside){display:flex;align-items:center;gap:3px;flex-shrink:0;}
+    /* Icons row sits BELOW the textarea inside the .igrp column.
+       justify-content:flex-end keeps the cluster (paperclip, mic, eraser,
+       cost predictor, model picker, send button) right-aligned, leaving
+       the visual weight balanced even when the textarea is empty.
+       border-top adds a faint separator between the typing area and the
+       controls — Cursor / Linear-style. */
+    :global(.iside){
+        display:flex;
+        align-items:center;
+        gap:3px;
+        flex-shrink:0;
+        justify-content:flex-end;
+        padding-top:6px;
+        border-top:1px solid rgba(255,255,255,.04);
+    }
     :global(.ia-btn){background:none;border:none;color:#475569;cursor:pointer;padding:5px 7px;border-radius:6px;font-size:14px;transition:.15s;line-height:1;display:flex;align-items:center;justify-content:center;}
     :global(.ia-btn:hover){background:rgba(255,255,255,.07);color:#94a3b8;}
     :global(.ia-btn:disabled){opacity:.25;cursor:not-allowed;}
