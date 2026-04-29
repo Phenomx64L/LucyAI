@@ -4068,6 +4068,8 @@ Use ONE of these patterns instead:
                                     toolResults.push(`[EDIT RESULT] ${r}`);
                                     stepsHtml += `[· Edición] ${esc(path)}\n`;
                                     filesMod.add(path);
+                                    // Working memory: remember Lucy just edited this file.
+                                    updateWorkingMemory(t, { type: 'file', path, op: 'edited' });
                                     finishToolCard(_editCard, String(r), true);
                                 } catch(e) {
                                     toolResults.push(`[EDIT ERROR] ${e}`);
@@ -4092,6 +4094,8 @@ Use ONE of these patterns instead:
                             toolResults.push(`[WRITE RESULT] ${r}`);
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
+                            // Working memory: remember the new/written file.
+                            updateWorkingMemory(t, { type: 'file', path: _wPath, op: 'created' });
                             // ── UX: preserve the actual file content inside the tool card so the
                             // user can see what was written without opening the file. Without this,
                             // the streamed code disappears at loop end leaving only "Files Modified"
@@ -4104,6 +4108,29 @@ Use ONE of these patterns instead:
                             const _errSummary = `✗ ${String(e)}\n\n──── Attempted content (${_fileContent.length} chars) ────\n${_fileContent}`;
                             toolResults.push(`[WRITE ERROR] ${e}`);
                             finishToolCard(_writeCard, _errSummary, false);
+                        }
+                    }
+
+                    // ── <TOOL>cd:/new/path</TOOL> — change logical working directory ──
+                    // Without this handler, Lucy emitted <TOOL>cd:...</TOOL> per the
+                    // system prompt's RULE 17 but the frontend silently ignored it
+                    // — so subsequent commands kept resolving paths against the OLD
+                    // cwd, exactly the "dementia" the user reported.
+                    const cdToolM = agentResp.match(/<TOOL>cd:([^<]+)<\/TOOL>/i);
+                    if (cdToolM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>cd:[^<]+<\/TOOL>/gi, '');
+                        const newPath = cdToolM[1].trim();
+                        const _cdCard = newToolCard('▸', `cd ${newPath}`, 'system');
+                        try {
+                            await invoke('set_tab_cwd', { tabId: String(tabId), path: newPath });
+                            updateWorkingMemory(t, { type: 'cwd', path: newPath });
+                            toolResults.push(`[CWD CHANGED] Working directory is now: ${newPath}`);
+                            stepsHtml += `[▸ cwd] ${esc(newPath)}\n`;
+                            finishToolCard(_cdCard, `Working directory: ${newPath}`, true);
+                        } catch (e) {
+                            toolResults.push(`[CWD ERROR] ${e}`);
+                            finishToolCard(_cdCard, String(e), false);
                         }
                     }
 
@@ -5191,10 +5218,28 @@ if (Test-Path $src) {
 
     // ── WORKING MEMORY (opus-4-7 #1) ─────────────────────────────────────────
     // Records a command execution into tab.workingMemory. Keeps it bounded.
+    // Now also tracks files created/edited and the current working directory
+    // — both critical for "Lucy doesn't have dementia" UX. Without this,
+    // Lucy would forget she just wrote a file 30 seconds ago and offer to
+    // create it again.
     function updateWorkingMemory(tab, ev) {
         if (!tab) return;
-        tab.workingMemory ||= { currentHost:null, lastCommands:[], recentErrors:[], activeIncident:null, turnCount:0, compactedDigest:'' };
+        tab.workingMemory ||= {
+            currentHost: null,
+            currentCwd: null,
+            lastCommands: [],
+            recentFiles: [],          // [{path, op:'created'|'edited'|'read', ts}]
+            recentErrors: [],
+            activeIncident: null,
+            turnCount: 0,
+            compactedDigest: '',
+        };
         const wm = tab.workingMemory;
+        // Defensive: older tabs may have a workingMemory without the new
+        // fields. Backfill so subsequent code doesn't NPE on .recentFiles.
+        wm.recentFiles ??= [];
+        wm.currentCwd ??= null;
+
         if (ev.type === 'exec') {
             wm.lastCommands.push({
                 cmd: (ev.cmd || '').slice(0, 160),
@@ -5215,6 +5260,22 @@ if (Test-Path $src) {
             // Telemetry: exec_success / exec_failure + first_try_success signal
             const sub = (ev.target === 'local') ? 'local' : 'remote';
             logTaskEvent(ev.ok ? 'exec_success' : 'exec_failure', sub, ev.ms || 0, null, tab.id);
+        } else if (ev.type === 'file') {
+            // Track recent file mutations so Lucy doesn't forget she just
+            // edited config.json or created build.ps1.
+            const entry = {
+                path: String(ev.path || '').slice(0, 200),
+                op:   ev.op || 'edited',     // 'created' | 'edited' | 'read'
+                ts:   Date.now(),
+            };
+            // De-dupe by path+op (latest wins).
+            wm.recentFiles = wm.recentFiles.filter(f => !(f.path === entry.path && f.op === entry.op));
+            wm.recentFiles.push(entry);
+            if (wm.recentFiles.length > 8) wm.recentFiles.splice(0, wm.recentFiles.length - 8);
+        } else if (ev.type === 'cwd') {
+            // Logical CWD changes (via <TOOL>cd:...</TOOL>). Persists across
+            // turns so Lucy resolves relative paths consistently.
+            if (ev.path) wm.currentCwd = String(ev.path).slice(0, 300);
         } else if (ev.type === 'incident') {
             wm.activeIncident = ev.incident ? { id: ev.incident.id, phase: ev.incident.phase } : null;
         } else if (ev.type === 'turn') {
@@ -5230,7 +5291,10 @@ if (Test-Path $src) {
         if (wm.currentHost) {
             parts.push(`current_host: ${wm.currentHost.name} (${wm.currentHost.type}, id=${wm.currentHost.id})`);
         }
-        if (wm.lastCommands.length) {
+        if (wm.currentCwd) {
+            parts.push(`current_cwd: ${wm.currentCwd}`);
+        }
+        if (wm.lastCommands?.length) {
             const lines = wm.lastCommands.map(c => {
                 const mark = c.ok ? '✓' : '✗';
                 const detail = c.ok ? `${c.ms}ms` : (c.err ? c.err.slice(0, 80) : 'failed');
@@ -5238,24 +5302,41 @@ if (Test-Path $src) {
             }).join('\n');
             parts.push(`recent_cmds:\n${lines}`);
         }
-        if (wm.recentErrors.length) {
+        if (wm.recentFiles?.length) {
+            const lines = wm.recentFiles.slice(-5).map(f => {
+                const ago = Math.max(1, Math.round((Date.now() - f.ts) / 1000));
+                const agoLabel = ago < 60 ? `${ago}s` : ago < 3600 ? `${Math.round(ago/60)}m` : `${Math.round(ago/3600)}h`;
+                return `  · ${f.op} ${f.path} (${agoLabel} ago)`;
+            }).join('\n');
+            parts.push(`recent_files:\n${lines}`);
+        }
+        if (wm.recentErrors?.length) {
             parts.push(`recent_errors:\n${wm.recentErrors.map(e => `  · ${e.slice(0, 120)}`).join('\n')}`);
         }
         if (wm.activeIncident) {
             parts.push(`active_incident: ${wm.activeIncident.id} (phase: ${wm.activeIncident.phase})`);
         }
         if (!parts.length) return '';
-        return `\n\n--- WORKING MEMORY (tab state) ---\n${parts.join('\n')}\n(Use this to avoid re-asking the user and to detect retry loops. If last 2 cmds failed the same way, propose a different approach.)`;
+        return `\n\n--- WORKING MEMORY (tab state) ---\n${parts.join('\n')}\n(Use this to avoid re-asking, re-creating files, or re-running successful commands. If last 2 cmds failed with the same cause, propose a DIFFERENT approach.)`;
     }
 
-    // Relevance heuristic for lazy slots — avoids inflating system prompt needlessly.
+    // Relevance heuristic for lazy slots — avoids inflating system prompt
+    // needlessly, but biased toward inclusion ("better to over-recall than
+    // forget"). User feedback called the previous heuristic too aggressive
+    // ("Lucy has dementia") so several slots are now permanently true.
     function _slotRelevance(userInput) {
         const s = (userInput || '').toLowerCase();
         return {
+            // Host/remote-action slot: still gated on keywords because the
+            // host metadata block is sizable and irrelevant to most queries.
             host: /\b(host|server|servidor|prod|test|dev|remote|remoto|ssh|winrm|invoke|rdp|iis|sql|nginx|apache|linux|windows)\b/.test(s)
                   || /[a-z0-9]+-[a-z0-9]+-?\d*/i.test(s), // hostname-like tokens
-            runbook: /\b(how|como|cómo|fix|arregla|troubleshoot|diagnos|procedure|procedimiento|runbook|install|deploy|configure|configura|restart|reinicia|setup)\b/.test(s),
-            environment: /\b(my|mi|mis|environment|entorno|typical|normal|suele|usual|often|siempre)\b/.test(s),
+            // Runbook/troubleshoot slot: still gated, but list expanded.
+            runbook: /\b(how|como|cómo|fix|arregla|troubleshoot|diagnos|procedure|procedimiento|runbook|install|deploy|configure|configura|restart|reinicia|setup|crear|create|generar|generate|script|comando|command|ejecuta|run|edita|edit|crea archivo|new file)\b/.test(s),
+            // Environment slot: always-on now. Previously hidden behind
+            // possessive keywords ("my", "mi"), which meant a question like
+            // "list services" wouldn't see the user's machine inventory.
+            environment: true,
         };
     }
 
@@ -5282,9 +5363,14 @@ if (Test-Path $src) {
                 for (const p of fresh) {
                     (byCat[p.category] ||= []).push(`- ${p.key}: ${p.value}`);
                 }
-                // Always include identity+preference. Host/context only if relevant.
-                const alwaysCats = ['identity', 'preference'];
-                const lazyCats = rel.host ? ['context', 'host'] : [];
+                // Always include identity + preference + CONTEXT.
+                // 'context' was previously gated behind rel.host which made
+                // Lucy forget facts like "main_project: Lucy" the moment the
+                // user asked something not host-related. Context is by
+                // definition durable user info — it should be always-on.
+                // 'host' (server-specific facts) stays lazy.
+                const alwaysCats = ['identity', 'preference', 'context'];
+                const lazyCats = rel.host ? ['host'] : [];
                 const includeCats = [...alwaysCats, ...lazyCats];
                 const filtered = Object.entries(byCat).filter(([k]) => includeCats.includes(k));
                 if (filtered.length) {
@@ -5302,15 +5388,28 @@ if (Test-Path $src) {
             ctx += `\n\n--- ENTORNO DETECTADO ---\n${mem.map(m => `- ${m}`).join('\n')}`;
         }
 
-        // [LAZY] Persistent memories (DB) — only if user mentions runbook/troubleshoot keywords
-        if (rel.runbook && _dbMemoriesCache.length) {
-            const top = _dbMemoriesCache.slice(0, 6); // reduced from 8
-            ctx += `\n\n--- MEMORIA PERSISTENTE (${_dbMemoriesCache.length} entradas, mostrando ${top.length}) ---\n` +
+        // Persistent memories (DB) — TWO-tier injection:
+        //   1. Always: top 3 most-recent memories (compact, ~300 chars each).
+        //      Gives Lucy "ambient awareness" of what she's learned without
+        //      requiring keyword triggers. Eliminates the dementia symptom
+        //      where Lucy forgets a fact she saved 5 minutes ago because
+        //      the new prompt doesn't contain a runbook trigger.
+        //   2. On runbook/troubleshoot keywords: 6 more memories with
+        //      longer excerpts. Keeps the prompt budget reasonable for
+        //      everyday questions while still giving deep recall when
+        //      the user is clearly diagnosing or building.
+        if (_dbMemoriesCache.length) {
+            const ambientCount = Math.min(3, _dbMemoriesCache.length);
+            const deepCount = rel.runbook ? Math.min(6, _dbMemoriesCache.length) : 0;
+            const totalShown = Math.max(ambientCount, deepCount);
+            const top = _dbMemoriesCache.slice(0, totalShown);
+            const excerptLen = rel.runbook ? 220 : 140;
+            ctx += `\n\n--- MEMORIA PERSISTENTE (${_dbMemoriesCache.length} total, mostrando ${top.length}) ---\n` +
                 top.map(m => {
                     const date = new Date(m.created_at * 1000).toLocaleDateString();
-                    return `[${date}] **${m.title}**: ${m.content.slice(0, 220)}${m.content.length > 220 ? '…' : ''}`;
+                    return `[${date}] **${m.title}**: ${m.content.slice(0, excerptLen)}${m.content.length > excerptLen ? '…' : ''}`;
                 }).join('\n') +
-                `\n(Usa <TOOL>memoria_buscar:query</TOOL> para buscar memorias específicas)`;
+                `\n(Usa <TOOL>memoria_buscar:query</TOOL> para buscar memorias específicas | <TOOL>semantic:query</TOOL> para búsqueda por significado)`;
         }
         return ctx;
     }
