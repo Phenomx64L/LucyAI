@@ -1366,24 +1366,53 @@ import { listen } from '@tauri-apps/api/event';
         // Debounce de 500ms — evita serializar en cada keystroke/mensaje
         if (_saveTimer) clearTimeout(_saveTimer);
         _saveTimer = setTimeout(async () => {
-            const data = tabs.map(t => ({
+            // Memory v2: per-tab payload size cap. localStorage has a 5-10MB
+            // global quota. With 5 active tabs of ~80 messages each, JSON
+            // serialization can hit that ceiling — and `setItem` then throws
+            // QuotaExceededError mid-session. We pre-trim to fit:
+            //   - LS_FALLBACK keeps last 50 msgs per tab + only essential fields
+            //   - SQLite keeps the full last-100 (no quota issues)
+            // This way localStorage is just a fast warm-cache for boot, and
+            // SQLite is the durable store. Worst case, if SQLite is also full,
+            // user keeps the recent 50 in LS — never a hard data loss.
+            const fullData = tabs.map(t => ({
                 id: t.id,
                 title: t.title,
-                // Guardar solo los últimos 100 mensajes (excluir hidden para ahorrar espacio)
-                messages: t.messages.filter(m => m.role !== 'hidden').slice(-100),
+                // Skip hidden + thinking + streaming roles — they get rebuilt on next turn
+                messages: t.messages.filter(m => m.role !== 'hidden' && m.role !== 'thinking' && m.role !== 'streaming').slice(-100),
                 attachedFiles: [],
                 inputValue: t.inputValue || '',
                 selectedModel: t.selectedModel,
                 contextMax: t.contextMax ?? 50000,
-                execEngine: t.execEngine || 'powershell'
+                execEngine: t.execEngine || 'powershell',
+                // Persist workingMemory so reload restores recent_files / cmds / etc.
+                workingMemory: t.workingMemory || null,
             }));
-            
-            // Backup garantizado en localStorage (max ~5MB, manejable para texto)
+
+            // Slim LS variant: cap each tab to last 50 visible messages and drop
+            // anything bigger than ~12k chars per message (long outputs).
+            const lsData = fullData.map(d => ({
+                ...d,
+                messages: d.messages.slice(-50).map(m => {
+                    const raw = String(m.rawContent ?? m.content ?? '');
+                    if (raw.length <= 12_000) return m;
+                    return { ...m, rawContent: raw.slice(0, 12_000) + '\n[…truncated for storage; full version in SQLite]' };
+                }),
+            }));
+
             try {
-                safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data });
+                const ok = safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: lsData });
+                if (!ok) {
+                    // safeSetLS already logged + auto-warned. Try one more time
+                    // with an even tighter slice as last resort.
+                    const ultraSlim = lsData.map(d => ({ ...d, messages: d.messages.slice(-15) }));
+                    safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: ultraSlim });
+                }
             } catch(e) {
                 console.warn("[Lucy] localStorage limit exceeded, relying on SQLite", e);
             }
+            // Use the FULL data for SQLite below — no quota constraints there.
+            const data = fullData;
             
             if (db) {
                 try {
@@ -2171,11 +2200,89 @@ import { listen } from '@tauri-apps/api/event';
         const t=getTab(tabId);
         obj.id=obj.id||(Date.now()+Math.random());
         obj.time=ahora();
+        // Memory v2: per-message token estimate. Stored ONCE at creation
+        // (cheap char-based heuristic) so context-window math doesn't have
+        // to re-tokenize the whole tab on every turn.
+        if (obj.tokens === undefined) {
+            const text = String(obj.rawContent ?? obj.content ?? obj.html ?? '');
+            obj.tokens = Math.ceil(text.length / 4);   // ~4 chars/token, avg
+        }
         t.messages.push(obj);
-        if (t.messages.length > 250) t.messages = t.messages.slice(-250);
+        // Hard cap as the last line of defense — actual budget enforcement
+        // happens upstream in pruneTabForBudget(). 250 is just a sanity ceiling
+        // so a runaway tool result loop can't OOM the page.
+        if (t.messages.length > 250) {
+            const dropped = t.messages.length - 250;
+            t.messages = t.messages.slice(-250);
+            debug.warn(`[memory-v2] hard-capped tab ${tabId}: dropped ${dropped} oldest messages`);
+        }
+        // Memory v2: token-aware proactive prune. Runs cheaply on every
+        // message (just a sum), so we keep the tab healthy in real time
+        // instead of waiting for a crash.
+        pruneTabForBudget(t);
         refresh(); scrollChat(); addCopyBtns();
         // ── Persist visible turns for /recall search (fire-and-forget) ──
         persistConversationTurn(t, obj);
+    }
+
+    // ── Memory v2: token-aware budget enforcement ─────────────────────────
+    // The user reported chats dying after a long interaction ("ya pasé de los
+    // 10 dolares ... la ventana de converzación no muera como pasó"). Root
+    // cause: messages accumulated unbounded per tab + every turn re-sent the
+    // entire history to the LLM. Once the tab crossed ~80k tokens or
+    // localStorage filled (5MB cap), things broke.
+    //
+    // pruneTabForBudget enforces a soft cap of MAX_TAB_TOKENS by:
+    //   1. Summing token estimates of all visible messages.
+    //   2. If over budget, dropping oldest messages (skipping the most recent
+    //      KEEP_RECENT) until back under budget.
+    //   3. Marking that compaction is needed so regenerateSmartDigest() will
+    //      produce a YAML summary of the dropped turns next time it runs.
+    //
+    // This is the FAST inline pass — the smart-digest call (LLM-backed) runs
+    // separately in fin() so it never blocks message rendering.
+    const MAX_TAB_TOKENS    = 60_000;   // ~60% of typical 100k Gemini Flash window
+    const KEEP_RECENT_MSGS  = 16;       // never drop the most recent N messages
+    function pruneTabForBudget(tab) {
+        if (!tab?.messages?.length) return;
+        let total = 0;
+        for (const m of tab.messages) total += m.tokens || 0;
+        if (total <= MAX_TAB_TOKENS) return;
+
+        // Always keep recent KEEP_RECENT_MSGS verbatim so the active dialog
+        // makes sense. Drop from the OLDEST end forward.
+        const recent = tab.messages.slice(-KEEP_RECENT_MSGS);
+        let recentTokens = 0;
+        for (const m of recent) recentTokens += m.tokens || 0;
+
+        const olderBudget = MAX_TAB_TOKENS - recentTokens;
+        if (olderBudget <= 0) {
+            // Pathological: even the recent block exceeds budget. Keep just it.
+            const dropped = tab.messages.length - recent.length;
+            tab.messages = recent;
+            debug.warn(`[memory-v2] tab ${tab.id}: recent block exceeded budget; dropped ${dropped} older messages`);
+            tab.workingMemory ||= {};
+            tab.workingMemory._needsDigest = true;
+            return;
+        }
+
+        // Walk older messages from newest→oldest, keeping until budget runs out.
+        const older = tab.messages.slice(0, -KEEP_RECENT_MSGS);
+        const keptOlder = [];
+        let used = 0;
+        for (let i = older.length - 1; i >= 0; i--) {
+            const t = older[i].tokens || 0;
+            if (used + t > olderBudget) break;
+            used += t;
+            keptOlder.unshift(older[i]);
+        }
+        const droppedCount = older.length - keptOlder.length;
+        if (droppedCount === 0) return;
+
+        tab.messages = [...keptOlder, ...recent];
+        tab.workingMemory ||= {};
+        tab.workingMemory._needsDigest = true;
+        debug.log(`[memory-v2] tab ${tab.id}: pruned ${droppedCount} old messages (was ${total} tokens, now ~${used + recentTokens})`);
     }
 
     // Persist user/lucy turns to SQLite for cross-session FTS search.
@@ -5527,7 +5634,12 @@ if (Test-Path $src) {
         const valid = tab.messages.filter(m => m.rawRole);
         if (valid.length < 12) return;     // not enough history to compress yet
         const lastAnchor = tab.workingMemory?._lastDigestAt || 0;
-        if (valid.length - lastAnchor < 5) return;  // wait for 5 more turns since last digest
+        // Memory v2: pruneTabForBudget sets _needsDigest when it had to drop
+        // messages because the tab outgrew the token budget. That signal
+        // bypasses the "wait 5 turns" pacing — if we just lost context, we
+        // need a fresh summary NOW so the next turn isn't blind.
+        const urgent = !!tab.workingMemory?._needsDigest;
+        if (!urgent && valid.length - lastAnchor < 5) return;  // pacing
 
         _digestInFlight.add(tab.id);
         try {
@@ -5561,6 +5673,7 @@ if (Test-Path $src) {
             tab.workingMemory ||= {};
             tab.workingMemory.compactedDigest = String(result || '').slice(0, 1500);
             tab.workingMemory._lastDigestAt = valid.length;
+            tab.workingMemory._needsDigest = false;   // clear the urgent-prune flag
             debug.log(`[smart-digest] regenerated for tab ${tab.id} (${valid.length} turns)`);
         } catch (e) {
             // Silent: digest is best-effort. Fallback in compactOldTurns

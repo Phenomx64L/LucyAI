@@ -196,10 +196,16 @@
 </script>
 
 <div class="cost-dashboard">
-    <!-- Header -->
+    <!-- Header — prominent budget editor button always visible here so the
+         user never has to hunt for it (the small ⚙ on the budget card is
+         too subtle, per user feedback). -->
     <div class="header">
         <h2>{lang.title}</h2>
         <div class="controls">
+            <button class="budget-cta" type="button" on:click={openBudgetModal} title={lang.editBudget}>
+                <Settings size={13} strokeWidth={2}/>
+                <span>{lang.editBudget}</span>
+            </button>
             <select value={selectedPeriod} on:change={onPeriodChange} disabled={loading}>
                 <option value="day">{lang.day}</option>
                 <option value="month">{lang.month}</option>
@@ -256,14 +262,21 @@
                 </div>
             </div>
             {#if selectedPeriod === 'month' && $tokenBudgetConfig.enabled}
-                <div class="metric-card budget">
+                <!-- Whole card is now clickable: opens the budget editor. -->
+                <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                <div class="metric-card budget budget-clickable"
+                     role="button" tabindex="0"
+                     title={lang.editBudget}
+                     on:click={openBudgetModal}
+                     on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openBudgetModal(); }}>
                     <div class="metric-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
                         <span>{lang.budget}</span>
                         <button class="budget-edit-btn" type="button"
-                                on:click={openBudgetModal}
+                                on:click|stopPropagation={openBudgetModal}
                                 title={lang.editBudget}
                                 aria-label={lang.editBudget}>
-                            <Settings size={12} strokeWidth={2}/>
+                            <Settings size={13} strokeWidth={2}/>
+                            <span class="budget-edit-text">{lang.editBudget}</span>
                         </button>
                     </div>
                     <div class="budget-bar">
@@ -609,14 +622,33 @@
     }
 
     /* ── Budget edit affordances ─────────────────────────────────────── */
+    /* Big CTA in the dashboard header — primary affordance, always visible. */
+    .budget-cta {
+        display: inline-flex; align-items: center; gap: 6px;
+        background: rgba(16,185,129,0.10);
+        border: 1px solid rgba(16,185,129,0.30);
+        color: var(--accent, #10b981);
+        font-size: 12px; font-weight: 600; font-family: inherit;
+        padding: 6px 12px; border-radius: 7px;
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease;
+    }
+    .budget-cta:hover {
+        background: rgba(16,185,129,0.18);
+        border-color: var(--accent, #10b981);
+    }
+    /* Inline button on the budget card — now has TEXT next to the icon
+       so it's not invisible at small sizes. */
     .budget-edit-btn {
         background: transparent;
         border: 1px solid rgba(255,255,255,0.14);
         color: var(--text-muted, #94a3b8);
         border-radius: 6px;
-        padding: 2px 6px;
+        padding: 3px 8px;
         cursor: pointer;
-        display: inline-flex; align-items: center;
+        font-family: inherit; font-size: 10px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.4px;
+        display: inline-flex; align-items: center; gap: 4px;
         transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
     }
     .budget-edit-btn:hover {
@@ -624,6 +656,19 @@
         border-color: rgba(16,185,129,0.35);
         color: var(--accent, #10b981);
     }
+    .budget-edit-text {
+        white-space: nowrap;
+    }
+    /* The whole budget card lights up as clickable now. */
+    .budget-clickable {
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+    }
+    .budget-clickable:hover {
+        background: rgba(16,185,129,0.04);
+        border-color: rgba(16,185,129,0.25);
+    }
+    .budget-clickable:active { transform: scale(0.995); }
     .budget-fill.over {
         background: linear-gradient(90deg, #f59e0b 0%, #ef4444 100%);
     }
