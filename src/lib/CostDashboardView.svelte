@@ -1,9 +1,10 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { getCostSummary } from '$lib/lucy-api';
-    import { IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import { IconAlertTriangle as AlertTriangle, IconSettings as Settings, IconCheck as Check } from '@tabler/icons-svelte';
     import { costSummaryDay, costSummaryMonth, costSummaryAll, tokenBudgetConfig } from '$lib/stores';
     import { countUp } from '$lib/actions';
+    import { focusTrap } from '$lib/actions';
 
     const dispatch = createEventDispatcher();
 
@@ -17,6 +18,41 @@
     let selectedPeriod = 'month';
     let refreshTimer = null;
     let lastUpdate = '';
+
+    // ── Budget editor modal ────────────────────────────────────────────────
+    // Lets the user raise / lower / disable the monthly budget. Previously
+    // the Cost Dashboard showed "109% spent" with no way to act on it.
+    let budgetModalOpen = false;
+    let budgetDraft = { monthlyLimit: 10, alertThreshold: 80, enabled: true };
+    function openBudgetModal() {
+        // Snapshot the current config so cancel doesn't mutate.
+        const cur = $tokenBudgetConfig || { monthlyLimit: 10, alertThreshold: 80, enabled: true };
+        budgetDraft = {
+            monthlyLimit: Number(cur.monthlyLimit) || 10,
+            alertThreshold: Number(cur.alertThreshold) || 80,
+            enabled: cur.enabled !== false,
+        };
+        budgetModalOpen = true;
+    }
+    function closeBudgetModal() { budgetModalOpen = false; }
+    function saveBudget() {
+        // Sanitize: positive numbers only, threshold 1-100.
+        const m = Math.max(0.01, Number(budgetDraft.monthlyLimit) || 10);
+        const th = Math.min(100, Math.max(1, Number(budgetDraft.alertThreshold) || 80));
+        tokenBudgetConfig.set({
+            monthlyLimit: Math.round(m * 100) / 100,
+            alertThreshold: Math.round(th),
+            enabled: !!budgetDraft.enabled,
+        });
+        budgetModalOpen = false;
+        toast(isEN
+            ? `Budget updated: $${m.toFixed(2)}/month, alert at ${th}%`
+            : `Presupuesto actualizado: $${m.toFixed(2)}/mes, alerta al ${th}%`,
+            'ok');
+    }
+    // Quick presets — common bumps so the user doesn't always reach for the
+    // numeric input. Mirrors what GitHub Copilot / Cursor offer.
+    const BUDGET_PRESETS = [10, 25, 50, 100, 250];
 
     // Computed summaries
     let currentSummary = null;
@@ -47,6 +83,16 @@
             lastUpdate: 'Última actualización',
             budgetAlert: 'Alerta de presupuesto',
             budgetExceeded: 'Presupuesto excedido',
+            editBudget: 'Editar presupuesto',
+            budgetTitle: 'Configurar presupuesto mensual',
+            monthlyLimit: 'Límite mensual (USD)',
+            alertAt: 'Alerta al',
+            enableBudget: 'Activar control de presupuesto',
+            quickPresets: 'Atajos',
+            cancel: 'Cancelar',
+            save: 'Guardar',
+            disable: 'Desactivar control',
+            budgetHint: 'Si lo desactivas, Lucy no mostrará alertas de gasto.',
         },
         'en-US': {
             title: 'Cost Dashboard',
@@ -71,6 +117,16 @@
             lastUpdate: 'Last updated',
             budgetAlert: 'Budget Alert',
             budgetExceeded: 'Budget exceeded',
+            editBudget: 'Edit budget',
+            budgetTitle: 'Configure monthly budget',
+            monthlyLimit: 'Monthly limit (USD)',
+            alertAt: 'Alert at',
+            enableBudget: 'Enable budget tracking',
+            quickPresets: 'Quick presets',
+            cancel: 'Cancel',
+            save: 'Save',
+            disable: 'Disable tracking',
+            budgetHint: 'If disabled, Lucy will stop showing budget alerts.',
         }
     };
 
@@ -167,10 +223,14 @@
         <div class="error-box">{lang.error}: {error}</div>
     {/if}
 
-    <!-- Budget Alert -->
+    <!-- Budget Alert + inline action button -->
     {#if budgetAlert && $tokenBudgetConfig.enabled}
-        <div class="budget-alert" style="display:flex;align-items:center;gap:6px;">
-            <AlertTriangle size={13} strokeWidth={2}/> {lang.budgetAlert}: {budgetPercentage}% {lang.spent}
+        <div class="budget-alert" style="display:flex;align-items:center;gap:8px;">
+            <AlertTriangle size={13} strokeWidth={2}/>
+            <span>{lang.budgetAlert}: {budgetPercentage}% {lang.spent}</span>
+            <button class="budget-alert-action" type="button" on:click={openBudgetModal}>
+                <Settings size={11} strokeWidth={2}/> {lang.editBudget}
+            </button>
         </div>
     {/if}
 
@@ -197,16 +257,38 @@
             </div>
             {#if selectedPeriod === 'month' && $tokenBudgetConfig.enabled}
                 <div class="metric-card budget">
-                    <div class="metric-label">{lang.budget}</div>
+                    <div class="metric-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                        <span>{lang.budget}</span>
+                        <button class="budget-edit-btn" type="button"
+                                on:click={openBudgetModal}
+                                title={lang.editBudget}
+                                aria-label={lang.editBudget}>
+                            <Settings size={12} strokeWidth={2}/>
+                        </button>
+                    </div>
                     <div class="budget-bar">
                         <div
                             class="budget-fill"
+                            class:over={budgetPercentage > 100}
                             style="width: {Math.min(budgetPercentage, 100)}%"
                         ></div>
                     </div>
                     <div class="budget-text">
                         ${currentSummary.total_cost.toFixed(2)} / ${$tokenBudgetConfig.monthlyLimit.toFixed(2)}
+                        {#if budgetPercentage > 100}
+                            <span class="budget-over-pct">({budgetPercentage}%)</span>
+                        {/if}
                     </div>
+                </div>
+            {:else if selectedPeriod === 'month' && !$tokenBudgetConfig.enabled}
+                <div class="metric-card budget budget-disabled">
+                    <div class="metric-label">{lang.budget}</div>
+                    <div class="budget-text" style="opacity:.7;">
+                        {isEN ? 'Tracking disabled' : 'Control desactivado'}
+                    </div>
+                    <button class="budget-enable-btn" type="button" on:click={openBudgetModal}>
+                        <Settings size={11} strokeWidth={2}/> {lang.editBudget}
+                    </button>
                 </div>
             {/if}
         </div>
@@ -241,6 +323,73 @@
         <div class="no-data">{lang.noData}</div>
     {/if}
 </div>
+
+<!-- ── Budget editor modal ────────────────────────────────────────────────── -->
+{#if budgetModalOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="bm-overlay" role="presentation" on:click={closeBudgetModal}
+         on:keydown={(e) => { if (e.key === 'Escape') closeBudgetModal(); }}>
+        <div class="bm-box" role="dialog" aria-modal="true" tabindex={-1}
+             use:focusTrap on:click|stopPropagation>
+            <div class="bm-hdr">
+                <h3>{lang.budgetTitle}</h3>
+                <button class="bm-close" type="button" on:click={closeBudgetModal} aria-label="Close">✕</button>
+            </div>
+
+            <div class="bm-body">
+                <!-- Monthly limit -->
+                <label class="bm-field" for="bm-limit">
+                    <span class="bm-lbl">{lang.monthlyLimit}</span>
+                    <div class="bm-input-wrap">
+                        <span class="bm-currency">$</span>
+                        <input id="bm-limit" type="number" min="0.01" step="0.01"
+                               bind:value={budgetDraft.monthlyLimit} />
+                    </div>
+                </label>
+
+                <!-- Quick presets -->
+                <div class="bm-presets-row">
+                    <span class="bm-presets-lbl">{lang.quickPresets}:</span>
+                    {#each BUDGET_PRESETS as p}
+                        <button class="bm-preset" type="button"
+                                class:active={Number(budgetDraft.monthlyLimit) === p}
+                                on:click={() => budgetDraft.monthlyLimit = p}>
+                            ${p}
+                        </button>
+                    {/each}
+                </div>
+
+                <!-- Alert threshold -->
+                <label class="bm-field" for="bm-thresh">
+                    <span class="bm-lbl">{lang.alertAt}</span>
+                    <div class="bm-input-wrap">
+                        <input id="bm-thresh" type="number" min="1" max="100" step="1"
+                               bind:value={budgetDraft.alertThreshold} />
+                        <span class="bm-currency">%</span>
+                    </div>
+                </label>
+
+                <!-- Enable toggle -->
+                <label class="bm-toggle">
+                    <input type="checkbox" bind:checked={budgetDraft.enabled} />
+                    <span>{lang.enableBudget}</span>
+                </label>
+                {#if !budgetDraft.enabled}
+                    <p class="bm-hint">{lang.budgetHint}</p>
+                {/if}
+            </div>
+
+            <div class="bm-foot">
+                <button class="bm-btn bm-cancel" type="button" on:click={closeBudgetModal}>
+                    {lang.cancel}
+                </button>
+                <button class="bm-btn bm-save" type="button" on:click={saveBudget}>
+                    <Check size={13} strokeWidth={2.5}/> {lang.save}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
 
 <style>
     .cost-dashboard {
@@ -458,4 +607,199 @@
             padding: 0.75rem;
         }
     }
+
+    /* ── Budget edit affordances ─────────────────────────────────────── */
+    .budget-edit-btn {
+        background: transparent;
+        border: 1px solid rgba(255,255,255,0.14);
+        color: var(--text-muted, #94a3b8);
+        border-radius: 6px;
+        padding: 2px 6px;
+        cursor: pointer;
+        display: inline-flex; align-items: center;
+        transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    .budget-edit-btn:hover {
+        background: rgba(16,185,129,0.10);
+        border-color: rgba(16,185,129,0.35);
+        color: var(--accent, #10b981);
+    }
+    .budget-fill.over {
+        background: linear-gradient(90deg, #f59e0b 0%, #ef4444 100%);
+    }
+    .budget-over-pct {
+        color: #ef4444; font-weight: 700; margin-left: 4px;
+    }
+    .budget-disabled .budget-text { font-style: italic; }
+    .budget-enable-btn {
+        margin-top: 6px;
+        background: transparent;
+        border: 1px solid rgba(16,185,129,0.30);
+        color: var(--accent, #10b981);
+        font-size: 11px; font-weight: 600;
+        padding: 4px 10px; border-radius: 6px;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 4px;
+        transition: background 160ms ease;
+    }
+    .budget-enable-btn:hover { background: rgba(16,185,129,0.10); }
+    .budget-alert-action {
+        margin-left: auto;
+        background: transparent;
+        border: 1px solid rgba(245,158,11,0.45);
+        color: #fbbf24;
+        font-size: 11px; font-weight: 600;
+        padding: 3px 9px; border-radius: 6px;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 4px;
+        transition: background 160ms ease;
+    }
+    .budget-alert-action:hover { background: rgba(245,158,11,0.12); }
+
+    /* ── Modal: budget editor ────────────────────────────────────────── */
+    .bm-overlay {
+        position: fixed; inset: 0;
+        background: rgba(2, 6, 12, 0.74);
+        backdrop-filter: blur(4px);
+        z-index: 9000;
+        display: flex; align-items: center; justify-content: center;
+        animation: bm-fade-in 200ms ease-out;
+    }
+    @keyframes bm-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .bm-box {
+        background: var(--bg-card, #161b22);
+        border: 1px solid var(--border-light, #334155);
+        border-radius: 12px;
+        width: 380px; max-width: 92vw;
+        box-shadow: 0 24px 64px rgba(0,0,0,0.6),
+                    0 0 0 1px rgba(16,185,129,0.10);
+        outline: none;
+        animation: bm-pop-in 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes bm-pop-in {
+        from { opacity: 0; transform: scale(0.94) translateY(8px); }
+        to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .bm-hdr {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border-color, #1e293b);
+    }
+    .bm-hdr h3 {
+        margin: 0; font-size: 14px; font-weight: 600;
+        color: var(--text-bright, #f1f5f9);
+    }
+    .bm-close {
+        background: transparent; border: none;
+        color: var(--text-muted, #64748b);
+        font-size: 18px; cursor: pointer; padding: 0 4px;
+        line-height: 1;
+    }
+    .bm-close:hover { color: var(--text-bright, #f1f5f9); }
+
+    .bm-body {
+        padding: 18px;
+        display: flex; flex-direction: column; gap: 14px;
+    }
+    .bm-field {
+        display: flex; flex-direction: column; gap: 6px;
+    }
+    .bm-lbl {
+        font-size: 11px; font-weight: 600;
+        color: var(--text-muted, #94a3b8);
+        text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .bm-input-wrap {
+        display: flex; align-items: center; gap: 6px;
+        background: rgba(0,0,0,0.30);
+        border: 1px solid var(--border-color, #334155);
+        border-radius: 7px;
+        padding: 6px 10px;
+        transition: border-color 160ms ease;
+    }
+    .bm-input-wrap:focus-within {
+        border-color: var(--accent, #10b981);
+        box-shadow: 0 0 0 3px rgba(16,185,129,0.10);
+    }
+    .bm-currency {
+        color: var(--text-muted, #94a3b8);
+        font-family: var(--font-mono, monospace);
+        font-size: 13px;
+    }
+    .bm-input-wrap input {
+        flex: 1;
+        background: transparent;
+        border: none; outline: none;
+        color: var(--text-bright, #f1f5f9);
+        font-size: 14px; font-family: inherit;
+        font-weight: 600;
+    }
+    .bm-presets-row {
+        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .bm-presets-lbl {
+        font-size: 10px; font-weight: 600;
+        color: var(--text-muted, #94a3b8);
+        text-transform: uppercase; letter-spacing: 0.4px;
+        margin-right: 2px;
+    }
+    .bm-preset {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid var(--border-color, #334155);
+        color: var(--text-main, #e2e8f0);
+        border-radius: 6px;
+        padding: 3px 9px;
+        font-size: 11px; font-weight: 600;
+        font-family: var(--font-mono, monospace);
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease;
+    }
+    .bm-preset:hover {
+        background: rgba(16,185,129,0.10);
+        border-color: rgba(16,185,129,0.30);
+    }
+    .bm-preset.active {
+        background: rgba(16,185,129,0.18);
+        border-color: var(--accent, #10b981);
+        color: var(--accent, #10b981);
+    }
+    .bm-toggle {
+        display: flex; align-items: center; gap: 8px;
+        cursor: pointer; user-select: none;
+        font-size: 12px;
+        color: var(--text-main, #e2e8f0);
+    }
+    .bm-toggle input { accent-color: var(--accent, #10b981); cursor: pointer; }
+    .bm-hint {
+        margin: 0; padding: 8px 10px;
+        background: rgba(245,158,11,0.06);
+        border-left: 2px solid rgba(245,158,11,0.40);
+        border-radius: 0 6px 6px 0;
+        font-size: 11px; color: #fbbf24; line-height: 1.5;
+    }
+
+    .bm-foot {
+        display: flex; justify-content: flex-end; gap: 8px;
+        padding: 12px 18px;
+        border-top: 1px solid var(--border-color, #1e293b);
+    }
+    .bm-btn {
+        border-radius: 7px; padding: 7px 14px;
+        font-size: 12px; font-weight: 600; font-family: inherit;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 5px;
+        transition: opacity 150ms ease, background 150ms ease;
+    }
+    .bm-cancel {
+        background: transparent;
+        border: 1px solid var(--border-color, #334155);
+        color: var(--text-muted, #94a3b8);
+    }
+    .bm-cancel:hover { color: var(--text-bright, #f1f5f9); border-color: var(--border-light, #475569); }
+    .bm-save {
+        background: var(--accent, #10b981);
+        border: 1px solid var(--accent, #10b981);
+        color: #032b1c;
+    }
+    .bm-save:hover { opacity: 0.92; }
 </style>

@@ -5291,10 +5291,20 @@ if (Test-Path $src) {
             compactedDigest: '',
         };
         const wm = tab.workingMemory;
-        // Defensive: older tabs may have a workingMemory without the new
-        // fields. Backfill so subsequent code doesn't NPE on .recentFiles.
-        wm.recentFiles ??= [];
-        wm.currentCwd ??= null;
+        // BUG FIX (TypeError "Cannot read properties of undefined (reading 'push')"):
+        // tabs loaded from localStorage that were SAVED before a field existed
+        // get the old shape — `||=` above doesn't backfill new keys on an
+        // existing object. Backfill EVERY array/scalar that downstream code
+        // dereferences. Without this, an existing tab + a code update that
+        // adds a new field to the schema = guaranteed runtime crash mid-session.
+        wm.lastCommands ??= [];
+        wm.recentFiles  ??= [];
+        wm.recentErrors ??= [];
+        wm.currentHost  ??= null;
+        wm.currentCwd   ??= null;
+        wm.activeIncident ??= null;
+        wm.turnCount    ??= 0;
+        wm.compactedDigest ??= '';
 
         if (ev.type === 'exec') {
             wm.lastCommands.push({
