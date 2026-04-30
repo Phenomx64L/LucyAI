@@ -4440,7 +4440,22 @@ Use ONE of these patterns instead:
                     
                     renderAgentTask();
 
-                    const toolCtx = toolResults.join('\n\n');
+                    // Cap each tool result to ~12k chars (~3k tokens) to stop a
+                    // single readfile/searchfiles call from inflating the context
+                    // for the next agent turn. Lucy can ask for more with
+                    // readlines:start:count if she needs the rest. Without this
+                    // cap, a 500KB file dumped into the context window costs
+                    // ~125k tokens on the very next turn — kills latency on
+                    // Gemini Flash and inflates cost on Anthropic/OpenAI.
+                    const TOOL_RESULT_CAP = 12_000;
+                    const cappedResults = toolResults.map(r => {
+                        const s = String(r ?? '');
+                        if (s.length <= TOOL_RESULT_CAP) return s;
+                        const head = s.slice(0, TOOL_RESULT_CAP);
+                        const dropped = s.length - TOOL_RESULT_CAP;
+                        return head + `\n\n[…truncated ${dropped.toLocaleString()} chars. Use readlines:path:start:count if you need a specific section.]`;
+                    });
+                    const toolCtx = cappedResults.join('\n\n');
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
 
                     // ── Apply reactive compact if context is growing ──
@@ -5040,6 +5055,12 @@ Use ONE of these patterns instead:
         setTimeout(() => {
             document.querySelector('.chat-wrap.on .ibox')?.focus();
         }, 60);
+        // PERF: kick off a background smart-digest regeneration for long tabs.
+        // Runs only every 5 new turns and only when total > 12, so most short
+        // sessions never trigger this. Result lands in tab.workingMemory.
+        // compactedDigest where compactOldTurns will pick it up next turn.
+        // Fire-and-forget — no await, never blocks UI.
+        regenerateSmartDigest(t);
         // ── AUTO-SEND queued message (like Gemini/Claude behaviour) ─────────
         if (t.pendingMessage) {
             const pm = t.pendingMessage;
@@ -5113,24 +5134,54 @@ if (Test-Path $src) {
         const t0 = performance.now();
         let ttft = 0;
 
+        // ── PERF: rAF-throttled chunk dispatch ──────────────────────────────
+        // Gemini Flash streams ~50-100 chunks/sec. Calling onChunk + refresh()
+        // on EVERY chunk causes redundant markdown re-parse + Svelte rerender
+        // up to 100 times/second — well past the screen's refresh rate.
+        // We coalesce: every chunk updates `accumulated`, but we only flush
+        // to the UI once per animation frame (~60fps). TPS is also computed
+        // every 500ms instead of every chunk.
+        let _rafScheduled = false;
+        let _pendingChunk = false;
+        let _lastTpsAt   = 0;
+        let _cachedTps   = 0;
+        const flushChunk = () => {
+            _rafScheduled = false;
+            if (!_pendingChunk) return;
+            _pendingChunk = false;
+            // Update TPS at most every 500ms — rendering it every frame is
+            // visually distracting and wastes Math.round + refresh cycles.
+            const nowPerf = performance.now();
+            if (nowPerf - _lastTpsAt > 500) {
+                const elapsed = (nowPerf - t0) / 1000;
+                _cachedTps = elapsed > 0 ? Math.round((accumulated.length / 4) / elapsed) : 0;
+                _lastTpsAt = nowPerf;
+            }
+            if (tabId) {
+                const tt = getTab(tabId);
+                if (tt) { tt._streamTTFT = Math.round(ttft); tt._streamTPS = _cachedTps; refresh(); }
+            }
+            onChunk(accumulated);
+        };
+
         // Registrar listener ANTES del invoke para no perder chunks iniciales
         const unlisten = await listen(`lucy-chunk-${requestId}`, (event) => {
             if (streamState.cancelled) return; // Ignorar chunks post-cancelación
             if (!ttft) ttft = performance.now() - t0;
             accumulated += event.payload;
-            const elapsed = (performance.now() - t0) / 1000;
-            const tps = elapsed > 0 ? Math.round((accumulated.length / 4) / elapsed) : 0;
-            if (tabId) {
-                const tt = getTab(tabId);
-                if (tt) { tt._streamTTFT = Math.round(ttft); tt._streamTPS = tps; refresh(); }
+            _pendingChunk = true;
+            if (!_rafScheduled) {
+                _rafScheduled = true;
+                requestAnimationFrame(flushChunk);
             }
-            onChunk(accumulated);
         });
         streamState.unlisten = unlisten;
         if (tabId) _activeStreams.set(tabId, streamState);
 
         try {
             const result = await invoke('ask_lucy_stream', { ...params, requestId });
+            // Force a final flush so the closing chunk reaches onChunk before we return.
+            if (_pendingChunk) flushChunk();
             // Si fue cancelado mientras esperábamos, devolver lo acumulado hasta ahora
             if (streamState.cancelled) return accumulated || '';
             return result;
@@ -5180,16 +5231,21 @@ if (Test-Path $src) {
         guardarMemoriaPersistente(merged);
     }
 
-    // Cache de memorias DB — se carga una vez en onMount y se actualiza tras guardar
+    // Cache de memorias DB — se carga una vez en onMount y se actualiza tras guardar.
+    // PERF: previously two sequential `invoke()` calls = 2 Tauri round-trips
+    // (~10-15 ms total). Now fired in parallel with Promise.all so the slower
+    // of the two becomes the wall-clock floor instead of the sum. Each call
+    // is independent — they hit different SQLite tables — so no risk of
+    // contention or transaction issues.
     let _dbMemoriesCache = [];
     let _dbUserProfileCache = [];  // Hermes-style persistent facts about the user
     async function cargarMemoriasDB() {
-        try {
-            _dbMemoriesCache = await invoke('get_recent_memories', { limit: 12 });
-        } catch(e) { _dbMemoriesCache = []; }
-        try {
-            _dbUserProfileCache = await invoke('get_user_profile');
-        } catch(e) { _dbUserProfileCache = []; }
+        const [memRes, profRes] = await Promise.allSettled([
+            invoke('get_recent_memories', { limit: 12 }),
+            invoke('get_user_profile'),
+        ]);
+        _dbMemoriesCache    = memRes.status  === 'fulfilled' ? (memRes.value  || []) : [];
+        _dbUserProfileCache = profRes.status === 'fulfilled' ? (profRes.value || []) : [];
     }
 
     // ── QUALITY TELEMETRY (opus-4-7 Tier 2.A) ──────────────────────────────
@@ -5416,22 +5472,93 @@ if (Test-Path $src) {
 
     // Compacts first half of long tabs into a short digest. Called before building
     // HISTORIAL when turns > 20. Keeps most-recent 10 verbatim.
+    // Threshold lowered from 20 → 10 turns. Above 10, the cache-warm digest
+    // (if present from regenerateSmartDigest) gets used; otherwise the fast
+    // local fallback runs. Either way the OLDER half is dropped from the
+    // verbatim history Lucy sees, replaced by a much smaller summary.
     function compactOldTurns(tab) {
         if (!tab?.messages) return { keepFrom: 0, digest: '' };
         const valid = tab.messages.filter(m => m.rawRole);
-        if (valid.length <= 20) return { keepFrom: 0, digest: '' };
+        if (valid.length <= 10) return { keepFrom: 0, digest: '' };
         const half = Math.floor(valid.length / 2);
-        const older = valid.slice(0, half);
-        // Build lightweight digest: user intents + exec outcomes (no raw Lucy prose)
-        const userTurns = older.filter(m => m.rawRole === lucyConfig.name);
-        const lucyExecs = older.filter(m => m.rawRole === 'Lucy' || m.rawRole === 'Sistema');
-        const intents = userTurns.slice(-8).map(m => `· ${String(m.rawContent || '').slice(0, 140).replace(/\s+/g,' ')}`).join('\n');
-        const execCount = lucyExecs.length;
-        const digest = `Se conversaron ${valid.length} turnos (se resumen ${older.length} más antiguos).\nÚltimas intenciones del usuario:\n${intents}\nLucy ejecutó/respondió aprox. ${execCount} acciones previas.`;
-        // Find message index where we keep from
+
+        // Prefer a smart digest already produced by regenerateSmartDigest()
+        // in the background after a previous turn — yields a structured
+        // YAML summary much more useful for Lucy than a "X turnos previos"
+        // sentence. Falls back to the cheap local digest if not yet ready.
+        const cached = tab.workingMemory?.compactedDigest;
+        const cachedAt = tab.workingMemory?._lastDigestAt || 0;
+        const cacheStillValid = cached && (valid.length - cachedAt) < 6;
+
+        let digest;
+        if (cacheStillValid) {
+            digest = `(Smart digest of first ${cachedAt} turns)\n${cached}`;
+        } else {
+            const older = valid.slice(0, half);
+            const userTurns = older.filter(m => m.rawRole === lucyConfig.name);
+            const lucyExecs = older.filter(m => m.rawRole === 'Lucy' || m.rawRole === 'Sistema');
+            const intents = userTurns.slice(-8).map(m => `· ${String(m.rawContent || '').slice(0, 140).replace(/\s+/g,' ')}`).join('\n');
+            digest = `Se conversaron ${valid.length} turnos (se resumen ${older.length} más antiguos).\nÚltimas intenciones del usuario:\n${intents}\nLucy ejecutó/respondió aprox. ${lucyExecs.length} acciones previas.`;
+        }
+
         const keepMsg = valid[half];
         const keepIdx = tab.messages.indexOf(keepMsg);
         return { keepFrom: keepIdx >= 0 ? keepIdx : 0, digest };
+    }
+
+    // ── Smart digest: structured YAML summary of older turns ──────────────────
+    // Runs in the BACKGROUND after a turn ends, so the user never waits for it.
+    // Stores the result in tab.workingMemory.compactedDigest where compactOldTurns
+    // will pick it up on the NEXT turn. Re-generates every 5 new turns past the
+    // last anchor — cheap (~300 output tokens on Gemini Flash, ~50ms TTFT).
+    let _digestInFlight = new Set();   // tabIds currently being summarized
+    async function regenerateSmartDigest(tab) {
+        if (!tab?.messages || _digestInFlight.has(tab.id)) return;
+        const valid = tab.messages.filter(m => m.rawRole);
+        if (valid.length < 12) return;     // not enough history to compress yet
+        const lastAnchor = tab.workingMemory?._lastDigestAt || 0;
+        if (valid.length - lastAnchor < 5) return;  // wait for 5 more turns since last digest
+
+        _digestInFlight.add(tab.id);
+        try {
+            const half = Math.floor(valid.length / 2);
+            const older = valid.slice(0, half);
+            // Trim each turn so we don't blow the summarizer's input window.
+            const flat = older.map(m => `${m.rawRole}: ${String(m.rawContent || '').slice(0, 220).replace(/\s+/g,' ')}`).join('\n');
+            const summaryInput = flat.slice(0, 8000);
+
+            // Use the cheapest reachable model — Gemini Flash by default.
+            // No agent loop, no tools, just plain text completion.
+            const summaryPrompt =
+                `You are summarizing the FIRST ${older.length} turns of a SysAdmin AI conversation so the agent can keep going without re-reading them.\n\n` +
+                `Output ONLY this YAML (no prose, no markdown fences):\n` +
+                `decisions:\n  - <decision>\nfiles_touched:\n  - <path>\ncommands_run:\n  - <cmd>\nerrors_resolved:\n  - <error → fix>\nopen_questions:\n  - <pending>\nuser_intent: <one-line summary of overall goal>\n\n` +
+                `Be terse. Max 300 words total. Skip any section that has no entries.\n\n` +
+                `=== TURNS TO SUMMARIZE ===\n${summaryInput}`;
+
+            const result = await invoke('ask_lucy', {
+                prompt: summaryPrompt,
+                context: '',
+                userName: lucyConfig.name || 'user',
+                model: 'gemini-2.5-flash',   // pinned to the cheap/fast tier
+                images: null,
+                lang: userLang,
+                hostsJson: '[]',
+                runbooksDir: null,
+                maxTokensOverride: 600,
+            });
+
+            tab.workingMemory ||= {};
+            tab.workingMemory.compactedDigest = String(result || '').slice(0, 1500);
+            tab.workingMemory._lastDigestAt = valid.length;
+            debug.log(`[smart-digest] regenerated for tab ${tab.id} (${valid.length} turns)`);
+        } catch (e) {
+            // Silent: digest is best-effort. Fallback in compactOldTurns
+            // covers the case where we never get a smart one.
+            debug.warn('[smart-digest] failed:', e);
+        } finally {
+            _digestInFlight.delete(tab.id);
+        }
     }
 
     // ── 2. VERIFICACIÓN DE DEPENDENCIAS ─────────────────────────────────────
