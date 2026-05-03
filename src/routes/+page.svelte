@@ -45,6 +45,7 @@ import { listen } from '@tauri-apps/api/event';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
+    import { compressToolResults, shouldCompact, recordCompactionRatio } from '$lib/context-compressor';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
@@ -4628,22 +4629,36 @@ Use ONE of these patterns instead:
                     
                     renderAgentTask();
 
-                    // Cap each tool result to ~12k chars (~3k tokens) to stop a
-                    // single readfile/searchfiles call from inflating the context
-                    // for the next agent turn. Lucy can ask for more with
-                    // readlines:start:count if she needs the rest. Without this
-                    // cap, a 500KB file dumped into the context window costs
-                    // ~125k tokens on the very next turn — kills latency on
-                    // Gemini Flash and inflates cost on Anthropic/OpenAI.
+                    // CONTEXT COMPRESSOR v3 (Hermes-Wiki-inspired)
+                    // Three cheap local passes BEFORE the LLM sees the results:
+                    //   1. Per-result hard cap (12k chars) — ceiling for any single output
+                    //   2. MD5-style dedup — collapse exact repeats from earlier in this turn batch
+                    //   3. Smart Collapse — rewrite OLD results into one info-rich line
+                    //   4. Anti-thrashing — skip compaction when last 2 reduced <10%
                     const TOOL_RESULT_CAP = 12_000;
-                    const cappedResults = toolResults.map(r => {
+                    const capped = toolResults.map((r, i) => {
                         const s = String(r ?? '');
-                        if (s.length <= TOOL_RESULT_CAP) return s;
-                        const head = s.slice(0, TOOL_RESULT_CAP);
-                        const dropped = s.length - TOOL_RESULT_CAP;
-                        return head + `\n\n[…truncated ${dropped.toLocaleString()} chars. Use readlines:path:start:count if you need a specific section.]`;
+                        const text = s.length <= TOOL_RESULT_CAP
+                            ? s
+                            : s.slice(0, TOOL_RESULT_CAP) + `\n\n[…truncated ${(s.length - TOOL_RESULT_CAP).toLocaleString()} chars. Use readlines:path:start:count if you need a specific section.]`;
+                        // Best-effort kind extraction: parse leading "[KIND] " or "[NAME RESULT] " marker.
+                        const kindMatch = text.match(/^\[([\w\s\-_:]+?)\]/);
+                        return { kind: kindMatch ? kindMatch[1].toLowerCase().trim() : 'tool', text };
                     });
-                    const toolCtx = cappedResults.join('\n\n');
+                    let toolCtx;
+                    if (shouldCompact(t.workingMemory)) {
+                        const { joined, before, after, ratio } = compressToolResults(capped);
+                        toolCtx = joined;
+                        recordCompactionRatio(t.workingMemory, before, after);
+                        if (before !== after) {
+                            debug.log(`[ctx-compress] step ${loop_i + 1}: ${before} → ${after} chars (-${(ratio * 100).toFixed(1)}%)`);
+                        }
+                    } else {
+                        // Anti-thrashing kicked in — last 2 attempts saved <10%.
+                        // Skip compaction this turn but still join the capped results.
+                        toolCtx = capped.map(r => r.text).join('\n\n');
+                        debug.log(`[ctx-compress] step ${loop_i + 1}: skipped (anti-thrashing)`);
+                    }
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
 
                     // ── Apply reactive compact if context is growing ──
