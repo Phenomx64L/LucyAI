@@ -522,6 +522,102 @@ pub fn search_agent_memories(query: String, limit: Option<i64>) -> Result<Vec<Ag
     })
 }
 
+/// Delete a single agent memory by id. Cascades through the FTS trigger
+/// already declared in db.rs (agent_memories_ad).
+///
+/// Returns the number of rows deleted (0 if id not found, 1 on success).
+/// User-facing rationale: Lucy reported "I consolidated 13 memories into 1"
+/// but the 13 originals stayed alive because no delete tool existed. Now she
+/// can actually clean up after herself.
+#[tauri::command]
+pub fn delete_agent_memory(id: i64) -> Result<usize, String> {
+    if id <= 0 {
+        return Err("delete_agent_memory: invalid id".to_string());
+    }
+    with_db(|conn| {
+        let n = conn.execute(
+            "DELETE FROM agent_memories WHERE id = ?1",
+            rusqlite::params![id],
+        ).map_err(|e| format!("delete_agent_memory: {}", e))?;
+        Ok(n)
+    })
+}
+
+/// Atomic consolidation: delete a list of memories AND insert a new one in
+/// the same transaction. Either all succeed or nothing changes — Lucy can
+/// fold N memories into 1 without ever leaving the DB in a half-state.
+///
+/// `delete_ids` — comma-separated list of ids to drop (e.g. "10,11,12,13")
+/// `new_title` / `new_content` / `new_tags` — payload for the replacement.
+/// Returns the new id.
+#[tauri::command]
+pub fn consolidate_agent_memories(
+    delete_ids:  String,
+    new_title:   String,
+    new_content: String,
+    new_tags:    Option<String>,
+    importance:  Option<i64>,
+) -> Result<i64, String> {
+    // Parse + validate the id list before touching the DB.
+    let ids: Vec<i64> = delete_ids
+        .split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .filter(|&n| n > 0)
+        .collect();
+    if ids.is_empty() {
+        return Err("consolidate_agent_memories: no valid ids in delete_ids".to_string());
+    }
+    if new_title.trim().is_empty() || new_content.trim().is_empty() {
+        return Err("consolidate_agent_memories: new_title and new_content required".to_string());
+    }
+    let imp = importance.unwrap_or(2).max(1).min(3);
+    let tags = new_tags.unwrap_or_else(|| "[\"consolidated\"]".to_string());
+
+    with_db(|conn| {
+        // We can't use rusqlite::Transaction here because with_db borrows
+        // &Connection (not &mut). Manual BEGIN/COMMIT/ROLLBACK keeps the
+        // same atomicity guarantees while staying within the existing
+        // shared-connection contract.
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| format!("consolidate begin: {}", e))?;
+
+        let inner = || -> Result<(usize, i64), String> {
+            // Build a parameterized IN clause — never interpolate ids directly.
+            let placeholders = (1..=ids.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(",");
+            let del_sql = format!("DELETE FROM agent_memories WHERE id IN ({})", placeholders);
+            let params_vec: Vec<rusqlite::types::Value> =
+                ids.iter().map(|&i| rusqlite::types::Value::from(i)).collect();
+            let params: Vec<&dyn rusqlite::ToSql> =
+                params_vec.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            let deleted = conn.execute(&del_sql, params.as_slice())
+                .map_err(|e| format!("consolidate delete: {}", e))?;
+
+            conn.execute(
+                "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
+                 VALUES ('', ?1, ?2, ?3, '[]', ?4)",
+                rusqlite::params![new_title, new_content, tags, imp],
+            ).map_err(|e| format!("consolidate insert: {}", e))?;
+            Ok((deleted, conn.last_insert_rowid()))
+        };
+
+        match inner() {
+            Ok((deleted, new_id)) => {
+                conn.execute_batch("COMMIT")
+                    .map_err(|e| format!("consolidate commit: {}", e))?;
+                crate::utils::logging::write_app_log(
+                    "INFO",
+                    &format!("consolidate_agent_memories: dropped {} ids → new memory id {}", deleted, new_id),
+                );
+                Ok(new_id)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    })
+}
+
 /// Return the most recent memories ordered by importance then date.
 #[tauri::command]
 pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {

@@ -187,6 +187,8 @@ pub fn run() {
             metrics::delete_skill,
             metrics::increment_skill_usage,
             metrics::save_agent_memory,
+            metrics::delete_agent_memory,
+            metrics::consolidate_agent_memories,
             metrics::search_agent_memories,
             metrics::get_recent_memories,
             // User Profile (Hermes-inspired persistent memory)

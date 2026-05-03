@@ -3231,7 +3231,7 @@ Use ONE of these patterns instead:
             }
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
-            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search):/i;
+            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search):/i;
             const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
@@ -3834,6 +3834,87 @@ Use ONE of these patterns instead:
                         } catch(e) {
                             toolResults.push(`[MEMORY SAVE ERROR]\n${e}`);
                             finishToolCard(_mgCard, String(e), false);
+                        }
+                    }
+
+                    // ── memoria_eliminar: borra una memoria por id ─────────────
+                    // Usage: <TOOL>memoria_eliminar:42</TOOL> or comma list
+                    // <TOOL>memoria_eliminar:10,11,12</TOOL>. Without this Lucy
+                    // could create memories but never clean them — leading to
+                    // 13 partial duplicates that "consolidation" only added to.
+                    for (const meM of [...agentResp.matchAll(/<TOOL>memoria_eliminar:([^<]+)<\/TOOL>/gi)]) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(meM[0], '');
+                        const ids = String(meM[1]).split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0);
+                        if (!ids.length) {
+                            toolResults.push(`[MEMORY DELETE ERROR] No valid ids in "${meM[1]}"`);
+                            continue;
+                        }
+                        const _delCard = newToolCard('⊘', `Eliminar ${ids.length} memoria(s)`, 'write');
+                        try {
+                            let okCount = 0;
+                            for (const id of ids) {
+                                try {
+                                    const n = await invoke('delete_agent_memory', { id });
+                                    if (n > 0) okCount++;
+                                    // Best-effort embedding cleanup
+                                    invoke('delete_embedding', { entityType: 'memory', entityId: String(id) }).catch(() => {});
+                                } catch (e) { debug.warn('[memoria_eliminar] id', id, 'failed:', e); }
+                            }
+                            toolResults.push(`[MEMORY DELETED] ${okCount}/${ids.length} memorias eliminadas (ids: ${ids.join(', ')})`);
+                            stepsHtml += `[⊘ Memorias eliminadas] ${ids.length}\n`;
+                            finishToolCard(_delCard, `${okCount}/${ids.length} eliminadas`, okCount > 0);
+                            cargarMemoriasDB();
+                        } catch (e) {
+                            toolResults.push(`[MEMORY DELETE ERROR]\n${e}`);
+                            finishToolCard(_delCard, String(e), false);
+                        }
+                    }
+
+                    // ── memoria_consolidar: atomic delete-many + create-one ───────
+                    // Usage:
+                    //   <TOOL>memoria_consolidar:10,11,12,13|||New Title|||
+                    //   Unified content here|||tag1,tag2</TOOL>
+                    // The 4th part (tags) is optional. Done as one DB transaction
+                    // so if anything fails, NO memories are lost.
+                    const mcM = agentResp.match(/<TOOL>memoria_consolidar:([^|]+)\|\|\|([^|<]+)\|\|\|([^|<]+)(?:\|\|\|([^<]*))?<\/TOOL>/i);
+                    if (mcM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>memoria_consolidar:[^<]+<\/TOOL>/gi, '');
+                        const mcIds   = mcM[1].trim();
+                        const mcTitle = mcM[2].trim();
+                        const mcBody  = mcM[3].trim();
+                        const mcTags  = mcM[4]
+                            ? JSON.stringify(mcM[4].split(',').map(t => t.trim()).filter(Boolean))
+                            : '["consolidated"]';
+                        const idCount = mcIds.split(',').filter(Boolean).length;
+                        const _conCard = newToolCard('⇄', `Consolidar ${idCount} → 1: ${mcTitle}`, 'write');
+                        try {
+                            const newId = await invoke('consolidate_agent_memories', {
+                                deleteIds:  mcIds,
+                                newTitle:   mcTitle,
+                                newContent: mcBody,
+                                newTags:    mcTags,
+                                importance: 2,
+                            });
+                            // Best-effort embedding cleanup for the dropped ids
+                            // + register new embedding for the consolidated entry.
+                            for (const oldId of mcIds.split(',').map(s => s.trim()).filter(Boolean)) {
+                                invoke('delete_embedding', { entityType: 'memory', entityId: oldId }).catch(() => {});
+                            }
+                            invoke('upsert_embedding', {
+                                entityType: 'memory',
+                                entityId: String(newId),
+                                text: `${mcTitle}\n${mcBody}`,
+                                model: null,
+                            }).catch(() => {});
+                            toolResults.push(`[MEMORY CONSOLIDATED] ${idCount} memorias eliminadas → 1 nueva (id ${newId}: "${mcTitle}")`);
+                            stepsHtml += `[⇄ Memorias consolidadas] ${idCount} → ID ${newId}\n`;
+                            finishToolCard(_conCard, `Old ids dropped, new id: ${newId}`, true);
+                            cargarMemoriasDB();
+                        } catch (e) {
+                            toolResults.push(`[MEMORY CONSOLIDATE ERROR]\n${e}\nNada cambió — la transacción hizo rollback.`);
+                            finishToolCard(_conCard, String(e), false);
                         }
                     }
 
