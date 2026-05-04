@@ -46,6 +46,7 @@ import { listen } from '@tauri-apps/api/event';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
     import { compressToolResults, shouldCompact, recordCompactionRatio } from '$lib/context-compressor';
+    import { observe as skillFactoryObserve, getProposals as skillFactoryGetProposals, markAccepted as skillFactoryMarkAccepted, dismissProposal as skillFactoryDismiss } from '$lib/skill-factory';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
@@ -2497,6 +2498,14 @@ import { listen } from '@tauri-apps/api/event';
             }
             const elapsed = Date.now() - t0;
             updateWorkingMemory(t, { type:'exec', cmd:actualCmd, target, ok:true, ms:elapsed });
+            // Skill Factory: observe successful execs only. Failures don't
+            // make good skills, so the helper itself rejects ok=false.
+            try {
+                skillFactoryObserve(tabId, { cmd: actualCmd, target: String(target || 'local'),
+                                              engine: t.execEngine || 'powershell',
+                                              ts: Date.now(), ok: true });
+                _maybeShowSkillProposal(tabId);
+            } catch (e) { debug.warn('[skill-factory] observe failed:', e); }
             const wb = warpBlock(actualCmd, out || '(sin salida)', true, elapsed, mode==='dryrun'?'DRY-RUN':'PLAN');
             addMsg(tabId, { role:'lucy', html:`<div class="mn">Lucy</div>${wb}`, rawContent:`[${label}] ${actualCmd}\n${out||''}` });
 
@@ -5725,6 +5734,59 @@ if (Test-Path $src) {
     // will pick it up on the NEXT turn. Re-generates every 5 new turns past the
     // last anchor — cheap (~300 output tokens on Gemini Flash, ~50ms TTFT).
     let _digestInFlight = new Set();   // tabIds currently being summarized
+    // ── Skill Factory: surface auto-detected workflow proposals ─────────────
+    // Called after every successful exec. Throttled at the call site by the
+    // skill-factory helper itself (PROPOSAL_COOLDOWN_MS) — here we just
+    // grab the first eligible proposal and show it as a non-blocking modal.
+    let activeSkillProposal = null;       // {kind, occurrences, commands, suggestedName, ...}
+    let _proposalShownTabId = null;
+    function _maybeShowSkillProposal(tabId) {
+        // Only show one proposal at a time per session; user must accept or
+        // dismiss before another can appear.
+        if (activeSkillProposal) return;
+        if (_proposalShownTabId === tabId && Date.now() - (_proposalShownAt || 0) < 30_000) return;
+        const list = skillFactoryGetProposals(tabId);
+        if (!list?.length) return;
+        activeSkillProposal = { ...list[0], tabId };
+        _proposalShownTabId = tabId;
+        _proposalShownAt = Date.now();
+        refresh();
+    }
+    let _proposalShownAt = 0;
+
+    async function acceptSkillProposal() {
+        if (!activeSkillProposal) return;
+        const p = activeSkillProposal;
+        try {
+            await invoke('save_skill', {
+                id: '',                                // backend generates
+                name: p.suggestedName,
+                category: p.kind === 'sequence' ? 'runbook' : 'quick_cmd',
+                triggers: JSON.stringify(p.suggestedTriggers || []),
+                script: p.suggestedScript,
+                description: p.suggestedDescription,
+                parameters: JSON.stringify([]),
+                enabled: true,
+                tags: JSON.stringify(['auto', 'skill-factory']),
+            });
+            skillFactoryMarkAccepted(p.tabId, p.fingerprint);
+            toast(isEN
+                ? `Skill "${p.suggestedName}" created from auto-detected workflow`
+                : `Skill "${p.suggestedName}" creado desde workflow detectado`,
+                'ok');
+        } catch (e) {
+            toast((isEN ? 'Skill save failed: ' : 'Falló al guardar skill: ') + String(e).slice(0, 80), 'error');
+        }
+        activeSkillProposal = null;
+        refresh();
+    }
+    function dismissSkillProposal() {
+        if (!activeSkillProposal) return;
+        skillFactoryDismiss(activeSkillProposal.tabId, activeSkillProposal.fingerprint);
+        activeSkillProposal = null;
+        refresh();
+    }
+
     async function regenerateSmartDigest(tab) {
         if (!tab?.messages || _digestInFlight.has(tab.id)) return;
         const valid = tab.messages.filter(m => m.rawRole);
@@ -10262,6 +10324,175 @@ if (Test-Path $src) {
 
   <!-- ── COMMAND PALETTE (Ctrl+P) ── -->
   <CommandPalette bind:show={showPalette} allItems={allPaletteItems} {isEN} />
+
+  <!-- ── SKILL FACTORY: auto-detected workflow proposal ──────────────── -->
+  {#if activeSkillProposal}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="sf-overlay" role="presentation" on:click={dismissSkillProposal}
+         on:keydown={(e) => { if (e.key === 'Escape') dismissSkillProposal(); }}>
+      <div class="sf-box modal-spring" role="dialog" aria-modal="true" tabindex={-1}
+           use:focusTrap on:click|stopPropagation>
+        <div class="sf-hdr">
+          <span class="sf-ico">⚙</span>
+          <h3>{isEN ? 'Skill Factory — workflow detected' : 'Skill Factory — workflow detectado'}</h3>
+          <button class="sf-close" type="button" on:click={dismissSkillProposal} aria-label="Close">✕</button>
+        </div>
+        <div class="sf-body">
+          <p class="sf-lead">
+            {#if activeSkillProposal.kind === 'sequence'}
+              {isEN
+                ? `I noticed you ran this ${activeSkillProposal.commands.length}-step workflow ${activeSkillProposal.occurrences}× this session.`
+                : `Noté que ejecutaste este flujo de ${activeSkillProposal.commands.length} pasos ${activeSkillProposal.occurrences} veces en esta sesión.`}
+            {:else}
+              {isEN
+                ? `I noticed you used this command ${activeSkillProposal.occurrences}× this session.`
+                : `Noté que usaste este comando ${activeSkillProposal.occurrences} veces en esta sesión.`}
+            {/if}
+          </p>
+          <div class="sf-card">
+            <div class="sf-row"><span class="sf-k">{isEN ? 'Name' : 'Nombre'}</span><code>{activeSkillProposal.suggestedName}</code></div>
+            <div class="sf-row"><span class="sf-k">{isEN ? 'Category' : 'Categoría'}</span><code>{activeSkillProposal.kind === 'sequence' ? 'runbook' : 'quick_cmd'}</code></div>
+            <div class="sf-row sf-row-block">
+              <span class="sf-k">{isEN ? 'Script' : 'Script'}</span>
+              <pre class="sf-script">{activeSkillProposal.suggestedScript}</pre>
+            </div>
+            {#if activeSkillProposal.suggestedTriggers?.length}
+              <div class="sf-row sf-row-block">
+                <span class="sf-k">{isEN ? 'Triggers' : 'Disparadores'}</span>
+                <div class="sf-triggers">
+                  {#each activeSkillProposal.suggestedTriggers as tr}<span class="sf-trig">{tr}</span>{/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+          <p class="sf-hint">
+            {isEN
+              ? 'Save it now and Lucy will offer it as a 1-click skill in future sessions. You can edit name, script, and triggers later in the Skills panel.'
+              : 'Guárdalo y Lucy lo ofrecerá como skill de 1 click en sesiones futuras. Puedes editar nombre, script y disparadores luego en el panel Skills.'}
+          </p>
+        </div>
+        <div class="sf-foot">
+          <button class="sf-btn sf-cancel" type="button" on:click={dismissSkillProposal}>
+            {isEN ? 'Not now' : 'Ahora no'}
+          </button>
+          <button class="sf-btn sf-accept" type="button" on:click={acceptSkillProposal}>
+            ✓ {isEN ? 'Save as Skill' : 'Guardar como Skill'}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      .sf-overlay {
+        position: fixed; inset: 0; z-index: 8500;
+        background: rgba(2, 6, 12, 0.62);
+        backdrop-filter: blur(3px);
+        display: flex; align-items: center; justify-content: center;
+        animation: fade-in 200ms ease;
+      }
+      .sf-box {
+        background: var(--bg-card, #161b22);
+        border: 1px solid color-mix(in srgb, var(--accent, #10b981) 35%, transparent);
+        border-radius: 12px;
+        width: 460px; max-width: 92vw; max-height: 80vh;
+        box-shadow: 0 24px 64px rgba(0,0,0,0.6),
+                    0 0 28px color-mix(in srgb, var(--accent, #10b981) 18%, transparent);
+        display: flex; flex-direction: column;
+      }
+      .sf-hdr {
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--border-color, #1e293b);
+      }
+      .sf-ico {
+        font-size: 18px; color: var(--accent, #10b981);
+      }
+      .sf-hdr h3 {
+        flex: 1; margin: 0; font-size: 13px; font-weight: 600;
+        color: var(--text-bright, #f1f5f9);
+      }
+      .sf-close {
+        background: transparent; border: none;
+        color: var(--text-muted, #64748b);
+        font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1;
+      }
+      .sf-close:hover { color: var(--text-bright, #f1f5f9); }
+      .sf-body { padding: 16px 18px; overflow-y: auto; flex: 1; }
+      .sf-lead {
+        margin: 0 0 12px;
+        font-size: 12.5px; color: var(--text-main, #e2e8f0);
+        line-height: 1.55;
+      }
+      .sf-card {
+        background: rgba(0,0,0,0.30);
+        border: 1px solid var(--border-color, #334155);
+        border-radius: 8px;
+        padding: 10px 12px;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .sf-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+      .sf-row-block { flex-direction: column; align-items: stretch; }
+      .sf-k {
+        text-transform: uppercase; letter-spacing: 0.4px;
+        font-size: 9px; font-weight: 700;
+        color: var(--text-muted, #94a3b8);
+        min-width: 60px;
+      }
+      .sf-row code {
+        font-family: var(--font-mono, monospace);
+        font-size: 11.5px; color: var(--accent, #10b981);
+      }
+      .sf-script {
+        margin: 4px 0 0; padding: 8px 10px;
+        background: rgba(0,0,0,0.40);
+        border-radius: 5px;
+        font-family: var(--font-mono, monospace);
+        font-size: 11px; line-height: 1.55;
+        color: var(--text-main, #e2e8f0);
+        max-height: 180px; overflow-y: auto;
+        white-space: pre-wrap; word-break: break-all;
+      }
+      .sf-triggers { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+      .sf-trig {
+        background: rgba(99, 102, 241, 0.10);
+        border: 1px solid rgba(99, 102, 241, 0.25);
+        color: #a5b4fc;
+        padding: 2px 7px; border-radius: 10px;
+        font-size: 10px; font-family: var(--font-mono, monospace);
+      }
+      .sf-hint {
+        margin: 12px 0 0; padding: 8px 10px;
+        background: rgba(255,255,255,0.025);
+        border-left: 2px solid color-mix(in srgb, var(--accent, #10b981) 50%, transparent);
+        border-radius: 0 6px 6px 0;
+        font-size: 10.5px; color: var(--text-muted, #94a3b8);
+        line-height: 1.55;
+      }
+      .sf-foot {
+        display: flex; justify-content: flex-end; gap: 8px;
+        padding: 12px 18px;
+        border-top: 1px solid var(--border-color, #1e293b);
+      }
+      .sf-btn {
+        border-radius: 7px; padding: 7px 14px;
+        font-size: 12px; font-weight: 600; font-family: inherit;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 5px;
+      }
+      .sf-cancel {
+        background: transparent;
+        border: 1px solid var(--border-color, #334155);
+        color: var(--text-muted, #94a3b8);
+      }
+      .sf-cancel:hover { color: var(--text-bright); border-color: var(--border-light, #475569); }
+      .sf-accept {
+        background: var(--accent, #10b981);
+        border: 1px solid var(--accent, #10b981);
+        color: #032b1c;
+      }
+      .sf-accept:hover { opacity: 0.92; }
+    </style>
+  {/if}
 
   <!-- StatusOrb is now integrated INLINE inside the footer (.bbar)
        — see the bottom of the .ws block. Eliminates the prior overlap
