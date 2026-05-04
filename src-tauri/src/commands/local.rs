@@ -1160,6 +1160,43 @@ pub async fn search_web(query: String) -> Result<String, String> {
 //
 // SECURITY: la ruta se valida (no `..`, no metacharacters) antes de almacenar.
 
+/// Try to find and read a DESIGN.md file in the current working directory
+/// (or up to 3 parent directories). Returns the file contents on success,
+/// or an error if not found. Frontend caches the result so this only fires
+/// once per cwd change.
+///
+/// Why parent walk: most projects keep DESIGN.md at the repo root; if Lucy
+/// is operating in `src/lib/` or `src-tauri/`, walking up to find it is the
+/// natural ergonomic.
+#[tauri::command]
+pub async fn read_design_md() -> Result<String, String> {
+    let cwd_str = crate::state::GLOBAL_CWD.read()
+        .map(|c| c.clone())
+        .unwrap_or_else(|_| ".".to_string());
+    let mut cur = std::path::PathBuf::from(&cwd_str);
+    for _ in 0..4 {
+        let candidate = cur.join("DESIGN.md");
+        if candidate.exists() {
+            // Cap at 64KB — design docs shouldn't be massive and a compromised
+            // file shouldn't be able to inflate the system prompt arbitrarily.
+            let bytes = std::fs::read(&candidate)
+                .map_err(|e| format!("read DESIGN.md: {}", e))?;
+            let truncated = bytes.len() > 65_536;
+            let slice = if truncated { &bytes[..65_536] } else { &bytes[..] };
+            let mut s = String::from_utf8_lossy(slice).into_owned();
+            if truncated {
+                s.push_str("\n\n[…truncated; DESIGN.md exceeded 64KB cap.]");
+            }
+            return Ok(s);
+        }
+        match cur.parent() {
+            Some(p) if p != cur => cur = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    Err("DESIGN.md not found in cwd or up to 3 parents".to_string())
+}
+
 #[tauri::command]
 pub async fn set_tab_cwd(tab_id: String, path: String) -> Result<(), String> {
     if tab_id.is_empty() || tab_id.len() > 128 {

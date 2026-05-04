@@ -47,6 +47,7 @@ import { listen } from '@tauri-apps/api/event';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
     import { compressToolResults, shouldCompact, recordCompactionRatio } from '$lib/context-compressor';
     import { observe as skillFactoryObserve, getProposals as skillFactoryGetProposals, markAccepted as skillFactoryMarkAccepted, dismissProposal as skillFactoryDismiss } from '$lib/skill-factory';
+    import { parseDesignMd, formatTokensForPrompt as designTokensForPrompt } from '$lib/design-md';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
@@ -3026,6 +3027,8 @@ import { listen } from '@tauri-apps/api/event';
         t.isProcessing=true; startExecTimer(); refresh();
         // Hoisted refs so catch/finally can clean up even on unexpected throws.
         let _reasoningTickerRef = null;
+        // Best-effort DESIGN.md detection — non-blocking. Caches per cwd.
+        refreshDesignMd().catch(() => {});
         // Mostrar indicador "Lucy pensando" inline
         addThinking(tabId);
         await scrollChat();
@@ -5443,6 +5446,27 @@ if (Test-Path $src) {
         guardarMemoriaPersistente(merged);
     }
 
+    // ── DESIGN.md cache ──────────────────────────────────────────────────────
+    // Loaded once per cwd change (debounced). Result is the formatted prompt
+    // string ready to drop into construirContextoMemoria. Empty when no
+    // DESIGN.md exists in the current cwd or up to 3 parents.
+    let _designMdPromptBlock = '';
+    let _designMdLastCwd = null;
+    async function refreshDesignMd() {
+        // Avoid hammering the FS if cwd hasn't moved.
+        const cwd = await invoke('get_tab_cwd', { tabId: String(activeTabId || 'default') }).catch(() => '');
+        if (cwd === _designMdLastCwd) return;
+        _designMdLastCwd = cwd;
+        try {
+            const raw = await invoke('read_design_md');
+            const parsed = parseDesignMd(String(raw || ''));
+            _designMdPromptBlock = designTokensForPrompt(parsed);
+            if (_designMdPromptBlock) debug.log('[design.md] tokens injected from', cwd);
+        } catch {
+            _designMdPromptBlock = '';
+        }
+    }
+
     // Cache de memorias DB — se carga una vez en onMount y se actualiza tras guardar.
     // PERF: previously two sequential `invoke()` calls = 2 Tauri round-trips
     // (~10-15 ms total). Now fired in parallel with Promise.all so the slower
@@ -5622,6 +5646,13 @@ if (Test-Path $src) {
         const mem = leerMemoriaPersistente();
         let ctx = '';
         const rel = _slotRelevance(userInput);
+
+        // [CORE — always] DESIGN.md tokens if available — loaded async by
+        // refreshDesignMd(). When the user is in a project that defines its
+        // own visual identity, Lucy MUST respect it when generating UI code.
+        if (_designMdPromptBlock) {
+            ctx += `\n\n${_designMdPromptBlock}`;
+        }
 
         // [CORE — always] Working memory digest (tab state)
         ctx += buildWorkingMemoryDigest(tab);

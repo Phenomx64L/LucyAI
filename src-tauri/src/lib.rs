@@ -147,6 +147,7 @@ pub fn run() {
             local::set_tab_cwd,
             local::drop_tab_cwd,
             local::get_tab_cwd,
+            local::read_design_md,
             local::open_vscode,
             local::panic_kill_all,
             local::launch_rdp,
