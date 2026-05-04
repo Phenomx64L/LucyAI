@@ -436,6 +436,44 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
 CREATE INDEX IF NOT EXISTS idx_permission_rules_enabled ON permission_rules(enabled, priority);
 CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
 CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
+
+-- ── Principles (Maestro-inspired) ─────────────────────────────────────────
+-- Behavioral rules injected into the system prompt before each turn.
+-- Lucy reads these and adjusts her approach (e.g. "always validate with
+-- Get-* before Set-*", "prefer PowerShell 7 over 5"). Per-host scoping
+-- supported via 'scope' (NULL = global, host_id otherwise).
+CREATE TABLE IF NOT EXISTS principles (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    rule        TEXT NOT NULL,                       -- the actual instruction
+    scope       TEXT,                                -- NULL = global, else host_id or project tag
+    priority    INTEGER NOT NULL DEFAULT 100,        -- lower = applied first / shown first
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_principles_enabled ON principles(enabled, priority);
+CREATE INDEX IF NOT EXISTS idx_principles_scope   ON principles(scope);
+
+-- ── Scheduled tasks (Hermes-inspired natural-language cron) ───────────────
+-- Each row is a recurring or one-shot task. The tauri startup spawns a
+-- ticker that wakes every 60s, queries `next_run <= now()`, and dispatches
+-- the prompt to a fresh agent run via the gateway. Last run + outcome
+-- are recorded for the Insights view.
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    prompt       TEXT NOT NULL,                       -- natural-language task body
+    cron_expr    TEXT,                                -- '0 9 * * *' style; NULL for one-shot
+    next_run     INTEGER NOT NULL,                    -- unix epoch
+    last_run     INTEGER,                             -- unix epoch of most recent run
+    last_status  TEXT,                                -- 'ok' | 'error' | 'skipped'
+    last_output  TEXT,                                -- truncated tail
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_next ON scheduled_tasks(enabled, next_run);
 "#;
 
 // ── PDF Intelligence (Sprint 4 Pillar 4) ──────────────────────────────────

@@ -246,6 +246,18 @@ pub fn run() {
             pdf::pdf_list_docs,
             pdf::pdf_delete_doc,
             pdf::pdf_search,
+            // Principles (Maestro-inspired) — behavioral rules in system prompt
+            commands::principles::save_principle,
+            commands::principles::update_principle,
+            commands::principles::delete_principle,
+            commands::principles::list_principles,
+            // Scheduled tasks (Hermes-inspired natural-language cron)
+            commands::scheduled::save_scheduled_task,
+            commands::scheduled::list_scheduled_tasks,
+            commands::scheduled::due_scheduled_tasks,
+            commands::scheduled::mark_scheduled_run,
+            commands::scheduled::toggle_scheduled_task,
+            commands::scheduled::delete_scheduled_task,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

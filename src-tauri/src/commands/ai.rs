@@ -321,6 +321,10 @@ fn build_system_prompt(
 
     let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
     let core_mem_block = crate::commands::memory::render_core_sync();
+    // Principles: behavioral rules pulled from SQLite, scoped to None for now
+    // (global only). When we wire host-aware prompts, pass the active host id
+    // so per-host rules also surface. Empty string when no principles defined.
+    let principles_block = crate::commands::principles::render_principles_block(None);
     format!(
         "You are Lucy, an expert Windows SysAdmin AI assistant with autonomous code analysis and modification capabilities.\n\
         {lang}\n\
@@ -447,6 +451,7 @@ fn build_system_prompt(
         DECISION GUIDE — CONSOLIDATE: BEFORE saving any new memory, search first (memoria_buscar) to check if the topic already has 2+ entries. If it does, prefer memoria_consolidar over memoria_guardar — fold the existing entries plus the new info into ONE comprehensive entry, atomically. Goal: at most 1-2 memories per distinct topic. If the user says \"unifica las memorias de X\", \"consolida\", \"limpia memorias duplicadas\", \"reduce a una sola\" → ALWAYS use memoria_consolidar with the full id list (never call memoria_guardar followed by 'I will delete the others later'). After consolidating, briefly state to the user: \"Consolidé N memorias en una nueva (id X). Quedan Y entradas sobre este tema.\" so they can verify.\n\
         RULE 26 — PDF INTELLIGENCE: Users can ingest PDF manuals/documentation using the PDF panel (sidebar). When ingested, content is stored as episodic memories (session_id = 'pdf:{{doc_id}}') AND as semantic vectors. When the user asks about content that may be in a manual or document: (1) Try FTS search first: <TOOL>memoria_buscar:exact terms from likely section</TOOL>. (2) For semantic/conceptual search: <TOOL>pdf_search:natural language question</TOOL>. Each result shows the source filename and the relevant passage. Always cite the document name and section when using PDF content. If no results found, tell the user no PDF has been ingested yet and suggest dragging the file to the PDF panel in the sidebar.\n\
         {core_mem}\n\
+        {principles}\n\
         {ctx}
         {hosts}
         The user's name is {uname}. Always address them by name.\nINSTRUCTION: {prompt}",
@@ -456,6 +461,7 @@ fn build_system_prompt(
         uname = user_name,
         rb = runbooks_info,
         core_mem = core_mem_block,
+        principles = principles_block,
         prompt = prompt
     )
 }
