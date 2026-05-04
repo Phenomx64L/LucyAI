@@ -26,9 +26,13 @@ import { listen } from '@tauri-apps/api/event';
     // ── Lazy-loaded: solo se descargan cuando el usuario los abre por primera vez ──
     let _lazyPermissions   = null;
     let _lazySkills        = null;
+    let _lazyPrinciples    = null;
+    let _lazySchedules     = null;
     let _lazyProfile       = null;
     const lazyPermissions  = () => _lazyPermissions  || (_lazyPermissions  = import('$lib/PermissionRulesModal.svelte').then(m => m.default));
     const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
+    const lazyPrinciples   = () => _lazyPrinciples   || (_lazyPrinciples   = import('$lib/PrinciplesModal.svelte').then(m => m.default));
+    const lazySchedules    = () => _lazySchedules    || (_lazySchedules    = import('$lib/ScheduledTasksModal.svelte').then(m => m.default));
     let _lazyRemoteDiff    = null;
     const lazyRemoteDiff   = () => _lazyRemoteDiff   || (_lazyRemoteDiff   = import('$lib/RemoteFileDiffModal.svelte').then(m => m.default));
     import ForksMonitorPanel from '$lib/ForksMonitorPanel.svelte';
@@ -191,6 +195,7 @@ import { listen } from '@tauri-apps/api/event';
     // al SetupOverlay deja timers huérfanos consumiendo CPU + memoria.
     let _ollamaPingInterval = null;       // refresh local models every 30s
     let _footerCostInterval = null;       // refresh monthly cost every 5 min
+    let _scheduledTickInterval = null;    // poll due scheduled tasks every 60s
     let _qlOverHandler      = null;       // delegated mouseover for quick-look popover
     let _qlOutHandler       = null;       // delegated mouseout for quick-look popover
     let _qlPopover          = null;       // singleton tooltip element (cleaned in onDestroy)
@@ -351,7 +356,9 @@ import { listen } from '@tauri-apps/api/event';
     let showWelcome        = false; // muestra la pantalla de inicio aunque haya tabs abiertas
     let activeView         = 'terminal'; // 'terminal' | 'dashboard' | 'logviewer' | 'nexshell'
     let showPermissionRulesModal = false;
-    let showSkillsManagerModal = false;
+    let showSkillsManagerModal   = false;
+    let showPrinciplesModal      = false;
+    let showSchedulesModal       = false;
     let showForksMonitor       = false;
     let showPdfPanel           = false;
     // NexShell filter/sort state moved to NexShellView.svelte
@@ -988,6 +995,64 @@ import { listen } from '@tauri-apps/api/event';
             // Stored in module ref so onDestroy can clear it (was leaking on HMR / overlay return)
             _footerCostInterval = setInterval(refreshFooterCost, 5 * 60 * 1000);
 
+            // ── Scheduled tasks ticker ───────────────────────────────────
+            // Polls the SQLite-backed scheduled_tasks table every 60 s and
+            // dispatches any task whose next_run has passed. Each fired
+            // task runs as a normal LLM turn in a fresh background tab so
+            // the user's foreground conversation isn't disturbed.
+            // Background tabs don't render, but the agent loop persists
+            // results to memory and audit trail like any other run.
+            const _scheduledTick = async () => {
+                try {
+                    const due = await invoke('due_scheduled_tasks');
+                    if (!Array.isArray(due) || due.length === 0) return;
+                    for (const task of due) {
+                        // Mark as 'running' immediately so a slow LLM call
+                        // doesn't double-fire if the next tick hits.
+                        try {
+                            await invoke('mark_scheduled_run', {
+                                id: task.id, status: 'running', output: null,
+                            });
+                        } catch (e) { debug.warn('[scheduler] pre-mark failed:', e); continue; }
+
+                        // Fire-and-forget: dispatch the task body as a
+                        // standalone ask_lucy call (no streaming, simpler
+                        // for unattended runs). On completion, record
+                        // status/output back to the row.
+                        const t0 = Date.now();
+                        invoke('ask_lucy', {
+                            prompt: `[SCHEDULED TASK: ${task.name}]\n\n${task.prompt}`,
+                            context: '',
+                            userName: lucyConfig.name || 'scheduler',
+                            model: 'gemini-2.5-flash',
+                            images: null,
+                            lang: userLang,
+                            hostsJson: JSON.stringify($hosts),
+                            runbooksDir: lucyConfig.runbooksDir || null,
+                            maxTokensOverride: 4000,
+                        }).then(out => {
+                            const tail = String(out || '').slice(-1500);
+                            invoke('mark_scheduled_run', {
+                                id: task.id, status: 'ok', output: tail,
+                            }).catch(() => {});
+                            toast(isEN
+                                ? `Scheduled task "${task.name}" completed (${Math.round((Date.now()-t0)/1000)}s)`
+                                : `Tarea programada "${task.name}" completada (${Math.round((Date.now()-t0)/1000)}s)`,
+                                'ok');
+                        }).catch(err => {
+                            invoke('mark_scheduled_run', {
+                                id: task.id, status: 'error',
+                                output: String(err).slice(0, 500),
+                            }).catch(() => {});
+                            debug.warn('[scheduler] task failed:', task.name, err);
+                        });
+                    }
+                } catch (e) { debug.warn('[scheduler] tick failed:', e); }
+            };
+            // First tick after 30s (give the app time to settle), then every 60s.
+            setTimeout(_scheduledTick, 30_000);
+            _scheduledTickInterval = setInterval(_scheduledTick, 60_000);
+
             const provs = await invoke('get_configured_providers');
             let hasKey = Array.isArray(provs) && provs.length > 0;
             keyringOk = hasKey;
@@ -1034,6 +1099,7 @@ import { listen } from '@tauri-apps/api/event';
         if (_saveTimer)            { clearTimeout(_saveTimer);          _saveTimer = null; }
         if (_execTimer)            { clearTimeout(_execTimer);          _execTimer = null; }
         if (_ollamaPingInterval)   { clearInterval(_ollamaPingInterval); _ollamaPingInterval = null; }
+        if (_scheduledTickInterval){ clearInterval(_scheduledTickInterval); _scheduledTickInterval = null; }
         if (_footerCostInterval)   { clearInterval(_footerCostInterval); _footerCostInterval = null; }
         // ── Document-level listeners ──
         if (_clickHandler)   document.removeEventListener('click', _clickHandler);
@@ -3244,7 +3310,7 @@ Use ONE of these patterns instead:
             }
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
-            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search):/i;
+            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search|principle_set|principle_delete|schedule_create|schedule_list):/i;
             const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
@@ -3928,6 +3994,113 @@ Use ONE of these patterns instead:
                         } catch (e) {
                             toolResults.push(`[MEMORY CONSOLIDATE ERROR]\n${e}\nNada cambió — la transacción hizo rollback.`);
                             finishToolCard(_conCard, String(e), false);
+                        }
+                    }
+
+                    // ── principle_set: persist a behavioral rule ─────────────────
+                    // Format: <TOOL>principle_set:Short Name|||Full rule text|||scope?|||priority?</TOOL>
+                    // scope: optional host id / project tag (use "global" or empty for global rules)
+                    // priority: optional integer 1-1000 (lower = higher priority)
+                    const psM = agentResp.match(/<TOOL>principle_set:([^|<]+)\|\|\|([^|<]+)(?:\|\|\|([^|<]*))?(?:\|\|\|([^<]*))?<\/TOOL>/i);
+                    if (psM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>principle_set:[^<]+<\/TOOL>/gi, '');
+                        const pName = psM[1].trim();
+                        const pRule = psM[2].trim();
+                        const pScopeRaw = (psM[3] || '').trim();
+                        const pScope = (!pScopeRaw || pScopeRaw.toLowerCase() === 'global') ? null : pScopeRaw;
+                        const pPriority = psM[4] ? parseInt(psM[4].trim(), 10) : 100;
+                        const _pCard = newToolCard('▤', `Principle: ${pName}`, 'write');
+                        try {
+                            const newId = await invoke('save_principle', {
+                                name: pName,
+                                rule: pRule,
+                                scope: pScope,
+                                priority: Number.isFinite(pPriority) ? pPriority : 100,
+                            });
+                            toolResults.push(`[PRINCIPLE SAVED — ID ${newId}] "${pName}" ${pScope ? `(scope: ${pScope})` : '(global)'}`);
+                            stepsHtml += `[▤ Principle] ${esc(pName)}\n`;
+                            finishToolCard(_pCard, `ID ${newId}: ${pName}`, true);
+                        } catch (e) {
+                            toolResults.push(`[PRINCIPLE SAVE ERROR]\n${e}`);
+                            finishToolCard(_pCard, String(e), false);
+                        }
+                    }
+
+                    // ── principle_delete: drop a principle by id ─────────────────
+                    const pdM = agentResp.match(/<TOOL>principle_delete:(\d+)<\/TOOL>/i);
+                    if (pdM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>principle_delete:\d+<\/TOOL>/gi, '');
+                        const pdId = parseInt(pdM[1], 10);
+                        const _pdCard = newToolCard('⊘', `Delete principle ${pdId}`, 'write');
+                        try {
+                            const n = await invoke('delete_principle', { id: pdId });
+                            toolResults.push(`[PRINCIPLE DELETED] id=${pdId} (${n} row${n === 1 ? '' : 's'})`);
+                            stepsHtml += `[⊘ Principle ${pdId}] eliminado\n`;
+                            finishToolCard(_pdCard, `${n} row removed`, n > 0);
+                        } catch (e) {
+                            toolResults.push(`[PRINCIPLE DELETE ERROR]\n${e}`);
+                            finishToolCard(_pdCard, String(e), false);
+                        }
+                    }
+
+                    // ── schedule_create: create a recurring or one-shot task ─────
+                    // Format: <TOOL>schedule_create:Name|||Prompt body|||cron_expr|||iso_or_epoch_next_run</TOOL>
+                    // - cron_expr: 5-field cron ("0 9 * * 1-5") or empty for one-shot
+                    // - next_run: unix epoch SECONDS, or ISO 8601 datetime; required
+                    const scM = agentResp.match(/<TOOL>schedule_create:([^|<]+)\|\|\|([^|<]+)\|\|\|([^|<]*)\|\|\|([^<]+)<\/TOOL>/i);
+                    if (scM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>schedule_create:[^<]+<\/TOOL>/gi, '');
+                        const sName = scM[1].trim();
+                        const sPrompt = scM[2].trim();
+                        const sCron = (scM[3] || '').trim() || null;
+                        const sNextRaw = scM[4].trim();
+                        // Accept either epoch seconds OR ISO 8601 — Lucy will pick the
+                        // most natural for her, the parser handles both.
+                        let sNextRun = parseInt(sNextRaw, 10);
+                        if (!Number.isFinite(sNextRun) || sNextRun < 1_000_000_000) {
+                            const dt = Date.parse(sNextRaw);
+                            sNextRun = Number.isFinite(dt) ? Math.floor(dt / 1000) : 0;
+                        }
+                        const _scCard = newToolCard('⏰', `Schedule: ${sName}`, 'write');
+                        try {
+                            const newId = await invoke('save_scheduled_task', {
+                                name: sName,
+                                prompt: sPrompt,
+                                cronExpr: sCron,
+                                nextRun: sNextRun,
+                            });
+                            const when = new Date(sNextRun * 1000).toISOString();
+                            toolResults.push(`[SCHEDULE CREATED — ID ${newId}] "${sName}" — next run: ${when}${sCron ? ` (cron: ${sCron})` : ' (one-shot)'}`);
+                            stepsHtml += `[⏰ Scheduled] ${esc(sName)}\n`;
+                            finishToolCard(_scCard, `ID ${newId}: ${sName}\nNext run: ${when}`, true);
+                        } catch (e) {
+                            toolResults.push(`[SCHEDULE CREATE ERROR]\n${e}`);
+                            finishToolCard(_scCard, String(e), false);
+                        }
+                    }
+
+                    // ── schedule_list: list active scheduled tasks ───────────────
+                    const slM = agentResp.match(/<TOOL>schedule_list<\/TOOL>/i);
+                    if (slM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>schedule_list<\/TOOL>/gi, '');
+                        const _slCard = newToolCard('⏰', 'Scheduled tasks', 'read');
+                        try {
+                            const tasks = await invoke('list_scheduled_tasks');
+                            const summary = (tasks || []).map(t => {
+                                const next = new Date(t.next_run * 1000).toISOString();
+                                const last = t.last_run ? new Date(t.last_run * 1000).toISOString() : '—';
+                                return `[${t.id}] ${t.name} · ${t.enabled ? 'enabled' : 'disabled'} · next ${next} · last ${last}${t.cron_expr ? ` · cron "${t.cron_expr}"` : ' · one-shot'}`;
+                            }).join('\n') || '(no scheduled tasks defined)';
+                            toolResults.push(`[SCHEDULE LIST]\n${summary}`);
+                            stepsHtml += `[⏰ Schedule list] ${(tasks || []).length} entries\n`;
+                            finishToolCard(_slCard, `${(tasks || []).length} tasks`, true);
+                        } catch (e) {
+                            toolResults.push(`[SCHEDULE LIST ERROR]\n${e}`);
+                            finishToolCard(_slCard, String(e), false);
                         }
                     }
 
@@ -8900,6 +9073,14 @@ if (Test-Path $src) {
         title={isEN ? 'Manage skills and runbooks' : 'Gestionar skills y runbooks'}>
         <span class="sb-ico"><Zap size={18}/></span><span class="sb-txt">{isEN ? 'Skills' : 'Skills'}</span>
       </div>
+      <div class="sb-it" role="button" tabindex="0" on:click={() => showPrinciplesModal = true} on:keydown
+        title={isEN ? 'Behavioral principles — rules Lucy follows in every turn' : 'Principios — reglas que Lucy sigue en cada turno'}>
+        <span class="sb-ico"><Tag size={18}/></span><span class="sb-txt">{isEN ? 'Principles' : 'Principios'}</span>
+      </div>
+      <div class="sb-it" role="button" tabindex="0" on:click={() => showSchedulesModal = true} on:keydown
+        title={isEN ? 'Scheduled tasks — natural-language cron jobs' : 'Tareas programadas — cron en lenguaje natural'}>
+        <span class="sb-ico"><Bell size={18}/></span><span class="sb-txt">{isEN ? 'Schedules' : 'Programadas'}</span>
+      </div>
       <div class="sb-it" role="button" tabindex="0" on:click={() => showForksMonitor = !showForksMonitor} on:keydown
         title={isEN ? 'Sub-Agent Monitor (fork_task results)' : 'Monitor de Sub-Agentes (resultados fork_task)'}
         class:sb-it-active={showForksMonitor}>
@@ -10654,6 +10835,30 @@ if (Test-Path $src) {
       configuredProviders={configuredProvs}
       on:close={() => showSkillsManagerModal = false}
       {isEN}
+      on:toast={e => toast(e.detail.msg, e.detail.type)}
+    />
+  {/await}
+  {/if}
+
+  <!-- ── PRINCIPLES MODAL (lazy) ── -->
+  {#if showPrinciplesModal}
+  {#await lazyPrinciples() then PrinciplesComp}
+    <svelte:component this={PrinciplesComp}
+      bind:isOpen={showPrinciplesModal}
+      {isEN}
+      on:close={() => showPrinciplesModal = false}
+      on:toast={e => toast(e.detail.msg, e.detail.type)}
+    />
+  {/await}
+  {/if}
+
+  <!-- ── SCHEDULED TASKS MODAL (lazy) ── -->
+  {#if showSchedulesModal}
+  {#await lazySchedules() then SchedulesComp}
+    <svelte:component this={SchedulesComp}
+      bind:isOpen={showSchedulesModal}
+      {isEN}
+      on:close={() => showSchedulesModal = false}
       on:toast={e => toast(e.detail.msg, e.detail.type)}
     />
   {/await}
