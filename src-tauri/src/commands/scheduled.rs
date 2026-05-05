@@ -339,3 +339,80 @@ fn ymd_from_days(days: i64) -> (i32, i32, i32) {
     let y  = (y + (if m <= 2 { 1 } else { 0 })) as i32;
     (y, m, d)
 }
+
+// ── Tests (cargo test) ────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_cron_accepts_common_patterns() {
+        assert!(validate_cron("* * * * *").is_ok());
+        assert!(validate_cron("0 9 * * 1-5").is_ok());
+        assert!(validate_cron("*/15 * * * *").is_ok());
+        assert!(validate_cron("0 0,12 * * *").is_ok());
+        assert!(validate_cron("30 8 1 1 *").is_ok());
+    }
+
+    #[test]
+    fn validate_cron_rejects_malformed() {
+        assert!(validate_cron("").is_err());
+        assert!(validate_cron("0 9 * *").is_err());        // 4 fields
+        assert!(validate_cron("0 9 * * * *").is_err());    // 6 fields
+        assert!(validate_cron("60 9 * * *").is_err());     // minute > 59
+        assert!(validate_cron("0 24 * * *").is_err());     // hour > 23
+        assert!(validate_cron("0 9 32 * *").is_err());     // day > 31
+        assert!(validate_cron("0 9 * 13 *").is_err());     // month > 12
+        assert!(validate_cron("0 9 * * 7").is_err());      // dow > 6
+        assert!(validate_cron("0 9 * * abc").is_err());    // non-numeric
+    }
+
+    #[test]
+    fn next_after_for_every_minute_is_t_plus_60_at_minute_boundary() {
+        // t is unix epoch seconds. Pick a clean minute.
+        let t0 = 1_700_000_000_i64;       // arbitrary, lands on a minute
+        let next = next_after("* * * * *", t0).unwrap();
+        // For "every minute", next match should be the very next minute boundary.
+        assert!(next > t0);
+        assert!(next - t0 <= 60);
+        // And it must itself be aligned to minute zero.
+        assert_eq!(next % 60, 0);
+    }
+
+    #[test]
+    fn next_after_for_daily_9am_is_within_24h() {
+        let t0 = 1_700_000_000_i64;
+        let next = next_after("0 9 * * *", t0).unwrap();
+        assert!(next > t0);
+        assert!(next - t0 < 25 * 3600);   // less than 25 hours away
+        // The hour field of next must be 9 in UTC.
+        let (mn, hr, _, _, _) = decompose_utc(next);
+        assert_eq!(mn, 0);
+        assert_eq!(hr, 9);
+    }
+
+    #[test]
+    fn matches_field_handles_step_lists_and_ranges() {
+        assert!(matches_field("*",     5, 0, 59));
+        assert!(matches_field("5",     5, 0, 59));
+        assert!(matches_field("0,5,10", 5, 0, 59));
+        assert!(matches_field("0-10",   5, 0, 59));
+        assert!(matches_field("*/5",    5, 0, 59));
+        assert!(matches_field("*/5",    0, 0, 59));
+        assert!(matches_field("*/5",   55, 0, 59));
+        assert!(!matches_field("*/5",   3, 0, 59));
+        assert!(!matches_field("0-3",   5, 0, 59));
+    }
+
+    #[test]
+    fn ymd_round_trips_known_dates() {
+        // 0 days since 1970-01-01 → 1970-01-01.
+        assert_eq!(ymd_from_days(0), (1970, 1, 1));
+        // 31 days later → 1970-02-01.
+        assert_eq!(ymd_from_days(31), (1970, 2, 1));
+        // Common reference: 2000-01-01.
+        let days_to_2000 = 30 * 365 + 7;     // 30 years + leap days, approx
+        let (y, _, _) = ymd_from_days(days_to_2000 as i64);
+        assert!(y >= 1999 && y <= 2001);
+    }
+}

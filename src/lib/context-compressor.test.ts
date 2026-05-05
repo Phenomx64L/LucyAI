@@ -1,0 +1,131 @@
+import { describe, it, expect } from 'vitest';
+import {
+    dedupToolResults,
+    smartCollapseOldResults,
+    shouldCompact,
+    recordCompactionRatio,
+    compressToolResults,
+    type ToolResult,
+} from './context-compressor';
+
+const longA = '[readfile] /etc/long-config-a\n' + 'line\n'.repeat(80);
+const longB = '[searchfiles] pattern="x"\n' + 'match\n'.repeat(80);
+
+describe('context-compressor / dedupToolResults', () => {
+    it('replaces older duplicate, keeps newest', () => {
+        const r: ToolResult[] = [
+            { kind: 'readfile', text: longA },
+            { kind: 'readfile', text: longB },
+            { kind: 'readfile', text: longA },          // duplicate of [0]
+        ];
+        const out = dedupToolResults(r);
+        expect(out[0].text.startsWith('[Duplicate')).toBe(true);
+        expect(out[1].text).toBe(longB);
+        expect(out[2].text).toBe(longA);                // newest survives
+    });
+
+    it('skips dedup for outputs shorter than the threshold', () => {
+        const r: ToolResult[] = [
+            { kind: 'readfile', text: 'tiny' },
+            { kind: 'readfile', text: 'tiny' },
+        ];
+        const out = dedupToolResults(r);
+        expect(out[0].text).toBe('tiny');
+        expect(out[1].text).toBe('tiny');
+    });
+
+    it('handles empty input', () => {
+        expect(dedupToolResults([])).toEqual([]);
+    });
+});
+
+describe('context-compressor / smartCollapseOldResults', () => {
+    it('keeps the last N verbatim', () => {
+        const r: ToolResult[] = Array.from({ length: 5 }, (_, i) => ({
+            kind: 'readfile', text: 'X'.repeat(5000) + `_${i}`,
+        }));
+        const out = smartCollapseOldResults(r, 3);
+        // First 2 collapsed, last 3 verbatim.
+        expect(out[0].text).toMatch(/collapsed/);
+        expect(out[1].text).toMatch(/collapsed/);
+        expect(out[2].text.endsWith('_2')).toBe(true);
+        expect(out[3].text.endsWith('_3')).toBe(true);
+        expect(out[4].text.endsWith('_4')).toBe(true);
+    });
+
+    it('produces tool-aware summaries for known kinds', () => {
+        // Body must be ≥ COLLAPSE_BLOCK_LEN/4 (= 2000 chars) for the
+        // collapse rule to trigger — anything shorter is already cheap
+        // enough to keep verbatim.
+        const fat = 'line of content here\n'.repeat(200);   // ~4 KB
+        const r: ToolResult[] = [
+            { kind: 'readfile',  args: '/x', text: fat },
+            { kind: 'readfile',  args: '/y', text: fat },
+            { kind: 'readfile',  args: '/z', text: 'now' },
+            { kind: 'readfile',  args: '/w', text: 'now2' },
+        ];
+        const out = smartCollapseOldResults(r, 1);
+        expect(out[0].text).toMatch(/\[readfile\]/);
+        expect(out[0].text).toMatch(/\d+ chars, \d+ lines/);
+    });
+
+    it('does not collapse when length under threshold', () => {
+        const r: ToolResult[] = Array.from({ length: 5 }, (_, i) => ({
+            kind: 'readfile', text: 'short',
+        }));
+        const out = smartCollapseOldResults(r, 3);
+        // Short content stays verbatim even on the older slice.
+        expect(out.every(o => o.text === 'short')).toBe(true);
+    });
+});
+
+describe('context-compressor / shouldCompact (anti-thrashing)', () => {
+    it('returns true on empty/missing memory', () => {
+        expect(shouldCompact(null)).toBe(true);
+        expect(shouldCompact({})).toBe(true);
+        expect(shouldCompact({ _compRatios: [] })).toBe(true);
+    });
+
+    it('returns true while history is short', () => {
+        expect(shouldCompact({ _compRatios: [0.05] })).toBe(true);
+    });
+
+    it('returns false when last 2 ratios are both <10%', () => {
+        expect(shouldCompact({ _compRatios: [0.05, 0.03] })).toBe(false);
+    });
+
+    it('returns true if at least one of last 2 is meaningful', () => {
+        expect(shouldCompact({ _compRatios: [0.05, 0.20] })).toBe(true);
+        expect(shouldCompact({ _compRatios: [0.20, 0.05] })).toBe(true);
+    });
+});
+
+describe('context-compressor / recordCompactionRatio', () => {
+    it('appends and clamps history to last 4', () => {
+        const wm: any = {};
+        for (let i = 0; i < 6; i++) recordCompactionRatio(wm, 1000, 700);
+        expect(wm._compRatios.length).toBe(4);
+        expect(wm._compRatios.every((r: number) => Math.abs(r - 0.3) < 0.01)).toBe(true);
+    });
+
+    it('handles before=0 gracefully', () => {
+        const wm: any = {};
+        recordCompactionRatio(wm, 0, 0);
+        expect(wm._compRatios).toBeUndefined();
+    });
+});
+
+describe('context-compressor / compressToolResults end-to-end', () => {
+    it('reports realistic before/after/ratio', () => {
+        const r: ToolResult[] = [
+            { kind: 'readfile', text: longA },
+            { kind: 'readfile', text: longA },          // duplicate
+            { kind: 'readfile', text: longB },          // recent, kept verbatim
+        ];
+        const out = compressToolResults(r);
+        expect(out.before).toBeGreaterThan(0);
+        expect(out.after).toBeLessThanOrEqual(out.before);
+        expect(out.ratio).toBeGreaterThanOrEqual(0);
+        expect(out.ratio).toBeLessThanOrEqual(1);
+    });
+});
