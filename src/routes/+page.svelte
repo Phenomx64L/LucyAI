@@ -54,6 +54,7 @@ import { listen } from '@tauri-apps/api/event';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens } from '$lib/text-utils';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
+    import { ICON_PALETTE, ICON_MAP, cmdRapidos, mapeoApps } from '$lib/quick-cmds';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
     import { compressToolResults, shouldCompact, recordCompactionRatio } from '$lib/context-compressor';
     import { observe as skillFactoryObserve, getProposals as skillFactoryGetProposals, markAccepted as skillFactoryMarkAccepted, dismissProposal as skillFactoryDismiss } from '$lib/skill-factory';
@@ -319,30 +320,7 @@ import { listen } from '@tauri-apps/api/event';
 
     // --- ACCIONES RÁPIDAS DINÁMICAS ---
     let quickActions = [];
-    // ── Direct Actions: curated Tabler icon palette ──
-    // Stored in `accion.icono` as a stable key string (e.g. 'activity').
-    // Legacy emojis/symbols are migrated to keys on app load (see _legacyIconMap below).
-    const ICON_PALETTE = [
-        { key: 'activity',  icon: Activity,      label_es: 'Salud',       label_en: 'Health' },
-        { key: 'globe',     icon: Globe,         label_es: 'Red',         label_en: 'Network' },
-        { key: 'lock',      icon: Lock,          label_es: 'Bloqueo',     label_en: 'Lock' },
-        { key: 'clipboard', icon: ClipboardList, label_es: 'Lista',       label_en: 'List' },
-        { key: 'trash',     icon: Trash2,        label_es: 'Eliminar',    label_en: 'Delete' },
-        { key: 'brain',     icon: Brain,         label_es: 'Memoria',     label_en: 'Memory' },
-        { key: 'shield',    icon: ShieldCheck,   label_es: 'Seguridad',   label_en: 'Security' },
-        { key: 'bolt',      icon: Zap,           label_es: 'Rápida',      label_en: 'Quick' },
-        { key: 'wrench',    icon: Wrench,        label_es: 'Herramienta', label_en: 'Tool' },
-        { key: 'terminal',  icon: Terminal,      label_es: 'Consola',     label_en: 'Console' },
-        { key: 'server',    icon: Server,        label_es: 'Servidor',    label_en: 'Server' },
-        { key: 'download',  icon: Download,      label_es: 'Descarga',    label_en: 'Download' },
-        { key: 'bug',       icon: Bug,           label_es: 'Debug',       label_en: 'Debug' },
-        { key: 'monitor',   icon: Monitor,       label_es: 'Pantalla',    label_en: 'Display' },
-        { key: 'key',       icon: Key,           label_es: 'Credencial',  label_en: 'Credential' },
-        { key: 'folder',    icon: FolderOpen,    label_es: 'Archivos',    label_en: 'Files' },
-        { key: 'bell',      icon: Bell,          label_es: 'Alerta',      label_en: 'Alert' },
-        { key: 'rocket',    icon: Rocket,        label_es: 'Lanzar',      label_en: 'Launch' },
-    ];
-    const ICON_MAP = Object.fromEntries(ICON_PALETTE.map(p => [p.key, p.icon]));
+    // ICON_PALETTE, ICON_MAP → imported from $lib/quick-cmds
     // showNewActionModal → stores.ts
     let newActionName    = '';
     let newActionScript  = '';
@@ -612,40 +590,6 @@ import { listen } from '@tauri-apps/api/event';
         return '';
     };
 
-    const ptScript = (t) => `$exe = Get-ChildItem -Path 'C:\\Program Files\\PowerToys' -Filter '*${t}*.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if ($exe) { Start-Process $exe.FullName } else { throw 'Herramienta no encontrada' }`;
-
-    const cmdRapidos = [
-        { claves:["reinicia la aplicacion","borrar mis datos","borra mis datos"], script:"RESET_APP", respuesta:"Reiniciando..." },
-        { claves:["salud del sistema","revisa el sistema","estado del sistema"], script:"TOOL_SYSINFO", respuesta:"Revisando..." },
-        { claves:["silencia","mute","silenciar"], script:"(new-object -com wscript.shell).SendKeys([char]173)", respuesta:"Audio silenciado." },
-        { claves:["baja el volumen","menos volumen","bajale"], script:"$sh = new-object -com wscript.shell; 1..5 | % { $sh.SendKeys([char]174) }", respuesta:"Volumen reducido." },
-        { claves:["sube el volumen","mas volumen","subele"], script:"$sh = new-object -com wscript.shell; 1..5 | % { $sh.SendKeys([char]175) }", respuesta:"Volumen subido." },
-        { claves:["pausa","play","pausar","reanudar"], script:"(new-object -com wscript.shell).SendKeys([char]179)", respuesta:"Reproducción pausada/reanudada." },
-        { claves:["siguiente cancion","next","cambiala"], script:"(new-object -com wscript.shell).SendKeys([char]176)", respuesta:"Siguiente pista." },
-        { claves:["anterior cancion","prev"], script:"(new-object -com wscript.shell).SendKeys([char]177)", respuesta:"Pista anterior." },
-        { claves:["bloquea el equipo","bloquear pc"], script:"rundll32.exe user32.dll,LockWorkStation", respuesta:"Equipo bloqueado." },
-        { claves:["suspende el equipo","suspender pc"], script:"rundll32.exe powrprof.dll,SetSuspendState 0,1,0", respuesta:"Equipo en suspensión." },
-        { claves:["vacia la papelera","vaciar papelera"], script:"try{Clear-RecycleBin -Force -ErrorAction Stop;'Papelera vaciada.'}catch{if($_.Exception.Message -match 'encontrar'){Write-Output 'La papelera ya estaba vacía.'}else{throw}}", respuesta:"Papelera vaciada." },
-        { claves:["limpia el portapapeles","vaciar portapapeles"], script:"Set-Clipboard -Value $null", respuesta:"Portapapeles limpiado." },
-        { claves:["limpia el dns","flush dns"], script:"ipconfig /flushdns", respuesta:"Caché DNS purgada." },
-        { claves:["abre descargas","mis descargas"], script:"start shell:Downloads", respuesta:"Abriendo descargas." },
-        { claves:["abre documentos","mis documentos"], script:"start shell:Personal", respuesta:"Abriendo documentos." },
-        { claves:["abre administrador de tareas","task manager"], script:"start taskmgr", respuesta:"Abriendo Task Manager." },
-        { claves:["abre configuracion","settings del sistema"], script:"start ms-settings:", respuesta:"Abriendo Configuración." },
-        { claves:["abre panel de control"], script:"control", respuesta:"Abriendo Panel de Control." },
-        { claves:["explorador de archivos","abre el explorador"], script:"start explorer", respuesta:"Abriendo Explorador." },
-        { claves:["extrae el texto","extractor de texto"], script:ptScript('TextExtractor'), respuesta:"Abriendo Extractor de Texto." },
-        { claves:["selector de color","color picker"], script:ptScript('ColorPicker'), respuesta:"Abriendo Selector de Color." },
-        { claves:["hosts editor","editar hosts"], script:ptScript('HostsFileEditor'), respuesta:"Abriendo editor de Hosts." }
-    ];
-
-    const mapeoApps = {
-        "word":"winword","excel":"excel","powerpoint":"powerpnt","calculadora":"calc",
-        "paint":"mspaint","bloc de notas":"notepad","recortes":"snippingtool",
-        "terminal":"wt","consola":"cmd","powershell":"powershell","chrome":"chrome",
-        "edge":"msedge","firefox":"firefox","discord":"discord","spotify":"spotify:",
-        "whatsapp":"whatsapp:","youtube":"https://www.youtube.com","github":"https://github.com"
-    };
 
     // Component-scoped wrapper: passes userLang to the pure formatTime helper.
     const ahora = () => formatTime(userLang);
