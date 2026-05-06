@@ -1,0 +1,186 @@
+<script lang="ts">
+    import { createEventDispatcher } from 'svelte';
+
+    export let tab: any;
+    export let isEN: boolean = false;
+    export let chatSearch: string = '';
+    export let isActiveTab: boolean = false;
+
+    const dispatch = createEventDispatcher<{
+        pinmessage: { msg: any };
+        buttonaction: { msg: any; event: MouseEvent };
+        togglereasoning: { msg: any };
+        codeclick: { path: string };
+        fixclick: { key: string };
+    }>();
+
+    function handleAreaClick(e: MouseEvent) {
+        const target = e.target as HTMLElement;
+        const codeBtn = target.closest('.lucy-code-btn') as HTMLElement | null;
+        if (codeBtn?.dataset.path) {
+            dispatch('codeclick', { path: codeBtn.dataset.path });
+        }
+        const fixBtn = target.closest('.lucy-fix-btn') as HTMLElement | null;
+        if (fixBtn) {
+            const key = fixBtn.dataset.fixKey;
+            if (key) dispatch('fixclick', { key });
+        }
+    }
+
+    function visibleMessages(messages: any[]) {
+        return messages.filter(m =>
+            m.role !== 'hidden' && (
+                !chatSearch || !isActiveTab ||
+                m.role === 'system' || m.role === 'thinking' || m.role === 'streaming' ||
+                (m.rawContent || '').toLowerCase().includes(chatSearch.toLowerCase())
+            )
+        );
+    }
+</script>
+
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div class="chat-area" on:click={handleAreaClick}>
+    {#each visibleMessages(tab.messages) as msg (msg.id)}
+        {#if msg.role === 'thinking'}
+            <div class="msg-thinking">
+                <div class="thinking-dots">
+                    <span></span><span></span><span></span>
+                </div>
+                <span class="thinking-label">Lucy está procesando...</span>
+            </div>
+        {:else if msg.role === 'reasoning'}
+            <div class="msg-reasoning {msg.active ? 'reasoning-active' : 'reasoning-done'} {msg.collapsed ? 'reasoning-collapsed' : ''}">
+                <button type="button" class="reasoning-header"
+                    on:click={() => dispatch('togglereasoning', { msg })}>
+                    <span class="reasoning-icon">·</span>
+                    <span class="reasoning-title">
+                        {#if msg.active}Pensando…{:else}Pensó durante {msg.duration.toFixed(1)}s{/if}
+                    </span>
+                    {#if msg.active}
+                        <span class="reasoning-timer">{msg.duration.toFixed(1)}s</span>
+                    {/if}
+                    <span class="reasoning-chevron">{msg.collapsed ? '▸' : '▾'}</span>
+                </button>
+                {#if !msg.collapsed && msg.html}
+                    <div class="reasoning-body">{@html msg.html}</div>
+                {/if}
+            </div>
+        {:else if msg.role === 'streaming' && !msg.rawContent}
+            <div class="msg-lucy msg-skel">
+                <div class="mn">Lucy</div>
+                <div class="skel-block">
+                    <div class="skel-line" style="width:84%"></div>
+                    <div class="skel-line" style="width:68%"></div>
+                    <div class="skel-line" style="width:91%"></div>
+                </div>
+                <div class="skel-block" style="margin-top:7px">
+                    <div class="skel-line" style="width:52%"></div>
+                </div>
+            </div>
+        {:else}
+            <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''}"
+                style={msg.style || ''}>
+                {#if msg.role !== 'system'}
+                    {#if msg.rawRole && (msg.role === 'user' || msg.role === 'lucy')}
+                        <button class="msg-pin" class:on={msg.pinned}
+                            title={msg.pinned ? (isEN ? 'Unpin' : 'Quitar pin') : (isEN ? 'Pin to context' : 'Fijar al contexto')}
+                            on:click={() => dispatch('pinmessage', { msg })}>·</button>
+                    {/if}
+                    {@html msg.html}
+                    {#if msg.time}<div class="msg-time">{msg.time}</div>{/if}
+                {:else}
+                    {@html msg.html}
+                {/if}
+                {#if msg.button}
+                    <button class="msg-btn"
+                        on:click={(e) => dispatch('buttonaction', { msg, event: e })}>
+                        {msg.button.text}
+                    </button>
+                {/if}
+            </div>
+        {/if}
+    {/each}
+</div>
+
+<style>
+    :global(.chat-wrap){display:none;flex-direction:column;flex:1;overflow:hidden;max-width:960px;width:100%;margin:0 auto;}
+    :global(.chat-wrap.on){display:flex;}
+    :global(.chat-area){flex:1;overflow-y:auto;padding:16px 22px;display:flex;flex-direction:column;gap:10px;min-height:0;}
+    :global(.msg-user),:global(.msg-lucy),:global(.sys-msg),:global(.msg-thinking){content-visibility:auto;contain-intrinsic-size:0 80px;}
+    :global(.msg-user){align-self:flex-end;background:#1e212b;border:1px solid rgba(96,165,250,.08);border-right:2px solid var(--blue);border-radius:10px 10px 0 10px;padding:10px 14px;max-width:78%;white-space:pre-wrap;}
+    :global(.msg-lucy){align-self:flex-start;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid #10b981;border-radius:0 10px 10px 10px;padding:10px 14px;max-width:88%;line-height:1.6;}
+    :global(.skel-block){display:flex;flex-direction:column;gap:7px;padding:4px 0;}
+    :global(.skel-line){height:11px;border-radius:4px;background:linear-gradient(90deg,#0f1520 25%,#1e293b 50%,#0f1520 75%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;}
+    @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+    :global(.sys-msg){align-self:center;color:#334155;font-size:11px;font-style:italic;}
+    :global(.mn){font-size:11px;font-weight:700;margin-bottom:5px;}
+    :global(.msg-user .mn){color:var(--blue);}
+    :global(.msg-lucy .mn){color:var(--acc);}
+    :global(.msg-time){font-size:10px;color:#334155;text-align:right;margin-top:4px;}
+    :global(.msg-btn){display:inline-flex;align-items:center;gap:5px;margin-top:10px;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,170,0,.3);background:rgba(255,170,0,.1);color:var(--amber);transition:.15s;font-family:inherit;}
+    :global(.msg-btn:hover){background:rgba(255,170,0,.2);}
+    :global(.msg-btn:disabled){opacity:.4;cursor:not-allowed;}
+    :global(.msg-lucy p){margin:0 0 6px;}:global(.msg-lucy p:last-child){margin-bottom:0;}
+    :global(.msg-lucy pre){background:#0a0c15;border:1px solid var(--bdr);border-radius:7px;padding:10px 12px;overflow-x:auto;margin:8px 0;}
+    :global(.msg-lucy code){font-family:var(--mono);font-size:12px;color:var(--acc);background:rgba(16,185,129,.06);padding:2px 5px;border-radius:3px;}
+    :global(.msg-lucy pre code){color:#94a3b8;background:transparent;padding:0;border-radius:0;font-size:12px;}
+    :global(.msg-lucy table){width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;}
+    :global(.msg-lucy th,.msg-lucy td){border:1px solid var(--bdr);padding:6px 10px;text-align:left;}
+    :global(.msg-lucy th){background:var(--bg4);color:white;font-size:11px;font-weight:600;}
+    :global(.msg-lucy ul,.msg-lucy ol){padding-left:18px;margin:6px 0;}
+    :global(.msg-lucy li){margin-bottom:3px;}
+    :global(.msg-lucy h1){font-size:15px;color:white;margin:10px 0 5px;font-weight:600;}
+    :global(.msg-lucy h2){font-size:14px;color:white;margin:8px 0 4px;font-weight:600;}
+    :global(.msg-lucy h3){font-size:13px;color:white;margin:6px 0 3px;font-weight:600;}
+    :global(.msg-lucy strong){color:white;font-weight:600;}
+    .msg-pin{position:absolute;top:6px;right:6px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:12px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;}
+    .msg-pin:hover{opacity:1;background:rgba(167,139,250,.15);}
+    .msg-pin.on{opacity:1;color:#fbbf24;text-shadow:0 0 6px rgba(251,191,36,.5);}
+    :global(.msg-user),:global(.msg-lucy){position:relative;}
+    :global(.msg-pinned){border-left:2px solid #fbbf24 !important;}
+    .msg-thinking{display:flex;align-items:center;gap:10px;padding:10px 14px;align-self:flex-start;}
+    .thinking-dots{display:flex;gap:4px;align-items:center;}
+    .thinking-dots span{width:6px;height:6px;border-radius:50%;background:var(--acc);opacity:.4;animation:td .9s ease-in-out infinite;}
+    .thinking-dots span:nth-child(2){animation-delay:.2s;}
+    .thinking-dots span:nth-child(3){animation-delay:.4s;}
+    @keyframes td{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:1;transform:scale(1.3)}}
+    .thinking-label{font-size:11px;color:#334155;font-style:italic;}
+    .msg-reasoning{align-self:flex-start;max-width:88%;margin:6px 0 4px;border-radius:8px;background:rgba(167,139,250,.04);border:1px solid rgba(167,139,250,.14);border-left:2px solid transparent;overflow:hidden;transition:background .25s,border-color .25s;}
+    .msg-reasoning.reasoning-active{background:radial-gradient(circle at 0% 50%,rgba(167,139,250,.18) 0%,transparent 25%),linear-gradient(110deg,rgba(167,139,250,.06) 0%,rgba(99,102,241,.14) 50%,rgba(167,139,250,.06) 100%),rgba(99,102,241,.04);background-size:100% 100%,250% 100%,100% 100%;background-repeat:no-repeat;animation:reasonShimmer 3.2s linear infinite,reasonGlow 4s ease-in-out infinite;border-left-color:#a78bfa;box-shadow:0 0 0 1px rgba(167,139,250,.10),0 4px 18px -8px rgba(99,102,241,.35),inset 0 0 30px -10px rgba(167,139,250,.08);position:relative;}
+    .msg-reasoning.reasoning-active::before{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(110deg,transparent 45%,rgba(167,139,250,.08) 50%,transparent 55%);background-size:250% 100%;animation:reasonScan 2.4s ease-in-out infinite;}
+    .msg-reasoning.reasoning-done{background:rgba(255,255,255,.015);border-left-color:rgba(167,139,250,.35);}
+    @keyframes reasonShimmer{0%{background-position:0% 50%,0% 50%,0% 0%;}100%{background-position:0% 50%,250% 50%,0% 0%;}}
+    @keyframes reasonScan{0%{background-position:-120% 0%;}100%{background-position:120% 0%;}}
+    @keyframes reasonGlow{0%,100%{box-shadow:0 0 0 1px rgba(167,139,250,.10),0 4px 18px -8px rgba(99,102,241,.35),inset 0 0 30px -10px rgba(167,139,250,.08);}50%{box-shadow:0 0 0 1px rgba(167,139,250,.18),0 6px 28px -8px rgba(99,102,241,.55),inset 0 0 40px -10px rgba(167,139,250,.18);}}
+    .reasoning-header{display:flex;align-items:center;gap:8px;width:100%;padding:7px 12px;background:transparent;border:0;color:#cbd5e1;font-size:12px;font-weight:500;cursor:pointer;text-align:left;font-family:inherit;}
+    .reasoning-header:hover{background:rgba(255,255,255,.02);}
+    .reasoning-icon{font-size:13px;}
+    .reasoning-active .reasoning-icon{animation:reasonPulse 1.6s ease-in-out infinite;}
+    @keyframes reasonPulse{0%,100%{opacity:.55;transform:scale(1);}50%{opacity:1;transform:scale(1.15);}}
+    .reasoning-title{flex:1;letter-spacing:.1px;}
+    .reasoning-active .reasoning-title{background:linear-gradient(90deg,#cbd5e1 0%,#a78bfa 50%,#cbd5e1 100%);background-size:200% auto;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:reasonTextShine 2.4s linear infinite;}
+    @keyframes reasonTextShine{0%{background-position:0% 50%;}100%{background-position:200% 50%;}}
+    .reasoning-timer{font-family:var(--mono);font-size:10px;color:#a78bfa;background:rgba(167,139,250,.10);padding:1px 7px;border-radius:10px;border:1px solid rgba(167,139,250,.20);}
+    .reasoning-chevron{font-size:10px;opacity:.55;}
+    .reasoning-body{padding:2px 14px 12px;font-size:12px;line-height:1.55;color:#94a3b8;font-family:var(--mono);white-space:pre-wrap;border-top:1px solid rgba(167,139,250,.08);max-height:340px;overflow-y:auto;animation:reasonFadeIn .2s ease;}
+    @keyframes reasonFadeIn{from{opacity:0;transform:translateY(-2px);}to{opacity:1;transform:none;}}
+    :global(:root.light) .msg-reasoning{background:rgba(99,102,241,.04);border-color:rgba(99,102,241,.18);}
+    :global(:root.light) .reasoning-header{color:#334155;}
+    :global(:root.light) .reasoning-body{color:#475569;}
+    :global(.streaming-active){position:relative;}
+    :global(.streaming-active) :global(p:last-of-type),:global(.streaming-active) :global(li:last-of-type),:global(.streaming-active) :global(pre:last-of-type){animation:streamReveal .15s ease-out;}
+    @keyframes streamReveal{from{opacity:0;transform:translateY(2px);}to{opacity:1;transform:none;}}
+    :global(:root.light .msg-lucy){background:#ffffff !important;border:1px solid rgba(0,168,107,.22) !important;border-left:2px solid var(--acc) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:0 1px 6px rgba(0,0,0,.07);}
+    :global(:root.light .msg-user){background:rgba(213,228,250,.9) !important;border:1px solid rgba(59,130,246,.18) !important;border-right:2px solid var(--blue) !important;backdrop-filter:none !important;color:var(--txt) !important;}
+    :global(:root.light .msg-lucy .mn){color:var(--acc);}
+    :global(:root.light .msg-user .mn){color:var(--blue);}
+    :global(:root.light .msg-time){color:var(--txt3);}
+    :global(:root.light .sys-msg){color:var(--txt3);}
+    :global(:root.light .msg-lucy p,:root.light .msg-user p){color:var(--txt) !important;}
+    :global(:root.light .msg-lucy strong,:root.light .msg-user strong){color:var(--txt) !important;}
+    :global(:root.light .msg-lucy li,:root.light .msg-user li){color:var(--txt) !important;}
+    :global(:root.light .msg-lucy code){color:#00875a;background:rgba(0,168,107,.08);}
+    :global(:root.light .msg-lucy a){color:var(--blue);}
+    :global(:root.light .msg-lucy pre){background:#1a1f2e !important;color:#c8d0dc !important;border:1px solid #2a3448;border-radius:6px;}
+    :global(:root.light .msg-lucy th){background:var(--bg3);color:var(--txt);}
+</style>

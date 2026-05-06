@@ -9,6 +9,11 @@ import { listen } from '@tauri-apps/api/event';
     import Database from '@tauri-apps/plugin-sql';
     import SetupOverlay    from '$lib/SetupOverlay.svelte';
     import { IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles, IconTerminal2 as TerminalSquare, IconFileText as ScrollText, IconNetwork as Network, IconShieldCheck as ShieldCheck, IconClipboardList as ClipboardList, IconActivity as Activity, IconWorld as Globe, IconLock as Lock, IconEraser as Eraser, IconTrash as Trash2, IconSettings as Settings, IconDeviceDesktop as Monitor, IconServer as Server, IconRocket as Rocket, IconBrain as Brain, IconBolt as Zap, IconTool as Wrench, IconDownload as Download, IconSchool as GraduationCap, IconFileCode as FileCode, IconCurrencyDollar as DollarSign, IconOctagonMinus as OctagonX, IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconBug as Bug, IconUser as User, IconDeviceTv as Tv2, IconTerminal as Terminal, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTag as Tag, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconBook2 as Book2, IconFileTypePdf as FilePdf } from '@tabler/icons-svelte';
+    import TabBar          from '$lib/TabBar.svelte';
+    import Sidebar         from '$lib/Sidebar.svelte';
+    import ChatThread      from '$lib/ChatThread.svelte';
+    import ChatInput       from '$lib/ChatInput.svelte';
+    import StatusBar       from '$lib/StatusBar.svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
     import TutorialOverlay from '$lib/TutorialOverlay.svelte';
@@ -8836,273 +8841,59 @@ if (Test-Path $src) {
   </div>
   {/if}
 
-  <header class="tb" data-tauri-drag-region>
-    <div class="brand" role="button" tabindex="0"
-         title="Ver capacidades de Lucy"
-         on:click={() => { showWelcome = true; }}
-         on:keydown={(e) => e.key==='Enter' && (showWelcome = true)}>
-      <div class="bdot"></div>LUCY
-    </div>
-
-    <div class="tabs-area" style="-webkit-app-region: no-drag;">
-      {#if canScrollLeft}
-      <button class="tab-scroll-btn" on:click={scrollTabsLeft} title="Pestañas anteriores">‹</button>
-      {/if}
-
-      <div id="tabs-list" bind:this={tabsListEl} on:scroll={updateScrollState}>
-        {#each tabs as tab (tab.id)}
-          <div class="tab" class:active={activeTabId === tab.id} role="button" tabindex="0"
-               on:click={() => { activeTabId = tab.id; showWelcome = false; scrollToActiveTab(); tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); }); }} on:keydown>
-            <div class="tdot"></div>
-            {#if renamingTabId === tab.id}
-              <input
-                id="rename-{tab.id}"
-                class="tab-rename-input"
-                bind:value={renameValue}
-                on:keydown={(e) => onRenameKey(e, tab.id)}
-                on:blur={() => confirmarRename(tab.id)}
-                on:click|stopPropagation
-              >
-            {:else}
-              <span class="tab-title-txt" role="button" tabindex="0" on:dblclick|stopPropagation={() => iniciarRename(tab.id)} title={`${tab.title}\n(${isEN ? 'Double-click to rename' : 'Doble clic para renombrar'})`}>{tab.title}</span>
-            {/if}
-            <span class="tx" role="button" tabindex="0" on:click={(e) => cerrarTab(tab.id, e)} on:keydown>✕</span>
-          </div>
-        {/each}
-      </div>
-
-      {#if canScrollRight}
-      <button class="tab-scroll-btn" on:click={scrollTabsRight} title="Más pestañas">›</button>
-      {/if}
-
-      {#if tabs.length > 1}
-      <div class="tab-picker-wrap">
-        <button class="tab-picker-btn" title="Ver todas las terminales ({tabs.length})"
-                on:click={() => showTabPicker = !showTabPicker}>
-          <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
-            <path d="M1 3h9v1H1zm0 3h9v1H1zm0 3h9v1H1z"/>
-          </svg>
-          {#if tabs.length > 1}<span class="tab-count">{tabs.length}</span>{/if}
-        </button>
-
-        {#if showTabPicker}
-        <div class="tab-picker-backdrop" role="button" tabindex="-1" aria-label="Cerrar" on:click={() => showTabPicker = false} on:keydown></div>
-        <div class="tab-picker-menu">
-          <div class="tab-picker-header">Terminales abiertas</div>
-          {#each tabs as tab, i (tab.id)}
-            <div class="tab-picker-item" class:tpi-active={activeTabId === tab.id} role="button" tabindex="0"
-                 on:click={() => { activeTabId = tab.id; showWelcome = false; showTabPicker = false; scrollToActiveTab(); tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); }); }}
-                 on:keydown>
-              <div class="tpi-dot" class:tpi-dot-active={activeTabId === tab.id}></div>
-              <span class="tpi-num">{i + 1}</span>
-              <span class="tpi-title" role="button" tabindex="0" on:dblclick|stopPropagation={() => { showTabPicker=false; tick().then(()=>iniciarRename(tab.id)); }} title="Doble clic para renombrar">{tab.title}</span>
-              <button class="tpi-close" title="Cerrar"
-                      on:click|stopPropagation={(e) => { cerrarTab(tab.id, e); if(tabs.length <= 1) showTabPicker = false; }}
-                      on:keydown>✕</button>
-            </div>
-          {/each}
-        </div>
-        {/if}
-      </div>
-      {/if}
-    </div>
-
-    <div class="tb-btns">
-      <button class="btn-new" title="Nueva terminal (Ctrl+T)" on:click={crearTab}>+</button>
-    </div>
-    <div class="drag-sp" data-tauri-drag-region></div>
-    <div class="win-controls">
-      <button class="win-btn-icon panic-btn" on:click={panicKill} title={isEN ? 'Stop All Processes (Panic)' : 'Detener todo (Pánico)'}>
-        <OctagonX size={14} strokeWidth={2.2} />
-      </button>
-      <button class="win-btn-icon" on:click={() => { focusMode = !focusMode; }} title={focusMode ? 'Ctrl+M — salir de focus' : 'Ctrl+M — modo focus'}>
-        {focusMode ? '⊞' : '⊟'}
-      </button>
-      <div class="win-btn" role="button" tabindex="0" title="Minimizar" on:click={minimize} on:keydown>
-        <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M11 5H0V6H11V5Z"/></svg>
-      </div>
-      <div class="win-btn" role="button" tabindex="0" title="Maximizar" on:click={maximize} on:keydown>
-        <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M10 1H1V10H10V1ZM11 0V11H0V0H11Z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
-      </div>
-      <div class="win-btn wc" role="button" tabindex="0" title="Cerrar" on:click={cerrar} on:keydown>
-        <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M10.854 1.146L9.854 0.146L5.5 4.5L1.146 0.146L0.146 1.146L4.5 5.5L0.146 9.854L1.146 10.854L5.5 6.5L9.854 10.854L10.854 9.854L6.5 5.5L10.854 1.146Z"/></svg>
-      </div>
-    </div>
-  </header>
+  <TabBar
+    {tabs} {activeTabId} {canScrollLeft} {canScrollRight}
+    {renamingTabId} {renameValue} {focusMode} {isEN}
+    bind:tabsListEl
+    on:newtab={() => crearTab()}
+    on:selecttab={(e) => { activeTabId = e.detail.tabId; showWelcome = false; scrollToActiveTab(); tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); }); }}
+    on:closetab={(e) => cerrarTab(e.detail.tabId, e.detail.event)}
+    on:scrollleft={scrollTabsLeft}
+    on:scrollright={scrollTabsRight}
+    on:startRename={(e) => iniciarRename(e.detail.tabId)}
+    on:confirmRename={(e) => confirmarRename(e.detail.tabId)}
+    on:renameKey={(e) => onRenameKey(e.detail.event, e.detail.tabId)}
+    on:toggleFocus={() => { focusMode = !focusMode; }}
+    on:minimize={minimize}
+    on:maximize={maximize}
+    on:closeApp={cerrar}
+    on:panic={panicKill}
+    on:showWelcome={() => { showWelcome = true; }}
+  />
 
   <div class="body" class:focus-mode={focusMode}>
 
-    <aside class="sidebar sidebar-glass" class:open={!sidebarCollapsed} class:closed={sidebarCollapsed}
-      style={!sidebarCollapsed ? `width:${sidebarWidth}px` : ''}>
-
-      <button class="sb-tog" on:click={() => sidebarCollapsed = !sidebarCollapsed}
-        title={sidebarCollapsed ? (isEN ? 'Expand sidebar' : 'Expandir sidebar') : (isEN ? 'Collapse sidebar' : 'Colapsar sidebar')}>
-        {sidebarCollapsed ? '›' : '‹'}
-        {#if !sidebarCollapsed}<span class="sb-togtxt">{isEN ? 'Collapse' : 'Colapsar'}</span>{/if}
-      </button>
-
-      <div class="sb-lbl">Sistema</div>
-      <div class="sb-it" class:act={activeView==='dashboard'} role="button" tabindex="0" on:click={() => setView('dashboard')} on:keydown title="Dashboard — métricas del sistema">
-        <span class="sb-ico"><LayoutDashboard size={20} /></span><span class="sb-txt">Dashboard</span>
-      </div>
-      <div class="sb-it" class:act={activeView==='terminal'} role="button" tabindex="0" on:click={() => setView('terminal')} on:keydown title="Terminal IA — chat con Lucy">
-        <span class="sb-ico"><Sparkles size={20} /></span><span class="sb-txt">Terminal IA</span>
-      </div>
-      <div class="sb-it" class:act={activeView==='nexshell'} role="button" tabindex="0" on:click={() => setView('nexshell')} on:keydown title="NexShell — Hosts remotos e infraestructura">
-        <span class="sb-ico"><TerminalSquare size={20} /></span>
-        <span class="sb-txt">NexShell</span>
-        {#if rshellSessions.length > 0 && !sidebarCollapsed}
-          <span class="sb-ns-badge">{rshellSessions.filter(s=>s.connected).length}/{rshellSessions.length}</span>
-        {/if}
-      </div>
-      <div class="sb-it" class:act={activeView==='logviewer'} role="button" tabindex="0" on:click={() => setView('logviewer')} on:keydown title="Log Viewer — revisar archivos de log">
-        <span class="sb-ico"><ScrollText size={20} /></span><span class="sb-txt">Log Viewer</span>
-      </div>
-      <div class="sb-it" class:act={activeView==='inventory'} role="button" tabindex="0" on:click={() => setView('inventory')} on:keydown title={isEN ? 'Infrastructure Inventory — ports, services, software, certificates' : 'Inventario — puertos, servicios, software, certificados'}>
-        <span class="sb-ico"><Network size={20} /></span><span class="sb-txt">{isEN ? 'Inventory' : 'Inventario'}</span>
-      </div>
-      <div class="sb-it" class:act={activeView==='compliance'} role="button" tabindex="0" on:click={() => setView('compliance')} on:keydown title={isEN ? 'Compliance Scanning — CIS Benchmark audits' : 'Compliance — auditorías CIS Benchmark'}>
-        <span class="sb-ico"><ShieldCheck size={20} /></span><span class="sb-txt">Compliance</span>
-      </div>
-      <div class="sb-it" class:act={activeView==='audittrail'} role="button" tabindex="0" on:click={() => setView('audittrail')} on:keydown title={isEN ? 'Audit Trail — command history and tracking' : 'Auditoría — historial y seguimiento de comandos'}>
-        <span class="sb-ico"><ClipboardList size={20} /></span><span class="sb-txt">{isEN ? 'Audit Trail' : 'Auditoría'}</span>
-      </div>
-      <div class="sb-div"></div>
-
-      <!-- Runbooks / Playbooks -->
-      <div class="sb-lbl" style="display:flex;justify-content:space-between;align-items:center;padding-right:14px;">
-        {#if !sidebarCollapsed}<span>RUNBOOKS</span>{/if}
-        {#if !sidebarCollapsed}
-        <button on:click={abrirNuevoRunbook} style="background:none;border:none;color:var(--acc);cursor:pointer;font-size:15px;font-weight:bold;line-height:1;padding:0 5px;" title={isEN ? "New runbook" : "Nuevo runbook"}>+</button>
-        {/if}
-      </div>
-      {#if !$runbooks.length && !sidebarCollapsed}
-        <div style="padding:4px 14px 8px;font-size:11px;color:#334155;font-style:italic;">{isEN ? 'No runbooks' : 'Sin runbooks'}</div>
-      {/if}
-      {#each $runbooks as rb}
-      <div class="sb-it sb-action-item" role="button" tabindex="0" on:click={() => ejecutarRunbook(rb)} on:keydown
-        title="Ejecutar: {rb.name} ({rb.steps.length} pasos)">
-        <span class="sb-ico">{rb.icon}</span>
-        <span class="sb-txt">{rb.name}</span>
-        {#if !sidebarCollapsed}
-        <div style="display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0;">
-          {#if runbookRunning?.rbId === rb.id && runbookRunning.stepIdx >= 0}
-            <span style="font-size:9px;color:var(--amber);">paso {runbookRunning.stepIdx+1}/{rb.steps.length}</span>
-          {/if}
-          <button class="sb-shell-btn" on:click|stopPropagation={() => abrirEditarRunbook(rb)} title="Editar">✏</button>
-          <button class="sb-rm-btn" on:click|stopPropagation={() => eliminarRunbook(rb.id)} title="Eliminar">✖</button>
-        </div>
-        {/if}
-      </div>
-      {/each}
-
-      <div class="sb-div"></div>
-
-      <div class="sb-lbl" style="display:flex; justify-content:space-between; align-items:center; padding-right:14px;">
-        {#if !sidebarCollapsed}
-          <div>
-            <span>{isEN ? 'Direct actions' : 'Acciones directas'}</span>
-            <span class="sb-noai-badge" title={isEN ? "These buttons execute PowerShell scripts directly, bypassing Lucy" : "Estos botones ejecutan scripts de PowerShell directamente, sin pasar por Lucy"}>{isEN ? 'NO AI' : 'SIN IA'}</span>
-          </div>
-          <button on:click={() => { editingActionIdx = null; newActionName = ''; newActionScript = ''; newActionIcon = 'bolt'; $showNewActionModal = true; }} style="background:none; border:none; color:var(--acc); cursor:pointer; font-size:16px; font-weight:bold; line-height:1; padding:0 5px;" title={isEN ? "Add direct action" : "Añadir acción directa"}>+</button>
-        {/if}
-      </div>
-
-      {#each quickActions as accion, i}
-      <div class="sb-it sb-action-item" role="button" tabindex="0"
-        on:click={() => ejecutarDesdeSidebar(accion)} on:keydown
-        title="Ejecutar directamente: {accion.nombre}">
-        <span class="sb-ico">
-          {#if ICON_MAP[accion.icono]}
-            <svelte:component this={ICON_MAP[accion.icono]} size={18}/>
-          {:else}
-            <!-- Fallback for any unrecognized icon: render as raw text/emoji -->
-            <span style="font-size:13px;">{accion.icono}</span>
-          {/if}
-        </span>
-        <span class="sb-txt">{accion.nombre}</span>
-        {#if !sidebarCollapsed}
-        <button class="sb-edit" on:click|stopPropagation={() => abrirEditarAccionRapida(i)} title={isEN ? 'Edit' : 'Editar'}>✎</button>
-        <button class="sb-del" on:click|stopPropagation={() => eliminarAccionRapida(i)} title={isEN ? 'Delete' : 'Eliminar'}>✖</button>
-        {/if}
-      </div>
-      {/each}
-      <div class="sb-div" style="margin-top:auto;"></div>
-
-      <!-- Registros: accordion plegable -->
-      <div class="sb-lbl sb-accordion-hdr" role="button" tabindex="0"
-        on:click={() => registrosOpen = !registrosOpen} on:keydown={(e) => e.key === 'Enter' && (registrosOpen = !registrosOpen)}>
-        {#if !sidebarCollapsed}
-          <span>Registros</span>
-          <span class="sb-accordion-arrow" class:open={registrosOpen}>{registrosOpen ? '▾' : '▸'}</span>
-        {:else}
-          <span style="font-size:10px;">≡</span>
-        {/if}
-      </div>
-      {#if registrosOpen || sidebarCollapsed}
-      <div class="sb-accordion-body">
-        <div class="sb-it" role="button" tabindex="0" on:click={abrirMemoria} on:keydown
-          title={isEN ? 'Custom commands learned by Lucy' : 'Comandos aprendidos por Lucy'}>
-          <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Commands' : 'Comandos'}</span>
-          {#if customCmdCount > 0}<span class="sb-bdg b">{customCmdCount}</span>{/if}
-        </div>
-        <div class="sb-it" role="button" tabindex="0" on:click={abrirAudit} on:keydown title="Abrir audit log en Notepad">
-          <span class="sb-ico"><FileCode size={18}/></span><span class="sb-txt">Audit Log</span>
-          {#if auditAlerts > 0}<span class="sb-bdg y">{auditAlerts}</span>{/if}
-        </div>
-        <div class="sb-it" role="button" tabindex="0" on:click={exportarAuditLog} on:keydown title="Exportar audit log a Descargas">
-          <span class="sb-ico"><Download size={18}/></span><span class="sb-txt">Exportar Log</span>
-        </div>
-      </div>
-      {/if}
-
-      <div class="sb-div"></div>
-
-      <!-- Utilidades agrupadas -->
-      <div class="sb-it" role="button" tabindex="0"
-        on:click={() => { showTutorial = true; }}
-        on:keydown={(e) => e.key === 'Enter' && (showTutorial = true)}
-        title={isEN ? 'Interactive guided tour of Lucy' : 'Tour guiado interactivo de Lucy'}>
-        <span class="sb-ico"><GraduationCap size={18}/></span><span class="sb-txt">{isEN ? 'Show Tutorial' : 'Ver Tutorial'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showPermissionRulesModal = true} on:keydown
-        title={isEN ? 'Manage permission rules' : 'Gestionar reglas de permisos'}>
-        <span class="sb-ico"><ShieldCheck size={18}/></span><span class="sb-txt">{isEN ? 'Permissions' : 'Permisos'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showSkillsManagerModal = true} on:keydown
-        title={isEN ? 'Manage skills and runbooks' : 'Gestionar skills y runbooks'}>
-        <span class="sb-ico"><Zap size={18}/></span><span class="sb-txt">{isEN ? 'Skills' : 'Skills'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showPrinciplesModal = true} on:keydown
-        title={isEN ? 'Behavioral principles — rules Lucy follows in every turn' : 'Principios — reglas que Lucy sigue en cada turno'}>
-        <span class="sb-ico"><Tag size={18}/></span><span class="sb-txt">{isEN ? 'Principles' : 'Principios'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showSchedulesModal = true} on:keydown
-        title={isEN ? 'Scheduled tasks — natural-language cron jobs' : 'Tareas programadas — cron en lenguaje natural'}>
-        <span class="sb-ico"><Bell size={18}/></span><span class="sb-txt">{isEN ? 'Schedules' : 'Programadas'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showForksMonitor = !showForksMonitor} on:keydown
-        title={isEN ? 'Sub-Agent Monitor (fork_task results)' : 'Monitor de Sub-Agentes (resultados fork_task)'}
-        class:sb-it-active={showForksMonitor}>
-        <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Sub-Agents' : 'Sub-Agentes'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showPdfPanel = !showPdfPanel} on:keydown
-        title={isEN ? 'PDF Intelligence — Ingest manuals & docs' : 'PDF Intelligence — Ingresa manuales y docs'}
-        class:sb-it-active={showPdfPanel}>
-        <span class="sb-ico"><FilePdf size={18}/></span><span class="sb-txt">{isEN ? 'PDF Docs' : 'PDF Docs'}</span>
-      </div>
-      <div class="sb-it" role="button" tabindex="0" on:click={() => showSettingsModal = true} on:keydown
-        title={isEN ? 'Settings & Preferences' : 'Configuración y Preferencias'}>
-        <span class="sb-ico"><Settings size={18}/></span><span class="sb-txt">{isEN ? 'Settings' : 'Configuración'}</span>
-      </div>
-
-    </aside>
-    {#if !sidebarCollapsed}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="sb-resize-handle" class:resizing={sidebarResizing}
-         on:mousedown|preventDefault={sbResizeStart}
-         title="Arrastrar para ajustar ancho" on:keydown></div>
-    {/if}
+    <Sidebar
+      {activeView} {sidebarCollapsed} {sidebarWidth} {sidebarResizing}
+      quickActions={quickActions} {isEN} {rshellSessions} {registrosOpen}
+      customCmdCount={customCmdCount} {auditAlerts} {runbookRunning}
+      {showForksMonitor} {showPdfPanel} {ICON_MAP}
+      on:setview={(e) => setView(e.detail.view)}
+      on:openmodal={(e) => {
+        const m = e.detail.modal;
+        if (m === 'newrunbook') abrirNuevoRunbook();
+        else if (m === 'newaction') { editingActionIdx = null; newActionName = ''; newActionScript = ''; newActionIcon = 'bolt'; $showNewActionModal = true; }
+        else if (m === 'permissions') showPermissionRulesModal = true;
+        else if (m === 'skills') showSkillsManagerModal = true;
+        else if (m === 'principles') showPrinciplesModal = true;
+        else if (m === 'schedules') showSchedulesModal = true;
+        else if (m === 'settings') showSettingsModal = true;
+        else if (m === 'tutorial') showTutorial = true;
+      }}
+      on:runrunbook={(e) => ejecutarRunbook(e.detail.runbook)}
+      on:editrunbook={(e) => abrirEditarRunbook(e.detail.runbook)}
+      on:deleterunbook={(e) => eliminarRunbook(e.detail.id)}
+      on:runaction={(e) => ejecutarDesdeSidebar(e.detail.action)}
+      on:editaction={(e) => abrirEditarAccionRapida(e.detail.index)}
+      on:deleteaction={(e) => eliminarAccionRapida(e.detail.index)}
+      on:sbresizestart={(e) => sbResizeStart(e.detail.event)}
+      on:toggleregistros={() => registrosOpen = !registrosOpen}
+      on:memoriaabierta={abrirMemoria}
+      on:auditabierto={abrirAudit}
+      on:exportarlog={exportarAuditLog}
+      on:toggleforks={() => showForksMonitor = !showForksMonitor}
+      on:togglepdf={() => showPdfPanel = !showPdfPanel}
+    />
 
     <div class="panel">
 
@@ -9271,249 +9062,40 @@ if (Test-Path $src) {
 
         {#each tabs as tab (tab.id)}
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div class="chat-area" on:click={(e) => {
-                const codeBtn = e.target.closest('.lucy-code-btn');
-                if (codeBtn && codeBtn.dataset.path) {
-                    invoke('open_vscode', { path: codeBtn.dataset.path });
-                }
-                const btn = e.target.closest('.lucy-fix-btn'); 
-                if(btn){ 
-                    const key = btn.dataset.fixKey; 
-                    if(key && window._lucyRunFix) window._lucyRunFix(key);  
-                } 
-            }}>
-              {#each tab.messages.filter(m => m.role !== 'hidden' && (
-                  !chatSearch || activeTabId !== tab.id ||
-                  m.role === 'system' || m.role === 'thinking' || m.role === 'streaming' ||
-                  (m.rawContent||'').toLowerCase().includes(chatSearch.toLowerCase())
-              )) as msg (msg.id)}
-                {#if msg.role === 'thinking'}
-                  <!-- Indicador inline "Lucy pensando" estilo Warp -->
-                  <div class="msg-thinking">
-                    <div class="thinking-dots">
-                      <span></span><span></span><span></span>
-                    </div>
-                    <span class="thinking-label">Lucy está procesando...</span>
-                  </div>
-                {:else if msg.role === 'reasoning'}
-                  <!-- Live reasoning panel (Claude/Antigravity-style) -->
-                  <div class="msg-reasoning {msg.active ? 'reasoning-active' : 'reasoning-done'} {msg.collapsed ? 'reasoning-collapsed' : ''}">
-                    <button type="button" class="reasoning-header" on:click={() => { msg.collapsed = !msg.collapsed; tabs = tabs; }}>
-                      <span class="reasoning-icon">·</span>
-                      <span class="reasoning-title">
-                        {#if msg.active}Pensando…{:else}Pensó durante {msg.duration.toFixed(1)}s{/if}
-                      </span>
-                      {#if msg.active}
-                        <span class="reasoning-timer">{msg.duration.toFixed(1)}s</span>
-                      {/if}
-                      <span class="reasoning-chevron">{msg.collapsed ? '▸' : '▾'}</span>
-                    </button>
-                    {#if !msg.collapsed && msg.html}
-                      <div class="reasoning-body">{@html msg.html}</div>
-                    {/if}
-                  </div>
-                {:else if msg.role === 'streaming' && !msg.rawContent}
-                  <!-- Skeleton: visible hasta que llega el primer chunk de contenido -->
-                  <div class="msg-lucy msg-skel">
-                    <div class="mn">Lucy</div>
-                    <div class="skel-block">
-                      <div class="skel-line" style="width:84%"></div>
-                      <div class="skel-line" style="width:68%"></div>
-                      <div class="skel-line" style="width:91%"></div>
-                    </div>
-                    <div class="skel-block" style="margin-top:7px">
-                      <div class="skel-line" style="width:52%"></div>
-                    </div>
-                  </div>
-                {:else}
-                  <div class="{msg.role==='user'?'msg-user':msg.role==='system'?'sys-msg':'msg-lucy'}{msg.role==='streaming'?' streaming-active':''}{msg.pinned?' msg-pinned':''}" style={msg.style||''}>
-                    {#if msg.role !== 'system'}
-                      {#if msg.rawRole && (msg.role === 'user' || msg.role === 'lucy')}
-                        <button class="msg-pin" class:on={msg.pinned} title={msg.pinned ? (isEN?'Unpin':'Quitar pin') : (isEN?'Pin to context':'Fijar al contexto')}
-                          on:click={() => { msg.pinned = !msg.pinned; tabs = tabs; toast(msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}>·</button>
-                      {/if}
-                      {@html msg.html}
-                      {#if msg.time}<div class="msg-time">{msg.time}</div>{/if}
-                    {:else}
-                      {@html msg.html}
-                    {/if}
-                    {#if msg.button}
-                      <button class="msg-btn"
-                              on:click={(e) => {e.target.disabled=true;e.target.innerText='↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA');msg.button.action(e);}}>
-                        {msg.button.text}
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
-              {/each}
-            </div>
-
-            <div class="staged">
-              {#each tab.attachedFiles as file}
-                <div class="sf-bdg">
-                  {#if file.type==='image'}<img src={file.previewUrl} alt="p" style="width:22px;height:22px;object-fit:cover;border-radius:3px;">
-                  {:else}<span>·</span>{/if}
-                  <span style="font-size:12px;">{file.name}</span>
-                  <button class="sf-rm" on:click={() => removeFile(tab.id, file.name)} on:keydown>✕</button>
-                </div>
-              {/each}
-            </div>
-
-            <div class="chips" class:chips-collapsed={chipsHidden}>
-              <button class="chips-toggle" on:click={toggleChipsCollapsed}
-                title={chipsHidden
-                  ? (isEN ? `Show ${userChips.length} Lucy shortcuts` : `Mostrar ${userChips.length} atajos de Lucy`)
-                  : (isEN ? 'Hide Lucy shortcuts' : 'Ocultar atajos de Lucy')}>
-                <span class="chips-lucy-label">Lucy ↗</span>
-                {#if chipsHidden}<span class="chips-count">{userChips.length}</span>{/if}
-                <span class="chips-chevron">{chipsHidden ? '▸' : '▾'}</span>
-              </button>
-              {#if !chipsHidden}
-                {#each userChips as chip, i}
-                  <div class="chip-wrap">
-                    <button class="chip chip-user" on:click={() => runChipLabel(chip.clave)} disabled={tab.isProcessing}
-                      title="Enviar a Lucy: {chip.clave}">{chip.label}</button>
-                    <div class="chip-actions">
-                      <button class="chip-act" on:click|stopPropagation={() => abrirEditarChip(i)} title="Editar">✎</button>
-                      <button class="chip-act chip-del" on:click|stopPropagation={() => eliminarChip(i)} title="Eliminar">✕</button>
-                    </div>
-                  </div>
-                {/each}
-                <button class="chip chip-add" on:click={abrirNuevoChip} title={isEN ? "Add message shortcut for Lucy" : "Agregar atajo de mensaje para Lucy"}>＋</button>
-              {/if}
-            </div>
-
-            {#if pendingSecurityBlock?.tabId === tab.id}
-            <div class="sec-banner" role="alert">
-              <div class="sec-banner-hdr">
-                <span class="sec-banner-ico">⬡</span>
-                <div class="sec-banner-info">
-                  <span class="sec-banner-title">Instrucción bloqueada por seguridad</span>
-                  <span class="sec-banner-rule">Regla: <code>{pendingSecurityBlock.blockWord}</code></span>
-                </div>
-              </div>
-              <code class="sec-banner-cmd">{pendingSecurityBlock.displayCmd}</code>
-              <div class="sec-banner-actions">
-                <button class="mbtn ghost" style="font-size:12px;padding:6px 14px;" on:click={limpiarSecurityBlock}>Cancelar</button>
-                <button class="mbtn warn" style="font-size:12px;padding:6px 14px;" on:click={autorizarSecurityBlock}>! Autorizar y Ejecutar</button>
-              </div>
-            </div>
-            {/if}
-
-            {#if showChatSearch && activeTabId === tab.id}
-            <div class="chat-search-bar">
-              <span class="cs-ico">◎</span>
-              <input id="chat-search-inp" class="cs-inp" bind:value={chatSearch}
-                placeholder={isEN ? 'Search in conversation…' : 'Buscar en conversación…'}
-                on:keydown={(e) => { if (e.key === 'Escape') { showChatSearch = false; chatSearch = ''; } }} />
-              {#if chatSearch}<span class="cs-count">{chatSearchCount} {isEN ? 'results' : 'resultados'}</span>{/if}
-              <button class="cs-close" on:click={() => { showChatSearch = false; chatSearch = ''; }}>✕</button>
-            </div>
-            {/if}
-
-            <div class="ibar" role="region" aria-label={isEN ? 'Message input area' : 'Área de entrada de mensaje'}
-              on:dragover|preventDefault={(e) => { e.dataTransfer.dropEffect='copy'; e.currentTarget.classList.add('drag-over'); }}
-              on:dragleave={(e) => e.currentTarget.classList.remove('drag-over')}
-              on:drop|preventDefault={(e) => { e.currentTarget.classList.remove('drag-over'); handleFileDrop(e, tab.id); }}>
-              <!-- ── PENDING MESSAGE INDICATOR ── -->
-              {#if tab.pendingMessage}
-              <div class="pending-msg-bar">
-                <span class="pending-msg-dot"></span>
-                <span class="pending-msg-text">{isEN ? 'Queued' : 'En espera'}: "{tab.pendingMessage.text.length > 50 ? tab.pendingMessage.text.slice(0,50)+'…' : tab.pendingMessage.text}"</span>
-                <button class="pending-msg-cancel" title={isEN ? 'Cancel queued message' : 'Cancelar mensaje en espera'}
-                  on:click={() => { getTab(tab.id).pendingMessage = null; refresh(); }}>✕</button>
-              </div>
-              {/if}
-              <div class="igrp">
-                <textarea class="ibox" rows="1"
-                  placeholder={tab.pendingMessage
-                    ? (isEN ? 'Message queued — waiting for Lucy…' : 'Mensaje en espera — esperando a Lucy…')
-                    : tab.isProcessing
-                      ? (isEN ? 'Type here — will send when Lucy finishes…' : 'Escribe aquí — se enviará cuando Lucy termine…')
-                      : ui.cmdPlaceholder}
-                  bind:value={tab.inputValue}
-                  on:input={autoResize}
-                  on:keydown={(e)=>onKey(e,tab.id)}
-                  disabled={!!tab.pendingMessage}></textarea>
-                <div class="iside">
-                  <button class="ia-btn" title={isEN ? 'Attach file' : 'Adjuntar archivo'} on:click={() => attach(tab.id)} disabled={!!tab.pendingMessage}>
-                    <Paperclip size={15} strokeWidth={1.8} />
-                  </button>
-                  <button class="ia-btn {tab.isListening?'mic-on':''}" title={isEN ? 'Voice input' : 'Entrada de voz'} on:click={() => toggleMic(tab.id)} disabled={tab.isProcessing && !tab.isListening}>
-                    {#if tab.isListening}<MicOff size={15} strokeWidth={1.8} />{:else}<Mic size={15} strokeWidth={1.8} />{/if}
-                  </button>
-                  <button class="ia-btn" title={isEN ? 'Clear session (Ctrl+L)' : 'Limpiar sesión (Ctrl+L)'} on:click={() => limpiarSesion(tab.id)} disabled={tab.isProcessing}>
-                    <Eraser size={15} strokeWidth={1.8} />
-                  </button>
-                  <div class="ia-sep"></div>
-                  {#if tab.id === activeTabId && costPrediction}
-                    <span class="cost-predict cost-predict-{costPrediction.level}"
-                      title={costPrediction.level === 'free'
-                        ? (isEN ? 'Local model — no API cost' : 'Modelo local — sin costo de API')
-                        : `${isEN ? 'Estimated cost' : 'Costo estimado'}: $${costPrediction.cost.toFixed(4)}\n${isEN ? 'Input' : 'Entrada'}: ~${costPrediction.inputTokens} tokens\n${isEN ? 'Output' : 'Salida'}: ~${costPrediction.outputTokens} tokens (${isEN ? 'estimated' : 'estimado'})\n${isEN ? 'Model' : 'Modelo'}: ${costPrediction.model}`}>
-                      {#if costPrediction.level === 'free'}
-                        <span class="cp-icon">●</span>{isEN ? 'free' : 'gratis'}
-                      {:else}
-                        <span class="cp-icon">≈</span>
-                        <span class="cp-tokens">{_formatTokens(costPrediction.totalTokens)}</span>
-                        <span class="cp-cost">${costPrediction.cost < 0.001 ? costPrediction.cost.toFixed(4) : costPrediction.cost.toFixed(3)}</span>
-                      {/if}
-                    </span>
-                    <div class="ia-sep"></div>
-                  {/if}
-                  <div class="mbdg">
-                    {#if tab.selectedModel?.startsWith('local-')}
-                      <span class="ollama-dot" class:on={$ollamaOnline} title={$ollamaOnline ? 'Ollama online' : 'Ollama offline'}></span>
-                    {:else if tab.selectedModel?.includes('/') || tab.selectedModel === 'nvidia-custom'}
-                      <span class="ollama-dot" class:on={$nvidiaConfigured} title={$nvidiaConfigured ? 'NVIDIA NIM ✓' : 'NVIDIA API Key no configurada'}></span>
-                    {/if}
-                    <select bind:value={tab.selectedModel} disabled={tab.isProcessing}
-                      title={getModelDescription(tab.selectedModel, isEN)}>
-                      {#each LLM_GROUPS as group}
-                        <optgroup label={group.label}>
-                          {#if group.label.includes('Locales')}
-                            {#each $localModels as opt}
-                              <option value={opt.id}>{opt.icon} {isEN ? opt.nameEn : opt.nameEs}</option>
-                            {/each}
-                          {:else if group.provider === 'nvidia' && $nvidiaModels.length > 0}
-                            {#each $nvidiaModels as opt}
-                              <option value={opt.id}>{opt.icon} {isEN ? opt.nameEn : opt.nameEs}</option>
-                            {/each}
-                          {:else}
-                            {#each group.options as opt}
-                              <option value={opt.id}>{opt.icon} {isEN ? opt.nameEn : opt.nameEs}</option>
-                            {/each}
-                          {/if}
-                        </optgroup>
-                      {/each}
-                    </select>
-                    {#if tab.selectedModel === 'nvidia-custom'}
-                      <input
-                        class="nvidia-custom-input"
-                        type="text"
-                        bind:value={tab.nvidiaCustomModel}
-                        disabled={tab.isProcessing}
-                        placeholder="owner/model  (ej: nicoboss/DeepSeek-R1-Distill-Qwen-32B-Uncensored)"
-                        title={isEN ? 'Type the exact NVIDIA NIM model ID (owner/model-name)' : 'Escribe el ID exacto del modelo NVIDIA NIM (owner/model-name)'}
-                      />
-                    {/if}
-                  </div>
-                </div>
-              </div>
-              <!-- ── SEND / STOP TOGGLE (Gemini/Claude style) ── -->
-              {#if tab.isProcessing}
-                <button class="sbtn sbtn-stop" on:click={() => cancelarEjecucion(tab.id)}
-                  title={isEN ? 'Stop (Escape)' : 'Detener (Escape)'}>
-                  <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
-                    <rect x="1.5" y="1.5" width="10" height="10" rx="2"/>
-                  </svg>
-                </button>
-              {:else}
-                <button class="sbtn" on:click={() => process(tab.id)}
-                  disabled={!tab.inputValue?.trim() && !tab.attachedFiles?.length}>▶</button>
-              {/if}
-            </div>
+            <ChatThread
+              {tab} {isEN} {chatSearch} isActiveTab={activeTabId === tab.id}
+              on:pinmessage={(e) => { e.detail.msg.pinned = !e.detail.msg.pinned; tabs = tabs; toast(e.detail.msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}
+              on:buttonaction={(e) => { const btn = e.detail.event.target; btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); e.detail.msg.button.action(e.detail.event); }}
+              on:togglereasoning={(e) => { e.detail.msg.collapsed = !e.detail.msg.collapsed; tabs = tabs; }}
+              on:codeclick={(e) => invoke('open_vscode', { path: e.detail.path })}
+              on:fixclick={(e) => { if (window._lucyRunFix) window._lucyRunFix(e.detail.key); }}
+            />
+            <ChatInput
+              {tab} {isEN} {costPrediction} {userChips} {chipsHidden}
+              {pendingSecurityBlock} {LLM_GROUPS} {showChatSearch} bind:chatSearch
+              {chatSearchCount} isActiveTab={activeTabId === tab.id}
+              cmdPlaceholder={ui.cmdPlaceholder} {getEffectiveModel} {getModelDescription}
+              formatTokens={_formatTokens}
+              on:attach={() => attach(tab.id)}
+              on:togglemic={() => toggleMic(tab.id)}
+              on:clearsession={() => limpiarSesion(tab.id)}
+              on:removefile={(e) => removeFile(e.detail.tabId, e.detail.fileName)}
+              on:runchip={(e) => runChipLabel(e.detail.clave)}
+              on:addchip={abrirNuevoChip}
+              on:editchip={(e) => abrirEditarChip(e.detail.index)}
+              on:deletechip={(e) => eliminarChip(e.detail.index)}
+              on:togglechips={toggleChipsCollapsed}
+              on:authorizesecurity={autorizarSecurityBlock}
+              on:clearsecurity={limpiarSecurityBlock}
+              on:send={() => process(tab.id)}
+              on:stop={() => cancelarEjecucion(tab.id)}
+              on:inputchange={autoResize}
+              on:keydown={(e) => onKey(e.detail.event, tab.id)}
+              on:cancelpending={() => { getTab(tab.id).pendingMessage = null; refresh(); }}
+              on:chatSearchChange={() => {}}
+              on:closeChatSearch={() => { showChatSearch = false; chatSearch = ''; }}
+              on:filedrop={(e) => handleFileDrop(e.detail.event, tab.id)}
+            />
           </div>
         {/each}
 
@@ -9582,55 +9164,12 @@ if (Test-Path $src) {
 
       </div><!-- fin .ws -->
 
-      {#if !showSetupOverlay}
-      <div class="bbar">
-        {#if hostName !== '---'}<div class="bi"><span>Host:</span><span style="color:#0f7b5a;">{lucyConfig.name} · {hostName}</span></div>{/if}
-        {#if activeTab}
-          {@const _model = getEffectiveModel(activeTab)}
-          {@const _shortModel = _model.includes('/') ? _model.split('/').pop() : _model}
-          <div class="bi" title={`${isEN ? 'Active model in this tab' : 'Modelo activo en esta pestaña'}: ${_model}`}>
-            <span>{isEN ? 'Model:' : 'Modelo:'}</span><span class="cm">◇ {_shortModel}</span>
-          </div>
-        {/if}
-        {#if $costSummaryMonth && $costSummaryMonth.total_cost > 0}
-          {@const _budget = $tokenBudgetConfig?.monthlyLimit || 0}
-          {@const _pct = _budget > 0 ? ($costSummaryMonth.total_cost / _budget) * 100 : 0}
-          {@const _critical = _budget > 0 && _pct >= ($tokenBudgetConfig?.alertThreshold || 80)}
-          {@const _warn = _budget > 0 && _pct >= 60 && !_critical}
-          <div class="bi" title={_budget > 0
-            ? `${isEN ? 'This month' : 'Este mes'}: $${$costSummaryMonth.total_cost.toFixed(4)} de $${_budget.toFixed(2)} (${_pct.toFixed(1)}%) · ${$costSummaryMonth.total_tokens.toLocaleString()} tokens · ${$costSummaryMonth.request_count} ${isEN?'requests':'consultas'}`
-            : `${isEN ? 'This month' : 'Este mes'}: $${$costSummaryMonth.total_cost.toFixed(4)} · ${$costSummaryMonth.total_tokens.toLocaleString()} tokens`}>
-            <span>{isEN ? 'Cost:' : 'Costo:'}</span>
-            <span class="{_critical ? 'cr' : _warn ? 'cy' : 'cok'}">${$costSummaryMonth.total_cost.toFixed(_budget > 0 && _budget < 1 ? 4 : 3)}</span>
-            {#if _budget > 0}
-              <span class="cost-budget-track" title="Budget: ${_budget.toFixed(2)}">
-                <span class="cost-budget-fill {_critical ? 'cr-bg' : _warn ? 'cy-bg' : 'cok-bg'}" style="width:{Math.min(100, _pct).toFixed(1)}%;"></span>
-              </span>
-            {/if}
-          </div>
-        {/if}
-        {#if activeTab?._streamTPS && activeTab._streamTPS > 0}
-          <div class="bi" title={`${isEN ? 'Tokens per second' : 'Tokens por segundo'}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
-            <span>{isEN ? 'Stream:' : 'Stream:'}</span><span class="cok">~{activeTab._streamTPS} t/s</span>
-          </div>
-        {/if}
-        {#if !keyringOk}
-          <div class="bi" title={isEN ? 'Keyring unavailable — credentials cannot be saved securely' : 'Keyring no disponible — las credenciales no se pueden guardar de forma segura'}>
-            <span>⚠</span><span class="cr">{isEN ? 'Keyring failed' : 'Keyring falló'}</span>
-          </div>
-        {/if}
-        {#if auditAlerts > 0}<div class="bi"><span>Alertas:</span><span class="cy">{auditAlerts} bypass</span></div>{/if}
-        <div class="bi r" style="opacity:0.6; font-size:12px;">
-          Lucy OS v{appVersion} · {userLang}
-        </div>
-        <!-- Inline status orb — last item in the footer, sits to the right
-             of the version label without overlapping anything. -->
-        <StatusOrb state={lucyState} visible={appReady && !showSetupOverlay} inline={true}
-                   label={isEN
-                      ? `Lucy: ${lucyState}`
-                      : `Lucy: ${lucyState === 'idle' ? 'inactiva' : lucyState === 'thinking' ? 'pensando' : lucyState === 'executing' ? 'ejecutando' : 'error'}`} />
-      </div>
-      {/if}
+      <StatusBar
+        {hostName} {lucyConfig} activeTab={activeTab} {keyringOk} {auditAlerts}
+        {appVersion} {userLang} {isEN} {lucyState} {appReady} {showSetupOverlay}
+        costSummaryMonth={$costSummaryMonth} tokenBudgetConfig={$tokenBudgetConfig}
+        {getEffectiveModel}
+      />
 
     </div>
   </div>
