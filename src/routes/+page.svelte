@@ -75,6 +75,7 @@ import { listen } from '@tauri-apps/api/event';
     import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste } from '$lib/file-inputs';
     import { buildWorkingMemoryDigest, slotRelevance, updateWorkingMemory, compactOldTurns } from '$lib/working-memory';
     import { toDryRunCmd, parsePlanTags, renderPlanCard, isMultiIntentPrompt } from '$lib/plan-utils';
+    import { cleanStreamDisplay as _cleanStreamDisplay, detectCodeGenIntent as _detectCodeGenIntent, hasToolResponse as _hasToolResponse, needsAgentLoop as _needsAgentLoop, isMultiStepResponse as _isMultiStepResponse, extractTags as _extractTags, parseTool as _parseTool, toolHash as _toolHash, isToolLooping as _isToolLooping, askLucyStream as _askLucyStreamFn, cancelStream as _cancelStream, isStreaming as _isStreaming, isSensitiveRegistry as _isSensitiveReg, buildCodeProtocol as _buildCodeProtocol, createTokenDrain as _createTokenDrain, enqueueChunk as _enqueueChunk, drainBatch as _drainBatch, flushDrain as _flushDrain, DRAIN_MS as _DRAIN_MS, MAX_AGENT_LOOPS as _MAX_LOOPS_CONST, MAX_IDENTICAL_TOOL_CALLS as _MAX_IDENTICAL, FILE_TOOL_RE as _FILE_TOOL_RE, NATIVE_TOOL_RE as _NATIVE_TOOL_RE } from '$lib/llm-stream';
 
     let lucyConfig         = { name: '' };
     let db                 = null;

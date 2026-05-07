@@ -8,6 +8,7 @@ pub mod local;
 pub mod logs;
 pub mod metrics;
 pub mod providers;
+pub mod prompt_sections;
 pub mod rdp_agent;
 pub mod shell;
 pub mod system;

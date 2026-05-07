@@ -305,7 +305,26 @@ pub async fn change_agent_dir(path: String) -> Result<String, String> {
 /// PROTECTED BY GNU GPLv3: Distribuir o alterar esta lógica clave exige
 /// mantener el código fuente abierto y otorgar crédito explícito al autor original.
 /// Ver: https://github.com/Phenomx64L/LucyAI
+/// build_system_prompt — now delegates to the composable prompt_sections module.
+/// Kept as a thin wrapper to preserve the same call signature for ask_lucy/ask_lucy_stream.
 fn build_system_prompt(
+    lang: &str,
+    context: &str,
+    hosts_context: &str,
+    user_name: &str,
+    prompt: &str,
+    working_dir: &str,
+    runbooks_dir: Option<&str>,
+) -> String {
+    crate::commands::prompt_sections::build_system_prompt_v2(
+        lang, context, hosts_context, user_name, prompt, working_dir, runbooks_dir,
+    )
+}
+
+/// Legacy monolithic build — preserved for reference and rollback.
+/// Remove after v1.3.0 ships stable.
+#[allow(dead_code)]
+fn build_system_prompt_legacy(
     lang: &str,
     context: &str,
     hosts_context: &str,
@@ -321,9 +340,6 @@ fn build_system_prompt(
 
     let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
     let core_mem_block = crate::commands::memory::render_core_sync();
-    // Principles: behavioral rules pulled from SQLite, scoped to None for now
-    // (global only). When we wire host-aware prompts, pass the active host id
-    // so per-host rules also surface. Empty string when no principles defined.
     let principles_block = crate::commands::principles::render_principles_block(None);
     format!(
         "You are Lucy, an expert Windows SysAdmin AI assistant with autonomous code analysis and modification capabilities.\n\
