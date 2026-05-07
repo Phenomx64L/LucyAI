@@ -6,7 +6,6 @@
 import { listen } from '@tauri-apps/api/event';
     import { getVersion } from '@tauri-apps/api/app';
     import { marked } from 'marked';
-    import DOMPurify from 'dompurify';
     import Database from '@tauri-apps/plugin-sql';
     import SetupOverlay    from '$lib/SetupOverlay.svelte';
     import { IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles, IconTerminal2 as TerminalSquare, IconFileText as ScrollText, IconNetwork as Network, IconShieldCheck as ShieldCheck, IconClipboardList as ClipboardList, IconActivity as Activity, IconWorld as Globe, IconLock as Lock, IconEraser as Eraser, IconTrash as Trash2, IconSettings as Settings, IconDeviceDesktop as Monitor, IconServer as Server, IconRocket as Rocket, IconBrain as Brain, IconBolt as Zap, IconTool as Wrench, IconDownload as Download, IconSchool as GraduationCap, IconFileCode as FileCode, IconCurrencyDollar as DollarSign, IconOctagonMinus as OctagonX, IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconBug as Bug, IconUser as User, IconDeviceTv as Tv2, IconTerminal as Terminal, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTag as Tag, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconBook2 as Book2, IconFileTypePdf as FilePdf } from '@tabler/icons-svelte';
@@ -71,19 +70,10 @@ import { listen } from '@tauri-apps/api/event';
              activeProfileHosts,
              costSummaryMonth, tokenBudgetConfig,
              initHostsFromKeyring } from '$lib/stores';
-    // ── Syntax highlighting: solo los lenguajes usados en SysAdmin ───────────
-    import hljs            from 'highlight.js/lib/core';
-    import hljsPS          from 'highlight.js/lib/languages/powershell';
-    import hljsBash        from 'highlight.js/lib/languages/bash';
-    import hljsJson        from 'highlight.js/lib/languages/json';
-    import hljsYaml        from 'highlight.js/lib/languages/yaml';
-    import hljsPlain       from 'highlight.js/lib/languages/plaintext';
-    hljs.registerLanguage('powershell', hljsPS);
-    hljs.registerLanguage('bash',       hljsBash);
-    hljs.registerLanguage('shell',      hljsBash);
-    hljs.registerLanguage('json',       hljsJson);
-    hljs.registerLanguage('yaml',       hljsYaml);
-    hljs.registerLanguage('plaintext',  hljsPlain);
+    import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns } from '$lib/message-render';
+    import { initRecognition, toggleMic as _toggleMic, speak as _speak } from '$lib/voice';
+    import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste } from '$lib/file-inputs';
+    import { buildWorkingMemoryDigest, slotRelevance, updateWorkingMemory, compactOldTurns } from '$lib/working-memory';
 
     let lucyConfig         = { name: '' };
     let db                 = null;
@@ -1174,7 +1164,7 @@ import { listen } from '@tauri-apps/api/event';
             activeTabId = tabs[tabs.length-1].id;
             // Inicializar recognition para cada tab restaurada
             // (no se puede serializar a JSON, se pierde al guardar)
-            tabs.forEach(t => { t.recognition = _initRecognition(t.id); });
+            tabs.forEach(t => { t.recognition = initRecognition(t.id, _voiceOpts()); });
             tabs = [...tabs]; // forzar reactividad
             setTimeout(scrollChat, 100);
         }
@@ -1564,174 +1554,26 @@ import { listen } from '@tauri-apps/api/event';
         fallo();
     }
 
-    async function addCopyBtns() {
-        await tick();
-        document.querySelectorAll('.msg-lucy pre:not(.hc)').forEach(pre => {
-            // Saltar los wb-out que son parte del warp-block — tienen su propio toggle
-            if (pre.classList.contains('wb-out')) return;
-            pre.classList.add('hc');
-            const codeEl = pre.querySelector('code');
-            const rawText = codeEl ? codeEl.innerText.trim() : pre.innerText.trim();
-            let lang = 'código';
-            if (codeEl) { const cls = [...codeEl.classList].find(c => c.startsWith('language-')); if (cls) lang = cls.replace('language-', ''); }
-            const isPowershell = lang === 'powershell' || rawText.toLowerCase().startsWith('start-process') || rawText.includes('Get-') || rawText.includes('-Command') || rawText.includes('Invoke-');
-            const isCmd  = lang === 'batch' || lang === 'cmd' || lang === 'bat' || rawText.toLowerCase().startsWith('net ') || rawText.toLowerCase().startsWith('ipconfig') || rawText.toLowerCase().startsWith('netstat') || rawText.toLowerCase().startsWith('sc ');
-            const isWmic = lang === 'wmic' || rawText.toLowerCase().startsWith('wmic ');
-            const isNetsh= lang === 'netsh' || rawText.toLowerCase().startsWith('netsh ');
-            const isReg  = lang === 'reg' || rawText.toLowerCase().startsWith('reg ');
-            const isVbs  = lang === 'vbs' || lang === 'vbscript' || rawText.toLowerCase().startsWith('dim ') || rawText.toLowerCase().includes('createobject(');
-            const isRunnable = isPowershell || isCmd || isWmic || isNetsh || isReg || isVbs;
-            const execTypeInline = isCmd?'cmd':isWmic?'wmic':isNetsh?'netsh':isReg?'reg':isVbs?'cscript':'powershell';
-            const langLabel = isPowershell?'PowerShell':isCmd?'CMD':isWmic?'WMIC':isNetsh?'netsh':isReg?'reg':isVbs?'VBScript':lang==='código'?'salida':lang;
-
-            // ── Syntax highlighting (highlight.js) ───────────────────────────
-            if (codeEl) {
-                const hljsLang = isPowershell ? 'powershell'
-                    : (isCmd || isNetsh)       ? 'bash'
-                    : lang === 'json'          ? 'json'
-                    : lang === 'yaml'          ? 'yaml'
-                    : null;
-                if (hljsLang) {
-                    try {
-                        const result = hljs.highlight(codeEl.innerText || '', { language: hljsLang, ignoreIllegals: true });
-                        codeEl.innerHTML = result.value;
-                        codeEl.classList.add('hljs');
-                    } catch(_) { /* degradar silenciosamente */ }
-                }
-            }
-
-            const header = document.createElement('div');
-            header.className = 'code-header';
-            // SECURITY: langLabel may originate from AI-emitted ```<lang> markdown.
-            // Using textContent (not innerHTML) prevents XSS via crafted lang strings.
-            const langSpan = document.createElement('span');
-            langSpan.className = 'code-lang';
-            langSpan.textContent = langLabel;
-            header.appendChild(langSpan);
-            const btn = document.createElement('button');
-            btn.className = 'copy-btn';
-            btn.textContent = 'copiar';
-            btn.onclick = (e) => { e.stopPropagation(); copiarAlPortapapeles(rawText, btn); };
-            header.appendChild(btn);
-            if (isRunnable) {
-                const runBtn = document.createElement('button');
-                runBtn.className = 'run-inline-btn';
-                runBtn.title = isEN ? 'Run this command' : 'Ejecutar este comando';
-                runBtn.textContent = `▶ ${langLabel}`;
-                runBtn.onclick = (ev) => {
-                    ev.stopPropagation();
-                    if (!activeTabId) return;
-                    const tab = getTab(activeTabId);
-                    if (tab && !tab.isProcessing) {
-                        // Temporarily override execEngine for this inline run
-                        const prevEngine = tab.execEngine;
-                        tab.execEngine = execTypeInline;
-                        tab.inputValue = rawText; tabs = tabs;
-                        process(activeTabId).finally(() => { const t2=getTab(activeTabId); if(t2) t2.execEngine=prevEngine; tabs=tabs; });
-                    }
-                };
-                header.appendChild(runBtn);
-            }
-            const wrapper = document.createElement('div');
-            wrapper.className = 'code-wrap';
-            pre.parentNode.insertBefore(wrapper, pre);
-            wrapper.appendChild(header);
-            wrapper.appendChild(pre);
-        });
-
-        // Event delegation para los botones de colapsar warp-blocks
-        document.querySelectorAll('.wb-toggle:not([data-bound])').forEach(btn => {
-            btn.setAttribute('data-bound', '1');
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const block = btn.closest('.warp-block');
-                const out = block?.querySelector('.wb-out');
-                if (!out) return;
-                const collapsed = btn.getAttribute('data-collapsed') === '1';
-                out.style.display = collapsed ? '' : 'none';
-                btn.setAttribute('data-collapsed', collapsed ? '0' : '1');
-                btn.textContent = collapsed ? '▼' : '▶';
-            });
-        });
-    }
-
     // ── RECOGNITION: función reutilizable para crear/restaurar tabs ──────────
     // Se llama tanto en crearTab() como en iniciar() al restaurar desde localStorage
-    function _initRecognition(tabId) {
-        // Intentar obtener SpeechRecognition — múltiples prefijos para compatibilidad WebView2
-        const SR = window.SpeechRecognition
-                || window.webkitSpeechRecognition
-                || window.mozSpeechRecognition
-                || window.msSpeechRecognition;
-        if (!SR) return null;
+    function _voiceOpts() {
+        return { getActiveLang: () => activeLang, getTab, addMsg, refresh, toast };
+    }
 
-        const rec = new SR();
-        rec.lang = activeLang.stt;
-        rec.continuous = false;   // false es más estable en WebViews — reiniciamos manualmente
-        rec.interimResults = true;
-        rec.maxAlternatives = 1;
+    // Thin wrapper so call sites don't need to thread logTaskEvent manually.
+    function _updateWM(tab, ev) {
+        updateWorkingMemory(tab, ev, (type, sub, ms) => logTaskEvent(type, sub, ms, null, tab.id));
+    }
 
-        rec.onstart = () => {
-            const x = getTab(tabId);
-            if (!x) return;
-            x.isListening = true;
-            x.usedVoice = true;
-            if (!x._committed) x._committed = x.inputValue.trim();
-            refresh();
+    function _fileOpts() {
+        return {
+            isEN,
+            getActiveTabId: () => activeTabId,
+            getTab,
+            refresh,
+            toast,
+            setDragOverlay: (v) => { showDragOverlay = v; },
         };
-
-        rec.onresult = (ev) => {
-            const x = getTab(tabId);
-            if (!x) return;
-            let finalText = '';
-            let interimText = '';
-            for (let i = ev.resultIndex; i < ev.results.length; i++) {
-                const transcript = ev.results[i][0].transcript;
-                if (ev.results[i].isFinal) finalText += transcript;
-                else interimText += transcript;
-            }
-            if (finalText) x._committed = ((x._committed||'') + ' ' + finalText).trim();
-            x.inputValue = ((x._committed||'') + (interimText ? ' ' + interimText : '')).trim();
-            refresh();
-        };
-
-        rec.onend = () => {
-            const x = getTab(tabId);
-            if (!x) return;
-            x.inputValue = (x._committed || '').trim();
-            if (x._shouldListen && !x.isProcessing) {
-                try { rec.start(); return; } catch(e) {}
-            }
-            x.isListening = false;
-            x._committed = '';
-            refresh();
-        };
-
-        rec.onerror = (ev) => {
-            const x = getTab(tabId);
-            if (!x) return;
-            x.isListening = false;
-            x._shouldListen = false;
-            x.inputValue = (x._committed || '').trim();
-            x._committed = '';
-            if (ev.error === 'not-allowed' || ev.error === 'permission-denied') {
-                addMsg(tabId, {
-                    role: 'lucy',
-                    html: `<div class="mn">⊕ Micrófono sin permiso</div>Ve a <b>Inicio → Configuración → Privacidad y seguridad → Micrófono</b> y activa el acceso para aplicaciones de escritorio.`,
-                    style: 'border-left-color:#f59e0b;'
-                });
-            } else if (ev.error === 'network') {
-                addMsg(tabId, {
-                    role: 'lucy',
-                    html: `<div class="mn">⊕ Error de red</div>El reconocimiento de voz requiere conexión a internet.`,
-                    style: 'border-left-color:#f59e0b;'
-                });
-            }
-            // 'no-speech' es silencioso — el usuario simplemente no habló
-            refresh();
-        };
-
-        return rec;
     }
 
     function crearTab() {
@@ -1754,7 +1596,7 @@ import { listen } from '@tauri-apps/api/event';
                 turnCount: 0,
                 compactedDigest: '',    // summary of older turns when > 20
             },
-            recognition: _initRecognition(id)
+            recognition: initRecognition(id, _voiceOpts())
         };
         tabs = [...tabs, t];
         activeTabId = id;
@@ -1991,229 +1833,16 @@ import { listen } from '@tauri-apps/api/event';
         }
     }
 
-    async function toggleMic(tabId) {
-        const t = getTab(tabId);
-        if (!t || !t.recognition) {
-            // SpeechRecognition no disponible en este navegador/WebView
-            toast('El reconocimiento de voz no está disponible en este equipo', 'error');
-            return;
-        }
-        // En WebView2 (Tauri), getUserMedia debe llamarse primero para activar el permiso del SO
-        if (!t.isListening && navigator.mediaDevices?.getUserMedia) {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(track => track.stop()); // liberar inmediatamente
-            } catch(permErr) {
-                addMsg(tabId, {
-                    role: 'lucy',
-                    html: `<div class="mn">⊕ Micrófono sin permiso</div>Windows bloqueó el acceso al micrófono para esta app. Ve a <b>Inicio → Configuración → Privacidad y seguridad → Micrófono</b>, activa <b>"Permitir que las aplicaciones de escritorio accedan al micrófono"</b> y reinicia Lucy.`,
-                    style: 'border-left-color:#f59e0b;'
-                });
-                refresh();
-                return;
-            }
-        }
-        if (t.isListening) {
-            // El usuario quiere parar — marcar como intencional para que onend no reinicie
-            t._shouldListen = false;
-            t.recognition.stop();
-        } else {
-            if (window.speechSynthesis) window.speechSynthesis.cancel();
-            t._shouldListen = true;
-            t._committed = t.inputValue.trim(); // preservar texto existente
-            try {
-                t.recognition.start();
-            } catch(e) {
-                // Si ya había una instancia activa, crear una nueva
-                t._shouldListen = false;
-                t.isListening = false;
-                toast('Error al iniciar el micrófono. Intenta de nuevo.', 'error');
-            }
-        }
-        refresh();
-    }
+    const toggleMic = (tabId) => _toggleMic(tabId, _voiceOpts());
 
     // ── ADJUNTAR MÚLTIPLES ARCHIVOS ───────────────────────────────────────────
-    async function attach(tabId) {
-        try {
-            const archivos = await invoke('pick_multiple_files');
-            if (!archivos || !archivos.length) return;
-            const t = getTab(tabId);
-            let agregados = 0;
-            for (const r of archivos) {
-                if (r[2] === 'text/plain') {
-                    if (!t.attachedFiles.some(f => f.name === r[0])) {
-                        t.attachedFiles.push({ name: r[0], content: r[1], type: 'text' });
-                        agregados++;
-                    }
-                } else {
-                    const u = `data:${r[2]};base64,${r[1]}`;
-                    if (!t.attachedFiles.some(f => f.name === r[0])) {
-                        t.attachedFiles.push({ name: r[0], content: r[1], type: 'image', mimeType: r[2], previewUrl: u });
-                        agregados++;
-                    }
-                }
-            }
-            if (agregados > 0) refresh();
-        } catch(e) { toast(`${isEN ? 'Error attaching files' : 'Error adjuntando archivos'}: ${e}`, 'error'); }
-    }
+    const attach         = (tabId)    => _attach(tabId, _fileOpts());
+    const removeFile     = (tabId, n) => _removeFile(tabId, n, _fileOpts());
+    const handleFileDrop = (e, tabId) => _handleFileDrop(e, tabId, _fileOpts());
+    const onDrop         = (e)        => _onDrop(e, _fileOpts());
+    const onPaste        = (e)        => _onPaste(e, _fileOpts());
 
-    function removeFile(tabId, name) { const t=getTab(tabId); t.attachedFiles=t.attachedFiles.filter(f=>f.name!==name); refresh(); }
-
-    async function handleFileDrop(e, tabId) {
-        const t = getTab(tabId); if (!t) return;
-        const files = Array.from(e.dataTransfer?.files || []);
-        if (!files.length) return;
-        if (!Array.isArray(t.attachedFiles)) t.attachedFiles = [];
-        for (const f of files) {
-            try {
-                const isImg = f.type.startsWith('image/');
-                const reader = new FileReader();
-                const data = await new Promise((res, rej) => { reader.onload = () => res(reader.result); reader.onerror = rej; isImg ? reader.readAsDataURL(f) : reader.readAsText(f); });
-                if (isImg) {
-                    t.attachedFiles.push({ name: f.name, content: String(data).split(',')[1], type: 'image', mimeType: f.type, previewUrl: data });
-                } else {
-                    t.attachedFiles.push({ name: f.name, content: String(data).slice(0, 200000), type: 'text' });
-                }
-            } catch (err) { console.warn('drop file failed', f.name, err); }
-        }
-        refresh();
-    }
-
-    function onDrop(e) {
-        showDragOverlay=false;
-        if(!activeTabId||!e.dataTransfer.files?.length) return;
-        const t=getTab(activeTabId);
-        Array.from(e.dataTransfer.files).forEach(file=>{const r=new FileReader();if(file.type.startsWith('image/')){r.onload=ev=>{if(!t.attachedFiles.some(f=>f.name===file.name)){t.attachedFiles.push({name:file.name,content:ev.target.result.split(',')[1],type:'image',mimeType:file.type,previewUrl:ev.target.result});refresh();}};r.readAsDataURL(file);}else{r.onload=ev=>{if(!t.attachedFiles.some(f=>f.name===file.name)){t.attachedFiles.push({name:file.name,content:ev.target.result,type:'text'});refresh();}};r.readAsText(file);}});
-    }
-
-    async function onPaste(e) {
-        if (!activeTabId) return;
-        const t = getTab(activeTabId);
-        if (!t) return;
-        let handled = false;
-
-        try {
-            // Intento 1: clipboardData.items (screenshots, copias desde browser)
-            const items = (e.clipboardData || window.clipboardData)?.items;
-            if (items) {
-                for (let i = 0; i < items.length; i++) {
-                    const item = items[i];
-                    if (!item || typeof item.type !== 'string') continue;
-                    const mimeType = item.type; // capturar SINCRÓNICAMENTE antes de cualquier await/callback
-                    if (mimeType.indexOf('image') !== -1) {
-                        const blob = item.getAsFile();
-                        if (!blob) continue;
-                        handled = true;
-                        const r = new FileReader();
-                        r.onerror = () => {};
-                        r.onload = ev => {
-                            try {
-                                if (!ev?.target?.result) return;
-                                const ext = mimeType.split('/')[1] || 'png';
-                                if (!Array.isArray(t.attachedFiles)) t.attachedFiles = [];
-                                t.attachedFiles.push({ name:`Cap_${Date.now()}.${ext}`, content:ev.target.result.split(',')[1], type:'image', mimeType, previewUrl:ev.target.result });
-                                refresh();
-                            } catch(_) {}
-                        };
-                        r.readAsDataURL(blob);
-                    }
-                }
-            }
-
-            // Intento 2: navigator.clipboard.read() — imágenes copiadas desde Explorer/apps nativas
-            if (!handled && navigator.clipboard?.read) {
-                try {
-                    const clipItems = await navigator.clipboard.read();
-                    for (const ci of clipItems) {
-                        for (const mimeType of ci.types) {
-                            if (mimeType.startsWith('image/')) {
-                                const blob = await ci.getType(mimeType);
-                                const r = new FileReader();
-                                r.onerror = () => {};
-                                r.onload = ev => {
-                                    try {
-                                        if (!ev?.target?.result) return;
-                                        const ext = mimeType.split('/')[1] || 'png';
-                                        if (!Array.isArray(t.attachedFiles)) t.attachedFiles = [];
-                                        t.attachedFiles.push({ name:`Img_${Date.now()}.${ext}`, content:ev.target.result.split(',')[1], type:'image', mimeType, previewUrl:ev.target.result });
-                                        refresh();
-                                    } catch(_) {}
-                                };
-                                r.readAsDataURL(blob);
-                                handled = true;
-                            }
-                        }
-                    }
-                } catch(_) { /* permiso denegado o no disponible en este contexto */ }
-            }
-        } catch(err) {
-            console.warn('[Lucy] onPaste error (ignorado):', err);
-        }
-
-        if (handled) e.preventDefault();
-    }
-
-    // ── TTS: texto a voz ──────────────────────────────────────────────────────
-    // Las voces del sistema se cargan de forma asíncrona — esperamos si es necesario
-    async function speak(text) {
-        if (!window.speechSynthesis) return;
-        // Limpiar el texto: quitar HTML, bloques de código, markdown
-        const limpio = text
-            .replace(/<[^>]*>?/gm, '')
-            .replace(/```[\s\S]*?```/g, ' Código. ')
-            .replace(/`[^`]+`/g, '')
-            .replace(/[*_#~]/g, '')
-            .replace(/\n{2,}/g, '. ')
-            .replace(/\n/g, ' ')
-            .trim();
-        if (!limpio) return;
-
-        window.speechSynthesis.cancel();
-
-        // Esperar voces si aún no se cargaron (necesario en Tauri WebView).
-        // BUG FIX: si el setTimeout(2s) ganaba la carrera, el listener
-        // 'voiceschanged' quedaba registrado para siempre. Cada llamada a
-        // speak() en tab nuevo añadía otro listener huérfano.
-        let voces = window.speechSynthesis.getVoices();
-        if (!voces.length) {
-            await new Promise(resolve => {
-                let _settled = false;
-                const onVoicesChanged = () => {
-                    if (_settled) return;
-                    _settled = true;
-                    voces = window.speechSynthesis.getVoices();
-                    window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
-                    resolve();
-                };
-                window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
-                // Timeout de seguridad — siempre limpia el listener.
-                setTimeout(() => {
-                    if (_settled) return;
-                    _settled = true;
-                    window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
-                    resolve();
-                }, 2000);
-            });
-            voces = window.speechSynthesis.getVoices();
-        }
-
-        const u = new SpeechSynthesisUtterance(limpio);
-        u.lang = activeLang.tts;
-        u.rate = 1.05;
-        u.pitch = 1.0;
-
-        // Buscar la mejor voz disponible para el idioma activo
-        const langPrefix = activeLang.tts.split('-')[0]; // 'es', 'en', 'pt', etc.
-        const matchVoices = voces.filter(v => v.lang.startsWith(langPrefix));
-        if (matchVoices.length) {
-            // Preferir voz exacta del locale, luego cualquier voz del mismo idioma
-            u.voice = matchVoices.find(v => v.lang === activeLang.tts)
-                   || matchVoices[0];
-        }
-
-        window.speechSynthesis.speak(u);
-    }
+    const speak = (text) => _speak(text, { getActiveLang: () => activeLang });
 
     function addMsg(tabId,obj){
         const t=getTab(tabId);
@@ -2239,7 +1868,16 @@ import { listen } from '@tauri-apps/api/event';
         // message (just a sum), so we keep the tab healthy in real time
         // instead of waiting for a crash.
         pruneTabForBudget(t);
-        refresh(); scrollChat(); addCopyBtns();
+        refresh(); scrollChat();
+        addCopyBtns({
+            isEN,
+            getActiveTabId: () => activeTabId,
+            getTab,
+            runProcess: (id) => process(id),
+            setTabsExecEngine: (id, eng) => { const t2 = getTab(id); if (t2) { t2.execEngine = eng; tabs = tabs; } },
+            setTabInputValue:  (id, val) => { const t2 = getTab(id); if (t2) { t2.inputValue = val; tabs = tabs; } },
+            copyToClipboard: (text, btn) => copiarAlPortapapeles(text, btn),
+        });
         // ── Persist visible turns for /recall search (fire-and-forget) ──
         persistConversationTurn(t, obj);
     }
@@ -2331,41 +1969,6 @@ import { listen } from '@tauri-apps/api/event';
         t.messages=t.messages.filter(m=>m.id!==id);
         t.messages.push({id,role:'thinking',html:'',time:''});
         refresh(); scrollChat();
-    }
-
-    function warpBlock(cmd,output,ok,elapsedMs,label='') {
-        const sc=cmd.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const so=DOMPurify.sanitize(output.replace(/</g,'&lt;').replace(/>/g,'&gt;'));
-        const t=elapsedMs<1000?`${elapsedMs}ms`:`${(elapsedMs/1000).toFixed(1)}s`;
-        const st=ok?'wb-ok':'wb-err';
-        const si=ok?'✓':'✗';
-        const hl=label||(ok?'Ejecutado':'Error');
-        return `<div class="warp-block ${st}"><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span><button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${so||'(sin salida)'}</pre></div>`;
-    }
-
-    // CONFIDENCE tag renderer (opus-4-7 #2) — turns <CONFIDENCE level="high|med|low">reason</CONFIDENCE>
-    // into an inline colored badge. Applied BEFORE markdown parse so badges survive.
-    function renderConfidenceTags(text) {
-        if (!text || !text.includes('<CONFIDENCE')) return text;
-        return text.replace(/<CONFIDENCE\s+level=["']?(high|med|low)["']?\s*>([\s\S]*?)<\/CONFIDENCE>/gi, (_, lvl, reason) => {
-            const L = String(lvl).toLowerCase();
-            const cfg = {
-                high: { bg:'rgba(52,211,153,.12)', bd:'#34d399', fg:'#10b981', ico:'✓', label:'HIGH' },
-                med:  { bg:'rgba(251,191,36,.12)', bd:'#fbbf24', fg:'#d97706', ico:'◐', label:'MED' },
-                low:  { bg:'rgba(248,113,113,.12)', bd:'#f87171', fg:'#ef4444', ico:'⚠', label:'LOW' },
-            }[L] || { bg:'rgba(148,163,184,.12)', bd:'#94a3b8', fg:'#64748b', ico:'?', label:'?' };
-            const safeReason = String(reason).trim().replace(/</g,'&lt;').replace(/>/g,'&gt;');
-            return `\n\n<div class="conf-badge" style="display:inline-flex;align-items:center;gap:8px;margin:6px 0;padding:5px 10px;border-left:3px solid ${cfg.bd};background:${cfg.bg};border-radius:3px;font-size:11px;line-height:1.4;">
-                <span style="font-weight:700;color:${cfg.fg};letter-spacing:0.5px;">${cfg.ico} ${cfg.label}</span>
-                <span style="color:var(--txt2,#94a3b8);">${safeReason}</span>
-            </div>\n\n`;
-        });
-    }
-
-    // One-shot markdown renderer that also processes CONFIDENCE badges.
-    function renderLucyMarkdown(text) {
-        const withBadges = renderConfidenceTags(text || '');
-        return renderMd(withBadges, { mode: 'badges' });
     }
 
     // ── PLAN/ACT/VERIFY (opus-4-7 #3) ──────────────────────────────────────────
@@ -2514,7 +2117,7 @@ import { listen } from '@tauri-apps/api/event';
                 });
             }
             const elapsed = Date.now() - t0;
-            updateWorkingMemory(t, { type:'exec', cmd:actualCmd, target, ok:true, ms:elapsed });
+            _updateWM(t, { type:'exec', cmd:actualCmd, target, ok:true, ms:elapsed });
             // Skill Factory: observe successful execs only. Failures don't
             // make good skills, so the helper itself rejects ok=false.
             try {
@@ -2578,7 +2181,7 @@ import { listen } from '@tauri-apps/api/event';
                 }
             }
         } catch (e) {
-            updateWorkingMemory(t, { type:'exec', cmd:actualCmd, target, ok:false, ms:Date.now()-t0, err:e });
+            _updateWM(t, { type:'exec', cmd:actualCmd, target, ok:false, ms:Date.now()-t0, err:e });
             addMsg(tabId, { role:'lucy', html:`<div class="mn">!</div>Error: <pre style="color:#f87171;">${String(e).substring(0,500)}</pre>`, style:'border-left-color:#ef4444;' });
         } finally {
             _pendingPlans.delete(planId);
@@ -3050,7 +2653,7 @@ import { listen } from '@tauri-apps/api/event';
         await scrollChat();
         try{
             // Compact old turns if tab is long (opus-4-7 #1 — prompt budget)
-            const compaction = compactOldTurns(t);
+            const compaction = compactOldTurns(t, lucyConfig.name);
             if (compaction.digest) {
                 t.workingMemory ||= {};
                 t.workingMemory.compactedDigest = compaction.digest;
@@ -4393,7 +3996,7 @@ Use ONE of these patterns instead:
                                     stepsHtml += `[· Edición] ${esc(path)}\n`;
                                     filesMod.add(path);
                                     // Working memory: remember Lucy just edited this file.
-                                    updateWorkingMemory(t, { type: 'file', path, op: 'edited' });
+                                    _updateWM(t, { type: 'file', path, op: 'edited' });
                                     finishToolCard(_editCard, String(r), true);
                                 } catch(e) {
                                     toolResults.push(`[EDIT ERROR] ${e}`);
@@ -4419,7 +4022,7 @@ Use ONE of these patterns instead:
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
                             // Working memory: remember the new/written file.
-                            updateWorkingMemory(t, { type: 'file', path: _wPath, op: 'created' });
+                            _updateWM(t, { type: 'file', path: _wPath, op: 'created' });
                             // ── UX: preserve the actual file content inside the tool card so the
                             // user can see what was written without opening the file. Without this,
                             // the streamed code disappears at loop end leaving only "Files Modified"
@@ -4448,7 +4051,7 @@ Use ONE of these patterns instead:
                         const _cdCard = newToolCard('▸', `cd ${newPath}`, 'system');
                         try {
                             await invoke('set_tab_cwd', { tabId: String(tabId), path: newPath });
-                            updateWorkingMemory(t, { type: 'cwd', path: newPath });
+                            _updateWM(t, { type: 'cwd', path: newPath });
                             toolResults.push(`[CWD CHANGED] Working directory is now: ${newPath}`);
                             stepsHtml += `[▸ cwd] ${esc(newPath)}\n`;
                             finishToolCard(_cdCard, `Working directory: ${newPath}`, true);
@@ -4989,15 +4592,15 @@ Use ONE of these patterns instead:
                                         hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
                                         password: pwd, keyPath: h.sshKeyPath || null,
                                     });
-                                    updateWorkingMemory(t, { type:'exec', cmd:item.cmd, target:h.name, ok:true, ms:Date.now()-itemT0, host:h });
+                                    _updateWM(t, { type:'exec', cmd:item.cmd, target:h.name, ok:true, ms:Date.now()-itemT0, host:h });
                                     return { hostName: h.name, output: out, error: null };
                                 } else {
                                     const out = await invoke('execute_powershell', { script: item.cmd, forceExecute: false });
-                                    updateWorkingMemory(t, { type:'exec', cmd:item.cmd, target:'local', ok:true, ms:Date.now()-itemT0 });
+                                    _updateWM(t, { type:'exec', cmd:item.cmd, target:'local', ok:true, ms:Date.now()-itemT0 });
                                     return { hostName: 'Local', output: out, error: null };
                                 }
                             } catch (e) {
-                                updateWorkingMemory(t, { type:'exec', cmd:item.cmd, target:item.isRemote?item.hostId:'local', ok:false, ms:Date.now()-itemT0, err:e });
+                                _updateWM(t, { type:'exec', cmd:item.cmd, target:item.isRemote?item.hostId:'local', ok:false, ms:Date.now()-itemT0, err:e });
                                 return { error: String(e), output: null };
                             }
                         });
@@ -5083,7 +4686,7 @@ Use ONE of these patterns instead:
                     });
                     const elapsed = Date.now() - t0;
                     const safeOut = (out || '(sin salida)').trim();
-                    updateWorkingMemory(t, { type:'exec', cmd, target:h.name, ok:true, ms:elapsed, host:h });
+                    _updateWM(t, { type:'exec', cmd, target:h.name, ok:true, ms:elapsed, host:h });
                     const html = `<div class="mn">Lucy</div>` +
                         `<div style="font-size:12px;color:var(--txt2);margin-bottom:6px;">◉ Ejecutado en <b>${h.name}</b> (${h.type==='linux'?'SSH':'WinRM'}) — ${elapsed}ms</div>` +
                         warpBlock(cmd, safeOut, true, elapsed, h.type==='windows'?'WinRM':'SSH');
@@ -5108,7 +4711,7 @@ Use ONE of these patterns instead:
                         }
                     } catch(e) { console.warn('[remote] follow-up failed:', e); }
                 } catch(e) {
-                    updateWorkingMemory(t, { type:'exec', cmd, target:h.name, ok:false, ms:Date.now()-t0, err:e });
+                    _updateWM(t, { type:'exec', cmd, target:h.name, ok:false, ms:Date.now()-t0, err:e });
                     addMsg(tabId, {
                         role: 'lucy',
                         html: `<div class="mn">!</div>Error ejecutando en <b>${h.name}</b>: <pre style="color:#f87171;">${String(e).substring(0,500)}</pre>`,
@@ -5158,7 +4761,7 @@ Use ONE of these patterns instead:
                     else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false});
                     else                            out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
                     const elapsed=Date.now()-t0;
-                    updateWorkingMemory(t, { type:'exec', cmd, target:'local', ok:true, ms:elapsed });
+                    _updateWM(t, { type:'exec', cmd, target:'local', ok:true, ms:elapsed });
                     t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
                     if (elapsed > 30000 && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
                         try { new Notification('Lucy — Comando completado ✓', { body: cmd.substring(0, 80) + (cmd.length > 80 ? '…' : '') + `  (${(elapsed/1000).toFixed(0)}s)` }); } catch(e) {}
@@ -5186,7 +4789,7 @@ Use ONE of these patterns instead:
                         if(doSpeak)speak("Pausado por seguridad.");
                     }else{
                         const elapsed=Date.now()-t0;
-                        updateWorkingMemory(t, { type:'exec', cmd, target:'local', ok:false, ms:elapsed, err });
+                        _updateWM(t, { type:'exec', cmd, target:'local', ok:false, ms:elapsed, err });
                         const wb=warpBlock(cmd,String(err),false,elapsed);
                         
                         // --- AGENT LOOP LOGIC ---
@@ -5631,144 +5234,10 @@ if (Test-Path $src) {
         }
     }
 
-    // ── WORKING MEMORY (opus-4-7 #1) ─────────────────────────────────────────
-    // Records a command execution into tab.workingMemory. Keeps it bounded.
-    // Now also tracks files created/edited and the current working directory
-    // — both critical for "Lucy doesn't have dementia" UX. Without this,
-    // Lucy would forget she just wrote a file 30 seconds ago and offer to
-    // create it again.
-    function updateWorkingMemory(tab, ev) {
-        if (!tab) return;
-        tab.workingMemory ||= {
-            currentHost: null,
-            currentCwd: null,
-            lastCommands: [],
-            recentFiles: [],          // [{path, op:'created'|'edited'|'read', ts}]
-            recentErrors: [],
-            activeIncident: null,
-            turnCount: 0,
-            compactedDigest: '',
-        };
-        const wm = tab.workingMemory;
-        // BUG FIX (TypeError "Cannot read properties of undefined (reading 'push')"):
-        // tabs loaded from localStorage that were SAVED before a field existed
-        // get the old shape — `||=` above doesn't backfill new keys on an
-        // existing object. Backfill EVERY array/scalar that downstream code
-        // dereferences. Without this, an existing tab + a code update that
-        // adds a new field to the schema = guaranteed runtime crash mid-session.
-        wm.lastCommands ??= [];
-        wm.recentFiles  ??= [];
-        wm.recentErrors ??= [];
-        wm.currentHost  ??= null;
-        wm.currentCwd   ??= null;
-        wm.activeIncident ??= null;
-        wm.turnCount    ??= 0;
-        wm.compactedDigest ??= '';
-
-        if (ev.type === 'exec') {
-            wm.lastCommands.push({
-                cmd: (ev.cmd || '').slice(0, 160),
-                target: ev.target || 'local',
-                ok: !!ev.ok,
-                ms: ev.ms || 0,
-                ts: Date.now(),
-                err: ev.err ? String(ev.err).slice(0, 200) : null,
-            });
-            if (wm.lastCommands.length > 5) wm.lastCommands.splice(0, wm.lastCommands.length - 5);
-            if (ev.ok && ev.host) {
-                wm.currentHost = { id: ev.host.id, name: ev.host.name, type: ev.host.type };
-            }
-            if (!ev.ok && ev.err) {
-                wm.recentErrors.push(String(ev.err).slice(0, 200));
-                if (wm.recentErrors.length > 3) wm.recentErrors.splice(0, wm.recentErrors.length - 3);
-            }
-            // Telemetry: exec_success / exec_failure + first_try_success signal
-            const sub = (ev.target === 'local') ? 'local' : 'remote';
-            logTaskEvent(ev.ok ? 'exec_success' : 'exec_failure', sub, ev.ms || 0, null, tab.id);
-        } else if (ev.type === 'file') {
-            // Track recent file mutations so Lucy doesn't forget she just
-            // edited config.json or created build.ps1.
-            const entry = {
-                path: String(ev.path || '').slice(0, 200),
-                op:   ev.op || 'edited',     // 'created' | 'edited' | 'read'
-                ts:   Date.now(),
-            };
-            // De-dupe by path+op (latest wins).
-            wm.recentFiles = wm.recentFiles.filter(f => !(f.path === entry.path && f.op === entry.op));
-            wm.recentFiles.push(entry);
-            if (wm.recentFiles.length > 8) wm.recentFiles.splice(0, wm.recentFiles.length - 8);
-        } else if (ev.type === 'cwd') {
-            // Logical CWD changes (via <TOOL>cd:...</TOOL>). Persists across
-            // turns so Lucy resolves relative paths consistently.
-            if (ev.path) wm.currentCwd = String(ev.path).slice(0, 300);
-        } else if (ev.type === 'incident') {
-            wm.activeIncident = ev.incident ? { id: ev.incident.id, phase: ev.incident.phase } : null;
-        } else if (ev.type === 'turn') {
-            wm.turnCount = (wm.turnCount || 0) + 1;
-        }
-    }
-
-    // Builds <500 token digest of tab state. Always injected.
-    function buildWorkingMemoryDigest(tab) {
-        const wm = tab?.workingMemory;
-        if (!wm) return '';
-        const parts = [];
-        if (wm.currentHost) {
-            parts.push(`current_host: ${wm.currentHost.name} (${wm.currentHost.type}, id=${wm.currentHost.id})`);
-        }
-        if (wm.currentCwd) {
-            parts.push(`current_cwd: ${wm.currentCwd}`);
-        }
-        if (wm.lastCommands?.length) {
-            const lines = wm.lastCommands.map(c => {
-                const mark = c.ok ? '✓' : '✗';
-                const detail = c.ok ? `${c.ms}ms` : (c.err ? c.err.slice(0, 80) : 'failed');
-                return `  ${mark} [${c.target}] ${c.cmd.slice(0, 100)}${c.cmd.length>100?'…':''} (${detail})`;
-            }).join('\n');
-            parts.push(`recent_cmds:\n${lines}`);
-        }
-        if (wm.recentFiles?.length) {
-            const lines = wm.recentFiles.slice(-5).map(f => {
-                const ago = Math.max(1, Math.round((Date.now() - f.ts) / 1000));
-                const agoLabel = ago < 60 ? `${ago}s` : ago < 3600 ? `${Math.round(ago/60)}m` : `${Math.round(ago/3600)}h`;
-                return `  · ${f.op} ${f.path} (${agoLabel} ago)`;
-            }).join('\n');
-            parts.push(`recent_files:\n${lines}`);
-        }
-        if (wm.recentErrors?.length) {
-            parts.push(`recent_errors:\n${wm.recentErrors.map(e => `  · ${e.slice(0, 120)}`).join('\n')}`);
-        }
-        if (wm.activeIncident) {
-            parts.push(`active_incident: ${wm.activeIncident.id} (phase: ${wm.activeIncident.phase})`);
-        }
-        if (!parts.length) return '';
-        return `\n\n--- WORKING MEMORY (tab state) ---\n${parts.join('\n')}\n(Use this to avoid re-asking, re-creating files, or re-running successful commands. If last 2 cmds failed with the same cause, propose a DIFFERENT approach.)`;
-    }
-
-    // Relevance heuristic for lazy slots — avoids inflating system prompt
-    // needlessly, but biased toward inclusion ("better to over-recall than
-    // forget"). User feedback called the previous heuristic too aggressive
-    // ("Lucy has dementia") so several slots are now permanently true.
-    function _slotRelevance(userInput) {
-        const s = (userInput || '').toLowerCase();
-        return {
-            // Host/remote-action slot: still gated on keywords because the
-            // host metadata block is sizable and irrelevant to most queries.
-            host: /\b(host|server|servidor|prod|test|dev|remote|remoto|ssh|winrm|invoke|rdp|iis|sql|nginx|apache|linux|windows)\b/.test(s)
-                  || /[a-z0-9]+-[a-z0-9]+-?\d*/i.test(s), // hostname-like tokens
-            // Runbook/troubleshoot slot: still gated, but list expanded.
-            runbook: /\b(how|como|cómo|fix|arregla|troubleshoot|diagnos|procedure|procedimiento|runbook|install|deploy|configure|configura|restart|reinicia|setup|crear|create|generar|generate|script|comando|command|ejecuta|run|edita|edit|crea archivo|new file)\b/.test(s),
-            // Environment slot: always-on now. Previously hidden behind
-            // possessive keywords ("my", "mi"), which meant a question like
-            // "list services" wouldn't see the user's machine inventory.
-            environment: true,
-        };
-    }
-
     function construirContextoMemoria(userInput, tab) {
         const mem = leerMemoriaPersistente();
         let ctx = '';
-        const rel = _slotRelevance(userInput);
+        const rel = slotRelevance(userInput);
 
         // [CORE — always] DESIGN.md tokens if available — loaded async by
         // refreshDesignMd(). When the user is in a project that defines its
@@ -5852,36 +5321,6 @@ if (Test-Path $src) {
     // (if present from regenerateSmartDigest) gets used; otherwise the fast
     // local fallback runs. Either way the OLDER half is dropped from the
     // verbatim history Lucy sees, replaced by a much smaller summary.
-    function compactOldTurns(tab) {
-        if (!tab?.messages) return { keepFrom: 0, digest: '' };
-        const valid = tab.messages.filter(m => m.rawRole);
-        if (valid.length <= 10) return { keepFrom: 0, digest: '' };
-        const half = Math.floor(valid.length / 2);
-
-        // Prefer a smart digest already produced by regenerateSmartDigest()
-        // in the background after a previous turn — yields a structured
-        // YAML summary much more useful for Lucy than a "X turnos previos"
-        // sentence. Falls back to the cheap local digest if not yet ready.
-        const cached = tab.workingMemory?.compactedDigest;
-        const cachedAt = tab.workingMemory?._lastDigestAt || 0;
-        const cacheStillValid = cached && (valid.length - cachedAt) < 6;
-
-        let digest;
-        if (cacheStillValid) {
-            digest = `(Smart digest of first ${cachedAt} turns)\n${cached}`;
-        } else {
-            const older = valid.slice(0, half);
-            const userTurns = older.filter(m => m.rawRole === lucyConfig.name);
-            const lucyExecs = older.filter(m => m.rawRole === 'Lucy' || m.rawRole === 'Sistema');
-            const intents = userTurns.slice(-8).map(m => `· ${String(m.rawContent || '').slice(0, 140).replace(/\s+/g,' ')}`).join('\n');
-            digest = `Se conversaron ${valid.length} turnos (se resumen ${older.length} más antiguos).\nÚltimas intenciones del usuario:\n${intents}\nLucy ejecutó/respondió aprox. ${lucyExecs.length} acciones previas.`;
-        }
-
-        const keepMsg = valid[half];
-        const keepIdx = tab.messages.indexOf(keepMsg);
-        return { keepFrom: keepIdx >= 0 ? keepIdx : 0, digest };
-    }
-
     // ── Smart digest: structured YAML summary of older turns ──────────────────
     // Runs in the BACKGROUND after a turn ends, so the user never waits for it.
     // Stores the result in tab.workingMemory.compactedDigest where compactOldTurns
