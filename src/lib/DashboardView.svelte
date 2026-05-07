@@ -375,7 +375,7 @@
         <div class="dc-sub">{dashMetrics.os}</div>
         <div class="dc-sub">Uptime: {dashMetrics.uptime_h}h</div>
         {#if metricsHistory[dashSelectedHost]?.length > 1}
-        <div class="dc-sub" style="margin-top:4px;color:#2a4a3a;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} strokeWidth={2}/> {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
+        <div class="dc-sub" style="margin-top:4px;color:#4ade80;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} strokeWidth={2}/> {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
         {/if}
       </div>
     </div>
@@ -454,16 +454,16 @@
     .dash-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;}
     .dash-card{background:rgba(0,0,0,.2);border:1px solid var(--bdr);border-radius:10px;padding:14px 16px;transition:border-color .3s,box-shadow .3s;}
     .dash-card:hover{border-color:rgba(255,255,255,.08);box-shadow:0 2px 16px rgba(0,0,0,.3);}
-    .dc-label{font-size:10px;color:#334155;letter-spacing:.5px;text-transform:uppercase;font-weight:700;margin-bottom:6px;}
+    .dc-label{font-size:10px;color:#7a9ab5;letter-spacing:.5px;text-transform:uppercase;font-weight:700;margin-bottom:6px;}
     .dc-value{font-size:28px;font-weight:400;margin-bottom:6px;line-height:1;}
     .dc-bar{height:3px;background:var(--bdr);border-radius:2px;margin-bottom:6px;overflow:hidden;}
     .dc-bar-fill{height:100%;border-radius:2px;transition:width .8s cubic-bezier(.4,0,.2,1);}
-    .dc-sub{font-size:11px;color:#475569;margin-top:2px;}
+    .dc-sub{font-size:11px;color:#94a3b8;margin-top:2px;}
     .dc-sparkline{opacity:.85;flex-shrink:0;align-self:flex-end;margin-bottom:2px;}
 
     /* ── Dashboard sections ───────────────────────── */
     .dash-section{background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;margin-bottom:12px;}
-    .ds-title{font-size:11px;color:#475569;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;}
+    .ds-title{font-size:11px;color:#7a9ab5;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;}
 
     /* ── CPU cores ─────────────────────────────────── */
     .core-grid{display:flex;gap:6px;flex-wrap:wrap;}
@@ -480,11 +480,11 @@
     .disk-bar-wrap{height:6px;background:var(--bdr);border-radius:3px;overflow:hidden;}
     .disk-bar-fill{height:100%;border-radius:3px;transition:width .4s ease;}
     .disk-pct{font-size:11px;font-weight:600;text-align:right;}
-    .disk-size{font-size:10px;color:#334155;font-family:var(--mono);}
+    .disk-size{font-size:10px;color:#7a9ab5;font-family:var(--mono);}
 
     /* ── Process table ─────────────────────────────── */
     .proc-table{width:100%;border-collapse:collapse;font-size:12px;}
-    .proc-table th{background:var(--bg4);color:#475569;padding:5px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
+    .proc-table th{background:var(--bg4);color:#7a9ab5;padding:5px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
     .proc-table td{padding:5px 10px;border-bottom:1px solid rgba(26,32,48,.4);}
     .proc-table tr:last-child td{border-bottom:none;}
 
