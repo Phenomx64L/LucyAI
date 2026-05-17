@@ -35,7 +35,7 @@ pub struct SemanticHit {
 
 /// Resolve the Ollama base URL from the keyring-stored endpoint.
 /// Falls back to http://localhost:11434 if not configured.
-fn ollama_base() -> String {
+pub(crate) fn ollama_base() -> String {
     if let Ok(entry) = Entry::new("LucySysAdmin", "local_api_key") {
         if let Ok(stored) = entry.get_password() {
             return stored

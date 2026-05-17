@@ -22,4 +22,5 @@ pub mod pdf;
 pub mod principles;
 pub mod reflection;
 pub mod scheduled;
+pub mod synonyms;
 pub mod vec_index;

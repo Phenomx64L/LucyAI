@@ -381,6 +381,7 @@ pub fn run() {
             metrics::consolidate_agent_memories,
             metrics::supersede_memory,
             metrics::search_agent_memories,
+            metrics::search_agent_memories_expanded,
             metrics::get_recent_memories,
             // User Profile (Hermes-inspired persistent memory)
             metrics::set_user_profile,
