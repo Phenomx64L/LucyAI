@@ -122,6 +122,11 @@
          title={isEN ? 'Audit Trail — command history' : 'Auditoría — historial y seguimiento de comandos'}>
         <span class="sb-ico"><ClipboardList size={20} /></span><span class="sb-txt">{isEN ? 'Audit Trail' : 'Auditoría'}</span>
     </div>
+    <div class="sb-it" class:act={activeView==='memory'} role="button" tabindex="0"
+         on:click={() => dispatch('setview', { view: 'memory' })} on:keydown
+         title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
+        <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
+    </div>
     <div class="sb-div"></div>
 
     <!-- ── Runbooks ── -->

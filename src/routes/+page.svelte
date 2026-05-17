@@ -114,6 +114,7 @@ import { listen } from '@tauri-apps/api/event';
     import ComplianceView  from '$lib/ComplianceView.svelte';
     import CostDashboardView from '$lib/CostDashboardView.svelte';
     import AuditTrailView  from '$lib/AuditTrailView.svelte';
+    import MemoryBrowserView from '$lib/MemoryBrowserView.svelte';
     import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
     import ProfileSwitcher from '$lib/ProfileSwitcher.svelte';
     import StatusOrb        from '$lib/StatusOrb.svelte';
@@ -395,7 +396,7 @@ import { listen } from '@tauri-apps/api/event';
     let rsMinimized    = false;
     $: rshellPanelOpen = rshellSessions.some(s => !s.minimized);
     let showWelcome        = false; // muestra la pantalla de inicio aunque haya tabs abiertas
-    let activeView         = 'terminal'; // 'terminal' | 'dashboard' | 'logviewer' | 'nexshell'
+    let activeView         = 'terminal'; // 'terminal' | 'dashboard' | 'logviewer' | 'nexshell' | 'memory' | …
     let showPermissionRulesModal = false;
     let showSkillsManagerModal   = false;
     let showPrinciplesModal      = false;
@@ -590,6 +591,7 @@ import { listen } from '@tauri-apps/api/event';
         { icon:'◎', label:'Inventario',              cat:'Vista',       action:()=>{setView('inventory');showPalette=false;} },
         { icon:'⬡', label:'Compliance',              cat:'Vista',       action:()=>{setView('compliance');showPalette=false;} },
         { icon:'≡', label:'Audit Trail',              cat:'Vista',       action:()=>{setView('audittrail');showPalette=false;} },
+        { icon:'◊', label: isEN ? 'Memory Browser' : 'Explorador de Memoria', cat:'Vista', action:()=>{setView('memory');showPalette=false;} },
         { icon:'⚙', label:'Configuración',             cat:'Config',      action:()=>{showSettingsModal=true;showPalette=false;} },
         { icon:'◈', label:'Manage Profiles',           cat:'Config',      action:()=>{showProfileModal=true;showPalette=false;} },
         // Terminales
@@ -6002,6 +6004,11 @@ if (Test-Path $src) {
           hosts={$activeProfileHosts} {isEN}
           on:toast={e => toast(e.detail.msg, e.detail.type)}
         />
+        {/if}
+
+        <!-- ── MEMORY BROWSER VIEW (agentmemory roadmap UI) ── -->
+        {#if activeView === 'memory'}
+        <MemoryBrowserView {isEN} />
         {/if}
 
         <!-- ── COST DASHBOARD VIEW ── -->
