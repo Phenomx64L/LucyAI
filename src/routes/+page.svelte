@@ -171,7 +171,7 @@ import { listen } from '@tauri-apps/api/event';
 
     // smartRouting + privacyMode restored (see /smart-router and /privacy slash
     // commands). Persisted in localStorage alongside the rest of lucyConfig.
-    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false };
+    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, userAvatarUrl: '' };
     let _lastRouteDecision = null;  // RoutingDecision | null — type erased for plain-JS <script>
     let db                 = null;
     let showSetupOverlay   = true;
@@ -945,6 +945,7 @@ import { listen } from '@tauri-apps/api/event';
                     runbooksDir: savedRb || '',
                     smartRouting: safeGetLS('lucy_smart_routing', '0') === '1',
                     privacyMode:  safeGetLS('lucy_privacy_mode',  '0') === '1',
+                    userAvatarUrl: safeGetLS('lucy_user_avatar', ''),
                 };
                 showSetupOverlay = false;
                 await iniciar();
@@ -5912,6 +5913,8 @@ if (Test-Path $src) {
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
             <ChatThread
               {tab} {isEN} {chatSearch} isActiveTab={activeTabId === tab.id}
+              userName={lucyConfig.name}
+              userAvatarUrl={lucyConfig.userAvatarUrl || ''}
               on:pinmessage={(e) => { e.detail.msg.pinned = !e.detail.msg.pinned; tabs = tabs; toast(e.detail.msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}
               on:buttonaction={(e) => { const btn = e.detail.event.target; btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); e.detail.msg.button.action(e.detail.event); }}
               on:togglereasoning={(e) => { e.detail.msg.collapsed = !e.detail.msg.collapsed; tabs = tabs; }}
@@ -6764,6 +6767,60 @@ if (Test-Path $src) {
             </span>
           </div>
           {/if}
+
+          <!-- ── Profile picture (regression: avatar showed `?` when name not wired) ── -->
+          <div class="settings-row">
+            <span class="settings-label">
+              {isEN ? 'Profile picture' : 'Foto de perfil'}
+              <span class="help-i" title={isEN
+                ? 'Optional avatar shown next to your messages. PNG/JPG/WebP up to ~500 KB recommended (stored as data: URL in localStorage).'
+                : 'Avatar opcional al lado de tus mensajes. PNG/JPG/WebP hasta ~500 KB recomendado (se guarda como data: URL en localStorage).'}>ⓘ</span>
+            </span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              {#if lucyConfig.userAvatarUrl}
+                <span class="user-avatar user-avatar-img" style="width:32px;height:32px;line-height:32px;margin:0;">
+                  <img src={lucyConfig.userAvatarUrl} alt="avatar preview" />
+                </span>
+              {:else}
+                <span class="user-avatar" style="width:32px;height:32px;line-height:32px;font-size:11px;margin:0;">
+                  {(lucyConfig.name || '?').trim().slice(0,2).toUpperCase()}
+                </span>
+              {/if}
+              <input type="file" accept="image/png,image/jpeg,image/webp" id="set-user-avatar"
+                style="display:none;"
+                on:change={(e) => {
+                  const f = e.target.files && e.target.files[0];
+                  if (!f) return;
+                  if (f.size > 600 * 1024) {
+                    toast(isEN ? 'Image too large (>600 KB). Pick a smaller one.' : 'Imagen muy grande (>600 KB). Elige una más pequeña.', 'error');
+                    e.target.value = '';
+                    return;
+                  }
+                  const fr = new FileReader();
+                  fr.onload = () => {
+                    const dataUrl = String(fr.result || '');
+                    lucyConfig = { ...lucyConfig, userAvatarUrl: dataUrl };
+                    try { localStorage.setItem('lucy_user_avatar', dataUrl); } catch (err) {
+                      toast(isEN ? 'Could not save avatar (storage full?)' : 'No se pudo guardar el avatar (¿almacenamiento lleno?)', 'error');
+                    }
+                  };
+                  fr.readAsDataURL(f);
+                  e.target.value = '';
+                }} />
+              <button class="settings-btn" type="button"
+                on:click={() => document.getElementById('set-user-avatar')?.click()}>
+                {lucyConfig.userAvatarUrl
+                    ? (isEN ? 'Change' : 'Cambiar')
+                    : (isEN ? 'Upload' : 'Subir')}
+              </button>
+              {#if lucyConfig.userAvatarUrl}
+                <button class="settings-btn" type="button"
+                  on:click={() => { lucyConfig = { ...lucyConfig, userAvatarUrl: '' }; try { localStorage.removeItem('lucy_user_avatar'); } catch {} }}>
+                  {isEN ? 'Remove' : 'Quitar'}
+                </button>
+              {/if}
+            </div>
+          </div>
 
           <div class="settings-row">
             <label class="settings-label" for="set-personality">

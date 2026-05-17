@@ -11,6 +11,10 @@
     export let isEN: boolean = false;
     export let chatSearch: string = '';
     export let isActiveTab: boolean = false;
+    // Optional data: URL or http URL pointing to the user's profile picture.
+    // When set, replaces the initials avatar with an <img>. Persisted in
+    // lucyConfig by the parent and forwarded here.
+    export let userAvatarUrl: string = '';
     // Fallback when a message lacks `rawRole` — used by the initials avatar
     // so it never has to show '?'. Comes from lucyConfig.name in the parent.
     export let userName: string = '';
@@ -127,9 +131,15 @@
                     </span>
                 {/if}
                 {#if msg.role === 'user'}
-                    <span class="user-avatar" title={msg.rawRole || userName || 'Usuario'} aria-label={msg.rawRole || userName || 'Usuario'}>
-                        {getInitials(msg.rawRole || userName)}
-                    </span>
+                    {#if userAvatarUrl}
+                        <span class="user-avatar user-avatar-img" title={msg.rawRole || userName || 'Usuario'} aria-label={msg.rawRole || userName || 'Usuario'}>
+                            <img src={userAvatarUrl} alt={msg.rawRole || userName || 'Usuario'} />
+                        </span>
+                    {:else}
+                        <span class="user-avatar" title={msg.rawRole || userName || 'Usuario'} aria-label={msg.rawRole || userName || 'Usuario'}>
+                            {getInitials(msg.rawRole || userName)}
+                        </span>
+                    {/if}
                 {/if}
                 {#if msg.role !== 'system'}
                     {#if msg.rawRole && (msg.role === 'user' || msg.role === 'lucy')}
@@ -279,6 +289,18 @@
     :global(.user-avatar:hover){
         transform:scale(1.12) translateY(-1px);
         box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 24px 2px rgba(59,158,255,.55),0 6px 18px -4px rgba(59,158,255,.4);
+    }
+    /* Image variant — the gradient background is hidden behind the photo.
+       padding:0 so the image fills the circle. */
+    :global(.user-avatar-img){
+        padding:0;
+        overflow:hidden;
+    }
+    :global(.user-avatar-img > img){
+        width:100%;height:100%;
+        object-fit:cover;
+        display:block;
+        border-radius:inherit;
     }
     /* On very narrow viewports, drop the avatars to keep room for text */
     @media (max-width:540px){
