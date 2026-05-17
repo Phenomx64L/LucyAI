@@ -1872,6 +1872,43 @@ import { listen } from '@tauri-apps/api/event';
         const t = getTab(tabId); if (!t) return;
         const actualCmd = mode === 'dryrun' ? toDryRunCmd(cmd, engine) : cmd;
         const label = mode === 'dryrun' ? 'DRY-RUN' : 'EJECUTANDO';
+
+        // ── Dedup guard (Tier 2 #6) ──────────────────────────────────
+        // Only enforce on REAL runs — dry-runs are safe to repeat. If
+        // the same (session, target+engine, command) was executed in
+        // the last 5 min, block + warn. The user can still override
+        // explicitly by clicking the execute button again (a release
+        // would let it through, but keeping it strict catches LLM
+        // loops which is the actual threat model).
+        if (mode !== 'dryrun') {
+            try {
+                const toolName = `exec:${target || 'local'}:${engine || 'pwsh'}`;
+                const res = await invoke('dedup_acquire', {
+                    sessionId: tabId,
+                    toolName,
+                    toolInput: actualCmd,
+                });
+                if (res && res.acquired === false) {
+                    const ageMin = Math.floor((res.prev_age_seconds || 0) / 60);
+                    const ageSec = (res.prev_age_seconds || 0) % 60;
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn" style="color:#f59e0b;">⊘ DEDUP — comando bloqueado</div>
+                               <div style="font-size:11px;color:var(--txt2);margin:4px 0;">
+                                   Este comando exacto se ejecutó hace ${ageMin > 0 ? `${ageMin}m ` : ''}${ageSec}s
+                                   en esta misma sesión. Re-ejecución bloqueada por 5 min para evitar loops del agente.
+                               </div>
+                               <pre style="font-size:11px;color:var(--txt2);margin:4px 0;white-space:pre-wrap;">${actualCmd.replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;')}</pre>`,
+                        rawContent: `[DEDUP BLOCK] ${actualCmd} (re-ejecución bloqueada, ${res.prev_age_seconds}s después de la anterior)`,
+                    });
+                    return;
+                }
+            } catch (e) {
+                // Dedup backend unreachable? Don't block execution — log and proceed.
+                debug.warn('[dedup] acquire failed, proceeding without guard:', e);
+            }
+        }
+
         logTaskEvent(mode === 'dryrun' ? 'plan_dryrun' : 'plan_execute', p.risk || 'med', null, { target, engine }, tabId);
         addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#a78bfa;">⚑ ${label}</div><div style="font-size:11px;color:var(--txt2);margin:4px 0;">${desc}</div>` });
         const t0 = Date.now();
