@@ -86,8 +86,18 @@ import { listen } from '@tauri-apps/api/event';
 
     import FilePdf from '@tabler/icons-svelte/icons/file-type-pdf';
 
-    // Phase 2c (May 2026) — slash-command dispatcher extracted from this file
+    // Phase 2c (May 2026) — extracted helpers from this file
     import { dispatchSlashCommand } from '$lib/page/slash-commands';
+    import { buildPreset, upsertPreset, deletePreset, stampApplied, presetPatches, persistPresetScalars, ageString } from '$lib/page/workspace-presets';
+    import { loadMcpSecrets as mcpLoad, saveMcpSecret as mcpSave, deleteMcpSecret as mcpDelete } from '$lib/page/mcp-secrets';
+    import { upsertChip, deleteChip, upsertQuickAction, deleteQuickAction } from '$lib/page/chips-quick-actions';
+    import { saveCheckpoint, clearCheckpoint, listStaleCheckpoints as listStaleCkpts, isSensitiveRegistry } from '$lib/page/agent-checkpoints';
+    import { attachQlPopover } from '$lib/page/ql-popover';
+    import { preflightHost } from '$lib/page/host-preflight';
+    import { setFix, getFix, deleteFix } from '$lib/page/fix-store';
+    import { tabsStore, activeTabIdStore, activeTabStore, tabsRev,
+             syncTabsStore, bumpTab, setActiveTab as setActiveTabStore,
+             disposeTabRev } from '$lib/page/tabs-store';
 
     import TabBar          from '$lib/TabBar.svelte';
     import Sidebar         from '$lib/Sidebar.svelte';
@@ -275,9 +285,9 @@ import { listen } from '@tauri-apps/api/event';
     let _ollamaPingInterval = null;       // refresh local models every 30s
     let _footerCostInterval = null;       // refresh monthly cost every 5 min
     let _scheduledTickInterval = null;    // poll due scheduled tasks every 60s
-    let _qlOverHandler      = null;       // delegated mouseover for quick-look popover
-    let _qlOutHandler       = null;       // delegated mouseout for quick-look popover
-    let _qlPopover          = null;       // singleton tooltip element (cleaned in onDestroy)
+    /** Quick-look popover handle (see $lib/page/ql-popover.ts).
+     *  `.detach()` cleans up listeners + DOM node on onDestroy / HMR. */
+    let _qlHandle = null;
     // ── HISTORY SEARCH ────────────────────────────────────
     // showHistoryModal → stores.ts
     let historyQuery       = '';
@@ -311,82 +321,52 @@ import { listen } from '@tauri-apps/api/event';
     let workspacePresets   = safeParseLS('lucy_presets', []);
 
     let showPresetPrompt = false;
+    // ── Workspace presets — see $lib/page/workspace-presets.ts ──
     function saveWorkspacePreset() { showPresetPrompt = true; }
-    // ── v2: snapshot extendido (vista, sidebar, focus, tabs) ──
     function commitPresetName(name) {
         showPresetPrompt = false;
         if (!name?.trim()) return;
-        name = name.trim();
         const t = getTab(activeTabId);
-        // v2 extras: tabs snapshot (title + model only — no message history) + view + sidebar state
         const tabSnapshot = (tabs || []).map(tt => ({
             title: String(tt.title || ''),
-            model: String(tt.selectedModel || 'gemini-2.5-flash'),
+            model: String(tt.selectedModel || 'gemini-3.1-flash-lite'),
         }));
-        const preset = {
-            v: 2,
-            name,
-            model: t?.selectedModel || 'gemini-2.5-flash',
-            theme: currentTheme,
-            density: uiDensity,
-            personality: lucyPersonality,
-            // v2 fields
-            view: activeView,
+        const preset = buildPreset(name, {
+            presets: workspacePresets,
+            activeModel:      t?.selectedModel || 'gemini-3.1-flash-lite',
+            theme:            currentTheme,
+            density:          uiDensity,
+            personality:      lucyPersonality,
+            view:             activeView,
             sidebarCollapsed: !!sidebarCollapsed,
-            focusMode: !!focusMode,
-            tabs: tabSnapshot,
-            lang: userLang,
-            ts: Date.now(),
-            lastApplied: null,
-        };
-        workspacePresets = [...workspacePresets.filter(p => p.name !== name), preset];
-        safeSetLS('lucy_presets', workspacePresets);
-        toast(isEN ? `Preset "${name}" saved (${tabSnapshot.length} tabs)` : `Preset "${name}" guardado (${tabSnapshot.length} tabs)`, 'ok');
+            focusMode:        !!focusMode,
+            userLang,
+            tabsSnapshot:     tabSnapshot,
+        });
+        workspacePresets = upsertPreset(workspacePresets, preset);
+        toast(isEN ? `Preset "${preset.name}" saved (${tabSnapshot.length} tabs)` : `Preset "${preset.name}" guardado (${tabSnapshot.length} tabs)`, 'ok');
     }
-
     function applyWorkspacePreset(p) {
         if (!p) return;
         const t = getTab(activeTabId);
         if (t) t.selectedModel = p.model;
-        currentTheme = p.theme; safeSetLSString('lucy_warp_theme', p.theme);
-        uiDensity = p.density || 'comfortable'; safeSetLSString('lucy_density', uiDensity);
+        const patches = presetPatches(p, userLang);
+        currentTheme    = patches.theme;
+        uiDensity       = patches.density;
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
-        if (p.personality) { lucyPersonality = p.personality; safeSetLSString('lucy_personality', p.personality); }
-        // v2 fields — apply only if preset is v2 to avoid breaking older presets
-        if (p.v >= 2) {
-            if (p.view && p.view !== activeView) setView(p.view);
-            if (typeof p.sidebarCollapsed === 'boolean') sidebarCollapsed = p.sidebarCollapsed;
-            if (typeof p.focusMode === 'boolean') focusMode = p.focusMode;
-            if (p.lang && p.lang !== userLang) {
-                userLang = p.lang;
-                safeSetLSString('lucy_user_lang', p.lang);
-            }
-        }
-        // Track last-applied so the user sees freshness in the UI
-        const now = Date.now();
-        workspacePresets = workspacePresets.map(x => x.name === p.name ? { ...x, lastApplied: now } : x);
-        safeSetLS('lucy_presets', workspacePresets);
+        if (patches.personality) lucyPersonality = patches.personality;
+        if (patches.view && patches.view !== activeView) setView(patches.view);
+        if (typeof patches.sidebarCollapsed === 'boolean') sidebarCollapsed = patches.sidebarCollapsed;
+        if (typeof patches.focusMode        === 'boolean') focusMode        = patches.focusMode;
+        if (patches.lang) userLang = patches.lang;
+        persistPresetScalars(currentTheme, uiDensity, patches.personality, patches.lang);
+        workspacePresets = stampApplied(workspacePresets, p.name);
         refresh();
         toast(isEN ? `Applied "${p.name}"` : `Aplicado "${p.name}"`, 'ok');
     }
+    function deleteWorkspacePreset(name) { workspacePresets = deletePreset(workspacePresets, name); }
+    const _agoStr = (ts) => ageString(ts, isEN, userLang);
 
-    function deleteWorkspacePreset(name) {
-        workspacePresets = workspacePresets.filter(p => p.name !== name);
-        safeSetLS('lucy_presets', workspacePresets);
-    }
-    // Pretty "ago" formatter for preset cards
-    function _agoStr(ts) {
-        if (!ts) return '';
-        const diff = Date.now() - ts;
-        const m = Math.round(diff / 60000);
-        if (m < 1) return isEN ? 'just now' : 'ahora';
-        if (m < 60) return `${m}${isEN ? 'm ago' : 'm'}`;
-        const h = Math.round(m / 60);
-        if (h < 24) return `${h}${isEN ? 'h ago' : 'h'}`;
-        const d = Math.round(h / 24);
-        if (d < 30) return `${d}${isEN ? 'd ago' : 'd'}`;
-        return new Date(ts).toLocaleDateString(userLang);
-    }
     let showTutorial       = false;    // guided tour overlay
     let _clickHandler      = null;     // ref al event listener de links externos
 
@@ -686,94 +666,21 @@ import { listen } from '@tauri-apps/api/event';
     // Persist in-flight agent state to localStorage so a reload mid-task
     // doesn't silently erase everything. Minimal, no auto-resume — just
     // surface that a prior task was interrupted so the user can decide.
-    const _CKPT_PREFIX = 'lucy_agent_ckpt_';
-    const _CKPT_MAX_CTX = 30000;
-    const saveAgentCheckpoint = (tabId, data) => {
-        try {
-            const snap = {
-                ts: Date.now(),
-                loop_i: data.loop_i ?? 0,
-                goal: (data.goal || '').slice(0, 2000),
-                stepsHtml: (data.stepsHtml || '').slice(0, 8000),
-                agentCtxTail: (data.agentCtx || '').slice(-_CKPT_MAX_CTX),
-                editCounts: Array.from((data.editCountsByPath || new Map()).entries()),
-                toolCounts: Array.from((data.toolCallCounts || new Map()).entries()),
-                filesMod: Array.from(data.filesMod || []),
-                toolCardsMeta: (data.agentToolCards || []).map(c => ({ icon: c.icon, label: c.label, kind: c.kind, status: c.status, duration: c.duration })),
-                model: data.model || '',
-                title: data.title || '',
-            };
-            safeSetLS(_CKPT_PREFIX + tabId, snap);
-        } catch (e) {
-            // Quota exceeded or tab closed — non-fatal
-            console.warn('[checkpoint] save failed:', e);
-        }
-    };
-    const clearAgentCheckpoint = (tabId) => {
-        safeRemoveLS(_CKPT_PREFIX + tabId);
-    };
-    const listStaleCheckpoints = () => {
-        const out = [];
-        try {
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (!k || !k.startsWith(_CKPT_PREFIX)) continue;
-                try {
-                    const snap = safeParseLS(k, {});
-                    out.push({ key: k, tabId: k.slice(_CKPT_PREFIX.length), snap });
-                } catch {}
-            }
-        } catch {}
-        return out;
-    };
-    // Expose for manual inspection from dev console / future recovery UI
+    // ── Agent checkpoints + sensitive-registry — see $lib/page/agent-checkpoints.ts ──
+    const saveAgentCheckpoint  = saveCheckpoint;
+    const clearAgentCheckpoint = clearCheckpoint;
     if (typeof window !== 'undefined') {
-        window.__lucyCheckpoints = { list: listStaleCheckpoints, clear: clearAgentCheckpoint };
+        window.__lucyCheckpoints = { list: listStaleCkpts, clear: clearCheckpoint };
     }
 
-    // ── SHARED: Sensitive registry path check ──
-    const isSensitiveRegistry = (keyPath) => /^(SAM|SECURITY|SYSTEM|CurrentUser\\Identities|\.DEFAULT\\Volatile)$/i.test(keyPath) || keyPath.toLowerCase().includes('password') || keyPath.toLowerCase().includes('credential');
+    // ── Fix store for sidebar autofix — see $lib/page/fix-store.ts ──
+    const _lucyFixStoreSet = setFix;
+    const _lucyFixStore    = { get: getFix, delete: deleteFix };
 
-    // ── Fix store for sidebar autofix (module-scoped, not on window) ──
-    const _lucyFixStore = new Map();
-    const _LUCY_FIX_STORE_CAP = 50;
-    const _lucyFixStoreSet = (k, v) => {
-        // FIFO eviction — Map preserves insertion order
-        if (_lucyFixStore.size >= _LUCY_FIX_STORE_CAP) {
-            const oldest = _lucyFixStore.keys().next().value;
-            if (oldest !== undefined) _lucyFixStore.delete(oldest);
-        }
-        _lucyFixStore.set(k, v);
-    };
-
-    // ── MCP Secrets — Keyring helpers ────────────────────────────────────────
-    async function loadMcpSecrets() {
-        try {
-            const names = await invoke('list_mcp_secrets');
-            const entries = await Promise.all(
-                names.map(async n => {
-                    try { return [n, await invoke('get_mcp_secret', { name: n })]; }
-                    catch(e) { return [n, '']; }
-                })
-            );
-            mcpSecrets = Object.fromEntries(entries);
-        } catch(e) { console.warn('[MCP] keyring load failed:', e); }
-    }
-
-    async function saveMcpSecret(name, value) {
-        await invoke('save_mcp_secret', { name, value });
-        const names = Object.keys({ ...mcpSecrets, [name]: value });
-        await invoke('set_mcp_secret_index', { names });
-    }
-
-    async function deleteMcpSecret(name) {
-        try { await invoke('delete_mcp_secret', { name }); } catch(e) {}
-        const updated = { ...mcpSecrets };
-        delete updated[name];
-        const names = Object.keys(updated);
-        await invoke('set_mcp_secret_index', { names });
-        mcpSecrets = updated;
-    }
+    // ── MCP secrets — see $lib/page/mcp-secrets.ts ──
+    async function loadMcpSecrets()           { mcpSecrets = await mcpLoad(); }
+    async function saveMcpSecret(name, value) { mcpSecrets = await mcpSave(mcpSecrets, name, value); }
+    async function deleteMcpSecret(name)      { mcpSecrets = await mcpDelete(mcpSecrets, name); }
 
     onMount(async () => {
         // Aplicar modo de densidad
@@ -891,96 +798,8 @@ import { listen } from '@tauri-apps/api/event';
         // Plan card buttons (opus-4-7 #3 Plan/Act/Verify)
         document.addEventListener('click', handlePlanButtonClick);
 
-        // ── Quick-look popover for tool-card refs ([1] [2]…) ──────────────
-        // Delegated mouseover/mouseout handler: shows a floating preview of the
-        // tool card's output/label/status without requiring click + scroll.
-        // _qlPopover is hoisted to component scope so onDestroy can clean it up.
-        let _qlAnchor  = null;
-        let _qlHideTimer = null;
-        const _ensureQlPopover = () => {
-            if (_qlPopover) return _qlPopover;
-            _qlPopover = document.createElement('div');
-            _qlPopover.className = 'ql-popover';
-            _qlPopover.setAttribute('role', 'tooltip');
-            _qlPopover.setAttribute('aria-hidden', 'true');
-            _qlPopover.innerHTML = `
-                <div class="ql-head">
-                  <span class="ql-icon"></span>
-                  <span class="ql-label"></span>
-                  <span class="ql-status"></span>
-                </div>
-                <pre class="ql-body"></pre>
-                <div class="ql-foot">${isEN ? 'Click to expand' : 'Click para expandir'}</div>
-            `;
-            // Keep popover alive while the user hovers it (lets them select text)
-            _qlPopover.addEventListener('mouseenter', () => { if (_qlHideTimer) { clearTimeout(_qlHideTimer); _qlHideTimer = null; } });
-            _qlPopover.addEventListener('mouseleave', _scheduleQlHide);
-            document.body.appendChild(_qlPopover);
-            return _qlPopover;
-        };
-        const _scheduleQlHide = () => {
-            if (_qlHideTimer) clearTimeout(_qlHideTimer);
-            _qlHideTimer = setTimeout(() => {
-                if (_qlPopover) {
-                    _qlPopover.classList.remove('ql-show');
-                    _qlPopover.setAttribute('aria-hidden', 'true');
-                }
-                _qlAnchor = null;
-                _qlHideTimer = null;
-            }, 120);
-        };
-        const _showQlFor = (anchor) => {
-            const preview = anchor.getAttribute('data-preview') || '';
-            const label   = anchor.getAttribute('data-label')   || '';
-            const status  = anchor.getAttribute('data-status')  || 'done';
-            const icon    = anchor.getAttribute('data-icon')    || '';
-            if (!preview && !label) return; // nothing useful to show
-            const pop = _ensureQlPopover();
-            pop.querySelector('.ql-icon').textContent = icon;
-            pop.querySelector('.ql-label').textContent = label;
-            const st = pop.querySelector('.ql-status');
-            st.textContent = status === 'error' ? '✕' : status === 'running' ? '↻' : '✓';
-            st.className = 'ql-status ql-st-' + status;
-            pop.querySelector('.ql-body').textContent = preview || (isEN ? '(no output)' : '(sin salida)');
-            pop.classList.add('ql-show');
-            pop.setAttribute('aria-hidden', 'false');
-            // Position: anchored above the link, clamped to viewport
-            const r = anchor.getBoundingClientRect();
-            // Reset to measure natural size
-            pop.style.left = '0px';
-            pop.style.top = '0px';
-            const pw = pop.offsetWidth;
-            const ph = pop.offsetHeight;
-            let left = r.left + (r.width / 2) - (pw / 2);
-            let top  = r.top - ph - 10;
-            // Clamp horizontally
-            left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
-            // Flip below if not enough space above
-            if (top < 8) top = r.bottom + 10;
-            pop.style.left = left + 'px';
-            pop.style.top  = top + 'px';
-        };
-        const _qlOver = (e) => {
-            const a = e.target?.closest?.('a.tc-ref');
-            if (!a || a === _qlAnchor) return;
-            _qlAnchor = a;
-            if (_qlHideTimer) { clearTimeout(_qlHideTimer); _qlHideTimer = null; }
-            _showQlFor(a);
-        };
-        const _qlOut = (e) => {
-            const a = e.target?.closest?.('a.tc-ref');
-            if (!a) return;
-            // Only schedule hide if we're really leaving the anchor
-            const next = e.relatedTarget;
-            if (next && next.closest && (next.closest('a.tc-ref') === a || next.closest('.ql-popover'))) return;
-            _scheduleQlHide();
-        };
-        // Stored in module refs so onDestroy can detach them (prevents stale listeners
-        // accumulating across HMR reloads or sub-mount/unmount cycles).
-        _qlOverHandler = _qlOver;
-        _qlOutHandler  = _qlOut;
-        document.addEventListener('mouseover', _qlOverHandler);
-        document.addEventListener('mouseout',  _qlOutHandler);
+        // ── Quick-look popover for tool-card refs — see $lib/page/ql-popover.ts ──
+        _qlHandle = attachQlPopover({ isEN });
 
         window.selectRunbooksDir = async function() {
             try {
@@ -1128,13 +947,8 @@ import { listen } from '@tauri-apps/api/event';
         if (typeof handlePlanButtonClick === 'function') {
             try { document.removeEventListener('click', handlePlanButtonClick); } catch {}
         }
-        if (_qlOverHandler)  document.removeEventListener('mouseover', _qlOverHandler);
-        if (_qlOutHandler)   document.removeEventListener('mouseout',  _qlOutHandler);
-        // ── Dangling singletons in document.body (created lazily, never removed) ──
-        if (_qlPopover && _qlPopover.parentNode) {
-            try { _qlPopover.parentNode.removeChild(_qlPopover); } catch {}
-            _qlPopover = null;
-        }
+        // Quick-look popover — detaches listeners + removes DOM node atomically.
+        if (_qlHandle) { try { _qlHandle.detach(); } catch {} _qlHandle = null; }
         // ── Active streaming AI requests — cancel + unlisten ──
         try {
             for (const [, st] of _activeStreams.entries()) {
@@ -1293,78 +1107,35 @@ import { listen } from '@tauri-apps/api/event';
 
     }
 
-    // Funciones para Acciones Rápidas en Sidebar
+    // ── Quick actions + chips — see $lib/page/chips-quick-actions.ts ──
     function guardarNuevaAccion() {
-        if (!newActionName.trim() || !newActionScript.trim()) return;
-        const iconKey = ICON_MAP[newActionIcon] ? newActionIcon : 'bolt';
-        if (editingActionIdx !== null) {
-            quickActions[editingActionIdx].nombre = newActionName;
-            quickActions[editingActionIdx].script = newActionScript;
-            quickActions[editingActionIdx].icono  = iconKey;
-            quickActions = [...quickActions];
-        } else {
-            quickActions = [...quickActions, { icono: iconKey, nombre: newActionName, script: newActionScript }];
-        }
-        safeSetLS('lucy_quick_actions', quickActions);
+        const next = upsertQuickAction(quickActions, editingActionIdx,
+            { nombre: newActionName, script: newActionScript, icono: newActionIcon }, ICON_MAP);
+        if (next === quickActions) return;
+        quickActions = next;
         $showNewActionModal = false;
-        newActionName = '';
-        newActionScript = '';
-        newActionIcon = 'bolt';
+        newActionName = ''; newActionScript = ''; newActionIcon = 'bolt';
         editingActionIdx = null;
     }
-
-
     function abrirEditarAccionRapida(i) {
         editingActionIdx = i;
-        newActionName = quickActions[i].nombre;
+        newActionName   = quickActions[i].nombre;
         newActionScript = quickActions[i].script;
-        newActionIcon = ICON_MAP[quickActions[i].icono] ? quickActions[i].icono : 'bolt';
+        newActionIcon   = ICON_MAP[quickActions[i].icono] ? quickActions[i].icono : 'bolt';
         $showNewActionModal = true;
     }
-    function eliminarAccionRapida(i) {
-        quickActions.splice(i, 1);
-        quickActions = [...quickActions];
-        safeSetLS('lucy_quick_actions', quickActions);
-    }
+    function eliminarAccionRapida(i) { quickActions = deleteQuickAction(quickActions, i); }
 
-    // ── CHIPS EDITABLES (barra inferior) ────────────────────────────────────
-    function _persistirChips() {
-        safeSetLS('lucy_user_chips', userChips);
-    }
-
-    function abrirNuevoChip() {
-        editingChipIdx = null;
-        chipForm = { label: '', clave: '' };
-        $showChipsModal = true;
-    }
-
-    function abrirEditarChip(idx) {
-        editingChipIdx = idx;
-        chipForm = { ...userChips[idx] };
-        $showChipsModal = true;
-    }
-
+    // Chips
+    function abrirNuevoChip()   { editingChipIdx = null; chipForm = { label: '', clave: '' }; $showChipsModal = true; }
+    function abrirEditarChip(i) { editingChipIdx = i; chipForm = { ...userChips[i] }; $showChipsModal = true; }
     function guardarChip() {
-        const label = chipForm.label.trim();
-        const clave = chipForm.clave.trim();
-        if (!label || !clave) return;
-        if (editingChipIdx === null) {
-            userChips = [...userChips, { label, clave }];
-        } else {
-            userChips[editingChipIdx] = { label, clave };
-            userChips = [...userChips];
-        }
-        _persistirChips();
-        $showChipsModal = false;
-        chipForm = { label: '', clave: '' };
-        editingChipIdx = null;
+        const next = upsertChip(userChips, editingChipIdx, chipForm);
+        if (next === userChips) return;
+        userChips = next; $showChipsModal = false;
+        chipForm = { label: '', clave: '' }; editingChipIdx = null;
     }
-
-    function eliminarChip(idx) {
-        userChips.splice(idx, 1);
-        userChips = [...userChips];
-        _persistirChips();
-    }
+    function eliminarChip(idx) { userChips = deleteChip(userChips, idx); }
 
     function runChipLabel(clave) {
         if (!activeTabId) crearTab();
@@ -1683,6 +1454,7 @@ import { listen } from '@tauri-apps/api/event';
         tabs = [...tabs, t];
         activeTabId = id;
         showWelcome = false;
+        syncTabsStore(tabs);    // P2 audit: keep tabs-store mirror in sync
         persistir();
         tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
     }
@@ -1705,8 +1477,17 @@ import { listen } from '@tauri-apps/api/event';
         const t = getTab(id);
         if (!t) return;
         if (t.recognition && t.isListening) t.recognition.stop();
+        // P2 audit (F1+F7): bump run-token to invalidate any in-flight
+        // runAI for this tab, then tear down any mounted EnrichedOutputWidgets
+        // before the messages array goes away (avoid detached-DOM memory leaks).
+        if (typeof _runToken === 'object') {
+            _runToken[id] = (_runToken[id] || 0) + 1;
+        }
+        try { destroyEnrichedWidgets(); } catch {}
         tabs = tabs.filter(x => x.id !== id);
         if (tabs.length && activeTabId === id) activeTabId = tabs[tabs.length-1].id;
+        syncTabsStore(tabs);    // P2: structural change → resync derived stores
+        disposeTabRev(id);      // P2: free per-tab revision store (memory hygiene)
         // Free per-tab CWD entry on the backend so the map doesn't grow unbounded
         invoke('drop_tab_cwd', { tabId: String(id) }).catch(e => debug.log('[cwd] drop failed:', e));
         persistir();
@@ -2056,36 +1837,7 @@ import { listen } from '@tauri-apps/api/event';
     // ── PLAN/ACT/VERIFY (opus-4-7 #3) ──────────────────────────────────────────
     const _pendingPlans = new Map(); // planId -> { ...plan, tabId, doSpeak }
 
-    // ── Host preflight cache (30s TTL per host) ───────────────────────────
-    // Avoids 15s WinRM timeouts when host is offline/unreachable.
-    const _preflightCache = new Map(); // hostId -> { ts, ok, err }
-    const PREFLIGHT_TTL_MS = 30_000;
-
-    async function preflightHost(h) {
-        if (!h || !h.host) return { ok: false, err: 'Host inválido' };
-        const key = h.id || h.host;
-        const cached = _preflightCache.get(key);
-        if (cached && (Date.now() - cached.ts) < PREFLIGHT_TTL_MS) {
-            return { ok: cached.ok, err: cached.err, cached: true };
-        }
-        const port = h.port || (h.type === 'linux' ? 22 : 5985);
-        // Test-NetConnection is available on the local (Windows) host and works for both SSH and WinRM ports.
-        const script = `$ErrorActionPreference='Stop'; try { $r = Test-NetConnection -ComputerName '${h.host.replace(/'/g,"''")}' -Port ${port} -InformationLevel Quiet -WarningAction SilentlyContinue; if ($r) { 'OK' } else { throw "TCP ${port} cerrado o host no responde" } } catch { Write-Error $_.Exception.Message }`;
-        const t0 = Date.now();
-        try {
-            const out = await invoke('execute_powershell', { script, forceExecute: true });
-            const ok = String(out || '').trim().toUpperCase().includes('OK');
-            const result = ok
-                ? { ok: true, err: null, ms: Date.now()-t0 }
-                : { ok: false, err: `Puerto ${port} no responde en ${h.host}`, ms: Date.now()-t0 };
-            _preflightCache.set(key, { ts: Date.now(), ...result });
-            return result;
-        } catch (e) {
-            const result = { ok: false, err: `Host ${h.host}:${port} inaccesible — ${String(e).substring(0,200)}`, ms: Date.now()-t0 };
-            _preflightCache.set(key, { ts: Date.now(), ...result });
-            return result;
-        }
-    }
+    // ── Host preflight — see $lib/page/host-preflight.ts ──
 
     // Runs an arbitrary command against local or remote target. Shared by execute + verify + rollback.
     async function _runPlanStep(target, cmd, engine) {
