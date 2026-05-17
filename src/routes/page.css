@@ -1405,7 +1405,10 @@ body[data-state="error"] .igrp{
        user types. The min-height here MUST stay tiny — anything ≥ 90 px
        (the old value) makes the box fixed-tall and breaks auto-grow. */
     min-height:24px;
-    max-height:160px;
+    /* Cap reduced from 160 → 100 px (≈ 5 rows). Past that the box stops
+       growing and an internal scrollbar appears. Keeps the bar a small
+       sliver of the screen even when the user pastes a wall of text. */
+    max-height:100px;
     overflow-y:hidden;
     line-height:1.5;
     padding:2px 0;

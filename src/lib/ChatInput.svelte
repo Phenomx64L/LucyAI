@@ -58,32 +58,44 @@
     let _flagSelIdx = 0;
 
     // ── Auto-grow textarea (restored from pre-refactor) ──
-    // The Sprint D refactor offloaded resize to the parent's autoResize
-    // via on:inputchange — but Svelte's CustomEvent.target is the
-    // component root, not the textarea, so the parent received null and
-    // the bar stopped growing (and crashed on every keystroke until the
-    // null-guard fix landed). Owning resize here, where we have the
-    // textarea ref directly, is both correct and resilient.
+    // CAP must match the .ibox max-height in page.css. The JS reads the
+    // CSS-computed max-height at runtime so this stays in sync even if
+    // someone tweaks the stylesheet later.
+    const CAP_PX = 100;
+    const FLOOR_PX = 24;
+
     function autoResize() {
         if (!_textareaEl) return;
-        _textareaEl.style.height = '0px';
-        const target = Math.min(_textareaEl.scrollHeight, 160);
-        _textareaEl.style.height = Math.max(target, 24) + 'px';
-        _textareaEl.style.overflowY = _textareaEl.scrollHeight > 160 ? 'auto' : 'hidden';
+        // Reset first so scrollHeight reports natural content height —
+        // setting to 'auto' (vs '0px') plays nicer with browsers that
+        // refuse to shrink under min-height after a 0px touch.
+        _textareaEl.style.height = 'auto';
+        const sh = _textareaEl.scrollHeight;
+        const target = Math.max(FLOOR_PX, Math.min(sh, CAP_PX));
+        _textareaEl.style.height = target + 'px';
+        // Scrollbar only past the cap. Anything else = hidden so the box
+        // never shows a scrollbar when it doesn't need one.
+        _textareaEl.style.overflowY = sh > CAP_PX ? 'auto' : 'hidden';
     }
 
-    // Reset height when the input value is cleared (after sending).
-    $: if (tab.inputValue === '' && _textareaEl) {
-        _textareaEl.style.height = '24px';
-        _textareaEl.style.overflowY = 'hidden';
+    // ── Reactive on tab.inputValue ──
+    // tab.inputValue is a primitive — Svelte ONLY refires this when it
+    // actually changes, NOT on every parent tabs=[...tabs] refresh. So
+    // it's safe to put autoResize here (unlike `$: tab && _textareaEl`
+    // which was reactive on the tab object reference and caused the
+    // startup microtask stall).
+    // Covers: programmatic value writes (history nav, slash commands
+    // emptying it, send-clears-it) AND paste, since bind:value will
+    // sync after the native paste event.
+    $: if (_textareaEl !== null && (tab && typeof tab.inputValue === 'string')) {
+        // tab.inputValue read tracks the dep; deferring to tick() ensures
+        // Svelte has actually flushed bind:value into the DOM before we
+        // measure scrollHeight.
+        const _dep = tab.inputValue;  // eslint-disable-line @typescript-eslint/no-unused-vars
+        tick().then(autoResize);
     }
 
-    // Initial size on mount — the textarea otherwise renders at its CSS
-    // default which can stretch the parent flex column. We DON'T add a
-    // `$: tab` reactive (Svelte 4 marks `tab` dirty on every parent
-    // `tabs = [...tabs]` refresh — that's ~30 events per agent turn,
-    // which queued enough microtasks to stall startup). on:input below
-    // handles every keystroke directly, which is what actually matters.
+    // Initial size on mount.
     onMount(async () => {
         await tick();
         autoResize();
@@ -227,6 +239,8 @@
             bind:value={tab.inputValue}
             bind:this={_textareaEl}
             on:input={(e) => { autoResize(); refreshFlagSuggestions(); dispatch('inputchange', { event: e }); }}
+            on:paste={() => tick().then(autoResize)}
+            on:cut={() => tick().then(autoResize)}
             on:keydown={(e) => { if (handleSuggestionKey(e)) return; dispatch('keydown', { event: e }); }}
             on:blur={() => setTimeout(() => { _flagSuggestions = []; }, 120)}
             disabled={!!tab.pendingMessage}></textarea>
