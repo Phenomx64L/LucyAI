@@ -236,6 +236,36 @@ pub fn run() {
                 crate::commands::local::warmup_tokenizer();
             });
 
+            // ── Memory auto-forget sweep (Tier 1 #1) ────────────────────
+            // Runs once 60s after startup (not blocking launch), then every
+            // 12h. Cleans TTL-expired memories + low-value old rows. Errors
+            // are logged but never crash the app — the memory store works
+            // fine without this, it just grows slowly.
+            tauri::async_runtime::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                loop {
+                    match crate::commands::metrics::auto_forget_run(Some(false)) {
+                        Ok(r) if r.total_deleted > 0 => {
+                            crate::utils::logging::write_app_log(
+                                "INFO",
+                                &format!(
+                                    "auto-forget: ttl={} low_value={} total={}",
+                                    r.ttl_expired, r.low_value, r.total_deleted
+                                ),
+                            );
+                        }
+                        Ok(_) => {}  // Nothing to clean — silent
+                        Err(e) => {
+                            crate::utils::logging::write_app_log(
+                                "WARN",
+                                &format!("auto-forget run failed: {}", e),
+                            );
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(43_200)).await;  // 12h
+                }
+            });
+
             // ── Periodic janitor (every 5 min) ──────────────────────────
             // Keeps in-memory state from leaking when sessions/tokens die
             // through abnormal paths (crash, abrupt disconnect, app sleep).

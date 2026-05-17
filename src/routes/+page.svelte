@@ -3222,7 +3222,11 @@ Use ONE of these patterns instead:
                         readOnlyTasks.push({
                             label: `[◈ Memoria] ${mbQuery}`,
                             fn: async () => {
-                                const mems = await invoke('search_agent_memories', { query: mbQuery, limit: 8 });
+                                // Tier 1 #2: agent-driven recall uses the EXPANDED path —
+                                // 3 LLM reformulations × 2 streams (BM25+cosine) → RRF. The
+                                // 1-3s extra latency is invisible inside an agent turn but
+                                // buys ~15-25% better recall on vague queries.
+                                const mems = await invoke('search_agent_memories_expanded', { query: mbQuery, limit: 8 });
                                 if (!mems || mems.length === 0) {
                                     return `[MEMORY SEARCH: "${mbQuery}"]\nNo se encontraron memorias relevantes. Esto puede ser la primera vez que trabajas en esta área.`;
                                 }
