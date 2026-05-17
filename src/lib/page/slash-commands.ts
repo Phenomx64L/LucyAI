@@ -42,6 +42,12 @@ export interface SlashCtx {
     tabs: Array<{ id: string; title: string; selectedModel?: string }>;
     LLM_GROUPS: Array<{ label: string; options: Array<{ id: string; icon?: string }> }>;
 
+    /** Config flags the user can toggle via slash commands (restored after
+     *  Sprint D regression). Updated in place via setSmartRouting / setPrivacy. */
+    lucyFlags: { smartRouting: boolean; privacyMode: boolean };
+    /** Last routing decision from smart-router (for /route diagnostic). */
+    lastRouteDecision: { modelId: string; reason: string; tier: number; autoSelected: boolean } | null;
+
     // Mutation callbacks — page wires these to its real functions
     getTab: (id: string) => { id: string; messages: any[]; selectedModel?: string } | null | undefined;
     addMsg: (tabId: string, msg: any) => any;
@@ -51,6 +57,9 @@ export interface SlashCtx {
     clearTabMessages: (tabId: string) => void;
     openRemoteDiff: (hostNameOrId: string, filePath: string) => void;
     runMultiCompare: (tabId: string, models: string[], prompt: string) => void;
+    /** Persist a flag toggle + mirror back into lucyConfig. Page wires both. */
+    setSmartRouting: (on: boolean) => void;
+    setPrivacyMode:  (on: boolean) => void;
 }
 
 /**
@@ -92,6 +101,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /insights · lista los insights por confidence DESC<br>
                 /graph-rebuild · reconstruye el grafo de memoria (concepts/files/sessions)<br>
                 /graph &lt;id&gt; [hops] · BFS desde una memoria — descubre lo relacionado vía 1-3 hops<br>
+                /smart-router on|off · activa/desactiva la elección automática de modelo<br>
+                /privacy on|off · hard-lock a Ollama local (sobrepasa cualquier selección cloud)<br>
+                /route · muestra la última decisión del smart-router (tier + razón)<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -177,6 +189,57 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             if (!arg) { sysMsg('Uso: <code>/graph &lt;memory-id&gt; [hops=2]</code> — explora memorias relacionadas vía BFS.'); return true; }
             runGraphNeighbors(arg.trim(), ctx, sysMsg);
             return true;
+
+        // ── Smart-router + privacy mode (restored from orphaned smart-router.ts) ──
+        case 'smart-router':
+        case 'smartrouter':
+        case 'router': {
+            const a = (arg || '').trim().toLowerCase();
+            if (a === 'on' || a === '1' || a === 'true' || a === 'enable') {
+                ctx.setSmartRouting(true);
+                sysMsg(`<div class="mn" style="color:#34d399;">⚙ Smart router: ON</div>
+                    <div style="font-size:11px;color:var(--txt2);">Lucy elige modelo automáticamente según complejidad. Tu selección manual sigue siendo respetable como hard-override.</div>`);
+            } else if (a === 'off' || a === '0' || a === 'false' || a === 'disable') {
+                ctx.setSmartRouting(false);
+                sysMsg(`<div class="mn">⚙ Smart router: OFF</div>
+                    <div style="font-size:11px;color:var(--txt2);">Lucy usa el modelo del dropdown sin re-routear.</div>`);
+            } else {
+                const cur = ctx.lucyFlags.smartRouting ? 'ON' : 'OFF';
+                sysMsg(`Estado actual: <b>${cur}</b>. Uso: <code>/smart-router on</code> o <code>/smart-router off</code>.`);
+            }
+            return true;
+        }
+
+        case 'privacy':
+        case 'privacy-mode': {
+            const a = (arg || '').trim().toLowerCase();
+            if (a === 'on' || a === '1' || a === 'true' || a === 'enable') {
+                ctx.setPrivacyMode(true);
+                sysMsg(`<div class="mn" style="color:#34d399;">🔒 Privacy mode: ON</div>
+                    <div style="font-size:11px;color:var(--txt2);">Todo el tráfico LLM se enruta a Ollama local. Hard-lock — sobrepasa al smart-router y cualquier selección cloud.</div>`);
+            } else if (a === 'off' || a === '0' || a === 'false' || a === 'disable') {
+                ctx.setPrivacyMode(false);
+                sysMsg(`<div class="mn">🔓 Privacy mode: OFF</div>
+                    <div style="font-size:11px;color:var(--txt2);">Modelos cloud habilitados de nuevo.</div>`);
+            } else {
+                const cur = ctx.lucyFlags.privacyMode ? 'ON' : 'OFF';
+                sysMsg(`Estado actual: <b>${cur}</b>. Uso: <code>/privacy on</code> o <code>/privacy off</code>.`);
+            }
+            return true;
+        }
+
+        case 'route': {
+            const d = ctx.lastRouteDecision;
+            if (!d) {
+                sysMsg('No hay decisión de routing reciente. Envía un mensaje con <code>/smart-router on</code> primero.');
+            } else {
+                const auto = d.autoSelected ? '◆ auto' : '○ manual';
+                sysMsg(`<div class="mn">⚙ Last route decision</div>
+                    <div style="font-size:11px;">tier <b>${d.tier}</b> · ${auto} · <code>${escapeHtml(d.modelId)}</code></div>
+                    <div style="font-size:11px;color:var(--txt2);margin-top:2px;">${escapeHtml(d.reason)}</div>`);
+            }
+            return true;
+        }
 
         case 'editremote':
         case 'edit-remote':

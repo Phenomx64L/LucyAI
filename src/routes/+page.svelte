@@ -149,6 +149,8 @@ import { listen } from '@tauri-apps/api/event';
     import { observe as skillFactoryObserve, getProposals as skillFactoryGetProposals, markAccepted as skillFactoryMarkAccepted, dismissProposal as skillFactoryDismiss } from '$lib/skill-factory';
     import { parseDesignMd, formatTokensForPrompt as designTokensForPrompt } from '$lib/design-md';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
+    // Restored after regression — smart-router was orphaned by Sprint D.
+    import { routeModel, enrichLocalModel, estimateTokens } from '$lib/smart-router';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
              alertRules, activeAlerts, runbooks,
@@ -167,7 +169,10 @@ import { listen } from '@tauri-apps/api/event';
     import { toDryRunCmd, parsePlanTags, renderPlanCard, isMultiIntentPrompt } from '$lib/plan-utils';
     import { cleanStreamDisplay as _cleanStreamDisplay, detectCodeGenIntent as _detectCodeGenIntent, hasToolResponse as _hasToolResponse, needsAgentLoop as _needsAgentLoop, isMultiStepResponse as _isMultiStepResponse, extractTags as _extractTags, parseTool as _parseTool, toolHash as _toolHash, isToolLooping as _isToolLooping, askLucyStream as _askLucyStreamFn, cancelStream as _cancelStream, isStreaming as _isStreaming, isSensitiveRegistry as _isSensitiveReg, buildCodeProtocol as _buildCodeProtocol, createTokenDrain as _createTokenDrain, enqueueChunk as _enqueueChunk, drainBatch as _drainBatch, flushDrain as _flushDrain, DRAIN_MS as _DRAIN_MS, MAX_AGENT_LOOPS as _MAX_LOOPS_CONST, MAX_IDENTICAL_TOOL_CALLS as _MAX_IDENTICAL, FILE_TOOL_RE as _FILE_TOOL_RE, NATIVE_TOOL_RE as _NATIVE_TOOL_RE } from '$lib/llm-stream';
 
-    let lucyConfig         = { name: '' };
+    // smartRouting + privacyMode restored (see /smart-router and /privacy slash
+    // commands). Persisted in localStorage alongside the rest of lucyConfig.
+    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false };
+    let _lastRouteDecision = null;  // RoutingDecision | null — type erased for plain-JS <script>
     let db                 = null;
     let showSetupOverlay   = true;
     let appReady           = false;
@@ -661,13 +666,37 @@ import { listen } from '@tauri-apps/api/event';
     // When a tab selects 'nvidia-custom', the real model ID is stored in
     // tab.nvidiaCustomModel (typed by the user). All API call sites must
     // use getEffectiveModel(tab) instead of tab.selectedModel directly.
-    function getEffectiveModel(tab) {
+    function getEffectiveModel(tab, prompt = '') {
         if (!tab) return 'gemini-2.5-flash';
         if (tab.selectedModel === 'nvidia-custom') {
             const m = (tab.nvidiaCustomModel || '').trim();
             return m || 'nvidia-custom';  // fallback keeps it invalid so Rust returns a clear error
         }
-        return tab.selectedModel || 'gemini-2.5-flash';
+        const manual = tab.selectedModel || 'gemini-2.5-flash';
+
+        // ── Smart routing (restored from orphaned smart-router.ts) ──
+        // Only takes effect when the user opts in via /smart-router on.
+        // privacyMode (hard-locked local) is honoured even when smartRouting
+        // is off — it's a safety floor, not a routing preference.
+        if (!lucyConfig.smartRouting && !lucyConfig.privacyMode) return manual;
+        try {
+            const enriched = ($localModels || []).map(m => enrichLocalModel(m));
+            const decision = routeModel({
+                prompt: prompt || '',
+                contextTokens: estimateTokens(prompt || ''),
+                ollamaOnline: !!$ollamaOnline,
+                localModels: enriched,
+                primaryLocalModel: enriched[0]?.id,
+                manualOverride: manual,
+                smartRoutingEnabled: !!lucyConfig.smartRouting,
+                privacyMode: !!lucyConfig.privacyMode,
+            });
+            _lastRouteDecision = decision;
+            return decision.modelId || manual;
+        } catch (e) {
+            debug.warn('[smart-router] routing failed, falling back to manual:', e);
+            return manual;
+        }
     }
 
     // ── AGENT CHECKPOINTING ─────────────────────────────────────────────────
@@ -911,7 +940,12 @@ import { listen } from '@tauri-apps/api/event';
             const savedRb   = safeGetLS('lucy_runbooks_dir', '');
             if (savedLang) userLang = savedLang;
             if (hasKey && savedName) {
-                lucyConfig = { name: savedName, runbooksDir: savedRb || '' };
+                lucyConfig = {
+                    name: savedName,
+                    runbooksDir: savedRb || '',
+                    smartRouting: safeGetLS('lucy_smart_routing', '0') === '1',
+                    privacyMode:  safeGetLS('lucy_privacy_mode',  '0') === '1',
+                };
                 showSetupOverlay = false;
                 await iniciar();
                 invoke('get_system_health').then(r => {
@@ -2146,6 +2180,17 @@ import { listen } from '@tauri-apps/api/event';
             },
             openRemoteDiff,
             runMultiCompare,
+            // Smart-router / privacy toggles — persist + mirror back into lucyConfig
+            lucyFlags: { smartRouting: !!lucyConfig.smartRouting, privacyMode: !!lucyConfig.privacyMode },
+            lastRouteDecision: _lastRouteDecision,
+            setSmartRouting: (on) => {
+                lucyConfig = { ...lucyConfig, smartRouting: !!on };
+                try { localStorage.setItem('lucy_smart_routing', on ? '1' : '0'); } catch {}
+            },
+            setPrivacyMode: (on) => {
+                lucyConfig = { ...lucyConfig, privacyMode: !!on };
+                try { localStorage.setItem('lucy_privacy_mode', on ? '1' : '0'); } catch {}
+            },
         });
     }
 
