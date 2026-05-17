@@ -83,6 +83,8 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /crystallize · destila la sesión actual en un crystal (narrativa + outcomes + lecciones)<br>
                 /crystals · lista los crystals más recientes<br>
                 /crystal &lt;id&gt; · muestra el detalle de un crystal<br>
+                /consolidate · preview (dry-run) de fusión automática de memorias relacionadas<br>
+                /consolidate-now · ejecuta la fusión real (LLM por cluster + supersede)<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -116,6 +118,18 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'crystal':
             if (!arg) { sysMsg('Uso: <code>/crystal &lt;id&gt;</code> — muestra el detalle de un crystal. Lista con <code>/crystals</code>.'); return true; }
             runCrystalGet(arg.trim(), ctx, sysMsg);
+            return true;
+
+        // ── Auto-consolidation (Tier 2 #5) ──────────────────────────────
+        // /consolidate     — dry-run: muestra clusters propuestos sin tocar nada
+        // /consolidate-now — corre la fusión real (LLM por cluster + supersede)
+        case 'consolidate':
+            runConsolidate(true, sysMsg);
+            return true;
+
+        case 'consolidate-now':
+        case 'consolidate!':
+            runConsolidate(false, sysMsg);
             return true;
 
         case 'editremote':
@@ -460,6 +474,84 @@ function runCrystalsList(
             sysMsg(`<div class="mn">◆ Crystals (${list.length} recientes)</div>${rows}`);
         } catch (e) {
             sysMsg(`list_crystals falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+// ── Consolidation (Tier 2 #5) ──────────────────────────────────────────
+// Wire the auto_consolidate_run backend command. Two modes — dry-run
+// shows what WOULD be fused; the explicit /consolidate-now actually
+// runs the LLM calls and supersedes the originals.
+
+interface ConsolidationCluster {
+    source_ids: number[];
+    shared_tags: string[];
+    new_memory_id: number | null;
+    new_title: string | null;
+}
+interface AutoConsolidateReport {
+    dry_run: boolean;
+    eligible_memories: number;
+    clusters_found: number;
+    clusters_processed: number;
+    memories_superseded: number;
+    new_memories: number;
+    clusters: ConsolidationCluster[];
+}
+
+function runConsolidate(
+    dryRun: boolean,
+    sysMsg: (html: string, color?: string) => void,
+) {
+    const label = dryRun ? 'preview' : 'ejecutando';
+    sysMsg(`◯ Consolidación de memorias — ${label}… (puede tardar ${dryRun ? 'pocos segundos' : '15-90 s por cluster'})`);
+
+    (async () => {
+        try {
+            const r = await invoke<AutoConsolidateReport>('auto_consolidate_run', { dryRun });
+
+            if (r.clusters.length === 0) {
+                sysMsg(`<div class="mn">◯ Sin clusters viables</div>
+                    <div style="font-size:11px;color:var(--txt2);">
+                        ${r.eligible_memories} memorias elegibles, ${r.clusters_found} clusters encontrados.
+                        Necesitas ≥ 3 memorias con ≥ 2 tags compartidos (y ≥ 7 días de antigüedad) para fusionar.
+                    </div>`);
+                return;
+            }
+
+            const rows = r.clusters.map(c => {
+                const status = c.new_memory_id
+                    ? `<span style="color:#34d399;">✓ fusionado → #${c.new_memory_id}</span>`
+                    : c.new_title
+                        ? `<span style="color:#f87171;">${escapeHtml(c.new_title)}</span>`
+                        : `<span style="color:var(--txt2);">(propuesta)</span>`;
+                const tags = c.shared_tags.length
+                    ? c.shared_tags.map(t => `<code style="font-size:10px;">${escapeHtml(t)}</code>`).join(' ')
+                    : '<span style="color:var(--txt2);">(sin tags compartidos)</span>';
+                const newTitle = c.new_title && c.new_memory_id
+                    ? `<div style="margin-top:2px;font-size:11px;"><b>Nuevo:</b> ${escapeHtml(c.new_title)}</div>`
+                    : '';
+                return `<div style="padding:6px 8px;border-left:2px solid var(--accent);margin-bottom:6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:11px;">
+                        <span>${c.source_ids.length} memorias → 1</span>${status}
+                    </div>
+                    <div style="margin-top:2px;font-size:10px;color:var(--txt2);">
+                        IDs: ${c.source_ids.join(', ')}
+                    </div>
+                    <div style="margin-top:2px;">tags: ${tags}</div>
+                    ${newTitle}
+                </div>`;
+            }).join('');
+
+            const summary = r.dry_run
+                ? `${r.eligible_memories} elegibles · ${r.clusters_found} clusters · ${r.clusters_processed} se procesarían. Ejecuta <code>/consolidate-now</code> para fusionar de verdad.`
+                : `${r.new_memories} nuevas memorias · ${r.memories_superseded} originales marcadas superseded (preservadas).`;
+
+            sysMsg(`<div class="mn">◯ Consolidación — ${r.dry_run ? 'DRY-RUN' : 'COMPLETADA'}</div>
+                <div style="font-size:11px;color:var(--txt2);margin-bottom:6px;">${summary}</div>
+                ${rows}`);
+        } catch (e) {
+            sysMsg(`auto_consolidate_run falló: ${String(e).substring(0, 200)}`, 'var(--red)');
         }
     })();
 }

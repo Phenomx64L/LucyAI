@@ -266,6 +266,39 @@ pub fn run() {
                 }
             });
 
+            // ── Memory auto-consolidation (Tier 2 #5) ──────────────────
+            // Runs once 5 min after startup (after auto-forget has had a
+            // chance to prune), then every 24h. Clusters related memories
+            // by shared tags and asks the LLM to fuse each cluster into
+            // one durable memory; originals are marked superseded (audit
+            // trail preserved). Network failures or Ollama-offline degrade
+            // gracefully — the run logs and exits, retries next cycle.
+            tauri::async_runtime::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                loop {
+                    match crate::commands::metrics::auto_consolidate_run(Some(false)).await {
+                        Ok(r) if r.new_memories > 0 => {
+                            crate::utils::logging::write_app_log(
+                                "INFO",
+                                &format!(
+                                    "auto-consolidate: eligible={} clusters_found={} processed={} new={} superseded={}",
+                                    r.eligible_memories, r.clusters_found,
+                                    r.clusters_processed, r.new_memories, r.memories_superseded
+                                ),
+                            );
+                        }
+                        Ok(_) => {}  // No clusters worth fusing yet
+                        Err(e) => {
+                            crate::utils::logging::write_app_log(
+                                "WARN",
+                                &format!("auto-consolidate failed: {}", e),
+                            );
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;  // 24h
+                }
+            });
+
             // ── Periodic janitor (every 5 min) ──────────────────────────
             // Keeps in-memory state from leaking when sessions/tokens die
             // through abnormal paths (crash, abrupt disconnect, app sleep).
@@ -412,6 +445,7 @@ pub fn run() {
             metrics::list_crystals,
             metrics::get_crystal,
             metrics::delete_crystal,
+            metrics::auto_consolidate_run,
             commands::dedup::dedup_acquire,
             commands::dedup::dedup_release,
             commands::dedup::dedup_stats,

@@ -2164,3 +2164,380 @@ pub fn delete_crystal(id: i64) -> Result<usize, String> {
         Ok(n)
     })
 }
+
+// ── Auto-consolidation (Tier 2 #5, agentmemory-inspired) ─────────────────
+// Periodic background pass that fuses related agent_memories into a single
+// higher-quality memory. The originals are kept (audit trail) but marked
+// superseded — they no longer surface in default search results.
+//
+// Pipeline:
+//   1. Pull eligible memories: importance == 1, NOT superseded, ≥ 7 days
+//      old (give them time to be accessed before fusion), has ≥ 2 tags.
+//   2. Cluster by Jaccard similarity on the tag set — two memories cluster
+//      together if they share ≥ MIN_SHARED_TAGS tags. Connected components
+//      give us groups; we keep clusters of size [MIN_SIZE..MAX_SIZE].
+//   3. For each cluster, call Ollama with a strict XML prompt asking for a
+//      single fused memory (title/content/tags/type). Insert the result.
+//   4. Mark every source as superseded_by the new id.
+//
+// Conservative defaults — importance≥2 is never auto-consolidated (the
+// user/agent explicitly flagged it as important); pinned & recent rows
+// stay untouched. Dry-run mode reports cluster proposals without writing.
+
+const CONSOLIDATE_MIN_AGE_DAYS:     i64   = 7;
+const CONSOLIDATE_MIN_SHARED_TAGS:  usize = 2;
+const CONSOLIDATE_MIN_CLUSTER:      usize = 3;
+const CONSOLIDATE_MAX_CLUSTER:      usize = 12;
+const CONSOLIDATE_MAX_CLUSTERS_RUN: usize = 5;   // Cap LLM calls per run
+const CONSOLIDATE_OLLAMA_TIMEOUT_S: u64   = 30;
+
+#[derive(serde::Serialize, Clone)]
+pub struct ConsolidationCluster {
+    pub source_ids: Vec<i64>,
+    pub shared_tags: Vec<String>,
+    /// Only populated when dry_run=false AND the LLM call succeeded.
+    pub new_memory_id: Option<i64>,
+    pub new_title: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct AutoConsolidateReport {
+    pub dry_run: bool,
+    pub eligible_memories: i64,
+    pub clusters_found: i64,
+    pub clusters_processed: i64,
+    pub memories_superseded: i64,
+    pub new_memories: i64,
+    pub clusters: Vec<ConsolidationCluster>,
+}
+
+/// Parse the JSON tag array stored in agent_memories.tags. Returns an
+/// empty Vec on any malformed/empty input.
+fn parse_tags(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
+/// Union-Find for cluster building. Tiny, all-in-one, no external dep.
+struct UnionFind { parent: Vec<usize> }
+impl UnionFind {
+    fn new(n: usize) -> Self { UnionFind { parent: (0..n).collect() } }
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+    fn union(&mut self, a: usize, b: usize) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra != rb { self.parent[ra] = rb; }
+    }
+}
+
+const CONSOLIDATE_SYSTEM: &str = "You are a memory consolidation engine for an autonomous SysAdmin assistant. \
+Given a set of related observations, distill them into ONE durable memory.
+
+Output EXACTLY this XML (no markdown, no preamble):
+<memory>
+  <type>pattern|preference|architecture|bug|workflow|fact</type>
+  <title>Concise title (max 80 chars)</title>
+  <content>2-4 sentence synthesis. Capture the COMMON insight; drop one-off details.</content>
+  <tags>
+    <tag>lowercase-keyword</tag>
+  </tags>
+</memory>
+
+Rules:
+- Pick the SHARED essence — don't list every observation. If they share a root cause, name it.
+- 2-6 tags. Reuse the inputs' tags where they fit; add 1-2 new abstract ones if useful.
+- type=fact for static knowledge, pattern for recurring behaviour, workflow for procedures.
+- Output ONLY the <memory> block.";
+
+/// XML helpers (shared with crystallize).
+fn xml_single_local(xml: &str, tag: &str) -> Option<String> {
+    let open  = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let s = xml.find(&open)? + open.len();
+    let e = xml[s..].find(&close)?;
+    Some(xml[s..s + e].trim().to_string())
+}
+fn xml_collect_local(xml: &str, tag: &str) -> Vec<String> {
+    let open  = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(s) = xml[cursor..].find(&open) {
+        let start = cursor + s + open.len();
+        let Some(e) = xml[start..].find(&close) else { break };
+        let inner = xml[start..start + e].trim().to_string();
+        if !inner.is_empty() { out.push(inner); }
+        cursor = start + e + close.len();
+    }
+    out
+}
+
+/// Run a consolidation sweep. `dry_run = true` reports cluster proposals
+/// without calling Ollama or writing anything. Idempotent — safe to call
+/// repeatedly and via a 24h background scheduler.
+#[tauri::command]
+pub async fn auto_consolidate_run(
+    dry_run: Option<bool>,
+) -> Result<AutoConsolidateReport, String> {
+    let dry = dry_run.unwrap_or(false);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let age_cutoff = now - (CONSOLIDATE_MIN_AGE_DAYS * 86_400);
+
+    // ── 1. Pull eligible memories (read-only) ────────────────────────
+    #[derive(Clone)]
+    struct Eligible { id: i64, title: String, content: String, tags: Vec<String> }
+    let eligibles: Vec<Eligible> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, content, tags FROM agent_memories
+             WHERE importance = 1
+               AND superseded_by IS NULL
+               AND expires_at = 0
+               AND created_at < ?1
+             ORDER BY created_at ASC
+             LIMIT 500"  // cap; very old DBs would otherwise stall the sweep
+        ).map_err(|e| format!("consolidate prepare: {}", e))?;
+        let rows = stmt.query_map(rusqlite::params![age_cutoff], |row| {
+            Ok(Eligible {
+                id:      row.get(0)?,
+                title:   row.get(1)?,
+                content: row.get(2)?,
+                tags:    parse_tags(&row.get::<_, String>(3)?),
+            })
+        }).map_err(|e| format!("consolidate query: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows { if let Ok(e) = r {
+            // Drop memories without tags — can't cluster them
+            if e.tags.len() >= 2 { out.push(e); }
+        }}
+        Ok(out)
+    })?;
+
+    let eligible_count = eligibles.len() as i64;
+    if eligibles.len() < CONSOLIDATE_MIN_CLUSTER {
+        return Ok(AutoConsolidateReport {
+            dry_run: dry,
+            eligible_memories: eligible_count,
+            clusters_found: 0,
+            clusters_processed: 0,
+            memories_superseded: 0,
+            new_memories: 0,
+            clusters: Vec::new(),
+        });
+    }
+
+    // ── 2. Cluster by shared-tag overlap (Union-Find) ────────────────
+    // O(N²) pairwise — acceptable up to ~500 memories, our hard cap.
+    let n = eligibles.len();
+    let mut uf = UnionFind::new(n);
+    use std::collections::HashSet;
+    let tag_sets: Vec<HashSet<&str>> = eligibles.iter()
+        .map(|e| e.tags.iter().map(|s| s.as_str()).collect())
+        .collect();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let shared = tag_sets[i].intersection(&tag_sets[j]).count();
+            if shared >= CONSOLIDATE_MIN_SHARED_TAGS {
+                uf.union(i, j);
+            }
+        }
+    }
+    // Materialize clusters
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for i in 0..n {
+        let root = uf.find(i);
+        groups.entry(root).or_default().push(i);
+    }
+    // Keep clusters within size bounds, sort by size DESC (largest first)
+    let mut viable: Vec<Vec<usize>> = groups.into_values()
+        .filter(|g| g.len() >= CONSOLIDATE_MIN_CLUSTER && g.len() <= CONSOLIDATE_MAX_CLUSTER)
+        .collect();
+    viable.sort_by(|a, b| b.len().cmp(&a.len()));
+    let clusters_found = viable.len() as i64;
+
+    // Cap total Ollama calls per run
+    viable.truncate(CONSOLIDATE_MAX_CLUSTERS_RUN);
+
+    // ── 3. (dry-run shortcut) Just report proposals ──────────────────
+    if dry {
+        let clusters: Vec<ConsolidationCluster> = viable.iter().map(|idxs| {
+            let source_ids: Vec<i64> = idxs.iter().map(|&i| eligibles[i].id).collect();
+            // Shared tags = intersection across the cluster
+            let mut shared: HashSet<&str> = tag_sets[idxs[0]].clone();
+            for &i in idxs.iter().skip(1) {
+                shared = shared.intersection(&tag_sets[i]).copied().collect();
+            }
+            ConsolidationCluster {
+                source_ids,
+                shared_tags: shared.into_iter().map(|s| s.to_string()).collect(),
+                new_memory_id: None,
+                new_title: None,
+            }
+        }).collect();
+        return Ok(AutoConsolidateReport {
+            dry_run: true,
+            eligible_memories: eligible_count,
+            clusters_found,
+            clusters_processed: viable.len() as i64,
+            memories_superseded: 0,
+            new_memories: 0,
+            clusters,
+        });
+    }
+
+    // ── 4. Real run: per-cluster LLM + insert + supersede ────────────
+    let base = crate::commands::embeddings::ollama_base();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(CONSOLIDATE_OLLAMA_TIMEOUT_S))
+        .build()
+        .map_err(|e| format!("http client: {}", e))?;
+
+    let mut total_superseded = 0i64;
+    let mut total_new = 0i64;
+    let mut report_clusters: Vec<ConsolidationCluster> = Vec::with_capacity(viable.len());
+    let mut processed = 0i64;
+
+    for idxs in &viable {
+        let cluster_members: Vec<&Eligible> = idxs.iter().map(|&i| &eligibles[i]).collect();
+        let source_ids: Vec<i64> = cluster_members.iter().map(|e| e.id).collect();
+        let mut shared: HashSet<&str> = tag_sets[idxs[0]].clone();
+        for &i in idxs.iter().skip(1) {
+            shared = shared.intersection(&tag_sets[i]).copied().collect();
+        }
+        let shared_tags_vec: Vec<String> = shared.iter().map(|s| s.to_string()).collect();
+
+        // Build the user prompt: each memory as a numbered block
+        let mut user_prompt = String::with_capacity(2048);
+        user_prompt.push_str("Observations:\n\n");
+        for (i, m) in cluster_members.iter().enumerate() {
+            let snippet: String = m.content.chars().take(400).collect();
+            user_prompt.push_str(&format!(
+                "{}. {} — {}\n   tags: {}\n\n",
+                i + 1,
+                m.title.chars().take(80).collect::<String>(),
+                snippet,
+                m.tags.join(", ")
+            ));
+        }
+
+        let body = serde_json::json!({
+            "model": "qwen3:4b",
+            "messages": [
+                { "role": "system", "content": CONSOLIDATE_SYSTEM },
+                { "role": "user",   "content": user_prompt },
+            ],
+            "stream": false,
+            "options": { "temperature": 0.3, "num_predict": 600 },
+        });
+
+        let resp = match client
+            .post(format!("{}/api/chat", base))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                // Network failure for THIS cluster — log a placeholder and move on
+                report_clusters.push(ConsolidationCluster {
+                    source_ids: source_ids.clone(),
+                    shared_tags: shared_tags_vec.clone(),
+                    new_memory_id: None,
+                    new_title: Some("(Ollama unreachable)".to_string()),
+                });
+                continue;
+            }
+        };
+        let json: serde_json::Value = match resp.json().await {
+            Ok(j) => j, Err(_) => continue,
+        };
+        let xml = json
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let title = match xml_single_local(&xml, "title") {
+            Some(t) => t, None => continue,  // skip unparseable
+        };
+        let content = match xml_single_local(&xml, "content") {
+            Some(c) => c, None => continue,
+        };
+        let mem_type = xml_single_local(&xml, "type").unwrap_or_else(|| "pattern".to_string());
+        let mut tags = xml_collect_local(&xml, "tag");
+        if tags.is_empty() {
+            tags = shared_tags_vec.clone();
+        }
+        // Always tag the result so consolidated rows are filterable
+        tags.push("consolidated".to_string());
+        tags.push(format!("type:{}", mem_type));
+
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+
+        // Insert + supersede in a single transaction
+        let result_id: Result<i64, String> = with_db(|conn| {
+            let tx = conn.unchecked_transaction()
+                .map_err(|e| format!("consolidate tx: {}", e))?;
+            tx.execute(
+                "INSERT INTO agent_memories
+                 (session_id, title, content, tags, files, importance, expires_at)
+                 VALUES ('', ?1, ?2, ?3, '[]', 2, 0)",
+                rusqlite::params![title, content, tags_json],
+            ).map_err(|e| format!("consolidate insert: {}", e))?;
+            let new_id = tx.last_insert_rowid();
+            for sid in &source_ids {
+                tx.execute(
+                    "UPDATE agent_memories SET superseded_by = ?1 WHERE id = ?2",
+                    rusqlite::params![new_id, sid],
+                ).map_err(|e| format!("consolidate supersede: {}", e))?;
+            }
+            tx.commit().map_err(|e| format!("consolidate commit: {}", e))?;
+            Ok(new_id)
+        });
+
+        match result_id {
+            Ok(new_id) => {
+                total_new += 1;
+                total_superseded += source_ids.len() as i64;
+                processed += 1;
+                report_clusters.push(ConsolidationCluster {
+                    source_ids,
+                    shared_tags: shared_tags_vec,
+                    new_memory_id: Some(new_id),
+                    new_title: Some(title),
+                });
+            }
+            Err(_) => {
+                report_clusters.push(ConsolidationCluster {
+                    source_ids,
+                    shared_tags: shared_tags_vec,
+                    new_memory_id: None,
+                    new_title: Some("(insert failed)".to_string()),
+                });
+            }
+        }
+    }
+
+    Ok(AutoConsolidateReport {
+        dry_run: false,
+        eligible_memories: eligible_count,
+        clusters_found,
+        clusters_processed: processed,
+        memories_superseded: total_superseded,
+        new_memories: total_new,
+        clusters: report_clusters,
+    })
+}
