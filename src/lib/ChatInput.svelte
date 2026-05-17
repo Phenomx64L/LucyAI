@@ -22,6 +22,12 @@
     export let chatSearchCount: number = 0;
     export let isActiveTab: boolean = false;
     export let cmdPlaceholder: string = '';
+    // Forwarded from the parent so we can resolve the effective model when
+    // smart-routing or nvidia-custom is in play. Currently used only by
+    // the model-picker tooltip — the visible <select> is bound to
+    // tab.selectedModel directly so the user sees their manual choice
+    // rather than the routed one.
+    // svelte-ignore unused-export-let
     export let getEffectiveModel: (tab: any) => string = (t) => t?.selectedModel || '';
     export let getModelDescription: (model: string, isEN: boolean) => string = () => '';
     export let formatTokens: (n: number) => string = (n) => String(n);

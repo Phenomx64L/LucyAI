@@ -338,7 +338,7 @@
     .sb-noai-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(255,170,0,.1);color:var(--amber);border:1px solid rgba(255,170,0,.2);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;text-transform:uppercase;cursor:default;}
     .sb-bdg{font-size:10px;padding:1px 6px;border-radius:10px;flex-shrink:0;}
     .sidebar.closed .sb-bdg{display:none;}
-    .sb-bdg.g{background:var(--acc-d);color:var(--acc);}
+    /* .sb-bdg.g removed — was never applied (no element uses both classes). */
     .sb-bdg.y{background:rgba(255,170,0,.12);color:var(--amber);}
     .sb-bdg.b{background:rgba(59,130,246,.12);color:var(--blue);}
     .sb-ns-badge{font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(16,185,129,.1);color:var(--acc);flex-shrink:0;}
