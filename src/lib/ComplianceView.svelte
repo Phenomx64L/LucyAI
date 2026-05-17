@@ -1,7 +1,13 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { IconShieldCheck as ShieldCheck, IconFileText as FileText, IconAlertTriangle as AlertTriangle, IconBulb as Lightbulb } from '@tabler/icons-svelte';
+    import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
+
+    import FileText from '@tabler/icons-svelte/icons/file-text';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
+
+    import Lightbulb from '@tabler/icons-svelte/icons/bulb';
     import { complianceReports } from '$lib/stores';
     import { exportCompliancePdf } from '$lib/reports/ReportGenerator';
     import cisLinux from '$lib/compliance/cis-linux.json';

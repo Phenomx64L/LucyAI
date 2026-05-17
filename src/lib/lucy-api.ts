@@ -224,8 +224,8 @@ export interface TaskEntry {
     memKb: number;
 }
 
-export const executeCmd      = (script: string, forceExecute = false): Promise<string> =>
-    invoke('execute_cmd', { script, forceExecute });
+export const executeCmd      = (script: string, forceExecute = false, bypassToken: string | null = null): Promise<string> =>
+    invoke('execute_cmd', { script, forceExecute, bypassToken });
 
 export const executeWmic     = (query: string): Promise<string> =>
     invoke('execute_wmic', { query });

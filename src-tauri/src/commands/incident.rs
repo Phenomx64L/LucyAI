@@ -26,6 +26,7 @@ use crate::utils::db::{
 };
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 
 fn now_ts() -> i64 {
     std::time::SystemTime::now()
@@ -164,7 +165,7 @@ pub async fn incident_add_evidence(args: AddEvidenceArgs) -> Result<IncidentEvid
     const MAX_EVIDENCE_BYTES: usize = 64 * 1024;
 
     let content = if args.content.len() > MAX_EVIDENCE_BYTES {
-        let mut t = args.content[..MAX_EVIDENCE_BYTES].to_string();
+        let mut t = crate::utils::safe_truncate(&args.content, MAX_EVIDENCE_BYTES).to_string();
         t.push_str("\n\n[...truncated for storage]");
         t
     } else {
@@ -397,23 +398,38 @@ pub async fn incident_log_action(args: LogActionArgs) -> Result<IncidentAction, 
     let id = generate_id();
     let ts = now_ts();
 
-    let phase: String = shared_db(|conn| {
+    let (phase, chain_hash) = shared_db(|conn| {
         let phase: String = conn.query_row(
             "SELECT phase FROM incidents WHERE id = ?1",
             params![&args.incident_id],
             |row| row.get(0),
         ).map_err(|e| format!("incident not found: {}", e))?;
 
+        // ── Hash-chain: SHA-256( prev_hash || id || command || ts ) ──────
+        let prev_hash: String = conn.query_row(
+            "SELECT chain_hash FROM incident_action
+             WHERE incident_id = ?1 ORDER BY executed_at DESC LIMIT 1",
+            params![&args.incident_id],
+            |row| row.get(0),
+        ).unwrap_or_else(|_| "GENESIS".to_string());
+
+        let mut hasher = Sha256::new();
+        hasher.update(prev_hash.as_bytes());
+        hasher.update(id.as_bytes());
+        hasher.update(args.command.as_bytes());
+        hasher.update(ts.to_string().as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+
         conn.execute(
             "INSERT INTO incident_action
-                (id, incident_id, phase, rationale, command, output_evidence_id, executed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (id, incident_id, phase, rationale, command, output_evidence_id, executed_at, chain_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &id, &args.incident_id, &phase,
-                &args.rationale, &args.command, &args.output_evidence_id, ts,
+                &args.rationale, &args.command, &args.output_evidence_id, ts, &hash,
             ],
         ).map_err(|e| format!("log_action insert: {}", e))?;
-        Ok(phase)
+        Ok((phase, hash))
     })?;
 
     Ok(IncidentAction {
@@ -424,6 +440,7 @@ pub async fn incident_log_action(args: LogActionArgs) -> Result<IncidentAction, 
         command: args.command,
         output_evidence_id: args.output_evidence_id,
         executed_at: ts,
+        chain_hash: Some(chain_hash),
     })
 }
 
@@ -463,21 +480,21 @@ pub async fn incident_finalize(args: FinalizeArgs) -> Result<Incident, String> {
 #[tauri::command]
 pub async fn incident_list(shell_id: Option<String>) -> Result<Vec<Incident>, String> {
     shared_db(|conn| {
-        let (sql, has_filter) = match &shell_id {
-            Some(_) => (
-                "SELECT id, shell_id, host_name, title, description, phase, status,
-                        validity_score, loop_count, max_loops, created_at, updated_at,
-                        resolved_at, summary, root_cause
-                 FROM incidents WHERE shell_id = ?1 ORDER BY updated_at DESC",
-                true,
-            ),
-            None => (
-                "SELECT id, shell_id, host_name, title, description, phase, status,
-                        validity_score, loop_count, max_loops, created_at, updated_at,
-                        resolved_at, summary, root_cause
-                 FROM incidents ORDER BY updated_at DESC LIMIT 100",
-                false,
-            ),
+        // Use a single match on shell_id to drive BOTH the SQL choice and the
+        // params binding. Previously this kept a parallel `has_filter` bool
+        // and unwrapped `shell_id` in the filter branch — correct by
+        // convention but the unwrap was invisible to the compiler. Now the
+        // type system guarantees we only deref the Some-side.
+        let sql = if shell_id.is_some() {
+            "SELECT id, shell_id, host_name, title, description, phase, status,
+                    validity_score, loop_count, max_loops, created_at, updated_at,
+                    resolved_at, summary, root_cause
+             FROM incidents WHERE shell_id = ?1 ORDER BY updated_at DESC"
+        } else {
+            "SELECT id, shell_id, host_name, title, description, phase, status,
+                    validity_score, loop_count, max_loops, created_at, updated_at,
+                    resolved_at, summary, root_cause
+             FROM incidents ORDER BY updated_at DESC LIMIT 100"
         };
         let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
 
@@ -501,17 +518,13 @@ pub async fn incident_list(shell_id: Option<String>) -> Result<Vec<Incident>, St
             })
         };
 
-        let rows: Vec<Incident> = if has_filter {
-            stmt.query_map(params![shell_id.as_ref().unwrap()], mapper)
-                .map_err(|e| format!("query: {}", e))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("collect: {}", e))?
-        } else {
-            stmt.query_map([], mapper)
-                .map_err(|e| format!("query: {}", e))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("collect: {}", e))?
-        };
+        let rows: Vec<Incident> = match &shell_id {
+            Some(sid) => stmt.query_map(params![sid], mapper),
+            None      => stmt.query_map([], mapper),
+        }
+            .map_err(|e| format!("query: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect: {}", e))?;
         Ok(rows)
     })
 }
@@ -549,6 +562,82 @@ fn fetch_incident_row(conn: &rusqlite::Connection, id: &str) -> Result<Incident,
         },
     )
     .map_err(|e| format!("fetch_incident_row: {}", e))
+}
+
+// ── Hash-chain verification ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainVerifyResult {
+    pub valid: bool,
+    pub total_actions: usize,
+    pub verified_count: usize,
+    /// First broken link (if any): the action id where the chain breaks
+    pub broken_at: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Verify the SHA-256 hash-chain integrity of all actions for an incident.
+/// Recomputes each chain_hash from scratch and compares to the stored value.
+/// Returns a detailed result showing whether the chain is tamper-free.
+#[tauri::command]
+pub async fn incident_verify_chain(incident_id: String) -> Result<ChainVerifyResult, String> {
+    shared_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, command, executed_at, chain_hash
+             FROM incident_action
+             WHERE incident_id = ?1
+             ORDER BY executed_at ASC"
+        ).map_err(|e| format!("prepare: {}", e))?;
+
+        let rows: Vec<(String, String, i64, String)> = stmt.query_map(
+            params![&incident_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).map_err(|e| format!("query: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if rows.is_empty() {
+            return Ok(ChainVerifyResult {
+                valid: true, total_actions: 0, verified_count: 0,
+                broken_at: None, error: None,
+            });
+        }
+
+        let mut prev_hash = "GENESIS".to_string();
+        let mut verified = 0;
+
+        for (id, command, ts, stored_hash) in &rows {
+            let mut hasher = Sha256::new();
+            hasher.update(prev_hash.as_bytes());
+            hasher.update(id.as_bytes());
+            hasher.update(command.as_bytes());
+            hasher.update(ts.to_string().as_bytes());
+            let expected = format!("{:x}", hasher.finalize());
+
+            if &expected != stored_hash {
+                return Ok(ChainVerifyResult {
+                    valid: false,
+                    total_actions: rows.len(),
+                    verified_count: verified,
+                    broken_at: Some(id.clone()),
+                    error: Some(format!(
+                        "Chain broken at action {}: expected {} but stored {}",
+                        id, &expected[..16], &stored_hash[..stored_hash.len().min(16)]
+                    )),
+                });
+            }
+            prev_hash = expected;
+            verified += 1;
+        }
+
+        Ok(ChainVerifyResult {
+            valid: true,
+            total_actions: rows.len(),
+            verified_count: verified,
+            broken_at: None,
+            error: None,
+        })
+    })
 }
 
 // ── System prompts (phase-aware) ──────────────────────────────────────────

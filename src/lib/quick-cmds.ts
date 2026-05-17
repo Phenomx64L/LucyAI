@@ -1,15 +1,58 @@
 // ── quick-cmds.ts — static lookup tables extracted from +page.svelte ────────
 // Imported by +page.svelte and Sidebar.svelte.
 
-import {
-    IconActivity as Activity, IconWorld as Globe, IconLock as Lock,
-    IconClipboardList as ClipboardList, IconTrash as Trash2, IconBrain as Brain,
-    IconShieldCheck as ShieldCheck, IconBolt as Zap, IconTool as Wrench,
-    IconTerminal as Terminal, IconServer as Server, IconDownload as Download,
-    IconBug as Bug, IconDeviceDesktop as Monitor, IconKey as Key,
-    IconFolderOpen as FolderOpen, IconBell as Bell, IconRocket as Rocket,
-} from '@tabler/icons-svelte';
+import Activity from '@tabler/icons-svelte/icons/activity';
 
+
+import Globe from '@tabler/icons-svelte/icons/world';
+
+
+import Lock from '@tabler/icons-svelte/icons/lock';
+
+
+import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
+
+
+import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+
+import Brain from '@tabler/icons-svelte/icons/brain';
+
+
+import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
+
+
+import Zap from '@tabler/icons-svelte/icons/bolt';
+
+
+import Wrench from '@tabler/icons-svelte/icons/tool';
+
+
+import Terminal from '@tabler/icons-svelte/icons/terminal';
+
+
+import Server from '@tabler/icons-svelte/icons/server';
+
+
+import Download from '@tabler/icons-svelte/icons/download';
+
+
+import Bug from '@tabler/icons-svelte/icons/bug';
+
+
+import Monitor from '@tabler/icons-svelte/icons/device-desktop';
+
+
+import Key from '@tabler/icons-svelte/icons/key';
+
+
+import FolderOpen from '@tabler/icons-svelte/icons/folder-open';
+
+
+import Bell from '@tabler/icons-svelte/icons/bell';
+
+
+import Rocket from '@tabler/icons-svelte/icons/rocket';
 export interface IconPaletteEntry {
     key: string;
     icon: any;

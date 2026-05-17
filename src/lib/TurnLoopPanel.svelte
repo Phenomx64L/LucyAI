@@ -1,8 +1,9 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { PHASE_ORDER, phaseLabel, phaseIcon } from '$lib/hooks/turn-loop';
-    import { IconCircleCheck as CheckCircle, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import CheckCircle from '@tabler/icons-svelte/icons/circle-check';
 
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     const dispatch = createEventDispatcher();
 
     /** @type {import('$lib/hooks/turn-loop').TurnLoopState | null} */

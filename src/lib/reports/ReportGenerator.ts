@@ -1,9 +1,34 @@
 // ── ReportGenerator.ts — PDF export for Lucy reports ─────────────────────────
 // Uses jspdf + jspdf-autotable to generate professional SOC-style PDFs.
+//
+// P4 audit (May 2026): jspdf + jspdf-autotable together weigh ~400KB
+// minified. The PDF-export feature is rare (user clicks "Export" once
+// per session at most), so we lazy-import the heavy deps via dynamic
+// import inside each export fn. This shaves the libs out of the initial
+// page chunk; they load only when the export button is clicked.
+//
+// Types still need to be available at compile time, hence the
+// `type`-only import below — strips to zero at runtime.
 
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import type jsPDFType from 'jspdf';
+type JsPDF = InstanceType<typeof jsPDFType>;
 import { saveFileDialog } from '$lib/lucy-api';
+
+/** Lazy-load jspdf + autotable on first call. Cached at module scope so
+ *  subsequent exports in the same session reuse the loaded chunks. */
+let _jsPDFLazy: typeof jsPDFType | null = null;
+let _autoTableLazy: ((doc: JsPDF, opts: Record<string, unknown>) => void) | null = null;
+async function loadPdfLibs() {
+    if (!_jsPDFLazy) {
+        const mod = await import('jspdf');
+        _jsPDFLazy = mod.default ?? (mod as unknown as typeof jsPDFType);
+    }
+    if (!_autoTableLazy) {
+        const mod = await import('jspdf-autotable');
+        _autoTableLazy = (mod.default ?? mod) as typeof _autoTableLazy;
+    }
+    return { jsPDF: _jsPDFLazy, autoTable: _autoTableLazy! };
+}
 
 // ── COLORS ──────────────────────────────────────────────────────────────────
 const SOC_BG: [number, number, number]     = [15, 23, 42];
@@ -13,8 +38,8 @@ const SOC_YELLOW: [number, number, number] = [255, 200, 50];
 const WHITE: [number, number, number]      = [255, 255, 255];
 const GRAY: [number, number, number]       = [148, 163, 184];
 
-function initDoc(title: string, isEN: boolean): jsPDF {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+function initDoc(jsPDFCtor: typeof jsPDFType, title: string, isEN: boolean): JsPDF {
+    const doc = new jsPDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     // Header bar
     doc.setFillColor(...SOC_BG);
     doc.rect(0, 0, 210, 28, 'F');
@@ -32,7 +57,7 @@ function initDoc(title: string, isEN: boolean): jsPDF {
     return doc;
 }
 
-function addFooter(doc: jsPDF, isEN: boolean) {
+function addFooter(doc: JsPDF, isEN: boolean) {
     const pages = doc.getNumberOfPages();
     for (let i = 1; i <= pages; i++) {
         doc.setPage(i);
@@ -45,7 +70,7 @@ function addFooter(doc: jsPDF, isEN: boolean) {
     }
 }
 
-async function savePdf(doc: jsPDF, fileName: string) {
+async function savePdf(doc: JsPDF, fileName: string) {
     const arrayBuf = doc.output('arraybuffer');
     const bytes = new Uint8Array(arrayBuf);
     let binary = '';
@@ -72,7 +97,8 @@ export interface ComplianceExportData {
 }
 
 export async function exportCompliancePdf(data: ComplianceExportData, isEN: boolean): Promise<string> {
-    const doc = initDoc(isEN ? 'Compliance Report' : 'Reporte de Cumplimiento', isEN);
+    const { jsPDF, autoTable } = await loadPdfLibs();
+    const doc = initDoc(jsPDF, isEN ? 'Compliance Report' : 'Reporte de Cumplimiento', isEN);
 
     // Summary
     let y = 36;
@@ -169,7 +195,8 @@ export interface InventoryExportData {
 }
 
 export async function exportInventoryPdf(data: InventoryExportData, isEN: boolean): Promise<string> {
-    const doc = initDoc(isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura', isEN);
+    const { jsPDF, autoTable } = await loadPdfLibs();
+    const doc = initDoc(jsPDF, isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura', isEN);
 
     let y = 36;
     doc.setFontSize(11);
@@ -265,7 +292,8 @@ export interface AuditExportData {
 }
 
 export async function exportAuditPdf(data: AuditExportData, isEN: boolean): Promise<string> {
-    const doc = initDoc(isEN ? 'Audit Trail Report' : 'Reporte de Auditoria', isEN);
+    const { jsPDF, autoTable } = await loadPdfLibs();
+    const doc = initDoc(jsPDF, isEN ? 'Audit Trail Report' : 'Reporte de Auditoria', isEN);
 
     let y = 36;
     doc.setFontSize(10);

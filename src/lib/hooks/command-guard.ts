@@ -115,7 +115,7 @@ const LINUX_PATTERNS: DangerPattern[] = [
 
 const WINDOWS_PATTERNS: DangerPattern[] = [
     // ── CRITICAL ────
-    { regex: /\bRemove-Item\s+.*-Recurse\b.*-Force\b/i,
+    { regex: /\bRemove-Item\b(?=.*-Recurse)(?=.*-Force)/i,
       category: 'filesystem', description: 'Eliminacion recursiva forzada', descriptionEN: 'Forced recursive deletion',
       severity: 'critical', points: 40 },
     { regex: /\bFormat-Volume\b|\bClear-Disk\b|\bInitialize-Disk\b/i,
@@ -173,7 +173,7 @@ const DB_PATTERNS: DangerPattern[] = [
     { regex: /\bTRUNCATE\s+TABLE\b/i,
       category: 'database', description: 'Truncamiento de tabla', descriptionEN: 'Table truncation',
       severity: 'critical', points: 40 },
-    { regex: /\bDELETE\s+FROM\b(?!\s+.*\bWHERE\b)/i,
+    { regex: /\bDELETE\s+FROM\b(?![\s\S]*\bWHERE\b)/i,
       category: 'database', description: 'DELETE sin clausula WHERE', descriptionEN: 'DELETE without WHERE clause',
       severity: 'critical', points: 45 },
     { regex: /\bUPDATE\b.*\bSET\b(?![\s\S]*\bWHERE\b)/i,
@@ -278,7 +278,7 @@ export function analyzeCommand(
                            : score > 0   ? 'low'
                            : 'safe';
 
-    const topMatch = matches.sort((a, b) => b.points - a.points)[0];
+    const topMatch = [...matches].sort((a, b) => b.points - a.points)[0];
 
     let summary = '';
     let suggestion: string | undefined;
@@ -361,11 +361,12 @@ export async function checkPermissionRules(cmd: string, ruleType: string = 'comm
             ruleId: result.rule_id,
         };
     } catch (error) {
-        // If permission checking fails, allow by default (graceful degradation)
+        // SECURITY: Fail closed — if permission backend is unavailable, block execution
+        console.warn('[command-guard] Permission check failed, blocking (fail-closed):', error);
         return {
-            allowed: true,
-            action: 'allow',
-            reason: 'Permission rules unavailable - allowing execution',
+            allowed: false,
+            action: 'ask',
+            reason: 'Permission service unavailable — requires manual approval',
         };
     }
 }

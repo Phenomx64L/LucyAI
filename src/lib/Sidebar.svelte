@@ -1,14 +1,36 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
-    import {
-        IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles,
-        IconTerminal2 as TerminalSquare, IconFileText as ScrollText,
-        IconNetwork as Network, IconShieldCheck as ShieldCheck,
-        IconClipboardList as ClipboardList, IconBrain as Brain,
-        IconBolt as Zap, IconDownload as Download, IconSchool as GraduationCap,
-        IconFileCode as FileCode, IconSettings as Settings, IconTag as Tag,
-        IconBell as Bell, IconFileTypePdf as FilePdf
-    } from '@tabler/icons-svelte';
+    import LayoutDashboard from '@tabler/icons-svelte/icons/layout-dashboard';
+
+    import Sparkles from '@tabler/icons-svelte/icons/sparkles';
+
+    import TerminalSquare from '@tabler/icons-svelte/icons/terminal-2';
+
+    import ScrollText from '@tabler/icons-svelte/icons/file-text';
+
+    import Network from '@tabler/icons-svelte/icons/network';
+
+    import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
+
+    import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
+
+    import Brain from '@tabler/icons-svelte/icons/brain';
+
+    import Zap from '@tabler/icons-svelte/icons/bolt';
+
+    import Download from '@tabler/icons-svelte/icons/download';
+
+    import GraduationCap from '@tabler/icons-svelte/icons/school';
+
+    import FileCode from '@tabler/icons-svelte/icons/file-code';
+
+    import Settings from '@tabler/icons-svelte/icons/settings';
+
+    import Tag from '@tabler/icons-svelte/icons/tag';
+
+    import Bell from '@tabler/icons-svelte/icons/bell';
+
+    import FilePdf from '@tabler/icons-svelte/icons/file-type-pdf';
     import { runbooks } from '$lib/stores';
 
     // ── Props ────────────────────────────────────────────────────────────────

@@ -7,6 +7,24 @@ use futures_util::StreamExt;
 use crate::state::{HTTP_CLIENT, ALLOWED_MODELS};
 use crate::commands::metrics::log_usage_internal;
 
+/// Adaptive `num_ctx` for Ollama. We used to hardcode 32768 which is fine for
+/// log-paste / analysis but blows VRAM on 7B vision models like qwen2.5vl
+/// (KV-cache at 32K easily takes 6-10 GB extra → "model runner unexpectedly
+/// stopped" 500s).
+///
+/// Strategy: pick the smallest power-of-2 window that fits `prompt_chars / 3`
+/// (rough char→token ratio for mixed ES/EN), clamped to [2048, 32768].
+/// Ollama's runner only allocates KV-cache for the requested window, so
+/// smaller prompts → smaller cache → no OOM crash.
+fn adaptive_num_ctx(prompt_chars: usize) -> u32 {
+    let est_tokens = (prompt_chars / 3).saturating_add(512); // +512 for response headroom
+    if est_tokens <= 2048  { 2048 }
+    else if est_tokens <= 4096  { 4096 }
+    else if est_tokens <= 8192  { 8192 }
+    else if est_tokens <= 16384 { 16384 }
+    else                        { 32768 }
+}
+
 // ── LIST LOCAL MODELS (Ollama /api/tags) ─────────────────────────────────────
 /// Pregunta a Ollama (o endpoint compatible) qué modelos hay instalados.
 /// Lee la URL del chat endpoint guardada en keyring (`local_api_key`),
@@ -51,27 +69,33 @@ pub async fn list_local_models() -> Result<Vec<String>, String> {
 
 // ── TOKEN EXTRACTION from API responses ──────────────────────────────────────
 
+/// Safely convert u64 to u32, saturating at u32::MAX instead of silently truncating.
+#[inline]
+fn safe_u64_to_u32(v: u64) -> u32 {
+    v.min(u32::MAX as u64) as u32
+}
+
 /// Extract input and output tokens from Anthropic API response
 fn extract_tokens_anthropic(json: &serde_json::Value) -> Option<(u32, u32)> {
     let usage = &json["usage"];
-    let input = usage["input_tokens"].as_u64()? as u32;
-    let output = usage["output_tokens"].as_u64()? as u32;
+    let input = safe_u64_to_u32(usage["input_tokens"].as_u64()?);
+    let output = safe_u64_to_u32(usage["output_tokens"].as_u64()?);
     Some((input, output))
 }
 
 /// Extract input and output tokens from OpenAI API response
 fn extract_tokens_openai(json: &serde_json::Value) -> Option<(u32, u32)> {
     let usage = &json["usage"];
-    let input = usage["prompt_tokens"].as_u64()? as u32;
-    let output = usage["completion_tokens"].as_u64()? as u32;
+    let input = safe_u64_to_u32(usage["prompt_tokens"].as_u64()?);
+    let output = safe_u64_to_u32(usage["completion_tokens"].as_u64()?);
     Some((input, output))
 }
 
 /// Extract input and output tokens from Google Gemini API response
 fn extract_tokens_gemini(json: &serde_json::Value) -> Option<(u32, u32)> {
     let usage = &json["usageMetadata"];
-    let input = usage["promptTokenCount"].as_u64()? as u32;
-    let output = usage["candidatesTokenCount"].as_u64()? as u32;
+    let input = safe_u64_to_u32(usage["promptTokenCount"].as_u64()?);
+    let output = safe_u64_to_u32(usage["candidatesTokenCount"].as_u64()?);
     Some((input, output))
 }
 
@@ -133,10 +157,16 @@ fn strip_html_tags(html: &str) -> String {
 }
 
 /// Fetches a URL and returns up to 12 000 chars of readable plain text.
+///
+/// Guardrail (audit S5): rejects SSRF targets — loopback, RFC1918,
+/// link-local, cloud-metadata IPs — and any scheme other than http(s).
+/// Without this, an LLM-emitted `<TOOL>fetch_url:http://169.254.169.254/...</TOOL>`
+/// would exfiltrate cloud IAM credentials via the response body.
 #[tauri::command]
 pub async fn fetch_url_content(url: String) -> Result<String, String> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL debe comenzar con http:// o https://".to_string());
+    let scan = crate::guardrails::scan_url(&url);
+    if !matches!(scan.decision, crate::guardrails::ScanDecision::Allow) {
+        return Err(format!("URL bloqueada por guardrail [{}]", scan.reason));
     }
     let res = HTTP_CLIENT
         .get(&url)
@@ -157,7 +187,7 @@ pub async fn fetch_url_content(url: String) -> Result<String, String> {
 
     let plain = strip_html_tags(&body);
     let clean: String = plain.split_whitespace().collect::<Vec<&str>>().join(" ");
-    let truncated = if clean.len() > 6_000 { &clean[..6_000] } else { &clean };
+    let truncated = crate::utils::safe_truncate(&clean, 6_000);
 
     Ok(truncated.to_string())
 }
@@ -266,7 +296,7 @@ pub async fn search_runbooks(dir_path: Option<String>, query: String) -> Result<
     let mut out = String::new();
     for r in results.into_iter().take(2) { // Top 2 más relevantes
         if let Some(content) = files_metadata.get(&r) {
-            let trunc = if content.len() > 12000 { &content[..12000] } else { content };
+            let trunc = crate::utils::safe_truncate(content, 12000);
             out.push_str(&format!("--- RUNBOOK FILE: {} ---\n{}\n\n", r, trunc));
         }
     }
@@ -396,7 +426,7 @@ fn build_system_prompt_legacy(
         - START INDEXER: <TOOL>start_indexer:C:\\</TOOL> — Rebuilds the global SQLite file index for a given path. Use this if locate_file cannot find something you suspect exists.\n\
         - CHANGE DIR: <TOOL>cd:/nueva/ruta</TOOL> — Changes your logical working directory. Use this when the user asks you to switch paths or create a project in a specific directory. ⚠️ CRITICAL: NEVER use `<EXECUTE>cd path</EXECUTE>` — that spawns a subprocess that exits immediately and changes NOTHING. ALWAYS use `<TOOL>cd:path</TOOL>` which persists the change for all future commands.\n\
         RULE 22 — WEB KNOWLEDGE: NEVER guess release dates, software versions, or information post-2024. Use <TOOL>search_web:query</TOOL> IMMEDIATELY and autonomously — do NOT ask the user for permission. If a snippet is too short or lacks exact data, follow up with <TOOL>fetch:URL</TOOL> on the result URL before answering.\n\
-        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Searches DuckDuckGo. Use for documentation, current events, software versions, or system requirements.\n\
+        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Tavily API (preferred, AI-summarized) or DuckDuckGo fallback. Use for documentation, current events, software versions, or system requirements.\n\
         - FETCH WEB: <TOOL>fetch:URL</TOOL> — Fetches full text of a webpage. Use when search snippets are insufficient.\n\
         - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot of system processes or ports. Call it again later to get a DIFFERENCE (who died/closed, who was born/opened). Perfect for verifying if your commands worked.\n\
         - SEARCH RUNBOOKS: <TOOL>search_runbooks:query</TOOL> — uses TF-IDF Semantic similarity to fetch the top 2 company runbooks that match your technical issue query.\n\
@@ -533,15 +563,29 @@ pub async fn ask_lucy(
     let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
     let user_lang = lang.as_deref().unwrap_or("es-MX");
     let hosts_context = build_hosts_context(hosts_json.as_deref());
-    let final_prompt = build_system_prompt(
-        lang_instruction(user_lang),
-        context.as_deref().unwrap_or_default(),
-        &hosts_context,
-        &user_name,
-        &prompt,
-        &cwd,
-        runbooks_dir.as_deref(),
-    );
+    // Cloud models (Gemini/Claude/OpenAI/NVIDIA) get the full v2 prompt with
+    // all rules + tools. Local Ollama models get a slim version (≤800 tokens)
+    // because small 7-14B models hallucinate when overwhelmed with rules.
+    let final_prompt = if provider == "local" {
+        crate::commands::prompt_sections::build_local_system_prompt(
+            lang_instruction(user_lang),
+            context.as_deref().unwrap_or_default(),
+            &hosts_context,
+            &user_name,
+            &prompt,
+            &cwd,
+        )
+    } else {
+        build_system_prompt(
+            lang_instruction(user_lang),
+            context.as_deref().unwrap_or_default(),
+            &hosts_context,
+            &user_name,
+            &prompt,
+            &cwd,
+            runbooks_dir.as_deref(),
+        )
+    };
 
     let req = match provider {
         "openai" => {
@@ -564,15 +608,20 @@ pub async fn ask_lucy(
                 .json(&payload)
         },
         "local" => {
-            // Le quitamos el prefijo "local-" y aplicamos parámetros de coherencia para Qwen
+            // Strip "local-" prefix. num_ctx is adaptive (see adaptive_num_ctx
+            // doc): hardcoded 32K used to crash 7B vision models on consumer GPUs.
+            // Temperature 0.1 (not 0.2): small local models drift into nonsense
+            // quickly above 0.15 — keep deterministic for code-gen quality.
             let actual_model = model.replace("local-", "");
+            let ctx_size = adaptive_num_ctx(final_prompt.len());
             let payload = json!({
                 "model": actual_model,
                 "messages": [{"role": "user", "content": final_prompt}],
                 "options": {
-                    "temperature": 0.2,
-                    "num_ctx": 8192,
-                    "top_p": 0.9
+                    "temperature": 0.1,
+                    "num_ctx": ctx_size,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.1
                 }
             });
             HTTP_CLIENT.post(&api_key).json(&payload)
@@ -685,15 +734,27 @@ pub async fn ask_lucy_stream(
     let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
     let user_lang = lang.as_deref().unwrap_or("es-MX");
     let hosts_context = build_hosts_context(hosts_json.as_deref());
-    let final_prompt = build_system_prompt(
-        lang_instruction(user_lang),
-        context.as_deref().unwrap_or_default(),
-        &hosts_context,
-        &user_name,
-        &prompt,
-        &cwd,
-        runbooks_dir.as_deref(),
-    );
+    // Same provider-aware prompt selection as ask_lucy — see comment there.
+    let final_prompt = if provider == "local" {
+        crate::commands::prompt_sections::build_local_system_prompt(
+            lang_instruction(user_lang),
+            context.as_deref().unwrap_or_default(),
+            &hosts_context,
+            &user_name,
+            &prompt,
+            &cwd,
+        )
+    } else {
+        build_system_prompt(
+            lang_instruction(user_lang),
+            context.as_deref().unwrap_or_default(),
+            &hosts_context,
+            &user_name,
+            &prompt,
+            &cwd,
+            runbooks_dir.as_deref(),
+        )
+    };
 
     let req = match provider {
         "openai" => {
@@ -717,15 +778,20 @@ pub async fn ask_lucy_stream(
                 .json(&payload)
         },
         "local" => {
+            // Strip "local-" prefix. num_ctx adaptive — see adaptive_num_ctx doc.
+            // Temperature 0.1 + repeat_penalty 1.1 — small local models drift
+            // into hallucination above 0.15 and loop on identical phrases.
             let actual_model = model.replace("local-", "");
+            let ctx_size = adaptive_num_ctx(final_prompt.len());
             let payload = json!({
                 "model": actual_model,
                 "messages": [{"role": "user", "content": final_prompt}],
                 "stream": true,
                 "options": {
-                    "temperature": 0.2,
-                    "num_ctx": 8192,
-                    "top_p": 0.9
+                    "temperature": 0.1,
+                    "num_ctx": ctx_size,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.1
                 }
             });
             HTTP_CLIENT.post(&api_key).json(&payload)
@@ -766,12 +832,17 @@ pub async fn ask_lucy_stream(
     let mut input_tokens: u32 = 0;
     let mut output_tokens: u32 = 0;
     let start_time = std::time::Instant::now();
-    let stream_timeout = std::time::Duration::from_secs(30); // 30 second timeout for faster feedback
+    // Local models (Ollama) need much more time for TTFT on large prompts
+    let stream_timeout = if provider == "local" {
+        std::time::Duration::from_secs(300) // 5 min for local models
+    } else {
+        std::time::Duration::from_secs(120) // 2 min for cloud APIs
+    };
 
     while let Some(chunk) = byte_stream.next().await {
         // Check for timeout
         if start_time.elapsed() > stream_timeout {
-            eprintln!("[ask_lucy_stream] Timeout after 60 segundos esperando stream");
+            eprintln!("[ask_lucy_stream] Timeout after {} seconds waiting for stream", stream_timeout.as_secs());
             let timeout_msg = "\n__STREAM_TIMEOUT__";
             full_text.push_str(timeout_msg);
             let _ = window.emit(&chunk_event, timeout_msg); // Emit timeout marker
@@ -793,7 +864,7 @@ pub async fn ask_lucy_stream(
 
                     // Anthropic: check delta.stop_reason
                     if let Some(reason) = v["delta"]["stop_reason"].as_str() {
-                        if reason != "end_turn" {
+                        if reason == "max_tokens" {
                             was_truncated = true;
                         }
                         stream_ended = reason == "end_turn" || reason == "stop_sequence" || reason == "max_tokens";

@@ -1,8 +1,9 @@
 <script>
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
-    import { IconSearch as Search, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import Search from '@tabler/icons-svelte/icons/search';
 
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     export let hosts = [];
     // svelte-ignore export_let_unused
     export let hostName = '';

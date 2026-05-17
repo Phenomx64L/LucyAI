@@ -1,7 +1,6 @@
 <script lang="ts">
     import { createEventDispatcher, tick } from 'svelte';
-    import { IconOctagonMinus as OctagonX } from '@tabler/icons-svelte';
-
+    import OctagonX from '@tabler/icons-svelte/icons/octagon-minus';
     export let tabs: any[] = [];
     export let activeTabId: string | null = null;
     export let canScrollLeft: boolean = false;

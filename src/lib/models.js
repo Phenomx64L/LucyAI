@@ -40,7 +40,11 @@ export async function refreshLocalModels() {
             opts.push({ id: "local-custom", icon: "🖥️", nameEn: "Custom Endpoint", nameEs: "Endpoint Personalizado" });
             localModels.set(opts);
             // Sync into LLM_GROUPS so existing consumers (getModelDescription, etc.) see them too.
-            const grp = LLM_GROUPS.find(g => g.label.includes('Locales'));
+            // BUG FIX: was matching by label.includes('Locales') (Spanish word) but the
+            // actual group label is "── Local Ollama (Self-Hosted) ──" (English). The find
+            // returned undefined and the dropdown never received the detected models.
+            // Now matches by the stable `provider` field, same pattern as refreshNvidiaModels.
+            const grp = LLM_GROUPS.find(g => g.provider === 'ollama');
             if (grp) grp.options = opts;
             return opts;
         }
@@ -94,10 +98,14 @@ export const LLM_GROUPS = [
         provider: "anthropic",
         credential_key: "anthropic_api_key",
         options: [
-            { id: "claude-opus-4-5", icon: "◉", nameEn: "Claude Opus 4.5 — Best Intelligence", nameEs: "Claude Opus 4.5 — Máxima Inteligencia" },
-            { id: "claude-sonnet-4-6", icon: "◉", nameEn: "Claude Sonnet 4.6 — Advanced Analysis & Code", nameEs: "Claude Sonnet 4.6 — Análisis Avanzado y Código" },
-            { id: "claude-sonnet-4-5", icon: "✦", nameEn: "Claude Sonnet 4.5 — Fast & Efficient", nameEs: "Claude Sonnet 4.5 — Rápido y Eficiente" },
-            { id: "claude-3-5-sonnet-latest", icon: "▸", nameEn: "Claude 3.5 Sonnet — Balanced Performance", nameEs: "Claude 3.5 Sonnet — Rendimiento Equilibrado" },
+            // May 2026 lineup — Opus 4.7 / Sonnet 4.6 / Haiku 4.5 (1M ctx on Opus & Sonnet)
+            // Iconography:
+            //   🧠 reasoning tier   ✨ balanced tier   ⚡ fast tier   🕰 legacy
+            { id: "claude-opus-4-7",   icon: "🧠", nameEn: "Claude Opus 4.7 — Best Intelligence",         nameEs: "Claude Opus 4.7 — Máxima Inteligencia" },
+            { id: "claude-sonnet-4-6", icon: "✨", nameEn: "Claude Sonnet 4.6 — Advanced Analysis & Code", nameEs: "Claude Sonnet 4.6 — Análisis Avanzado y Código" },
+            { id: "claude-haiku-4-5",  icon: "⚡", nameEn: "Claude Haiku 4.5 — Fast & Efficient",         nameEs: "Claude Haiku 4.5 — Rápido y Eficiente" },
+            // Legacy — kept for backward compat with existing chats / runbooks
+            { id: "claude-sonnet-4-5", icon: "🕰", nameEn: "Claude Sonnet 4.5 — Legacy",                  nameEs: "Claude Sonnet 4.5 — Legado" },
         ]
     },
     {
@@ -105,20 +113,30 @@ export const LLM_GROUPS = [
         provider: "gemini",
         credential_key: "gemini_api_key",
         options: [
-            { id: "gemini-3.1-pro-preview", icon: "◆", nameEn: "Gemini 3.1 Pro — Ultimate Analysis", nameEs: "Gemini 3.1 Pro — Máxima Inteligencia" },
-            { id: "gemini-3-flash-preview", icon: "▸", nameEn: "Gemini 3 Flash — Fast & Balanced", nameEs: "Gemini 3 Flash — Rápido y Equilibrado" },
-            { id: "gemini-2.5-pro", icon: "◆", nameEn: "Gemini 2.5 Pro — Deep Analysis", nameEs: "Gemini 2.5 Pro — Análisis Profundo" },
-            { id: "gemini-2.5-flash", icon: "▸", nameEn: "Gemini 2.5 Flash — SysAdmin Balanced", nameEs: "Gemini 2.5 Flash — SysAdmin Equilibrado" },
+            // Gemini 3.1 family (May 2026). 2.5 entries removed from the dropdown
+            // (still in ALLOWED_MODELS for backward compat with old saved chats).
+            //   💎 frontier   🌟 balanced   🪶 lite/cheapest   🧪 preview
+            { id: "gemini-3.1-pro-preview",        icon: "💎", nameEn: "Gemini 3.1 Pro — Ultimate Analysis",            nameEs: "Gemini 3.1 Pro — Máxima Inteligencia" },
+            { id: "gemini-3-flash-preview",        icon: "🌟", nameEn: "Gemini 3 Flash — Fast & Balanced",              nameEs: "Gemini 3 Flash — Rápido y Equilibrado" },
+            { id: "gemini-3.1-flash-lite",         icon: "🪶", nameEn: "Gemini 3.1 Flash-Lite — Frontier at Low Cost", nameEs: "Gemini 3.1 Flash-Lite — Frontier a Bajo Costo" },
+            { id: "gemini-3.1-flash-lite-preview", icon: "🧪", nameEn: "Gemini 3.1 Flash-Lite Preview",                 nameEs: "Gemini 3.1 Flash-Lite Vista Previa" },
         ]
     },
     {
-        label: "── OpenAI GPT-4 Vision ──",
+        label: "── OpenAI GPT-5 Vision ──",
         provider: "openai",
         credential_key: "openai_api_key",
         options: [
-            { id: "gpt-4o", icon: "✦", nameEn: "GPT-4o — Multimodal Intelligence", nameEs: "GPT-4o — Inteligencia Multimodal" },
-            { id: "gpt-4-turbo", icon: "▸", nameEn: "GPT-4 Turbo — Fast & Capable", nameEs: "GPT-4 Turbo — Rápido y Capaz" },
-            { id: "gpt-4o-mini", icon: "▸", nameEn: "GPT-4o Mini — Fast & Cost Effective", nameEs: "GPT-4o Mini — Rápido y Económico" },
+            // GPT-5.5 family (April-May 2026).
+            //   🚀 frontier   ⚡ instant/fast   🌱 mini   🍃 nano   👨‍💻 codex   🕰 legacy
+            { id: "gpt-5.5",         icon: "🚀",     nameEn: "GPT-5.5 — Frontier Reasoning & Coding", nameEs: "GPT-5.5 — Razonamiento y Código de Frontera" },
+            { id: "gpt-5.5-instant", icon: "⚡",     nameEn: "GPT-5.5 Instant — Low-Latency Default", nameEs: "GPT-5.5 Instant — Baja Latencia por Defecto" },
+            { id: "gpt-5.4-mini",    icon: "🌱",     nameEn: "GPT-5.4 Mini — Fast & Cost Effective",  nameEs: "GPT-5.4 Mini — Rápido y Económico" },
+            { id: "gpt-5.4-nano",    icon: "🍃",     nameEn: "GPT-5.4 Nano — Cheapest Reasoning",     nameEs: "GPT-5.4 Nano — Razonamiento Más Barato" },
+            { id: "gpt-5.3-codex",   icon: "👨‍💻", nameEn: "GPT-5.3 Codex — Agentic Coding",        nameEs: "GPT-5.3 Codex — Codificación Agéntica" },
+            // Legacy
+            { id: "gpt-4o",      icon: "🕰", nameEn: "GPT-4o — Legacy Multimodal",    nameEs: "GPT-4o — Legado Multimodal" },
+            { id: "gpt-4o-mini", icon: "🕰", nameEn: "GPT-4o Mini — Legacy Fast",     nameEs: "GPT-4o Mini — Legado Rápido" },
         ]
     },
     {

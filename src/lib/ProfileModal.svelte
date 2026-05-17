@@ -1,8 +1,13 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { profiles, hosts } from '$lib/stores';
-    import { IconAlertTriangle as AlertTriangle, IconPencil as Pencil, IconTrash as Trash2, IconUser as User } from '@tabler/icons-svelte';
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
 
+    import Pencil from '@tabler/icons-svelte/icons/pencil';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import User from '@tabler/icons-svelte/icons/user';
     const dispatch = createEventDispatcher();
 
     export let isEN = false;

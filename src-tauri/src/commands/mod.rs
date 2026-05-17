@@ -20,4 +20,6 @@ pub mod embeddings;
 pub mod memory;
 pub mod pdf;
 pub mod principles;
+pub mod reflection;
 pub mod scheduled;
+pub mod vec_index;

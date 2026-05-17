@@ -1,7 +1,25 @@
 <script>
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { IconKey as Key, IconWorld as Globe, IconDeviceFloppy as Save, IconAlertCircle as AlertCircle, IconCircleCheck as CheckCircle, IconSparkles, IconBrandGoogle, IconBrandOpenai, IconServer2, IconBolt } from '@tabler/icons-svelte';
+    import Key from '@tabler/icons-svelte/icons/key';
+
+    import Globe from '@tabler/icons-svelte/icons/world';
+
+    import Save from '@tabler/icons-svelte/icons/device-floppy';
+
+    import AlertCircle from '@tabler/icons-svelte/icons/alert-circle';
+
+    import CheckCircle from '@tabler/icons-svelte/icons/circle-check';
+
+    import IconSparkles from '@tabler/icons-svelte/icons/sparkles';
+
+    import IconBrandGoogle from '@tabler/icons-svelte/icons/brand-google';
+
+    import IconBrandOpenai from '@tabler/icons-svelte/icons/brand-openai';
+
+    import IconServer2 from '@tabler/icons-svelte/icons/server-2';
+
+    import IconBolt from '@tabler/icons-svelte/icons/bolt';
     import { refreshNvidiaModels } from '$lib/models.js';
 
     const dispatch = createEventDispatcher();
@@ -14,20 +32,25 @@
     let loading = false;
     let error = '';
     let success = '';
-    let activeTab = 'anthropic'; // 'anthropic', 'gemini', 'openai', 'nvidia', 'ollama'
+    let activeTab = 'anthropic'; // 'anthropic', 'gemini', 'openai', 'nvidia', 'ollama', 'tavily'
     let credentials = {
         anthropic: { key: '', configured: false },
         gemini: { key: '', configured: false },
         openai: { key: '', configured: false },
         nvidia: { key: '', configured: false },
-        ollama: { endpoint: 'http://localhost:11434', configured: false }
+        ollama: { endpoint: 'http://localhost:11434', configured: false },
+        // Tavily is the preferred backend for the `<TOOL>search_web</TOOL>`
+        // tool. Without a key Lucy falls back to scraping DuckDuckGo, which
+        // is fragile + rate-limited. Free tier covers 1000 searches/month.
+        tavily: { key: '', configured: false },
     };
     let healthStatus = {
         anthropic: null,
         gemini: null,
         openai: null,
         nvidia: null,
-        ollama: null
+        ollama: null,
+        tavily: null,
     };
 
     const labels = {
@@ -63,6 +86,23 @@
                 placeholder: 'http://localhost:11434',
                 hint: 'Instala Ollama desde https://ollama.ai y descarga llava',
                 feature: 'Privacidad Total - Ejecución Local'
+            },
+            tavily: {
+                label: 'API Key Tavily',
+                placeholder: 'tvly-...',
+                hint: 'Obtén tu clave gratis en https://app.tavily.com (1000 búsquedas/mes incluidas)',
+                feature: 'Búsqueda web optimizada para agentes — sin scraping ni rate-limits'
+            },
+            guardrails: {
+                title: 'Capa de Guardrails',
+                regex_active: 'Regex bank activo — protege contra prompt injection, SSRF, UAC injection y bypass de cmd (audit S1/S2/S5/S10).',
+                ml_active: 'PromptGuard 2 ML ACTIVO — detecta jailbreaks parafraseados.',
+                ml_model_missing: 'Feature ML compilado pero modelo no encontrado.',
+                ml_runtime_missing: 'Modelo en disco pero ONNX Runtime DLL no detectada.',
+                ml_feature_disabled: 'Build sin ML — solo regex está activo. Para activar: cargo build --features ml-guard',
+                ml_failed: 'Error al cargar:',
+                recheck: 'Re-verificar',
+                install_guide: 'Ver guía de instalación: src-tauri/src/guardrails/PROMPT_GUARD_INSTALL.md'
             },
             save: 'Guardar Credenciales',
             test: 'Probar Conexión',
@@ -104,6 +144,23 @@
                 hint: 'Get your free key at https://build.nvidia.com → Get API Key',
                 feature: 'Llama 3.1/3.3, Nemotron, Mistral, Gemma 4 and more'
             },
+            tavily: {
+                label: 'Tavily API Key',
+                placeholder: 'tvly-...',
+                hint: 'Get your free key at https://app.tavily.com (free tier: 1000 searches/month)',
+                feature: 'Agent-optimized web search — no scraping, no rate limits'
+            },
+            guardrails: {
+                title: 'Guardrail Layer',
+                regex_active: 'Regex bank active — protects against prompt injection, SSRF, UAC injection and cmd bypass (audit S1/S2/S5/S10).',
+                ml_active: 'PromptGuard 2 ML ACTIVE — detects paraphrased jailbreaks.',
+                ml_model_missing: 'ML feature compiled but model not found.',
+                ml_runtime_missing: 'Model on disk but ONNX Runtime DLL not detected.',
+                ml_feature_disabled: 'Build without ML — regex only. To enable: cargo build --features ml-guard',
+                ml_failed: 'Load failed:',
+                recheck: 'Re-check',
+                install_guide: 'Install guide: src-tauri/src/guardrails/PROMPT_GUARD_INSTALL.md'
+            },
             ollama: {
                 label: 'Ollama Endpoint',
                 placeholder: 'http://localhost:11434',
@@ -127,6 +184,38 @@
 
     const l = labels[isEN ? 'en-US' : 'es-MX'];
 
+    // ── Load configured state on mount (May 2026 UX polish) ──
+    // Previously the modal showed every tab as "unconfigured" until the user
+    // saved a new key, even if the key was already in the keyring from a
+    // previous session. Now we probe `get_configured_providers` once when
+    // the modal first becomes visible and stamp the green checkmarks.
+    async function loadConfiguredState() {
+        try {
+            const provs = await invoke('get_configured_providers');
+            const set = new Set(Array.isArray(provs) ? provs.map(String) : []);
+            for (const p of Object.keys(credentials)) {
+                // `ollama` is stored under the `local` keyring slot
+                const key = (p === 'ollama') ? 'local' : p;
+                credentials[p].configured = set.has(key);
+            }
+            credentials = credentials;   // trigger reactivity
+        } catch { /* keyring failure → leave defaults */ }
+    }
+
+    // ── PromptGuard 2 status (Phase 2 LlamaFirewall, May 2026) ──
+    // Shown in the "Guardrails" tab so users can verify their ML install
+    // without diving into DevTools. Re-probed on every modal open + when
+    // the user explicitly hits "Re-check".
+    let mlGuard = null;          // { status, model_path, note }
+    async function probeMlGuard() {
+        try { mlGuard = await invoke('prompt_guard_status'); }
+        catch (e) { mlGuard = { status: 'failed', model_path: '', note: String(e) }; }
+    }
+    onMount(() => { loadConfiguredState(); probeMlGuard(); });
+    // Re-probe whenever the modal is opened, so a user who configured a
+    // provider elsewhere (e.g. via /command) sees the updated state.
+    $: if (isOpen) { loadConfiguredState(); probeMlGuard(); }
+
     async function saveCredentials() {
         loading = true;
         error = '';
@@ -136,7 +225,7 @@
             const value = credentials[activeTab].key || credentials[activeTab].endpoint || '';
             if (!value.trim()) { error = l.required; return; }
 
-            // save_llm_key handles gemini / anthropic / openai / nvidia / local
+            // save_llm_key handles gemini / anthropic / openai / nvidia / local / tavily
             await invoke('save_llm_key', { provider: activeTab === 'ollama' ? 'local' : activeTab, apiKey: value.trim() });
             credentials[activeTab].configured = true;
             success = l.success;
@@ -253,6 +342,28 @@
                             <CheckCircle size={14} color="#10b981" />
                         {/if}
                     </button>
+                    <button
+                        class="tab"
+                        class:active={activeTab === 'tavily'}
+                        on:click={() => activeTab = 'tavily'}
+                        title="Web search backend for <TOOL>search_web</TOOL>"
+                    >
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><Globe size={14} strokeWidth={1.8} color="#3b9eff" />Tavily</span>
+                        {#if credentials.tavily.configured}
+                            <CheckCircle size={14} color="#10b981" />
+                        {/if}
+                    </button>
+                    <button
+                        class="tab"
+                        class:active={activeTab === 'guardrails'}
+                        on:click={() => { activeTab = 'guardrails'; probeMlGuard(); }}
+                        title="Security guardrail layer status"
+                    >
+                        <span style="display:inline-flex;align-items:center;gap:6px;">🛡 Guardrails</span>
+                        {#if mlGuard?.status === 'active'}
+                            <CheckCircle size={14} color="#10b981" />
+                        {/if}
+                    </button>
                 </div>
 
                 <!-- Tab Content -->
@@ -331,6 +442,85 @@
                             <p class="hint">
                                 <Globe size={14} /> {l.ollama.hint}
                             </p>
+                        </div>
+                    {:else if activeTab === 'tavily'}
+                        <div class="config-section">
+                            <div class="feature-badge" style="background:rgba(59,158,255,0.15);color:#3b9eff;">{l.tavily.feature}</div>
+                            <label>
+                                <span>{l.tavily.label}</span>
+                                <input
+                                    type="password"
+                                    bind:value={credentials.tavily.key}
+                                    placeholder={l.tavily.placeholder}
+                                />
+                            </label>
+                            <p class="hint">
+                                <Key size={14} /> {l.tavily.hint}
+                            </p>
+                        </div>
+                    {:else if activeTab === 'guardrails'}
+                        <div class="config-section">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                                <h3 style="margin:0;font-size:14px;color:var(--txt);">{l.guardrails.title}</h3>
+                                <button class="re-check" on:click={probeMlGuard} title="Re-check status">↻ {l.guardrails.recheck}</button>
+                            </div>
+
+                            <!-- Regex layer — always-on -->
+                            <div class="guard-row guard-ok">
+                                <CheckCircle size={16} color="#10b981" />
+                                <div>
+                                    <strong>Regex bank</strong>
+                                    <div class="hint" style="margin-top:2px;">{l.guardrails.regex_active}</div>
+                                </div>
+                            </div>
+
+                            <!-- ML layer — status varies -->
+                            {#if mlGuard?.status === 'active'}
+                                <div class="guard-row guard-ok">
+                                    <CheckCircle size={16} color="#10b981" />
+                                    <div>
+                                        <strong>PromptGuard 2 ML</strong>
+                                        <div class="hint" style="margin-top:2px;">{l.guardrails.ml_active}</div>
+                                        {#if mlGuard.model_path}
+                                            <div class="hint" style="font-family:var(--mono);font-size:10px;margin-top:4px;opacity:0.7;">{mlGuard.model_path}</div>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {:else if mlGuard?.status === 'model_missing'}
+                                <div class="guard-row guard-warn">
+                                    <AlertCircle size={16} color="#f59e0b" />
+                                    <div>
+                                        <strong>PromptGuard 2 ML</strong>
+                                        <div class="hint" style="margin-top:2px;">{l.guardrails.ml_model_missing}</div>
+                                        <div class="hint" style="font-family:var(--mono);font-size:10px;margin-top:4px;opacity:0.7;">{mlGuard.model_path}</div>
+                                        <div class="hint" style="margin-top:6px;">{l.guardrails.install_guide}</div>
+                                    </div>
+                                </div>
+                            {:else if mlGuard?.status === 'runtime_missing'}
+                                <div class="guard-row guard-warn">
+                                    <AlertCircle size={16} color="#f59e0b" />
+                                    <div>
+                                        <strong>PromptGuard 2 ML</strong>
+                                        <div class="hint" style="margin-top:2px;">{l.guardrails.ml_runtime_missing}</div>
+                                    </div>
+                                </div>
+                            {:else if mlGuard?.status === 'failed'}
+                                <div class="guard-row guard-err">
+                                    <AlertCircle size={16} color="#ef4444" />
+                                    <div>
+                                        <strong>PromptGuard 2 ML</strong>
+                                        <div class="hint" style="margin-top:2px;">{l.guardrails.ml_failed} {mlGuard.note ?? ''}</div>
+                                    </div>
+                                </div>
+                            {:else}
+                                <div class="guard-row guard-muted">
+                                    <span style="opacity:0.5;font-size:14px;">○</span>
+                                    <div>
+                                        <strong>PromptGuard 2 ML</strong>
+                                        <div class="hint" style="margin-top:2px;">{l.guardrails.ml_feature_disabled}</div>
+                                    </div>
+                                </div>
+                            {/if}
                         </div>
                     {/if}
 
@@ -525,6 +715,32 @@
         flex-direction: column;
         gap: 12px;
     }
+
+    /* Guardrails status rows */
+    .guard-row {
+        display: flex; align-items: flex-start; gap: 10px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--bdr);
+        background: rgba(255,255,255,0.015);
+    }
+    .guard-row strong { color: var(--txt); font-size: 13px; }
+    .guard-ok    { border-left: 3px solid #10b981; }
+    .guard-warn  { border-left: 3px solid #f59e0b; background: rgba(245,158,11,0.04); }
+    .guard-err   { border-left: 3px solid #ef4444; background: rgba(239,68,68,0.04); }
+    .guard-muted { border-left: 3px solid var(--bdr); opacity: 0.7; }
+
+    .re-check {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid var(--bdr);
+        color: var(--txt2);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: background .15s ease;
+    }
+    .re-check:hover { background: rgba(255,255,255,0.08); color: var(--txt); }
 
     .feature-badge {
         display: inline-block;

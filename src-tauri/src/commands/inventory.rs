@@ -3,7 +3,7 @@
 use std::process::Command;
 use std::os::windows::process::CommandExt;
 use crate::state::CREATE_NO_WINDOW;
-use crate::utils::shell::ensure_trusted_host;
+use crate::utils::shell::{ensure_trusted_host, run_winrm};
 
 /// Descubre servicios, puertos, software y certificados en un host Linux via SSH.
 #[tauri::command]
@@ -158,22 +158,7 @@ $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
 } | ConvertTo-Json -Depth 4
     "#;
 
-    let pw_esc = password.replace('\'', "''");
-    let ps = format!(
-        "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-         $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-         Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
-        pw_esc, username, host, script
-    );
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&ps)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-    }).await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("Error WinRM: {}", e))?;
+    let output = run_winrm(host, username, password, script.to_string()).await?;
 
     if !output.status.success() {
         return Err(format!("WinRM Error: {}", String::from_utf8_lossy(&output.stderr)));

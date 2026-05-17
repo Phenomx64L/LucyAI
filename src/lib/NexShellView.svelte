@@ -2,7 +2,9 @@
     import { invoke } from '@tauri-apps/api/core';
     import { listen } from '@tauri-apps/api/event';
     import { LLM_GROUPS, getModelDescription } from '$lib/models.js';
-    import { IconShield as Shield, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import Shield from '@tabler/icons-svelte/icons/shield';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     import { tick, createEventDispatcher, onDestroy } from 'svelte';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
     import { staggerIn } from '$lib/stagger';

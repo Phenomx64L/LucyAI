@@ -10,6 +10,7 @@ const PREVIEW_LENGTH = 500;
 export function logAuditEntry(entry: Omit<AuditEntry, 'id' | 'timestamp'>): void {
     const full: AuditEntry = {
         ...entry,
+        id: Date.now() + Math.random(),
         timestamp: new Date().toISOString(),
         outputPreview: (entry.outputPreview || '').substring(0, PREVIEW_LENGTH),
     };

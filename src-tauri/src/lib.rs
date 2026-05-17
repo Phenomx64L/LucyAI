@@ -3,8 +3,9 @@
 mod state;
 mod utils;
 mod commands;
+mod guardrails;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, shell, system, ui, embeddings, memory, pdf};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,33 +13,189 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .setup(|app| {
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri::Emitter;
-                use tokio::io::AsyncReadExt;
-                if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:31337").await {
-                    eprintln!("[lucy] OpenClaw Gateway runnning on port 31337");
-                    while let Ok((mut socket, _)) = listener.accept().await {
-                        let h = handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let mut buf = vec![0; 4096];
-                            if let Ok(n) = socket.read(&mut buf).await {
-                                if n > 0 {
-                                    if let Ok(req) = String::from_utf8(buf[0..n].to_vec()) {
-                                        let body = if let Some(idx) = req.find("\r\n\r\n") {
-                                            req[idx+4..].trim().to_string()
-                                        } else {
-                                            req.trim().to_string()
-                                        };
-                                        if !body.is_empty() {
-                                            let _ = h.emit("openclaw_webhook", body);
-                                        }
-                                    }
-                                }
-                            }
-                        });
+
+            // ── OpenClaw Gateway — token-protected localhost webhook receiver ──
+            // Opt-out via `LUCY_DISABLE_OPENCLAW=1`. Auth required: clients must
+            // send `Authorization: Bearer <token>` header. Token is written to
+            // `%APPDATA%\Lucy\openclaw_token` (Windows-ACL restricted to current
+            // user) — trusted automations read it from there. Body must be valid
+            // JSON, ≤64KB. Rate-limited to 30 req/min per peer.
+            let openclaw_disabled = std::env::var("LUCY_DISABLE_OPENCLAW")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+            if !openclaw_disabled {
+                let openclaw_token = crate::state::generate_secure_token();
+                let token_file_path = {
+                    let logs_dir = crate::utils::logging::get_logs_dir();
+                    logs_dir.parent()
+                        .map(|p| p.join("openclaw_token"))
+                        .unwrap_or_else(|| logs_dir.join("openclaw_token"))
+                };
+                match std::fs::write(&token_file_path, &openclaw_token) {
+                    Ok(_) => {
+                        crate::utils::logging::write_app_log(
+                            "INFO",
+                            &format!("OpenClaw token written to: {}", token_file_path.display()),
+                        );
+                    }
+                    Err(e) => {
+                        crate::utils::logging::write_app_log(
+                            "WARNING",
+                            &format!("Failed to write openclaw_token file: {} — gateway will reject all requests", e),
+                        );
                     }
                 }
-            });
+                // Windows: restrict file ACL to current user only (no inherit, no group)
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    if let Some(path_str) = token_file_path.to_str() {
+                        let _ = std::process::Command::new("icacls")
+                            .args([path_str, "/inheritance:r", "/grant:r", "%USERNAME%:F"])
+                            .creation_flags(crate::state::CREATE_NO_WINDOW)
+                            .output();
+                    }
+                }
+
+                let token_for_gateway = openclaw_token;
+                let handle_for_gateway = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    use std::collections::HashMap;
+                    use std::sync::Arc;
+                    use std::sync::Mutex as StdMutex;
+                    use std::time::{Instant, Duration};
+
+                    // Rate limiter: peer_addr → (window_start, request_count)
+                    // 30 req / 60 s. Map auto-prunes entries older than the window.
+                    let rate_state: Arc<StdMutex<HashMap<String, (Instant, u32)>>> =
+                        Arc::new(StdMutex::new(HashMap::new()));
+
+                    if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:31337").await {
+                        eprintln!("[lucy] OpenClaw Gateway running on 127.0.0.1:31337 (token-protected)");
+                        while let Ok((mut socket, addr)) = listener.accept().await {
+                            let h = handle_for_gateway.clone();
+                            let token = token_for_gateway.clone();
+                            let rl = rate_state.clone();
+                            tauri::async_runtime::spawn(async move {
+                                // ── Rate limit ─────────────────────────────────
+                                let peer_key = addr.to_string();
+                                let allowed = match rl.lock() {
+                                    Ok(mut map) => {
+                                        let now = Instant::now();
+                                        // Prune stale entries opportunistically (cap map at 256)
+                                        if map.len() > 256 {
+                                            map.retain(|_, (ts, _)| now.duration_since(*ts) < Duration::from_secs(60));
+                                        }
+                                        let entry = map.entry(peer_key.clone()).or_insert((now, 0));
+                                        if now.duration_since(entry.0) > Duration::from_secs(60) {
+                                            *entry = (now, 1);
+                                            true
+                                        } else {
+                                            entry.1 += 1;
+                                            entry.1 <= 30
+                                        }
+                                    }
+                                    Err(_) => false, // fail-closed on poisoned mutex
+                                };
+                                if !allowed {
+                                    let _ = socket.write_all(b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                                    let _ = socket.shutdown().await;
+                                    return;
+                                }
+
+                                // ── Read with hard cap ────────────────────────
+                                let mut buf = vec![0u8; 65536];
+                                let n = match tokio::time::timeout(
+                                    Duration::from_secs(5),
+                                    socket.read(&mut buf)
+                                ).await {
+                                    Ok(Ok(n)) if n > 0 => n,
+                                    _ => {
+                                        let _ = socket.shutdown().await;
+                                        return;
+                                    }
+                                };
+
+                                let req = match std::str::from_utf8(&buf[..n]) {
+                                    Ok(s) => s,
+                                    Err(_) => {
+                                        let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                                        let _ = socket.shutdown().await;
+                                        return;
+                                    }
+                                };
+
+                                // ── Auth: require Authorization: Bearer <token> ──
+                                // Constant-time-ish comparison via exact-substring match on word boundary.
+                                // Token is 64 hex chars; collisions with random text are astronomically unlikely.
+                                let auth_ok = req
+                                    .lines()
+                                    .take(40)  // headers section only
+                                    .any(|line| {
+                                        let trimmed = line.trim();
+                                        let lower = trimmed.to_ascii_lowercase();
+                                        lower.starts_with("authorization:")
+                                            && trimmed
+                                                .split_ascii_whitespace()
+                                                .any(|w| w == token.as_str())
+                                    });
+
+                                if !auth_ok {
+                                    let _ = socket.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                                    let _ = socket.shutdown().await;
+                                    crate::utils::logging::write_app_log(
+                                        "WARNING",
+                                        &format!("OpenClaw: rejected unauthorized request from {}", peer_key),
+                                    );
+                                    return;
+                                }
+
+                                // ── Extract body ──────────────────────────────
+                                let body = match req.find("\r\n\r\n") {
+                                    Some(idx) => req[idx + 4..].trim().to_string(),
+                                    None => {
+                                        let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                                        let _ = socket.shutdown().await;
+                                        return;
+                                    }
+                                };
+
+                                if body.is_empty() || body.len() > 65_536 {
+                                    let status = if body.is_empty() { "400 Bad Request" } else { "413 Payload Too Large" };
+                                    let resp = format!("HTTP/1.1 {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", status);
+                                    let _ = socket.write_all(resp.as_bytes()).await;
+                                    let _ = socket.shutdown().await;
+                                    return;
+                                }
+
+                                // ── Strict JSON validation ────────────────────
+                                if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+                                    let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 14\r\nConnection: close\r\n\r\nExpected JSON\n").await;
+                                    let _ = socket.shutdown().await;
+                                    return;
+                                }
+
+                                let _ = h.emit("openclaw_webhook", body);
+                                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nOK\n").await;
+                                let _ = socket.shutdown().await;
+                            });
+                        }
+                    } else {
+                        crate::utils::logging::write_app_log(
+                            "WARNING",
+                            "OpenClaw Gateway: could not bind to 127.0.0.1:31337 (port in use?)",
+                        );
+                    }
+                });
+            } else {
+                crate::utils::logging::write_app_log(
+                    "INFO",
+                    "OpenClaw Gateway disabled via LUCY_DISABLE_OPENCLAW env var",
+                );
+            }
 
             // ── BOOT-TIME INTEGRITY CHECK ─────────────────────────────────
             // Logged-only by design: a Mismatch could legitimately mean the
@@ -72,9 +229,39 @@ pub fn run() {
             if let Err(e) = metrics::init(&app.handle()) {
                 eprintln!("[lucy] metrics::init failed: {}", e);
             }
+
+            // Warm up the tiktoken BPE table on a background thread so the
+            // first read_file_content() call doesn't pay the ~200ms init cost.
+            std::thread::spawn(|| {
+                crate::commands::local::warmup_tokenizer();
+            });
+
+            // ── Periodic janitor (every 5 min) ──────────────────────────
+            // Keeps in-memory state from leaking when sessions/tokens die
+            // through abnormal paths (crash, abrupt disconnect, app sleep).
+            tauri::async_runtime::spawn(async {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                interval.tick().await; // skip the immediate first tick (state is fresh)
+                loop {
+                    interval.tick().await;
+                    crate::state::purge_expired_bypass_tokens();
+                    let killed = crate::state::purge_dead_stream_sessions();
+                    if killed > 0 {
+                        crate::utils::logging::write_app_log(
+                            "INFO",
+                            &format!("Janitor: cleaned up {} dead stream session(s)", killed),
+                        );
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Guardrails (audit S1/S2/S5/S10) + PromptGuard 2 ML status
+            guardrails::guardrail_scan,
+            guardrails::guardrail_scan_url,
+            guardrails::prompt_guard_status,
             // AI
             ai::ask_lucy,
             commands::mcp::call_mcp_tool,
@@ -190,6 +377,7 @@ pub fn run() {
             metrics::save_agent_memory,
             metrics::delete_agent_memory,
             metrics::consolidate_agent_memories,
+            metrics::supersede_memory,
             metrics::search_agent_memories,
             metrics::get_recent_memories,
             // User Profile (Hermes-inspired persistent memory)
@@ -200,8 +388,10 @@ pub fn run() {
             // Conversation history / recall (Hermes-inspired)
             metrics::save_conversation_turn,
             metrics::recall_conversations,
-            // Quality Telemetry (opus-4-7 Tier 2.A) — raw logger only
+            // Quality Telemetry (opus-4-7 Tier 2.A)
             metrics::log_task_event,
+            metrics::get_task_telemetry,
+            metrics::get_confidence_distribution,
             // Provider Management (Multi-LLM Support)
             providers::save_credential,
             providers::get_credential,
@@ -219,6 +409,7 @@ pub fn run() {
             incident::incident_list,
             incident::incident_get,
             incident::incident_phase_prompt,
+            incident::incident_verify_chain,
             // Semantic embeddings (Sprint 2 — vector search on skills, memories, runbooks)
             embeddings::embed_text,
             embeddings::embeddings_available,
@@ -258,6 +449,11 @@ pub fn run() {
             commands::scheduled::mark_scheduled_run,
             commands::scheduled::toggle_scheduled_task,
             commands::scheduled::delete_scheduled_task,
+            // Reflection safety gate (pre-emission analysis)
+            reflection::reflect_on_response,
+            // Prompt section runtime toggles (Phase 5)
+            commands::prompt_sections::toggle_prompt_section,
+            commands::prompt_sections::list_prompt_sections,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

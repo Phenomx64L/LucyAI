@@ -68,7 +68,7 @@ export async function handleFileDrop(e: DragEvent, tabId: string, opts: Pick<Fil
                 isImg ? reader.readAsDataURL(f) : reader.readAsText(f);
             });
             if (isImg) {
-                t.attachedFiles.push({ name: f.name, content: String(data).split(',')[1], type: 'image', mimeType: f.type, previewUrl: data });
+                t.attachedFiles.push({ name: f.name, content: String(data).split(',')[1] || '', type: 'image', mimeType: f.type, previewUrl: data });
             } else {
                 t.attachedFiles.push({ name: f.name, content: String(data).slice(0, 200_000), type: 'text' });
             }
@@ -96,9 +96,12 @@ export function onDrop(e: DragEvent, opts: FileInputOpts): void {
             };
             r.readAsDataURL(file);
         } else {
+            // Cap text files at 200KB to prevent OOM on large log files
+            const MAX_TEXT = 200_000;
             r.onload = (ev: any) => {
                 if (!t.attachedFiles.some((f: any) => f.name === file.name)) {
-                    t.attachedFiles.push({ name: file.name, content: ev.target.result, type: 'text' });
+                    const text = String(ev.target.result || '').slice(0, MAX_TEXT);
+                    t.attachedFiles.push({ name: file.name, content: text, type: 'text' });
                     refresh();
                 }
             };

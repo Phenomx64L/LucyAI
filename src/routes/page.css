@@ -1,3 +1,64 @@
+/* ── OPSCENTER DESIGN SYSTEM — High-density data visualization tokens ────────
+   Military-grade information density for SRE dashboards, process tables,
+   network views, and metric panels. Used by enriched output widgets.
+   ──────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* ─ Spacing scale (tight for data-dense panels) */
+  --ops-space-1: 2px;
+  --ops-space-2: 4px;
+  --ops-space-3: 6px;
+  --ops-space-4: 8px;
+  --ops-space-5: 12px;
+  --ops-space-6: 16px;
+
+  /* ─ Typography (monospace-first, tabular numbers) */
+  --ops-font: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  --ops-font-size-xs: 10px;
+  --ops-font-size-sm: 11px;
+  --ops-font-size-md: 12px;
+  --ops-font-size-lg: 13px;
+
+  /* ─ Surface hierarchy (darker than chat, panel-within-panel) */
+  --ops-surface-0: #080a12;
+  --ops-surface-1: #0c0f1a;
+  --ops-surface-2: #111422;
+  --ops-surface-3: #181c2c;
+
+  /* ─ Border / separators */
+  --ops-border: rgba(255,255,255,0.06);
+  --ops-border-focus: rgba(16,185,129,0.4);
+
+  /* ─ Status palette (consistent across all widgets) */
+  --ops-status-ok: #10b981;
+  --ops-status-warn: #f59e0b;
+  --ops-status-error: #ef4444;
+  --ops-status-info: #60a5fa;
+  --ops-status-muted: #475569;
+
+  /* ─ Semantic colors for data types */
+  --ops-cpu: #a78bfa;
+  --ops-mem: #60a5fa;
+  --ops-disk: #f59e0b;
+  --ops-net: #34d399;
+  --ops-pid: #94a3b8;
+
+  /* ─ Table / grid geometry */
+  --ops-row-h: 24px;
+  --ops-header-h: 28px;
+  --ops-cell-px: 8px;
+  --ops-radius: 4px;
+  --ops-radius-lg: 6px;
+
+  /* ─ Sparkline / chart colors */
+  --ops-spark-fill: rgba(16,185,129,0.15);
+  --ops-spark-stroke: #10b981;
+  --ops-spark-warn-fill: rgba(245,158,11,0.15);
+  --ops-spark-warn-stroke: #f59e0b;
+
+  /* ─ Transitions */
+  --ops-transition: 120ms ease-out;
+}
+
 /* ── LIVE TRACE floating panel + FAB toggle ── */
 /* ── FUENTE: Inter desde Google Fonts ──────── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
@@ -10,7 +71,48 @@
     6000  tutorial overlay      7000 drag-drop overlay
     9999  loading splash
   ──────────────────────────────────────────────────────────────────── */
-  --z-rshell:900;--z-tab-pick:1200;--z-modal:2000;--z-palette:3000;--z-mb:4000;--z-toast:5000;--z-tutorial:6000;--z-drag:7000;--z-splash:9999;}
+  --z-rshell:900;--z-tab-pick:1200;--z-modal:2000;--z-palette:3000;--z-mb:4000;--z-toast:5000;--z-tutorial:6000;--z-drag:7000;--z-splash:9999;
+  /* ── Lucy Gen 2 — Semantic palette tokens ─────────────────────────────
+   * Formal naming so the rest of the codebase can migrate from
+   * raw color vars (--acc/--blue/--amber/--red/--purple) to semantic
+   * intents. Reading an operator panel becomes faster when "red ==
+   * critical" universally instead of "red sometimes means error,
+   * sometimes decoration".
+   *
+   *   --sem-ok    → estado normal, comandos exitosos, agente listo
+   *   --sem-op    → información operativa, métricas no críticas
+   *   --sem-warn  → advertencias, throttling, anomalías leves
+   *   --sem-crit  → compliance fail, destructivo, errores severos
+   *   --sem-agent → Lucy razonando, modo agente activo, IA pensando
+   *
+   * Cada token tiene cuatro modos: base, -dim (8% opacity), -border
+   * (18% opacity), -glow (0 0 8px de la base). Para usar en box-shadow
+   * o backgrounds sin recalcular cada vez. */
+  --sem-ok:         #10b981;
+  --sem-ok-dim:     rgba(16,185,129,0.08);
+  --sem-ok-border:  rgba(16,185,129,0.20);
+  --sem-ok-glow:    0 0 8px rgba(16,185,129,.25);
+
+  --sem-op:         #5ec8ff;
+  --sem-op-dim:     rgba(94,200,255,0.08);
+  --sem-op-border:  rgba(94,200,255,0.20);
+  --sem-op-glow:    0 0 8px rgba(94,200,255,.25);
+
+  --sem-warn:       #f59e0b;
+  --sem-warn-dim:   rgba(245,158,11,0.08);
+  --sem-warn-border:rgba(245,158,11,0.22);
+  --sem-warn-glow:  0 0 8px rgba(245,158,11,.30);
+
+  --sem-crit:       #ef4444;
+  --sem-crit-dim:   rgba(239,68,68,0.08);
+  --sem-crit-border:rgba(239,68,68,0.22);
+  --sem-crit-glow:  0 0 8px rgba(239,68,68,.30);
+
+  --sem-agent:      #a78bfa;
+  --sem-agent-dim:  rgba(167,139,250,0.08);
+  --sem-agent-border:rgba(167,139,250,0.22);
+  --sem-agent-glow: 0 0 8px rgba(167,139,250,.28);
+}
 /* ── RESET ─────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;background:transparent;overflow:hidden;}
@@ -115,6 +217,19 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
 }
 /* AMOLED keeps absolute-black to honor OLED battery savings — no breathing */
 :root:not(.light) .root[data-theme="amoled"]{ animation:none; }
+
+/* ── GPU saver: when the window is hidden/minimized, pause every infinite
+ * animation app-wide. The `.app-hidden` class is toggled from
+ * onMount via document.visibilitychange. WebView2 keeps the page rendered
+ * even when invisible, so without this the GPU stays busy blurring/painting
+ * for nothing. With this, GPU drops to ~0% as soon as the window loses
+ * visibility. Re-resumes instantly when it becomes visible again. */
+html.app-hidden *,
+html.app-hidden *::before,
+html.app-hidden *::after{
+  animation-play-state:paused !important;
+  transition:none !important;
+}
 /* prefers-reduced-motion already disables this in the global rule below */
 :root:not(.light) .root[data-theme] .body,
 :root:not(.light) .root[data-theme] .panel,
@@ -123,17 +238,21 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
 :root:not(.light) .root[data-theme] .bbar{background:transparent !important;}
 /* Themed chat bubbles — backdrop blur picks up the theme gradient.
    pre/code/warp-block/tool-card bodies are NOT touched (terminal output stays dark). */
+/* GPU note: backdrop-filter is the single biggest GPU cost in WebView2.
+   Reduced from blur(8px) saturate(130%) to blur(5px) saturate(110%) — Gaussian
+   blur scales O(r²) so halving the radius is ~4× faster on the GPU.
+   Visual difference is barely perceptible against the dark gradient bg. */
 :root:not(.light) .root[data-theme] .msg-user{
   background:var(--msg-user-bg) !important;
   border-color:var(--msg-user-bdr) !important;
-  backdrop-filter:blur(8px) saturate(130%);
-  -webkit-backdrop-filter:blur(8px) saturate(130%);
+  backdrop-filter:blur(5px) saturate(110%);
+  -webkit-backdrop-filter:blur(5px) saturate(110%);
 }
 :root:not(.light) .root[data-theme] .msg-lucy{
   background:var(--msg-lucy-bg) !important;
   border-color:var(--msg-lucy-bdr) !important;
-  backdrop-filter:blur(8px) saturate(130%);
-  -webkit-backdrop-filter:blur(8px) saturate(130%);
+  backdrop-filter:blur(5px) saturate(110%);
+  -webkit-backdrop-filter:blur(5px) saturate(110%);
 }
 /* Footer (status bar) picks up a subtle top border instead of opaque bg */
 :root:not(.light) .root[data-theme] .bbar{
@@ -142,8 +261,8 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
 /* Input bar becomes a translucent glass strip, same vibe as sidebar */
 :root:not(.light) .root[data-theme] .ibar{
   background:var(--sidebar-overlay) !important;
-  backdrop-filter:blur(10px) saturate(130%);
-  -webkit-backdrop-filter:blur(10px) saturate(130%);
+  backdrop-filter:blur(6px) saturate(115%);
+  -webkit-backdrop-filter:blur(6px) saturate(115%);
   border-top:1px solid var(--border-glass) !important;
   transition:background-color .5s ease;
 }
@@ -160,15 +279,17 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
 /* Active tab gets a subtle translucent highlight instead of opaque var(--bg2) */
 :root:not(.light) .root[data-theme] .tab.active{
   background:var(--sidebar-overlay) !important;
-  backdrop-filter:blur(8px);
-  -webkit-backdrop-filter:blur(8px);
+  backdrop-filter:blur(5px);
+  -webkit-backdrop-filter:blur(5px);
   border-color:var(--border-glass) !important;
 }
-/* Sidebar gets a translucent glass overlay over the gradient */
+/* Sidebar gets a translucent glass overlay over the gradient.
+   Reduced from blur(12px) — biggest GPU cost was here since the sidebar
+   covers a large area and re-blurs on every frame. */
 :root:not(.light) .root[data-theme] .sidebar{
   background:var(--sidebar-overlay) !important;
-  backdrop-filter:blur(12px) saturate(140%);
-  -webkit-backdrop-filter:blur(12px) saturate(140%);
+  backdrop-filter:blur(6px) saturate(115%);
+  -webkit-backdrop-filter:blur(6px) saturate(115%);
   border-right:1px solid var(--border-glass) !important;
   transition:background-color .5s ease;
 }
@@ -343,8 +464,15 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
 .sb-it::before{content:'';position:absolute;left:0;top:18%;bottom:18%;width:2px;border-radius:1px;background:var(--acc);transform:scaleY(0);transform-origin:center;transition:transform .18s cubic-bezier(.4,0,.2,1),opacity .15s;opacity:0;pointer-events:none;}
 .sb-it:hover{background:rgba(16,185,129,.03);color:#94a3b8;}
 .sb-it:hover::before{transform:scaleY(.55);opacity:.38;}
-.sb-it.act{background:rgba(16,185,129,.05);color:var(--acc);}
-.sb-it.act::before{transform:scaleY(1);opacity:1;}
+.sb-it.act{
+  background:linear-gradient(90deg,rgba(16,185,129,.14) 0%,rgba(16,185,129,.06) 60%,rgba(16,185,129,.02) 100%);
+  color:var(--acc);
+  text-shadow:0 0 8px rgba(16,185,129,.45);
+  box-shadow:inset 0 0 0 1px rgba(16,185,129,.10),0 0 12px -4px rgba(16,185,129,.35);
+}
+.sb-it.act::before{transform:scaleY(1);opacity:1;box-shadow:0 0 8px rgba(16,185,129,.65),0 0 14px rgba(16,185,129,.35);}
+/* Active item icon also pops a little */
+.sb-it.act svg,.sb-it.act i{filter:drop-shadow(0 0 4px rgba(16,185,129,.55));}
 .sidebar.closed .sb-it{justify-content:center;padding:7px 0;}
 .sidebar.closed .sb-it::before{display:none;}
 .sidebar.closed .sb-it:hover{background:rgba(16,185,129,.05);}
@@ -594,6 +722,20 @@ body.density-compact .chat{gap:2px !important;}
 /* ── MESSAGES ──────────────────────────────── */
 .msg-user{align-self:flex-end;background:#1e212b;border:1px solid rgba(96,165,250,.08);border-right:2px solid var(--blue);border-radius:10px 10px 0 10px;padding:10px 14px;max-width:78%;white-space:pre-wrap;}
 .msg-lucy{align-self:flex-start;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid #10b981;border-radius:0 10px 10px 10px;padding:10px 14px;max-width:88%;line-height:1.6;}
+
+/* Guardrail-blocked input — surfaced inside an .msg-lucy bubble */
+.msg-error{
+    background:rgba(239,68,68,.06);
+    border:1px solid rgba(239,68,68,.28);
+    border-left:3px solid var(--sem-crit, #ef4444);
+    padding:10px 12px;
+    border-radius:6px;
+    color:#fecaca;
+    font-size:13px;
+    line-height:1.55;
+}
+.msg-error strong{color:var(--sem-crit, #ef4444);}
+.msg-error small{display:inline-block;margin-top:4px;line-height:1.5;}
 /* ── Skeleton streaming ─────────────────────── */
 .skel-block{display:flex;flex-direction:column;gap:7px;padding:4px 0;}
 .skel-line{height:11px;border-radius:4px;background:linear-gradient(90deg,#0f1520 25%,#1e293b 50%,#0f1520 75%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;}
@@ -675,6 +817,16 @@ body.density-compact .chat{gap:2px !important;}
 .wb-toggle{background:none;border:none;color:#475569;cursor:pointer;font-size:10px;padding:0 2px;line-height:1;flex-shrink:0;transition:.1s;}
 .wb-toggle:hover{color:var(--txt2);}
 .wb-out{background:#0a0c15;padding:8px 10px;font-size:11px;color:#94a3b8;overflow-x:auto;margin:0;border-top:1px solid rgba(255,255,255,.04);max-height:300px;overflow-y:auto;transition:max-height .3s ease,padding .2s ease,opacity .2s ease;}
+.wb-enriched-mount{border-top:1px solid rgba(255,255,255,.04);}
+.wb-enriched-mount:empty{display:none;}
+.wb-enrich-badge{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,.12);color:#60a5fa;font-weight:500;letter-spacing:.3px;text-transform:uppercase;flex-shrink:0;}
+/* ── Reflection gate badges ── */
+.reflection-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 8px;border-radius:3px;font-weight:600;margin:4px 0;}
+.reflection-badge.warn{background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.2);}
+.reflection-badge.escalate{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2);}
+.reflection-badge.escalate.critical{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.35);}
+.reflection-escalate{margin:8px 0;padding:8px 12px;border-left:3px solid #ef4444;background:rgba(239,68,68,.05);border-radius:0 4px 4px 0;}
+.reflection-reasons{font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.5;}
 
 /* ── THINKING INDICATOR ──────────────────────── */
 .msg-thinking{display:flex;align-items:center;gap:10px;padding:10px 14px;align-self:flex-start;}
@@ -2166,3 +2318,163 @@ body[data-state="error"] .igrp{
   :root.light .sb-it             { color:#cbd5e1; }
   :root.light .sb-it:hover       { background:rgba(255,255,255,.06); color:#ffffff; }
   :root.light .sb-it.act         { background:color-mix(in srgb, var(--acc) 15%, transparent); color:var(--acc); font-weight: 600; }
+
+  /* ── Lucy Gen 2 — Model badge (Smart Routing decision indicator) ──────
+   * Appears at the foot of an auto-routed Lucy bubble. Compact, low-noise,
+   * monospace — communicates "routed by X" without competing with content.
+   * Hover reveals full reason via the title attribute. */
+  .model-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 8px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: .25px;
+    color: var(--sem-op, #5ec8ff);
+    background: var(--sem-op-dim, rgba(94,200,255,.08));
+    border: 1px solid var(--sem-op-border, rgba(94,200,255,.20));
+    border-radius: 10px;
+    user-select: none;
+    cursor: help;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .model-badge:hover {
+    background: color-mix(in srgb, var(--sem-op, #5ec8ff) 15%, transparent);
+    border-color: color-mix(in srgb, var(--sem-op, #5ec8ff) 35%, transparent);
+  }
+  .model-badge code {
+    color: var(--sem-op, #5ec8ff);
+    background: transparent !important;
+    padding: 0 !important;
+    border: none !important;
+    font-size: inherit;
+  }
+
+  /* ── Lucy Gen 2 — Settings toggle (checkbox replacement) ─────────────
+   * Used by the smartRouting and privacyMode toggles. iOS-style slider
+   * with semantic colors so an OFF/ON state is unambiguous at a glance. */
+  .settings-toggle {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 36px;
+    height: 18px;
+    background: rgba(255,255,255,.10);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 10px;
+    position: relative;
+    cursor: pointer;
+    transition: background .2s ease, border-color .2s ease;
+    flex-shrink: 0;
+  }
+  .settings-toggle::after {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #94a3b8;
+    top: 2px; left: 2px;
+    transition: left .22s cubic-bezier(.34,1.56,.64,1), background .15s ease;
+  }
+  .settings-toggle:checked {
+    background: color-mix(in srgb, var(--sem-ok, #10b981) 22%, transparent);
+    border-color: var(--sem-ok-border, rgba(16,185,129,.40));
+  }
+  .settings-toggle:checked::after {
+    left: 20px;
+    background: var(--sem-ok, #10b981);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--sem-ok, #10b981) 55%, transparent);
+  }
+  .settings-toggle:focus-visible {
+    outline: 2px solid var(--sem-op, #5ec8ff);
+    outline-offset: 2px;
+  }
+
+  /* ── Lucy Gen 2 — Settings predictive search ─────────────────────────
+   * Floats at the top of the Settings modal. Filters all rows / buttons
+   * by substring match against their text content. Pure DOM filtering
+   * (see filterSettings() in +page.svelte) — no need to annotate every
+   * row with data-keywords. */
+  .settings-search-wrap {
+    position: relative;
+    padding: 10px 16px 4px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    background: rgba(255,255,255,.018);
+  }
+  .settings-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px;
+    padding: 7px 32px 7px 10px;
+    color: var(--txt, #e2e8f0);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  .settings-search-input::placeholder {
+    color: var(--txt3, #64748b);
+  }
+  .settings-search-input:focus {
+    border-color: var(--sem-op-border, rgba(94,200,255,.30));
+    box-shadow: var(--sem-op-glow, 0 0 8px rgba(94,200,255,.20));
+    background: rgba(255,255,255,.06);
+  }
+  .settings-search-clear {
+    position: absolute;
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--txt3, #64748b);
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 11px;
+    border-radius: 3px;
+    transition: color .12s ease, background .12s ease;
+  }
+  .settings-search-clear:hover {
+    color: var(--txt, #e2e8f0);
+    background: rgba(255,255,255,.05);
+  }
+
+  /* ── Custom scrollbar — cyberpunk minimal ─────────────────────────────
+   * Applied globally to all scrollable containers via WebKit pseudo-elements.
+   * Thin 8px track, no buttons, with a subtle gradient on the thumb that
+   * matches the accent color. Firefox uses `scrollbar-width` + `color`.
+   *
+   * Light theme override comes below.
+   */
+  *::-webkit-scrollbar         { width:8px; height:8px; }
+  *::-webkit-scrollbar-track   { background:rgba(255,255,255,.02); border-radius:4px; }
+  *::-webkit-scrollbar-thumb   {
+    background:linear-gradient(180deg,rgba(16,185,129,.32),rgba(16,185,129,.18));
+    border-radius:4px;
+    border:1px solid rgba(16,185,129,.15);
+    transition:background .2s ease;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background:linear-gradient(180deg,rgba(16,185,129,.55),rgba(16,185,129,.3));
+    border-color:rgba(16,185,129,.35);
+    box-shadow:inset 0 0 6px rgba(16,185,129,.25);
+  }
+  *::-webkit-scrollbar-thumb:active {
+    background:linear-gradient(180deg,rgba(16,185,129,.7),rgba(16,185,129,.45));
+  }
+  *::-webkit-scrollbar-corner  { background:transparent; }
+  /* Firefox */
+  * { scrollbar-width:thin; scrollbar-color:rgba(16,185,129,.32) rgba(255,255,255,.02); }
+
+  /* Light theme — softer scrollbar against light background */
+  :root.light *::-webkit-scrollbar-track { background:rgba(15,23,42,.04); }
+  :root.light *::-webkit-scrollbar-thumb {
+    background:linear-gradient(180deg,rgba(0,168,107,.45),rgba(0,168,107,.25));
+    border-color:rgba(0,168,107,.2);
+  }
+  :root.light *::-webkit-scrollbar-thumb:hover {
+    background:linear-gradient(180deg,rgba(0,168,107,.7),rgba(0,168,107,.4));
+  }
+  :root.light * { scrollbar-color:rgba(0,168,107,.45) rgba(15,23,42,.04); }

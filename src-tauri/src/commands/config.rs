@@ -13,7 +13,9 @@ use serde_json;
 
 #[tauri::command]
 pub fn save_llm_key(provider: String, api_key: String) -> Result<(), String> {
-    if !["gemini", "anthropic", "openai", "local", "nvidia"].contains(&provider.as_str()) {
+    // `tavily` is allowed (web-search backend). Not strictly an LLM
+    // provider but lives in the same keyring scheme for UI uniformity.
+    if !["gemini", "anthropic", "openai", "local", "nvidia", "tavily"].contains(&provider.as_str()) {
         return Err("Proveedor no válido.".to_string());
     }
     let key_name = format!("{}_api_key", provider);
@@ -32,7 +34,11 @@ pub fn save_llm_key(provider: String, api_key: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_configured_providers() -> Result<Vec<String>, String> {
     let mut configured = Vec::new();
-    for provider in ["gemini", "anthropic", "openai", "local", "nvidia"] {
+    // `tavily` is included so the frontend can render its status row in
+    // the provider config modal even though Tavily is an auxiliary tool
+    // (web search), not an LLM provider. Keeping it in the same list lets
+    // the UI reuse the existing rendering loop.
+    for provider in ["gemini", "anthropic", "openai", "local", "nvidia", "tavily"] {
         let key_name = format!("{}_api_key", provider);
         if let Ok(entry) = Entry::new("LucySysAdmin", &key_name) {
             if entry.get_password().is_ok() {
@@ -84,6 +90,23 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
         "local" => {
             // Para modelos locales, aceptaremos la URL proporcionada asumiendo que el usuario sabe lo que hace.
             return Ok(());
+        },
+        "tavily" => {
+            // Tavily keys are prefixed "tvly-" and ~40 chars. Validate by
+            // calling the search endpoint with a trivial query — single
+            // credit cost (~1¢/1000 searches on free tier).
+            if !key.starts_with("tvly-") {
+                return Err(
+                    "La clave Tavily debe comenzar con 'tvly-'. \
+                     Consíguela en app.tavily.com → API Keys (free tier: 1000 searches/mes).".to_string()
+                );
+            }
+            let body = serde_json::json!({
+                "api_key": key, "query": "ping", "max_results": 1, "include_answer": false
+            });
+            HTTP_CLIENT.post("https://api.tavily.com/search")
+                .header("Content-Type", "application/json")
+                .json(&body)
         },
         _ => return Err("Proveedor desconocido.".to_string())
     };

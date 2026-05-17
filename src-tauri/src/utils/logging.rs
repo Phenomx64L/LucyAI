@@ -1,8 +1,36 @@
 // ── LOGGING — Escritura de logs de aplicación y auditoría ─────────────────────
 
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fs::{OpenOptions, File};
+use std::io::{Write, BufReader, BufWriter, copy as io_copy};
 use chrono::Local;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+
+/// Compress a rotated log file in-place. After success the original `.log`
+/// is replaced by `.log.gz` (best-effort: failure is logged silently so
+/// log rotation never blocks the app).
+///
+/// Background-friendly: callers may wrap this in `std::thread::spawn` for
+/// large files — gzip on a 10 MB log takes ~50–100 ms.
+fn gzip_rotated_log(path: &std::path::Path) {
+    let Ok(input) = File::open(path) else { return; };
+    let out_path = {
+        let mut p = path.to_path_buf();
+        let new_name = format!(
+            "{}.gz",
+            p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+        );
+        p.set_file_name(new_name);
+        p
+    };
+    let Ok(output) = File::create(&out_path) else { return; };
+    let mut reader = BufReader::new(input);
+    let mut encoder = GzEncoder::new(BufWriter::new(output), Compression::default());
+    if io_copy(&mut reader, &mut encoder).is_err() { return; }
+    if encoder.finish().is_err() { return; }
+    // Original .log only gets removed once .gz exists successfully
+    let _ = std::fs::remove_file(path);
+}
 
 /// Devuelve la ruta al directorio de logs: %APPDATA%\Lucy\logs\
 /// Lo crea si no existe.
@@ -17,13 +45,18 @@ pub fn get_logs_dir() -> std::path::PathBuf {
 }
 
 /// Escribe una línea en lucy_app.log con timestamp y nivel.
-/// Rota automáticamente si supera 5 MB.
+/// Rota automáticamente si supera 5 MB y comprime el archivo histórico a .gz.
 pub fn write_app_log(level: &str, message: &str) {
     let log_path = get_logs_dir().join("lucy_app.log");
-    // Rotación simple: si supera 5 MB renombra a .1.log
+    // Rotación: si supera 5 MB renombra a .1.log y la comprime en background
     if let Ok(meta) = std::fs::metadata(&log_path) {
         if meta.len() > 5 * 1024 * 1024 {
-            let _ = std::fs::rename(&log_path, get_logs_dir().join("lucy_app.1.log"));
+            let rotated = get_logs_dir().join("lucy_app.1.log");
+            // Drop the prior .1.log.gz first so we don't accumulate forever
+            let _ = std::fs::remove_file(get_logs_dir().join("lucy_app.1.log.gz"));
+            if std::fs::rename(&log_path, &rotated).is_ok() {
+                std::thread::spawn(move || gzip_rotated_log(&rotated));
+            }
         }
     }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
@@ -32,25 +65,33 @@ pub fn write_app_log(level: &str, message: &str) {
     }
 }
 
-/// Rota el audit log si supera 10 MB — conserva hasta 3 archivos históricos.
+/// Rota el audit log si supera 10 MB — conserva hasta 3 archivos históricos
+/// comprimidos a .gz para reducir uso de disco (~10× compresión típica).
 pub fn rotate_audit_log() {
     let audit_path = get_logs_dir().join("lucy_audit.log");
     if let Ok(meta) = std::fs::metadata(&audit_path) {
         if meta.len() > 10 * 1024 * 1024 {
+            let dir = get_logs_dir();
+            // Shift compressed history backwards
+            let _ = std::fs::remove_file(dir.join("lucy_audit.3.log.gz"));
             let _ = std::fs::rename(
-                get_logs_dir().join("lucy_audit.2.log"),
-                get_logs_dir().join("lucy_audit.3.log"),
+                dir.join("lucy_audit.2.log.gz"),
+                dir.join("lucy_audit.3.log.gz"),
             );
             let _ = std::fs::rename(
-                get_logs_dir().join("lucy_audit.1.log"),
-                get_logs_dir().join("lucy_audit.2.log"),
+                dir.join("lucy_audit.1.log.gz"),
+                dir.join("lucy_audit.2.log.gz"),
             );
-            let _ = std::fs::rename(&audit_path, get_logs_dir().join("lucy_audit.1.log"));
+            let rotated = dir.join("lucy_audit.1.log");
+            if std::fs::rename(&audit_path, &rotated).is_ok() {
+                std::thread::spawn(move || gzip_rotated_log(&rotated));
+            }
         }
     }
 }
 
-/// Rota cualquier log con tamaño máximo configurable y N archivos históricos.
+/// Rota cualquier log con tamaño máximo configurable y N archivos históricos
+/// (todos comprimidos a .gz tras la rotación, salvo el .log activo).
 /// Útil para `lucy_agent_loop.log` y futuros logs verbose.
 pub fn rotate_log(file_name: &str, max_size_bytes: u64, keep: usize) {
     let dir = get_logs_dir();
@@ -58,12 +99,17 @@ pub fn rotate_log(file_name: &str, max_size_bytes: u64, keep: usize) {
     let Ok(meta) = std::fs::metadata(&main) else { return; };
     if meta.len() <= max_size_bytes { return; }
 
-    // Shift histories backwards: .{keep-1}.log → discard, ..., .1.log → .2.log
     let stem = file_name.trim_end_matches(".log");
+    // Discard the oldest beyond `keep`
+    let _ = std::fs::remove_file(dir.join(format!("{}.{}.log.gz", stem, keep)));
+    // Shift histories backwards: .{keep-1}.log.gz → .{keep}.log.gz, ...
     for i in (1..keep).rev() {
-        let from = dir.join(format!("{}.{}.log", stem, i));
-        let to   = dir.join(format!("{}.{}.log", stem, i + 1));
+        let from = dir.join(format!("{}.{}.log.gz", stem, i));
+        let to   = dir.join(format!("{}.{}.log.gz", stem, i + 1));
         let _ = std::fs::rename(&from, &to);
     }
-    let _ = std::fs::rename(&main, dir.join(format!("{}.1.log", stem)));
+    let rotated = dir.join(format!("{}.1.log", stem));
+    if std::fs::rename(&main, &rotated).is_ok() {
+        std::thread::spawn(move || gzip_rotated_log(&rotated));
+    }
 }

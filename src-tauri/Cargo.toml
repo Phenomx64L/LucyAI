@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.2.1"
+version = "1.4.0"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
@@ -25,11 +25,21 @@ sysinfo    = "0.30"
 keyring    = "2.3"
 chrono     = "0.4"
 once_cell  = "1"
+flate2     = "1"   # gzip compression for rotated logs (already transitive)
+# ts-rs: generates TypeScript bindings from #[derive(TS)] structs.
+# Run `cargo test --package lucy-svelte export_bindings` to regenerate
+# files in `src/lib/types/`. Zero runtime overhead — derive is no-op
+# unless the export method is called from a test.
+ts-rs = { version = "10", features = ["chrono-impl", "serde-compat"] }
 tokio      = { version = "1", features = ["time", "rt", "process", "io-util"] }
 winreg     = "0.52"
 tauri-plugin-sql = { version = "2.0.0", features = ["sqlite"] }
 regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
+# P11 audit: connection pool — splits read/write so concurrent readers don't
+# serialize through one mutex. r2d2_sqlite 0.24 matches rusqlite 0.31 series.
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
 ropey = "1.6.1"
 aho-corasick = "1.1.4"
 similar = "3.0.0"
@@ -45,6 +55,24 @@ urlencoding = "2.1.3"
 rand = "0.8"
 # ── PDF Intelligence (Sprint 4 Pillar 4) ─────────────────────────────────────
 pdf-extract = "0.7"
+
+# ── LlamaFirewall Phase 2 (May 2026) — ML guardrail ──────────────────────────
+# Optional ONNX inference for prompt-injection detection via PromptGuard 2.
+# Gated behind the `ml-guard` feature so the default build stays lean (no
+# extra ~50MB ORT runtime DLLs, no 280MB model). When the feature is OFF
+# the regex-based guardrail bank is still active — ML is *defense in
+# depth*, not the only line.
+#
+# Build with: `cargo build --features ml-guard`
+# `load-dynamic` means the ORT DLL is loaded at runtime if present; build
+# never tries to bundle binaries, so this feature is build-safe to enable.
+ort         = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
+tokenizers  = { version = "0.21", default-features = false, features = ["onig"], optional = true }
+ndarray     = { version = "0.16", optional = true }
+
+[features]
+default     = []
+ml-guard    = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 
 # ── RDP Computer Use Agent ────────────────────────────────────────────────────
 # Win32 APIs for window screenshot + input simulation

@@ -3,8 +3,25 @@
     import { auditTrail } from '$lib/stores';
     import { exportAuditPdf } from '$lib/reports/ReportGenerator';
     import { staggerIn } from '$lib/stagger';
-    import { IconClipboardList as ClipboardList, IconDownload as Download, IconTrash as Trash2, IconFileText as FileText, IconSparkles as Sparkles, IconBook2 as BookOpen, IconShieldCheck as ShieldCheck, IconRadio as Radio, IconKeyboard as Keyboard, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
 
+    import Download from '@tabler/icons-svelte/icons/download';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import FileText from '@tabler/icons-svelte/icons/file-text';
+
+    import Sparkles from '@tabler/icons-svelte/icons/sparkles';
+
+    import BookOpen from '@tabler/icons-svelte/icons/book-2';
+
+    import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
+
+    import Radio from '@tabler/icons-svelte/icons/radio';
+
+    import Keyboard from '@tabler/icons-svelte/icons/keyboard';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     const dispatch = createEventDispatcher();
 
     export let hosts    = [];

@@ -4,13 +4,14 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 use serde_json::json;
 use crate::state::CREATE_NO_WINDOW;
-use crate::utils::shell::ensure_trusted_host;
+use crate::utils::shell::{ensure_trusted_host, run_winrm};
 
 // ── SECURITY helpers ─────────────────────────────────────────────────────────
 
 /// Validate that a host string is a safe IP or hostname (no shell metacharacters).
 /// Allows: alphanumeric, dots, hyphens, underscores, IPv6 brackets and colons.
-fn validate_host(host: &str) -> Result<(), String> {
+/// Public so other modules (shell.rs, etc.) can use the same validator.
+pub fn validate_host(host: &str) -> Result<(), String> {
     if host.is_empty() || host.len() > 253 {
         return Err("Host inválido: vacío o demasiado largo.".to_string());
     }
@@ -25,9 +26,23 @@ fn validate_host(host: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate that a password is sane-sized. We don't restrict character set
+/// (passwords contain arbitrary symbols) but we cap length to:
+///   - prevent DoS via 100 MB password fields exhausting memory
+///   - keep stack traces / panic messages bounded (in case some path leaks it)
+///   - reject obvious garbage (no real password is >256 chars)
+/// Empty passwords are allowed (some flows use key-based auth or pre-shared creds).
+pub fn validate_password(pwd: &str) -> Result<(), String> {
+    if pwd.len() > 256 {
+        return Err("Password inválido: excede 256 caracteres (límite de seguridad).".to_string());
+    }
+    Ok(())
+}
+
 /// Validate that a username contains only safe characters.
 /// Allows: alphanumeric, dots, hyphens, underscores, backslash (domain\user), @
-fn validate_username(user: &str) -> Result<(), String> {
+/// Public so other modules (shell.rs, etc.) can use the same validator.
+pub fn validate_username(user: &str) -> Result<(), String> {
     if user.is_empty() || user.len() > 128 {
         return Err("Username inválido: vacío o demasiado largo.".to_string());
     }
@@ -52,6 +67,7 @@ pub async fn execute_remote_windows(
 ) -> Result<String, String> {
     validate_host(&host)?;
     validate_username(&username)?;
+    validate_password(&password)?;
 
     // Check permission rules before executing
     let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
@@ -62,22 +78,7 @@ pub async fn execute_remote_windows(
         _ => return Err(format!("Acción de permiso inválida: {}", perm.action)),
     }
 
-    let pw_esc = password.replace('\'', "''");
-    let ps = format!(
-        "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-         $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-         Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
-        pw_esc, username, host, command
-    );
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&ps)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-    }).await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("Error WinRM: {}", e))?;
+    let output = run_winrm(host, username, password, command).await?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
@@ -93,6 +94,7 @@ pub async fn get_remote_health_windows(
 ) -> Result<serde_json::Value, String> {
     validate_host(&host)?;
     validate_username(&username)?;
+    validate_password(&password)?;
     let script = r#"
         $os    = Get-WmiObject Win32_OperatingSystem
         $cpu   = (Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1).CounterSamples[0].CookedValue
@@ -115,22 +117,7 @@ pub async fn get_remote_health_windows(
         } | ConvertTo-Json -Depth 5
     "#;
     let raw = {
-        let pw_esc = password.replace('\'', "''");
-        let ps = format!(
-            "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-             $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-             Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
-            pw_esc, username, host, script
-        );
-        let out = tokio::task::spawn_blocking(move || {
-            Command::new("powershell")
-                .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-                .arg("-Command").arg(&ps)
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-        }).await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| format!("Error WinRM: {}", e))?;
+        let out = run_winrm(host.clone(), username.clone(), password.clone(), script.to_string()).await?;
         if out.status.success() {
             String::from_utf8_lossy(&out.stdout).to_string()
         } else {
@@ -175,6 +162,10 @@ pub async fn execute_remote_linux(
     port: Option<u16>,
     key_path: Option<String>,
 ) -> Result<String, String> {
+    // Validate inputs to prevent injection via host/username
+    validate_host(&host)?;
+    validate_username(&username)?;
+
     // Check permission rules before executing
     let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -212,6 +203,11 @@ pub async fn get_remote_health_linux(
     port: Option<u16>,
     key_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // SECURITY: validate host & username to prevent shell injection
+    // via the `ssh user@host` argument construction.
+    validate_host(&host)?;
+    validate_username(&username)?;
+
     let script = r#"
 HOSTNAME=$(hostname)
 UPTIME_H=$(awk '{print int($1/3600)}' /proc/uptime)
@@ -302,6 +298,11 @@ pub async fn execute_shell_cmd(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<String, String> {
+    // SECURITY: cap password length early (validates Some only — None is fine
+    // for key-based auth). Prevents 100MB password payloads from consuming
+    // memory or appearing in panic traces.
+    if let Some(ref p) = password { validate_password(p)?; }
+
     // Check permission rules before executing
     let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -348,27 +349,11 @@ pub async fn execute_shell_cmd(
         validate_username(&username)?;
         ensure_trusted_host(&host);
         let pwd = password.unwrap_or_default();
-        let pw_esc = pwd.replace('\'', "''");
-        let ps = format!(
-            "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-             $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-             Invoke-Command -ComputerName '{}' -Credential $cred \
-               -ScriptBlock {{ {} }} -ErrorAction Stop",
-            pw_esc, username, host, command
-        );
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            tokio::task::spawn_blocking(move || {
-                Command::new("powershell")
-                    .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-                    .arg("-Command").arg(&ps)
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output()
-            })
+            run_winrm(host, username, pwd, command)
         ).await
-            .map_err(|_| "Timeout: el comando tardó más de 60 segundos.".to_string())?
-            .map_err(|e| e.to_string())?
-            .map_err(|e| format!("WinRM Error: {}", e))?;
+            .map_err(|_| "Timeout: el comando tardó más de 60 segundos.".to_string())??;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -393,6 +378,12 @@ pub async fn nexshell_bootstrap(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // SECURITY: validate inputs for both Linux (SSH) and Windows (WinRM) paths.
+    // Both inject `host`/`username` into shell-level argument construction.
+    validate_host(&host)?;
+    validate_username(&username)?;
+    if let Some(ref p) = password { validate_password(p)?; }
+
     if host_type == "linux" {
         // Enviado por stdin (bash -s) para evitar problemas de escapado de comillas
         let script = r#"
@@ -474,7 +465,6 @@ printf '{"hostname":"%s","os":"%s","shell":"%s","kernel":"%s","user":"%s","cwd":
         // Windows WinRM — script PowerShell inyectado en ScriptBlock
         ensure_trusted_host(&host);
         let pwd = password.unwrap_or_default();
-        let pw_esc = pwd.replace('\'', "''");
 
         // Script embebido como argumento (no en el format! string) para evitar conflictos de llaves
         let win_script = r#"
@@ -504,22 +494,7 @@ printf '{"hostname":"%s","os":"%s","shell":"%s","kernel":"%s","user":"%s","cwd":
             } | ConvertTo-Json -Compress
         "#;
 
-        let ps = format!(
-            "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-             $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-             Invoke-Command -ComputerName '{}' -Credential $cred \
-               -ScriptBlock {{ {} }} -ErrorAction Stop",
-            pw_esc, username, host, win_script
-        );
-
-        let output = tokio::task::spawn_blocking(move || {
-            Command::new("powershell")
-                .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-                .arg("-Command").arg(&ps)
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-        }).await
-            .map_err(|e| e.to_string())?
+        let output = run_winrm(host, username, pwd, win_script.to_string()).await
             .map_err(|e| format!("WinRM Bootstrap error: {}", e))?;
 
         if !output.status.success() {
@@ -557,10 +532,26 @@ fn validate_remote_path(p: &str) -> Result<(), String> {
     if p.len() > 4096 { return Err("Ruta demasiado larga (>4096)".to_string()); }
     if p.contains("..") { return Err("Ruta inválida: '..' no permitido (path traversal)".to_string()); }
     if p.contains('\0') { return Err("Ruta inválida: contiene byte nulo".to_string()); }
-    // Whitelist de caracteres comunes en paths Linux y Windows
-    if !p.chars().all(|c| c.is_ascii_alphanumeric()
-        || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | ' ' | '(' | ')' | '~')) {
-        return Err(format!("Ruta inválida: contiene caracteres no permitidos"));
+
+    // Strategy: instead of an ASCII-only whitelist (which rejected legitimate
+    // international filenames like "año.txt", "東京.log", etc), we BLACKLIST
+    // shell metacharacters and control bytes. The path is single-quoted
+    // before injection into bash/PowerShell, so any non-quote char is safe.
+    //
+    // Rejected: ; | & $ ! < > * ? [ ] { } # ` " ' \n \r \t
+    //   (single-quote `'` is handled by the caller's escaping but is still
+    //    rejected pre-emptively to keep the contract simple)
+    // Also rejected: any ASCII control byte (0x00-0x1F, 0x7F).
+    const FORBIDDEN: &[char] = &[
+        ';', '|', '&', '$', '!', '<', '>', '*', '?',
+        '[', ']', '{', '}', '#', '`', '"', '\'',
+        '\n', '\r', '\t',
+    ];
+    if let Some(bad) = p.chars().find(|c| FORBIDDEN.contains(c) || c.is_control()) {
+        return Err(format!(
+            "Ruta inválida: contiene carácter prohibido '{}' (shell metacharacter o control byte)",
+            bad.escape_default()
+        ));
     }
     Ok(())
 }
@@ -579,14 +570,37 @@ pub async fn read_remote_file(
 
     // Build a remote command that base64-encodes the file content. Both bash and PowerShell
     // can do this without external dependencies.
+    //
+    // Stderr handling: previously this mixed stderr into stdout via `2>&1`, which meant
+    // a missing-file error message got piped into the base64 decoder → confusing
+    // "Error decodificando base64" instead of "File not found". Now we surface
+    // categorised errors with a `__LUCY_ERROR__:` prefix and discard real stderr.
     let remote_cmd = if host_type == "linux" {
-        // Use coreutils base64 on Linux. Filename quoted with single quotes (already validated).
-        format!("base64 -w 0 '{}' 2>&1 | head -c 4194304", path.replace('\'', "'\\''"))
-    } else {
-        // PowerShell on Windows
+        // Quote-safe filename (single quotes inside POSIX single-quoted strings)
+        let path_esc = path.replace('\'', "'\\''");
+        // Sequence:
+        //   1) explicit existence + readable checks → categorical error message
+        //   2) base64 only on success, stderr silenced (real errors are rare past step 1)
+        //   3) cap at 4 MB to avoid mailing the entire disk back
         format!(
-            "[Convert]::ToBase64String([System.IO.File]::ReadAllBytes('{}'))",
-            path.replace('\'', "''")
+            "if [ ! -e '{p}' ]; then echo '__LUCY_ERROR__:not_found'; exit 0; fi; \
+             if [ ! -f '{p}' ]; then echo '__LUCY_ERROR__:not_a_file'; exit 0; fi; \
+             if [ ! -r '{p}' ]; then echo '__LUCY_ERROR__:permission_denied'; exit 0; fi; \
+             base64 -w 0 '{p}' 2>/dev/null | head -c 4194304",
+            p = path_esc
+        )
+    } else {
+        // PowerShell on Windows — explicit Test-Path then ReadAllBytes. On error we
+        // emit the same `__LUCY_ERROR__:` prefix for symmetry with the Linux branch.
+        let path_esc = path.replace('\'', "''");
+        format!(
+            "if (-not (Test-Path -LiteralPath '{p}')) {{ Write-Output '__LUCY_ERROR__:not_found'; }} \
+             elseif ((Get-Item -LiteralPath '{p}').PSIsContainer) {{ Write-Output '__LUCY_ERROR__:not_a_file'; }} \
+             else {{ \
+                try {{ [Convert]::ToBase64String([System.IO.File]::ReadAllBytes('{p}')) }} \
+                catch {{ Write-Output ('__LUCY_ERROR__:' + ($_.Exception.GetType().Name)) }} \
+             }}",
+            p = path_esc
         )
     };
 
@@ -594,8 +608,19 @@ pub async fn read_remote_file(
     let b64 = execute_shell_cmd(host, username, remote_cmd, host_type, port, password, key_path).await?;
     let b64_clean = b64.trim().replace(['\n', '\r', ' '], "");
 
+    // Detect and surface categorical errors from the remote helper script
+    if let Some(reason) = b64_clean.strip_prefix("__LUCY_ERROR__:") {
+        let human = match reason {
+            "not_found" => format!("Archivo no encontrado: {}", path),
+            "not_a_file" => format!("La ruta existe pero no es un archivo regular: {}", path),
+            "permission_denied" => format!("Permiso denegado al leer: {}", path),
+            other => format!("Error remoto al leer '{}': {}", path, other),
+        };
+        return Err(human);
+    }
+
     let bytes = base64::engine::general_purpose::STANDARD.decode(&b64_clean)
-        .map_err(|e| format!("Error decodificando base64 desde host: {} (¿el archivo existe?)", e))?;
+        .map_err(|e| format!("Error decodificando base64 desde host: {} (¿el archivo es binario o el remoto truncó la salida?)", e))?;
 
     if bytes.len() > MAX_REMOTE_FILE_BYTES {
         return Err(format!("Archivo demasiado grande ({} bytes, máx 1 MB para edición remota)", bytes.len()));

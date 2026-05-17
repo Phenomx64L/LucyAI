@@ -15,8 +15,15 @@
 
     import { createEventDispatcher, onMount, tick } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { IconFileText as FileText, IconRefresh as Refresh, IconCheck as Check, IconX as XIcon, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import FileText from '@tabler/icons-svelte/icons/file-text';
 
+    import Refresh from '@tabler/icons-svelte/icons/refresh';
+
+    import Check from '@tabler/icons-svelte/icons/check';
+
+    import XIcon from '@tabler/icons-svelte/icons/x';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     const dispatch = createEventDispatcher();
 
     // Props

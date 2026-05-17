@@ -1,6 +1,12 @@
 <script lang="ts">
     import { createEventDispatcher, onMount } from 'svelte';
-    import { IconShieldExclamation as ShieldAlert, IconShieldCheck as ShieldCheck, IconKey as Key, IconShield as Shield } from '@tabler/icons-svelte';
+    import ShieldAlert from '@tabler/icons-svelte/icons/shield-exclamation';
+
+    import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
+
+    import Key from '@tabler/icons-svelte/icons/key';
+
+    import Shield from '@tabler/icons-svelte/icons/shield';
     import { testApiKey, saveLlmKey, getConfiguredProviders } from '$lib/lucy-api';
     import { refreshNvidiaModels } from '$lib/models.js';
 

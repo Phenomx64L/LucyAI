@@ -12,6 +12,7 @@
 // call sites since this module owns the storage schema.
 
 use crate::commands::metrics::shared_db;
+use crate::commands::vec_index;
 use crate::state::HTTP_CLIENT;
 use crate::utils::db::generate_id;
 use keyring::Entry;
@@ -219,7 +220,10 @@ pub async fn upsert_embedding(
             params![id, entity_type, entity_id, text, blob, dims, used_model],
         ).map_err(|e| format!("Failed to upsert embedding: {}", e))?;
         Ok(())
-    })
+    })?;
+    // Invalidate HNSW index so it rebuilds on next unfiltered search
+    vec_index::invalidate();
+    Ok(())
 }
 
 /// Delete embeddings for an entity. Called when the underlying skill/memory
@@ -232,12 +236,18 @@ pub async fn delete_embedding(entity_type: String, entity_id: String) -> Result<
             params![entity_type, entity_id],
         ).map_err(|e| format!("Failed to delete embedding: {}", e))?;
         Ok(())
-    })
+    })?;
+    // Invalidate HNSW index
+    vec_index::invalidate();
+    Ok(())
 }
 
 /// Semantic search. Embeds `query` and returns up to `limit` hits ranked by
 /// cosine similarity, optionally filtered by entity_type. Results below
 /// `min_score` (default 0.25) are discarded to avoid garbage matches.
+///
+/// Uses HNSW index (vec_index) when corpus > 500 rows for O(log n) search.
+/// Falls back to linear scan for smaller corpora or filtered queries.
 #[tauri::command]
 pub async fn semantic_search(
     query: String,
@@ -250,8 +260,20 @@ pub async fn semantic_search(
     let limit = limit.unwrap_or(5).max(1) as usize;
     let min_score = min_score.unwrap_or(0.25);
 
-    // Pull all candidate rows from SQLite (bounded scan — this is the part
-    // we'd swap for sqlite-vec once corpus > 10k).
+    // ── Fast path: use HNSW index if available and no type filter ────────
+    // The index doesn't support per-type filtering (it indexes ALL vectors).
+    // For filtered queries or when index is stale, fall through to linear scan.
+    if entity_type.is_none() && vec_index::is_ready() {
+        let results = vec_index::search(&qvec, limit, min_score);
+        if !results.is_empty() {
+            let hits: Vec<SemanticHit> = results.into_iter()
+                .map(|(et, eid, text, score)| SemanticHit { entity_type: et, entity_id: eid, text, score })
+                .collect();
+            return Ok(hits);
+        }
+    }
+
+    // ── Linear scan: pull all candidate rows from SQLite ─────────────────
     let rows: Vec<(String, String, String, Vec<u8>, i64)> = shared_db(|conn| {
         let sql = if entity_type.is_some() {
             "SELECT entity_type, entity_id, text, vec, dims
@@ -276,6 +298,20 @@ pub async fn semantic_search(
         };
         Ok(iter)
     })?;
+
+    // ── Opportunistic index build: if corpus crossed threshold, populate index ──
+    if entity_type.is_none() && rows.len() >= vec_index::INDEX_THRESHOLD && !vec_index::is_ready() {
+        let entries: Vec<vec_index::IndexEntry> = rows.iter()
+            .map(|(et, eid, text, blob, _)| vec_index::IndexEntry {
+                entity_type: et.clone(),
+                entity_id: eid.clone(),
+                text: text.clone(),
+                vec: blob_to_vec(blob),
+            })
+            .collect();
+        // Build in background — this search still uses linear scan
+        std::thread::spawn(move || vec_index::reload(entries));
+    }
 
     // Score every row, partial-sort by cosine desc, filter by threshold.
     let mut scored: Vec<SemanticHit> = rows.into_iter()

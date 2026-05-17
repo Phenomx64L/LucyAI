@@ -14,12 +14,21 @@
     import { invoke } from '@tauri-apps/api/core';
     import { focusTrap } from '$lib/actions';
     import { staggerIn } from '$lib/stagger';
-    import {
-        IconClock as Clock, IconPlus as Plus, IconTrash as Trash2,
-        IconCheck as Check, IconX as X, IconPlayerPlay as Play,
-        IconPlayerPause as Pause, IconCalendar as Calendar,
-    } from '@tabler/icons-svelte';
+    import Clock from '@tabler/icons-svelte/icons/clock';
 
+    import Plus from '@tabler/icons-svelte/icons/plus';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import Check from '@tabler/icons-svelte/icons/check';
+
+    import X from '@tabler/icons-svelte/icons/x';
+
+    import Play from '@tabler/icons-svelte/icons/player-play';
+
+    import Pause from '@tabler/icons-svelte/icons/player-pause';
+
+    import Calendar from '@tabler/icons-svelte/icons/calendar';
     const dispatch = createEventDispatcher();
 
     export let isOpen = false;

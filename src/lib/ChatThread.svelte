@@ -1,10 +1,30 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
+    // Inlined base64 data URL — bypasses Tauri 2.x webview path resolution
+    // edge cases on Windows (`https://tauri.localhost` scheme + Vite-hashed
+    // asset chunks didn't render reliably). The image lives inside the JS
+    // bundle so no network fetch, no path resolution, no cache surprises.
+    import { LUCY_AVATAR_DATA_URL as lucyAvatarUrl } from '$lib/assets/lucy-avatar-data';
+    import { getTabRevStore } from '$lib/page/tabs-store';
 
     export let tab: any;
     export let isEN: boolean = false;
     export let chatSearch: string = '';
     export let isActiveTab: boolean = false;
+    // Fallback when a message lacks `rawRole` — used by the initials avatar
+    // so it never has to show '?'. Comes from lucyConfig.name in the parent.
+    export let userName: string = '';
+
+    // ── P2 audit: granular per-tab reactivity ──
+    // When the parent calls `refreshSoft(tab.id)`, only THIS tab's rev
+    // store fires. We subscribe via `$revStore` so this component re-runs
+    // its template, but cousin tabs (other ChatThreads) don't notice.
+    //
+    // We read `$revStore` inside `visibleMessages()` and the iteration
+    // below so Svelte tracks it as a dependency. The actual value is
+    // discarded — it's just a "tick" signal.
+    $: revStore = tab?.id ? getTabRevStore(tab.id) : null;
+    $: tabRev = revStore ? $revStore : 0;
 
     const dispatch = createEventDispatcher<{
         pinmessage: { msg: any };
@@ -36,11 +56,26 @@
             )
         );
     }
+
+    /**
+     * Compute 1–2 character initials for the user avatar from a name string.
+     * "Iván López" → "IL", "Luna" → "LU", "" → "?".
+     */
+    function getInitials(name: string | undefined | null): string {
+        if (!name) return '?';
+        const trimmed = name.trim();
+        if (!trimmed) return '?';
+        const parts = trimmed.split(/\s+/);
+        if (parts.length >= 2) {
+            return (parts[0][0] + parts[1][0]).toUpperCase();
+        }
+        return trimmed.slice(0, 2).toUpperCase();
+    }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="chat-area" on:click={handleAreaClick}>
-    {#each visibleMessages(tab.messages) as msg (msg.id)}
+    {#each (tabRev, visibleMessages(tab.messages)) as msg (msg.id)}
         {#if msg.role === 'thinking'}
             <div class="msg-thinking">
                 <div class="thinking-dots">
@@ -66,7 +101,11 @@
                 {/if}
             </div>
         {:else if msg.role === 'streaming' && !msg.rawContent}
-            <div class="msg-lucy msg-skel">
+            <div class="msg-lucy msg-skel msg-enter">
+                <span class="lucy-avatar-wrap" title="Lucy · v1.4.0">
+                    <img class="lucy-avatar" src={lucyAvatarUrl} alt="Lucy" />
+                    <span class="lucy-status processing" aria-label="Lucy está pensando"></span>
+                </span>
                 <div class="mn">Lucy</div>
                 <div class="skel-block">
                     <div class="skel-line" style="width:84%"></div>
@@ -78,8 +117,20 @@
                 </div>
             </div>
         {:else}
-            <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''}"
+            <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''} msg-enter"
                 style={msg.style || ''}>
+                {#if msg.role === 'lucy' || msg.role === 'streaming'}
+                    <span class="lucy-avatar-wrap" title="Lucy · v1.4.0">
+                        <img class="lucy-avatar" src={lucyAvatarUrl} alt="Lucy" />
+                        <span class="lucy-status {tab?.isProcessing && msg.role === 'streaming' ? 'processing' : 'active'}"
+                              aria-label={tab?.isProcessing && msg.role === 'streaming' ? 'Procesando' : 'Activo'}></span>
+                    </span>
+                {/if}
+                {#if msg.role === 'user'}
+                    <span class="user-avatar" title={msg.rawRole || userName || 'Usuario'} aria-label={msg.rawRole || userName || 'Usuario'}>
+                        {getInitials(msg.rawRole || userName)}
+                    </span>
+                {/if}
                 {#if msg.role !== 'system'}
                     {#if msg.rawRole && (msg.role === 'user' || msg.role === 'lucy')}
                         <button class="msg-pin" class:on={msg.pinned}
@@ -107,8 +158,147 @@
     :global(.chat-wrap.on){display:flex;}
     :global(.chat-area){flex:1;overflow-y:auto;padding:16px 22px;display:flex;flex-direction:column;gap:10px;min-height:0;}
     :global(.msg-user),:global(.msg-lucy),:global(.sys-msg),:global(.msg-thinking){content-visibility:auto;contain-intrinsic-size:0 80px;}
-    :global(.msg-user){align-self:flex-end;background:#1e212b;border:1px solid rgba(96,165,250,.08);border-right:2px solid var(--blue);border-radius:10px 10px 0 10px;padding:10px 14px;max-width:78%;white-space:pre-wrap;}
-    :global(.msg-lucy){align-self:flex-start;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid #10b981;border-radius:0 10px 10px 10px;padding:10px 14px;max-width:88%;line-height:1.6;}
+    /* ── Bubble gradient backgrounds — subtle depth, no distraction ──────
+     * msg-user: diagonal blue→deeper blue. Bubble feels "lit" from upper-left.
+     * msg-lucy: diagonal turquoise→teal with low opacity over a dark base —
+     *           echoes the avatar's color palette.
+     * The gradient angle (135deg) matches the avatar's gradient direction
+     * so the whole interface has visual continuity.
+     */
+    :global(.msg-user){
+        align-self:flex-end;
+        background:linear-gradient(135deg,#22283a 0%,#1c2030 60%,#191c28 100%);
+        border:1px solid rgba(96,165,250,.10);
+        border-right:2px solid var(--blue);
+        border-radius:10px 10px 0 10px;
+        padding:10px 14px;
+        max-width:78%;
+        white-space:pre-wrap;
+        box-shadow:inset 0 1px 0 rgba(96,165,250,.05),0 2px 12px -6px rgba(0,0,0,.4);
+    }
+    :global(.msg-lucy){
+        align-self:flex-start;
+        background:linear-gradient(135deg,rgba(16,185,129,.09) 0%,rgba(16,185,129,.04) 55%,rgba(16,185,129,.02) 100%),rgba(20,28,38,.35);
+        border:1px solid rgba(16,185,129,.12);
+        border-left:2px solid #10b981;
+        border-radius:0 10px 10px 10px;
+        padding:10px 14px;
+        max-width:88%;
+        line-height:1.6;
+        box-shadow:inset 0 1px 0 rgba(16,185,129,.06),0 2px 12px -6px rgba(0,0,0,.4);
+    }
+    /* ── Avatar wrap — positioning context for the status indicator dot ────
+     * Floats left so the bubble text wraps around it. The .lucy-avatar
+     * itself is display:block inside this wrap; the .lucy-status sits
+     * absolutely on the bottom-right corner.
+     */
+    :global(.lucy-avatar-wrap){
+        position:relative !important;
+        display:inline-block !important;
+        float:left;
+        margin:0 12px 4px 0;
+        flex-shrink:0;
+        vertical-align:top;
+    }
+    :global(.lucy-avatar){
+        display:block !important;
+        width:38px !important;
+        height:38px !important;
+        object-fit:cover;
+        border-radius:8px;
+        border:1px solid rgba(16,185,129,.45);
+        box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 14px -2px rgba(16,185,129,.32);
+        background:rgba(16,185,129,0.06); /* visible fallback if image fails */
+        transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;
+        cursor:default;
+        user-select:none;
+        -webkit-user-drag:none;
+    }
+    /* Status indicator dot — Slack/Discord style presence light */
+    :global(.lucy-status){
+        position:absolute !important;
+        bottom:-2px;
+        right:-2px;
+        width:11px;
+        height:11px;
+        border-radius:50%;
+        background:#10b981;                /* green = active by default */
+        border:2px solid var(--bg2,#060a0f);
+        box-shadow:0 0 6px rgba(16,185,129,.6);
+        pointer-events:none;
+        z-index:2;
+    }
+    :global(.lucy-status.processing){
+        background:#3b9eff;
+        box-shadow:0 0 6px rgba(59,158,255,.6);
+        animation:lucyStatusPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes lucyStatusPulse{
+        0%,100%{box-shadow:0 0 6px rgba(59,158,255,.6); transform:scale(1);}
+        50%    {box-shadow:0 0 14px rgba(59,158,255,1); transform:scale(1.2);}
+    }
+    /* Pulsing avatar border while Lucy is streaming a response */
+    :global(.msg-lucy.streaming-active) :global(.lucy-avatar),
+    :global(.msg-lucy.msg-skel) :global(.lucy-avatar){
+        animation:lucyAvatarPulse 1.8s ease-in-out infinite;
+    }
+    @keyframes lucyAvatarPulse{
+        0%,100%{box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 14px -2px rgba(16,185,129,.25);}
+        50%    {box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 22px 1px rgba(16,185,129,.55);}
+    }
+    /* Hover effect — applied to the wrap so the status dot scales together */
+    :global(.lucy-avatar-wrap:hover) :global(.lucy-avatar){
+        transform:scale(1.12) translateY(-1px);
+        border-color:rgba(16,185,129,.65);
+        box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 24px 2px rgba(16,185,129,.55),0 6px 18px -4px rgba(16,185,129,.4);
+    }
+    /* ── User avatar — initials in a tinted circle (matches Luna's blue) ─── */
+    :global(.user-avatar){
+        display:inline-block !important;
+        float:right;
+        width:38px !important;
+        height:38px !important;
+        margin:0 0 4px 12px;
+        border-radius:8px;
+        background:linear-gradient(135deg,#3b9eff 0%,#2563eb 100%);
+        color:#fff;
+        font-family:var(--mono,ui-monospace,monospace);
+        font-size:13px;
+        font-weight:700;
+        letter-spacing:.5px;
+        text-align:center;
+        line-height:38px;
+        border:1px solid rgba(59,158,255,.45);
+        box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 14px -2px rgba(59,158,255,.32);
+        user-select:none;
+        flex-shrink:0;
+        vertical-align:top;
+        transition:transform .25s ease,box-shadow .25s ease;
+        cursor:default;
+    }
+    :global(.user-avatar:hover){
+        transform:scale(1.12) translateY(-1px);
+        box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 24px 2px rgba(59,158,255,.55),0 6px 18px -4px rgba(59,158,255,.4);
+    }
+    /* On very narrow viewports, drop the avatars to keep room for text */
+    @media (max-width:540px){
+        :global(.lucy-avatar-wrap),:global(.user-avatar){display:none !important;}
+    }
+    /* ── Message entrance animation — slide-up + fade-in once on mount ──── */
+    :global(.msg-enter){
+        animation:msgSlideIn .28s cubic-bezier(.16,1,.3,1);
+    }
+    @keyframes msgSlideIn{
+        from{opacity:0; transform:translateY(8px);}
+        to  {opacity:1; transform:translateY(0);}
+    }
+    /* Honor reduced-motion preference */
+    @media (prefers-reduced-motion:reduce){
+        :global(.msg-enter){animation:none;}
+        :global(.lucy-status.processing),
+        :global(.msg-lucy.streaming-active) :global(.lucy-avatar),
+        :global(.msg-lucy.msg-skel) :global(.lucy-avatar){animation:none;}
+    }
     :global(.skel-block){display:flex;flex-direction:column;gap:7px;padding:4px 0;}
     :global(.skel-line){height:11px;border-radius:4px;background:linear-gradient(90deg,#0f1520 25%,#1e293b 50%,#0f1520 75%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;}
     @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}

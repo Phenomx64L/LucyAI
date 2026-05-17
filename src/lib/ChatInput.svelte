@@ -1,7 +1,14 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
-    import { IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconEraser as Eraser } from '@tabler/icons-svelte';
+    import Paperclip from '@tabler/icons-svelte/icons/paperclip';
+
+    import Mic from '@tabler/icons-svelte/icons/microphone';
+
+    import MicOff from '@tabler/icons-svelte/icons/microphone-off';
+
+    import Eraser from '@tabler/icons-svelte/icons/eraser';
     import { ollamaOnline, nvidiaConfigured, nvidiaModels, localModels } from '$lib/models.js';
+    import { suggestFlags, applyFlagCompletion, type FlagSuggestion } from '$lib/flag-completions';
 
     export let tab: any;
     export let isEN: boolean = false;
@@ -40,6 +47,54 @@
         closeChatSearch: void;
         filedrop: { event: DragEvent };
     }>();
+
+    // ── Flag autocomplete (May 2026 UX) ──
+    // Driven by $lib/flag-completions.ts which queries the hand-curated
+    // signatures catalog. The popover renders only when the cursor sits
+    // on a "-flag-shaped" token of a known command. Tab/Enter to insert,
+    // Esc to dismiss, ArrowUp/Down to navigate.
+    let _textareaEl: HTMLTextAreaElement | null = null;
+    let _flagSuggestions: FlagSuggestion[] = [];
+    let _flagSelIdx = 0;
+
+    function refreshFlagSuggestions() {
+        if (!_textareaEl) { _flagSuggestions = []; return; }
+        const line = _textareaEl.value;
+        const pos  = _textareaEl.selectionStart ?? 0;
+        const next = suggestFlags(line, pos, 8);
+        _flagSuggestions = next;
+        if (_flagSelIdx >= next.length) _flagSelIdx = 0;
+    }
+
+    function applySuggestion(flag: string) {
+        if (!_textareaEl) return;
+        const line = _textareaEl.value;
+        const pos  = _textareaEl.selectionStart ?? 0;
+        const { line: newLine, cursor } = applyFlagCompletion(line, pos, flag);
+        tab.inputValue = newLine;
+        // Defer caret update until Svelte applies the bind:value
+        requestAnimationFrame(() => {
+            if (_textareaEl) {
+                _textareaEl.selectionStart = _textareaEl.selectionEnd = cursor;
+                _textareaEl.focus();
+            }
+        });
+        _flagSuggestions = [];
+        _flagSelIdx = 0;
+    }
+
+    /** Returns true if the key was consumed by the suggestion popover. */
+    function handleSuggestionKey(e: KeyboardEvent): boolean {
+        if (_flagSuggestions.length === 0) return false;
+        if (e.key === 'Escape')    { _flagSuggestions = []; e.preventDefault(); return true; }
+        if (e.key === 'ArrowDown') { _flagSelIdx = (_flagSelIdx + 1) % _flagSuggestions.length; e.preventDefault(); return true; }
+        if (e.key === 'ArrowUp')   { _flagSelIdx = (_flagSelIdx - 1 + _flagSuggestions.length) % _flagSuggestions.length; e.preventDefault(); return true; }
+        if (e.key === 'Tab' || e.key === 'Enter') {
+            const choice = _flagSuggestions[_flagSelIdx];
+            if (choice) { applySuggestion(choice.flag); e.preventDefault(); return true; }
+        }
+        return false;
+    }
 </script>
 
 <!-- ── STAGED FILES ── -->
@@ -130,7 +185,7 @@
     </div>
     {/if}
 
-    <div class="igrp">
+    <div class="igrp" style="position:relative;">
         <textarea class="ibox" rows="1"
             placeholder={tab.pendingMessage
                 ? (isEN ? 'Message queued — waiting for Lucy…' : 'Mensaje en espera — esperando a Lucy…')
@@ -138,9 +193,26 @@
                     ? (isEN ? 'Type here — will send when Lucy finishes…' : 'Escribe aquí — se enviará cuando Lucy termine…')
                     : cmdPlaceholder}
             bind:value={tab.inputValue}
-            on:input={(e) => dispatch('inputchange', { event: e })}
-            on:keydown={(e) => dispatch('keydown', { event: e })}
+            bind:this={_textareaEl}
+            on:input={(e) => { dispatch('inputchange', { event: e }); refreshFlagSuggestions(); }}
+            on:keydown={(e) => { if (handleSuggestionKey(e)) return; dispatch('keydown', { event: e }); }}
+            on:blur={() => setTimeout(() => { _flagSuggestions = []; }, 120)}
             disabled={!!tab.pendingMessage}></textarea>
+
+        <!-- Flag autocomplete popover — appears only when caret is on a flag-shaped token of a known command -->
+        {#if _flagSuggestions.length > 0}
+            <div class="flag-pop" role="listbox" aria-label="Flag suggestions">
+                {#each _flagSuggestions as s, i (s.flag)}
+                    <button class="flag-row" class:sel={i === _flagSelIdx} class:destructive={s.destructive}
+                        on:mousedown|preventDefault={() => applySuggestion(s.flag)}>
+                        <span class="flag-flag">{s.flag}</span>
+                        <span class="flag-desc">{s.desc}</span>
+                        {#if s.destructive}<span class="flag-warn" title={isEN ? 'destructive' : 'destructivo'}>⚠</span>{/if}
+                    </button>
+                {/each}
+                <div class="flag-foot">{isEN ? 'Tab/Enter: insert · Esc: close' : 'Tab/Enter: insertar · Esc: cerrar'}</div>
+            </div>
+        {/if}
 
         <div class="iside">
             <button class="ia-btn" title={isEN ? 'Attach file' : 'Adjuntar archivo'}
@@ -229,6 +301,64 @@
 </div>
 
 <style>
+    /* Flag autocomplete popover (May 2026 UX) */
+    .flag-pop {
+        position: absolute;
+        bottom: calc(100% + 4px);
+        left: 0;
+        right: auto;
+        min-width: 280px;
+        max-width: 480px;
+        background: var(--panel-bg, #0f1520);
+        border: 1px solid var(--bdr);
+        border-radius: 8px;
+        padding: 4px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+        z-index: 50;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .flag-row {
+        display: flex; align-items: center; gap: 8px;
+        width: 100%;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        padding: 5px 8px;
+        text-align: left;
+        cursor: pointer;
+        color: var(--txt2);
+        font-size: 12px;
+        transition: background .12s ease;
+    }
+    .flag-row:hover, .flag-row.sel { background: rgba(255,255,255,0.06); border-color: var(--bdr); color: var(--txt); }
+    .flag-row.destructive { color: #fca5a5; }
+    .flag-row.destructive.sel, .flag-row.destructive:hover { background: rgba(239,68,68,0.08); }
+    .flag-flag {
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 11px;
+        min-width: 90px;
+        color: inherit;
+    }
+    .flag-desc {
+        flex: 1;
+        font-size: 11px;
+        opacity: 0.8;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .flag-warn { color: #ef4444; font-size: 12px; }
+    .flag-foot {
+        padding: 4px 8px 2px;
+        font-size: 10px;
+        color: var(--txt3);
+        border-top: 1px solid var(--bdr);
+        margin-top: 2px;
+        font-family: var(--mono);
+    }
+
     :global(.staged){padding:4px 14px;display:flex;flex-wrap:wrap;gap:4px;}
     :global(.sf-bdg){display:inline-flex;align-items:center;gap:6px;background:var(--acc-d);border:1px solid var(--acc-b);color:var(--acc);padding:3px 10px;border-radius:20px;font-size:12px;}
     :global(.sf-rm){background:none;border:none;color:var(--red);cursor:pointer;font-weight:bold;padding:0 3px;font-size:12px;line-height:1;}

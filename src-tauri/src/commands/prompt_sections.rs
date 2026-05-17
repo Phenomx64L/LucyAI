@@ -15,6 +15,97 @@
 // of Systems Administration expertise by Iván Eduardo Luna (@Phenomx64L).
 // PROTECTED BY GNU GPLv3. See: https://github.com/Phenomx64L/LucyAI
 
+// ── Runtime toggles ─────────────────────────────────────────────────────────
+// Allows the UI to disable/enable individual prompt sections without
+// recompilation. A simple global HashSet protected by a Mutex.
+
+use std::collections::HashSet;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static DISABLED_SECTIONS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Disable a section by name (e.g. "SubAgents", "PdfIntelligence").
+pub fn disable_section(name: &str) {
+    if let Ok(mut set) = DISABLED_SECTIONS.lock() {
+        set.insert(name.to_string());
+    }
+}
+
+/// Re-enable a previously disabled section.
+pub fn enable_section(name: &str) {
+    if let Ok(mut set) = DISABLED_SECTIONS.lock() {
+        set.remove(name);
+    }
+}
+
+/// Check if a section is currently disabled.
+pub fn is_section_disabled(name: &str) -> bool {
+    DISABLED_SECTIONS.lock().map(|s| s.contains(name)).unwrap_or(false)
+}
+
+/// List all currently disabled section names.
+pub fn list_disabled_sections() -> Vec<String> {
+    DISABLED_SECTIONS.lock().map(|s| s.iter().cloned().collect()).unwrap_or_default()
+}
+
+// Tauri commands for frontend control
+
+#[tauri::command]
+pub fn toggle_prompt_section(name: String, enabled: bool) -> Result<bool, String> {
+    if enabled {
+        enable_section(&name);
+    } else {
+        disable_section(&name);
+    }
+    Ok(enabled)
+}
+
+#[tauri::command]
+pub fn list_prompt_sections() -> Result<Vec<PromptSectionInfo>, String> {
+    let disabled = list_disabled_sections();
+    let all = all_section_names();
+    Ok(all.into_iter().map(|(name, prio)| PromptSectionInfo {
+        name: name.to_string(),
+        priority: prio,
+        enabled: !disabled.iter().any(|s| s == name),
+    }).collect())
+}
+
+#[derive(serde::Serialize)]
+pub struct PromptSectionInfo {
+    pub name: String,
+    pub priority: u32,
+    pub enabled: bool,
+}
+
+/// Returns all section names and their priorities.
+fn all_section_names() -> Vec<(&'static str, u32)> {
+    vec![
+        ("Identity", 0),
+        ("Runbooks", 5),
+        ("IntentDetection", 10),
+        ("SafetyRules", 20),
+        ("MemoryRules", 25),
+        ("HostRouting", 30),
+        ("AlternativeExecutors", 35),
+        ("FileTools", 40),
+        ("WebKnowledge", 45),
+        ("SubAgents", 48),
+        ("PersistentMemory", 50),
+        ("TieredMemory", 55),
+        ("CodeWorkflow", 60),
+        ("ReactSelfCorrection", 65),
+        ("PlanActVerify", 70),
+        ("PdfIntelligence", 75),
+        ("CoreMemory", 80),
+        ("Principles", 82),
+        ("HostsContext", 85),
+        ("ExtraContext", 90),
+        ("UserInstruction", 100),
+    ]
+}
+
 // ── Context passed to each section for relevance decisions ───────────────────
 
 /// Everything a section needs to decide whether to include itself.
@@ -46,12 +137,15 @@ pub trait PromptSection {
     fn render(&self, ctx: &PromptContext) -> String;
     /// Ordering priority. Lower = placed earlier in the assembled prompt.
     fn priority(&self) -> u32;
+    /// Section name for runtime toggle identification.
+    fn name(&self) -> &'static str;
 }
 
 // ── Individual sections ──────────────────────────────────────────────────────
 
 pub struct IdentitySection;
 impl PromptSection for IdentitySection {
+    fn name(&self) -> &'static str { "Identity" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true } // always
     fn priority(&self) -> u32 { 0 }
     fn render(&self, ctx: &PromptContext) -> String {
@@ -71,6 +165,7 @@ impl PromptSection for IdentitySection {
 
 pub struct RunbooksSection;
 impl PromptSection for RunbooksSection {
+    fn name(&self) -> &'static str { "Runbooks" }
     fn relevant(&self, ctx: &PromptContext) -> bool { ctx.has_runbooks }
     fn priority(&self) -> u32 { 5 }
     fn render(&self, ctx: &PromptContext) -> String {
@@ -89,6 +184,7 @@ impl PromptSection for RunbooksSection {
 
 pub struct IntentDetectionSection;
 impl PromptSection for IntentDetectionSection {
+    fn name(&self) -> &'static str { "IntentDetection" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 10 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -104,6 +200,7 @@ impl PromptSection for IntentDetectionSection {
 
 pub struct SafetyRulesSection;
 impl PromptSection for SafetyRulesSection {
+    fn name(&self) -> &'static str { "SafetyRules" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 20 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -120,6 +217,7 @@ impl PromptSection for SafetyRulesSection {
 
 pub struct MemoryRulesSection;
 impl PromptSection for MemoryRulesSection {
+    fn name(&self) -> &'static str { "MemoryRules" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 25 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -130,6 +228,7 @@ impl PromptSection for MemoryRulesSection {
 
 pub struct HostRoutingSection;
 impl PromptSection for HostRoutingSection {
+    fn name(&self) -> &'static str { "HostRouting" }
     fn relevant(&self, ctx: &PromptContext) -> bool { ctx.has_hosts }
     fn priority(&self) -> u32 { 30 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -141,6 +240,7 @@ impl PromptSection for HostRoutingSection {
 
 pub struct AlternativeExecutorsSection;
 impl PromptSection for AlternativeExecutorsSection {
+    fn name(&self) -> &'static str { "AlternativeExecutors" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 35 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -162,6 +262,7 @@ impl PromptSection for AlternativeExecutorsSection {
 
 pub struct FileToolsSection;
 impl PromptSection for FileToolsSection {
+    fn name(&self) -> &'static str { "FileTools" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 40 }
     fn render(&self, ctx: &PromptContext) -> String {
@@ -196,12 +297,13 @@ impl PromptSection for FileToolsSection {
 
 pub struct WebKnowledgeSection;
 impl PromptSection for WebKnowledgeSection {
+    fn name(&self) -> &'static str { "WebKnowledge" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 45 }
     fn render(&self, _ctx: &PromptContext) -> String {
         "RULE 16 — WEB DOCUMENTATION CONTEXT: If the context contains '--- CONTENIDO WEB: <url> ---' blocks, the system has already fetched and embedded that documentation. Use it directly. CRITICAL: reading web context does NOT change your execution behavior — continue using <EXECUTE> tags exactly as before.\n\
         RULE 22 — WEB KNOWLEDGE: NEVER guess release dates, software versions, or information post-2024. Use <TOOL>search_web:query</TOOL> IMMEDIATELY and autonomously — do NOT ask the user for permission.\n\
-        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Searches DuckDuckGo.\n\
+        - SEARCH WEB: <TOOL>search_web:query</TOOL> — Tavily API (preferred, ~5 clean results with AI summary) or DuckDuckGo fallback. Use for documentation, current events, software versions.\n\
         - FETCH WEB: <TOOL>fetch:URL</TOOL> — Fetches full text of a webpage.\n\
         - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot; call again for DIFFERENCE.".to_string()
     }
@@ -209,6 +311,7 @@ impl PromptSection for WebKnowledgeSection {
 
 pub struct SubAgentsSection;
 impl PromptSection for SubAgentsSection {
+    fn name(&self) -> &'static str { "SubAgents" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 48 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -231,6 +334,7 @@ impl PromptSection for SubAgentsSection {
 
 pub struct PersistentMemorySection;
 impl PromptSection for PersistentMemorySection {
+    fn name(&self) -> &'static str { "PersistentMemory" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 50 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -251,6 +355,7 @@ impl PromptSection for PersistentMemorySection {
 
 pub struct TieredMemorySection;
 impl PromptSection for TieredMemorySection {
+    fn name(&self) -> &'static str { "TieredMemory" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 55 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -264,6 +369,7 @@ impl PromptSection for TieredMemorySection {
 
 pub struct CodeWorkflowSection;
 impl PromptSection for CodeWorkflowSection {
+    fn name(&self) -> &'static str { "CodeWorkflow" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 60 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -283,6 +389,7 @@ impl PromptSection for CodeWorkflowSection {
 
 pub struct ReactSelfCorrectionSection;
 impl PromptSection for ReactSelfCorrectionSection {
+    fn name(&self) -> &'static str { "ReactSelfCorrection" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 65 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -296,6 +403,7 @@ impl PromptSection for ReactSelfCorrectionSection {
 
 pub struct PlanActVerifySection;
 impl PromptSection for PlanActVerifySection {
+    fn name(&self) -> &'static str { "PlanActVerify" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 70 }
     fn render(&self, _ctx: &PromptContext) -> String {
@@ -309,6 +417,7 @@ impl PromptSection for PlanActVerifySection {
 
 pub struct PdfIntelligenceSection;
 impl PromptSection for PdfIntelligenceSection {
+    fn name(&self) -> &'static str { "PdfIntelligence" }
     // Only include when user might ask about documents
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 75 }
@@ -321,6 +430,7 @@ impl PromptSection for PdfIntelligenceSection {
 
 pub struct CoreMemoryBlock;
 impl PromptSection for CoreMemoryBlock {
+    fn name(&self) -> &'static str { "CoreMemory" }
     fn relevant(&self, ctx: &PromptContext) -> bool { !ctx.core_memory.is_empty() }
     fn priority(&self) -> u32 { 80 }
     fn render(&self, ctx: &PromptContext) -> String { ctx.core_memory.to_string() }
@@ -328,6 +438,7 @@ impl PromptSection for CoreMemoryBlock {
 
 pub struct PrinciplesBlock;
 impl PromptSection for PrinciplesBlock {
+    fn name(&self) -> &'static str { "Principles" }
     fn relevant(&self, ctx: &PromptContext) -> bool { !ctx.principles.is_empty() }
     fn priority(&self) -> u32 { 82 }
     fn render(&self, ctx: &PromptContext) -> String { ctx.principles.to_string() }
@@ -335,6 +446,7 @@ impl PromptSection for PrinciplesBlock {
 
 pub struct HostsContextBlock;
 impl PromptSection for HostsContextBlock {
+    fn name(&self) -> &'static str { "HostsContext" }
     fn relevant(&self, ctx: &PromptContext) -> bool { ctx.has_hosts }
     fn priority(&self) -> u32 { 85 }
     fn render(&self, ctx: &PromptContext) -> String { ctx.hosts_context.to_string() }
@@ -342,6 +454,7 @@ impl PromptSection for HostsContextBlock {
 
 pub struct ExtraContextBlock;
 impl PromptSection for ExtraContextBlock {
+    fn name(&self) -> &'static str { "ExtraContext" }
     fn relevant(&self, ctx: &PromptContext) -> bool { !ctx.extra_context.is_empty() }
     fn priority(&self) -> u32 { 90 }
     fn render(&self, ctx: &PromptContext) -> String { ctx.extra_context.to_string() }
@@ -349,6 +462,7 @@ impl PromptSection for ExtraContextBlock {
 
 pub struct UserInstructionSection;
 impl PromptSection for UserInstructionSection {
+    fn name(&self) -> &'static str { "UserInstruction" }
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 100 } // always last
     fn render(&self, ctx: &PromptContext) -> String {
@@ -390,10 +504,10 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &UserInstructionSection,
     ];
 
-    // Filter relevant and sort by priority (already in order, but future-proof)
+    // Filter relevant (+ runtime toggle) and sort by priority
     let mut active: Vec<&dyn PromptSection> = sections
         .into_iter()
-        .filter(|s| s.relevant(ctx))
+        .filter(|s| s.relevant(ctx) && !is_section_disabled(s.name()))
         .collect();
     active.sort_by_key(|s| s.priority());
 
@@ -443,4 +557,70 @@ pub fn build_system_prompt_v2(
     };
 
     build_composable_prompt(&ctx)
+}
+
+/// Slim system prompt for LOCAL models (Ollama 7-20B).
+///
+/// Why a separate builder: the full v2 prompt is ~6-8K tokens of rules, tools,
+/// memory sections, and sub-agent guidance — tuned for Gemini/Claude with
+/// 1M+ token windows and strong instruction-following. Small local models
+/// (qwen2.5-coder:14b, llava-llama3:8b, etc.) get OVERWHELMED by that volume
+/// and start hallucinating: inventing tool tags, dropping syntax, mixing
+/// languages, or substituting unrelated commands ("snake.py" → bogus
+/// `Get-Process | Sort-Object`).
+///
+/// This builder keeps only what a local model can actually use:
+///   • Identity (who Lucy is) — minimal
+///   • Language preference (es/en)
+///   • User name, cwd
+///   • One simple output rule per intent (code-gen vs shell vs chat)
+///   • Hosts list (only if remote hosts are configured)
+///
+/// Total target: ≤ 800 tokens. Stays well within any quantized model's
+/// attention budget and leaves room for actual conversation context.
+pub fn build_local_system_prompt(
+    lang: &str,
+    context: &str,
+    hosts_context: &str,
+    user_name: &str,
+    prompt: &str,
+    working_dir: &str,
+) -> String {
+    let mut out = String::with_capacity(1024);
+
+    // Identity — short, plain, no jargon
+    out.push_str("You are Lucy, a Windows SysAdmin assistant.\n");
+    out.push_str(lang);
+    out.push('\n');
+    out.push_str(&format!("User: {}\nWorking dir: {}\n", user_name, working_dir));
+
+    // Output rules — minimal, intent-aware (the frontend chooses model based
+    // on intent; the prompt just reinforces the expected output shape).
+    out.push_str("\nOutput rules:\n");
+    out.push_str("- For code (Python, JS, PowerShell, etc.): respond with a SINGLE fenced code block ```lang\\n...\\n``` and a brief 1-line description before it. No invented commands. No tool tags.\n");
+    out.push_str("- For shell commands that should run NOW: wrap them in <EXECUTE>...</EXECUTE>. One command per tag. No explanation needed beyond the tag.\n");
+    out.push_str("- For file creation requests (e.g. \"genera un fichero hola.txt en X:\\\"): respond with a PowerShell <EXECUTE> using `New-Item` or `Set-Content`. Use the exact path the user gave.\n");
+    out.push_str("- For questions: respond plainly in the user's language. Do NOT prepend commands the user didn't ask for.\n");
+    out.push_str("- Never invent tool tags like <TOOL>... — you don't have tools here.\n");
+    out.push_str("- Never repeat the user's prompt back at them.\n");
+
+    // Hosts block (only when remote hosts are configured)
+    if !hosts_context.is_empty() {
+        out.push_str("\nRemote hosts:\n");
+        out.push_str(hosts_context);
+        out.push('\n');
+    }
+
+    // Extra context (working memory, last command output, etc.)
+    if !context.is_empty() {
+        out.push_str("\n--- Context ---\n");
+        out.push_str(context);
+        out.push_str("\n--- End Context ---\n");
+    }
+
+    // User prompt at the very end, clearly delimited
+    out.push_str("\nUser request:\n");
+    out.push_str(prompt);
+
+    out
 }

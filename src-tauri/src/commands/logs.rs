@@ -4,6 +4,7 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 use std::io::{Read, Seek, SeekFrom};
 use crate::state::CREATE_NO_WINDOW;
+use crate::utils::shell::run_winrm;
 
 /// Lee las últimas N líneas de un archivo local de forma eficiente.
 /// Lee en chunks de 64KB desde el final — nunca carga el archivo completo en RAM.
@@ -61,22 +62,7 @@ pub async fn read_remote_log_windows(
     lines: usize,
 ) -> Result<Vec<String>, String> {
     let script = format!("Get-Content -Path '{}' -Tail {} -ErrorAction Stop", path, lines);
-    let pw_esc = password.replace('\'', "''");
-    let ps = format!(
-        "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-         $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-         Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
-        pw_esc, username, host, script
-    );
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&ps)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-    }).await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("Error WinRM: {}", e))?;
+    let output = run_winrm(host, username, password, script).await?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).lines().map(String::from).collect())
     } else {

@@ -1,8 +1,9 @@
 <script>
     import { createEventDispatcher, onMount } from 'svelte';
     import { riskColor, riskIcon } from '$lib/hooks/command-guard';
-    import { IconDeviceDesktop as Monitor, IconBulb as Lightbulb } from '@tabler/icons-svelte';
+    import Monitor from '@tabler/icons-svelte/icons/device-desktop';
 
+    import Lightbulb from '@tabler/icons-svelte/icons/bulb';
     const dispatch = createEventDispatcher();
 
     /** @type {import('$lib/hooks/command-guard').RiskAssessment} */

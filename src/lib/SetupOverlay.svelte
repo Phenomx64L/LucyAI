@@ -26,10 +26,10 @@
     let setupLoading = false;
     let setupError   = '';
     let setupStep    = 'form'; // 'form' | 'success'
-    let showWhatsNew = false;  // toggle the "What's new in 1.2.1" panel
+    let showWhatsNew = false;  // toggle the "What's new in 1.4.0" panel
 
     // Bumped each release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.2.1';
+    const LUCY_VERSION = '1.4.0';
 
     // ── Helpers de i18n ──────────────────────────────────────────────────────
     $: t = (es, pt, en, fr = en, de = en) =>
@@ -126,7 +126,7 @@
         )}
       </p>
 
-      <!-- ── What's new in 1.2.1 (collapsible) ─────────────────────────── -->
+      <!-- ── What's new in 1.4.0 (collapsible) ─────────────────────────── -->
       <button class="so-whatsnew-toggle" type="button" on:click={() => showWhatsNew = !showWhatsNew}>
         <span class="so-spark">✦</span>
         <span>{t(

@@ -14,12 +14,19 @@
     import { invoke } from '@tauri-apps/api/core';
     import { focusTrap } from '$lib/actions';
     import { staggerIn } from '$lib/stagger';
-    import {
-        IconBookmark as Bookmark, IconPlus as Plus, IconTrash as Trash2,
-        IconCheck as Check, IconX as X, IconEdit as Edit2,
-        IconShieldCheck as ShieldCheck,
-    } from '@tabler/icons-svelte';
+    import Bookmark from '@tabler/icons-svelte/icons/bookmark';
 
+    import Plus from '@tabler/icons-svelte/icons/plus';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import Check from '@tabler/icons-svelte/icons/check';
+
+    import X from '@tabler/icons-svelte/icons/x';
+
+    import Edit2 from '@tabler/icons-svelte/icons/edit';
+
+    import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
     const dispatch = createEventDispatcher();
 
     export let isOpen = false;

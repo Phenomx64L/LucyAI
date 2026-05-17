@@ -1,8 +1,15 @@
 <script>
     import { createEventDispatcher } from 'svelte';
     import { profiles, activeProfileId } from '$lib/stores';
-    import { IconUser as User, IconWorld as Globe, IconSettings as Settings, IconChevronDown as ChevronDown, IconChevronUp as ChevronUp } from '@tabler/icons-svelte';
+    import User from '@tabler/icons-svelte/icons/user';
 
+    import Globe from '@tabler/icons-svelte/icons/world';
+
+    import Settings from '@tabler/icons-svelte/icons/settings';
+
+    import ChevronDown from '@tabler/icons-svelte/icons/chevron-down';
+
+    import ChevronUp from '@tabler/icons-svelte/icons/chevron-up';
     const dispatch = createEventDispatcher();
 
     export let isEN = false;

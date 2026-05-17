@@ -2,7 +2,15 @@
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { countUp } from '$lib/actions';
-    import { IconChartBar as BarChart3, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconTrendingUp as TrendingUp, IconActivityHeartbeat as Heartbeat } from '@tabler/icons-svelte';
+    import BarChart3 from '@tabler/icons-svelte/icons/chart-bar';
+
+    import Bell from '@tabler/icons-svelte/icons/bell';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
+
+    import TrendingUp from '@tabler/icons-svelte/icons/trending-up';
+
+    import Heartbeat from '@tabler/icons-svelte/icons/activity-heartbeat';
     import { detectAnomaly } from '$lib/anomaly';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
 

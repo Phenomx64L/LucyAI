@@ -1,7 +1,11 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
-    import { IconScan as ScanSearch, IconFileText as FileText, IconAlertTriangle as AlertTriangle } from '@tabler/icons-svelte';
+    import ScanSearch from '@tabler/icons-svelte/icons/scan';
+
+    import FileText from '@tabler/icons-svelte/icons/file-text';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     import { inventorySnapshots } from '$lib/stores';
     import { exportInventoryPdf } from '$lib/reports/ReportGenerator';
 

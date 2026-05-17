@@ -2,8 +2,15 @@
     import { createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import ConfirmModal from '$lib/ConfirmModal.svelte';
-    import { IconSettings as Settings, IconTrash as Trash2, IconPlus as Plus, IconCheck as Check, IconX as X } from '@tabler/icons-svelte';
+    import Settings from '@tabler/icons-svelte/icons/settings';
 
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import Plus from '@tabler/icons-svelte/icons/plus';
+
+    import Check from '@tabler/icons-svelte/icons/check';
+
+    import X from '@tabler/icons-svelte/icons/x';
     const dispatch = createEventDispatcher();
 
     // Props

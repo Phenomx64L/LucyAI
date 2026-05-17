@@ -15,8 +15,23 @@
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onDestroy } from 'svelte';
     import ConfirmModal from '$lib/ConfirmModal.svelte';
-    import { IconAlertTriangle as AlertTriangle, IconActivity as Activity, IconSearch as Search, IconBulb as Lightbulb, IconCircleCheck as CheckCircle2, IconCircleX as XCircle, IconFileText as FileText, IconRotate2 as RotateCcw, IconFlag as Flag } from '@tabler/icons-svelte';
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
 
+    import Activity from '@tabler/icons-svelte/icons/activity';
+
+    import Search from '@tabler/icons-svelte/icons/search';
+
+    import Lightbulb from '@tabler/icons-svelte/icons/bulb';
+
+    import CheckCircle2 from '@tabler/icons-svelte/icons/circle-check';
+
+    import XCircle from '@tabler/icons-svelte/icons/circle-x';
+
+    import FileText from '@tabler/icons-svelte/icons/file-text';
+
+    import RotateCcw from '@tabler/icons-svelte/icons/rotate-2';
+
+    import Flag from '@tabler/icons-svelte/icons/flag';
     export let incidentId = null;
     export let isEN = false;
 

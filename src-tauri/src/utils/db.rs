@@ -105,6 +105,7 @@ pub struct IncidentAction {
     pub command: String,        // what was executed (if applicable)
     pub output_evidence_id: Option<String>, // link to captured evidence
     pub executed_at: i64,
+    pub chain_hash: Option<String>, // SHA-256 hash-chain for tamper-evidence
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,16 +123,17 @@ pub struct ForkResult {
     pub finished_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../src/lib/types/")]
 pub struct AgentMemory {
     pub id:         i64,
     pub session_id: String,
     pub title:      String,
     pub content:    String,
-    pub tags:       String,  // JSON array
+    pub tags:       String,  // JSON array (kept as string for SQLite compat)
     pub files:      String,  // JSON array
     pub importance: i64,     // 1-3
-    pub created_at: i64,     // unix epoch
+    pub created_at: i64,     // unix epoch seconds
 }
 
 /// Create tables for cost tracking, permission rules, and skills
@@ -202,6 +204,18 @@ CREATE TABLE IF NOT EXISTS agent_memories (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_memories_created    ON agent_memories(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_importance ON agent_memories(importance DESC);
+
+-- Mem0-inspired columns (added May 2026 — schema migration). Idempotent
+-- via `ALTER TABLE ADD COLUMN`; SQLite returns "duplicate column" silently
+-- on second run, which we catch in metrics::init().
+-- • last_accessed_at — bumped on every successful search hit. Drives
+--   recency-weighted ranking so frequently-used memories surface first
+--   while stale ones decay out of the top-K.
+-- • access_count — running tally of search hits. Used as a tie-breaker
+--   for recency + signal that this memory matters to the user.
+-- • superseded_by — when a newer memory contradicts/replaces an old one,
+--   we keep both rows but link them so audit trails stay intact. The
+--   search query filters out superseded rows from the default result set.
 
 -- FTS5 full-text search for memories
 CREATE VIRTUAL TABLE IF NOT EXISTS agent_memories_fts
@@ -275,6 +289,8 @@ CREATE TABLE IF NOT EXISTS incident_hypothesis (
 );
 
 -- Actions executed during the investigation (audit trail of the agent).
+-- chain_hash: SHA-256( prev_chain_hash || id || command || executed_at )
+-- Forms a tamper-evident linked chain per incident. First action uses "GENESIS".
 CREATE TABLE IF NOT EXISTS incident_action (
     id                    TEXT PRIMARY KEY,
     incident_id           TEXT NOT NULL,
@@ -283,6 +299,7 @@ CREATE TABLE IF NOT EXISTS incident_action (
     command               TEXT NOT NULL DEFAULT '',
     output_evidence_id    TEXT,
     executed_at           INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    chain_hash            TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
 );
 

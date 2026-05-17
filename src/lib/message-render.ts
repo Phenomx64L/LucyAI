@@ -19,14 +19,24 @@ hljs.registerLanguage('plaintext',  hljsPlain);
 
 // ── warpBlock ────────────────────────────────────────────────────────────────
 // Builds the collapsible command-output block injected into Lucy messages.
-export function warpBlock(cmd: string, output: string, ok: boolean, elapsedMs: number, label = ''): string {
+// When enrichedType is provided (not 'plain'), renders a structured data widget
+// alongside the raw output for rich visualization.
+export function warpBlock(cmd: string, output: string, ok: boolean, elapsedMs: number, label = '', enrichedType?: string, enrichedJson?: string): string {
     const sc = cmd.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const so = DOMPurify.sanitize(output.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
     const t  = elapsedMs < 1000 ? `${elapsedMs}ms` : `${(elapsedMs / 1000).toFixed(1)}s`;
     const st = ok ? 'wb-ok' : 'wb-err';
     const si = ok ? '✓' : '✗';
     const hl = label || (ok ? 'Ejecutado' : 'Error');
-    return `<div class="warp-block ${st}"><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span><button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${so || '(sin salida)'}</pre></div>`;
+    // Enriched widget mount point: data attributes consumed by mountEnrichedWidgets()
+    // Use encodeURIComponent to safely embed JSON in data attribute without DOMPurify corruption
+    const enrichAttr = (enrichedType && enrichedType !== 'plain' && enrichedJson)
+        ? ` data-enriched-type="${enrichedType}" data-enriched-json="${encodeURIComponent(enrichedJson)}"`
+        : '';
+    const enrichBadge = (enrichedType && enrichedType !== 'plain')
+        ? `<span class="wb-enrich-badge">${enrichedType.replace('-', ' ')}</span>`
+        : '';
+    return `<div class="warp-block ${st}"${enrichAttr}><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span>${enrichBadge}<button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${so || '(sin salida)'}</pre><div class="wb-enriched-mount"></div></div>`;
 }
 
 // ── renderConfidenceTags ──────────────────────────────────────────────────────
@@ -167,11 +177,64 @@ export async function addCopyBtns(opts: AddCopyBtnsOpts): Promise<void> {
             e.stopPropagation();
             const block = btn.closest('.warp-block');
             const out = block?.querySelector<HTMLElement>('.wb-out');
+            const mount = block?.querySelector<HTMLElement>('.wb-enriched-mount');
             if (!out) return;
             const collapsed = btn.getAttribute('data-collapsed') === '1';
             out.style.display = collapsed ? '' : 'none';
+            if (mount) mount.style.display = collapsed ? '' : 'none';
             btn.setAttribute('data-collapsed', collapsed ? '0' : '1');
             btn.textContent = collapsed ? '▼' : '▶';
         });
     });
+}
+
+// ── mountEnrichedWidgets ─────────────────────────────────────────────────────
+// Post-render DOM pass: finds warp blocks with data-enriched-type/json attributes
+// and mounts the EnrichedOutputWidget Svelte component into .wb-enriched-mount.
+// Call this after addCopyBtns or any HTML render pass that inserts warp blocks.
+
+/** Track mounted Svelte instances for cleanup.
+ *  Uses Map (not WeakMap) because destroyEnrichedWidgets() needs to iterate.
+ *  Entries are manually removed in destroy() and on tab clear. */
+const mountedWidgets = new Map<HTMLElement, any>();
+
+export async function mountEnrichedWidgets(): Promise<void> {
+    const blocks = document.querySelectorAll<HTMLElement>('.warp-block[data-enriched-type]:not([data-enriched-mounted])');
+    if (blocks.length === 0) return;
+
+    // Dynamic import to avoid circular deps and code-split the widget
+    const { default: EnrichedOutputWidget } = await import('$lib/EnrichedOutputWidget.svelte');
+
+    blocks.forEach(block => {
+        const type = block.getAttribute('data-enriched-type');
+        const jsonStr = block.getAttribute('data-enriched-json');
+        const mountEl = block.querySelector<HTMLElement>('.wb-enriched-mount');
+        if (!type || !jsonStr || !mountEl) return;
+
+        try {
+            const parsed = JSON.parse(decodeURIComponent(jsonStr));
+            const enrichedData = { type, raw: '', parsed };
+
+            // Mount Svelte 4 component
+            const instance = new EnrichedOutputWidget({
+                target: mountEl,
+                props: { data: enrichedData, collapsed: false }
+            });
+
+            mountedWidgets.set(mountEl, instance);
+            block.setAttribute('data-enriched-mounted', '1');
+        } catch (e) {
+            console.warn('[enriched-widget] mount failed:', e);
+        }
+    });
+}
+
+/** Destroy all mounted enriched widgets (call on tab clear / chat reset). */
+export function destroyEnrichedWidgets(): void {
+    for (const [el, instance] of mountedWidgets.entries()) {
+        try {
+            if (instance?.$destroy) instance.$destroy();
+        } catch { /* already destroyed */ }
+        mountedWidgets.delete(el);
+    }
 }

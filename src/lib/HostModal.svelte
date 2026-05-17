@@ -10,8 +10,23 @@
     import { invoke } from '@tauri-apps/api/core';
     import { focusTrap } from '$lib/actions';
     import ConfirmModal from '$lib/ConfirmModal.svelte';
-    import { IconPencil as Pencil, IconPlus as Plus, IconX as X, IconTag as Tag, IconPalette as Palette, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTrash as Trash2 } from '@tabler/icons-svelte';
+    import Pencil from '@tabler/icons-svelte/icons/pencil';
 
+    import Plus from '@tabler/icons-svelte/icons/plus';
+
+    import X from '@tabler/icons-svelte/icons/x';
+
+    import Tag from '@tabler/icons-svelte/icons/tag';
+
+    import Palette from '@tabler/icons-svelte/icons/palette';
+
+    import Key from '@tabler/icons-svelte/icons/key';
+
+    import FolderOpen from '@tabler/icons-svelte/icons/folder-open';
+
+    import Info from '@tabler/icons-svelte/icons/info-circle';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
     /** Controls visibility; supports bind:show */
     export let show        = false;
     /** Host being edited, or null for a new host */

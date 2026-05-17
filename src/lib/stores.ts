@@ -59,7 +59,22 @@ export interface MetricsSample {
  * que escribe el código legacy de +page.svelte, de forma que la migración
  * a este store no rompa datos existentes.
  * Al escribir siempre usa el formato moderno (array/objeto plano).
+ *
+ * F11 audit (May 2026): writes are debounced (200ms). The previous
+ * synchronous `localStorage.setItem` on EVERY store update was a real
+ * bottleneck — for `auditTrail` (capped at ~1000 entries × ~500 bytes
+ * ≈ 500KB JSON), each shell command serialized + wrote to disk-backed
+ * storage synchronously, blocking the main thread. With a debounce we
+ * coalesce bursts (a single agent turn that emits 10 audit entries
+ * now triggers ONE write 200ms after the last update) without losing
+ * data on a normal app close — the trailing edge fires reliably.
+ *
+ * For ABRUPT app crashes within the 200ms window, the last few entries
+ * may be lost. That's an acceptable tradeoff for the perf gain; if
+ * full crash safety is needed for a specific key, the caller can call
+ * `localStorage.setItem` directly after critical writes.
  */
+const PERSIST_DEBOUNCE_MS = 200;
 function persistedWritable<T>(key: string, initial: T) {
     let stored: T = initial;
     try {
@@ -74,10 +89,40 @@ function persistedWritable<T>(key: string, initial: T) {
     } catch { /* usar valor inicial */ }
 
     const store = writable<T>(stored);
+
+    // Debounced persistence: collapse rapid bursts of updates into one
+    // write. Keeps the latest value pending until the timer fires.
+    let pending: T | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let initial_call = true;
+
     store.subscribe(value => {
-        // Siempre persiste en formato moderno (sin wrapper)
-        try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignorar */ }
+        // First subscribe fires synchronously with the initial value —
+        // there's nothing new to persist, skip.
+        if (initial_call) { initial_call = false; return; }
+        pending = value;
+        if (timer !== null) return;
+        timer = setTimeout(() => {
+            timer = null;
+            try { localStorage.setItem(key, JSON.stringify(pending)); }
+            catch { /* quota exceeded / private mode — ignore */ }
+            pending = null;
+        }, PERSIST_DEBOUNCE_MS);
     });
+
+    // Flush pending writes when the window unloads so we don't lose the
+    // last 200ms of activity on a normal close.
+    if (typeof window !== 'undefined') {
+        window.addEventListener('beforeunload', () => {
+            if (timer !== null) {
+                clearTimeout(timer);
+                timer = null;
+                try { if (pending !== null) localStorage.setItem(key, JSON.stringify(pending)); }
+                catch { /* ignore */ }
+            }
+        });
+    }
+
     return store;
 }
 
@@ -142,6 +187,26 @@ export function pushMetricsSample(hostId: string, sample: MetricsSample): void {
 
 export const localHealth   = writable<SystemHealth | null>(null);
 export const remoteHealths = writable<Record<string, SystemHealth>>({});
+
+/**
+ * Per-host reachability tracker. The PostureStrip uses this to decide whether
+ * to render a green (online), red (offline) or muted-gray (never-pinged) dot.
+ * Updated by the background poller in +page.svelte every ~15s.
+ *
+ *   - `ts`        : last attempt timestamp
+ *   - `reachable` : true if the last attempt succeeded, false if it errored,
+ *                   undefined if we've never tried
+ */
+export interface HostReachability {
+    ts: number;
+    reachable: boolean;
+}
+export const hostReachability = writable<Record<string, HostReachability>>({});
+
+/** Mark a host as reachable=true after a successful health/metric fetch. */
+export function markHostReachable(hostId: string, ok: boolean): void {
+    hostReachability.update(r => ({ ...r, [hostId]: { ts: Date.now(), reachable: ok } }));
+}
 
 // ── ALERT RULES ───────────────────────────────────────────────────────────────
 

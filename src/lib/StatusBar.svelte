@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount } from 'svelte';
+    import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
 
@@ -19,6 +20,42 @@
     export let getEffectiveModel: (tab: any) => string = (t) => t?.selectedModel || '';
 
     const dispatch = createEventDispatcher<{ changelang: string }>();
+
+    // ── PromptGuard 2 ML status (Phase 2 LlamaFirewall, May 2026) ──
+    // Probed once at mount. Drives the small "ML" badge after "GUARD".
+    // Re-probed on demand if the user installs the model — we listen for
+    // a focus event so when they alt-tab back from installing, status
+    // refreshes without a full app restart.
+    type GuardStatus = 'active' | 'model_missing' | 'runtime_missing' | 'feature_disabled' | 'failed';
+    let mlStatus: GuardStatus | null = null;
+    let mlNote = '';
+    async function probeMlGuard() {
+        try {
+            const r = await invoke<{ status: GuardStatus; note: string | null }>('prompt_guard_status');
+            mlStatus = r.status;
+            mlNote = r.note ?? '';
+        } catch (e) {
+            mlStatus = 'failed';
+            mlNote = String(e);
+        }
+    }
+    onMount(() => {
+        probeMlGuard();
+        const onFocus = () => probeMlGuard();
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+    });
+
+    // Visual mapping. The badge is intentionally subtle — we show it only
+    // when it's `active` (a positive signal worth seeing) or when the
+    // user explicitly opted in via `--features ml-guard` but the model
+    // isn't loaded yet (actionable: tells them to finish setup).
+    $: mlBadge =
+        mlStatus === 'active'           ? { txt: '🧠 ML', cls: 'cok',  tip: isEN ? 'PromptGuard 2 ML active — catches paraphrased prompt injection.' : 'PromptGuard 2 ML activo — detecta prompt injection parafraseado.' }
+      : mlStatus === 'model_missing'   ? { txt: '🧠 ?',  cls: 'cy',   tip: isEN ? 'ML feature compiled but PromptGuard model not installed. See PROMPT_GUARD_INSTALL.md.' : 'Feature ML compilado pero modelo PromptGuard no instalado. Ver PROMPT_GUARD_INSTALL.md.' }
+      : mlStatus === 'runtime_missing' ? { txt: '🧠 !',  cls: 'cy',   tip: isEN ? 'PromptGuard model is on disk but ONNX Runtime DLL is missing.' : 'Modelo PromptGuard en disco pero falta ONNX Runtime DLL.' }
+      : mlStatus === 'failed'          ? { txt: '🧠 ✕',  cls: 'cr',   tip: `ML load failed: ${mlNote}` }
+      : null;  // feature_disabled / null → no badge (default build)
 </script>
 
 {#if !showSetupOverlay}
@@ -67,6 +104,20 @@
 
     {#if auditAlerts > 0}
         <div class="bi"><span>Alertas:</span><span class="cy">{auditAlerts} bypass</span></div>
+    {/if}
+
+    <!-- Guardrails indicator (audit S1/S2/S5/S10 defense layer, Lucy 1.3.1+; ML badge added in 1.4.0) -->
+    <div class="bi" title={isEN
+        ? 'Guardrail layer active — scans inputs for prompt injection, SSRF, UAC injection, cmd bypass shapes'
+        : 'Capa de Guardrails activa — escanea entradas en busca de prompt injection, SSRF, UAC injection, bypass de cmd'}>
+        <span class="cok" style="letter-spacing:.3px;">🛡 GUARD</span>
+    </div>
+
+    <!-- PromptGuard 2 ML indicator (Phase 2 LlamaFirewall) — only shown when relevant -->
+    {#if mlBadge}
+        <div class="bi" title={mlBadge.tip}>
+            <span class={mlBadge.cls} style="letter-spacing:.3px;">{mlBadge.txt}</span>
+        </div>
     {/if}
 
     <div class="bi r" style="opacity:0.6; font-size:12px;">

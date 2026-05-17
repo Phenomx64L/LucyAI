@@ -69,7 +69,7 @@
         position: fixed; inset: 0;
         background: rgba(6,10,15,0.78); backdrop-filter: blur(6px);
         display: flex; align-items: center; justify-content: center;
-        z-index: 8000; animation: cm-fade .15s ease;
+        z-index: 10500; animation: cm-fade .15s ease;
     }
     @keyframes cm-fade { from { opacity: 0 } to { opacity: 1 } }
 

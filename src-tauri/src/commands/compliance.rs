@@ -3,7 +3,7 @@
 use std::process::Command;
 use std::os::windows::process::CommandExt;
 use crate::state::CREATE_NO_WINDOW;
-use crate::utils::shell::ensure_trusted_host;
+use crate::utils::shell::{ensure_trusted_host, run_winrm};
 
 /// Ejecuta un batch de checks de compliance en un host Linux via SSH.
 /// Recibe un JSON array de { id, command } y devuelve { id, stdout, stderr, exit_code }.
@@ -92,22 +92,7 @@ $results += [PSCustomObject]@{{ id='{}'; exit_code=$ec; stdout=$out.Substring(0,
     }
     ps_script.push_str("$results | ConvertTo-Json -Depth 3\n");
 
-    let pw_esc = password.replace('\'', "''");
-    let ps = format!(
-        "$pass = ConvertTo-SecureString '{}' -AsPlainText -Force; \
-         $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-         Invoke-Command -ComputerName '{}' -Credential $cred -ScriptBlock {{ {} }} -ErrorAction Stop",
-        pw_esc, username, host, ps_script
-    );
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&ps)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-    }).await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("Error WinRM: {}", e))?;
+    let output = run_winrm(host, username, password, ps_script).await?;
 
     if !output.status.success() {
         return Err(format!("WinRM Error: {}", String::from_utf8_lossy(&output.stderr)));

@@ -21,11 +21,11 @@ impl OpenAiProvider {
 #[async_trait]
 impl ComputerUseProvider for OpenAiProvider {
     fn name(&self) -> &str {
-        "OpenAI GPT-4 Vision"
+        "OpenAI GPT-5 Vision"
     }
 
     fn get_model(&self) -> String {
-        "gpt-4o".into()
+        "gpt-5.5".into()
     }
 
     async fn check_credentials(&self) -> Result<(), String> {

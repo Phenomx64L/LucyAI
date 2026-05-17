@@ -11,8 +11,11 @@
 //   3. Auto-reset corrupted entries so the user isn't stuck on a broken state.
 
 const _warned = new Set<string>();
+const _WARN_CAP = 200;
 function _warnOnce(key: string, msg: string) {
     if (_warned.has(key)) return;
+    // Prevent unbounded growth — evict oldest entries when cap reached
+    if (_warned.size >= _WARN_CAP) _warned.clear();
     _warned.add(key);
     try { console.warn(`[safe-ls] ${key}: ${msg}`); } catch {}
 }

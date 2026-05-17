@@ -8,7 +8,83 @@ import { listen } from '@tauri-apps/api/event';
     import { marked } from 'marked';
     import Database from '@tauri-apps/plugin-sql';
     import SetupOverlay    from '$lib/SetupOverlay.svelte';
-    import { IconLayoutDashboard as LayoutDashboard, IconSparkles as Sparkles, IconTerminal2 as TerminalSquare, IconFileText as ScrollText, IconNetwork as Network, IconShieldCheck as ShieldCheck, IconClipboardList as ClipboardList, IconActivity as Activity, IconWorld as Globe, IconLock as Lock, IconEraser as Eraser, IconTrash as Trash2, IconSettings as Settings, IconDeviceDesktop as Monitor, IconServer as Server, IconRocket as Rocket, IconBrain as Brain, IconBolt as Zap, IconTool as Wrench, IconDownload as Download, IconSchool as GraduationCap, IconFileCode as FileCode, IconCurrencyDollar as DollarSign, IconOctagonMinus as OctagonX, IconPaperclip as Paperclip, IconMicrophone as Mic, IconMicrophoneOff as MicOff, IconBug as Bug, IconUser as User, IconDeviceTv as Tv2, IconTerminal as Terminal, IconKey as Key, IconFolderOpen as FolderOpen, IconInfoCircle as Info, IconTag as Tag, IconBell as Bell, IconAlertTriangle as AlertTriangle, IconBook2 as Book2, IconFileTypePdf as FilePdf } from '@tabler/icons-svelte';
+    import LayoutDashboard from '@tabler/icons-svelte/icons/layout-dashboard';
+
+    import Sparkles from '@tabler/icons-svelte/icons/sparkles';
+
+    import TerminalSquare from '@tabler/icons-svelte/icons/terminal-2';
+
+    import ScrollText from '@tabler/icons-svelte/icons/file-text';
+
+    import Network from '@tabler/icons-svelte/icons/network';
+
+    import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
+
+    import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
+
+    import Activity from '@tabler/icons-svelte/icons/activity';
+
+    import Globe from '@tabler/icons-svelte/icons/world';
+
+    import Lock from '@tabler/icons-svelte/icons/lock';
+
+    import Eraser from '@tabler/icons-svelte/icons/eraser';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import Settings from '@tabler/icons-svelte/icons/settings';
+
+    import Monitor from '@tabler/icons-svelte/icons/device-desktop';
+
+    import Server from '@tabler/icons-svelte/icons/server';
+
+    import Rocket from '@tabler/icons-svelte/icons/rocket';
+
+    import Brain from '@tabler/icons-svelte/icons/brain';
+
+    import Zap from '@tabler/icons-svelte/icons/bolt';
+
+    import Wrench from '@tabler/icons-svelte/icons/tool';
+
+    import Download from '@tabler/icons-svelte/icons/download';
+
+    import GraduationCap from '@tabler/icons-svelte/icons/school';
+
+    import FileCode from '@tabler/icons-svelte/icons/file-code';
+
+    import DollarSign from '@tabler/icons-svelte/icons/currency-dollar';
+
+    import OctagonX from '@tabler/icons-svelte/icons/octagon-minus';
+
+    import Paperclip from '@tabler/icons-svelte/icons/paperclip';
+
+    import Mic from '@tabler/icons-svelte/icons/microphone';
+
+    import MicOff from '@tabler/icons-svelte/icons/microphone-off';
+
+    import Bug from '@tabler/icons-svelte/icons/bug';
+
+    import User from '@tabler/icons-svelte/icons/user';
+
+    import Tv2 from '@tabler/icons-svelte/icons/device-tv';
+
+    import Terminal from '@tabler/icons-svelte/icons/terminal';
+
+    import Key from '@tabler/icons-svelte/icons/key';
+
+    import FolderOpen from '@tabler/icons-svelte/icons/folder-open';
+
+    import Info from '@tabler/icons-svelte/icons/info-circle';
+
+    import Tag from '@tabler/icons-svelte/icons/tag';
+
+    import Bell from '@tabler/icons-svelte/icons/bell';
+
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
+
+    import Book2 from '@tabler/icons-svelte/icons/book-2';
+
+    import FilePdf from '@tabler/icons-svelte/icons/file-type-pdf';
     import TabBar          from '$lib/TabBar.svelte';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
@@ -3352,20 +3428,34 @@ Use ONE of these patterns instead:
                         const imp = /importance:3/i.test(mgContent) ? 3 : /importance:2/i.test(mgContent) ? 2 : 1;
                         const _mgCard = newToolCard('◈', `Memoria: ${mgTitle}`, 'write');
                         try {
-                            const savedId = await invoke('save_agent_memory', {
+                            // Mem0-inspired (May 2026): backend now returns
+                            //   { id, action: "inserted"|"duplicate", reason }
+                            // so the agent can surface dedup info to the user
+                            // instead of silently re-storing the same fact.
+                            const saveRes = await invoke('save_agent_memory', {
                                 title: mgTitle, content: mgContent,
                                 tags: mgTags, files: mgFiles,
                                 sessionId: String(agentTaskId), importance: imp
                             });
-                            // Sprint 2 auto-embed: fire-and-forget so Ollama downtime never blocks memory saves
-                            invoke('upsert_embedding', {
-                                entityType: 'memory',
-                                entityId: String(savedId),
-                                text: `${mgTitle}\n${mgContent}`,
-                                model: null
-                            }).catch(err => debug.log('[embed] memory skipped:', err));
-                            toolResults.push(`[MEMORY SAVED — ID ${savedId}]\n"${mgTitle}" guardado en memoria persistente.`);
-                            stepsHtml += `[◈ Memoria guardada] ${esc(mgTitle)}\n`;
+                            const savedId = saveRes?.id ?? saveRes;          // back-compat if backend rolls back
+                            const action  = saveRes?.action ?? 'inserted';
+                            // Only embed truly new memories — dedup hits already
+                            // have an embedding from when they were first saved.
+                            if (action === 'inserted') {
+                                invoke('upsert_embedding', {
+                                    entityType: 'memory',
+                                    entityId: String(savedId),
+                                    text: `${mgTitle}\n${mgContent}`,
+                                    model: null
+                                }).catch(err => debug.log('[embed] memory skipped:', err));
+                            }
+                            if (action === 'duplicate') {
+                                toolResults.push(`[MEMORY ALREADY EXISTS — ID ${savedId}]\n"${mgTitle}" ya estaba guardado (deduplicado automáticamente).`);
+                                stepsHtml += `[◈ Memoria ya conocida] ${esc(mgTitle)} <span style="color:var(--txt3);font-size:11px;">(dedup)</span>\n`;
+                            } else {
+                                toolResults.push(`[MEMORY SAVED — ID ${savedId}]\n"${mgTitle}" guardado en memoria persistente.`);
+                                stepsHtml += `[◈ Memoria guardada] ${esc(mgTitle)}\n`;
+                            }
                             finishToolCard(_mgCard, `ID ${savedId}: ${mgTitle}`, true);
                             cargarMemoriasDB(); // refrescar cache en segundo plano
                         } catch(e) {

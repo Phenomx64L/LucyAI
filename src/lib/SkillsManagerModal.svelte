@@ -2,8 +2,19 @@
     import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import ConfirmModal from '$lib/ConfirmModal.svelte';
-    import { IconBolt as Zap, IconTrash as Trash2, IconPlus as Plus, IconEdit as Edit2, IconPlayerPlay as Play, IconChevronDown as ChevronDown, IconSparkles as Sparkles } from '@tabler/icons-svelte';
+    import Zap from '@tabler/icons-svelte/icons/bolt';
 
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
+
+    import Plus from '@tabler/icons-svelte/icons/plus';
+
+    import Edit2 from '@tabler/icons-svelte/icons/edit';
+
+    import Play from '@tabler/icons-svelte/icons/player-play';
+
+    import ChevronDown from '@tabler/icons-svelte/icons/chevron-down';
+
+    import Sparkles from '@tabler/icons-svelte/icons/sparkles';
     const dispatch = createEventDispatcher();
 
     // Props

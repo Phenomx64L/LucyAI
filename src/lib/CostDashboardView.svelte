@@ -1,7 +1,11 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { getCostSummary } from '$lib/lucy-api';
-    import { IconAlertTriangle as AlertTriangle, IconSettings as Settings, IconCheck as Check } from '@tabler/icons-svelte';
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
+
+    import Settings from '@tabler/icons-svelte/icons/settings';
+
+    import Check from '@tabler/icons-svelte/icons/check';
     import { costSummaryDay, costSummaryMonth, costSummaryAll, tokenBudgetConfig } from '$lib/stores';
     import { countUp } from '$lib/actions';
     import { focusTrap } from '$lib/actions';
