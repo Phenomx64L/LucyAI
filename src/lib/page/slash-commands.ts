@@ -80,6 +80,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /refresh · re-detecta modelos Ollama<br>
                 /compare &lt;m1,m2,...&gt; &lt;prompt&gt; · ejecuta el mismo prompt en N modelos en paralelo<br>
                 /recall &lt;query&gt; · busca en el historial de conversaciones pasadas<br>
+                /crystallize · destila la sesión actual en un crystal (narrativa + outcomes + lecciones)<br>
+                /crystals · lista los crystals más recientes<br>
+                /crystal &lt;id&gt; · muestra el detalle de un crystal<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -94,6 +97,25 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
 
         case 'clear': case 'cls':
             ctx.clearTabMessages(tabId);
+            return true;
+
+        // ── Crystals (Tier 2 #4) ────────────────────────────────────────
+        // /crystallize — distill the current tab's transcript into a stored
+        //                crystal (narrative + outcomes + files + lessons)
+        // /crystals    — list the most recent crystals (newest first)
+        // /crystal <id> — print the full body of one crystal
+        case 'crystallize':
+        case 'crystalize':
+            runCrystallize(tabId, ctx, sysMsg);
+            return true;
+
+        case 'crystals':
+            runCrystalsList(ctx, sysMsg);
+            return true;
+
+        case 'crystal':
+            if (!arg) { sysMsg('Uso: <code>/crystal &lt;id&gt;</code> — muestra el detalle de un crystal. Lista con <code>/crystals</code>.'); return true; }
+            runCrystalGet(arg.trim(), ctx, sysMsg);
             return true;
 
         case 'editremote':
@@ -312,6 +334,169 @@ function runQuickDiagnose(
             }
         } catch (e) {
             sysMsg(`Error: ${String(e).substring(0, 150)}`, 'var(--red)');
+        }
+    })();
+}
+
+// ── Crystals (Tier 2 #4) ────────────────────────────────────────────────
+// Wire the backend agent_crystals commands as slash actions. Keeps the
+// surface tiny — no new view, no new modal — while giving the user full
+// access to create/list/inspect crystals. Once the workflow proves
+// itself a richer Crystals panel can replace this UX.
+
+interface CrystalRow {
+    id: number;
+    session_id: string;
+    project: string;
+    narrative: string;
+    key_outcomes: string;     // JSON-encoded string[]
+    files_affected: string;   // JSON-encoded string[]
+    lessons: string;          // JSON-encoded string[]
+    source_chars: number;
+    created_at: number;
+}
+
+function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, c => ({
+        '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;',
+    }[c] as string));
+}
+
+/**
+ * Build a transcript from the current tab's messages, then call
+ * crystallize_session. The Rust side calls Ollama with a strict XML
+ * prompt — depending on model size, expect ~5-20 s. We show a
+ * "working…" message immediately so the user knows it's running.
+ */
+function runCrystallize(
+    tabId: string,
+    ctx: SlashCtx,
+    sysMsg: (html: string, color?: string) => void,
+) {
+    const t = ctx.getTab(tabId);
+    if (!t || !t.messages || t.messages.length === 0) {
+        sysMsg('No hay mensajes en esta sesión para cristalizar.', 'var(--yellow)');
+        return;
+    }
+
+    // Build transcript: role + rawContent of every meaningful message.
+    // Skip system markers (toasts, security blocks, etc.) — they're UI
+    // noise, not session content the LLM should summarise.
+    const lines: string[] = [];
+    for (const m of t.messages) {
+        const role: string = (m && m.role) || '';
+        if (role === 'system' || role === 'toast') continue;
+        const raw = (m && (m.rawContent || m.text || m.html || '')) as string;
+        const trimmed = String(raw).replace(/<[^>]+>/g, '').trim();
+        if (!trimmed) continue;
+        lines.push(`[${role}] ${trimmed}`);
+    }
+    const transcript = lines.join('\n\n');
+    if (transcript.length < 80) {
+        sysMsg('Sesión muy corta para destilar en un crystal (mínimo ~80 caracteres de contenido real).', 'var(--yellow)');
+        return;
+    }
+
+    sysMsg(`◆ Cristalizando sesión <code>${tabId.slice(0, 8)}</code>… (${transcript.length.toLocaleString()} chars → Ollama, esto puede tardar 10-30 s)`);
+
+    (async () => {
+        try {
+            const newId = await invoke<number>('crystallize_session', {
+                sessionId: tabId,
+                project:   '',
+                transcript,
+            });
+            // Fetch the row back so we can render its body
+            const c = await invoke<CrystalRow | null>('get_crystal', { id: newId });
+            if (!c) {
+                sysMsg(`Crystal creado (id=${newId}) pero no pudo releerse.`, 'var(--yellow)');
+                return;
+            }
+            const outcomes: string[] = JSON.parse(c.key_outcomes || '[]');
+            const files:    string[] = JSON.parse(c.files_affected || '[]');
+            const lessons:  string[] = JSON.parse(c.lessons || '[]');
+            const body = `
+                <div class="mn">◆ Crystal #${c.id}</div>
+                <div style="margin-top:6px;font-size:13px;line-height:1.5;"><b>Narrativa:</b> ${escapeHtml(c.narrative)}</div>
+                ${outcomes.length ? `<div style="margin-top:8px;"><b>Outcomes</b><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;">${outcomes.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ul></div>` : ''}
+                ${files.length ?    `<div style="margin-top:8px;"><b>Archivos</b><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;font-family:var(--mono);">${files.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div>` : ''}
+                ${lessons.length ?  `<div style="margin-top:8px;"><b>Lecciones</b> <span style="color:var(--txt2);font-size:11px;">— también guardadas como memorias</span><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;">${lessons.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul></div>` : ''}
+                <div style="margin-top:6px;font-size:10px;color:var(--txt2);">Fuente: ${c.source_chars.toLocaleString()} chars · ID: ${c.id}</div>
+            `;
+            ctx.addMsg(tabId, { role: 'lucy', html: body, rawContent: c.narrative });
+        } catch (e) {
+            sysMsg(`Crystallize falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+/** Print the 10 most recent crystals as a compact list. */
+function runCrystalsList(
+    ctx: SlashCtx,
+    sysMsg: (html: string, color?: string) => void,
+) {
+    (async () => {
+        try {
+            const list = await invoke<CrystalRow[]>('list_crystals', {
+                sessionId: null,
+                project:   null,
+                limit:     10,
+            });
+            if (!list || list.length === 0) {
+                sysMsg('No hay crystals todavía. Crea uno con <code>/crystallize</code> al final de una sesión.');
+                return;
+            }
+            const rows = list.map(c => {
+                const date = new Date(c.created_at * 1000).toLocaleString();
+                const session = (c.session_id || '').slice(0, 8) || '—';
+                return `<div style="padding:6px 8px;border-left:2px solid var(--accent);margin-bottom:6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--txt2);">
+                        <span>#${c.id} · sess <code>${session}</code></span><span>${date}</span>
+                    </div>
+                    <div style="margin-top:2px;font-size:12px;">${escapeHtml(c.narrative)}</div>
+                    <div style="margin-top:2px;font-size:10px;color:var(--txt2);">Detalle: <code>/crystal ${c.id}</code></div>
+                </div>`;
+            }).join('');
+            sysMsg(`<div class="mn">◆ Crystals (${list.length} recientes)</div>${rows}`);
+        } catch (e) {
+            sysMsg(`list_crystals falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+/** Show the full body of one crystal by id. */
+function runCrystalGet(
+    idRaw: string,
+    ctx: SlashCtx,
+    sysMsg: (html: string, color?: string) => void,
+) {
+    const id = parseInt(idRaw, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        sysMsg(`ID inválido: <code>${escapeHtml(idRaw)}</code>`, 'var(--red)');
+        return;
+    }
+    (async () => {
+        try {
+            const c = await invoke<CrystalRow | null>('get_crystal', { id });
+            if (!c) {
+                sysMsg(`Crystal #${id} no existe.`, 'var(--yellow)');
+                return;
+            }
+            const outcomes: string[] = JSON.parse(c.key_outcomes || '[]');
+            const files:    string[] = JSON.parse(c.files_affected || '[]');
+            const lessons:  string[] = JSON.parse(c.lessons || '[]');
+            const date = new Date(c.created_at * 1000).toLocaleString();
+            const body = `
+                <div class="mn">◆ Crystal #${c.id}</div>
+                <div style="font-size:10px;color:var(--txt2);">sess <code>${(c.session_id || '—').slice(0, 12)}</code> · ${date}</div>
+                <div style="margin-top:8px;font-size:13px;line-height:1.5;"><b>Narrativa:</b> ${escapeHtml(c.narrative)}</div>
+                ${outcomes.length ? `<div style="margin-top:8px;"><b>Outcomes</b><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;">${outcomes.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ul></div>` : ''}
+                ${files.length ?    `<div style="margin-top:8px;"><b>Archivos</b><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;font-family:var(--mono);">${files.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul></div>` : ''}
+                ${lessons.length ?  `<div style="margin-top:8px;"><b>Lecciones</b><ul style="margin:4px 0 0 18px;padding:0;font-size:12px;">${lessons.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul></div>` : ''}
+            `;
+            sysMsg(body);
+        } catch (e) {
+            sysMsg(`get_crystal falló: ${String(e).substring(0, 200)}`, 'var(--red)');
         }
     })();
 }
