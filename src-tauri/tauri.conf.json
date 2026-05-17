@@ -72,6 +72,8 @@
         ],
         "displayLanguageSelector": true,
         "installerIcon": "icons/icon.ico",
+        "sidebarImage": "icons/installer-sidebar.bmp",
+        "headerImage": "icons/installer-header.bmp",
         "compression": "lzma"
       }
     }
