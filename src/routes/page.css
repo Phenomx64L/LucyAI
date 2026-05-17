@@ -1353,13 +1353,14 @@ body.density-compact .chat{gap:2px !important;}
     gap:3px;
     background:rgba(255,255,255,.025);
     border:1px solid rgba(255,255,255,.07);
-    /* flex:0 0 auto so the input bar sizes to its CONTENT — not to all
-       the remaining vertical space of chat-wrap. The old `flex:1` made
-       .igrp claim half the chat area regardless of how little the
-       textarea actually needed.
-       Compact paddings (5px 10px instead of 8px) so the empty-state bar
-       is as close to a single textarea row as the chips+icons rows allow. */
-    border-radius:10px;flex:0 0 auto;padding:5px 10px;
+    /* .ibar is the row-direction PARENT (textarea group + send button).
+       In a row parent, flex:1 grows HORIZONTALLY — that's what gives the
+       bar its full width. Vertical sizing happens INSIDE .igrp via the
+       column children (chips + textarea + icons), each at its natural
+       compact height. The textarea controls bar height via JS-set inline
+       height bounded by .ibox min-height:24 / max-height:100.
+       Compact paddings: 5px vertical (was 8px). */
+    border-radius:10px;flex:1 1 auto;padding:5px 10px;
     transition: border-color var(--motion-base) var(--ease-out),
                 box-shadow   var(--motion-base) var(--ease-out),
                 background   var(--motion-base) var(--ease-out);
