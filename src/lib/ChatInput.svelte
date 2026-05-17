@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount, tick } from 'svelte';
     import Paperclip from '@tabler/icons-svelte/icons/paperclip';
 
     import Mic from '@tabler/icons-svelte/icons/microphone';
@@ -74,8 +74,19 @@
 
     // Reset height when the input value is cleared (after sending).
     $: if (tab.inputValue === '' && _textareaEl) {
-        _textareaEl.style.height = 'auto';
+        _textareaEl.style.height = '24px';
+        _textareaEl.style.overflowY = 'hidden';
     }
+
+    // Initial size on mount + when the textarea ref binds — without this
+    // the box renders at its CSS `height: auto` default which can stretch
+    // the parent flex column to the max in some layouts.
+    onMount(async () => {
+        await tick();
+        autoResize();
+    });
+    // Also re-run on tab swap (different inputValue → different scrollHeight)
+    $: if (tab && _textareaEl) tick().then(autoResize);
 
     function refreshFlagSuggestions() {
         if (!_textareaEl) { _flagSuggestions = []; return; }

@@ -1391,9 +1391,14 @@ body[data-state="error"] .igrp{
     background:transparent;border:none;
     color:white;font-family:inherit;font-size:13px;
     outline:none;resize:none;
-    min-height:90px;
-    max-height:320px;
-    overflow-y:auto;
+    /* Auto-grow: textarea starts at ONE row and ChatInput.svelte's
+       autoResize() bumps the inline `height` up to 160 px max as the
+       user types. The min-height here MUST stay tiny — anything ≥ 90 px
+       (the old value) makes the box fixed-tall and breaks auto-grow.
+       max-height is the absolute ceiling; scrollbar appears past it. */
+    min-height:24px;
+    max-height:160px;
+    overflow-y:hidden;
     line-height:1.5;
     padding:2px 0;
 }

@@ -6715,6 +6715,56 @@ if (Test-Path $src) {
         <div class="settings-section">
           <div class="settings-section-title">{isEN ? 'AI Behavior' : 'Comportamiento IA'}</div>
 
+          <!-- ── Smart router toggle (restored from orphaned smart-router.ts) ── -->
+          <div class="settings-row">
+            <label class="settings-label" for="set-smart-routing">
+              {isEN ? 'Smart routing' : 'Enrutamiento inteligente'}
+              <span class="help-i" title={isEN
+                ? 'When ON, Lucy picks the best model automatically per turn based on prompt complexity (shell → small/fast, analysis → Claude Opus, default → Gemini Flash). Your dropdown selection still acts as a hard-override when this is OFF.'
+                : 'Si está activo, Lucy elige el mejor modelo cada turno según la complejidad del prompt (shell → pequeño/rápido, análisis → Claude Opus, default → Gemini Flash). Tu selección del dropdown sigue siendo hard-override cuando está apagado.'}>ⓘ</span>
+            </label>
+            <div style="display:flex;gap:6px;">
+              <button class="settings-btn" class:settings-btn-on={lucyConfig.smartRouting}
+                on:click={() => { lucyConfig = { ...lucyConfig, smartRouting: true };  try { localStorage.setItem('lucy_smart_routing', '1'); } catch {} }}>
+                ◆ {isEN ? 'On' : 'Activado'}
+              </button>
+              <button class="settings-btn" class:settings-btn-on={!lucyConfig.smartRouting}
+                on:click={() => { lucyConfig = { ...lucyConfig, smartRouting: false }; try { localStorage.setItem('lucy_smart_routing', '0'); } catch {} }}>
+                ○ {isEN ? 'Off' : 'Apagado'}
+              </button>
+            </div>
+          </div>
+
+          <!-- ── Privacy mode (hard-lock to local Ollama) ── -->
+          <div class="settings-row">
+            <label class="settings-label" for="set-privacy">
+              {isEN ? 'Privacy mode' : 'Modo privacidad'}
+              <span class="help-i" title={isEN
+                ? 'When ON, ALL LLM traffic is hard-locked to local Ollama — never sent to cloud, regardless of dropdown selection or smart-routing tier. Use for compliance / air-gapped scenarios.'
+                : 'Si está activo, TODO el tráfico LLM queda hard-locked a Ollama local — nunca se envía a la nube, sin importar el dropdown o el smart-router. Para compliance / entornos air-gapped.'}>ⓘ</span>
+            </label>
+            <div style="display:flex;gap:6px;">
+              <button class="settings-btn" class:settings-btn-on={lucyConfig.privacyMode}
+                on:click={() => { lucyConfig = { ...lucyConfig, privacyMode: true };  try { localStorage.setItem('lucy_privacy_mode', '1'); } catch {} }}>
+                🔒 {isEN ? 'On' : 'Activado'}
+              </button>
+              <button class="settings-btn" class:settings-btn-on={!lucyConfig.privacyMode}
+                on:click={() => { lucyConfig = { ...lucyConfig, privacyMode: false }; try { localStorage.setItem('lucy_privacy_mode', '0'); } catch {} }}>
+                🔓 {isEN ? 'Off' : 'Apagado'}
+              </button>
+            </div>
+          </div>
+
+          {#if lucyConfig.smartRouting && _lastRouteDecision}
+          <div class="settings-row" style="margin-top:-4px; padding-top:0;">
+            <span class="settings-label" style="font-size:10px; opacity:0.6;">↳ {isEN ? 'Last decision' : 'Última decisión'}:</span>
+            <span class="effective-model-hint" title={_lastRouteDecision.reason}>
+              <code>{_lastRouteDecision.modelId}</code>
+              <span style="font-size:10px;opacity:0.6;margin-left:6px;">tier {_lastRouteDecision.tier}</span>
+            </span>
+          </div>
+          {/if}
+
           <div class="settings-row">
             <label class="settings-label" for="set-personality">
               {isEN ? 'Response Style' : 'Estilo de respuesta'}
