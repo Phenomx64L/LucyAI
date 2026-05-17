@@ -78,15 +78,16 @@
         _textareaEl.style.overflowY = 'hidden';
     }
 
-    // Initial size on mount + when the textarea ref binds — without this
-    // the box renders at its CSS `height: auto` default which can stretch
-    // the parent flex column to the max in some layouts.
+    // Initial size on mount — the textarea otherwise renders at its CSS
+    // default which can stretch the parent flex column. We DON'T add a
+    // `$: tab` reactive (Svelte 4 marks `tab` dirty on every parent
+    // `tabs = [...tabs]` refresh — that's ~30 events per agent turn,
+    // which queued enough microtasks to stall startup). on:input below
+    // handles every keystroke directly, which is what actually matters.
     onMount(async () => {
         await tick();
         autoResize();
     });
-    // Also re-run on tab swap (different inputValue → different scrollHeight)
-    $: if (tab && _textareaEl) tick().then(autoResize);
 
     function refreshFlagSuggestions() {
         if (!_textareaEl) { _flagSuggestions = []; return; }
