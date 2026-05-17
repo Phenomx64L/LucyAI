@@ -36,6 +36,13 @@
       "nsis",
       "msi"
     ],
+    "publisher": "Iván Eduardo Luna (@Phenomx64L)",
+    "copyright": "Copyright © 2026 Iván Eduardo Luna. Licensed under GPLv3.",
+    "category": "DeveloperTool",
+    "shortDescription": "Autonomous SysAdmin AI Assistant",
+    "longDescription": "Lucy is an autonomous AI assistant for Windows system administration: agentic loops, multi-host management (WinRM/SSH), compliance scans, runbooks, and tiered persistent memory. Built on Tauri + SvelteKit + Rust.",
+    "homepage": "https://github.com/Phenomx64L/LucyAI",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,7 +53,42 @@
     "windows": {
       "digestAlgorithm": "sha256",
       "certificateThumbprint": null,
-      "timestampUrl": ""
+      "timestampUrl": "",
+      "// Bundle the WebView2 runtime offline-installer so first-launch": "",
+      "// works even on machines without internet. Adds ~120 MB to the": "",
+      "// installer; acceptable per user request (May 2026) — Lucy is a": "",
+      "// SysAdmin tool that frequently runs on locked-down corp boxes": "",
+      "// where the WebView2 bootstrapper download path is blocked.": "",
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      },
+      "wix": {
+        "language": [
+          "en-US",
+          "es-MX"
+        ]
+      },
+      "nsis": {
+        "// Per-user OR per-machine — user picks at install time.": "",
+        "// 'currentUser' avoids UAC entirely; 'perMachine' needs admin": "",
+        "// but lets all Windows users share the same install.": "",
+        "installMode": "both",
+        "languages": [
+          "English",
+          "Spanish",
+          "SpanishInternational"
+        ],
+        "displayLanguageSelector": true,
+        "// Tauri NSIS automatically creates Start Menu shortcut AND a": "",
+        "// proper Uninstall entry in Programs & Features. The .nsi": "",
+        "// template also offers a 'Desktop shortcut' checkbox to the": "",
+        "// user during install — no extra config needed.": "",
+        "installerIcon": "icons/icon.ico",
+        "// installerSidebar / installerHeaderImage — leave to defaults": "",
+        "// for now; can add a branded 164x314 BMP later for the": "",
+        "// 'Welcome' page sidebar.": "",
+        "compression": "lzma"
+      }
     }
   }
 }

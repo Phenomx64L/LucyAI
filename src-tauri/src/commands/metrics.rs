@@ -693,82 +693,167 @@ async fn stage2_embedding_dedup(
     }))
 }
 
-/// Full-text search over memories using FTS5 with **Mem0-inspired
-/// recency/access decay** (May 2026).
+/// Hybrid retrieval over memories — **RRF fusion** (BM25 + embedding
+/// cosine) with Mem0-inspired recency/access decay (May 2026).
 ///
-/// Ranking formula (lower = better):
-///   composite = bm25_score
-///              - 0.5 * importance
-///              - log2(access_count + 1) * 0.3
-///              - age_decay_bonus
+/// Pipeline (inspired by rohitg00/agentmemory v0.11):
+///   1. Run BM25 search to get top-N (lexical match)
+///   2. If Ollama embeddings are available, run cosine search via the
+///      in-memory vec_index, filtered to `entity_type=memory`
+///   3. Fuse both ranked lists with Reciprocal Rank Fusion (k=60):
+///        rrf_score(id) = Σ 1 / (k + rank_in_stream_i)
+///      A memory in BOTH lists scores higher than the same memory in
+///      only one — caught by lexical AND semantic signals.
+///   4. Apply decay/access/importance bonus as a multiplicative post-rank
+///      (so frequently-used / fresh memories outrank stale ones with
+///      similar fusion score).
+///   5. Touch the matched rows so future searches see them as "hot".
 ///
-/// where `age_decay_bonus` rewards recently-accessed memories: ~0 for
-/// memories untouched in the last week, up to -2.0 for ones accessed
-/// in the past hour. This pushes "hot" memories above stale ones with
-/// similar bm25 relevance.
-///
-/// Hits also TOUCH the matched rows: bump `access_count` and refresh
-/// `last_accessed_at`. This is a fire-and-forget UPDATE inside the
-/// same connection, so it doesn't slow the query down meaningfully.
+/// Graceful degradation: when Ollama is offline or the vec_index isn't
+/// ready, the BM25 stream alone drives ranking — identical to the
+/// previous v1.4.0 behavior.
 ///
 /// Superseded memories (`superseded_by IS NOT NULL`) are excluded by
 /// default — they remain in the table for audit but never surface in
 /// normal retrieval.
 #[tauri::command]
-pub fn search_agent_memories(query: String, limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
-    with_db(|conn| {
-        let lim = limit.unwrap_or(10).max(1).min(50);
-        // Build a safe FTS5 query: each word becomes a prefix match term
+pub async fn search_agent_memories(query: String, limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+    let lim = limit.unwrap_or(10).max(1).min(50);
+    if query.trim().is_empty() {
+        return with_db(|_conn| get_recent_memories(Some(lim)));
+    }
+    // Cast to usize for ranking math; FETCH_N is the pool we draw from in
+    // each stream before fusion — wider than `lim` so the fusion has
+    // headroom to interleave the two ranked lists.
+    const FETCH_N: usize = 20;
+    const RRF_K: f64 = 60.0;
+    let lim_usize = lim as usize;
+
+    // ── Stream 1: BM25 (lexical) ──────────────────────────────────────
+    // Returns up to FETCH_N ids ranked by bm25. We DON'T apply decay
+    // here — that's a post-fusion multiplier so it doesn't distort the
+    // RRF rank ordering between streams.
+    let bm25_ids: Vec<i64> = with_db(|conn| {
         let safe_q = query
             .split_whitespace()
             .filter(|w| !w.is_empty())
             .map(|w| format!("\"{}\"*", w.replace('"', "")))
             .collect::<Vec<_>>()
             .join(" OR ");
-        if safe_q.is_empty() {
-            return get_recent_memories(Some(lim));
+        if safe_q.is_empty() { return Ok(Vec::new()); }
+        let sql = "SELECT am.id
+                   FROM agent_memories am
+                   JOIN agent_memories_fts fts ON am.id = fts.rowid
+                   WHERE agent_memories_fts MATCH ?1
+                     AND am.superseded_by IS NULL
+                   ORDER BY bm25(agent_memories_fts) ASC
+                   LIMIT ?2";
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("bm25 prepare: {}", e))?;
+        let n = FETCH_N as i64;
+        let rows = stmt.query_map(rusqlite::params![safe_q, n], |r| r.get::<_, i64>(0))
+            .map_err(|e| format!("bm25 query: {}", e))?;
+        let mut ids = Vec::with_capacity(FETCH_N);
+        for r in rows { if let Ok(id) = r { ids.push(id); } }
+        Ok(ids)
+    })?;
+
+    // ── Stream 2: embedding cosine (best-effort, async) ──────────────
+    // Skip silently if Ollama embeddings aren't available — RRF over a
+    // single stream is still valid, it just reduces to bm25 ranking.
+    let cosine_ids: Vec<i64> = match crate::commands::embeddings::embed_via_ollama_pub(&query, None).await {
+        Ok((qvec, _)) => {
+            crate::commands::vec_index::search(&qvec, FETCH_N, 0.50)
+                .into_iter()
+                .filter(|(etype, _, _, _)| etype == "memory")
+                .filter_map(|(_, eid, _, _)| eid.parse::<i64>().ok())
+                .collect()
         }
-        // Composite score: combine bm25, importance, access count, recency.
-        // SQLite has no `log2` so we approximate with `ln / ln(2)`. The
-        // recency bonus uses now-last_accessed in seconds, scaled into
-        // [0..2.0] by `exp(-age_seconds / 86400)` (decays to ~0 in 7d).
-        let sql = "
-            SELECT am.id, am.session_id, am.title, am.content, am.tags, am.files,
-                   am.importance, am.created_at
-            FROM agent_memories am
-            JOIN agent_memories_fts fts ON am.id = fts.rowid
-            WHERE agent_memories_fts MATCH ?1
-              AND am.superseded_by IS NULL
-            ORDER BY (
-                bm25(agent_memories_fts)
-                - 0.5 * am.importance
-                - 0.3 * (ln(am.access_count + 1) / ln(2))
-                - 2.0 * exp( -(strftime('%s','now') - am.last_accessed_at) / 86400.0 )
-            ) ASC,
-            am.importance DESC,
-            am.created_at DESC
-            LIMIT ?2";
-        let mut stmt = conn.prepare(sql).map_err(|e| format!("search prepare: {}", e))?;
-        let rows = map_memory_rows(&mut stmt, rusqlite::params![safe_q, lim])?;
+        Err(_) => Vec::new(),
+    };
+
+    // ── RRF fusion ────────────────────────────────────────────────────
+    // For each id seen in either stream, sum 1/(k + rank). k=60 is the
+    // canonical RRF constant from Cormack et al. — high enough that the
+    // top of one stream doesn't dominate the other.
+    use std::collections::HashMap;
+    let mut fused: HashMap<i64, f64> = HashMap::with_capacity(FETCH_N * 2);
+    for (rank, id) in bm25_ids.iter().enumerate() {
+        *fused.entry(*id).or_insert(0.0) += 1.0 / (RRF_K + (rank as f64 + 1.0));
+    }
+    for (rank, id) in cosine_ids.iter().enumerate() {
+        *fused.entry(*id).or_insert(0.0) += 1.0 / (RRF_K + (rank as f64 + 1.0));
+    }
+
+    if fused.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // ── Fetch full rows + apply decay/access/importance multiplier ────
+    let ids_vec: Vec<i64> = fused.keys().copied().collect();
+    let rows = with_db(|conn| {
+        let in_clause = ids_vec.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        // Safe: ids come from i64 results of SELECT, can't be injected.
+        let sql = format!(
+            "SELECT id, session_id, title, content, tags, files, importance, created_at,
+                    access_count, last_accessed_at
+             FROM agent_memories
+             WHERE id IN ({})
+               AND superseded_by IS NULL",
+            in_clause
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("fetch prepare: {}", e))?;
+        let mapped = stmt.query_map([], |row| {
+            Ok((
+                AgentMemory {
+                    id:          row.get(0)?,
+                    session_id:  row.get(1)?,
+                    title:       row.get(2)?,
+                    content:     row.get(3)?,
+                    tags:        row.get(4)?,
+                    files:       row.get(5)?,
+                    importance:  row.get(6)?,
+                    created_at:  row.get(7)?,
+                },
+                row.get::<_, i64>(8).unwrap_or(0) as f64,  // access_count
+                row.get::<_, i64>(9).unwrap_or(0) as f64,  // last_accessed_at
+            ))
+        }).map_err(|e| format!("fetch query: {}", e))?;
+        let now = chrono::Utc::now().timestamp() as f64;
+        let mut combined: Vec<(AgentMemory, f64)> = Vec::new();
+        for r in mapped {
+            let Ok((m, access, last_acc)) = r else { continue };
+            let rrf = fused.get(&m.id).copied().unwrap_or(0.0);
+            // Decay/access/importance multiplier — keep the RRF rank as
+            // primary signal but bias toward fresh + frequently-used.
+            // Range roughly [0.5..2.5] given our v1.4 thresholds.
+            let imp_bonus    = (m.importance as f64) * 0.10;
+            let access_bonus = ((access + 1.0).ln() / 2f64.ln()) * 0.05;
+            let age_sec      = (now - last_acc).max(0.0);
+            let recency_bonus = (-age_sec / 86400.0).exp() * 0.30;
+            let multiplier = 1.0 + imp_bonus + access_bonus + recency_bonus;
+            combined.push((m, rrf * multiplier));
+        }
+        combined.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top: Vec<AgentMemory> = combined.into_iter().take(lim_usize).map(|(m, _)| m).collect();
 
         // Touch matched rows so frequently-retrieved memories surface higher
-        // in future searches. Fire-and-forget — if the UPDATE fails (e.g. WAL
-        // contention) we still return results.
-        if !rows.is_empty() {
-            let ids: Vec<String> = rows.iter().map(|m| m.id.to_string()).collect();
-            let in_clause = ids.join(",");
-            // Safe: ids come from SELECT'd rusqlite rows (i64), can't be injected.
+        // in future searches. Fire-and-forget — if the UPDATE fails we still
+        // return results.
+        if !top.is_empty() {
+            let id_list = top.iter().map(|m| m.id.to_string()).collect::<Vec<_>>().join(",");
             let touch_sql = format!(
                 "UPDATE agent_memories
                  SET access_count = access_count + 1,
                      last_accessed_at = strftime('%s','now')
                  WHERE id IN ({})",
-                in_clause
+                id_list
             );
             let _ = conn.execute(&touch_sql, []);
         }
-        Ok(rows)
-    })
+        Ok(top)
+    })?;
+
+    Ok(rows)
 }
 
 /// Mark a memory as superseded by a newer one (Mem0-style conflict
