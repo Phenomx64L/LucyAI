@@ -1353,7 +1353,11 @@ body.density-compact .chat{gap:2px !important;}
     gap:6px;
     background:rgba(255,255,255,.025);
     border:1px solid rgba(255,255,255,.07);
-    border-radius:10px;flex:1;padding:8px 10px;
+    /* flex:0 0 auto so the input bar sizes to its CONTENT — not to all
+       the remaining vertical space of chat-wrap. The old `flex:1` made
+       .igrp claim half the chat area regardless of how little the
+       textarea actually needed. */
+    border-radius:10px;flex:0 0 auto;padding:8px 10px;
     transition: border-color var(--motion-base) var(--ease-out),
                 box-shadow   var(--motion-base) var(--ease-out),
                 background   var(--motion-base) var(--ease-out);
@@ -1387,20 +1391,25 @@ body[data-state="error"] .igrp{
    it always hugs the bottom of the input, not the bottom of a fixed
    22px stub. */
 .ibox{
-    flex:1;
+    /* NO flex:1 here — flex-grow in a column container expands the
+       textarea vertically and overrides our inline height. We want the
+       textarea to be PRECISELY the height our JS computes from scrollHeight
+       (capped between min/max). width:100% keeps it horizontally filling
+       the .igrp column. */
+    width:100%;
     background:transparent;border:none;
     color:white;font-family:inherit;font-size:13px;
     outline:none;resize:none;
     /* Auto-grow: textarea starts at ONE row and ChatInput.svelte's
        autoResize() bumps the inline `height` up to 160 px max as the
        user types. The min-height here MUST stay tiny — anything ≥ 90 px
-       (the old value) makes the box fixed-tall and breaks auto-grow.
-       max-height is the absolute ceiling; scrollbar appears past it. */
+       (the old value) makes the box fixed-tall and breaks auto-grow. */
     min-height:24px;
     max-height:160px;
     overflow-y:hidden;
     line-height:1.5;
     padding:2px 0;
+    box-sizing:border-box;
 }
 .ibox::placeholder{color:#334155;}
 /* Icons row sits BELOW the textarea inside the .igrp column.
