@@ -12,6 +12,7 @@
 
     import Heartbeat from '@tabler/icons-svelte/icons/activity-heartbeat';
     import { detectAnomaly } from '$lib/anomaly';
+    import { reportAnomaly } from '$lib/anomaly-bridge';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
 
     const dispatch = createEventDispatcher();
@@ -82,35 +83,67 @@
         dashLoading = true;
         await refreshDash();
         if (myId !== _dashStartId) return;     // llamada más reciente ya tomó el control
-        dashRefreshTimer = setInterval(refreshDash, 10000);
+        // Recursive setTimeout instead of setInterval: schedules the NEXT tick only
+        // after the current refresh resolves. Prevents overlap when a remote-host
+        // fetch takes longer than the 10s cadence (was producing duplicate
+        // pushMetricsHistory writes + race conditions on slow hosts).
+        _scheduleDashTick(myId);
+    }
+
+    /**
+     * Internal: schedule the next dashboard refresh tick. Uses the same
+     * `_dashStartId` token as startDashboard() so any in-flight tick becomes
+     * a no-op the moment stopDashboard() / a new startDashboard() invalidates
+     * the session.
+     */
+    function _scheduleDashTick(sessionId) {
+        dashRefreshTimer = setTimeout(async () => {
+            if (sessionId !== _dashStartId) return;     // session changed → bail
+            await refreshDash();
+            if (sessionId !== _dashStartId) return;     // session changed mid-fetch → bail
+            _scheduleDashTick(sessionId);                // chain next
+        }, 10000);
     }
 
     function stopDashboard() {
-        if (dashRefreshTimer) { clearInterval(dashRefreshTimer); dashRefreshTimer = null; }
+        _dashStartId++;                                  // invalidate pending ticks
+        if (dashRefreshTimer) { clearTimeout(dashRefreshTimer); dashRefreshTimer = null; }
     }
 
     async function refreshDash() {
         dashLoading = true; dashError = '';
+        // Race-safe: capture which host this fetch is FOR before any await.
+        // If the user switches hosts mid-fetch, we must NOT write the previous
+        // host's metrics into the new host's history slot (previously caused
+        // mixed sparklines + bogus z-score anomalies on host switch).
+        const fetchedFor = dashSelectedHost;
+        let fetched = null;
         try {
-            if (dashSelectedHost === 'local') {
-                dashMetrics = await invoke('get_system_health_json');
+            if (fetchedFor === 'local') {
+                fetched = await invoke('get_system_health_json');
             } else {
-                const h = hosts.find(x => x.id === dashSelectedHost);
+                const h = hosts.find(x => x.id === fetchedFor);
                 if (!h) { dashError = isEN ? 'Host not found.' : 'Host no encontrado.'; dashLoading = false; return; }
                 let pwd = '';
                 try { pwd = await invoke('get_host_credential', { hostId: h.id }); } catch(e){}
                 if (h.type === 'windows') {
-                    dashMetrics = await invoke('get_remote_health_windows', { host:h.host, username:h.username, password:pwd });
+                    fetched = await invoke('get_remote_health_windows', { host:h.host, username:h.username, password:pwd });
                 } else {
-                    dashMetrics = await invoke('get_remote_health_linux', { host:h.host, username:h.username, port:h.port||22, keyPath:h.sshKeyPath||null });
+                    fetched = await invoke('get_remote_health_linux', { host:h.host, username:h.username, port:h.port||22, keyPath:h.sshKeyPath||null });
                 }
             }
+            // Bail if the user switched hosts during the fetch — discard result.
+            if (fetchedFor !== dashSelectedHost) { dashLoading = false; return; }
+            dashMetrics = fetched;
             dashLastUpdate = new Date().toLocaleTimeString(userLang, {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-            pushMetricsHistory(dashSelectedHost, dashMetrics);
-            checkAlerts(dashSelectedHost, dashMetrics);
+            pushMetricsHistory(fetchedFor, dashMetrics);
+            checkAlerts(fetchedFor, dashMetrics);
         } catch(e) {
-            dashError = String(e);
-            dashMetrics = null;
+            // Only set error if we're still on the host that originated this fetch
+            if (fetchedFor === dashSelectedHost) {
+                dashError = String(e);
+                dashMetrics = null;
+            }
         }
         dashLoading = false;
     }
@@ -277,6 +310,30 @@
         const r = detectAnomaly(past, dashMetrics.memory.percent);
         return r.severity === 'normal' || r.severity === 'mild' ? null : r;
     })();
+    $: anomalyDisk = (() => {
+        const h = metricsHistory[dashSelectedHost] || [];
+        if (h.length < 4 || !dashMetrics?.disks?.length) return null;
+        const past = h.slice(0, -1).map(s => s.disk);
+        const current = Math.max(...dashMetrics.disks.map(d => d.percent));
+        const r = detectAnomaly(past, current);
+        return r.severity === 'normal' || r.severity === 'mild' ? null : r;
+    })();
+
+    // ── Auto-incident bridge: report anomalies for debounced triggering ──
+    // Hands off to $lib/anomaly-bridge which debounces and decides whether
+    // the threshold has been sustained long enough to spin up an incident.
+    $: if (anomalyCpu) {
+        const hName = dashSelectedHost === 'local' ? hostName : dashSelectedHost;
+        reportAnomaly(dashSelectedHost, hName, 'cpu', anomalyCpu, 'dashboard');
+    }
+    $: if (anomalyRam) {
+        const hName = dashSelectedHost === 'local' ? hostName : dashSelectedHost;
+        reportAnomaly(dashSelectedHost, hName, 'ram', anomalyRam, 'dashboard');
+    }
+    $: if (anomalyDisk) {
+        const hName = dashSelectedHost === 'local' ? hostName : dashSelectedHost;
+        reportAnomaly(dashSelectedHost, hName, 'disk', anomalyDisk, 'dashboard');
+    }
 
     onDestroy(() => {
         stopDashboard();
@@ -339,7 +396,7 @@
                   class:extreme={anomalyCpu.severity === 'extreme'}
                   title={isEN ? `Statistical anomaly: ${anomalyCpu.message}` : `Anomalía estadística: ${anomalyCpu.message}`}>
               <Heartbeat size={10} strokeWidth={2.5}/>
-              {Math.abs(anomalyCpu.sigma).toFixed(1)}σ
+              {Number.isFinite(anomalyCpu.sigma) ? Math.abs(anomalyCpu.sigma).toFixed(1) + 'σ' : '∞σ'}
             </span>
           {/if}
         </div>
@@ -362,7 +419,7 @@
                   class:extreme={anomalyRam.severity === 'extreme'}
                   title={isEN ? `Statistical anomaly: ${anomalyRam.message}` : `Anomalía estadística: ${anomalyRam.message}`}>
               <Heartbeat size={10} strokeWidth={2.5}/>
-              {Math.abs(anomalyRam.sigma).toFixed(1)}σ
+              {Number.isFinite(anomalyRam.sigma) ? Math.abs(anomalyRam.sigma).toFixed(1) + 'σ' : '∞σ'}
             </span>
           {/if}
         </div>
@@ -402,8 +459,16 @@
     </div>
     {/if}
     {#if dashMetrics.disks?.length}
-    <div class="dash-section">
-      <div class="ds-title">{isEN ? 'Storage' : 'Almacenamiento'}</div>
+    <div class="dash-section" class:anomaly-section={anomalyDisk}>
+      <div class="ds-title">
+        {isEN ? 'Storage' : 'Almacenamiento'}
+        {#if anomalyDisk}
+          <span class="anomaly-badge" class:extreme={anomalyDisk.severity === 'extreme'}
+                title={isEN ? `Statistical anomaly: ${anomalyDisk.message}` : `Anomalía estadística: ${anomalyDisk.message}`}>
+            <Heartbeat size={10} strokeWidth={2.5}/> {Number.isFinite(anomalyDisk.sigma) ? Math.abs(anomalyDisk.sigma).toFixed(1) + 'σ' : '∞σ'}
+          </span>
+        {/if}
+      </div>
       {#each dashMetrics.disks as disk}
       <div class="disk-row">
         <div class="disk-name">{disk.name||disk.mount}</div>
@@ -551,6 +616,12 @@
         box-shadow: 0 0 0 1px rgba(245,158,11,0.18) inset;
     }
     .anomaly-card:has(.anomaly-badge.extreme) {
+        box-shadow: 0 0 0 1px rgba(239,68,68,0.30) inset;
+    }
+    .anomaly-section {
+        box-shadow: 0 0 0 1px rgba(245,158,11,0.18) inset;
+    }
+    .anomaly-section:has(.anomaly-badge.extreme) {
         box-shadow: 0 0 0 1px rgba(239,68,68,0.30) inset;
     }
     @keyframes anomaly-pulse {
