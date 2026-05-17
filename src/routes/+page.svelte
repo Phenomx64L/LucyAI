@@ -1108,6 +1108,27 @@ import { listen } from '@tauri-apps/api/event';
             tabs.forEach(t => { t.recognition = initRecognition(t.id, _voiceOpts()); });
             tabs = [...tabs]; // forzar reactividad
             setTimeout(scrollChat, 100);
+
+            // ── Hydrate persistent session summaries ──
+            // For each restored tab, fetch its persisted YAML/text summary
+            // and inject into workingMemory.compactedDigest. compactOldTurns
+            // (the next-turn helper that builds the agent's context) picks
+            // it up automatically. The user's "Lucy pierde el hilo" complaint
+            // is fixed precisely here: closing Lucy mid-long-session and
+            // reopening keeps the compacted thread intact.
+            for (const t of tabs) {
+                invoke('get_session_summary', { tabId: t.id })
+                    .then((s) => {
+                        if (s && s.summary) {
+                            t.workingMemory ||= {};
+                            t.workingMemory.compactedDigest = s.summary;
+                            t.workingMemory._lastDigestAt = s.anchor_msg_index || 0;
+                            t.workingMemory._restoredFromDb = true;
+                            debug.log(`[smart-digest] restored persistent summary for tab ${t.id} (${s.summary.length} chars, anchor=${s.anchor_msg_index})`);
+                        }
+                    })
+                    .catch(e => debug.warn('[smart-digest] hydrate failed for tab', t.id, e));
+            }
         }
 
         const defaultActions = [
@@ -1535,6 +1556,9 @@ import { listen } from '@tauri-apps/api/event';
         disposeTabRev(id);      // P2: free per-tab revision store (memory hygiene)
         // Free per-tab CWD entry on the backend so the map doesn't grow unbounded
         invoke('drop_tab_cwd', { tabId: String(id) }).catch(e => debug.log('[cwd] drop failed:', e));
+        // Drop the persistent session summary so it doesn't accumulate
+        // across closed-and-recreated tabs with random uuids.
+        invoke('delete_session_summary', { tabId: String(id) }).catch(e => debug.log('[summary] drop failed:', e));
         persistir();
     }
 
@@ -5059,10 +5083,24 @@ if (Test-Path $src) {
             });
 
             tab.workingMemory ||= {};
-            tab.workingMemory.compactedDigest = String(result || '').slice(0, 1500);
+            const summaryText = String(result || '').slice(0, 1500);
+            tab.workingMemory.compactedDigest = summaryText;
             tab.workingMemory._lastDigestAt = valid.length;
             tab.workingMemory._needsDigest = false;   // clear the urgent-prune flag
-            debug.log(`[smart-digest] regenerated for tab ${tab.id} (${valid.length} turns)`);
+
+            // Persist to DB so closing/reopening Lucy doesn't blow away
+            // the compacted thread. iniciar()'s tab-load path picks it
+            // up via get_session_summary on cold start.
+            invoke('save_session_summary', {
+                tabId:          tab.id,
+                anchorMsgIndex: half,
+                summary:        summaryText,
+                modelUsed:      'gemini-2.5-flash',
+                tokensIn:       Math.ceil(summaryInput.length / 4),
+                tokensOut:      Math.ceil(summaryText.length / 4),
+            }).catch(e => debug.warn('[smart-digest] persist failed:', e));
+
+            debug.log(`[smart-digest] regenerated + persisted for tab ${tab.id} (${valid.length} turns)`);
         } catch (e) {
             // Silent: digest is best-effort. Fallback in compactOldTurns
             // covers the case where we never get a smart one.
