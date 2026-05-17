@@ -164,6 +164,30 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
          ON agent_insights(confidence DESC, reinforcements DESC)",
         "CREATE INDEX IF NOT EXISTS idx_agent_insights_updated \
          ON agent_insights(updated_at DESC)",
+        // agentmemory-inspired graph (Tier 3 #9). Each row is an undirected
+        // edge between two memories — we materialise it as TWO directed
+        // rows (a→b and b→a) so a simple SELECT on source_id is enough for
+        // BFS without UNION trickery.
+        //
+        // edge_type captures the WHY:
+        //   • 'shares_concept' — overlapping tags (weight = Jaccard sim)
+        //   • 'shares_file'    — overlapping file refs (weight = capped)
+        //   • 'same_session'   — both came from one agent session
+        //
+        // Edges are built in batch by graph_rebuild_edges_run (idempotent)
+        // rather than per-save to keep the hot save path fast.
+        "CREATE TABLE IF NOT EXISTS agent_memory_edges (\
+            source_id    INTEGER NOT NULL,\
+            target_id    INTEGER NOT NULL,\
+            edge_type    TEXT    NOT NULL,\
+            weight       REAL    NOT NULL DEFAULT 1.0,\
+            created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),\
+            PRIMARY KEY (source_id, target_id, edge_type)\
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_memory_edges_source \
+         ON agent_memory_edges(source_id, weight DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_edges_target \
+         ON agent_memory_edges(target_id)",
     ];
     for stmt in &migrations {
         if let Err(e) = conn.execute(stmt, []) {
@@ -2937,4 +2961,351 @@ pub fn delete_insight(id: i64) -> Result<usize, String> {
         ).map_err(|e| format!("delete_insight: {}", e))?;
         Ok(n)
     })
+}
+
+// ── Memory graph (Tier 3 #9, agentmemory-inspired) ───────────────────────
+// Multi-hop graph over agent_memories. Edges encode WHY two memories are
+// related — shared concepts (tags), shared file references, or same
+// agent session. BFS traversal with per-hop decay surfaces memories that
+// are 2-3 jumps away from a seed, useful for queries like "what else
+// relates to this DNS incident?" or "memories adjacent to the patches I
+// applied last week".
+//
+// Edges are built in batch (graph_rebuild_edges_run) rather than on every
+// save — the hot save path stays fast. The scheduler runs the rebuild
+// every 24 h, AFTER auto-consolidate so consolidated/superseded rows are
+// already settled.
+
+const GRAPH_MIN_SHARED_TAGS:    usize = 2;
+const GRAPH_MAX_EDGES_PER_MEM:  usize = 12;   // Cap fan-out per source
+const GRAPH_SESSION_GROUP_LIMIT: usize = 20;  // Same-session edges per group
+
+#[derive(serde::Serialize)]
+pub struct GraphRebuildReport {
+    pub eligible_memories: i64,
+    pub concept_edges:     i64,
+    pub file_edges:        i64,
+    pub session_edges:     i64,
+    pub total_directed_edges: i64,
+}
+
+/// Rebuild the entire graph from scratch (truncates agent_memory_edges
+/// first). Idempotent — safe to call any time. Cheap on modest DBs
+/// (≤500 memories runs in <1s); the cap on eligible rows keeps it bounded
+/// regardless of how large the memory store grows over years.
+#[tauri::command]
+pub fn graph_rebuild_edges_run() -> Result<GraphRebuildReport, String> {
+    // 1. Pull all non-superseded memories with their tag/file/session.
+    #[derive(Clone)]
+    struct Node {
+        id:         i64,
+        session_id: String,
+        tags:       Vec<String>,
+        files:      Vec<String>,
+    }
+    let nodes: Vec<Node> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, tags, files FROM agent_memories
+             WHERE superseded_by IS NULL
+             ORDER BY id ASC
+             LIMIT 2000"
+        ).map_err(|e| format!("graph fetch prepare: {}", e))?;
+        let rows = stmt.query_map([], |row| {
+            let tags_json:  String = row.get(2)?;
+            let files_json: String = row.get(3)?;
+            let tags  = parse_tags(&tags_json);
+            let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+            Ok(Node {
+                id:         row.get(0)?,
+                session_id: row.get(1)?,
+                tags,
+                files,
+            })
+        }).map_err(|e| format!("graph fetch query: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows { if let Ok(n) = r { out.push(n); } }
+        Ok(out)
+    })?;
+
+    let total = nodes.len();
+    if total < 2 {
+        return Ok(GraphRebuildReport {
+            eligible_memories: total as i64,
+            concept_edges: 0, file_edges: 0, session_edges: 0,
+            total_directed_edges: 0,
+        });
+    }
+
+    // 2. Build edge candidates in memory before writing.
+    // Vec<(src, tgt, type, weight)> — we'll dedupe by primary key on insert.
+    let mut edges: Vec<(i64, i64, &'static str, f64)> = Vec::with_capacity(total * 8);
+    use std::collections::{HashMap, HashSet};
+
+    // Pre-compute tag-sets and file-sets for fast intersection.
+    let tag_sets: Vec<HashSet<&str>> = nodes.iter()
+        .map(|n| n.tags.iter().map(|s| s.as_str()).collect())
+        .collect();
+    let file_sets: Vec<HashSet<&str>> = nodes.iter()
+        .map(|n| n.files.iter().map(|s| s.as_str()).collect())
+        .collect();
+
+    // Track best K outgoing edges per source to enforce the cap.
+    // Map<src_id, Vec<(tgt_id, type, weight)>> after building all, we'll
+    // keep top-K by weight per source per type.
+
+    // Concept edges — pairwise Jaccard on tags
+    let mut concept_count = 0i64;
+    for i in 0..total {
+        if tag_sets[i].is_empty() { continue; }
+        for j in (i + 1)..total {
+            let shared = tag_sets[i].intersection(&tag_sets[j]).count();
+            if shared >= GRAPH_MIN_SHARED_TAGS {
+                let union = tag_sets[i].union(&tag_sets[j]).count();
+                let weight = if union > 0 { shared as f64 / union as f64 } else { 0.0 };
+                edges.push((nodes[i].id, nodes[j].id, "shares_concept", weight));
+                edges.push((nodes[j].id, nodes[i].id, "shares_concept", weight));
+                concept_count += 2;
+            }
+        }
+    }
+
+    // File edges — any shared file path is enough (rare = high signal)
+    let mut file_count = 0i64;
+    for i in 0..total {
+        if file_sets[i].is_empty() { continue; }
+        for j in (i + 1)..total {
+            let shared = file_sets[i].intersection(&file_sets[j]).count();
+            if shared > 0 {
+                let weight = ((shared as f64) / 3.0).min(1.0);  // cap at 1.0
+                edges.push((nodes[i].id, nodes[j].id, "shares_file", weight));
+                edges.push((nodes[j].id, nodes[i].id, "shares_file", weight));
+                file_count += 2;
+            }
+        }
+    }
+
+    // Session edges — group by session_id, fully connect within group up
+    // to GRAPH_SESSION_GROUP_LIMIT members. Skip empty session ids.
+    let mut session_groups: HashMap<&str, Vec<i64>> = HashMap::new();
+    for n in &nodes {
+        if n.session_id.is_empty() { continue; }
+        session_groups.entry(n.session_id.as_str()).or_default().push(n.id);
+    }
+    let mut session_count = 0i64;
+    for (_, members) in session_groups.iter() {
+        if members.len() < 2 { continue; }
+        let m: Vec<i64> = members.iter().take(GRAPH_SESSION_GROUP_LIMIT).copied().collect();
+        for i in 0..m.len() {
+            for j in (i + 1)..m.len() {
+                edges.push((m[i], m[j], "same_session", 0.5));
+                edges.push((m[j], m[i], "same_session", 0.5));
+                session_count += 2;
+            }
+        }
+    }
+
+    // 3. Cap fan-out per (source, type). Sort by weight DESC and keep top-K.
+    edges.sort_by(|a, b|
+        a.0.cmp(&b.0)
+            .then_with(|| a.2.cmp(b.2))
+            .then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
+    );
+    // Now per (source, type) the strongest weights come first; walk and
+    // keep only the first K of each group.
+    let mut kept: Vec<(i64, i64, &'static str, f64)> = Vec::with_capacity(edges.len());
+    let mut current_src: i64 = -1;
+    let mut current_type: &'static str = "";
+    let mut taken: usize = 0;
+    for e in edges {
+        if e.0 != current_src || e.2 != current_type {
+            current_src = e.0;
+            current_type = e.2;
+            taken = 0;
+        }
+        if taken < GRAPH_MAX_EDGES_PER_MEM {
+            kept.push(e);
+            taken += 1;
+        }
+    }
+    let total_kept = kept.len() as i64;
+
+    // 4. Write — truncate first, then bulk INSERT in a transaction.
+    with_db(|conn| {
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("graph tx: {}", e))?;
+        tx.execute("DELETE FROM agent_memory_edges", [])
+            .map_err(|e| format!("graph truncate: {}", e))?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO agent_memory_edges \
+                 (source_id, target_id, edge_type, weight) VALUES (?1, ?2, ?3, ?4)"
+            ).map_err(|e| format!("graph insert prepare: {}", e))?;
+            for (src, tgt, et, w) in &kept {
+                stmt.execute(rusqlite::params![src, tgt, et, w])
+                    .map_err(|e| format!("graph insert: {}", e))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("graph commit: {}", e))?;
+        Ok(())
+    })?;
+
+    Ok(GraphRebuildReport {
+        eligible_memories: total as i64,
+        concept_edges: concept_count,
+        file_edges: file_count,
+        session_edges: session_count,
+        total_directed_edges: total_kept,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct GraphNeighbor {
+    pub memory_id: i64,
+    pub hops:      i64,
+    pub score:     f64,
+    /// Pipe-joined list of edge types that connected this node — debugging
+    /// help: "shares_concept|same_session" means we got here via both.
+    pub edge_types: String,
+    pub memory:    AgentMemory,
+}
+
+/// BFS over agent_memory_edges starting from `seed_id`. Each hop multiplies
+/// the cumulative weight by `hop_decay` (default 0.5). Up to `max_hops`
+/// levels deep, returning the top-`limit` nodes by score (excluding the
+/// seed itself).
+///
+/// Multi-path nodes keep their BEST score across all reachable paths —
+/// the BFS keeps frontiers fresh but updates already-seen nodes if a new
+/// path delivers a higher score.
+#[tauri::command]
+pub fn graph_neighbors(
+    seed_id:  i64,
+    max_hops: Option<i64>,
+    limit:    Option<i64>,
+) -> Result<Vec<GraphNeighbor>, String> {
+    if seed_id <= 0 { return Err("graph_neighbors: invalid seed_id".to_string()); }
+    let hops = max_hops.unwrap_or(2).max(1).min(4);
+    let lim  = limit.unwrap_or(15).max(1).min(50);
+    const HOP_DECAY: f64 = 0.5;
+
+    // BFS with score + path-type tracking
+    use std::collections::HashMap;
+    // node -> (best_score, hop_at_best, edge_types_concat)
+    let mut best: HashMap<i64, (f64, i64, String)> = HashMap::new();
+    let mut frontier: Vec<(i64, f64, i64)> = vec![(seed_id, 1.0, 0)];
+
+    for current_hop in 0..hops {
+        if frontier.is_empty() { break; }
+        let mut next: Vec<(i64, f64, i64)> = Vec::new();
+        // Bulk-fetch all outgoing edges for the current frontier in ONE query
+        let src_list: Vec<String> = frontier.iter()
+            .map(|(s, _, _)| s.to_string()).collect();
+        if src_list.is_empty() { break; }
+        let in_clause = src_list.join(",");
+        // safe: ids are i64
+        let sql = format!(
+            "SELECT source_id, target_id, edge_type, weight FROM agent_memory_edges \
+             WHERE source_id IN ({}) ORDER BY weight DESC", in_clause
+        );
+
+        let edges: Vec<(i64, i64, String, f64)> = with_db(|conn| {
+            let mut stmt = conn.prepare(&sql).map_err(|e| format!("graph BFS prepare: {}", e))?;
+            let rows = stmt.query_map([], |row| Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, f64>(3)?,
+            ))).map_err(|e| format!("graph BFS query: {}", e))?;
+            let mut out = Vec::new();
+            for r in rows { if let Ok(e) = r { out.push(e); } }
+            Ok(out)
+        })?;
+
+        // Index frontier by source for O(1) lookup of parent score
+        let frontier_scores: HashMap<i64, f64> = frontier.iter()
+            .map(|(s, sc, _)| (*s, *sc)).collect();
+
+        for (src, tgt, et, w) in edges {
+            if tgt == seed_id { continue; }
+            let parent_score = frontier_scores.get(&src).copied().unwrap_or(0.0);
+            let new_score = parent_score * w * (HOP_DECAY.powi(current_hop as i32));
+            let new_hop = current_hop + 1;
+
+            let mut should_expand = true;
+            best.entry(tgt)
+                .and_modify(|(s, h, types)| {
+                    if new_score > *s {
+                        *s = new_score; *h = new_hop;
+                    }
+                    if !types.contains(&et) {
+                        if !types.is_empty() { types.push('|'); }
+                        types.push_str(&et);
+                    } else {
+                        should_expand = false;
+                    }
+                })
+                .or_insert_with(|| (new_score, new_hop, et.clone()));
+            if should_expand {
+                next.push((tgt, new_score, new_hop));
+            }
+        }
+        // De-dupe next frontier: one entry per id with best score
+        let mut next_map: HashMap<i64, (f64, i64)> = HashMap::new();
+        for (id, sc, h) in next {
+            next_map.entry(id)
+                .and_modify(|x| { if sc > x.0 { x.0 = sc; x.1 = h; } })
+                .or_insert((sc, h));
+        }
+        frontier = next_map.into_iter().map(|(id, (sc, h))| (id, sc, h)).collect();
+    }
+
+    if best.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Take top-`lim` ids by score
+    let mut ranked: Vec<(i64, f64, i64, String)> = best.into_iter()
+        .map(|(id, (sc, h, types))| (id, sc, h, types))
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(lim as usize);
+
+    if ranked.is_empty() { return Ok(Vec::new()); }
+
+    // Fetch full memory rows in one query
+    let id_list = ranked.iter().map(|(id, _, _, _)| id.to_string()).collect::<Vec<_>>().join(",");
+    let mem_rows: HashMap<i64, AgentMemory> = with_db(|conn| {
+        let sql = format!(
+            "SELECT id, session_id, title, content, tags, files, importance, created_at \
+             FROM agent_memories WHERE id IN ({}) AND superseded_by IS NULL", id_list
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("graph mem prepare: {}", e))?;
+        let rows = stmt.query_map([], |row| Ok(AgentMemory {
+            id:         row.get(0)?,
+            session_id: row.get(1)?,
+            title:      row.get(2)?,
+            content:    row.get(3)?,
+            tags:       row.get(4)?,
+            files:      row.get(5)?,
+            importance: row.get(6)?,
+            created_at: row.get(7)?,
+        })).map_err(|e| format!("graph mem query: {}", e))?;
+        let mut m = HashMap::new();
+        for r in rows { if let Ok(am) = r { m.insert(am.id, am); } }
+        Ok(m)
+    })?;
+
+    let neighbors: Vec<GraphNeighbor> = ranked.into_iter()
+        .filter_map(|(id, score, hop, types)| {
+            mem_rows.get(&id).map(|m| GraphNeighbor {
+                memory_id: id,
+                hops: hop,
+                score,
+                edge_types: types,
+                memory: m.clone(),
+            })
+        })
+        .collect();
+
+    Ok(neighbors)
 }

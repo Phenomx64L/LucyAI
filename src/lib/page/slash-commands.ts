@@ -90,6 +90,8 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /reflect · preview de la reflexión (dry-run, sin tocar nada)<br>
                 /reflect-now · genera/refuerza insights desde clusters de memorias<br>
                 /insights · lista los insights por confidence DESC<br>
+                /graph-rebuild · reconstruye el grafo de memoria (concepts/files/sessions)<br>
+                /graph &lt;id&gt; [hops] · BFS desde una memoria — descubre lo relacionado vía 1-3 hops<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -162,6 +164,18 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         case 'insights':
             runInsightsList(sysMsg);
+            return true;
+
+        // ── Memory graph (Tier 3 #9) ────────────────────────────────────
+        // /graph-rebuild         — reconstruye los edges del grafo (corre auto cada 24 h)
+        // /graph <id> [hops]     — BFS desde la memoria id, hasta hops levels
+        case 'graph-rebuild':
+        case 'rebuild-graph':
+            runGraphRebuild(sysMsg);
+            return true;
+        case 'graph':
+            if (!arg) { sysMsg('Uso: <code>/graph &lt;memory-id&gt; [hops=2]</code> — explora memorias relacionadas vía BFS.'); return true; }
+            runGraphNeighbors(arg.trim(), ctx, sysMsg);
             return true;
 
         case 'editremote':
@@ -584,6 +598,112 @@ function runConsolidate(
                 ${rows}`);
         } catch (e) {
             sysMsg(`auto_consolidate_run falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+// ── Memory graph (Tier 3 #9) ────────────────────────────────────────────
+
+interface GraphRebuildReport {
+    eligible_memories: number;
+    concept_edges: number;
+    file_edges: number;
+    session_edges: number;
+    total_directed_edges: number;
+}
+
+interface GraphNeighbor {
+    memory_id: number;
+    hops: number;
+    score: number;
+    edge_types: string;  // pipe-joined
+    memory: {
+        id: number;
+        title: string;
+        content: string;
+        tags: string;
+        created_at: number;
+    };
+}
+
+function runGraphRebuild(sysMsg: (html: string, color?: string) => void) {
+    sysMsg('◈ Reconstruyendo grafo de memoria…');
+    (async () => {
+        try {
+            const r = await invoke<GraphRebuildReport>('graph_rebuild_edges_run');
+            sysMsg(`<div class="mn">◈ Grafo reconstruido</div>
+                <div style="font-size:11px;">
+                    <b>${r.eligible_memories}</b> nodos ·
+                    <b>${r.total_directed_edges.toLocaleString()}</b> aristas (kept tras cap)
+                </div>
+                <div style="font-size:11px;color:var(--txt2);margin-top:2px;">
+                    pre-cap: ${r.concept_edges.toLocaleString()} concept ·
+                    ${r.file_edges.toLocaleString()} file ·
+                    ${r.session_edges.toLocaleString()} session
+                </div>`);
+        } catch (e) {
+            sysMsg(`graph_rebuild falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+function runGraphNeighbors(
+    argRaw: string,
+    _ctx: SlashCtx,
+    sysMsg: (html: string, color?: string) => void,
+) {
+    // Parse "<id> [hops]" — second token optional
+    const parts = argRaw.split(/\s+/).filter(p => p.length);
+    const seedId = parseInt(parts[0] || '', 10);
+    const hops = parts[1] ? Math.max(1, Math.min(4, parseInt(parts[1], 10))) : 2;
+    if (!Number.isFinite(seedId) || seedId <= 0) {
+        sysMsg(`memory-id inválido: <code>${escapeHtml(argRaw)}</code>`, 'var(--red)');
+        return;
+    }
+    sysMsg(`◈ BFS desde memoria #${seedId} hasta ${hops} hops…`);
+    (async () => {
+        try {
+            const list = await invoke<GraphNeighbor[]>('graph_neighbors', {
+                seedId, maxHops: hops, limit: 15,
+            });
+            if (!list || list.length === 0) {
+                sysMsg(`No hay memorias relacionadas a #${seedId} dentro de ${hops} hops. Quizás el grafo no está construido — prueba <code>/graph-rebuild</code>.`);
+                return;
+            }
+            // Group by hop for cleaner output
+            const byHop: Record<number, GraphNeighbor[]> = {};
+            for (const n of list) {
+                (byHop[n.hops] ||= []).push(n);
+            }
+            const sections = Object.keys(byHop)
+                .map(h => parseInt(h, 10))
+                .sort((a, b) => a - b)
+                .map(h => {
+                    const rows = byHop[h].map(n => {
+                        const tags = (() => {
+                            try { return JSON.parse(n.memory.tags || '[]'); } catch { return []; }
+                        })();
+                        const tagStr = tags.length
+                            ? `<span style="color:var(--txt2);font-size:10px;">${tags.slice(0, 4).map((t: string) => escapeHtml(t)).join(', ')}</span>`
+                            : '';
+                        const edgeTypes = n.edge_types.split('|').map(et => {
+                            const sym = et === 'shares_concept' ? '◇' : et === 'shares_file' ? '⊟' : '⌖';
+                            return `<span title="${escapeHtml(et)}" style="color:var(--accent);font-size:10px;">${sym}</span>`;
+                        }).join(' ');
+                        return `<div style="padding:4px 6px;border-left:2px solid var(--accent);margin-bottom:4px;">
+                            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--txt2);">
+                                <span>#${n.memory.id} · score=${n.score.toFixed(3)}</span>
+                                <span>${edgeTypes}</span>
+                            </div>
+                            <div style="font-size:12px;line-height:1.3;">${escapeHtml(n.memory.title)}</div>
+                            ${tagStr}
+                        </div>`;
+                    }).join('');
+                    return `<div style="margin-top:6px;font-size:11px;color:var(--txt2);">— hop ${h} —</div>${rows}`;
+                }).join('');
+            sysMsg(`<div class="mn">◈ Vecindario de #${seedId} (${list.length} memorias en ${hops} hops)</div>${sections}`);
+        } catch (e) {
+            sysMsg(`graph_neighbors falló: ${String(e).substring(0, 200)}`, 'var(--red)');
         }
     })();
 }

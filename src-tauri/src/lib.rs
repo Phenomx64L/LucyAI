@@ -332,6 +332,37 @@ pub fn run() {
                 }
             });
 
+            // ── Memory graph rebuild (Tier 3 #9) ───────────────────────
+            // Refreshes agent_memory_edges nightly so the graph reflects
+            // recent saves + consolidate's supersede sweeps. Runs 30 min
+            // after launch (well after auto-consolidate at +5 min so the
+            // graph sees the consolidation outputs), then every 24h.
+            tauri::async_runtime::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(1800)).await;
+                loop {
+                    match crate::commands::metrics::graph_rebuild_edges_run() {
+                        Ok(r) if r.total_directed_edges > 0 => {
+                            crate::utils::logging::write_app_log(
+                                "INFO",
+                                &format!(
+                                    "graph rebuild: nodes={} concept={} file={} session={} kept={}",
+                                    r.eligible_memories, r.concept_edges,
+                                    r.file_edges, r.session_edges, r.total_directed_edges
+                                ),
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            crate::utils::logging::write_app_log(
+                                "WARN",
+                                &format!("graph rebuild failed: {}", e),
+                            );
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;  // 24h
+                }
+            });
+
             // ── Periodic janitor (every 5 min) ──────────────────────────
             // Keeps in-memory state from leaking when sessions/tokens die
             // through abnormal paths (crash, abrupt disconnect, app sleep).
@@ -482,6 +513,8 @@ pub fn run() {
             metrics::reflect_run,
             metrics::list_insights,
             metrics::delete_insight,
+            metrics::graph_rebuild_edges_run,
+            metrics::graph_neighbors,
             commands::dedup::dedup_acquire,
             commands::dedup::dedup_release,
             commands::dedup::dedup_stats,
