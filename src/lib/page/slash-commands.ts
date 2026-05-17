@@ -87,6 +87,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /consolidate-now · ejecuta la fusión real (LLM por cluster + supersede)<br>
                 /reranker · estado del cross-encoder reranker (feature/model/runtime)<br>
                 /reranker-install · descarga el modelo ms-marco-MiniLM (22 MB) si la feature está activa<br>
+                /reflect · preview de la reflexión (dry-run, sin tocar nada)<br>
+                /reflect-now · genera/refuerza insights desde clusters de memorias<br>
+                /insights · lista los insights por confidence DESC<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -144,6 +147,21 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'reranker-install':
         case 'install-reranker':
             runRerankerInstall(sysMsg);
+            return true;
+
+        // ── Reflection / Insights (Tier 3 #8) ───────────────────────────
+        // /reflect     — preview de cuántos clusters se procesarían (dry-run)
+        // /reflect-now — corre la reflexión real (genera/refuerza insights)
+        // /insights    — lista los insights ordenados por confidence DESC
+        case 'reflect':
+            runReflect(true, sysMsg);
+            return true;
+        case 'reflect-now':
+        case 'reflect!':
+            runReflect(false, sysMsg);
+            return true;
+        case 'insights':
+            runInsightsList(sysMsg);
             return true;
 
         case 'editremote':
@@ -566,6 +584,83 @@ function runConsolidate(
                 ${rows}`);
         } catch (e) {
             sysMsg(`auto_consolidate_run falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+// ── Reflection / Insights (Tier 3 #8) ───────────────────────────────────
+
+interface ReflectReport {
+    dry_run: boolean;
+    eligible_memories: number;
+    clusters_processed: number;
+    insights_created: number;
+    insights_reinforced: number;
+}
+
+interface AgentInsight {
+    id: number;
+    content: string;
+    fingerprint: string;
+    confidence: number;
+    reinforcements: number;
+    concepts: string;  // JSON-encoded string[]
+    source_count: number;
+    last_reinforced_at: number;
+    created_at: number;
+    updated_at: number;
+}
+
+function runReflect(dryRun: boolean, sysMsg: (html: string, color?: string) => void) {
+    sysMsg(`◇ Reflexión — ${dryRun ? 'preview' : 'ejecutando'}… (${dryRun ? 'segundos' : '20-90 s por cluster'})`);
+    (async () => {
+        try {
+            const r = await invoke<ReflectReport>('reflect_run', { dryRun });
+            if (r.dry_run) {
+                sysMsg(`<div class="mn">◇ Reflexión DRY-RUN</div>
+                    <div style="font-size:11px;">${r.eligible_memories} memorias elegibles · ${r.clusters_processed} clusters se procesarían.</div>
+                    <div style="font-size:11px;color:var(--txt2);">Ejecuta <code>/reflect-now</code> para generar insights.</div>`);
+            } else {
+                const color = (r.insights_created + r.insights_reinforced) > 0 ? '#34d399' : 'var(--txt2)';
+                sysMsg(`<div class="mn" style="color:${color};">◇ Reflexión completada</div>
+                    <div style="font-size:11px;">
+                        ${r.clusters_processed} clusters procesados ·
+                        <b>${r.insights_created}</b> nuevos insights ·
+                        <b>${r.insights_reinforced}</b> insights reforzados
+                    </div>
+                    <div style="font-size:11px;color:var(--txt2);">Lista con <code>/insights</code>.</div>`);
+            }
+        } catch (e) {
+            sysMsg(`reflect_run falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+function runInsightsList(sysMsg: (html: string, color?: string) => void) {
+    (async () => {
+        try {
+            const list = await invoke<AgentInsight[]>('list_insights', { limit: 20 });
+            if (!list || list.length === 0) {
+                sysMsg('No hay insights aún. La reflexión nocturna corre cada 48 h, o lánzala manualmente con <code>/reflect-now</code>.');
+                return;
+            }
+            const rows = list.map(i => {
+                const concepts: string[] = JSON.parse(i.concepts || '[]');
+                const conf = (i.confidence * 100).toFixed(0);
+                const date = new Date(i.last_reinforced_at * 1000).toLocaleDateString();
+                const bar = '█'.repeat(Math.round(i.confidence * 10)) + '░'.repeat(10 - Math.round(i.confidence * 10));
+                return `<div style="padding:6px 8px;border-left:2px solid var(--accent);margin-bottom:6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--txt2);">
+                        <span>#${i.id} · ${conf}% <code>${bar}</code></span>
+                        <span>×${i.reinforcements} · ${date}</span>
+                    </div>
+                    <div style="margin-top:3px;font-size:12px;line-height:1.4;">${escapeHtml(i.content)}</div>
+                    ${concepts.length ? `<div style="margin-top:3px;font-size:10px;color:var(--txt2);">${concepts.map(c => `<code style="font-size:10px;">${escapeHtml(c)}</code>`).join(' ')}</div>` : ''}
+                </div>`;
+            }).join('');
+            sysMsg(`<div class="mn">◇ Insights (${list.length} top por confidence)</div>${rows}`);
+        } catch (e) {
+            sysMsg(`list_insights falló: ${String(e).substring(0, 200)}`, 'var(--red)');
         }
     })();
 }

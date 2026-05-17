@@ -299,6 +299,39 @@ pub fn run() {
                 }
             });
 
+            // ── Reflection — meta-insight pass (Tier 3 #8) ─────────────
+            // Runs once 15 min after startup (well after auto-forget +
+            // auto-consolidate have shaped the memory store), then every
+            // 48h. Each run clusters memories by tag overlap and asks
+            // the LLM to derive ONE generalisable meta-insight per cluster
+            // — those either create a new agent_insights row or reinforce
+            // an existing one (confidence asymptotic toward 1.0).
+            tauri::async_runtime::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(900)).await;
+                loop {
+                    match crate::commands::metrics::reflect_run(Some(false)).await {
+                        Ok(r) if r.insights_created > 0 || r.insights_reinforced > 0 => {
+                            crate::utils::logging::write_app_log(
+                                "INFO",
+                                &format!(
+                                    "reflect: eligible={} processed={} created={} reinforced={}",
+                                    r.eligible_memories, r.clusters_processed,
+                                    r.insights_created, r.insights_reinforced
+                                ),
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            crate::utils::logging::write_app_log(
+                                "WARN",
+                                &format!("reflect failed: {}", e),
+                            );
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(172_800)).await;  // 48h
+                }
+            });
+
             // ── Periodic janitor (every 5 min) ──────────────────────────
             // Keeps in-memory state from leaking when sessions/tokens die
             // through abnormal paths (crash, abrupt disconnect, app sleep).
@@ -446,6 +479,9 @@ pub fn run() {
             metrics::get_crystal,
             metrics::delete_crystal,
             metrics::auto_consolidate_run,
+            metrics::reflect_run,
+            metrics::list_insights,
+            metrics::delete_insight,
             commands::dedup::dedup_acquire,
             commands::dedup::dedup_release,
             commands::dedup::dedup_stats,

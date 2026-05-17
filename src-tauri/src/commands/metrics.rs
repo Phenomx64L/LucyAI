@@ -136,6 +136,34 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
          ON agent_crystals(session_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_agent_crystals_created \
          ON agent_crystals(created_at DESC)",
+        // agentmemory-inspired insights (Tier 3 #8). Each row is a higher-
+        // level META-observation derived from a cluster of memories. Unlike
+        // crystals (one-shot session digests) and unlike consolidated
+        // memories (which supersede their sources), insights are RECURRENT:
+        // every reflect_run looks for matching patterns and either creates
+        // a new insight or REINFORCES an existing one — confidence grows
+        // toward 1.0 each time the pattern re-appears, and reinforcements
+        // counts the recurrences.
+        //
+        // fingerprint is a stable hash over the lowercased, whitespace-
+        // collapsed content — same wording across runs deduplicates into
+        // reinforcement instead of creating noise.
+        "CREATE TABLE IF NOT EXISTS agent_insights (\
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,\
+            content             TEXT    NOT NULL,\
+            fingerprint         TEXT    NOT NULL UNIQUE,\
+            confidence          REAL    NOT NULL DEFAULT 0.5,\
+            reinforcements      INTEGER NOT NULL DEFAULT 1,\
+            concepts            TEXT    NOT NULL DEFAULT '[]',\
+            source_count        INTEGER NOT NULL DEFAULT 0,\
+            last_reinforced_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),\
+            created_at          INTEGER NOT NULL DEFAULT (strftime('%s','now')),\
+            updated_at          INTEGER NOT NULL DEFAULT (strftime('%s','now'))\
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_agent_insights_confidence \
+         ON agent_insights(confidence DESC, reinforcements DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_insights_updated \
+         ON agent_insights(updated_at DESC)",
     ];
     for stmt in &migrations {
         if let Err(e) = conn.execute(stmt, []) {
@@ -2576,5 +2604,337 @@ pub async fn auto_consolidate_run(
         memories_superseded: total_superseded,
         new_memories: total_new,
         clusters: report_clusters,
+    })
+}
+
+// ── Reflection (Tier 3 #8, agentmemory-inspired) ─────────────────────────
+// Periodic meta-observation pass. Unlike consolidate (which fuses sources
+// into one replacement memory) and unlike crystallize (one-shot session
+// digest), reflect produces RECURRENT insights:
+//
+//   "I've noticed the user prefers PowerShell over cmd for filesystem tasks"
+//   "Most DNS issues on this estate trace back to AD replication lag"
+//   "WinRM cert errors usually mean clock skew between client and server"
+//
+// Each run looks for clusters of related memories, generates a meta-
+// insight via Ollama, then either:
+//   • Creates a new agent_insights row (first occurrence), OR
+//   • REINFORCES an existing insight whose fingerprint matches —
+//     confidence += 0.1*(1-confidence) (asymptotic toward 1.0),
+//     reinforcements += 1, last_reinforced_at = now.
+//
+// Fingerprint is a stable hash over lowercased+whitespace-collapsed
+// content. Two runs that produce semantically-equivalent insights with
+// slight wording differences will MISS each other and create duplicate
+// rows — that's acceptable noise; the high-confidence ones surface first
+// in /insights via the (confidence DESC, reinforcements DESC) index.
+
+const REFLECT_MIN_AGE_DAYS:    i64   = 5;
+const REFLECT_MIN_CLUSTER:     usize = 4;     // Higher bar than consolidate
+const REFLECT_MAX_CLUSTER:     usize = 20;
+const REFLECT_MIN_SHARED_TAGS: usize = 2;
+const REFLECT_MAX_CLUSTERS:    usize = 4;
+const REFLECT_OLLAMA_TIMEOUT_S: u64  = 35;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct AgentInsight {
+    pub id: i64,
+    pub content: String,
+    pub fingerprint: String,
+    pub confidence: f64,
+    pub reinforcements: i64,
+    /// JSON-encoded Vec<String> of concept keywords
+    pub concepts: String,
+    pub source_count: i64,
+    pub last_reinforced_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReflectReport {
+    pub dry_run: bool,
+    pub eligible_memories: i64,
+    pub clusters_processed: i64,
+    pub insights_created: i64,
+    pub insights_reinforced: i64,
+}
+
+const REFLECT_SYSTEM: &str = "You are a reflection engine for an autonomous SysAdmin assistant. \
+Given a cluster of related observations the agent has accumulated, identify ONE generalisable META-insight \
+— a pattern, preference, or rule of thumb that holds ACROSS the observations.
+
+Output EXACTLY this XML (no markdown, no preamble):
+<insight>
+  <content>One concise sentence (under 200 chars) stating the meta-pattern.</content>
+  <concepts>
+    <concept>lowercase-keyword</concept>
+  </concepts>
+</insight>
+
+Rules:
+- The content MUST generalise — don't restate a single observation. If the
+  observations don't share a generalisable insight, output an empty <content/>.
+- 1-4 concepts that the insight is ABOUT (not literal tags from the inputs;
+  abstract them: 'PowerShell' not 'pwsh', 'authentication' not 'auth-fail').
+- Content style: assertive present-tense observation. \"Lucy prefers X over Y for Z.\"
+  Or \"X errors usually trace to Y.\" Or \"X requires Y when Z.\"";
+
+/// Stable fingerprint: lowercase + collapse whitespace + sha256 hex prefix.
+/// Two insights with identical wording (modulo whitespace/case) collapse
+/// to the same fingerprint and reinforce instead of duplicating.
+fn insight_fingerprint(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let normalized: String = content
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut h = Sha256::new();
+    h.update(normalized.as_bytes());
+    let bytes = h.finalize();
+    let mut s = String::with_capacity(32);
+    for b in bytes.iter().take(16) {  // 16 bytes / 32 hex chars is plenty for dedup
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+#[tauri::command]
+pub async fn reflect_run(dry_run: Option<bool>) -> Result<ReflectReport, String> {
+    let dry = dry_run.unwrap_or(false);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let age_cutoff = now - (REFLECT_MIN_AGE_DAYS * 86_400);
+
+    // 1. Pull eligible memories (read-only).
+    #[derive(Clone)]
+    struct Eligible { title: String, content: String, tags: Vec<String> }
+    let eligibles: Vec<Eligible> = with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT title, content, tags FROM agent_memories
+             WHERE superseded_by IS NULL
+               AND expires_at = 0
+               AND created_at < ?1
+             ORDER BY created_at DESC
+             LIMIT 400"
+        ).map_err(|e| format!("reflect prepare: {}", e))?;
+        let rows = stmt.query_map(rusqlite::params![age_cutoff], |row| {
+            Ok(Eligible {
+                title:   row.get(0)?,
+                content: row.get(1)?,
+                tags:    parse_tags(&row.get::<_, String>(2)?),
+            })
+        }).map_err(|e| format!("reflect query: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows { if let Ok(e) = r {
+            if e.tags.len() >= 2 { out.push(e); }
+        }}
+        Ok(out)
+    })?;
+
+    let eligible_count = eligibles.len() as i64;
+    if eligibles.len() < REFLECT_MIN_CLUSTER {
+        return Ok(ReflectReport {
+            dry_run: dry,
+            eligible_memories: eligible_count,
+            clusters_processed: 0,
+            insights_created: 0,
+            insights_reinforced: 0,
+        });
+    }
+
+    // 2. Cluster by shared-tag overlap (same Union-Find pattern as consolidate).
+    let n = eligibles.len();
+    let mut uf = UnionFind::new(n);
+    use std::collections::HashSet;
+    let tag_sets: Vec<HashSet<&str>> = eligibles.iter()
+        .map(|e| e.tags.iter().map(|s| s.as_str()).collect())
+        .collect();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let shared = tag_sets[i].intersection(&tag_sets[j]).count();
+            if shared >= REFLECT_MIN_SHARED_TAGS {
+                uf.union(i, j);
+            }
+        }
+    }
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for i in 0..n {
+        let root = uf.find(i);
+        groups.entry(root).or_default().push(i);
+    }
+    let mut viable: Vec<Vec<usize>> = groups.into_values()
+        .filter(|g| g.len() >= REFLECT_MIN_CLUSTER && g.len() <= REFLECT_MAX_CLUSTER)
+        .collect();
+    viable.sort_by(|a, b| b.len().cmp(&a.len()));
+    viable.truncate(REFLECT_MAX_CLUSTERS);
+
+    if dry {
+        return Ok(ReflectReport {
+            dry_run: true,
+            eligible_memories: eligible_count,
+            clusters_processed: viable.len() as i64,
+            insights_created: 0,
+            insights_reinforced: 0,
+        });
+    }
+
+    // 3. For each cluster: LLM → fingerprint match → create or reinforce.
+    let base = crate::commands::embeddings::ollama_base();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(REFLECT_OLLAMA_TIMEOUT_S))
+        .build()
+        .map_err(|e| format!("http client: {}", e))?;
+
+    let mut created = 0i64;
+    let mut reinforced = 0i64;
+    let mut processed = 0i64;
+
+    for idxs in &viable {
+        // Build user prompt
+        let mut user_prompt = String::with_capacity(2048);
+        user_prompt.push_str("Cluster of related observations:\n\n");
+        for (i, &mi) in idxs.iter().enumerate() {
+            let m = &eligibles[mi];
+            let snippet: String = m.content.chars().take(280).collect();
+            user_prompt.push_str(&format!(
+                "{}. {} — {}\n   tags: {}\n\n",
+                i + 1,
+                m.title.chars().take(80).collect::<String>(),
+                snippet,
+                m.tags.join(", ")
+            ));
+        }
+
+        let body = serde_json::json!({
+            "model": "qwen3:4b",
+            "messages": [
+                { "role": "system", "content": REFLECT_SYSTEM },
+                { "role": "user",   "content": user_prompt },
+            ],
+            "stream": false,
+            "options": { "temperature": 0.4, "num_predict": 400 },
+        });
+
+        let resp = match client
+            .post(format!("{}/api/chat", base))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let json: serde_json::Value = match resp.json().await { Ok(j) => j, Err(_) => continue };
+        let xml = json
+            .get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str())
+            .unwrap_or("").to_string();
+
+        let content = match xml_single_local(&xml, "content") {
+            Some(c) if !c.trim().is_empty() && c.len() >= 20 => c,
+            _ => continue,  // model emitted empty/too-short content → skip
+        };
+        let concepts: Vec<String> = xml_collect_local(&xml, "concept")
+            .into_iter()
+            .filter(|c| !c.trim().is_empty())
+            .take(6)
+            .collect();
+        let concepts_json = serde_json::to_string(&concepts).unwrap_or_else(|_| "[]".to_string());
+
+        let fp = insight_fingerprint(&content);
+        let cluster_size = idxs.len() as i64;
+        processed += 1;
+
+        // 4. Upsert: try INSERT; on UNIQUE conflict, run reinforcement UPDATE.
+        let action: Result<&'static str, String> = with_db(|conn| {
+            let res = conn.execute(
+                "INSERT INTO agent_insights \
+                 (content, fingerprint, confidence, reinforcements, concepts, \
+                  source_count, last_reinforced_at, created_at, updated_at) \
+                 VALUES (?1, ?2, 0.5, 1, ?3, ?4, ?5, ?5, ?5)",
+                rusqlite::params![content, fp, concepts_json, cluster_size, now],
+            );
+            match res {
+                Ok(_) => Ok("created"),
+                Err(rusqlite::Error::SqliteFailure(_, ref msg))
+                    if msg.as_deref().unwrap_or("").contains("UNIQUE") =>
+                {
+                    // Reinforce: confidence += 0.1 * (1 - confidence)
+                    conn.execute(
+                        "UPDATE agent_insights SET \
+                            confidence = confidence + 0.10 * (1.0 - confidence), \
+                            reinforcements = reinforcements + 1, \
+                            source_count = source_count + ?2, \
+                            last_reinforced_at = ?3, \
+                            updated_at = ?3 \
+                         WHERE fingerprint = ?1",
+                        rusqlite::params![fp, cluster_size, now],
+                    ).map_err(|e| format!("reflect reinforce: {}", e))?;
+                    Ok("reinforced")
+                }
+                Err(e) => Err(format!("reflect insert: {}", e)),
+            }
+        });
+
+        match action {
+            Ok("created")    => created += 1,
+            Ok("reinforced") => reinforced += 1,
+            _ => {}  // already counted in `processed`, no-op on insert failure
+        }
+    }
+
+    Ok(ReflectReport {
+        dry_run: false,
+        eligible_memories: eligible_count,
+        clusters_processed: processed,
+        insights_created: created,
+        insights_reinforced: reinforced,
+    })
+}
+
+/// List insights, ordered by (confidence DESC, reinforcements DESC) — the
+/// most-confident, most-recurrent insights surface first.
+#[tauri::command]
+pub fn list_insights(limit: Option<i64>) -> Result<Vec<AgentInsight>, String> {
+    let lim = limit.unwrap_or(20).max(1).min(100);
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, content, fingerprint, confidence, reinforcements, \
+                    concepts, source_count, last_reinforced_at, created_at, updated_at \
+             FROM agent_insights \
+             ORDER BY confidence DESC, reinforcements DESC \
+             LIMIT ?1"
+        ).map_err(|e| format!("list_insights prepare: {}", e))?;
+        let rows = stmt.query_map(rusqlite::params![lim], |row| Ok(AgentInsight {
+            id:                 row.get(0)?,
+            content:            row.get(1)?,
+            fingerprint:        row.get(2)?,
+            confidence:         row.get(3)?,
+            reinforcements:     row.get(4)?,
+            concepts:           row.get(5)?,
+            source_count:       row.get(6)?,
+            last_reinforced_at: row.get(7)?,
+            created_at:         row.get(8)?,
+            updated_at:         row.get(9)?,
+        })).map_err(|e| format!("list_insights query: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows { if let Ok(i) = r { out.push(i); } }
+        Ok(out)
+    })
+}
+
+#[tauri::command]
+pub fn delete_insight(id: i64) -> Result<usize, String> {
+    if id <= 0 { return Err("delete_insight: invalid id".to_string()); }
+    with_db(|conn| {
+        let n = conn.execute(
+            "DELETE FROM agent_insights WHERE id = ?1",
+            rusqlite::params![id],
+        ).map_err(|e| format!("delete_insight: {}", e))?;
+        Ok(n)
     })
 }
