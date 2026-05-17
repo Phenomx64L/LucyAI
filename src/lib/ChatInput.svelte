@@ -57,6 +57,26 @@
     let _flagSuggestions: FlagSuggestion[] = [];
     let _flagSelIdx = 0;
 
+    // ── Auto-grow textarea (restored from pre-refactor) ──
+    // The Sprint D refactor offloaded resize to the parent's autoResize
+    // via on:inputchange — but Svelte's CustomEvent.target is the
+    // component root, not the textarea, so the parent received null and
+    // the bar stopped growing (and crashed on every keystroke until the
+    // null-guard fix landed). Owning resize here, where we have the
+    // textarea ref directly, is both correct and resilient.
+    function autoResize() {
+        if (!_textareaEl) return;
+        _textareaEl.style.height = '0px';
+        const target = Math.min(_textareaEl.scrollHeight, 160);
+        _textareaEl.style.height = Math.max(target, 24) + 'px';
+        _textareaEl.style.overflowY = _textareaEl.scrollHeight > 160 ? 'auto' : 'hidden';
+    }
+
+    // Reset height when the input value is cleared (after sending).
+    $: if (tab.inputValue === '' && _textareaEl) {
+        _textareaEl.style.height = 'auto';
+    }
+
     function refreshFlagSuggestions() {
         if (!_textareaEl) { _flagSuggestions = []; return; }
         const line = _textareaEl.value;
@@ -194,7 +214,7 @@
                     : cmdPlaceholder}
             bind:value={tab.inputValue}
             bind:this={_textareaEl}
-            on:input={(e) => { dispatch('inputchange', { event: e }); refreshFlagSuggestions(); }}
+            on:input={(e) => { autoResize(); refreshFlagSuggestions(); dispatch('inputchange', { event: e }); }}
             on:keydown={(e) => { if (handleSuggestionKey(e)) return; dispatch('keydown', { event: e }); }}
             on:blur={() => setTimeout(() => { _flagSuggestions = []; }, 120)}
             disabled={!!tab.pendingMessage}></textarea>
