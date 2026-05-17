@@ -1984,7 +1984,18 @@ import { listen } from '@tauri-apps/api/event';
         }
     }
 
-    function autoResize(e){const el=e.target;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}
+    // FIX (post-Sprint D): ChatInput.svelte dispatches a CustomEvent whose
+    // `target` is the component root, not the textarea. Unwrap `e.detail.event`
+    // to get the real InputEvent, and fall back to `e` for direct callers.
+    // Null-guard everything — autoResize fires on every keystroke; one null
+    // deref blows up the whole view (regression seen on Terminal IA).
+    function autoResize(e){
+        const inner = (e && e.detail && e.detail.event) ? e.detail.event : e;
+        const el = inner && inner.target;
+        if (!el || !el.style) return;
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+    }
     function onKey(e, tabId) {
         const t = getTab(tabId);
         if (!t) return;
