@@ -489,7 +489,13 @@ import { listen } from '@tauri-apps/api/event';
     // LogViewer state moved to LogViewerView.svelte
     let logSelectedHost    = 'local';  // kept for host deletion cleanup
 
-    $: activeTab    = tabs.find(t => t.id === activeTabId);
+    // ── Derived store migration (Phase 2c FINAL · audit P2) ────────────────
+    // Keep activeTabIdStore in lockstep with the page-level `activeTabId`.
+    // Downstream `$: activeTab = $activeTabStore` then re-fires ONLY when
+    // either the id OR the tabsStore actually changes — not on every cousin
+    // tab's in-place mutation (which used to invalidate via `tabs.find`).
+    $: activeTabIdStore.set(activeTabId);
+    $: activeTab    = $activeTabStore ?? tabs.find(t => t.id === activeTabId);
 
     // ── Lucy global state (drives StatusOrb + data-state on <body>) ─────────
     // Order matters: error wins over executing wins over thinking wins over idle.
@@ -545,8 +551,10 @@ import { listen } from '@tauri-apps/api/event';
             : `'${uiFont}',monospace`);
     }
     // ── UX: Chat search count ─────────────────────
+    // Phase 2c FINAL: reuse derived `activeTab` instead of re-finding in the
+    // tabs array — saves one O(N) scan per keystroke in the search box.
     $: chatSearchCount = chatSearch
-        ? (tabs.find(t => t.id === activeTabId)?.messages.filter(m =>
+        ? (activeTab?.messages.filter(m =>
             (m.rawContent||'').toLowerCase().includes(chatSearch.toLowerCase())).length ?? 0)
         : 0;
     // ── CHIPS EDITABLES (barra inferior) ──────────
