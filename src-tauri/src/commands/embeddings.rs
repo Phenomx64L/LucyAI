@@ -167,6 +167,14 @@ pub async fn embed_text(text: String, model: Option<String>) -> Result<Vec<f32>,
     Ok(v)
 }
 
+/// Crate-visible wrapper around the private `embed_via_ollama` so sibling
+/// modules (e.g. `metrics::save_agent_memory` Stage 2 dedup) can embed
+/// content without going through the Tauri command boundary. Returns
+/// (vector, actual_model_used).
+pub(crate) async fn embed_via_ollama_pub(text: &str, model: Option<String>) -> Result<(Vec<f32>, String), String> {
+    embed_via_ollama(text, model).await
+}
+
 /// Check whether the embeddings system is available (Ollama reachable + model
 /// installed). Runs a 1-token embed as smoke test. Returns `true` on success.
 #[tauri::command]

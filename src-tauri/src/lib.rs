@@ -262,6 +262,7 @@ pub fn run() {
             guardrails::guardrail_scan,
             guardrails::guardrail_scan_url,
             guardrails::prompt_guard_status,
+            guardrails::download_prompt_guard_model,
             // AI
             ai::ask_lucy,
             commands::mcp::call_mcp_tool,

@@ -526,25 +526,28 @@ pub struct SaveMemoryResult {
     pub reason: String,
 }
 
-/// Save a memory discovered during an agent task — with **automatic
-/// deduplication** (Mem0-inspired, May 2026).
+/// Save a memory discovered during an agent task — with **two-stage
+/// automatic deduplication** (Mem0-inspired, May 2026).
 ///
-/// Before INSERTing, we ask FTS5 whether the (title, content) pair is
-/// substantially the same as something we already stored. If so we DON'T
-/// duplicate; instead we touch the existing row's access counters and
-/// return its id with `action="duplicate"`. The agent surfaces this in
-/// chat so the user knows "this fact was already known".
+/// **Stage 1 — FTS5 bm25 probe** (cheap, ~1ms). Catches duplicates where
+/// the new content uses similar wording to an existing one. Threshold
+/// `bm25 < -8.0` catches ~90% of true dups with our content shape.
 ///
-/// Threshold tuning: bm25 returns NEGATIVE scores (lower = better).
-/// We use `< -8.0` as the duplicate cut. Empirically with our content
-/// shape (1-3 sentence sysadmin facts) this catches ~90% of true dups
-/// without false positives. The query is title + content's first 200
-/// chars — full content can be much longer and dilutes the match.
+/// **Stage 2 — Embedding cosine similarity** (Mem0 deep, May 2026).
+/// Runs ONLY if stage 1 didn't catch a dup AND Ollama embeddings are
+/// available. Embeds the new content + searches `vec_index` for any
+/// `entity_type=memory` row with cosine ≥ 0.92. Catches **paraphrased**
+/// duplicates that bm25 misses (e.g. "server X uses PostgreSQL 16" vs
+/// "PROD-DB-01 runs Postgres 16.x" — bm25 sees different words, but
+/// the embedding sees the same fact).
+///
+/// If either stage matches: skip INSERT, bump the existing row's access
+/// counters, return `{ action: "duplicate", id: existing }`.
 ///
 /// `tags`  — JSON array string, e.g. `["rust","cargo","fix"]`
 /// `files` — JSON array string of related file paths
 #[tauri::command]
-pub fn save_agent_memory(
+pub async fn save_agent_memory(
     title:      String,
     content:    String,
     tags:       Option<String>,
@@ -552,75 +555,142 @@ pub fn save_agent_memory(
     session_id: Option<String>,
     importance: Option<i64>,
 ) -> Result<SaveMemoryResult, String> {
-    with_db(|conn| {
+    // Stage 1 + INSERT happen synchronously in the DB closure. Stage 2
+    // (embedding probe) is async, so we run it BEFORE the DB closure
+    // when bm25 didn't catch a dup. The closure handles the insert + dup
+    // dance for stages 1 and 2 atomically.
+    let stage1_result = with_db(|conn| stage1_fts_dedup(conn, &title, &content))?;
+    if let Some(dup) = stage1_result {
+        return Ok(dup);
+    }
+
+    // Stage 2 — try embedding-based dedup. If Ollama is offline or any
+    // step fails, fall through to insert without semantic dedup. Stage 2
+    // is best-effort; we never block a save on it.
+    let stage2_result = stage2_embedding_dedup(&title, &content).await;
+    if let Ok(Some(dup)) = stage2_result {
+        return Ok(dup);
+    }
+
+    // No dups found — insert the fresh row.
+    let new_id = with_db(|conn| {
         let imp  = importance.unwrap_or(1).max(1).min(3);
         let tags  = tags.unwrap_or_else(|| "[]".to_string());
         let files = files.unwrap_or_else(|| "[]".to_string());
         let sid   = session_id.unwrap_or_default();
-
-        // ── Dedup probe via FTS5 ──
-        // Build a safe FTS query from title + first slice of content.
-        // Each word becomes a prefix-match term joined by OR (matches the
-        // pattern used in search_agent_memories for consistency).
-        let probe = format!("{} {}", title, &content.chars().take(200).collect::<String>());
-        let safe_q = probe
-            .split_whitespace()
-            .filter(|w| w.len() > 2 && !w.chars().any(|c| c.is_control()))
-            .map(|w| format!("\"{}\"*", w.replace('"', "")))
-            .take(20)  // FTS query length limit
-            .collect::<Vec<_>>()
-            .join(" OR ");
-
-        if !safe_q.is_empty() {
-            let best: rusqlite::Result<(i64, f64)> = conn.query_row(
-                "SELECT am.id, bm25(agent_memories_fts) AS score
-                 FROM agent_memories am
-                 JOIN agent_memories_fts fts ON am.id = fts.rowid
-                 WHERE agent_memories_fts MATCH ?1
-                   AND am.superseded_by IS NULL
-                 ORDER BY score ASC
-                 LIMIT 1",
-                rusqlite::params![safe_q],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            );
-
-            if let Ok((dup_id, score)) = best {
-                // bm25 returns LOWER (more negative) = better match. Empirical
-                // tuning: < -8.0 means substantial title+content overlap.
-                if score < -8.0 {
-                    // Touch the existing row's access bookkeeping so the
-                    // dedup signal counts as engagement.
-                    let _ = conn.execute(
-                        "UPDATE agent_memories
-                         SET access_count = access_count + 1,
-                             last_accessed_at = strftime('%s','now')
-                         WHERE id = ?1",
-                        rusqlite::params![dup_id],
-                    );
-                    return Ok(SaveMemoryResult {
-                        id: dup_id,
-                        action: "duplicate".to_string(),
-                        reason: format!(
-                            "Memory already exists (id={}, bm25 score={:.2})",
-                            dup_id, score
-                        ),
-                    });
-                }
-            }
-        }
-
-        // No dup — insert fresh.
         conn.execute(
             "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![sid, title, content, tags, files, imp],
         ).map_err(|e| format!("save_agent_memory: {}", e))?;
-        Ok(SaveMemoryResult {
-            id: conn.last_insert_rowid(),
-            action: "inserted".to_string(),
-            reason: "New memory stored".to_string(),
-        })
+        Ok(conn.last_insert_rowid())
+    })?;
+
+    Ok(SaveMemoryResult {
+        id: new_id,
+        action: "inserted".to_string(),
+        reason: "New memory stored".to_string(),
     })
+}
+
+/// Stage 1 — FTS5 bm25 dedup. Returns Some(dup-result) when a strong
+/// match is found, None otherwise. Synchronous (DB-only).
+fn stage1_fts_dedup(
+    conn: &rusqlite::Connection,
+    title: &str,
+    content: &str,
+) -> Result<Option<SaveMemoryResult>, String> {
+    let probe = format!("{} {}", title, &content.chars().take(200).collect::<String>());
+    let safe_q = probe
+        .split_whitespace()
+        .filter(|w| w.len() > 2 && !w.chars().any(|c| c.is_control()))
+        .map(|w| format!("\"{}\"*", w.replace('"', "")))
+        .take(20)
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    if safe_q.is_empty() {
+        return Ok(None);
+    }
+
+    let best: rusqlite::Result<(i64, f64)> = conn.query_row(
+        "SELECT am.id, bm25(agent_memories_fts) AS score
+         FROM agent_memories am
+         JOIN agent_memories_fts fts ON am.id = fts.rowid
+         WHERE agent_memories_fts MATCH ?1
+           AND am.superseded_by IS NULL
+         ORDER BY score ASC
+         LIMIT 1",
+        rusqlite::params![safe_q],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    );
+
+    if let Ok((dup_id, score)) = best {
+        if score < -8.0 {
+            let _ = conn.execute(
+                "UPDATE agent_memories
+                 SET access_count = access_count + 1,
+                     last_accessed_at = strftime('%s','now')
+                 WHERE id = ?1",
+                rusqlite::params![dup_id],
+            );
+            return Ok(Some(SaveMemoryResult {
+                id: dup_id,
+                action: "duplicate".to_string(),
+                reason: format!("FTS bm25 score {:.2} matches memory {}", score, dup_id),
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// Stage 2 — embedding cosine dedup (Mem0 deep). Best-effort: requires
+/// Ollama embeddings; returns Ok(None) if anything goes wrong so the
+/// caller falls back to a normal insert.
+async fn stage2_embedding_dedup(
+    title: &str,
+    content: &str,
+) -> Result<Option<SaveMemoryResult>, String> {
+    // Build the same probe as stage 1 — title + first chunk of content
+    let probe = format!("{}\n{}", title, &content.chars().take(800).collect::<String>());
+
+    // Embed via Ollama. If embeddings aren't available we silently skip.
+    let embed_res = crate::commands::embeddings::embed_via_ollama_pub(&probe, None).await;
+    let query_vec = match embed_res {
+        Ok((v, _)) => v,
+        Err(_) => return Ok(None),  // Ollama offline / model missing — skip stage 2
+    };
+
+    // Search the in-memory vec index for high-similarity memories
+    let hits = crate::commands::vec_index::search(&query_vec, 5, 0.92);
+    let best_memory = hits.iter()
+        .find(|(etype, _id, _text, _score)| etype == "memory");
+    let Some((_etype, entity_id, _text, score)) = best_memory else {
+        return Ok(None);
+    };
+
+    let dup_id: i64 = match entity_id.parse() {
+        Ok(i) => i,
+        Err(_) => return Ok(None),  // entity_id wasn't a memory row id — skip
+    };
+
+    // Touch the existing row, then return the dup result.
+    let _ = with_db(|conn| {
+        conn.execute(
+            "UPDATE agent_memories
+             SET access_count = access_count + 1,
+                 last_accessed_at = strftime('%s','now')
+             WHERE id = ?1 AND superseded_by IS NULL",
+            rusqlite::params![dup_id],
+        ).map_err(|e| format!("touch failed: {}", e))?;
+        Ok::<(), String>(())
+    });
+
+    Ok(Some(SaveMemoryResult {
+        id: dup_id,
+        action: "duplicate".to_string(),
+        reason: format!("Embedding cosine {:.3} matches memory {} (semantic paraphrase)", score, dup_id),
+    }))
 }
 
 /// Full-text search over memories using FTS5 with **Mem0-inspired

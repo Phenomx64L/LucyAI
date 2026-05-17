@@ -71,3 +71,22 @@ pub fn guardrail_scan_url(url: String) -> ScanResult {
 pub fn prompt_guard_status() -> prompt_guard::StatusInfo {
     prompt_guard::status_info()
 }
+
+/// Download the PromptGuard 2 model + tokenizer from HuggingFace.
+///
+/// PromptGuard 2 is a gated model — users MUST supply a HuggingFace token
+/// with read access AND have accepted the Meta license on the model's
+/// HF page. Lucy never stores the token; it's passed per-call and used
+/// only for the duration of these two GETs.
+///
+/// Streams progress to the frontend via the `prompt_guard:download`
+/// event so the UI can render a progress bar. On completion, the next
+/// `prompt_guard_status` call should flip to either `Active` or
+/// `RuntimeMissing` (if the ORT DLL isn't installed yet).
+#[tauri::command]
+pub async fn download_prompt_guard_model(
+    hf_token: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    prompt_guard::download_model(&hf_token, &app).await
+}

@@ -31,6 +31,7 @@
 
 use std::path::PathBuf;
 use serde::Serialize;
+use tauri::Emitter;
 #[cfg(feature = "ml-guard")]
 use std::sync::OnceLock;
 
@@ -201,3 +202,144 @@ mod ml {
 }
 #[cfg(feature = "ml-guard")]
 pub use ml::score;
+
+// ─────────────────────────────────────────────────────────────────────────
+// MODEL DOWNLOAD (from HuggingFace)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Downloads `model.onnx` + `tokenizer.json` into `%APPDATA%\Lucy\guardrails
+// \prompt_guard_2\`. The user must supply a HuggingFace token with read
+// access AND have accepted the Meta license on the gated model page
+// (otherwise HF returns 401/403).
+//
+// We emit `prompt_guard:download` events at each phase so the UI can
+// render a progress bar. Event payload:
+//   { file: string, phase: "start" | "progress" | "done" | "error",
+//     bytes_received?: u64, bytes_total?: u64, error?: string }
+
+#[derive(Debug, Clone, Serialize)]
+struct DownloadEvent<'a> {
+    file: &'a str,
+    phase: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes_received: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes_total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// HuggingFace model repository for PromptGuard 2.
+/// Meta's `meta-llama/Llama-Prompt-Guard-2-86M` is gated — user needs
+/// a token with read access + accepted license.
+const HF_REPO: &str = "meta-llama/Llama-Prompt-Guard-2-86M";
+
+pub async fn download_model(hf_token: &str, app: &tauri::AppHandle) -> Result<String, String> {
+    if hf_token.trim().is_empty() {
+        return Err("HuggingFace token requerido. Genera uno en huggingface.co/settings/tokens".to_string());
+    }
+    let dir = model_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("No se pudo crear {}: {}", dir.display(), e))?;
+
+    // Two files we need from the repo root
+    for filename in &["model.onnx", "tokenizer.json"] {
+        download_one_file(hf_token, filename, &dir, app).await?;
+    }
+
+    Ok(format!("Modelo descargado en {}", dir.display()))
+}
+
+async fn download_one_file(
+    token: &str,
+    filename: &str,
+    dest_dir: &PathBuf,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let url = format!("https://huggingface.co/{}/resolve/main/{}", HF_REPO, filename);
+    let dest = dest_dir.join(filename);
+
+    let _ = app.emit("prompt_guard:download", DownloadEvent {
+        file: filename, phase: "start",
+        bytes_received: None, bytes_total: None, error: None,
+    });
+
+    let res = crate::state::HTTP_CLIENT
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("User-Agent", concat!("Lucy/", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = format!("HF request failed for {}: {}", filename, e);
+            let _ = app.emit("prompt_guard:download", DownloadEvent {
+                file: filename, phase: "error",
+                bytes_received: None, bytes_total: None, error: Some(msg.clone()),
+            });
+            msg
+        })?;
+
+    if !res.status().is_success() {
+        let code = res.status().as_u16();
+        let body = res.text().await.unwrap_or_default();
+        let snippet = &body[..body.len().min(200)];
+        let msg = match code {
+            401 => format!("HF 401 — token inválido o sin acceso al modelo gated."),
+            403 => format!("HF 403 — debes aceptar la licencia en huggingface.co/{} antes de descargar.", HF_REPO),
+            404 => format!("HF 404 — archivo {} no encontrado en el repo.", filename),
+            _   => format!("HF HTTP {}: {}", code, snippet),
+        };
+        let _ = app.emit("prompt_guard:download", DownloadEvent {
+            file: filename, phase: "error",
+            bytes_received: None, bytes_total: None, error: Some(msg.clone()),
+        });
+        return Err(msg);
+    }
+
+    let total = res.content_length();
+    let mut received: u64 = 0;
+    let mut stream = res.bytes_stream();
+
+    // Write to a `.partial` file then rename atomically at the end so
+    // an interrupted download never leaves a corrupted onnx that would
+    // crash the loader on next startup.
+    let tmp = dest.with_extension("partial");
+    let mut file = std::fs::File::create(&tmp)
+        .map_err(|e| format!("create {} failed: {}", tmp.display(), e))?;
+    use std::io::Write;
+
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.map_err(|e| {
+            let msg = format!("stream error on {}: {}", filename, e);
+            let _ = app.emit("prompt_guard:download", DownloadEvent {
+                file: filename, phase: "error",
+                bytes_received: Some(received), bytes_total: total, error: Some(msg.clone()),
+            });
+            msg
+        })?;
+        file.write_all(&chunk).map_err(|e| format!("write failed: {}", e))?;
+        received += chunk.len() as u64;
+        // Throttle progress events: emit roughly every 256 KB to avoid
+        // flooding the bridge during a 280 MB download.
+        if received % (256 * 1024) < chunk.len() as u64 {
+            let _ = app.emit("prompt_guard:download", DownloadEvent {
+                file: filename, phase: "progress",
+                bytes_received: Some(received), bytes_total: total, error: None,
+            });
+        }
+    }
+    drop(file);
+
+    // Atomic rename — Windows requires the destination to NOT exist
+    let _ = std::fs::remove_file(&dest);
+    std::fs::rename(&tmp, &dest)
+        .map_err(|e| format!("rename {} → {} failed: {}", tmp.display(), dest.display(), e))?;
+
+    let _ = app.emit("prompt_guard:download", DownloadEvent {
+        file: filename, phase: "done",
+        bytes_received: Some(received), bytes_total: total, error: None,
+    });
+    Ok(())
+}

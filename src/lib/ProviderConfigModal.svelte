@@ -1,6 +1,7 @@
 <script>
-    import { createEventDispatcher, onMount } from 'svelte';
+    import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    import { listen } from '@tauri-apps/api/event';
     import Key from '@tabler/icons-svelte/icons/key';
 
     import Globe from '@tabler/icons-svelte/icons/world';
@@ -211,7 +212,57 @@
         try { mlGuard = await invoke('prompt_guard_status'); }
         catch (e) { mlGuard = { status: 'failed', model_path: '', note: String(e) }; }
     }
-    onMount(() => { loadConfiguredState(); probeMlGuard(); });
+
+    // ── PromptGuard 2 model download UI ──
+    // Listens for `prompt_guard:download` events from the Rust backend
+    // and renders a per-file progress bar. Token is held in component
+    // state only — never persisted to keyring (HF tokens are sensitive
+    // and the user should re-enter for each download session).
+    let hfToken = '';
+    let downloading = false;
+    let downloadErr = '';
+    // Per-file progress map: { 'model.onnx': {bytes_received, bytes_total, phase}, ... }
+    let downloadProgress = {};
+    let _unlistenDownload = null;
+
+    async function startDownload() {
+        if (!hfToken.trim()) { downloadErr = 'Token requerido'; return; }
+        downloadErr = '';
+        downloading = true;
+        downloadProgress = {};
+        try {
+            await invoke('download_prompt_guard_model', { hfToken: hfToken.trim() });
+            await probeMlGuard();   // refresh status after success
+        } catch (e) {
+            downloadErr = String(e);
+        }
+        downloading = false;
+    }
+
+    function formatMB(n) {
+        if (!n) return '?';
+        return (n / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    onMount(async () => {
+        loadConfiguredState();
+        probeMlGuard();
+        // Subscribe to the download progress channel. The unlisten fn is
+        // saved + called on destroy so we don't leak the listener across
+        // HMR re-mounts.
+        try {
+            _unlistenDownload = await listen('prompt_guard:download', (ev) => {
+                const d = ev.payload;
+                if (!d || !d.file) return;
+                downloadProgress = { ...downloadProgress, [d.file]: { ...d } };
+                if (d.phase === 'error') downloadErr = d.error || 'download error';
+            });
+        } catch { /* event channel unavailable — non-fatal */ }
+    });
+    onDestroy(() => {
+        if (_unlistenDownload) { try { _unlistenDownload(); } catch {} _unlistenDownload = null; }
+    });
+
     // Re-probe whenever the modal is opened, so a user who configured a
     // provider elsewhere (e.g. via /command) sees the updated state.
     $: if (isOpen) { loadConfiguredState(); probeMlGuard(); }
@@ -489,11 +540,58 @@
                             {:else if mlGuard?.status === 'model_missing'}
                                 <div class="guard-row guard-warn">
                                     <AlertCircle size={16} color="#f59e0b" />
-                                    <div>
+                                    <div style="flex:1;">
                                         <strong>PromptGuard 2 ML</strong>
                                         <div class="hint" style="margin-top:2px;">{l.guardrails.ml_model_missing}</div>
                                         <div class="hint" style="font-family:var(--mono);font-size:10px;margin-top:4px;opacity:0.7;">{mlGuard.model_path}</div>
-                                        <div class="hint" style="margin-top:6px;">{l.guardrails.install_guide}</div>
+
+                                        <!-- Inline download UI (PromptGuard 2 from HuggingFace) -->
+                                        <div class="dl-box">
+                                            <label style="display:block;font-size:11px;color:var(--txt2);margin-bottom:4px;">
+                                                {isEN ? 'HuggingFace token (read access to meta-llama/Llama-Prompt-Guard-2-86M):' : 'Token HuggingFace (acceso de lectura a meta-llama/Llama-Prompt-Guard-2-86M):'}
+                                            </label>
+                                            <input type="password" bind:value={hfToken} placeholder="hf_..." disabled={downloading}
+                                                   style="width:100%;padding:5px 8px;background:#0f1520;border:1px solid var(--bdr);border-radius:4px;color:var(--txt);font-family:var(--mono);font-size:11px;" />
+                                            <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
+                                                <button class="dl-btn" on:click={startDownload} disabled={downloading || !hfToken.trim()}>
+                                                    {#if downloading}
+                                                        ↻ {isEN ? 'Downloading…' : 'Descargando…'}
+                                                    {:else}
+                                                        ⬇ {isEN ? 'Download Model (≈280 MB)' : 'Descargar Modelo (≈280 MB)'}
+                                                    {/if}
+                                                </button>
+                                                <span style="font-size:10px;color:var(--txt3);">
+                                                    {isEN
+                                                        ? 'Get token: huggingface.co/settings/tokens · License: huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M'
+                                                        : 'Token: huggingface.co/settings/tokens · Licencia: huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M'}
+                                                </span>
+                                            </div>
+
+                                            {#if downloadErr}
+                                                <div class="hint" style="margin-top:6px;color:var(--red);">⚠ {downloadErr}</div>
+                                            {/if}
+
+                                            <!-- Progress bars per file -->
+                                            {#each Object.entries(downloadProgress) as [file, p] (file)}
+                                                {@const pct = (p.bytes_total && p.bytes_received)
+                                                    ? Math.min(100, (p.bytes_received / p.bytes_total) * 100) : 0}
+                                                <div class="dl-prog" style="margin-top:6px;">
+                                                    <div style="display:flex;justify-content:space-between;font-size:10px;font-family:var(--mono);color:var(--txt2);">
+                                                        <span>{file}</span>
+                                                        <span>
+                                                            {#if p.phase === 'done'}✓ {formatMB(p.bytes_received)}
+                                                            {:else if p.phase === 'error'}✕ error
+                                                            {:else}{formatMB(p.bytes_received)} / {formatMB(p.bytes_total)} ({pct.toFixed(0)}%)
+                                                            {/if}
+                                                        </span>
+                                                    </div>
+                                                    <div class="dl-track">
+                                                        <div class="dl-fill" class:err={p.phase === 'error'} class:done={p.phase === 'done'}
+                                                             style="width: {p.phase === 'done' ? 100 : pct}%;"></div>
+                                                    </div>
+                                                </div>
+                                            {/each}
+                                        </div>
                                     </div>
                                 </div>
                             {:else if mlGuard?.status === 'runtime_missing'}
@@ -741,6 +839,44 @@
         transition: background .15s ease;
     }
     .re-check:hover { background: rgba(255,255,255,0.08); color: var(--txt); }
+
+    /* Inline download UI for PromptGuard 2 — sits inside the Guardrails tab
+       when status is `model_missing`. */
+    .dl-box {
+        margin-top: 10px;
+        padding: 10px;
+        background: rgba(0,0,0,0.18);
+        border: 1px solid var(--bdr);
+        border-radius: 5px;
+    }
+    .dl-btn {
+        background: var(--acc, #10b981);
+        color: #0a0d12;
+        border: none;
+        padding: 6px 14px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity .15s ease;
+    }
+    .dl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .dl-btn:not(:disabled):hover { filter: brightness(1.1); }
+
+    .dl-track {
+        height: 5px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 3px;
+        margin-top: 3px;
+        overflow: hidden;
+    }
+    .dl-fill {
+        height: 100%;
+        background: var(--acc, #10b981);
+        transition: width .15s ease;
+    }
+    .dl-fill.done { background: #10b981; }
+    .dl-fill.err  { background: var(--red, #ef4444); }
 
     .feature-badge {
         display: inline-block;
