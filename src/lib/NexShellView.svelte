@@ -71,13 +71,17 @@
             }
 
             const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.setAttribute('href', URL.createObjectURL(blob));
+            link.setAttribute('href', url);
             link.setAttribute('download', `nexshell-debug-${Date.now()}.log`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            // Release the object URL — prevents the Blob memory from being
+            // pinned indefinitely. 1s delay so the click had time to start.
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
             toast(isEN ? 'Logs downloaded' : 'Logs descargados', 'success');
         } catch (e) {
             toast(`Error: ${e}`, 'error');
@@ -287,6 +291,13 @@
         const s = getShell(id);
         if (!s || !s.isStreaming) return;
         s.streamOut = (s.streamOut || '') + chunk;
+        // Cap streaming buffer at 100KB to prevent unbounded memory growth
+        // on long-running shell sessions (verbose logs, tail -f, etc.). The
+        // 100KB tail is more than enough for any human to read on screen.
+        const MAX_STREAM = 102400;
+        if (s.streamOut.length > MAX_STREAM) {
+            s.streamOut = '…[truncado]\n' + s.streamOut.slice(-MAX_STREAM);
+        }
         if (!s.waitingForInput) {
             for (const p of RS_PROMPT_PATTERNS) {
                 if (p.re.test(s.streamOut)) {
@@ -1391,11 +1402,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
         const outUl  = await listen(`ssh-out-${bgId}`,  (e) => {
             const t = getShell(shellId)?.bgTasks?.find(t => t.id === bgId);
-            if (t) { t.streamOut += String(e.payload); rshellSessions = [...rshellSessions]; }
+            if (t) { t.streamOut += String(e.payload); if (t.streamOut.length > 102400) t.streamOut = '…[truncado]\n' + t.streamOut.slice(-102400); rshellSessions = [...rshellSessions]; }
         });
         const errUl  = await listen(`ssh-err-${bgId}`,  (e) => {
             const t = getShell(shellId)?.bgTasks?.find(t => t.id === bgId);
-            if (t) { t.streamOut += String(e.payload); rshellSessions = [...rshellSessions]; }
+            if (t) { t.streamOut += String(e.payload); if (t.streamOut.length > 102400) t.streamOut = '…[truncado]\n' + t.streamOut.slice(-102400); rshellSessions = [...rshellSessions]; }
         });
         const doneUl = await listen(`ssh-done-${bgId}`, (e) => {
             let exitCode = null, durationMs = null;
@@ -1571,7 +1582,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                     ? `Copy-Item -Path "${ftLocalPath}" -Destination "${ftRemotePath}" -ToSession (New-PSSession -ComputerName ${s.host.host})`
                     : `Copy-Item -Path "${ftRemotePath}" -Destination "${ftLocalPath}" -FromSession (New-PSSession -ComputerName ${s.host.host})`;
                 await invoke('execute_powershell', { script: ps, forceExecute: false });
-                ftResult = `✓ {isEN ? 'Transfer complete' : 'Transferencia completada'}`;
+                ftResult = `✓ ${isEN ? 'Transfer complete' : 'Transferencia completada'}`;
                 rsLogTo(ftShellId, 'info', `⊞ ${isEN ? 'Transfer complete' : 'Transferencia completada'}`);
             }
         } catch(e) {
@@ -1589,7 +1600,9 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         rsLogTo(shellId, 'info', `◉ Iniciando tail: ${logPath}`);
         showTailModal = false;
         let lastLines = '';
-        const interval = setInterval(async () => {
+        // Use recursive setTimeout instead of setInterval to prevent stacking
+        // when the remote command takes longer than the poll interval.
+        const poll = async () => {
             try {
                 const cmd = s.host.type === 'linux'
                     ? `tail -n 20 "${logPath}"`
@@ -1605,8 +1618,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                     if (newLines) rsLogTo(shellId, 'out', newLines);
                     lastLines = out;
                 }
-            } catch(e) { rsDetenerTail(shellId, logPath); }
-        }, 3000);
+            } catch(e) { rsDetenerTail(shellId, logPath); return; }
+            // Schedule next poll only after current one completes
+            if (tailIntervals[key]) tailIntervals[key] = setTimeout(poll, 3000);
+        };
+        const interval = setTimeout(poll, 3000);
         tailIntervals = { ...tailIntervals, [key]: interval };
         rshellSessions = [...rshellSessions];
     }
@@ -1614,7 +1630,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     function rsDetenerTail(shellId, logPath) {
         const key = `${shellId}_${logPath}`;
         if (tailIntervals[key]) {
-            clearInterval(tailIntervals[key]);
+            clearTimeout(tailIntervals[key]);
             const { [key]: _, ...rest } = tailIntervals;
             tailIntervals = rest;
             rsLogTo(shellId, 'info', `⏹ Tail detenido: ${logPath}`);
@@ -1627,7 +1643,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     function rsDetenerTodosTails(shellId) {
         Object.keys(tailIntervals).filter(k => k.startsWith(shellId)).forEach(k => {
-            clearInterval(tailIntervals[k]);
+            clearTimeout(tailIntervals[k]);
         });
         tailIntervals = Object.fromEntries(Object.entries(tailIntervals).filter(([k]) => !k.startsWith(shellId)));
     }
@@ -1640,26 +1656,34 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     // ── RDP Computer-Use Agent ──────────────────────────────────────────────
 
     let rdpAgentUnlisten = null;
+    let _componentDestroyed = false;
 
-    // Start listening for agent events as soon as the component mounts
-    listen('rdp_agent_step', (event) => {
-        const { hwnd, kind, data, detail } = event.payload;
-        const s = rshellSessions.find(s => s.rdpAgentHwnd == hwnd);
-        if (!s) return;
+    // Start listening for agent events — use IIFE to avoid top-level await race.
+    // If the component is destroyed BEFORE listen() resolves, we still call the
+    // unlisten fn (otherwise the handler keeps firing on a dead component and
+    // leaks memory through closure references to rshellSessions).
+    (async () => {
+        const fn = await listen('rdp_agent_step', (event) => {
+            const { hwnd, kind, data, detail } = event.payload;
+            const s = rshellSessions.find(s => s.rdpAgentHwnd == hwnd);
+            if (!s) return;
 
-        const entry = { kind, data: kind === 'screenshot' ? '' : data, detail, ts: new Date() };
-        s.rdpAgentLog = [...s.rdpAgentLog, entry];
+            const entry = { kind, data: kind === 'screenshot' ? '' : data, detail, ts: new Date() };
+            s.rdpAgentLog = [...s.rdpAgentLog, entry];
 
-        if (kind === 'screenshot' && data) {
-            s.rdpAgentScreenshot = data;
-        }
-        if (kind === 'done' || kind === 'error') {
-            s.rdpAgentRunning = false;
-            if (kind === 'done') rsLogTo(s.id, 'lucy-out', `[Agent] Agente completó tarea: ${detail}`);
-            else                 rsLogTo(s.id, 'err',      `[Agent] Agente error: ${detail}`);
-        }
-        rshellSessions = [...rshellSessions];
-    }).then(fn => { rdpAgentUnlisten = fn; });
+            if (kind === 'screenshot' && data) {
+                s.rdpAgentScreenshot = data;
+            }
+            if (kind === 'done' || kind === 'error') {
+                s.rdpAgentRunning = false;
+                if (kind === 'done') rsLogTo(s.id, 'lucy-out', `[Agent] Agente completó tarea: ${detail}`);
+                else                 rsLogTo(s.id, 'err',      `[Agent] Agente error: ${detail}`);
+            }
+            rshellSessions = [...rshellSessions];
+        });
+        // If component was destroyed while awaiting, unlisten immediately
+        if (_componentDestroyed) { fn(); } else { rdpAgentUnlisten = fn; }
+    })();
 
     async function checkProviderHealthRdp(shellId) {
         const s = getShell(shellId);
@@ -1854,7 +1878,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     // ── Cleanup on destroy ──────────────────────────────────────────────────
     onDestroy(() => {
-        Object.values(tailIntervals).forEach(id => clearInterval(id));
+        _componentDestroyed = true;
+        Object.values(tailIntervals).forEach(id => clearTimeout(id));
         if (rdpAgentUnlisten) rdpAgentUnlisten();
     });
 </script>

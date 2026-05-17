@@ -32,8 +32,15 @@
     import RotateCcw from '@tabler/icons-svelte/icons/rotate-2';
 
     import Flag from '@tabler/icons-svelte/icons/flag';
+    // Restored after regression — these two integrations were dropped during
+    // the icon-import migration so incident-resolve no longer auto-built a
+    // runbook nor de-duped the alert in the anomaly bridge.
+    import { generateRunbookFromIncident } from '$lib/runbook-gen';
+    import { markIncidentResolved } from '$lib/anomaly-bridge';
+
     export let incidentId = null;
     export let isEN = false;
+    export let runbooksDir = null;
 
     const dispatch = createEventDispatcher();
 
@@ -74,6 +81,41 @@
             error = null;
         } catch (e) {
             error = String(e);
+        }
+    }
+
+    // ── Auto-generate runbook when incident resolves ──────────────────────
+    // The transition from non-resolved → resolved fires once. We:
+    //   1. Generate a runbook from the incident's evidence + hypotheses,
+    //      so the operator gets a reusable playbook next time the same
+    //      pattern recurs.
+    //   2. Notify the anomaly-bridge so it removes this host+metric from
+    //      its dedup set — subsequent flare-ups will spawn fresh
+    //      incidents instead of being suppressed.
+    let runbookPath = null;
+    let runbookGenerating = false;
+    let prevStatus = null;
+
+    $: if (incident && incident.status === 'resolved' && prevStatus !== 'resolved') {
+        prevStatus = incident.status;
+        // Auto-generate runbook on resolution
+        autoGenRunbook();
+        // Notify anomaly bridge (removes from dedup set)
+        markIncidentResolved(incident.id);
+    }
+    $: if (incident && incident.status !== 'resolved') {
+        prevStatus = incident.status;
+    }
+
+    async function autoGenRunbook() {
+        if (!incidentId || runbookGenerating || runbookPath) return;
+        runbookGenerating = true;
+        try {
+            runbookPath = await generateRunbookFromIncident(incidentId, runbooksDir);
+        } catch (e) {
+            console.warn('[IncidentPanel] runbook gen failed:', e);
+        } finally {
+            runbookGenerating = false;
         }
     }
 
