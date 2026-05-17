@@ -117,6 +117,25 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_agent_memories_expires \
          ON agent_memories(expires_at) WHERE expires_at > 0",
+        // agentmemory-inspired crystals (Tier 2 #4). Each row is the LLM-
+        // distilled digest of a completed agent session: 1-2 sentence
+        // narrative + key outcomes + files affected + lessons learned.
+        // Surfaced via list_crystals / get_crystal commands.
+        "CREATE TABLE IF NOT EXISTS agent_crystals (\
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,\
+            session_id      TEXT    NOT NULL DEFAULT '',\
+            project         TEXT    NOT NULL DEFAULT '',\
+            narrative       TEXT    NOT NULL,\
+            key_outcomes    TEXT    NOT NULL DEFAULT '[]',\
+            files_affected  TEXT    NOT NULL DEFAULT '[]',\
+            lessons         TEXT    NOT NULL DEFAULT '[]',\
+            source_chars    INTEGER NOT NULL DEFAULT 0,\
+            created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))\
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_agent_crystals_session \
+         ON agent_crystals(session_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_crystals_created \
+         ON agent_crystals(created_at DESC)",
     ];
     for stmt in &migrations {
         if let Err(e) = conn.execute(stmt, []) {
@@ -1854,5 +1873,294 @@ pub async fn fork_clear(days: Option<u32>) -> Result<u32, String> {
             rusqlite::params![cutoff_days],
         ).map_err(|e| format!("fork_clear: {}", e))?;
         Ok(n as u32)
+    })
+}
+
+// ── Crystals (Tier 2 #4, agentmemory-inspired) ───────────────────────────
+// A crystal is the LLM-distilled digest of a completed agent session:
+//   • narrative      — 1-2 sentence summary of what was accomplished
+//   • key_outcomes   — bullet-list of decisions/results
+//   • files_affected — paths touched during the session
+//   • lessons        — patterns or insights worth remembering for next time
+//
+// Crystals are recall gold for "how did I fix the WinRM cert issue three
+// weeks ago?" — they survive normal memory eviction (importance is implicit:
+// the user/agent explicitly chose to crystallize this session) and stay
+// browsable in a dedicated UI panel.
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct AgentCrystal {
+    pub id: i64,
+    pub session_id: String,
+    pub project: String,
+    pub narrative: String,
+    /// JSON array string of bullet outcomes
+    pub key_outcomes: String,
+    /// JSON array string of file paths
+    pub files_affected: String,
+    /// JSON array string of lesson strings
+    pub lessons: String,
+    pub source_chars: i64,
+    pub created_at: i64,
+}
+
+/// XML the LLM must produce. Stricter than free-form JSON: we get
+/// deterministic parsing and clean failure modes if the model emits prose.
+const CRYSTALLIZE_SYSTEM: &str = "You are a memory crystallization engine for an autonomous SysAdmin assistant. \
+Given a transcript of a completed agent session, distill it into a single durable memory.
+
+Output EXACTLY this XML (no markdown, no commentary, no code fences):
+<crystal>
+  <narrative>1-2 sentence summary of what was accomplished, in past tense.</narrative>
+  <outcomes>
+    <outcome>Concrete result or decision (under 100 chars each)</outcome>
+  </outcomes>
+  <files>
+    <file>path/to/file</file>
+  </files>
+  <lessons>
+    <lesson>Reusable pattern or insight under 120 chars</lesson>
+  </lessons>
+</crystal>
+
+Rules:
+- 2-5 outcomes, 0-10 files, 1-4 lessons.
+- Lessons must be generalisable (\"PowerShell ExecutionPolicy=Bypass needed for unsigned scripts\"), not session-specific (\"ran command at 3pm\").
+- If files were edited or commands targeted specific paths, include them.
+- Skip XML elements entirely if empty — DO NOT emit <outcome></outcome>.
+- Output ONLY the <crystal> block. No preamble.";
+
+/// Tiny XML helper — extracts the inner text of every `<tag>...</tag>`
+/// match in `xml`. Handles nested whitespace, trims results, drops empties.
+fn xml_collect(xml: &str, tag: &str) -> Vec<String> {
+    let open  = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(s) = xml[cursor..].find(&open) {
+        let start = cursor + s + open.len();
+        let Some(e) = xml[start..].find(&close) else { break };
+        let inner = xml[start..start + e].trim().to_string();
+        if !inner.is_empty() {
+            out.push(inner);
+        }
+        cursor = start + e + close.len();
+    }
+    out
+}
+
+fn xml_single(xml: &str, tag: &str) -> Option<String> {
+    xml_collect(xml, tag).into_iter().next()
+}
+
+/// Crystallize a chunk of session transcript into a stored AgentCrystal.
+/// The frontend assembles `transcript` from the live tab messages; we
+/// don't try to read messages from disk (Lucy keeps them in-memory).
+///
+/// Returns the new crystal id. Fails fast if Ollama is unreachable or
+/// emits unparseable output — crystallization is opt-in and rare, so
+/// silent fallback isn't useful here (unlike search expansion).
+#[tauri::command]
+pub async fn crystallize_session(
+    session_id: String,
+    project:    Option<String>,
+    transcript: String,
+) -> Result<i64, String> {
+    let t = transcript.trim();
+    if t.is_empty() {
+        return Err("crystallize_session: empty transcript".to_string());
+    }
+    // Cap input to a reasonable size — Ollama context is finite and
+    // crystallization is a one-shot summarisation, not a deep read.
+    const MAX_CHARS: usize = 24_000;
+    let chunk = if t.chars().count() > MAX_CHARS {
+        let truncated: String = t.chars().take(MAX_CHARS).collect();
+        format!("{}\n\n[transcript truncated at {} chars]", truncated, MAX_CHARS)
+    } else {
+        t.to_string()
+    };
+    let source_chars = chunk.chars().count() as i64;
+
+    // ── Call Ollama for the digest ──────────────────────────────────
+    let base = crate::commands::embeddings::ollama_base();
+    let body = serde_json::json!({
+        "model": "qwen3:4b",
+        "messages": [
+            { "role": "system", "content": CRYSTALLIZE_SYSTEM },
+            { "role": "user",   "content": format!("Session transcript:\n\n{}", chunk) },
+        ],
+        "stream": false,
+        "options": { "temperature": 0.3, "num_predict": 1200 },
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .map_err(|e| format!("http client: {}", e))?;
+    let resp = client
+        .post(format!("{}/api/chat", base))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Ollama unreachable: {}", e))?;
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Ollama JSON parse: {}", e))?;
+    let xml = json
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // ── Parse XML ────────────────────────────────────────────────────
+    let narrative = xml_single(&xml, "narrative")
+        .ok_or_else(|| format!("crystallize: missing <narrative> in LLM output: {}",
+                               xml.chars().take(200).collect::<String>()))?;
+    let outcomes = xml_collect(&xml, "outcome");
+    let files    = xml_collect(&xml, "file");
+    let lessons  = xml_collect(&xml, "lesson");
+
+    let key_outcomes_json   = serde_json::to_string(&outcomes).unwrap_or_else(|_| "[]".to_string());
+    let files_affected_json = serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string());
+    let lessons_json        = serde_json::to_string(&lessons).unwrap_or_else(|_| "[]".to_string());
+    let project_str         = project.unwrap_or_default();
+
+    // ── Persist ──────────────────────────────────────────────────────
+    let new_id = with_db(|conn| {
+        conn.execute(
+            "INSERT INTO agent_crystals \
+             (session_id, project, narrative, key_outcomes, files_affected, lessons, source_chars) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                session_id, project_str, narrative,
+                key_outcomes_json, files_affected_json, lessons_json,
+                source_chars
+            ],
+        ).map_err(|e| format!("crystallize insert: {}", e))?;
+        Ok(conn.last_insert_rowid())
+    })?;
+
+    // ── Spawn-off: also save each lesson as a normal agent_memory ───
+    // Crystallization promotes lessons to first-class memories so they
+    // surface in the regular search pipeline. Fire-and-forget — failures
+    // here don't invalidate the crystal itself.
+    for lesson in &lessons {
+        let title = format!("Lesson: {}",
+            lesson.chars().take(60).collect::<String>());
+        let tags  = serde_json::to_string(&vec!["crystal", "lesson"])
+            .unwrap_or_else(|_| "[]".to_string());
+        let _ = save_agent_memory(
+            title,
+            lesson.clone(),
+            Some(tags),
+            None,
+            Some(session_id.clone()),
+            Some(2),       // importance bump — distilled lessons matter
+            None,          // no TTL — keep crystallized wisdom forever
+        ).await;
+    }
+
+    Ok(new_id)
+}
+
+/// List recent crystals, newest first. Optional filters by session or project.
+#[tauri::command]
+pub fn list_crystals(
+    session_id: Option<String>,
+    project:    Option<String>,
+    limit:      Option<i64>,
+) -> Result<Vec<AgentCrystal>, String> {
+    let lim = limit.unwrap_or(20).max(1).min(100);
+    with_db(|conn| {
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::ToSql>>) = match (session_id.as_deref(), project.as_deref()) {
+            (Some(s), Some(p)) => (
+                "SELECT id, session_id, project, narrative, key_outcomes, \
+                        files_affected, lessons, source_chars, created_at \
+                 FROM agent_crystals WHERE session_id = ?1 AND project = ?2 \
+                 ORDER BY created_at DESC LIMIT ?3",
+                vec![Box::new(s.to_string()), Box::new(p.to_string()), Box::new(lim)],
+            ),
+            (Some(s), None) => (
+                "SELECT id, session_id, project, narrative, key_outcomes, \
+                        files_affected, lessons, source_chars, created_at \
+                 FROM agent_crystals WHERE session_id = ?1 \
+                 ORDER BY created_at DESC LIMIT ?2",
+                vec![Box::new(s.to_string()), Box::new(lim)],
+            ),
+            (None, Some(p)) => (
+                "SELECT id, session_id, project, narrative, key_outcomes, \
+                        files_affected, lessons, source_chars, created_at \
+                 FROM agent_crystals WHERE project = ?1 \
+                 ORDER BY created_at DESC LIMIT ?2",
+                vec![Box::new(p.to_string()), Box::new(lim)],
+            ),
+            (None, None) => (
+                "SELECT id, session_id, project, narrative, key_outcomes, \
+                        files_affected, lessons, source_chars, created_at \
+                 FROM agent_crystals \
+                 ORDER BY created_at DESC LIMIT ?1",
+                vec![Box::new(lim)],
+            ),
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("list_crystals prepare: {}", e))?;
+        let p_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| &**b).collect();
+        let rows = stmt.query_map(p_refs.as_slice(), |row| Ok(AgentCrystal {
+            id:             row.get(0)?,
+            session_id:     row.get(1)?,
+            project:        row.get(2)?,
+            narrative:      row.get(3)?,
+            key_outcomes:   row.get(4)?,
+            files_affected: row.get(5)?,
+            lessons:        row.get(6)?,
+            source_chars:   row.get(7)?,
+            created_at:     row.get(8)?,
+        })).map_err(|e| format!("list_crystals query: {}", e))?;
+        let mut out = Vec::new();
+        for r in rows { if let Ok(c) = r { out.push(c); } }
+        Ok(out)
+    })
+}
+
+/// Fetch one crystal by id, or None if not found.
+#[tauri::command]
+pub fn get_crystal(id: i64) -> Result<Option<AgentCrystal>, String> {
+    with_db(|conn| {
+        let r: rusqlite::Result<AgentCrystal> = conn.query_row(
+            "SELECT id, session_id, project, narrative, key_outcomes, \
+                    files_affected, lessons, source_chars, created_at \
+             FROM agent_crystals WHERE id = ?1",
+            rusqlite::params![id],
+            |row| Ok(AgentCrystal {
+                id:             row.get(0)?,
+                session_id:     row.get(1)?,
+                project:        row.get(2)?,
+                narrative:      row.get(3)?,
+                key_outcomes:   row.get(4)?,
+                files_affected: row.get(5)?,
+                lessons:        row.get(6)?,
+                source_chars:   row.get(7)?,
+                created_at:     row.get(8)?,
+            }),
+        );
+        match r {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("get_crystal: {}", e)),
+        }
+    })
+}
+
+/// Delete a crystal by id. The associated lesson memories (saved by
+/// crystallize_session) are NOT cascaded — they're independent rows in
+/// agent_memories tagged with "crystal,lesson" and survive crystal deletion.
+#[tauri::command]
+pub fn delete_crystal(id: i64) -> Result<usize, String> {
+    if id <= 0 { return Err("delete_crystal: invalid id".to_string()); }
+    with_db(|conn| {
+        let n = conn.execute(
+            "DELETE FROM agent_crystals WHERE id = ?1",
+            rusqlite::params![id],
+        ).map_err(|e| format!("delete_crystal: {}", e))?;
+        Ok(n)
     })
 }
