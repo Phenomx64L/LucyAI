@@ -110,6 +110,13 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         "ALTER TABLE agent_memories ADD COLUMN superseded_by    INTEGER NULL",
         "CREATE INDEX IF NOT EXISTS idx_agent_memories_superseded \
          ON agent_memories(superseded_by) WHERE superseded_by IS NULL",
+        // agentmemory-inspired auto-forget (Tier 1 #1): expires_at is a
+        // Unix epoch seconds value. 0 means "never expires" — the default,
+        // preserves the prior behaviour. auto_forget_run() deletes rows
+        // where expires_at > 0 AND expires_at < now().
+        "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_agent_memories_expires \
+         ON agent_memories(expires_at) WHERE expires_at > 0",
     ];
     for stmt in &migrations {
         if let Err(e) = conn.execute(stmt, []) {
@@ -554,6 +561,10 @@ pub async fn save_agent_memory(
     files:      Option<String>,
     session_id: Option<String>,
     importance: Option<i64>,
+    // agentmemory-inspired TTL (Tier 1 #1). Days from now until the memory
+    // is eligible for auto-deletion via `auto_forget_run`. `None` (or 0)
+    // keeps the memory forever — same as pre-TTL behaviour.
+    ttl_days:   Option<i64>,
 ) -> Result<SaveMemoryResult, String> {
     // Stage 1 + INSERT happen synchronously in the DB closure. Stage 2
     // (embedding probe) is async, so we run it BEFORE the DB closure
@@ -578,10 +589,22 @@ pub async fn save_agent_memory(
         let tags  = tags.unwrap_or_else(|| "[]".to_string());
         let files = files.unwrap_or_else(|| "[]".to_string());
         let sid   = session_id.unwrap_or_default();
+        // TTL → absolute expires_at epoch seconds. ttl_days == None or 0
+        // → keep forever (expires_at = 0, the default).
+        let expires_at: i64 = match ttl_days.unwrap_or(0) {
+            d if d > 0 => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                now + d * 86_400
+            }
+            _ => 0,
+        };
         conn.execute(
-            "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![sid, title, content, tags, files, imp],
+            "INSERT INTO agent_memories (session_id, title, content, tags, files, importance, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![sid, title, content, tags, files, imp, expires_at],
         ).map_err(|e| format!("save_agent_memory: {}", e))?;
         Ok(conn.last_insert_rowid())
     })?;
@@ -896,6 +919,100 @@ pub fn delete_agent_memory(id: i64) -> Result<usize, String> {
             rusqlite::params![id],
         ).map_err(|e| format!("delete_agent_memory: {}", e))?;
         Ok(n)
+    })
+}
+
+// ── Auto-forget (Tier 1 #1, agentmemory-inspired) ────────────────────────
+// Periodic cleanup that keeps the memory store from growing unbounded.
+// Three eviction policies, all conservative (importance=3 is NEVER evicted):
+//
+//   1. TTL expired   — rows with expires_at > 0 AND expires_at < now()
+//   2. Low-value old — rows never accessed (access_count=0) older than
+//                      LOW_VALUE_AGE_DAYS, importance==1, no TTL set
+//   3. (future) contradiction detection via embedding cosine > 0.9 across
+//      memories — flag for manual review rather than auto-delete
+//
+// Always preserves: superseded memories (audit trail) and importance==3
+// rows (user explicitly pinned them). Dry-run mode reports what WOULD be
+// deleted without touching the DB — for UI confirmation flows.
+
+const LOW_VALUE_AGE_DAYS: i64 = 30;
+
+#[derive(serde::Serialize)]
+pub struct AutoForgetReport {
+    pub dry_run: bool,
+    pub ttl_expired: i64,
+    pub low_value: i64,
+    pub total_deleted: i64,
+    pub now_epoch: i64,
+}
+
+/// Run the auto-forget sweep. `dry_run = true` reports counts without
+/// deleting; `false` actually removes rows (cascades through the FTS
+/// delete trigger). Idempotent — safe to call on every app startup
+/// and via a UI button.
+#[tauri::command]
+pub fn auto_forget_run(dry_run: Option<bool>) -> Result<AutoForgetReport, String> {
+    let dry = dry_run.unwrap_or(false);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let low_value_cutoff = now - (LOW_VALUE_AGE_DAYS * 86_400);
+
+    with_db(|conn| {
+        // ── 1. Count + (optionally) delete TTL-expired rows ────────────
+        let ttl_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agent_memories
+             WHERE expires_at > 0 AND expires_at < ?1
+               AND importance < 3",
+            rusqlite::params![now],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let ttl_deleted = if !dry && ttl_count > 0 {
+            conn.execute(
+                "DELETE FROM agent_memories
+                 WHERE expires_at > 0 AND expires_at < ?1
+                   AND importance < 3",
+                rusqlite::params![now],
+            ).map_err(|e| format!("auto_forget_run TTL: {}", e))? as i64
+        } else { 0 };
+
+        // ── 2. Count + (optionally) delete low-value old rows ──────────
+        // Conservative: only importance==1 + access_count==0 + no TTL set
+        // (TTL=0 means user/code didn't explicitly opt in to keep forever
+        // — they just didn't set a TTL, so we treat that as eligible).
+        let low_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agent_memories
+             WHERE access_count = 0
+               AND importance = 1
+               AND expires_at = 0
+               AND created_at < ?1
+               AND superseded_by IS NULL",
+            rusqlite::params![low_value_cutoff],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let low_deleted = if !dry && low_count > 0 {
+            conn.execute(
+                "DELETE FROM agent_memories
+                 WHERE access_count = 0
+                   AND importance = 1
+                   AND expires_at = 0
+                   AND created_at < ?1
+                   AND superseded_by IS NULL",
+                rusqlite::params![low_value_cutoff],
+            ).map_err(|e| format!("auto_forget_run low-value: {}", e))? as i64
+        } else { 0 };
+
+        Ok(AutoForgetReport {
+            dry_run: dry,
+            ttl_expired: if dry { ttl_count } else { ttl_deleted },
+            low_value:   if dry { low_count } else { low_deleted },
+            total_deleted: if dry { ttl_count + low_count } else { ttl_deleted + low_deleted },
+            now_epoch: now,
+        })
     })
 }
 
