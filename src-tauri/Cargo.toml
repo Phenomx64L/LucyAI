@@ -66,13 +66,16 @@ pdf-extract = "0.7"
 # Build with: `cargo build --features ml-guard`
 # `load-dynamic` means the ORT DLL is loaded at runtime if present; build
 # never tries to bundle binaries, so this feature is build-safe to enable.
-ort         = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
+ort         = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
 tokenizers  = { version = "0.21", default-features = false, features = ["onig"], optional = true }
 ndarray     = { version = "0.16", optional = true }
 
 [features]
 default     = []
 ml-guard    = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+# Tier 3 #7: cross-encoder reranker (ms-marco-MiniLM-L-6-v2 ONNX).
+# Shares the same ORT/tokenizers cone as ml-guard, so enabling both is free.
+ml-reranker = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 
 # ── RDP Computer Use Agent ────────────────────────────────────────────────────
 # Win32 APIs for window screenshot + input simulation

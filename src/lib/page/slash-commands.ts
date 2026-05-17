@@ -85,6 +85,8 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /crystal &lt;id&gt; · muestra el detalle de un crystal<br>
                 /consolidate · preview (dry-run) de fusión automática de memorias relacionadas<br>
                 /consolidate-now · ejecuta la fusión real (LLM por cluster + supersede)<br>
+                /reranker · estado del cross-encoder reranker (feature/model/runtime)<br>
+                /reranker-install · descarga el modelo ms-marco-MiniLM (22 MB) si la feature está activa<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -130,6 +132,18 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'consolidate-now':
         case 'consolidate!':
             runConsolidate(false, sysMsg);
+            return true;
+
+        // ── Cross-encoder reranker (Tier 3 #7) ──────────────────────────
+        // /reranker          — status check (feature/model/runtime)
+        // /reranker-install  — download the 22 MB ONNX model from HF
+        case 'reranker':
+            runRerankerStatus(sysMsg);
+            return true;
+
+        case 'reranker-install':
+        case 'install-reranker':
+            runRerankerInstall(sysMsg);
             return true;
 
         case 'editremote':
@@ -552,6 +566,57 @@ function runConsolidate(
                 ${rows}`);
         } catch (e) {
             sysMsg(`auto_consolidate_run falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+// ── Reranker (Tier 3 #7) ────────────────────────────────────────────────
+
+interface RerankerStatus {
+    status: 'feature_disabled' | 'model_missing' | 'runtime_missing' | 'active' | 'failed';
+    model_path: string;
+    note?: string | null;
+}
+
+function runRerankerStatus(sysMsg: (html: string, color?: string) => void) {
+    (async () => {
+        try {
+            const s = await invoke<RerankerStatus>('reranker_status');
+            const colorMap: Record<string, string> = {
+                active:           '#34d399',
+                feature_disabled: 'var(--txt2)',
+                model_missing:    '#f59e0b',
+                runtime_missing:  '#f59e0b',
+                failed:           '#f87171',
+            };
+            const labelMap: Record<string, string> = {
+                active:           '✓ Activo',
+                feature_disabled: '○ Feature deshabilitada (rebuild con --features ml-reranker)',
+                model_missing:    '⚠ Modelo no descargado',
+                runtime_missing:  '⚠ ONNX Runtime no instalado',
+                failed:           '✗ Falló la carga',
+            };
+            sysMsg(`<div class="mn">⚖ Cross-encoder reranker</div>
+                <div style="margin-top:4px;color:${colorMap[s.status]};">${labelMap[s.status]}</div>
+                <div style="margin-top:4px;font-size:11px;color:var(--txt2);">Path: <code>${escapeHtml(s.model_path)}</code></div>
+                ${s.note ? `<div style="margin-top:4px;font-size:11px;color:var(--txt2);">${escapeHtml(s.note)}</div>` : ''}
+                ${s.status === 'model_missing' ? `<div style="margin-top:6px;font-size:11px;">Ejecuta <code>/reranker-install</code> para descargar.</div>` : ''}`);
+        } catch (e) {
+            sysMsg(`reranker_status falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+function runRerankerInstall(sysMsg: (html: string, color?: string) => void) {
+    sysMsg(`⬇ Descargando ms-marco-MiniLM-L-6-v2 desde HuggingFace (~22 MB, sin auth)…`);
+    (async () => {
+        try {
+            const msg = await invoke<string>('download_reranker_model');
+            sysMsg(`<div class="mn" style="color:#34d399;">✓ Reranker instalado</div>
+                <div style="margin-top:4px;font-size:11px;">${escapeHtml(msg)}</div>
+                <div style="margin-top:4px;font-size:11px;color:var(--txt2);">Verifica con <code>/reranker</code>. Si la feature ml-reranker está activa, las búsquedas expandidas ya usan el cross-encoder.</div>`);
+        } catch (e) {
+            sysMsg(`download_reranker_model falló: ${String(e).substring(0, 250)}`, 'var(--red)');
         }
     })();
 }

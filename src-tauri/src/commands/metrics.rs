@@ -1131,10 +1131,47 @@ pub async fn search_agent_memories_expanded(
             let multiplier = 1.0 + imp_bonus + access_bonus + recency_bonus;
             combined.push((m, rrf * multiplier));
         }
+        // Initial sort by RRF*multiplier — we may overwrite this below
+        // with the cross-encoder ranking, but we still cap at FETCH_N=20
+        // candidates first so reranker cost stays bounded.
         combined.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let top: Vec<AgentMemory> = combined.into_iter().take(lim_usize).map(|(m, _)| m).collect();
-        if !top.is_empty() {
-            let id_list = top.iter().map(|m| m.id.to_string()).collect::<Vec<_>>().join(",");
+        Ok(combined)
+    })?;
+
+    // ── Cross-encoder reranker (Tier 3 #7, feature-gated) ────────────
+    // If the `ml-reranker` feature is built AND the ONNX model is
+    // available, re-score the top-FETCH_N candidates against the
+    // ORIGINAL query (not reformulations — the cross-encoder needs the
+    // user's actual intent). On any failure (model missing, runtime
+    // missing, inference error) we degrade gracefully to RRF ranking.
+    let mut candidates = rows;
+    candidates.truncate(FETCH_N);  // bound reranker cost regardless of stream sizes
+
+    let reranked: Option<Vec<(AgentMemory, f64)>> = (|| {
+        if candidates.is_empty() { return None; }
+        let passages: Vec<&str> = candidates.iter().map(|(m, _)| m.content.as_str()).collect();
+        let scores = crate::commands::reranker::rerank(&query, &passages)?;
+        if scores.len() != candidates.len() { return None; }
+        // Pair (memory, score) — drop the old RRF*mult ranking, use the
+        // cross-encoder logit directly. Higher = more relevant.
+        let mut paired: Vec<(AgentMemory, f64)> = candidates.iter()
+            .zip(scores.iter())
+            .map(|((m, _), s)| (m.clone(), *s as f64))
+            .collect();
+        paired.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Some(paired)
+    })();
+
+    let final_ranked = reranked.unwrap_or(candidates);
+    let top: Vec<AgentMemory> = final_ranked.into_iter()
+        .take(lim_usize)
+        .map(|(m, _)| m)
+        .collect();
+
+    // ── Touch returned rows for next-search ranking boost ───────────
+    if !top.is_empty() {
+        let id_list = top.iter().map(|m| m.id.to_string()).collect::<Vec<_>>().join(",");
+        with_db(|conn| {
             let touch_sql = format!(
                 "UPDATE agent_memories
                  SET access_count = access_count + 1,
@@ -1143,11 +1180,11 @@ pub async fn search_agent_memories_expanded(
                 id_list
             );
             let _ = conn.execute(&touch_sql, []);
-        }
-        Ok(top)
-    })?;
+            Ok(())
+        }).ok();
+    }
 
-    Ok(rows)
+    Ok(top)
 }
 
 /// Mark a memory as superseded by a newer one (Mem0-style conflict

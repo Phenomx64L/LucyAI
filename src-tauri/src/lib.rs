@@ -449,6 +449,8 @@ pub fn run() {
             commands::dedup::dedup_acquire,
             commands::dedup::dedup_release,
             commands::dedup::dedup_stats,
+            commands::reranker::reranker_status,
+            commands::reranker::download_reranker_model,
             metrics::consolidate_agent_memories,
             metrics::supersede_memory,
             metrics::search_agent_memories,

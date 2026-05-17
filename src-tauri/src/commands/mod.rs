@@ -24,4 +24,5 @@ pub mod reflection;
 pub mod scheduled;
 pub mod synonyms;
 pub mod dedup;
+pub mod reranker;
 pub mod vec_index;
