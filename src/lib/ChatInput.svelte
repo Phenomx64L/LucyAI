@@ -78,21 +78,29 @@
         _textareaEl.style.overflowY = sh > CAP_PX ? 'auto' : 'hidden';
     }
 
-    // ── Reactive on tab.inputValue ──
-    // tab.inputValue is a primitive — Svelte ONLY refires this when it
-    // actually changes, NOT on every parent tabs=[...tabs] refresh. So
-    // it's safe to put autoResize here (unlike `$: tab && _textareaEl`
-    // which was reactive on the tab object reference and caused the
-    // startup microtask stall).
-    // Covers: programmatic value writes (history nav, slash commands
-    // emptying it, send-clears-it) AND paste, since bind:value will
-    // sync after the native paste event.
-    $: if (_textareaEl !== null && (tab && typeof tab.inputValue === 'string')) {
-        // tab.inputValue read tracks the dep; deferring to tick() ensures
-        // Svelte has actually flushed bind:value into the DOM before we
-        // measure scrollHeight.
-        const _dep = tab.inputValue;  // eslint-disable-line @typescript-eslint/no-unused-vars
-        tick().then(autoResize);
+    // ── Reactive on tab.inputValue (with cached-last-value guard) ──
+    // Svelte 4 compiles `$:` reactives by tracking ALL identifiers read.
+    // `tab.inputValue` makes `tab` a dep, and the parent does
+    // `tabs = [...tabs]` ~30× per agent turn — so this $: ALWAYS refires
+    // 30× per turn regardless of whether inputValue actually changed.
+    // Without the runtime guard below, that was enough to queue enough
+    // microtasks to stall the splash → main UI transition (startup hang
+    // reproduced twice now).
+    //
+    // Fix: cache the last value we resized for. The $: block still
+    // re-evaluates 30× per turn (compile-time fact, can't avoid), but
+    // only QUEUES the autoResize microtask when the cached value
+    // actually changed. Cheap two-string comparisons replace heavy
+    // microtask flooding.
+    let _lastInputValueSeen = '';
+    $: {
+        if (_textareaEl && tab) {
+            const cur = typeof tab.inputValue === 'string' ? tab.inputValue : '';
+            if (cur !== _lastInputValueSeen) {
+                _lastInputValueSeen = cur;
+                tick().then(autoResize);
+            }
+        }
     }
 
     // Initial size on mount.
