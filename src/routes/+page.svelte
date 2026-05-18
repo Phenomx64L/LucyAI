@@ -4095,6 +4095,49 @@ Use ONE of these patterns instead:
                     }
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
 
+                    // ── Anti-hallucination guard ──────────────────────────
+                    // If every tool result this turn is empty/error/no-output,
+                    // inject an explicit marker telling the LLM it does NOT
+                    // have data to draw conclusions from. Prevents the
+                    // "Get-Service returned nothing → Lucy invents detailed
+                    // service list" failure mode that bit the user.
+                    // We check the raw toolResults array BEFORE compaction
+                    // because compaction may obscure the empty signal.
+                    const _emptyMarkers = [/\(sin salida\)/i, /\(no output\)/i, /\bempty\b/i, /no se encontraron/i, /not found/i, /no results/i];
+                    const _errorMarkers = [/^\[.*ERROR\]/im, /\[stderr warnings\]/i, /Reg Error/i, /ParserError/i, /CommandNotFoundException/i, /FullyQualifiedErrorId/i, /Acceso denegado|Access is denied/i];
+                    const totalToolCalls = toolResults.length;
+                    if (totalToolCalls > 0) {
+                        let emptyCount = 0;
+                        let errorCount = 0;
+                        for (const r of toolResults) {
+                            const s = String(r || '').trim();
+                            if (!s || s.length < 30) { emptyCount++; continue; }
+                            if (_emptyMarkers.some(re => re.test(s))) { emptyCount++; continue; }
+                            if (_errorMarkers.some(re => re.test(s))) { errorCount++; continue; }
+                        }
+                        if ((emptyCount + errorCount) === totalToolCalls) {
+                            const guardMarker =
+`\n\n[!! NO USABLE DATA — ${totalToolCalls} tool call${totalToolCalls === 1 ? '' : 's'} returned no output or only errors]
+You MUST NOT fabricate findings. Specifically:
+  • Do NOT report values you didn't see in actual output
+  • Do NOT invent service states, file contents, exclusions, or status flags
+  • Do NOT say "verified" or "confirmed" about anything you couldn't observe
+Acknowledge the tooling failure to the user, summarise WHAT you tried,
+and propose ONE alternate approach (different command, manual check,
+or asking the user to verify directly). If the same tool failed multiple
+times the SAME way, switch tool kind entirely.
+[!! END GUARD]`;
+                            agentCtx += guardMarker;
+                            pushTrace({
+                                phase: 'info',
+                                label: `⚠ Hallucination guard fired: ${emptyCount}/${totalToolCalls} empty, ${errorCount} errored`,
+                                step: loop_i + 1,
+                                tabId,
+                                detail: 'Injecting NO USABLE DATA marker into context — LLM must acknowledge failure instead of fabricating.',
+                            });
+                        }
+                    }
+
                     // ── Apply reactive compact if context is growing ──
                     const _preCompLen = agentCtx.length;
                     let compressedCtx = await compressContext(agentCtx, getEffectiveModel(t), loop_i);
