@@ -2312,6 +2312,17 @@ import { listen } from '@tauri-apps/api/event';
             if (compaction.digest) {
                 t.workingMemory ||= {};
                 t.workingMemory.compactedDigest = compaction.digest;
+                // Surface in telemetry: operator can see "Lucy is using the
+                // compacted summary for context" which explains why responses
+                // reference older context that's no longer visible verbatim.
+                pushTrace({
+                    phase: 'info',
+                    label: `Conversation compacted (keepFrom=${compaction.keepFrom}, digest=${compaction.digest.length}ch)`,
+                    tabId: t.id,
+                    detail: t.workingMemory._restoredFromDb
+                        ? '(includes persisted summary from previous session)'
+                        : '(in-session compaction)',
+                });
             }
             const validAll=t.messages.filter(m=>m.rawRole);
             // Keep only turns from compaction.keepFrom onwards (verbatim)
@@ -2562,6 +2573,12 @@ Use ONE of these patterns instead:
                     const prev = toolCallCounts.get(h) || 0;
                     toolCallCounts.set(h, prev + 1);
                     if (prev >= MAX_IDENTICAL_TOOL_CALLS) {
+                        pushTrace({
+                            phase: 'info',
+                            label: `⚠ Tool-loop blocked: ${kind} called ${prev}× with same args`,
+                            tabId,
+                            detail: `Args (truncated): ${String(args).slice(0, 240)}\n\nHint to LLM: ${hintAlt || 'switch strategy'}`,
+                        });
                         return { blocked: true, msg: `[LOOP BLOCKED] Has llamado a "${kind}" con los mismos argumentos ${prev} veces ya. STOP. Ese camino no converge. ${hintAlt || 'Cambia de estrategia: prueba una herramienta distinta, modifica los argumentos, o entrega tu respuesta final al usuario explicando lo que encontraste hasta ahora.'}` };
                     }
                     return { blocked: false, msg: null };
@@ -3940,6 +3957,12 @@ Use ONE of these patterns instead:
                             renderAgentTask();
 
                             const verModel = pickSubAgentModel(verifierModel, getEffectiveModel(t));
+                            pushTrace({
+                                phase: 'info',
+                                label: `Verifier sub-agent running (${verModel})`,
+                                step: loop_i + 1,
+                                tabId,
+                            });
                             const verPrompt =
                                 `You are a strict, impartial verifier. A primary AI agent just produced the FINAL ANSWER below in response to the USER GOAL. Your job: review the answer for correctness, completeness, hallucinations, security/safety issues, and unmet parts of the goal. Be terse.\n\n` +
                                 `=== USER GOAL ===\n${originalUserGoal}\n\n` +
@@ -4073,7 +4096,17 @@ Use ONE of these patterns instead:
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
 
                     // ── Apply reactive compact if context is growing ──
+                    const _preCompLen = agentCtx.length;
                     let compressedCtx = await compressContext(agentCtx, getEffectiveModel(t), loop_i);
+                    if (compressedCtx.length < _preCompLen * 0.95) {
+                        pushTrace({
+                            phase: 'info',
+                            label: `Context compacted ${_preCompLen.toLocaleString()} → ${compressedCtx.length.toLocaleString()} chars`,
+                            step: loop_i + 1,
+                            tabId,
+                            detail: `Reduction: ${Math.round((1 - compressedCtx.length / _preCompLen) * 100)}%`,
+                        });
+                    }
 
                     const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
 
@@ -4109,6 +4142,13 @@ Use ONE of these patterns instead:
                     stepsHtml = stepsHtml.replace(/<span.*\[↻ Siguiente turno.*span>\n/, '');
 
                     if (loop_i === MAX_LOOPS - 1) {
+                        pushTrace({
+                            phase: 'info',
+                            label: `⚠ MAX_LOOPS hit (${MAX_LOOPS}) — agent stopped`,
+                            step: loop_i + 1,
+                            tabId,
+                            detail: `Original goal: ${originalUserGoal.slice(0, 240)}`,
+                        });
                         finishReasoning();
                         renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.`);
                     }
