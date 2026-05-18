@@ -257,65 +257,91 @@ fn build_hosts_context(hosts_json: Option<&str>) -> String {
     lines
 }
 
+// MED-3 / RUST-1 FIX: all disk I/O moved into spawn_blocking to avoid stalling
+// the tokio executor. Reading many runbook files (potentially hundreds of MB)
+// was previously done directly on the async executor thread.
 #[tauri::command]
 pub async fn search_runbooks(dir_path: Option<String>, query: String) -> Result<String, String> {
-    use simsearch::SimSearch;
-
     let Some(path) = dir_path else { return Err("No runbooks directory configured.".to_string()) };
-    let path_obj = std::path::Path::new(&path);
-    if !path_obj.exists() || !path_obj.is_dir() {
-        return Err("Runbooks directory not found.".to_string());
-    }
 
-    let mut engine: SimSearch<String> = SimSearch::new();
-    let mut files_metadata = std::collections::HashMap::new();
+    tokio::task::spawn_blocking(move || {
+        use simsearch::SimSearch;
 
-    if let Ok(entries) = std::fs::read_dir(path_obj) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_file() {
-                if let Some(ext) = p.extension() {
-                    let ext_str = ext.to_string_lossy().to_lowercase();
-                    if ext_str == "md" || ext_str == "txt" {
-                        if let Ok(text) = std::fs::read_to_string(&p) {
-                            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                            engine.insert(name.clone(), &text);
-                            files_metadata.insert(name, text);
+        let path_obj = std::path::Path::new(&path);
+        if !path_obj.exists() || !path_obj.is_dir() {
+            return Err("Runbooks directory not found.".to_string());
+        }
+
+        let mut engine: SimSearch<String> = SimSearch::new();
+        let mut files_metadata = std::collections::HashMap::new();
+
+        if let Ok(entries) = std::fs::read_dir(path_obj) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(ext) = p.extension() {
+                        let ext_str = ext.to_string_lossy().to_lowercase();
+                        if ext_str == "md" || ext_str == "txt" {
+                            if let Ok(text) = std::fs::read_to_string(&p) {
+                                let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                engine.insert(name.clone(), &text);
+                                files_metadata.insert(name, text);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    let results = engine.search(&query);
-    if results.is_empty() {
-        return Ok(format!("[Sin resultados SEMÁNTICOS estrictos para '{}'", query));
-    }
-
-    let mut out = String::new();
-    for r in results.into_iter().take(2) { // Top 2 más relevantes
-        if let Some(content) = files_metadata.get(&r) {
-            let trunc = crate::utils::safe_truncate(content, 12000);
-            out.push_str(&format!("--- RUNBOOK FILE: {} ---\n{}\n\n", r, trunc));
+        let results = engine.search(&query);
+        if results.is_empty() {
+            return Ok(format!("[Sin resultados SEMÁNTICOS estrictos para '{}'", query));
         }
-    }
-    Ok(out)
+
+        let mut out = String::new();
+        for r in results.into_iter().take(2) {
+            if let Some(content) = files_metadata.get(&r) {
+                let trunc = crate::utils::safe_truncate(content, 12000);
+                out.push_str(&format!("--- RUNBOOK FILE: {} ---\n{}\n\n", r, trunc));
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
 pub async fn change_agent_dir(path: String) -> Result<String, String> {
+    // SEC-2 FIX: reject path traversal (..) and sensitive directories.
+    if path.contains("..") {
+        return Err("Path traversal bloqueado: '..' no permitido en change_agent_dir.".to_string());
+    }
     let p = std::path::Path::new(&path);
-    if p.exists() && p.is_dir() {
-        if let Ok(mut cwd) = crate::state::GLOBAL_CWD.write() {
-            *cwd = path.clone();
-            std::env::set_current_dir(&path).ok();
-            Ok(format!("Directorio de trabajo cambiado a: {}", path))
-        } else {
-            Err("Fallo al bloquear GLOBAL_CWD".into())
+    if !p.exists() || !p.is_dir() {
+        return Err(format!("Directorio no encontrado o no válido: {}", path));
+    }
+    // Canonicalize and validate against sensitive directory blocklist.
+    let canonical = p.canonicalize()
+        .map_err(|e| format!("No se pudo resolver el directorio: {}", e))?;
+    let canon_lower = canonical.to_string_lossy().to_ascii_lowercase();
+    let blocked_dirs: &[&str] = &[
+        r"c:\windows", r"c:\program files", r"c:\program files (x86)",
+        r"c:\programdata\microsoft", r"c:\$recycle.bin",
+        r"c:\system volume information",
+    ];
+    for bd in blocked_dirs {
+        if canon_lower.starts_with(bd) {
+            return Err(format!("Directorio bloqueado por política de seguridad: {}", canonical.display()));
         }
+    }
+    if let Ok(mut cwd) = crate::state::GLOBAL_CWD.write() {
+        *cwd = canonical.to_string_lossy().to_string();
+        // NOTE: std::env::set_current_dir removed — it's a process-global side effect
+        // that races with concurrent async tasks. GLOBAL_CWD is the single source of truth.
+        Ok(format!("Directorio de trabajo cambiado a: {}", canonical.display()))
     } else {
-        Err(format!("Directorio no encontrado o no válido: {}", path))
+        Err("Fallo al bloquear GLOBAL_CWD".into())
     }
 }
 

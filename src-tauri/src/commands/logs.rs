@@ -10,8 +10,11 @@ use crate::utils::shell::run_winrm;
 /// Lee en chunks de 64KB desde el final — nunca carga el archivo completo en RAM.
 #[tauri::command]
 pub fn read_log_tail(path: String, lines: usize) -> Result<Vec<String>, String> {
-    let mut file = std::fs::File::open(&path)
-        .map_err(|e| format!("No se pudo abrir '{}': {}", path, e))?;
+    // SEC-1 FIX: validate path against sensitive directories (same as read_file_content).
+    let validated = crate::commands::local::enforce_sensitive_path(&path, false)?;
+    let lines = lines.min(50_000); // BUG-4 FIX: cap lines to prevent unbounded reads.
+    let mut file = std::fs::File::open(&validated)
+        .map_err(|e| format!("No se pudo abrir '{}': {}", validated.display(), e))?;
 
     let file_size = file.metadata().map_err(|e| e.to_string())?.len();
     if file_size == 0 { return Ok(vec![]); }
@@ -61,7 +64,12 @@ pub async fn read_remote_log_windows(
     path: String,
     lines: usize,
 ) -> Result<Vec<String>, String> {
-    let script = format!("Get-Content -Path '{}' -Tail {} -ErrorAction Stop", path, lines);
+    // MED-1 FIX: escape single quotes in path to prevent PS string literal breakout.
+    // A path like "C:\foo'; Invoke-Expression 'calc'; $x='" would otherwise escape
+    // the single-quoted literal and inject arbitrary PowerShell.
+    let safe_path = path.replace('\'', "''");
+    let lines = lines.min(50_000); // Cap lines same as local read_log_tail.
+    let script = format!("Get-Content -Path '{}' -Tail {} -ErrorAction Stop", safe_path, lines);
     let output = run_winrm(host, username, password, script).await?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).lines().map(String::from).collect())
@@ -83,6 +91,7 @@ pub async fn read_remote_log_linux(
     let port_str = port.unwrap_or(22).to_string();
     let cmd = format!("tail -{} '{}'", lines, path.replace('\'', "'\\''"));
     let mut ssh_cmd = Command::new("ssh");
+    // SEC-4 KNOWN RISK: see shell.rs — accept-new trusts unknown keys on first connect.
     ssh_cmd.arg("-o").arg("StrictHostKeyChecking=accept-new")
            .arg("-o").arg("BatchMode=yes")
            .arg("-o").arg("ConnectTimeout=10")

@@ -41,7 +41,7 @@ fn resolve_path(raw: &str) -> std::path::PathBuf {
 /// Returns `Ok(canonical_path)` on success, or `Err(reason)` if the path
 /// targets a sensitive area. `for_write=true` enforces stricter rules
 /// (canonicalize must succeed; refuse to create files in sensitive dirs).
-fn enforce_sensitive_path(raw: &str, for_write: bool) -> Result<std::path::PathBuf, String> {
+pub(crate) fn enforce_sensitive_path(raw: &str, for_write: bool) -> Result<std::path::PathBuf, String> {
     // 1. Reject UNC verbatim prefixes that bypass normalization.
     let raw_lower = raw.to_ascii_lowercase();
     if raw_lower.starts_with(r"\\?\") || raw_lower.starts_with(r"\\.\") {
@@ -193,7 +193,9 @@ fn host() -> String { System::host_name().unwrap_or_else(|| "Local".to_string())
 #[tauri::command]
 pub async fn execute_cmd(
     script: String,
-    force_execute: bool,
+    #[allow(unused_variables)]
+    force_execute: bool,       // SEC-8 FIX: DEPRECATED — kept for ABI compat, always ignored.
+                               // Use bypass_token (cryptographic one-shot) instead.
     bypass_token: Option<String>,
 ) -> Result<String, String> {
     rotate_audit_log();
@@ -238,7 +240,8 @@ pub async fn execute_cmd(
     };
 
     // ── Guardrail layer (audit S2): bypass shapes the substring filter misses ──
-    if !was_blocked_but_bypassed && !force_execute {
+    // SEC-8 FIX: removed force_execute check — only cryptographic bypass_token can skip guardrail.
+    if !was_blocked_but_bypassed {
         let scan = crate::guardrails::scan(&script, crate::guardrails::Role::Assistant);
         if matches!(scan.decision, crate::guardrails::ScanDecision::Block) {
             audit(&format!(
@@ -258,20 +261,16 @@ pub async fn execute_cmd(
         "takeown /f c:\\windows", "bcdedit", "diskpart",
     ];
 
-    let mut bypassed = was_blocked_but_bypassed;
+    // SEC-8 FIX: blocklist now ALWAYS issues a bypass token on match (same as
+    // execute_powershell). The old force_execute:bool allowed the LLM to bypass
+    // the blocklist without cryptographic verification.
+    let bypassed = was_blocked_but_bypassed;
     if !bypassed {
         for blocked in &blocklist {
             if lower.contains(blocked) {
-                if force_execute {
-                    audit(&format!("[{}] [HOST:{}] [CMD_BYPASS] Restringido: {}", ts(), host(), blocked));
-                    write_app_log("WARNING", &format!("CMD bypass autorizado: {}", blocked));
-                    bypassed = true;
-                    break;
-                } else {
-                    audit(&format!("[{}] [HOST:{}] [CMD_BLOCKED_PENDING_AUTH] {}",
-                        ts(), host(), &script[..script.len().min(200)]));
-                    return Err(issue_block_token(blocked));
-                }
+                audit(&format!("[{}] [HOST:{}] [CMD_BLOCKED_PENDING_AUTH] {}",
+                    ts(), host(), &script[..script.len().min(200)]));
+                return Err(issue_block_token(blocked));
             }
         }
     }
@@ -279,22 +278,46 @@ pub async fn execute_cmd(
     let op = if bypassed { "CMD_EXEC_BYPASS" } else { "CMD_EXECUTED" };
     audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op, &script[..script.len().min(200)]));
 
+    // BUG-7 FIX: spawn the child explicitly so we can capture its PID and kill it
+    // on timeout (same pattern as execute_powershell). The old .output() call left
+    // zombie cmd.exe processes running after timeout because only the spawn_blocking
+    // task was cancelled, not the underlying OS process.
     let script_clone = script.clone();
+    let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
+
+    use std::process::Stdio;
+    let child = Command::new("cmd")
+        .current_dir(cwd)
+        .arg("/C")
+        .arg(&script_clone)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+
+    let child = match child {
+        Ok(c) => c,
+        Err(e) => { write_app_log("ERROR", &format!("CMD spawn failed: {}", e)); return Err(format!("Fallo al ejecutar CMD: {}", e)); }
+    };
+
+    let child_pid = child.id();
+
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(300), // AUMENTADO A 5 MINUTOS (300s)
-        tokio::task::spawn_blocking(move || {
-            let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
-            Command::new("cmd")
-                .current_dir(cwd)
-                .arg("/C")
-                .arg(&script_clone)
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-        }),
+        std::time::Duration::from_secs(300),
+        tokio::task::spawn_blocking(move || child.wait_with_output()),
     ).await;
 
     match result {
-        Err(_) => Err("Timeout: el comando tardó más de 5 minutos (300s) y fue cancelado.".to_string()),
+        Err(_) => {
+            // Timeout — kill the child process tree (mirrors execute_powershell behavior).
+            write_app_log("WARNING", &format!("CMD timeout (PID {}): matando proceso", child_pid));
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &child_pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+            Err("Timeout: el comando tardó más de 5 minutos (300s) y fue cancelado.".to_string())
+        }
         Ok(Err(e)) => Err(format!("Error spawn CMD: {}", e)),
         Ok(Ok(Err(e))) => { write_app_log("ERROR", &format!("CMD fallo: {}", e)); Err(format!("Fallo crítico CMD: {}", e)) }
         Ok(Ok(Ok(out))) => {
@@ -923,7 +946,8 @@ pub async fn read_file_lines(path: String, start: usize, count: usize) -> Result
     use ropey::Rope;
     use std::fs::File;
     use std::io::BufReader;
-    let resolved = resolve_path(&path);
+    // SEC-10 FIX: validate path against sensitive directories (same as read_file_content).
+    let resolved = enforce_sensitive_path(&path, false)?;
     let p = resolved.as_path();
     if !p.exists() {
         return Err(format!("Archivo no encontrado: {}", resolved.display()));
@@ -1257,28 +1281,12 @@ pub async fn edit_file(
 ) -> Result<String, String> {
     use similar::{ChangeTag, TextDiff};
 
-    let resolved = resolve_path(&path);
-    let p = resolved.as_path();
+    // SEC-9 FIX: use the centralized enforce_sensitive_path (same as write_file_content).
+    // Replaces the weaker inline 3-entry blocklist that missed .ssh, .aws, UNC prefixes, etc.
+    let canonical = enforce_sensitive_path(&path, true)?;
+    let p = canonical.as_path();
     if !p.exists() {
-        return Err(format!("Archivo no encontrado: {}", resolved.display()));
-    }
-
-    // SECURITY: reject ".." before canonicalize (same as write_file_content)
-    {
-        let raw = resolved.to_string_lossy();
-        if raw.contains("..") {
-            return Err("Ruta inválida: componentes '..' (path traversal) no permitidos.".to_string());
-        }
-    }
-    // DEFENSA: Resolver la ruta para evitar Path Traversal (ej. \..\..\Windows)
-    let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    let lower = canonical.to_string_lossy().to_lowercase().replace('/', "\\");
-
-    let blocked = ["c:\\windows\\", "c:\\program files\\", "c:\\program files (x86)\\"];
-    for bp in &blocked {
-        if lower.starts_with(bp) {
-            return Err(format!("Edición bloqueada en ruta del sistema: {}", bp));
-        }
+        return Err(format!("Archivo no encontrado: {}", canonical.display()));
     }
 
     // P5 audit: blocking read off the executor.
@@ -1294,7 +1302,7 @@ pub async fn edit_file(
             "No se encontró el texto a reemplazar en {}. El archivo tiene {} líneas.\n\
             Primeras 3 líneas:\n{}\n\
             Sugerencia: usa readlines para ver el contenido actual.",
-            resolved.display(), lines.len(),
+            canonical.display(), lines.len(),
             lines.iter().take(3).cloned().collect::<Vec<&str>>().join("\n")
         ));
     }
@@ -1305,7 +1313,7 @@ pub async fn edit_file(
     if count > 1 && !do_all {
         return Err(format!(
             "Se encontraron {} coincidencias del texto en {}. Usa replace_all=true para reemplazar todas, o proporciona más contexto para hacer la búsqueda única.",
-            count, resolved.display()
+            count, canonical.display()
         ));
     }
 
@@ -1327,7 +1335,7 @@ pub async fn edit_file(
     }
 
     audit(&format!("[{}] [HOST:{}] [FILE_EDIT] {} (replaced {} occurrence(s), {} -> {} bytes)",
-        ts(), host(), resolved.display(), if do_all { count } else { 1 },
+        ts(), host(), canonical.display(), if do_all { count } else { 1 },
         old_string.len(), new_string.len()));
 
     std::fs::write(p, &new_content)

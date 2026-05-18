@@ -143,6 +143,7 @@ import { listen } from '@tauri-apps/api/event';
     import { debug } from '$lib/debug';
     import { renderMd } from '$lib/md-render';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens } from '$lib/text-utils';
+    import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { ICON_PALETTE, ICON_MAP, cmdRapidos, mapeoApps } from '$lib/quick-cmds';
@@ -818,16 +819,19 @@ import { listen } from '@tauri-apps/api/event';
 
         // Interceptar enlaces externos — abrirlos en el navegador/cliente del sistema
         // SEGURO: validar que la URL sea estrictamente http(s) o mailto antes de pasarla a PowerShell
+        // MED-13 FIX: hardened URL handler — reject PowerShell metacharacters
+        // (backticks, $(), semicolons) that could inject commands via Start-Process.
         _clickHandler = (e) => {
             const a = e.target.closest('a[href]');
             if (!a) return;
             const href = a.getAttribute('href');
             if (!href) return;
-            // Validación estricta: solo protocolo http/https/mailto — sin caracteres peligrosos
+            // Strict URL validation: only http(s)/mailto, no PS metacharacters
             const safeUrl = /^(https?:\/\/[^\s"'<>]+|mailto:[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})$/.test(href);
-            if (safeUrl) {
+            // Block PowerShell metacharacters that could escape the quoted string
+            const hasPsMetachars = /[`$;|{}\[\]]/.test(href);
+            if (safeUrl && !hasPsMetachars) {
                 e.preventDefault();
-                // Escapar las comillas dobles que puedan quedar en la URL
                 const escaped = href.replace(/"/g, '%22').replace(/'/g, '%27');
                 invoke('execute_powershell', {
                     script: `Start-Process "${escaped}"`,
@@ -1346,9 +1350,14 @@ import { listen } from '@tauri-apps/api/event';
             
             if (db) {
                 try {
-                    const currentIds = data.map(d => `'${d.id}'`).join(',');
-                    if (currentIds.length > 0) {
-                        await db.execute(`DELETE FROM lucy_sessions WHERE id NOT IN (${currentIds})`);
+                    // SEC-5 FIX: use parameterized queries to prevent SQL injection.
+                    // Tab IDs are Date.now() strings today, but future sources could be unsafe.
+                    if (data.length > 0) {
+                        const placeholders = data.map((_, i) => `$${i + 1}`).join(',');
+                        await db.execute(
+                            `DELETE FROM lucy_sessions WHERE id NOT IN (${placeholders})`,
+                            data.map(d => d.id)
+                        );
                     } else {
                         await db.execute(`DELETE FROM lucy_sessions`);
                     }
@@ -1792,6 +1801,16 @@ import { listen } from '@tauri-apps/api/event';
         const t=getTab(tabId);
         obj.id=obj.id||(Date.now()+Math.random());
         obj.time=ahora();
+        // SEC-6/7 FIX: Defense-in-depth HTML sanitization. All 50+ call sites
+        // construct obj.html via string interpolation — many inject error messages,
+        // LLM content, user names, or command output without escaping. By sanitizing
+        // here we guarantee the {@html msg.html} sink in ChatThread.svelte never
+        // renders attacker-controlled scripts, even if upstream callers forget.
+        // renderLucyMarkdown() output is already DOMPurify-clean, so this is a no-op
+        // for well-formed messages and a safety net for everything else.
+        if (obj.html && typeof obj.html === 'string') {
+            obj.html = safeHtml(obj.html, { allowImages: true });
+        }
         // Memory v2: per-message token estimate. Stored ONCE at creation
         // (cheap char-based heuristic) so context-window math doesn't have
         // to re-tokenize the whole tab on every turn.
@@ -4647,7 +4666,8 @@ times the SAME way, switch tool kind entirely.
         const engineLabel = {powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS';
         try{
             let out;
-            if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:true});
+            // SEC-8 FIX: CMD now uses the same cryptographic bypass token as PowerShell.
+            if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false,bypassToken:token});
             else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:true});
             else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:true});
             else                            out=await invoke('execute_powershell',{script:cmd,bypassToken:token});

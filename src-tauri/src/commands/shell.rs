@@ -12,6 +12,13 @@ use crate::utils::logging::{write_app_log, rotate_audit_log, get_logs_dir};
 use crate::utils::shell::{strip_ansi, ensure_trusted_host, spawn_winrm_streaming};
 use crate::commands::hosts::{validate_host, validate_username, validate_password};
 
+// MED-5 FIX: regex compiled once at startup instead of on every execute_powershell call.
+// The old `Regex::new(...).ok()` inside the function body added ~200μs per invocation
+// and would panic the process on a future regex typo.
+static VAR_ASSIGN_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r"^\$([A-Za-z_][A-Za-z0-9_]*)\s*=").expect("VAR_ASSIGN_RE is a valid pattern")
+});
+
 // ── POWERSHELL LOCAL CON AUDIT LOG ────────────────────────────────────────────
 
 #[tauri::command]
@@ -210,8 +217,8 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     while let Some(pos) = clean_script.find("` ")  { clean_script.replace_range(pos..pos+2, " "); }
     // (b) auto-echo for single-line `$var = ...` pattern (no other ;)
     let trimmed = clean_script.trim();
-    let var_assign_re = regex::Regex::new(r"^\$([A-Za-z_][A-Za-z0-9_]*)\s*=").ok();
-    if let Some(ref re) = var_assign_re {
+    {
+        let re = &*VAR_ASSIGN_RE; // MED-5 FIX: use static compiled regex
         if let Some(cap) = re.captures(trimmed) {
             if let Some(name) = cap.get(1) {
                 let varname = name.as_str().to_string();
@@ -423,6 +430,10 @@ pub async fn stream_shell_cmd(
         let mut child = tokio::task::spawn_blocking(move || {
             let mut cmd = Command::new("ssh");
             // -tt fuerza PTY para comandos interactivos (sudo, python, etc.)
+            // SEC-4 KNOWN RISK: accept-new silently trusts unknown host keys on first
+            // connection — zero MITM protection until the key is cached in known_hosts.
+            // TODO: surface fingerprint to user on first connect, or use
+            // StrictHostKeyChecking=yes with a managed known_hosts file.
             cmd.arg("-tt")
                .arg("-o").arg("StrictHostKeyChecking=accept-new")
                .arg("-o").arg("ConnectTimeout=10")

@@ -95,6 +95,14 @@ pub fn purge_dead_stream_sessions() -> usize {
     count
 }
 
+/// Global working directory. Uses `std::sync::RwLock` (not tokio) because 30+
+/// call sites read it synchronously inside `spawn_blocking` closures where
+/// tokio's async lock would require `.await`.
+///
+/// SAFETY NOTE (MED-6): write acquisitions block the tokio executor thread
+/// until all readers release. Keep ALL lock holds under 1μs — clone immediately
+/// and drop the guard. Never do I/O while holding this lock. If write starvation
+/// becomes an issue, migrate to `tokio::sync::RwLock` with an async refactor.
 pub static GLOBAL_CWD: Lazy<RwLock<String>> = Lazy::new(|| {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())

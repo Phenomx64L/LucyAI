@@ -47,14 +47,20 @@ pub fn run() {
                     }
                 }
                 // Windows: restrict file ACL to current user only (no inherit, no group)
+                // MED-2 FIX: expand %USERNAME% via std::env — Command::arg passes
+                // strings verbatim to CreateProcess which does NOT expand env vars.
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
                     if let Some(path_str) = token_file_path.to_str() {
-                        let _ = std::process::Command::new("icacls")
-                            .args([path_str, "/inheritance:r", "/grant:r", "%USERNAME%:F"])
-                            .creation_flags(crate::state::CREATE_NO_WINDOW)
-                            .output();
+                        let username = std::env::var("USERNAME").unwrap_or_default();
+                        if !username.is_empty() {
+                            let grant_arg = format!("{}:F", username);
+                            let _ = std::process::Command::new("icacls")
+                                .args([path_str, "/inheritance:r", "/grant:r", &grant_arg])
+                                .creation_flags(crate::state::CREATE_NO_WINDOW)
+                                .output();
+                        }
                     }
                 }
 

@@ -44,6 +44,17 @@ pub fn strip_ansi(input: &str) -> String {
 /// Necesario para conectar por IP en lugar de nombre de dominio.
 /// Si falla no interrumpe la operación — el error de WinRM se verá después.
 pub fn ensure_trusted_host(host: &str) {
+    // LOGIC-2 FIX: defense-in-depth — validate host format here even though callers
+    // should have already called validate_host(). This function is pub and could be
+    // called from any module with any string. A host containing ' could escape the
+    // PS single-quoted literal.
+    if host.contains('\'') || host.contains(';') || host.contains('`') || host.is_empty() || host.len() > 255 {
+        crate::utils::logging::write_app_log(
+            "WARNING",
+            &format!("ensure_trusted_host: rejected suspicious host value: {:?}", &host[..host.len().min(60)])
+        );
+        return;
+    }
     let cmd = format!(
         "Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value '{}' -Force \
          -Concatenate -ErrorAction SilentlyContinue 2>$null",
@@ -106,6 +117,16 @@ pub fn urlencoding_simple(s: &str) -> String {
 ///   `[Console]::In.ReadLine()`. The password never appears in ANY string
 ///   literal of the encoded script, so no quote-escape attack is possible.
 ///   `run_winrm_sync` writes `password\n` to the child's stdin.
+/// KNOWN RISK (SEC-3, audited May 2026): The decoded script is executed via
+/// `Invoke-Expression` on the remote host. The ScriptBlock injection is prevented
+/// (Base64 encoding), and the password is protected (stdin). However, the CONTENT
+/// of the script itself is LLM-controlled — if the local guardrail layer is
+/// bypassed (e.g., indirect prompt injection via a file Lucy reads), arbitrary
+/// PowerShell runs on the remote host with the configured credential.
+///
+/// MITIGATION: Configure WinRM credentials with MINIMUM PRIVILEGE (no Domain Admin).
+/// Consider adding a per-host "max command tier" that limits what categories of
+/// commands can run on each remote host.
 fn build_winrm_script(host: &str, username: &str, _password_unused: &str, script: &str) -> String {
     // Base64-encode the inner user script to prevent ScriptBlock breakout
     let encoded = base64_encode_utf16le(script);
