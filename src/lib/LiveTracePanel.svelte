@@ -12,7 +12,7 @@
   scrolls up (sticky-scroll discipline).
 -->
 <script lang="ts">
-    import { afterUpdate, tick } from 'svelte';
+    import { onDestroy } from 'svelte';
     import { liveTrace, clearTrace, type TraceEntry, type TracePhase } from '$lib/liveTrace';
     import Activity     from '@tabler/icons-svelte/icons/activity';
     import X            from '@tabler/icons-svelte/icons/x';
@@ -36,19 +36,45 @@
     let listEl: HTMLDivElement | null = null;
     let stickyScroll = true;
 
-    // Re-derive visible entries when store / filters / tab change
-    $: visible = ($liveTrace || []).filter(e => {
-        if (!enabledPhases.has(e.phase)) return false;
-        if (scopeToActiveTab && activeTabId && e.tabId && e.tabId !== activeTabId) return false;
-        return true;
-    });
+    // Cap rendered entries — even though the store is now 100, the visible
+    // list after filtering can still be sizable for narrow filters. Render
+    // only the most recent N to keep frame budget tight.
+    const RENDER_CAP = 80;
 
-    // Auto-scroll bottom unless user scrolled up
-    afterUpdate(async () => {
-        if (!stickyScroll || !listEl) return;
-        await tick();
-        listEl.scrollTop = listEl.scrollHeight;
-    });
+    // Re-derive visible entries when store / filters / tab change.
+    // We slice to RENDER_CAP at the END (most recent) to avoid creating a
+    // huge intermediate array we then discard.
+    $: visible = (() => {
+        const list = $liveTrace || [];
+        const out: TraceEntry[] = [];
+        // Walk backwards so we collect the most recent N matches first
+        for (let i = list.length - 1; i >= 0 && out.length < RENDER_CAP; i--) {
+            const e = list[i];
+            if (!enabledPhases.has(e.phase)) continue;
+            if (scopeToActiveTab && activeTabId && e.tabId && e.tabId !== activeTabId) continue;
+            out.push(e);
+        }
+        return out.reverse();
+    })();
+
+    // Auto-scroll: debounced via rAF so a burst of pushTrace() calls (the
+    // agent loop emits 20+ events per turn) doesn't trigger one DOM write
+    // per push. We replace the old afterUpdate hook with a rAF-coalesced
+    // scroll triggered by the visible-array change.
+    let _scrollScheduled = false;
+    function scheduleScroll() {
+        if (_scrollScheduled || !stickyScroll || !listEl) return;
+        _scrollScheduled = true;
+        requestAnimationFrame(() => {
+            _scrollScheduled = false;
+            if (stickyScroll && listEl) listEl.scrollTop = listEl.scrollHeight;
+        });
+    }
+    // Reactive: whenever visible.length changes, schedule a scroll-to-bottom.
+    // Reading .length only (not full array) avoids tracking individual items.
+    $: visibleLen = visible.length;
+    $: if (typeof visibleLen === 'number') scheduleScroll();
+    onDestroy(() => { _scrollScheduled = false; });
 
     function onScroll() {
         if (!listEl) return;

@@ -28,7 +28,11 @@ export interface TraceEntry {
     tabId?: string;
 }
 
-const MAX_ENTRIES = 200;
+// Capped lower (200 → 100) so opening LiveTracePanel after a long task
+// doesn't have to render hundreds of entries at once on lower-end hardware.
+// If you need full history for debugging, the ring buffer can be unrolled
+// from the writable store directly via getTrace().
+const MAX_ENTRIES = 100;
 let _seq = 0;
 
 export const liveTrace = writable<TraceEntry[]>([]);

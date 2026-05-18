@@ -162,21 +162,39 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     // CRITICAL FIX (May 2026 — "(sin salida)" bug on Get-Service / Get-MpComputerStatus):
     // PowerShell auto-formats object output to text via the host's display
     // pipeline (Out-Default). When stdout is redirected to a pipe (as we do
-    // for capture), that pipeline can silently drop objects whose default
+    // for capture), that pipeline silently drops objects whose default
     // formatter expects a terminal width — Get-Service, Get-Process,
     // Get-MpComputerStatus all hit this with -Command on a redirected stdout.
     //
-    // Fix: wrap the user's script in a scriptblock and explicitly pipe it
-    // through Out-String -Width 4096, which forces materialisation as plain
-    // text regardless of whether stdout is a TTY. Also set Console.Output
-    // Encoding to UTF-8 so accented chars / box-drawing don't corrupt into
-    // garbage when from_utf8_lossy decodes them.
+    // First attempt (May 2026 v1) wrapped the script in `& { … } | Out-String`
+    // and passed it via -Command. That FAILED because Command::arg() passes
+    // the string verbatim to CreateProcess which joins args with spaces;
+    // PowerShell's own command-line parser then re-tokenises, and nested
+    // `{}` from Where-Object scriptblocks confused the outer wrap, so the
+    // inner script never executed properly (returned silently).
+    //
+    // BULLETPROOF FIX (v2): use -EncodedCommand with base64-encoded UTF-16LE.
+    // PowerShell decodes the bytes directly — argument parsing, quoting, and
+    // escape rules are completely bypassed. Any script, no matter how many
+    // nested braces or quotes, executes verbatim. We also still wrap in
+    // `& { … } | Out-String -Width 4096` to force materialisation, since the
+    // -EncodedCommand transport only fixes parsing — the Out-Default-drop
+    // issue is orthogonal.
+    use base64::Engine;
     let wrapped_script = format!(
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); \
+        "$ErrorActionPreference='Continue'; \
+         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); \
          $OutputEncoding = [System.Text.UTF8Encoding]::new(); \
-         & {{ {} }} | Out-String -Width 4096",
+         try {{ & {{ {} }} | Out-String -Width 4096 }} \
+         catch {{ Write-Output \"[POWERSHELL ERROR]: $($_.Exception.Message)\"; exit 1 }}",
         script_clone
     );
+    // UTF-16LE bytes for -EncodedCommand (PowerShell requirement)
+    let utf16: Vec<u8> = wrapped_script
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    let b64_cmd = base64::engine::general_purpose::STANDARD.encode(&utf16);
 
     let child = tokio::task::spawn_blocking(move || {
         let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
@@ -184,7 +202,7 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
             .current_dir(cwd)
             .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
             .arg("-OutputFormat").arg("Text")
-            .arg("-Command").arg(&wrapped_script)
+            .arg("-EncodedCommand").arg(&b64_cmd)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
     }).await
