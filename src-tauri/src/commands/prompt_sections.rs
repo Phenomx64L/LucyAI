@@ -247,9 +247,9 @@ impl PromptSection for AlternativeExecutorsSection {
         "RULE 15 — ALTERNATIVE EXECUTORS (use when PowerShell is blocked by policy or unavailable):\n\
         RULE 15b — AVOID TERMINAL-SERVER-ONLY COMMANDS: 'query user', 'query session', 'qwinsta' ONLY work on Terminal Server / RDS hosts. On regular Windows workstations/servers to check if a user is active or enabled, ALWAYS use PowerShell: Get-LocalUser -Name 'username' | Select Name,Enabled,LastLogon.\n\
         - CMD (<EXECUTE_CMD>): net, ipconfig, netstat, ping, tracert, dir, tasklist, sc, reg query — any cmd.exe command.\n\
-        - WMIC (<EXECUTE_WMIC>): hardware/OS queries — 'cpu get name,maxclockspeed', 'os get caption,version', 'diskdrive get model,size', 'memorychip get capacity'.\n\
+        - WMIC (<EXECUTE_WMIC>): ⚠️ STRICT SCOPE — ONLY for Win32_* hardware/OS classes via allowed aliases: cpu, os, diskdrive, logicaldisk, memorychip, computersystem, nic, nicconfig, process, service, startup, bios, baseboard, csproduct, useraccount, qfe, or `path Win32_*`. Examples: 'cpu get name,maxclockspeed', 'os get caption,version', 'diskdrive get model,size'. ❌ NEVER put `reg query`, registry paths, or file system commands inside <EXECUTE_WMIC> — will be rejected with 'Query WMIC no permitida'.\n\
         - NETSH (<EXECUTE_NETSH>): network/firewall config — 'interface ip show config', 'advfirewall show allprofiles', 'wlan show profiles'.\n\
-        - REG (<EXECUTE_REG>): registry read — 'query HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion /v ProductName'.\n\
+        - REG (<EXECUTE_REG>): registry read/query — examples: 'query HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion /v ProductName', 'query \"HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection\" /s'. ⚠️ ANY command starting with `reg query`, `reg add`, `reg delete`, or referencing HKLM/HKCU/HKCR/HKU paths MUST go inside <EXECUTE_REG> — NEVER <EXECUTE_WMIC> (WMI ≠ Registry).\n\
         - CSCRIPT (<EXECUTE_CSCRIPT>): VBS scripts for COM/AD.\n\
         - NATIVE_REGISTRY (<TOOL>registry:HKLM|SOFTWARE\\...|ValueName</TOOL>): reads registry directly from Rust, works even when reg.exe is blocked.\n\
         - NATIVE_NETSTAT (<TOOL>netconn</TOOL>): returns active network connections from native Rust.\n\

@@ -260,6 +260,54 @@ pub async fn init_metrics_db() -> Result<(), String> {
     if POOL.get().is_some() { Ok(()) } else { Err("DB not initialized at startup".to_string()) }
 }
 
+// ── Test-only DB initialization ─────────────────────────────────────────────
+// Spins up an in-memory SQLite pool with the full schema so tests that
+// transitively hit `with_db()` (via execute_powershell → check_permission,
+// for example) can run without needing a Tauri AppHandle.
+//
+// Idempotent: a second call after the pool is set is a no-op. Each test
+// process gets one shared pool — that's fine because:
+//   1. SQLite in-memory shared cache is process-local.
+//   2. permission_rules starts empty → check_permission returns "allow" for
+//      everything, which is exactly what we want for exec-contract tests.
+//
+// Gated behind `#[cfg(test)]` so it never ships in release binaries.
+#[cfg(test)]
+pub fn init_in_memory_for_tests() -> Result<(), String> {
+    if POOL.get().is_some() {
+        return Ok(());
+    }
+    // `SqliteConnectionManager::memory()` opens a fresh `:memory:` DB per
+    // connection by default. To share state across pool handles we'd need
+    // `file::memory:?cache=shared` — but for our tests, ONE connection in
+    // the pool is enough (max_size=1). check_permission borrows briefly,
+    // returns, and the same handle services the next call.
+    let manager = r2d2_sqlite::SqliteConnectionManager::memory()
+        .with_init(|conn| {
+            conn.execute_batch(
+                "PRAGMA journal_mode=MEMORY;\
+                 PRAGMA synchronous=OFF;\
+                 PRAGMA foreign_keys=ON;"
+            )
+        });
+    let pool = r2d2::Pool::builder()
+        .max_size(1)
+        .min_idle(Some(1))
+        .build(manager)
+        .map_err(|e| format!("test pool build: {}", e))?;
+    let conn = pool.get().map_err(|e| format!("test pool get: {}", e))?;
+    conn.execute_batch(INIT_SQL)
+        .map_err(|e| format!("test schema init: {}", e))?;
+    drop(conn);
+    // Race tolerance: cargo test runs tests in parallel. Two of them may
+    // both see `POOL.get().is_some() == false` and both build a pool.
+    // Whichever calls .set() first wins — the loser silently drops its
+    // pool. Either pool is functionally equivalent (both back an empty
+    // permission_rules table), so we don't care which one survives.
+    let _ = POOL.set(pool);
+    Ok(())
+}
+
 /// Internal function to log token usage (called from both Tauri command and AI instrumentation)
 pub async fn log_usage_internal(
     model: &str,

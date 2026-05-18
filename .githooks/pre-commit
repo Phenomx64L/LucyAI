@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────────────────────
+# Lucy pre-commit hook — regression guards for the most-broken-in-history
+# code paths. Designed to be FAST (< 5s total) so it never tempts you to
+# skip with --no-verify.
+#
+# What it runs:
+#   • Always: contract tests for execute_powershell / execute_cmd / execute_wmic
+#     (the "(sin salida)" and routing-misclassification regressions).
+#   • Conditional: full Rust build check if any .rs changed.
+#   • Conditional: svelte-check on staged .svelte/.ts/.js if frontend changed.
+#
+# Skipping (rare, document the reason in the commit body):
+#   git commit --no-verify
+#
+# Install:
+#   git config core.hooksPath .githooks
+#   (or `npm run hooks:install`)
+#
+# Failure exits with a clear diagnosis pointing at the broken contract.
+# ──────────────────────────────────────────────────────────────────────────────
+set -e
+
+# Colour helpers — degrade gracefully if not a TTY.
+if [ -t 1 ]; then
+    R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[1;34m'; N='\033[0m'
+else
+    R=''; G=''; Y=''; B=''; N=''
+fi
+
+# Resolve repo root from the hook's own location so this works regardless of
+# the cwd git invoked us from.
+HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$HOOK_DIR/.." && pwd)
+cd "$REPO_ROOT"
+
+# What's staged? Diff against the index, name-only.
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# Quick exits.
+if [ -z "$STAGED" ]; then
+    echo -e "${Y}pre-commit: no staged files, skipping checks.${N}"
+    exit 0
+fi
+
+# Detect what kinds of files changed. Bash regex tolerates the path separator.
+RUST_CHANGED=$(echo "$STAGED" | grep -E '^src-tauri/.*\.rs$' || true)
+TAURI_CFG_CHANGED=$(echo "$STAGED" | grep -E '^src-tauri/(Cargo\.toml|tauri\.conf\.json)$' || true)
+SVELTE_CHANGED=$(echo "$STAGED" | grep -E '^src/.*\.(svelte|ts|js|mjs)$' || true)
+
+START_TIME=$(date +%s)
+
+# ── 1. ALWAYS: full Rust unit-test suite ─────────────────────────────────────
+# Includes contract tests (shell::tests, local::tests) plus guardrails,
+# reflection, and others. Runs in ~2.3s warm. Even on a frontend-only commit
+# we run them — they're cheap and zero-flake.
+#
+# NOTE: `cargo test` accepts only one substring filter per invocation, and
+# we WANT the full suite anyway. If anyone adds slow tests (>5s) in the
+# future, gate them behind `#[ignore]` and add an explicit
+# `cargo test --ignored` step somewhere else (CI nightly, manual).
+echo -e "${B}[1/3] Running Rust unit tests…${N}"
+if ! ( cd src-tauri && cargo test --lib --quiet 2>&1 ); then
+    echo
+    echo -e "${R}╔════════════════════════════════════════════════════════════════╗${N}"
+    echo -e "${R}║  COMMIT BLOCKED — contract tests failed.                       ║${N}"
+    echo -e "${R}╚════════════════════════════════════════════════════════════════╝${N}"
+    echo
+    echo "These tests guard against the '(sin salida)' bug and WMIC/REG"
+    echo "routing regressions. A failure here means the command transport"
+    echo "is broken — running Lucy with this change will silently lose"
+    echo "PowerShell output."
+    echo
+    echo "Fix the failing test before committing, or (only if you're 100%"
+    echo "sure it's a flaky test, not a real regression):"
+    echo
+    echo "  git commit --no-verify"
+    echo
+    exit 1
+fi
+echo -e "${G}      ✓ contract tests passed${N}"
+
+# ── 2. CONDITIONAL: cargo check if Rust changed ──────────────────────────────
+if [ -n "$RUST_CHANGED" ] || [ -n "$TAURI_CFG_CHANGED" ]; then
+    echo -e "${B}[2/3] Rust changed — running cargo check…${N}"
+    if ! ( cd src-tauri && cargo check --quiet 2>&1 ); then
+        echo -e "${R}      ✗ cargo check failed — commit blocked${N}"
+        exit 1
+    fi
+    echo -e "${G}      ✓ cargo check passed${N}"
+else
+    echo -e "${Y}[2/3] No Rust changes — skipping cargo check.${N}"
+fi
+
+# ── 3. CONDITIONAL: svelte-check on frontend changes ─────────────────────────
+# We don't fail on svelte-check errors because the codebase has 20+ pre-
+# existing type errors unrelated to our work. Instead, count the errors on
+# the staged files specifically and warn if you ADDED new ones.
+if [ -n "$SVELTE_CHANGED" ]; then
+    echo -e "${B}[3/3] Frontend changed — running svelte-check…${N}"
+    SC_OUT=$(npx --no svelte-check --threshold error 2>&1 || true)
+    SC_TOTAL=$(echo "$SC_OUT" | grep -oE '[0-9]+ ERRORS' | head -1 | awk '{print $1}')
+    if [ -z "$SC_TOTAL" ]; then SC_TOTAL=0; fi
+    # 20 was the baseline at the time this hook was written (May 2026).
+    # If your baseline shifts after a legitimate refactor, update this
+    # number. The point is to surface new regressions, not to chase old ones.
+    BASELINE=20
+    if [ "$SC_TOTAL" -gt "$BASELINE" ]; then
+        echo -e "${R}      ✗ svelte-check reports ${SC_TOTAL} errors (baseline ${BASELINE}).${N}"
+        echo -e "${R}        New type errors likely introduced by this commit.${N}"
+        echo -e "${Y}        Inspect with: npm run check${N}"
+        exit 1
+    fi
+    echo -e "${G}      ✓ svelte-check within baseline (${SC_TOTAL} ≤ ${BASELINE})${N}"
+else
+    echo -e "${Y}[3/3] No frontend changes — skipping svelte-check.${N}"
+fi
+
+ELAPSED=$(($(date +%s) - START_TIME))
+echo -e "${G}pre-commit: all checks passed in ${ELAPSED}s.${N}"

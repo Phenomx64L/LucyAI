@@ -31,7 +31,7 @@ flate2     = "1"   # gzip compression for rotated logs (already transitive)
 # files in `src/lib/types/`. Zero runtime overhead — derive is no-op
 # unless the export method is called from a test.
 ts-rs = { version = "10", features = ["chrono-impl", "serde-compat"] }
-tokio      = { version = "1", features = ["time", "rt", "process", "io-util"] }
+tokio      = { version = "1", features = ["time", "rt", "process", "io-util", "macros"] }
 winreg     = "0.52"
 tauri-plugin-sql = { version = "2.0.0", features = ["sqlite"] }
 regex = "1"

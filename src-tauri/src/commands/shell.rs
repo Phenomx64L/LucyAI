@@ -186,6 +186,45 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     //   2. Sets UTF-8 console encoding so emoji / accented chars survive.
     //   3. Runs the user script and pipes through Out-String -Width 4096 so
     //      object output is always materialised as text.
+    // ── Sanitise the user script ────────────────────────────────────────
+    // Two real-world LLM bug fingerprints we now defend against:
+    //
+    //  (a) Line-continuation backticks. The LLM often writes scripts like:
+    //          Get-MpComputerStatus | Select-Object `
+    //              AMServiceEnabled, AntivirusEnabled
+    //      When that goes through the TOOL regex it can collapse to one
+    //      line, leaving the backtick adjacent to a space — which in
+    //      PowerShell escapes the next char and breaks parsing. Strip
+    //      `<whitespace> sequences (the continuation form) since they're
+    //      meaningless once newlines collapse.
+    //
+    //  (b) `$var = <pipeline>` shaped scripts. The assignment captures
+    //      the WHOLE pipeline into the variable, so when we append
+    //      `| Out-String` the assignment swallows it and stdout stays
+    //      empty. We auto-detect `^$word\s*=` at the start of the
+    //      (single-statement) script and append `; $word` so the
+    //      variable's value gets echoed at the end.
+    let mut clean_script = script_clone.clone();
+    // (a) strip line-continuation backticks followed by whitespace
+    while let Some(pos) = clean_script.find("`\n") { clean_script.replace_range(pos..pos+2, " "); }
+    while let Some(pos) = clean_script.find("` ")  { clean_script.replace_range(pos..pos+2, " "); }
+    // (b) auto-echo for single-line `$var = ...` pattern (no other ;)
+    let trimmed = clean_script.trim();
+    let var_assign_re = regex::Regex::new(r"^\$([A-Za-z_][A-Za-z0-9_]*)\s*=").ok();
+    if let Some(ref re) = var_assign_re {
+        if let Some(cap) = re.captures(trimmed) {
+            if let Some(name) = cap.get(1) {
+                let varname = name.as_str().to_string();
+                // Only auto-echo if the script has no explicit semicolon
+                // (single-statement). Multi-statement scripts may have
+                // their own output logic and we don't want to clobber.
+                if !trimmed.contains(';') && !trimmed.to_lowercase().contains("write-output") {
+                    clean_script = format!("{}; ${}", trimmed, varname);
+                }
+            }
+        }
+    }
+
     let wrapped_script = format!(
         "\u{FEFF}# Lucy execute_powershell wrapper (auto-generated)\n\
          $ProgressPreference = 'SilentlyContinue'\n\
@@ -193,12 +232,14 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
          $OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
          try {{\n\
-         {} | Out-String -Width 4096\n\
+             & {{\n\
+         {}\n\
+             }} | Out-String -Width 4096\n\
          }} catch {{\n\
              Write-Output \"[POWERSHELL ERROR]: $($_.Exception.Message)\"\n\
              exit 1\n\
          }}\n",
-        script_clone
+        clean_script
     );
 
     // Unique temp path — pid + nanos timestamp avoids collisions across
@@ -220,12 +261,33 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     let tmp_path_for_run = tmp_path.clone();
     let child = tokio::task::spawn_blocking(move || {
         let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
+        // ── CRITICAL FIX (May 2026 v4 — root cause of "(sin salida)" bug) ──
+        // v1–v3 all attacked the wrong layer: they kept rewriting the
+        // PowerShell wrapper (Out-String, EncodedCommand, temp .ps1) under
+        // the assumption that PS wasn't producing output. PS WAS producing
+        // output. The actual bug is that `.spawn()` without explicit
+        // .stdout/.stderr piping INHERITS those handles from the parent
+        // Tauri process — which on a windowed GUI app has no console, so
+        // the inherited handle resolves to NUL. `wait_with_output()` then
+        // returns empty Vec<u8> for both streams REGARDLESS of what the
+        // child actually wrote. (`Command::output()` doesn't have this bug
+        // because it pipes implicitly — which is why execute_cmd worked
+        // while execute_powershell didn't.)
+        //
+        // The three Stdio configs below are the minimum required for
+        // wait_with_output() to capture anything. stdin=null because the
+        // PowerShell script is fully self-contained in the temp .ps1 file
+        // and never reads stdin — closing it avoids the (rare) hang where
+        // a malformed user script does `Read-Host`.
         Command::new("powershell")
             .current_dir(cwd)
             .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
             .arg("-OutputFormat").arg("Text")
             .arg("-File").arg(&tmp_path_for_run)
             .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
     }).await
         .map_err(|e| format!("Error interno spawn: {}", e))?
@@ -563,5 +625,157 @@ pub fn kill_shell_session(session_id: String) {
             .arg("/F").arg("/T").arg("/PID").arg(pid.to_string())
             .creation_flags(CREATE_NO_WINDOW)
             .output();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTRACT TESTS — execute_powershell stdout/stderr capture
+//
+// These tests exist to prevent the "(sin salida)" bug from EVER coming back.
+//
+// History: between May 2026 and the v4 fix, three "critical fix" commits
+// (9dc5dce, 25a0c96, a170ad9) tried to fix this bug by rewriting the
+// PowerShell wrapper script — Out-String, EncodedCommand, temp .ps1 files.
+// None worked, because none addressed the actual root cause: `.spawn()`
+// inherits stdout/stderr from the parent unless explicitly piped, so
+// `wait_with_output()` returned empty Vec<u8> regardless of what PS printed.
+//
+// These tests assert the CONTRACT — "PowerShell output reaches the caller" —
+// rather than the implementation. If anyone refactors execute_powershell
+// (LLM-assisted or not) and breaks the capture pipe, these tests go red
+// IMMEDIATELY. The tests cost ~3 seconds total to run; the bug cost two
+// debugging sessions and a frustrated user. Worth it.
+//
+// To add a NEW test: pick a unique sentinel string (so parallel test
+// execution doesn't false-positive), run a small script that prints it,
+// assert it comes back. Keep tests fast (< 5s each) — these run on every
+// `cargo test`.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One-time setup — initialises an in-memory DB so check_permission works.
+    /// Safe to call from every test: it's a no-op after the first invocation.
+    fn setup() {
+        crate::commands::metrics::init_in_memory_for_tests()
+            .expect("test DB init failed");
+    }
+
+    /// CONTRACT: stdout from `Write-Output` MUST reach the caller.
+    /// This is the canary that died for two months. If this fails, the
+    /// stdout pipe is broken again — check that `.stdout(Stdio::piped())`
+    /// is still present on the `Command::new("powershell")` invocation.
+    #[tokio::test]
+    async fn powershell_captures_simple_stdout() {
+        setup();
+        // Sentinel intentionally weird so we know it came from THIS test.
+        let out = execute_powershell(
+            "Write-Output 'sentinel-9f3a-x7k2'".to_string(),
+            None,
+            Some(15),
+        ).await.expect("execute_powershell returned Err");
+        assert!(
+            out.contains("sentinel-9f3a-x7k2"),
+            "Regression: PowerShell stdout NOT captured. \
+             This is the (sin salida) bug returning. \
+             Check that .stdout(Stdio::piped()) is set in execute_powershell. \
+             Actual output: {:?}", out
+        );
+    }
+
+    /// CONTRACT: object output (the real-world case — Get-Service, Get-Process,
+    /// Get-MpComputerStatus etc.) must materialise via Out-String wrap.
+    #[tokio::test]
+    async fn powershell_captures_object_output() {
+        setup();
+        let out = execute_powershell(
+            "Get-Process | Select-Object -First 1 -Property Name".to_string(),
+            None,
+            Some(15),
+        ).await.expect("execute_powershell returned Err");
+        // Get-Process ALWAYS returns at least the System process. If the
+        // output capture works, we'll see a "Name" header and at least one
+        // row of data. If broken, the string is empty/whitespace.
+        assert!(
+            !out.trim().is_empty(),
+            "Object output not materialised — likely Out-String wrap regression or pipe break. Got: {:?}", out
+        );
+        assert!(
+            out.contains("Name"),
+            "Expected 'Name' header in formatted object output. Got: {:?}", out
+        );
+    }
+
+    /// CONTRACT: the v3 auto-echo for `$var = ...` single-statement scripts
+    /// must keep working. Without it, scripts like `$x = Get-Date` returned
+    /// nothing because the assignment swallowed the pipeline.
+    #[tokio::test]
+    async fn powershell_auto_echoes_var_assignment() {
+        setup();
+        let out = execute_powershell(
+            "$x = 'auto-echo-3k7m'".to_string(),
+            None,
+            Some(15),
+        ).await.expect("execute_powershell returned Err");
+        assert!(
+            out.contains("auto-echo-3k7m"),
+            "Var-assign auto-echo broken (v3 sanitisation). Got: {:?}", out
+        );
+    }
+
+    /// CONTRACT: a deliberately broken script must surface its error message
+    /// (via the try/catch wrap), not silently return empty success.
+    #[tokio::test]
+    async fn powershell_surfaces_errors() {
+        setup();
+        // Throw a unique sentinel from inside PowerShell — the catch block
+        // in the wrapper should turn it into "[POWERSHELL ERROR]: ..." output.
+        let out = execute_powershell(
+            "throw 'sentinel-error-q4p8'".to_string(),
+            None,
+            Some(15),
+        ).await;
+        match out {
+            Ok(s) => {
+                assert!(
+                    s.contains("sentinel-error-q4p8"),
+                    "Errors should surface either as Ok with [POWERSHELL ERROR] or as Err — got Ok({:?})", s
+                );
+            }
+            Err(e) => {
+                assert!(
+                    e.contains("sentinel-error-q4p8") || e.to_lowercase().contains("error"),
+                    "Error path returned but doesn't mention the failure. Got: {:?}", e
+                );
+            }
+        }
+    }
+
+    /// CONTRACT: the timeout flag actually kills runaway scripts.
+    /// We don't want a regression that lets `Start-Sleep` hang Lucy forever.
+    #[tokio::test]
+    async fn powershell_timeout_fires() {
+        setup();
+        let start = std::time::Instant::now();
+        let result = execute_powershell(
+            "Start-Sleep -Seconds 30".to_string(),
+            None,
+            Some(2), // 2-second timeout — should kill before sleep completes
+        ).await;
+        let elapsed = start.elapsed();
+        assert!(
+            result.is_err(),
+            "Expected timeout Err, got Ok"
+        );
+        assert!(
+            elapsed.as_secs() < 10,
+            "Timeout took too long ({:?}) — kill path broken", elapsed
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_lowercase().contains("timeout"),
+            "Error should mention timeout. Got: {:?}", err
+        );
     }
 }
