@@ -4101,19 +4101,34 @@ Use ONE of these patterns instead:
                     // have data to draw conclusions from. Prevents the
                     // "Get-Service returned nothing → Lucy invents detailed
                     // service list" failure mode that bit the user.
-                    // We check the raw toolResults array BEFORE compaction
-                    // because compaction may obscure the empty signal.
-                    const _emptyMarkers = [/\(sin salida\)/i, /\(no output\)/i, /\bempty\b/i, /no se encontraron/i, /not found/i, /no results/i];
-                    const _errorMarkers = [/^\[.*ERROR\]/im, /\[stderr warnings\]/i, /Reg Error/i, /ParserError/i, /CommandNotFoundException/i, /FullyQualifiedErrorId/i, /Acceso denegado|Access is denied/i];
+                    const _emptyMarkers = [/\(sin salida\)/i, /\(no output\)/i, /\bempty\b/i, /no se encontraron/i, /not found/i, /no results/i, /returned no output/i, /no se devolvieron/i];
+                    const _errorMarkers = [/^\[.*ERROR\]/im, /\[stderr warnings\]/i, /Reg Error/i, /ParserError/i, /CommandNotFoundException/i, /FullyQualifiedErrorId/i, /Acceso denegado|Access is denied/i, /POWERSHELL ERROR/i];
+                    /** Strip the boilerplate framing that wraps tool outputs
+                     *  ("[EXECUTION RESULT — step N]", header rows of the
+                     *  warpBlock, etc.) so the BODY can be inspected for
+                     *  actual content vs just headers. */
+                    function _stripFraming(s) {
+                        return String(s || '')
+                            .replace(/^\[[^\]]+\]\s*\n?/gm, '')        // bracket-headers
+                            .replace(/^---[^\n]*---\s*\n?/gm, '')      // markdown rules
+                            .replace(/^PS\s*>\s*[^\n]*\n?/gm, '')      // PS prompt lines
+                            .trim();
+                    }
                     const totalToolCalls = toolResults.length;
                     if (totalToolCalls > 0) {
                         let emptyCount = 0;
                         let errorCount = 0;
                         for (const r of toolResults) {
-                            const s = String(r || '').trim();
-                            if (!s || s.length < 30) { emptyCount++; continue; }
-                            if (_emptyMarkers.some(re => re.test(s))) { emptyCount++; continue; }
-                            if (_errorMarkers.some(re => re.test(s))) { errorCount++; continue; }
+                            const raw = String(r || '').trim();
+                            // Cheap-path empties: completely blank or trivially short
+                            if (!raw || raw.length < 30) { emptyCount++; continue; }
+                            // Strip framing then re-measure — catches the case where
+                            // the wrapper text is verbose but the actual command
+                            // output is empty/(sin salida).
+                            const body = _stripFraming(raw);
+                            if (!body || body.length < 25) { emptyCount++; continue; }
+                            if (_emptyMarkers.some(re => re.test(raw))) { emptyCount++; continue; }
+                            if (_errorMarkers.some(re => re.test(raw))) { errorCount++; continue; }
                         }
                         if ((emptyCount + errorCount) === totalToolCalls) {
                             const guardMarker =

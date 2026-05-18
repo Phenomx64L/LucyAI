@@ -159,55 +159,85 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
 
     // Spawn child process so we can kill it on timeout (prevents zombie processes).
     //
-    // CRITICAL FIX (May 2026 — "(sin salida)" bug on Get-Service / Get-MpComputerStatus):
-    // PowerShell auto-formats object output to text via the host's display
-    // pipeline (Out-Default). When stdout is redirected to a pipe (as we do
-    // for capture), that pipeline silently drops objects whose default
-    // formatter expects a terminal width — Get-Service, Get-Process,
-    // Get-MpComputerStatus all hit this with -Command on a redirected stdout.
+    // ── PowerShell stdout-capture pipeline (May 2026 v3 — temp-file approach) ──
     //
-    // First attempt (May 2026 v1) wrapped the script in `& { … } | Out-String`
-    // and passed it via -Command. That FAILED because Command::arg() passes
-    // the string verbatim to CreateProcess which joins args with spaces;
-    // PowerShell's own command-line parser then re-tokenises, and nested
-    // `{}` from Where-Object scriptblocks confused the outer wrap, so the
-    // inner script never executed properly (returned silently).
+    // History of failed attempts on the "(sin salida)" bug:
+    //   v1: wrap in `& { … } | Out-String` via -Command. FAILED — Command::arg
+    //       passes verbatim to CreateProcess which re-tokenises; nested {} from
+    //       Where-Object scriptblocks confused the outer wrap.
+    //   v2: same wrap + base64 -EncodedCommand. FAILED — PowerShell decoded the
+    //       script correctly but PROGRESS objects on stderr ("Preparando módulos
+    //       para el primer uso") interleaved with the output stream and CLIXML
+    //       serialisation drowned the actual data path.
     //
-    // BULLETPROOF FIX (v2): use -EncodedCommand with base64-encoded UTF-16LE.
-    // PowerShell decodes the bytes directly — argument parsing, quoting, and
-    // escape rules are completely bypassed. Any script, no matter how many
-    // nested braces or quotes, executes verbatim. We also still wrap in
-    // `& { … } | Out-String -Width 4096` to force materialisation, since the
-    // -EncodedCommand transport only fixes parsing — the Out-Default-drop
-    // issue is orthogonal.
-    use base64::Engine;
+    // v3 — write the wrapped script to a temp .ps1 file and execute via -File.
+    // Why this works where the others didn't:
+    //   • PowerShell parses .ps1 files in their native script mode, NOT the
+    //     command-line re-tokenisation mode. Any script with any nesting works.
+    //   • We can prepend $ProgressPreference='SilentlyContinue' at the top of
+    //     the file to suppress the progress CLIXML noise that was polluting
+    //     stderr and (more importantly) confusing our success-detection.
+    //   • Force UTF-8 BOM on the file so PowerShell reads it as UTF-8 reliably.
+    //   • Temp file lives in std::env::temp_dir() — auto-cleaned by Windows on
+    //     reboot, plus we delete it ourselves in the finally-equivalent.
+    //
+    // The wrapper now:
+    //   1. Suppresses progress UI (the source of the CLIXML noise).
+    //   2. Sets UTF-8 console encoding so emoji / accented chars survive.
+    //   3. Runs the user script and pipes through Out-String -Width 4096 so
+    //      object output is always materialised as text.
     let wrapped_script = format!(
-        "$ErrorActionPreference='Continue'; \
-         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); \
-         $OutputEncoding = [System.Text.UTF8Encoding]::new(); \
-         try {{ & {{ {} }} | Out-String -Width 4096 }} \
-         catch {{ Write-Output \"[POWERSHELL ERROR]: $($_.Exception.Message)\"; exit 1 }}",
+        "\u{FEFF}# Lucy execute_powershell wrapper (auto-generated)\n\
+         $ProgressPreference = 'SilentlyContinue'\n\
+         $ErrorActionPreference = 'Continue'\n\
+         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
+         $OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
+         try {{\n\
+         {} | Out-String -Width 4096\n\
+         }} catch {{\n\
+             Write-Output \"[POWERSHELL ERROR]: $($_.Exception.Message)\"\n\
+             exit 1\n\
+         }}\n",
         script_clone
     );
-    // UTF-16LE bytes for -EncodedCommand (PowerShell requirement)
-    let utf16: Vec<u8> = wrapped_script
-        .encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
-    let b64_cmd = base64::engine::general_purpose::STANDARD.encode(&utf16);
 
+    // Unique temp path — pid + nanos timestamp avoids collisions across
+    // concurrent invocations.
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = std::env::temp_dir()
+        .join(format!("lucy_ps_{}_{}.ps1", pid, nanos));
+
+    std::fs::write(&tmp_path, wrapped_script.as_bytes())
+        .map_err(|e| {
+            write_app_log("ERROR", &format!("Fallo escribir script temp: {}", e));
+            format!("No se pudo escribir script temporal: {}", e)
+        })?;
+
+    let tmp_path_for_run = tmp_path.clone();
     let child = tokio::task::spawn_blocking(move || {
         let cwd = crate::state::GLOBAL_CWD.read().map(|c| c.clone()).unwrap_or_else(|_| "C:\\".to_string());
         Command::new("powershell")
             .current_dir(cwd)
             .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
             .arg("-OutputFormat").arg("Text")
-            .arg("-EncodedCommand").arg(&b64_cmd)
+            .arg("-File").arg(&tmp_path_for_run)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
     }).await
         .map_err(|e| format!("Error interno spawn: {}", e))?
-        .map_err(|e| { write_app_log("ERROR", &format!("Fallo PowerShell spawn: {}", e)); format!("Fallo crítico: {}", e) })?;
+        .map_err(|e| {
+            // Try to clean the temp file even on spawn failure
+            let _ = std::fs::remove_file(&tmp_path);
+            write_app_log("ERROR", &format!("Fallo PowerShell spawn: {}", e));
+            format!("Fallo crítico: {}", e)
+        })?;
+
+    // Clone for cleanup after exit
+    let tmp_path_for_cleanup = tmp_path.clone();
 
     let child_pid = child.id();
     let child = Arc::new(StdMutex::new(Some(child)));
@@ -224,15 +254,6 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
 
     let output = match output_result {
         Err(_) => {
-            // Timeout: kill the zombie process. Race-safe approach:
-            //   1) Try Child::kill() via the Mutex if the Child is still there.
-            //   2) ALSO fire `taskkill /F /T /PID <pid>` which kills the whole
-            //      process tree (PowerShell can spawn children that the parent
-            //      handle alone can't reach).
-            // The Child may have already been moved out by `.take()` inside the
-            // wait spawn_blocking — in that case the spawn_blocking thread is
-            // still running and would otherwise leak. taskkill by PID handles
-            // both situations.
             write_app_log("WARNING", &format!("PowerShell timeout (PID {}): comando tardó más de {} segundos — matando proceso (taskkill /T)", child_pid, timeout_val));
             if let Ok(mut guard) = child_for_kill.lock() {
                 if let Some(ref mut c) = *guard {
@@ -240,20 +261,29 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
                     let _ = c.wait();
                 }
             }
-            // Belt-and-suspenders: kill the entire process tree by PID
             let _ = Command::new("taskkill")
                 .arg("/F").arg("/T").arg("/PID").arg(child_pid.to_string())
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
+            // Clean up temp script on timeout too
+            let _ = std::fs::remove_file(&tmp_path_for_cleanup);
             return Err(format!("Timeout: el comando tardó más de {} segundos y fue cancelado.", timeout_val));
         }
-        Ok(Err(e)) => { return Err(format!("Error interno spawn: {}", e)); }
+        Ok(Err(e)) => {
+            let _ = std::fs::remove_file(&tmp_path_for_cleanup);
+            return Err(format!("Error interno spawn: {}", e));
+        }
         Ok(Ok(Err(e))) => {
             write_app_log("ERROR", &format!("Fallo PowerShell: {}", e));
+            let _ = std::fs::remove_file(&tmp_path_for_cleanup);
             return Err(format!("Fallo crítico: {}", e));
         }
         Ok(Ok(Ok(out))) => out,
     };
+
+    // Clean up the temp script file now that PowerShell has finished with it.
+    // Best-effort: ignore errors (Windows often holds a brief lock after exit).
+    let _ = std::fs::remove_file(&tmp_path_for_cleanup);
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
