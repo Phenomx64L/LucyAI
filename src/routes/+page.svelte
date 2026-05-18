@@ -115,6 +115,7 @@ import { listen } from '@tauri-apps/api/event';
     import CostDashboardView from '$lib/CostDashboardView.svelte';
     import AuditTrailView  from '$lib/AuditTrailView.svelte';
     import MemoryBrowserView from '$lib/MemoryBrowserView.svelte';
+    import LiveTracePanel    from '$lib/LiveTracePanel.svelte';
     import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
     import ProfileSwitcher from '$lib/ProfileSwitcher.svelte';
     import StatusOrb        from '$lib/StatusOrb.svelte';
@@ -397,6 +398,7 @@ import { listen } from '@tauri-apps/api/event';
     $: rshellPanelOpen = rshellSessions.some(s => !s.minimized);
     let showWelcome        = false; // muestra la pantalla de inicio aunque haya tabs abiertas
     let activeView         = 'terminal'; // 'terminal' | 'dashboard' | 'logviewer' | 'nexshell' | 'memory' | …
+    let showLiveTrace      = false;       // Floating trace panel (Alt+T or FAB toggle)
     let showPermissionRulesModal = false;
     let showSkillsManagerModal   = false;
     let showPrinciplesModal      = false;
@@ -1659,6 +1661,16 @@ import { listen } from '@tauri-apps/api/event';
             e.preventDefault();
             showShortcutsOverlay = false;
             return;
+        }
+        // Alt+T — toggle LiveTrace panel (don't fire when typing)
+        if (e.altKey && (e.key === 't' || e.key === 'T') && !ctrl) {
+            const tgt = e.target;
+            const isTyping = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
+            if (!isTyping) {
+                e.preventDefault();
+                showLiveTrace = !showLiveTrace;
+                return;
+            }
         }
         if (!ctrl) return;
         switch(e.key) {
@@ -6047,6 +6059,16 @@ if (Test-Path $src) {
         <!-- ── MEMORY BROWSER VIEW (agentmemory roadmap UI) ── -->
         {#if activeView === 'memory'}
         <MemoryBrowserView {isEN} />
+        {/if}
+
+        <!-- ── LIVE TRACE PANEL — agent telemetry (toggle via FAB or Alt+T) ── -->
+        <LiveTracePanel {isEN} activeTabId={activeTabId || ''} bind:open={showLiveTrace}/>
+        {#if !showLiveTrace && activeView === 'terminal'}
+        <button type="button" class="livetrace-fab" title={isEN ? 'Show live agent trace (Alt+T)' : 'Ver telemetría del agente (Alt+T)'}
+            on:click={() => showLiveTrace = true} aria-label="Open live trace">
+            <span class="lt-fab-dot"></span>
+            <span class="lt-fab-txt">{isEN ? 'Trace' : 'Trace'}</span>
+        </button>
         {/if}
 
         <!-- ── COST DASHBOARD VIEW ── -->

@@ -2498,3 +2498,38 @@ body[data-state="error"] .igrp{
     background:linear-gradient(180deg,rgba(0,168,107,.7),rgba(0,168,107,.4));
   }
   :root.light * { scrollbar-color:rgba(0,168,107,.45) rgba(15,23,42,.04); }
+
+/* ── LiveTrace FAB (floating action button) ─────────────────────────────
+   Small "Trace" pill at the bottom-right of the chat area when the
+   trace panel is closed. Pulsing dot signals the panel will show live
+   agent activity. Alt+T also toggles it (see onGlobalKey). */
+.livetrace-fab {
+    position: fixed; right: 18px; bottom: 18px;
+    background: rgba(10,14,22,.92);
+    border: 1px solid rgba(96,165,250,.30);
+    color: var(--accent, #93c5fd);
+    border-radius: 18px;
+    padding: 6px 12px 6px 8px;
+    font-size: 11px; font-weight: 600;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    box-shadow: 0 6px 16px -4px rgba(0,0,0,.5), 0 0 0 1px rgba(96,165,250,.08) inset;
+    z-index: 8900;
+    transition: transform .15s, border-color .15s, box-shadow .15s;
+}
+.livetrace-fab:hover {
+    transform: translateY(-1px);
+    border-color: rgba(96,165,250,.55);
+    box-shadow: 0 8px 22px -4px rgba(0,0,0,.6), 0 0 14px rgba(96,165,250,.25);
+}
+.lt-fab-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 8px rgba(52,211,153,.7);
+    animation: lt-pulse 1.6s ease-in-out infinite;
+}
+@keyframes lt-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .45; transform: scale(.82); }
+}
+.lt-fab-txt { letter-spacing: .4px; }
