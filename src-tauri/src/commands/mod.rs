@@ -26,3 +26,8 @@ pub mod synonyms;
 pub mod dedup;
 pub mod reranker;
 pub mod vec_index;
+pub mod audit;
+pub mod capacity;
+pub mod diagnostics;
+pub mod notify;
+pub mod log_analysis;

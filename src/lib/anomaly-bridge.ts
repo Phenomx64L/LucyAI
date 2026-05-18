@@ -18,6 +18,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { AnomalySeverity, AnomalyResult } from '$lib/anomaly';
+import { notifyAlert } from '$lib/notify';
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
@@ -177,6 +178,9 @@ export async function reportAnomaly(
                 message: entry.message,
             }
         }));
+
+        // P0 Feature 4: OS-level toast notification on anomaly trigger
+        notifyAlert(metric, entry.sigma, hostName).catch(() => {});
 
         console.log(`[anomaly-bridge] Auto-triggered incident ${incident.id}: ${title}`);
     } catch (e) {

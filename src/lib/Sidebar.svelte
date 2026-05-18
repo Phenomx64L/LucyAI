@@ -16,6 +16,10 @@
 
     import Brain from '@tabler/icons-svelte/icons/brain';
 
+    import TrendingUp from '@tabler/icons-svelte/icons/trending-up';
+
+    import Stethoscope from '@tabler/icons-svelte/icons/stethoscope';
+
     import Zap from '@tabler/icons-svelte/icons/bolt';
 
     import Download from '@tabler/icons-svelte/icons/download';
@@ -126,6 +130,16 @@
          on:click={() => dispatch('setview', { view: 'memory' })} on:keydown
          title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
         <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
+    </div>
+    <div class="sb-it" class:act={activeView==='capacity'} role="button" tabindex="0"
+         on:click={() => dispatch('setview', { view: 'capacity' })} on:keydown
+         title={isEN ? 'Capacity Planning — historical trends & projections' : 'Capacidad — tendencias históricas y proyecciones'}>
+        <span class="sb-ico"><TrendingUp size={20} /></span><span class="sb-txt">{isEN ? 'Capacity' : 'Capacidad'}</span>
+    </div>
+    <div class="sb-it" class:act={activeView==='diagnostics'} role="button" tabindex="0"
+         on:click={() => dispatch('setview', { view: 'diagnostics' })} on:keydown
+         title={isEN ? 'Self-Diagnostics — unified health checks' : 'Auto-Diagnóstico — chequeos de salud unificados'}>
+        <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{isEN ? 'Diagnostics' : 'Diagnóstico'}</span>
     </div>
     <div class="sb-div"></div>
 

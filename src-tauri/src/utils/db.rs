@@ -491,7 +491,81 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     updated_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_next ON scheduled_tasks(enabled, next_run);
+
+-- ── Audit Trail (P0 Feature 1) ──────────────────────────────────────────
+-- Persistent audit log of every command executed (local + remote).
+-- Replaces the localStorage-backed persistedWritable<AuditEntry[]> in
+-- stores.ts with a durable, queryable, size-capped SQLite table.
+-- Auto-prune: frontend or periodic task deletes rows older than 90 days.
+CREATE TABLE IF NOT EXISTS audit_trail (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT    NOT NULL,            -- ISO 8601
+    host_id     TEXT    NOT NULL DEFAULT '', -- '' = local
+    host_name   TEXT    NOT NULL DEFAULT 'local',
+    command     TEXT    NOT NULL,
+    source      TEXT    NOT NULL DEFAULT 'manual', -- 'manual'|'runbook'|'compliance'|'ai'|'broadcast'
+    exit_code   INTEGER,                    -- NULL if unknown
+    duration_ms INTEGER,                    -- NULL if not measured
+    output_preview TEXT NOT NULL DEFAULT '', -- first ~500 chars of output
+    user        TEXT    NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_created  ON audit_trail(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_host     ON audit_trail(host_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_trail_source   ON audit_trail(source, created_at DESC);
+
+-- ── Capacity Metrics (P0 Feature 3) ─────────────────────────────────────
+-- Historical system metrics samples for trend projection. Sampled every
+-- 5 min by a frontend interval or backend tick. Downsampled hourly
+-- averages kept for 90 days; raw samples kept for 7 days.
+CREATE TABLE IF NOT EXISTS metrics_samples (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id     TEXT    NOT NULL DEFAULT '', -- '' = local
+    ts          INTEGER NOT NULL,           -- unix epoch seconds
+    cpu         REAL    NOT NULL DEFAULT 0.0,
+    ram         REAL    NOT NULL DEFAULT 0.0,  -- percent
+    disk        REAL    NOT NULL DEFAULT 0.0,  -- percent (primary disk)
+    ram_mb      INTEGER NOT NULL DEFAULT 0,    -- absolute MB used
+    disk_gb     INTEGER NOT NULL DEFAULT 0,    -- absolute GB used
+    disk_total_gb INTEGER NOT NULL DEFAULT 0,  -- total disk GB
+    ram_total_mb INTEGER NOT NULL DEFAULT 0,   -- total RAM MB
+    is_hourly   INTEGER NOT NULL DEFAULT 0     -- 1 = downsampled hourly avg
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_samples_ts   ON metrics_samples(host_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_samples_hourly ON metrics_samples(is_hourly, ts DESC);
 "#;
+
+// ── Audit Trail (P0 Feature 1) ────────────────────────────────────────────
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id:             i64,
+    pub timestamp:      String,
+    pub host_id:        String,
+    pub host_name:      String,
+    pub command:        String,
+    pub source:         String,
+    pub exit_code:      Option<i32>,
+    pub duration_ms:    Option<i64>,
+    pub output_preview: String,
+    pub user:           String,
+    pub created_at:     i64,
+}
+
+// ── Capacity Metrics (P0 Feature 3) ───────────────────────────────────────
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsSample {
+    pub id:            i64,
+    pub host_id:       String,
+    pub ts:            i64,
+    pub cpu:           f64,
+    pub ram:           f64,
+    pub disk:          f64,
+    pub ram_mb:        i64,
+    pub disk_gb:       i64,
+    pub disk_total_gb: i64,
+    pub ram_total_mb:  i64,
+    pub is_hourly:     bool,
+}
 
 // ── PDF Intelligence (Sprint 4 Pillar 4) ──────────────────────────────────
 #[derive(Debug, Clone, Serialize, Deserialize)]

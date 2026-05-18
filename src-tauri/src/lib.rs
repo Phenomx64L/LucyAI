@@ -5,12 +5,13 @@ mod utils;
 mod commands;
 mod guardrails;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -369,6 +370,52 @@ pub fn run() {
                 }
             });
 
+            // ── Capacity metrics sampling (every 5 min) ─────────────────
+            // Automatically records CPU/RAM/disk to metrics_samples table.
+            // Runs in background — never blocks the UI. Also runs hourly
+            // downsampling to keep the table size bounded.
+            tauri::async_runtime::spawn(async {
+                // Wait 2 min after startup (let system settle)
+                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                let mut sample_interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
+                let mut downsample_counter: u32 = 0;
+                loop {
+                    sample_interval.tick().await;
+                    // Save a local metrics sample
+                    match crate::commands::capacity::save_metrics_sample(
+                        None, None, None, None, None, None, None, None,
+                    ).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            crate::utils::logging::write_app_log(
+                                "WARN",
+                                &format!("Capacity auto-sample failed: {}", e),
+                            );
+                        }
+                    }
+                    // Downsample every 12 ticks (1 hour)
+                    downsample_counter += 1;
+                    if downsample_counter >= 12 {
+                        downsample_counter = 0;
+                        match crate::commands::capacity::downsample_metrics().await {
+                            Ok(n) if n > 0 => {
+                                crate::utils::logging::write_app_log(
+                                    "INFO",
+                                    &format!("Capacity downsample: {} hourly buckets created", n),
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                crate::utils::logging::write_app_log(
+                                    "WARN",
+                                    &format!("Capacity downsample failed: {}", e),
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+
             // ── Periodic janitor (every 5 min) ──────────────────────────
             // Keeps in-memory state from leaking when sessions/tokens die
             // through abnormal paths (crash, abrupt disconnect, app sleep).
@@ -608,6 +655,24 @@ pub fn run() {
             // Prompt section runtime toggles (Phase 5)
             commands::prompt_sections::toggle_prompt_section,
             commands::prompt_sections::list_prompt_sections,
+            // ── P0 Features ──────────────────────────────────────────────
+            // Audit Trail (P0 Feature 1)
+            audit::save_audit_entry,
+            audit::query_audit_trail,
+            audit::prune_audit_trail,
+            audit::audit_stats,
+            // Log Pattern Analysis (P0 Feature 2)
+            log_analysis::analyze_log_patterns,
+            // Capacity Planning (P0 Feature 3)
+            capacity::save_metrics_sample,
+            capacity::get_capacity_trends,
+            capacity::downsample_metrics,
+            // OS Notifications (P0 Feature 4)
+            notify::send_notification,
+            notify::check_notification_permission,
+            notify::request_notification_permission,
+            // Self-Diagnostics (P0 Feature 5)
+            diagnostics::run_self_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

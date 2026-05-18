@@ -1,6 +1,7 @@
 <script>
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount } from 'svelte';
     import { auditTrail } from '$lib/stores';
+    import { queryAuditTrail } from '$lib/audit';
     import { exportAuditPdf } from '$lib/reports/ReportGenerator';
     import { staggerIn } from '$lib/stagger';
     import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
@@ -26,6 +27,18 @@
 
     export let hosts    = [];
     export let isEN     = false;
+
+    // P0 Feature 1: Load recent audit entries from SQLite on mount
+    onMount(async () => {
+        try {
+            const result = await queryAuditTrail({ limit: 500 });
+            if (result.entries.length > 0) {
+                auditTrail.set(result.entries);
+            }
+        } catch (e) {
+            console.warn('[AuditTrailView] SQLite load failed, using localStorage fallback:', e);
+        }
+    });
 
     let filterHost   = 'all';
     let filterSource = 'all';

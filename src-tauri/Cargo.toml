@@ -34,6 +34,7 @@ ts-rs = { version = "10", features = ["chrono-impl", "serde-compat"] }
 tokio      = { version = "1", features = ["time", "rt", "process", "io-util", "macros"] }
 winreg     = "0.52"
 tauri-plugin-sql = { version = "2.0.0", features = ["sqlite"] }
+tauri-plugin-notification = "2"
 regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 # P11 audit: connection pool — splits read/write so concurrent readers don't

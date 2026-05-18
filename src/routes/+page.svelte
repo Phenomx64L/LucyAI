@@ -114,6 +114,8 @@ import { listen } from '@tauri-apps/api/event';
     import ComplianceView  from '$lib/ComplianceView.svelte';
     import CostDashboardView from '$lib/CostDashboardView.svelte';
     import AuditTrailView  from '$lib/AuditTrailView.svelte';
+    import CapacityPlanningView from '$lib/CapacityPlanningView.svelte';
+    import SelfDiagnosticsView from '$lib/SelfDiagnosticsView.svelte';
     import MemoryBrowserView from '$lib/MemoryBrowserView.svelte';
     import LiveTracePanel    from '$lib/LiveTracePanel.svelte';
     import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
@@ -6170,6 +6172,20 @@ if (Test-Path $src) {
         {#if activeView === 'audittrail'}
         <AuditTrailView
           hosts={$activeProfileHosts} {isEN}
+          on:toast={e => toast(e.detail.msg, e.detail.type)}
+        />
+        {/if}
+
+        <!-- ── CAPACITY PLANNING VIEW (P0 Feature 3) ── -->
+        {#if activeView === 'capacity'}
+        <CapacityPlanningView {isEN}
+          on:toast={e => toast(e.detail.msg, e.detail.type)}
+        />
+        {/if}
+
+        <!-- ── SELF-DIAGNOSTICS VIEW (P0 Feature 5) ── -->
+        {#if activeView === 'diagnostics'}
+        <SelfDiagnosticsView {isEN}
           on:toast={e => toast(e.detail.msg, e.detail.type)}
         />
         {/if}
