@@ -86,12 +86,18 @@ import { listen } from '@tauri-apps/api/event';
 
     import FilePdf from '@tabler/icons-svelte/icons/file-type-pdf';
 
+    // Phase 2c — reconnected orphans (reflection gate, posture strip, incident timeline, webhook listener)
+    import { reflectBeforeEmit, isPass, isWarn, isEscalate, getReasons, getRisk, renderVerdictBadge } from '$lib/reflection-gate';
+    import PostureStrip from '$lib/PostureStrip.svelte';
+    import IncidentTimeline from '$lib/IncidentTimeline.svelte';
+
     // Phase 2c (May 2026) — extracted helpers from this file
     import { dispatchSlashCommand } from '$lib/page/slash-commands';
     import { buildPreset, upsertPreset, deletePreset, stampApplied, presetPatches, persistPresetScalars, ageString } from '$lib/page/workspace-presets';
     import { loadMcpSecrets as mcpLoad, saveMcpSecret as mcpSave, deleteMcpSecret as mcpDelete } from '$lib/page/mcp-secrets';
     import { upsertChip, deleteChip, upsertQuickAction, deleteQuickAction } from '$lib/page/chips-quick-actions';
     import { saveCheckpoint, clearCheckpoint, listStaleCheckpoints as listStaleCkpts, isSensitiveRegistry } from '$lib/page/agent-checkpoints';
+    import { getTurnLoopCheckpoint } from '$lib/hooks/turn-loop';
     import { attachQlPopover } from '$lib/page/ql-popover';
     import { preflightHost } from '$lib/page/host-preflight';
     import { setFix, getFix, deleteFix } from '$lib/page/fix-store';
@@ -166,7 +172,8 @@ import { listen } from '@tauri-apps/api/event';
              multiHostSelected, multiHostCmd, multiHostResults, multiHostRunning,
              activeProfileHosts,
              costSummaryMonth, tokenBudgetConfig,
-             initHostsFromKeyring } from '$lib/stores';
+             initHostsFromKeyring,
+             hostReachability, markHostReachable } from '$lib/stores';
     import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns } from '$lib/message-render';
     import { initRecognition, toggleMic as _toggleMic, speak as _speak } from '$lib/voice';
     import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste } from '$lib/file-inputs';
@@ -295,6 +302,8 @@ import { listen } from '@tauri-apps/api/event';
     let _ollamaPingInterval = null;       // refresh local models every 30s
     let _footerCostInterval = null;       // refresh monthly cost every 5 min
     let _scheduledTickInterval = null;    // poll due scheduled tasks every 60s
+    let _openclawUnlisten = null;         // openclaw webhook listener (reconnected v1.4.0)
+    let activeIncidentId = null;          // incident timeline (reconnected v1.4.0)
     /** Quick-look popover handle (see $lib/page/ql-popover.ts).
      *  `.detach()` cleans up listeners + DOM node on onDestroy / HMR. */
     let _qlHandle = null;
@@ -772,11 +781,22 @@ import { listen } from '@tauri-apps/api/event';
             const stale = listStaleCheckpoints();
             if (stale.length > 0) {
                 const fresh = stale.filter(s => Date.now() - (s.snap.ts || 0) < 24 * 3600 * 1000);
+                // Enrich with turn-loop checkpoint data if available
+                for (const s of fresh) {
+                    try {
+                        const tlCkpt = getTurnLoopCheckpoint(s.tabId);
+                        if (tlCkpt) s._turnLoop = tlCkpt;
+                    } catch {}
+                }
                 if (fresh.length > 0) {
+                    const withLoop = fresh.filter(s => s._turnLoop);
+                    const detail = withLoop.length
+                        ? ` (${withLoop.length} con turn-loop recuperable)`
+                        : '';
                     setTimeout(() => {
-                        toast(`! ${fresh.length} tarea${fresh.length>1?'s':''} de agente quedó interrumpida en sesión previa. Revisa con window.__lucyCheckpoints.list() en consola.`, 'info');
+                        toast(`! ${fresh.length} tarea${fresh.length>1?'s':''} de agente quedó interrumpida en sesión previa${detail}. Revisa con window.__lucyCheckpoints.list() en consola.`, 'info');
                     }, 1500);
-                    console.warn('[Lucy] Stale agent checkpoints found:', fresh.map(s => ({ tab: s.tabId, goal: s.snap.goal?.slice(0,80), step: s.snap.loop_i, age_min: Math.round((Date.now() - s.snap.ts)/60000) })));
+                    console.warn('[Lucy] Stale agent checkpoints found:', fresh.map(s => ({ tab: s.tabId, goal: s.snap.goal?.slice(0,80), step: s.snap.loop_i, age_min: Math.round((Date.now() - s.snap.ts)/60000), turnLoop: !!s._turnLoop })));
                 }
                 // Auto-purge entries older than 24h
                 stale.filter(s => !fresh.includes(s)).forEach(s => safeRemoveLS(s.key));
@@ -967,6 +987,23 @@ import { listen } from '@tauri-apps/api/event';
                 setTimeout(() => verificarDependencias(), 3000);
                 // Cargar hosts completos desde Keyring → store
                 initHostsFromKeyring(invoke).catch(() => {});
+                // ── openclaw_webhook listener (reconnected v1.4.0) ──
+                // The Rust TCP server emits this event; now the frontend listens.
+                try {
+                    _openclawUnlisten = await listen('openclaw_webhook', (event) => {
+                        console.info('[openclaw] Webhook received:', event.payload);
+                        toast(isEN ? 'Webhook received from OpenClaw' : 'Webhook recibido de OpenClaw', 'info');
+                        // If there's an active tab, inject as a system message so Lucy can process it
+                        if (activeTabId) {
+                            addMsg(activeTabId, {
+                                role: 'lucy',
+                                html: `<div class="mn">OpenClaw Webhook</div><pre style="font-size:11px;max-height:200px;overflow:auto;">${escapeHtml(typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload, null, 2))}</pre>`,
+                                rawRole: 'Sistema',
+                                rawContent: `[Webhook OpenClaw] ${typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload)}`,
+                            });
+                        }
+                    });
+                } catch(e) { console.warn('[openclaw] listener setup failed:', e); }
             }
         } catch(e) { console.error(e); }
         finally {
@@ -1012,6 +1049,8 @@ import { listen } from '@tauri-apps/api/event';
             }
             _activeStreams.clear();
         } catch {}
+        // ── Event listeners ──
+        if (_openclawUnlisten) { try { _openclawUnlisten(); } catch {} _openclawUnlisten = null; }
         // Dashboard/LogViewer cleanup handled by their own onDestroy
     });
 
@@ -2514,6 +2553,41 @@ Use ONE of these patterns instead:
             if (t._cancelled) { fin(tabId); return; }
             // Doble-check: si ya no está procesando (cancel concurrente), salir
             if (!t.isProcessing) return;
+
+            // ── ReflectionGate: analizar respuesta ANTES de procesarla ─────────
+            // Sub-millisecond, no LLM — regex + context comparison en Rust.
+            try {
+                const verdict = await reflectBeforeEmit(resp, {
+                    currentCwd: t.cwd || null,
+                    recentPaths: (t.workingMemory?.recentPaths || []).slice(0, 10),
+                    lastOutputs: (t.workingMemory?.lastOutputs || []).slice(0, 5),
+                    lastCommands: (t.workingMemory?.lastCommands || []).slice(0, 5),
+                });
+                if (!isPass(verdict)) {
+                    const badge = renderVerdictBadge(verdict);
+                    if (isEscalate(verdict)) {
+                        // BLOCKED: no ejecutar, mostrar razones al usuario
+                        const reasons = getReasons(verdict);
+                        const risk = getRisk(verdict);
+                        t.messages = t.messages.filter(m => m.id !== streamMsgId);
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn">⊗ ReflectionGate — ${risk} risk</div>${badge}<div style="margin-top:8px;font-size:12px;color:var(--txt2);">${isEN ? 'Response blocked before execution. Reasons:' : 'Respuesta bloqueada antes de ejecución. Razones:'}<ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul></div>`,
+                            style: 'border-left-color:#ef4444;',
+                            rawRole: 'Lucy',
+                            rawContent: `[BLOCKED by ReflectionGate: ${risk}] ${reasons.join('; ')}`,
+                        });
+                        fin(tabId); return;
+                    }
+                    // WARN: inyectar badge pero continuar con la ejecución
+                    t._reflectionBadge = badge;
+                    pushTrace({ phase: 'warn', label: `ReflectionGate: ${getReasons(verdict).join('; ')}`, tabId: t.id });
+                }
+            } catch (rgErr) {
+                // Fail-open: si el gate falla, continuar sin bloquear
+                console.warn('[reflection-gate] Error, continuing:', rgErr);
+            }
+
             // Para TOOL/EXECUTE/THOUGHT responses, eliminar streaming msg (se añadirá uno nuevo).
             // Para text-only, se reutiliza el streaming msg (ver sección else al final).
             const _hasToolResp = resp.includes('<TOOL>') || resp.includes('<EXECUTE') || /<THOUGHT>/i.test(resp);
@@ -4623,17 +4697,19 @@ times the SAME way, switch tool kind entirely.
                     clean += '\n\n> ! **Mi respuesta fue cortada por límite de tokens.** Puedes pedirme que continúe donde me quedé.';
                 }
                 // Transición suave: reutilizar el mensaje streaming existente si aún está
+                const _rgBadge = t._reflectionBadge || '';
                 const existingStreamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (existingStreamMsg) {
                     existingStreamMsg.id = Date.now();
                     existingStreamMsg.role = 'lucy';
-                    existingStreamMsg.html = `<div class="mn">Lucy</div>${renderLucyMarkdown(clean)}`;
+                    existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`;
                     existingStreamMsg.rawRole = 'Lucy';
                     existingStreamMsg.rawContent = clean;
                     refresh();
                 } else {
-                    addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
+                    addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
                 }
+                if (_rgBadge) t._reflectionBadge = null; // limpiar badge usado
                 if(doSpeak)speak(clean);
             }
         }catch(e){
@@ -4781,6 +4857,12 @@ times the SAME way, switch tool kind entirely.
         t.messages=t.messages.filter(m=>m.id!==('streaming-'+tabId));
         t.isProcessing=false;
         t._cancelled = false; // Reset para próxima ejecución
+        // ── IncidentTimeline: detect open incidents (reconnected v1.4.0) ──
+        try {
+            const incidents = await invoke('incident_list', { shellId: null });
+            const openInc = incidents?.find(i => i.status === 'open');
+            activeIncidentId = openInc ? openInc.id : null;
+        } catch { activeIncidentId = null; }
         // Notificación nativa si la ventana está oculta y el comando tomó >5s
         try {
             const elapsed = (t._procStart ? (Date.now() - t._procStart) / 1000 : 0);
@@ -5931,6 +6013,27 @@ if (Test-Path $src) {
 
     <div class="panel">
 
+      <!-- PostureStrip: always-on host status bar (reconnected v1.4.0) -->
+      {#if $hosts.length > 0 && !showSetupOverlay}
+      <PostureStrip
+        hosts={$hosts.map(h => ({
+          id: h.id,
+          name: h.name || h.hostname || h.id,
+          status: $hostReachability[h.id]?.reachable === true ? 'online'
+                : $hostReachability[h.id]?.reachable === false ? 'offline'
+                : 'unknown',
+          cpu: undefined,
+          ram: undefined,
+        }))}
+        compact={focusMode}
+        on:hostclick={(e) => {
+          const hid = e.detail.hostId;
+          const found = $hosts.find(h => h.id === hid);
+          if (found) { setView('dashboard'); }
+        }}
+      />
+      {/if}
+
       {#if !showSetupOverlay && activeTab?.isProcessing}
       <div class="sbar processing">
         <div class="spill ml"><div class="sdot y"></div>Procesando…{#if _execSecs > 0}<span class="exec-timer">{_execSecs}s</span>{/if}{#if activeTab?._streamTTFT}<span class="exec-timer" title="Time to first token">TTFT {activeTab._streamTTFT}ms</span>{/if}{#if activeTab?._streamTPS}<span class="exec-timer" title="Tokens/sec aprox">~{activeTab._streamTPS} t/s</span>{/if}</div>
@@ -6096,6 +6199,11 @@ if (Test-Path $src) {
 
         {#each tabs as tab (tab.id)}
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
+            {#if activeIncidentId && activeTabId === tab.id}
+            <div style="padding:0 12px;">
+              <IncidentTimeline incidentId={activeIncidentId} {isEN} />
+            </div>
+            {/if}
             <ChatThread
               {tab} {isEN} {chatSearch} isActiveTab={activeTabId === tab.id}
               userName={lucyConfig.name}

@@ -1,3 +1,17 @@
+<script context="module" lang="ts">
+    export interface HostSnapshot {
+        id: string;
+        name: string;
+        /** 'online' | 'offline' | 'unknown' */
+        status: string;
+        cpu?: number;
+        ram?: number;
+        netIn?: number;  // MB/s
+        netOut?: number; // MB/s
+        cisErrors?: number;
+    }
+</script>
+
 <script lang="ts">
     // ── PostureStrip — Always-on horizontal status bar (Lucy Gen 2) ────────
     //
@@ -20,18 +34,6 @@
     // directly — duplicate network traffic for the same data is wasted.
 
     import { createEventDispatcher } from 'svelte';
-
-    export interface HostSnapshot {
-        id: string;
-        name: string;
-        /** 'online' | 'offline' | 'unknown' */
-        status: string;
-        cpu?: number;
-        ram?: number;
-        netIn?: number;  // MB/s
-        netOut?: number; // MB/s
-        cisErrors?: number;
-    }
 
     /** List of hosts to summarize. Pass an empty array to render nothing. */
     export let hosts: HostSnapshot[] = [];

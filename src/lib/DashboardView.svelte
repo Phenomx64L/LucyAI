@@ -14,6 +14,8 @@
     import { detectAnomaly } from '$lib/anomaly';
     import { reportAnomaly } from '$lib/anomaly-bridge';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
+    import CpuHeatmap from '$lib/CpuHeatmap.svelte';
+    import { markHostReachable } from '$lib/stores';
 
     const dispatch = createEventDispatcher();
 
@@ -138,12 +140,16 @@
             dashLastUpdate = new Date().toLocaleTimeString(userLang, {hour:'2-digit',minute:'2-digit',second:'2-digit'});
             pushMetricsHistory(fetchedFor, dashMetrics);
             checkAlerts(fetchedFor, dashMetrics);
+            // ── PostureStrip: mark host as reachable (reconnected v1.4.0) ──
+            markHostReachable(fetchedFor, true);
         } catch(e) {
             // Only set error if we're still on the host that originated this fetch
             if (fetchedFor === dashSelectedHost) {
                 dashError = String(e);
                 dashMetrics = null;
             }
+            // ── PostureStrip: mark host as unreachable ──
+            markHostReachable(fetchedFor, false);
         }
         dashLoading = false;
     }
@@ -447,15 +453,12 @@
     {#if dashMetrics.cpu.per_core?.length}
     <div class="dash-section">
       <div class="ds-title">{isEN ? 'CPU Cores' : 'Núcleos CPU'}</div>
-      <div class="core-grid">
-        {#each dashMetrics.cpu.per_core as usage, i}
-        <div class="core-item">
-          <div class="core-bar-wrap"><div class="core-bar-fill" style="height:{usage}%;background:{coreBarColor(usage)};"></div></div>
-          <div class="core-label">C{i}</div>
-          <div class="core-pct">{usage}%</div>
-        </div>
-        {/each}
-      </div>
+      <CpuHeatmap
+        cores={dashMetrics.cpu.per_core}
+        topProcessPerCore={dashMetrics.cpu.top_process_per_core || []}
+        showLabels={true}
+        showPct={true}
+      />
     </div>
     {/if}
     {#if dashMetrics.disks?.length}
@@ -538,14 +541,7 @@
     .dash-section{background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;margin-bottom:12px;}
     .ds-title{font-size:11px;color:#7a9ab5;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;}
 
-    /* ── CPU cores ─────────────────────────────────── */
-    .core-grid{display:flex;gap:6px;flex-wrap:wrap;}
-    .core-item{display:flex;flex-direction:column;align-items:center;gap:3px;}
-    .core-bar-wrap{width:22px;height:64px;background:var(--bg4);border-radius:4px;overflow:hidden;display:flex;align-items:flex-end;border:1px solid var(--bdr);}
-    .core-bar-fill{width:100%;border-radius:3px;transition:height .5s cubic-bezier(.34,1.3,.64,1),background .4s;animation:bar-entry .6s cubic-bezier(.34,1.3,.64,1);}
-    @keyframes bar-entry{from{height:0!important;}}
-    .core-label{font-size:9px;color:var(--txt3);}
-    .core-pct{font-size:9px;color:var(--txt2);font-weight:600;}
+    /* CPU cores: now rendered by CpuHeatmap component (v1.4.0) */
 
     /* ── Disks ─────────────────────────────────────── */
     .disk-row{display:grid;grid-template-columns:100px 1fr 44px 80px;align-items:center;gap:10px;margin-bottom:8px;}
