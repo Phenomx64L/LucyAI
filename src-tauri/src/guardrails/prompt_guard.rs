@@ -47,6 +47,7 @@ fn model_dir() -> PathBuf {
 /// installed (click to download)".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]  // variants used conditionally behind ml-guard feature gate
 pub enum Status {
     /// Built without the `ml-guard` feature. Inference is impossible.
     FeatureDisabled,

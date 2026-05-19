@@ -190,6 +190,7 @@ pub fn is_ready() -> bool {
 }
 
 /// Get the current corpus size in the index.
+#[allow(dead_code)]  // available for diagnostics / future telemetry
 pub fn corpus_size() -> usize {
     INDEX.lock().map(|idx| idx.entries.len()).unwrap_or(0)
 }

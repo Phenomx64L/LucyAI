@@ -22,7 +22,6 @@ use tauri::{AppHandle, Manager};
 // is 2-3 (UI dashboard refresh + LLM streaming + audit log writes). Headroom
 // for bursts (e.g. multi-host scan + log persist + cost summary refresh).
 pub(crate) type DbPool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
-pub(crate) type PooledConn = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 static POOL: OnceCell<DbPool> = OnceCell::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

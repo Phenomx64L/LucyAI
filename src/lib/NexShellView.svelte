@@ -19,7 +19,8 @@
     import { IconRocket as Rocket, IconHash as Hash, IconGitBranch as GitBranch, IconSparkles as Sparkles, IconMicrophone as Mic, IconClock as Timer, IconRadio as Radio, IconWorld as Globe, IconBookmark as BookMarked, IconFolderCog as FolderSync, IconActivity as Activity, IconDeviceDesktop as Monitor, IconServer as Server, IconX as X, IconPlayerPlay as Play, IconFolderOpen as FolderOpen, IconBook2 as BookOpen, IconAntenna as Antenna, IconUpload as Upload, IconDownload as Download, IconArrowUp as ArrowUp, IconArrowDown as ArrowDown, IconCpu as Cpu, IconCamera as Camera, IconCircleCheck as CheckCircle, IconAlertCircle as AlertCircle, IconPlayerPause as Pause, IconMessageCircle as MessageCircle, IconLoader as Loader, IconBolt as Zap, IconEdit as Edit2, IconPlug as Plug, IconRefresh as RefreshCw, IconTrash as Trash2, IconFileText as FileText, IconAlarm as Siren } from '@tabler/icons-svelte';
     import {
         createTurnLoop, extractCommand, extractVerdict, cleanAiResponse,
-        getDiagnosePrompt, getAnalyzePrompt, getProposePrompt, getVerifyPrompt, getResultPrompt
+        getDiagnosePrompt, getAnalyzePrompt, getProposePrompt, getVerifyPrompt, getResultPrompt,
+        detectStuck, saveTurnLoopCheckpoint, clearTurnLoopCheckpoint,
     } from '$lib/hooks/turn-loop';
     import {
         registerSkill, getSkill, getAllSkills, searchSkills,
@@ -104,6 +105,29 @@
     let nsInputsCollapsed  = false;
     let nsSort             = 'status';
     let nsCategoryFilter   = 'all';
+
+    // ── Performance: history render cap ──────────────────────────────────
+    // Instead of rendering all history entries (which can reach 10k+ in long
+    // sessions), we cap the rendered slice to the most recent N entries.
+    // User can click "Show more" to expand.
+    const NS_RENDER_CAP_DEFAULT = 300;
+    const NS_RENDER_CAP_STEP    = 500;
+    let nsRenderCap = {};  // per-shell: { [shellId]: number }
+
+    function nsGetCap(shellId) { return nsRenderCap[shellId] || NS_RENDER_CAP_DEFAULT; }
+    function nsExpandCap(shellId) {
+        nsRenderCap = { ...nsRenderCap, [shellId]: nsGetCap(shellId) + NS_RENDER_CAP_STEP };
+    }
+    /** Slice history for rendering: returns the most recent N entries */
+    function nsVisibleHistory(history, shellId) {
+        const cap = nsGetCap(shellId);
+        if (history.length <= cap) return history;
+        return history.slice(-cap);
+    }
+    function nsHiddenCount(history, shellId) {
+        const cap = nsGetCap(shellId);
+        return Math.max(0, history.length - cap);
+    }
 
     function getHostTypeComponent(type) {
         return type === 'windows' ? Monitor : Server;
@@ -511,6 +535,20 @@
         while (tl.active && tl.iteration <= tl.maxIterations) {
             turnLoops = { ...turnLoops };
 
+            // ── STUCK CHECK (before each iteration) ──
+            const stuckSignal = detectStuck(tl);
+            if (stuckSignal.isStuck) {
+                rsLogTo(shellId, 'err', `⚠ ${isEN ? 'Stuck detected' : 'Estancamiento detectado'}: ${stuckSignal.reason}`);
+                if (stuckSignal.severity === 'critical') {
+                    tl.phase = 'failed'; tl.active = false;
+                    tl.summary = isEN ? `Stopped: ${stuckSignal.reason}` : `Detenido: ${stuckSignal.reason}`;
+                    rsLogTo(shellId, 'info', `✗ Turn-Loop: ${tl.summary}`);
+                    saveTurnLoopCheckpoint(shellId, tl);
+                    break;
+                }
+                // warning: log but continue (user can manually stop)
+            }
+
             // ── PHASE 1: DIAGNOSE ──
             tl.phase = 'diagnose';
             turnLoops = { ...turnLoops };
@@ -536,6 +574,7 @@
             let diagOut = '';
             try { diagOut = await rsRunStreaming(shellId, cleanDiagCmd); } catch(e) { diagOut = String(e); }
             tl.steps.push({ phase: 'diagnose', timestamp: Date.now(), command: cleanDiagCmd, output: diagOut, aiResponse: diagClean });
+            saveTurnLoopCheckpoint(shellId, tl);
             if (!tl.active) break;
 
             // ── PHASE 2: ANALYZE ──
@@ -633,6 +672,7 @@
                 tl.phase = 'failed'; tl.active = false; break;
             }
             tl.steps.push({ phase: 'apply', timestamp: Date.now(), command: cleanFixCmd, output: fixOut });
+            saveTurnLoopCheckpoint(shellId, tl);
             if (!tl.active) break;
 
             // ── PHASE 5: VERIFY ──
@@ -702,6 +742,8 @@
                 }
             }
         }
+        // Clean up checkpoint when loop finishes (success or failure)
+        clearTurnLoopCheckpoint(shellId);
         turnLoops = { ...turnLoops };
     }
 
@@ -2288,7 +2330,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 ↻ {isEN ? 'Conversation restored from previous session' : 'Conversación restaurada de sesión anterior'}
               </div>
             {/if}
-            {#each s.history as entry, _i (entry.id || (entry.type + '-' + _i + '-' + entry.time))}
+            {#if nsHiddenCount(s.history, s.id) > 0}
+              <button class="ns-show-more" on:click={() => nsExpandCap(s.id)}>
+                ↑ {isEN ? `Show ${Math.min(NS_RENDER_CAP_STEP, nsHiddenCount(s.history, s.id))} more (${nsHiddenCount(s.history, s.id)} hidden)` : `Mostrar ${Math.min(NS_RENDER_CAP_STEP, nsHiddenCount(s.history, s.id))} más (${nsHiddenCount(s.history, s.id)} ocultos)`}
+              </button>
+            {/if}
+            {#each nsVisibleHistory(s.history, s.id) as entry, _i (entry.id || (entry.type + '-' + _i + '-' + entry.time))}
               {@const _sq = nsSearch[s.id]?.query?.trim()}
               {@const _sm = _sq && (entry.text||'').toLowerCase().includes(_sq.toLowerCase())}
               {@const _sc = _sm && nsGetMatchIdxs(s.id, _sq)[nsSearch[s.id]?.currentIdx] === _i}
@@ -3298,7 +3345,9 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     /* Output area */
     .rshell-out{flex:1;overflow-y:auto;padding:12px 16px;font-family:var(--mono);font-size:12px;background:#020407;display:flex;flex-direction:column;gap:3px;}
-    .rshell-line{display:flex;align-items:flex-start;gap:8px;padding:2px 0;border-bottom:1px solid rgba(26,32,48,.3);flex-wrap:wrap;}
+    .ns-show-more{display:block;width:100%;padding:6px 0;background:rgba(96,165,250,.06);border:1px dashed rgba(96,165,250,.2);border-radius:4px;color:var(--accent,#60a5fa);font-size:10px;font-family:var(--mono);cursor:pointer;text-align:center;margin-bottom:4px;transition:.15s;}
+    .ns-show-more:hover{background:rgba(96,165,250,.12);border-color:rgba(96,165,250,.35);}
+    .rshell-line{display:flex;align-items:flex-start;gap:8px;padding:2px 0;border-bottom:1px solid rgba(26,32,48,.3);flex-wrap:wrap;content-visibility:auto;contain-intrinsic-size:0 28px;}
     .rsl-time{margin-left:auto;font-size:10px;color:#1a2030;flex-shrink:0;align-self:center;}
     .rsl-prompt{flex-shrink:0;font-weight:700;color:#0f7b5a;user-select:none;}
     .lucy-dot{color:var(--acc)!important;}

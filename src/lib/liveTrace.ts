@@ -28,11 +28,11 @@ export interface TraceEntry {
     tabId?: string;
 }
 
-// Capped lower (200 → 100) so opening LiveTracePanel after a long task
-// doesn't have to render hundreds of entries at once on lower-end hardware.
-// If you need full history for debugging, the ring buffer can be unrolled
-// from the writable store directly via getTrace().
-const MAX_ENTRIES = 100;
+// Raised to 2000 — LiveTracePanel now uses virtual scrolling so it only
+// renders the viewport slice.  The full buffer is kept in memory for
+// scrollback and debugging.  2000 entries × ~200 bytes ≈ 400KB — well
+// within budget for a desktop app.
+const MAX_ENTRIES = 2000;
 let _seq = 0;
 
 export const liveTrace = writable<TraceEntry[]>([]);

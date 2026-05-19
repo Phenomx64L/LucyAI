@@ -37,6 +37,7 @@ fn model_dir() -> PathBuf {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]  // variants used conditionally behind feature gates
 pub enum Status {
     FeatureDisabled,
     ModelMissing,

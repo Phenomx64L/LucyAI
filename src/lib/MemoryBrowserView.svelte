@@ -23,11 +23,24 @@
     import Trash         from '@tabler/icons-svelte/icons/trash';
     import RefreshCw     from '@tabler/icons-svelte/icons/refresh';
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
+    import BookOpen      from '@tabler/icons-svelte/icons/book-2';
+    import Shield        from '@tabler/icons-svelte/icons/shield';
+    import Radar         from '@tabler/icons-svelte/icons/radar-2';
+    import GitCompare    from '@tabler/icons-svelte/icons/git-compare';
+
+    import { getLessons, promoteLesson, dismissLesson, getLessonProjects } from '$lib/agentmemory/lessons';
+    import type { Lesson } from '$lib/agentmemory/lessons';
+    import { loadSentinels, addSentinel, deleteSentinel, toggleSentinel, BUILTIN_TEMPLATES, opOptions } from '$lib/agentmemory/sentinels';
+    import type { SentinelRule } from '$lib/agentmemory/sentinels';
+    import { detectPatterns, patternKindLabel, patternKindIcon, confidenceColor } from '$lib/agentmemory/patterns';
+    import type { DetectedPattern, PatternReport } from '$lib/agentmemory/patterns';
+    import { verifyMemories, resolveContradiction, severityLabel, severityColor, resolutionLabel } from '$lib/agentmemory/verify';
+    import type { Contradiction, VerifyReport, Resolution } from '$lib/agentmemory/verify';
 
     export let isEN: boolean = false;
 
     // ── Tab state ────────────────────────────────────────────────────────
-    type Tab = 'memorias' | 'crystals' | 'insights' | 'grafo';
+    type Tab = 'memorias' | 'crystals' | 'insights' | 'grafo' | 'lessons' | 'sentinels' | 'patterns' | 'verify';
     let activeTab: Tab = 'memorias';
 
     // ── Memorias ──
@@ -243,6 +256,103 @@
         finally { adminBusy = false; }
     }
 
+    // ── Lessons ──
+    let lessons: Lesson[] = [];
+    let lessonsLoading = false;
+    let lessonsError: string | null = null;
+    let lessonQuery = '';
+    let lessonProjects: string[] = [];
+    let lessonProjectFilter = '';
+
+    async function loadLessons() {
+        lessonsLoading = true; lessonsError = null;
+        try {
+            lessons = await getLessons({ query: lessonQuery || undefined, project: lessonProjectFilter || undefined, limit: 100 });
+            if (lessonProjects.length === 0) lessonProjects = await getLessonProjects();
+        } catch (e) { lessonsError = String(e); lessons = []; }
+        finally { lessonsLoading = false; }
+    }
+    async function doPromoteLesson(l: Lesson) {
+        try { await promoteLesson(l); await loadLessons(); } catch (e) { lessonsError = String(e); }
+    }
+    async function doDismissLesson(l: Lesson) {
+        if (!confirm(isEN ? `Dismiss lesson?` : `¿Descartar lección?`)) return;
+        try { await dismissLesson(l); await loadLessons(); } catch (e) { lessonsError = String(e); }
+    }
+
+    // ── Sentinels ──
+    let sentinelRules: SentinelRule[] = [];
+    let showSentinelAdd = false;
+    let newSentinelName = '';
+    let newSentinelMetric = 'cpu_percent';
+    let newSentinelOp = 'gt';
+    let newSentinelThreshold = 90;
+    let newSentinelCooldown = 15;
+
+    function refreshSentinels() { sentinelRules = loadSentinels(); }
+    function doDeleteSentinel(id: string) {
+        if (!confirm(isEN ? 'Delete this sentinel?' : '¿Borrar este sentinel?')) return;
+        deleteSentinel(id); refreshSentinels();
+    }
+    function doToggleSentinel(id: string) { toggleSentinel(id); refreshSentinels(); }
+    function doAddSentinel() {
+        if (!newSentinelName.trim()) return;
+        addSentinel({
+            name: newSentinelName.trim(),
+            enabled: true,
+            metric: newSentinelMetric as any,
+            op: newSentinelOp as any,
+            threshold: newSentinelThreshold,
+            cooldownMin: newSentinelCooldown,
+            hostFilter: '',
+        });
+        showSentinelAdd = false;
+        newSentinelName = '';
+        refreshSentinels();
+    }
+    function addFromTemplate(tpl: typeof BUILTIN_TEMPLATES[0]) {
+        addSentinel({
+            name: isEN ? tpl.nameEN : tpl.name,
+            enabled: true,
+            metric: tpl.metric,
+            op: tpl.op,
+            threshold: tpl.threshold,
+            cooldownMin: tpl.cooldownMin,
+            hostFilter: '',
+        });
+        refreshSentinels();
+    }
+
+    // ── Patterns ──
+    let patternReport: PatternReport | null = null;
+    let patternsLoading = false;
+    let patternsError: string | null = null;
+
+    async function loadPatterns() {
+        patternsLoading = true; patternsError = null;
+        try { patternReport = await detectPatterns(); }
+        catch (e) { patternsError = String(e); patternReport = null; }
+        finally { patternsLoading = false; }
+    }
+
+    // ── Verify ──
+    let verifyReport: VerifyReport | null = null;
+    let verifyLoading = false;
+    let verifyError: string | null = null;
+
+    async function loadVerify() {
+        verifyLoading = true; verifyError = null;
+        try { verifyReport = await verifyMemories(); }
+        catch (e) { verifyError = String(e); verifyReport = null; }
+        finally { verifyLoading = false; }
+    }
+    async function doResolve(c: Contradiction, res: Resolution) {
+        try {
+            await resolveContradiction(c, res);
+            await loadVerify();
+        } catch (e) { verifyError = String(e); }
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
     function fmtDate(ts: number): string {
         return new Date(ts * 1000).toLocaleString();
@@ -277,6 +387,10 @@
         loadedTabs.add(t);
         if (t === 'crystals') loadCrystals();
         else if (t === 'insights') loadInsights();
+        else if (t === 'lessons') loadLessons();
+        else if (t === 'sentinels') refreshSentinels();
+        else if (t === 'patterns') loadPatterns();
+        else if (t === 'verify') loadVerify();
     }
 </script>
 
@@ -298,6 +412,19 @@
             </button>
             <button class:active={activeTab === 'grafo'} on:click={() => switchTab('grafo')}>
                 <Share3 size={14}/> {isEN ? 'Graph' : 'Grafo'}
+            </button>
+            <span class="mv-tab-sep">│</span>
+            <button class:active={activeTab === 'lessons'} on:click={() => switchTab('lessons')}>
+                <BookOpen size={14}/> {isEN ? 'Lessons' : 'Lecciones'}
+            </button>
+            <button class:active={activeTab === 'sentinels'} on:click={() => switchTab('sentinels')}>
+                <Shield size={14}/> Sentinels
+            </button>
+            <button class:active={activeTab === 'patterns'} on:click={() => switchTab('patterns')}>
+                <Radar size={14}/> {isEN ? 'Patterns' : 'Patrones'}
+            </button>
+            <button class:active={activeTab === 'verify'} on:click={() => switchTab('verify')}>
+                <GitCompare size={14}/> {isEN ? 'Verify' : 'Verificar'}
             </button>
         </nav>
     </header>
@@ -518,6 +645,224 @@
         {/if}
     </section>
     {/if}
+
+    <!-- ══════════════════════════ LESSONS ══════════════════════════ -->
+    {#if activeTab === 'lessons'}
+    <section class="mv-section">
+        <div class="mv-toolbar">
+            <div class="mv-search">
+                <Search size={14}/>
+                <input type="text" placeholder={isEN ? 'Search lessons…' : 'Buscar lecciones…'}
+                    bind:value={lessonQuery} on:input={() => { clearTimeout(memSearchTimer); memSearchTimer = setTimeout(loadLessons, 300); }}/>
+            </div>
+            {#if lessonProjects.length > 0}
+                <select bind:value={lessonProjectFilter} on:change={loadLessons} class="mv-select">
+                    <option value="">{isEN ? 'All projects' : 'Todos los proyectos'}</option>
+                    {#each lessonProjects as p}<option value={p}>{p}</option>{/each}
+                </select>
+            {/if}
+            <button class="mv-icon-btn" on:click={loadLessons} title={isEN ? 'Refresh' : 'Recargar'}>
+                <RefreshCw size={14}/>
+            </button>
+        </div>
+        {#if lessonsError}<div class="mv-error"><AlertTriangle size={14}/> {lessonsError}</div>{/if}
+        {#if lessonsLoading}
+            <div class="mv-loading">{isEN ? 'Loading…' : 'Cargando…'}</div>
+        {:else if lessons.length === 0}
+            <div class="mv-empty">{isEN ? 'No lessons yet. Run /crystallize to extract lessons from sessions.' : 'Sin lecciones. Usa /crystallize para extraerlas de sesiones.'}</div>
+        {:else}
+            <ul class="mv-list">
+                {#each lessons as l (l.id)}
+                    <li class="mv-card lesson-card">
+                        <div class="mv-card-head">
+                            <BookOpen size={14} color="#34d399"/>
+                            <span class="mv-lesson-source" title={l.source}>{l.source === 'memory' ? '◇' : '◆'}</span>
+                            <span class="mv-card-content" style="flex:1;">{l.text}</span>
+                        </div>
+                        <div class="mv-card-foot">
+                            <span class="mv-date">{fmtDate(l.createdAt)}</span>
+                            {#if l.project}<span class="mv-tag concept">{l.project}</span>{/if}
+                            {#each l.tags.slice(0, 5) as t}<span class="mv-tag">{t}</span>{/each}
+                            <span style="flex:1;"></span>
+                            <button class="mv-admin-btn" title={isEN ? 'Promote to critical memory' : 'Promover a memoria crítica'}
+                                on:click={() => doPromoteLesson(l)}>↑ {isEN ? 'Promote' : 'Promover'}</button>
+                            {#if l.source === 'memory'}
+                                <button class="mv-admin-btn warn" title={isEN ? 'Dismiss' : 'Descartar'}
+                                    on:click={() => doDismissLesson(l)}>✕</button>
+                            {/if}
+                        </div>
+                    </li>
+                {/each}
+            </ul>
+        {/if}
+    </section>
+    {/if}
+
+    <!-- ══════════════════════════ SENTINELS ══════════════════════════ -->
+    {#if activeTab === 'sentinels'}
+    <section class="mv-section">
+        <div class="mv-toolbar">
+            <span class="mv-hint">{isEN ? 'Watchdog rules that trigger OS notifications when conditions are met.' : 'Reglas watchdog que disparan notificaciones cuando se cumple la condición.'}</span>
+            <button class="mv-admin-btn" on:click={() => showSentinelAdd = !showSentinelAdd}>
+                + {isEN ? 'New rule' : 'Nueva regla'}
+            </button>
+        </div>
+
+        {#if showSentinelAdd}
+            <div class="mv-sentinel-form">
+                <input type="text" placeholder={isEN ? 'Rule name…' : 'Nombre de regla…'} bind:value={newSentinelName} class="mv-input"/>
+                <select bind:value={newSentinelMetric} class="mv-select">
+                    <option value="cpu_percent">CPU %</option>
+                    <option value="ram_percent">RAM %</option>
+                    <option value="disk_percent">Disk %</option>
+                    <option value="disk_days_until_full">{isEN ? 'Disk days left' : 'Días disco'}</option>
+                    <option value="anomaly_sigma">{isEN ? 'Anomaly σ' : 'Anomalía σ'}</option>
+                    <option value="diag_status">{isEN ? 'Diag status' : 'Estado diag'}</option>
+                </select>
+                <select bind:value={newSentinelOp} class="mv-select">
+                    {#each opOptions() as o}<option value={o.value}>{o.label}</option>{/each}
+                </select>
+                <input type="number" bind:value={newSentinelThreshold} class="mv-input" style="width:70px;"/>
+                <input type="number" bind:value={newSentinelCooldown} class="mv-input" style="width:60px;" title={isEN ? 'Cooldown (min)' : 'Cooldown (min)'}/>
+                <button class="mv-admin-btn" on:click={doAddSentinel}>{isEN ? 'Add' : 'Agregar'}</button>
+            </div>
+            <div class="mv-sentinel-templates">
+                <span style="font-size:10px;color:var(--txt2);">{isEN ? 'Quick add:' : 'Agregar rápido:'}</span>
+                {#each BUILTIN_TEMPLATES as tpl}
+                    <button class="mv-sentinel-tpl" on:click={() => addFromTemplate(tpl)}>
+                        {isEN ? tpl.nameEN : tpl.name}
+                    </button>
+                {/each}
+            </div>
+        {/if}
+
+        {#if sentinelRules.length === 0}
+            <div class="mv-empty">{isEN ? 'No sentinel rules. Add one above or use a template.' : 'Sin reglas sentinel. Agrega una arriba o usa una plantilla.'}</div>
+        {:else}
+            <ul class="mv-list">
+                {#each sentinelRules as rule (rule.id)}
+                    <li class="mv-card sentinel-card" class:disabled={!rule.enabled}>
+                        <div class="mv-card-head">
+                            <Shield size={14} color={rule.enabled ? '#34d399' : '#64748b'}/>
+                            <span class="mv-card-title" style="flex:1;">{rule.name}</span>
+                            <span class="mv-sentinel-cond">{rule.metric} {opOptions().find(o => o.value === rule.op)?.label || rule.op} {rule.threshold}</span>
+                            <span class="mv-sentinel-fires" title={isEN ? 'Times fired' : 'Veces disparado'}>×{rule.fireCount}</span>
+                        </div>
+                        <div class="mv-card-foot">
+                            <span class="mv-date">cooldown: {rule.cooldownMin}min</span>
+                            {#if rule.lastFired > 0}<span class="mv-date">{isEN ? 'last' : 'último'}: {new Date(rule.lastFired).toLocaleString()}</span>{/if}
+                            <span style="flex:1;"></span>
+                            <button class="mv-admin-btn" on:click={() => doToggleSentinel(rule.id)}>
+                                {rule.enabled ? (isEN ? 'Disable' : 'Desactivar') : (isEN ? 'Enable' : 'Activar')}
+                            </button>
+                            <button class="mv-admin-btn warn" on:click={() => doDeleteSentinel(rule.id)}>
+                                <Trash size={12}/>
+                            </button>
+                        </div>
+                    </li>
+                {/each}
+            </ul>
+        {/if}
+    </section>
+    {/if}
+
+    <!-- ══════════════════════════ PATTERNS ══════════════════════════ -->
+    {#if activeTab === 'patterns'}
+    <section class="mv-section">
+        <div class="mv-toolbar">
+            <span class="mv-hint">{isEN ? 'Deterministic pattern detection over memory corpus. No LLM needed.' : 'Detección determinista de patrones sobre el corpus de memorias. Sin LLM.'}</span>
+            <button class="mv-icon-btn" on:click={loadPatterns} title={isEN ? 'Scan' : 'Escanear'}>
+                <RefreshCw size={14}/>
+            </button>
+        </div>
+        {#if patternsError}<div class="mv-error"><AlertTriangle size={14}/> {patternsError}</div>{/if}
+        {#if patternsLoading}
+            <div class="mv-loading">{isEN ? 'Scanning patterns…' : 'Escaneando patrones…'}</div>
+        {:else if patternReport}
+            <div class="mv-pattern-stats">
+                {isEN ? 'Scanned' : 'Escaneado'}: {patternReport.scannedMemories} {isEN ? 'memories' : 'memorias'} + {patternReport.scannedCrystals} crystals · {patternReport.scanDurationMs}ms · {patternReport.patterns.length} {isEN ? 'patterns found' : 'patrones encontrados'}
+            </div>
+            {#if patternReport.patterns.length === 0}
+                <div class="mv-empty">{isEN ? 'No patterns detected. More data needed.' : 'Sin patrones detectados. Se necesitan más datos.'}</div>
+            {:else}
+                <ul class="mv-list">
+                    {#each patternReport.patterns as p, idx (idx)}
+                        <li class="mv-card pattern-card">
+                            <div class="mv-card-head">
+                                <span class="mv-pattern-icon">{patternKindIcon(p.kind)}</span>
+                                <span class="mv-card-title" style="flex:1;">{p.title}</span>
+                                <span class="mv-pattern-conf" style="color:{confidenceColor(p.confidence)};">{Math.round(p.confidence * 100)}%</span>
+                                <span class="mv-pattern-evidence">×{p.evidenceCount}</span>
+                            </div>
+                            <p class="mv-card-content">{p.description}</p>
+                            <div class="mv-card-foot">
+                                <span class="mv-tag concept">{patternKindLabel(p.kind, isEN)}</span>
+                            </div>
+                        </li>
+                    {/each}
+                </ul>
+            {/if}
+        {:else}
+            <div class="mv-empty">{isEN ? 'Click Scan to detect patterns.' : 'Haz clic en Escanear para detectar patrones.'}</div>
+        {/if}
+    </section>
+    {/if}
+
+    <!-- ══════════════════════════ VERIFY ══════════════════════════ -->
+    {#if activeTab === 'verify'}
+    <section class="mv-section">
+        <div class="mv-toolbar">
+            <span class="mv-hint">{isEN ? 'Cross-check memories for contradictions. Heuristic detection.' : 'Verificar memorias en busca de contradicciones. Detección heurística.'}</span>
+            <button class="mv-icon-btn" on:click={loadVerify} title={isEN ? 'Scan' : 'Escanear'}>
+                <RefreshCw size={14}/>
+            </button>
+        </div>
+        {#if verifyError}<div class="mv-error"><AlertTriangle size={14}/> {verifyError}</div>{/if}
+        {#if verifyLoading}
+            <div class="mv-loading">{isEN ? 'Verifying…' : 'Verificando…'}</div>
+        {:else if verifyReport}
+            <div class="mv-pattern-stats">
+                {isEN ? 'Checked' : 'Verificado'}: {verifyReport.memoriesScanned} {isEN ? 'memories' : 'memorias'}, {verifyReport.pairsChecked} {isEN ? 'pairs' : 'pares'} · {verifyReport.scanDurationMs}ms · {verifyReport.contradictions.length} {isEN ? 'conflicts' : 'conflictos'}
+            </div>
+            {#if verifyReport.contradictions.length === 0}
+                <div class="mv-empty">{isEN ? 'No contradictions detected!' : '¡Sin contradicciones detectadas!'}</div>
+            {:else}
+                <ul class="mv-list">
+                    {#each verifyReport.contradictions as c (c.id)}
+                        <li class="mv-card verify-card">
+                            <div class="mv-card-head">
+                                <span class="mv-verify-sev" style="color:{severityColor(c.severity)};">●</span>
+                                <span class="mv-card-title" style="flex:1;">{c.reason}</span>
+                                <span class="mv-tag" style="background:{severityColor(c.severity)}20;color:{severityColor(c.severity)};">{severityLabel(c.severity, isEN)}</span>
+                            </div>
+                            <div class="mv-verify-pair">
+                                <div class="mv-verify-mem older">
+                                    <span class="mv-verify-label">{isEN ? 'Older' : 'Anterior'} #{c.pair.older.id}</span>
+                                    <p>{previewText(c.pair.older.content, 150)}</p>
+                                    {#if c.snippetOlder}<code class="mv-verify-snippet">{c.snippetOlder}</code>{/if}
+                                </div>
+                                <div class="mv-verify-mem newer">
+                                    <span class="mv-verify-label">{isEN ? 'Newer' : 'Reciente'} #{c.pair.newer.id}</span>
+                                    <p>{previewText(c.pair.newer.content, 150)}</p>
+                                    {#if c.snippetNewer}<code class="mv-verify-snippet">{c.snippetNewer}</code>{/if}
+                                </div>
+                            </div>
+                            <div class="mv-card-foot mv-verify-actions">
+                                <button class="mv-admin-btn" on:click={() => doResolve(c, 'keep_newer')}>{resolutionLabel('keep_newer', isEN)}</button>
+                                <button class="mv-admin-btn" on:click={() => doResolve(c, 'keep_older')}>{resolutionLabel('keep_older', isEN)}</button>
+                                <button class="mv-admin-btn" on:click={() => doResolve(c, 'keep_both')}>{resolutionLabel('keep_both', isEN)}</button>
+                                <button class="mv-admin-btn" on:click={() => doResolve(c, 'merge')}>{resolutionLabel('merge', isEN)}</button>
+                                <button class="mv-admin-btn" on:click={() => doResolve(c, 'dismiss')}>{resolutionLabel('dismiss', isEN)}</button>
+                            </div>
+                        </li>
+                    {/each}
+                </ul>
+            {/if}
+        {:else}
+            <div class="mv-empty">{isEN ? 'Click Scan to check for contradictions.' : 'Haz clic en Escanear para buscar contradicciones.'}</div>
+        {/if}
+    </section>
+    {/if}
 </div>
 
 <style>
@@ -726,4 +1071,76 @@
     .mv-edge { color: var(--accent); font-size: 11px; }
     .mv-score { color: var(--txt2); font-size: 10px; font-family: var(--mono); }
     code { font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,.04); padding: 1px 4px; border-radius: 3px; }
+
+    /* ── Tab separator ── */
+    .mv-tab-sep { color: rgba(255,255,255,.1); font-size: 10px; align-self: center; user-select: none; }
+
+    /* ── Lessons ── */
+    .lesson-card .mv-card-content { font-size: 12px; line-height: 1.5; }
+    .mv-lesson-source { font-size: 12px; opacity: .6; flex-shrink: 0; }
+
+    /* ── Sentinels ── */
+    .mv-sentinel-form {
+        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        padding: 10px; background: rgba(255,255,255,.02);
+        border-radius: 6px; border: 1px solid rgba(255,255,255,.06);
+    }
+    .mv-sentinel-templates {
+        display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+        padding: 6px 10px; margin-top: 4px;
+    }
+    .mv-sentinel-tpl {
+        background: rgba(52,211,153,.06); border: 1px solid rgba(52,211,153,.15);
+        color: #34d399; padding: 2px 8px; border-radius: 4px;
+        font-size: 10px; cursor: pointer; transition: .15s;
+    }
+    .mv-sentinel-tpl:hover { background: rgba(52,211,153,.12); border-color: rgba(52,211,153,.3); }
+    .sentinel-card.disabled { opacity: .5; }
+    .mv-sentinel-cond {
+        font-family: var(--mono); font-size: 11px;
+        color: var(--accent); background: rgba(96,165,250,.08);
+        padding: 1px 6px; border-radius: 3px;
+    }
+    .mv-sentinel-fires { color: var(--txt2); font-size: 10px; font-family: var(--mono); }
+    .mv-input {
+        background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+        color: var(--txt); padding: 4px 8px; border-radius: 4px;
+        font-size: 11px; font-family: var(--mono);
+    }
+    .mv-input:focus { border-color: var(--accent); outline: none; }
+
+    /* ── Patterns ── */
+    .mv-pattern-stats {
+        font-size: 10px; color: var(--txt2); font-family: var(--mono);
+        padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.04);
+    }
+    .mv-pattern-icon { font-size: 14px; flex-shrink: 0; }
+    .mv-pattern-conf { font-size: 11px; font-weight: 600; font-family: var(--mono); }
+    .mv-pattern-evidence { color: var(--txt2); font-size: 10px; font-family: var(--mono); }
+
+    /* ── Verify ── */
+    .mv-verify-sev { font-size: 14px; flex-shrink: 0; }
+    .mv-verify-pair {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+        padding: 8px 0;
+    }
+    .mv-verify-mem {
+        padding: 8px; border-radius: 5px;
+        font-size: 11px; line-height: 1.5;
+    }
+    .mv-verify-mem.older { background: rgba(248,113,113,.04); border: 1px solid rgba(248,113,113,.12); }
+    .mv-verify-mem.newer { background: rgba(52,211,153,.04); border: 1px solid rgba(52,211,153,.12); }
+    .mv-verify-mem p { margin: 4px 0; color: var(--txt2); }
+    .mv-verify-label {
+        font-size: 10px; font-weight: 600; font-family: var(--mono);
+        text-transform: uppercase; letter-spacing: .5px;
+    }
+    .mv-verify-mem.older .mv-verify-label { color: #f87171; }
+    .mv-verify-mem.newer .mv-verify-label { color: #34d399; }
+    .mv-verify-snippet {
+        display: block; margin-top: 4px; padding: 3px 6px;
+        background: rgba(0,0,0,.2); border-radius: 3px;
+        font-size: 10px; word-break: break-all;
+    }
+    .mv-verify-actions { gap: 4px; flex-wrap: wrap; }
 </style>

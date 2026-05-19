@@ -89,6 +89,7 @@ pub enum LucyError {
 
 impl LucyError {
     /// Stable error code (matches the serde tag, no allocation needed).
+    #[allow(dead_code)]  // ready for frontend error-code routing
     pub fn code(&self) -> &'static str {
         match self {
             LucyError::PermissionDenied { .. } => "PermissionDenied",
@@ -103,6 +104,7 @@ impl LucyError {
     }
 
     /// Construct an Internal error from any displayable value.
+    #[allow(dead_code)]  // convenience constructor for future command modules
     pub fn internal<E: fmt::Display>(e: E) -> Self {
         LucyError::Internal { message: e.to_string() }
     }

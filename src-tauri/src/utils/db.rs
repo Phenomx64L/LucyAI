@@ -553,6 +553,7 @@ pub struct AuditEntry {
 
 // ── Capacity Metrics (P0 Feature 3) ───────────────────────────────────────
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]  // fields read via serde deserialization in capacity.rs
 pub struct MetricsSample {
     pub id:            i64,
     pub host_id:       String,

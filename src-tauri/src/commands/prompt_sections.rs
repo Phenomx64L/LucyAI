@@ -118,14 +118,11 @@ pub struct PromptContext<'a> {
     pub user_prompt:      &'a str,
     pub has_hosts:        bool,
     pub has_runbooks:     bool,
-    pub has_active_incident: bool,
-    pub has_images:       bool,
     pub hosts_context:    &'a str,
     pub runbooks_dir:     Option<&'a str>,
     pub core_memory:      &'a str,
     pub principles:       &'a str,
     pub extra_context:    &'a str,  // working memory, compacted history, etc.
-    pub incident_phase:   Option<&'a str>,
 }
 
 // ── Trait ────────────────────────────────────────────────────────────────────
@@ -546,14 +543,11 @@ pub fn build_system_prompt_v2(
         user_prompt: prompt,
         has_hosts: !hosts_context.is_empty(),
         has_runbooks: runbooks_dir.is_some(),
-        has_active_incident: false,
-        has_images: false,
         hosts_context,
         runbooks_dir,
         core_memory: &core_mem_block,
         principles: &principles_block,
         extra_context: context,
-        incident_phase: None,
     };
 
     build_composable_prompt(&ctx)

@@ -14,6 +14,7 @@
 <script lang="ts">
     import { onDestroy } from 'svelte';
     import { liveTrace, clearTrace, type TraceEntry, type TracePhase } from '$lib/liveTrace';
+    import VirtualList from '$lib/VirtualList.svelte';
     import Activity     from '@tabler/icons-svelte/icons/activity';
     import X            from '@tabler/icons-svelte/icons/x';
     import Trash        from '@tabler/icons-svelte/icons/trash';
@@ -33,54 +34,25 @@
     ]);
     let scopeToActiveTab = true;
     let showFilters = false;
-    let listEl: HTMLDivElement | null = null;
     let stickyScroll = true;
+    let virtualList: VirtualList;
 
-    // Cap rendered entries — even though the store is now 100, the visible
-    // list after filtering can still be sizable for narrow filters. Render
-    // only the most recent N to keep frame budget tight.
-    const RENDER_CAP = 80;
-
-    // Re-derive visible entries when store / filters / tab change.
-    // We slice to RENDER_CAP at the END (most recent) to avoid creating a
-    // huge intermediate array we then discard.
+    // No hard cap — the ring buffer in liveTrace.ts is 2000 and we use
+    // virtual scrolling so only the viewport + overscan rows exist in DOM.
     $: visible = (() => {
         const list = $liveTrace || [];
         const out: TraceEntry[] = [];
-        // Walk backwards so we collect the most recent N matches first
-        for (let i = list.length - 1; i >= 0 && out.length < RENDER_CAP; i--) {
+        for (let i = 0; i < list.length; i++) {
             const e = list[i];
             if (!enabledPhases.has(e.phase)) continue;
             if (scopeToActiveTab && activeTabId && e.tabId && e.tabId !== activeTabId) continue;
             out.push(e);
         }
-        return out.reverse();
+        return out;
     })();
 
-    // Auto-scroll: debounced via rAF so a burst of pushTrace() calls (the
-    // agent loop emits 20+ events per turn) doesn't trigger one DOM write
-    // per push. We replace the old afterUpdate hook with a rAF-coalesced
-    // scroll triggered by the visible-array change.
-    let _scrollScheduled = false;
-    function scheduleScroll() {
-        if (_scrollScheduled || !stickyScroll || !listEl) return;
-        _scrollScheduled = true;
-        requestAnimationFrame(() => {
-            _scrollScheduled = false;
-            if (stickyScroll && listEl) listEl.scrollTop = listEl.scrollHeight;
-        });
-    }
-    // Reactive: whenever visible.length changes, schedule a scroll-to-bottom.
-    // Reading .length only (not full array) avoids tracking individual items.
-    $: visibleLen = visible.length;
-    $: if (typeof visibleLen === 'number') scheduleScroll();
-    onDestroy(() => { _scrollScheduled = false; });
-
-    function onScroll() {
-        if (!listEl) return;
-        // Within 40px of bottom = sticky. Otherwise user is reviewing history.
-        const distFromBottom = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
-        stickyScroll = distFromBottom < 40;
+    function onVlScroll(e: CustomEvent) {
+        stickyScroll = e.detail.isAtBottom;
     }
 
     function togglePhase(p: TracePhase) {
@@ -179,40 +151,49 @@
         </div>
     {/if}
 
-    <div class="tp-list" bind:this={listEl} on:scroll={onScroll}>
-        {#if visible.length === 0}
+    {#if visible.length === 0}
+        <div class="tp-list">
             <div class="tp-empty">
                 {isEN ? 'No events yet. Start a task — Lucy will narrate every step here.' : 'Sin eventos aún. Inicia una tarea — Lucy narrará cada paso aquí.'}
             </div>
-        {:else}
-            {#each visible as e (e.id)}
-                <div class="tp-entry" style="--phase-color:{phaseColor(e.phase)};">
-                    <span class="tp-time">{fmtTime(e.ts)}</span>
-                    <span class="tp-icon">{phaseIcon(e.phase)}</span>
-                    <span class="tp-phase">{e.phase}</span>
-                    {#if e.step !== undefined}<span class="tp-step">#{e.step}</span>{/if}
-                    <span class="tp-label" title={e.label}>{e.label}</span>
-                    {#if e.elapsedMs !== undefined}
-                        <span class="tp-elapsed" class:warn={e.elapsedMs > 5000}>{fmtElapsed(e.elapsedMs)}</span>
-                    {/if}
-                    {#if e.ok === false}<span class="tp-fail">FAIL{e.exitCode !== undefined && e.exitCode !== null ? `:${e.exitCode}` : ''}</span>{/if}
-                    {#if e.ok === true}<span class="tp-ok">OK</span>{/if}
-                    {#if e.detail}
-                        <button class="tp-expand" on:click={() => toggleDetail(e.id)}
-                            title={isEN ? 'Show detail' : 'Mostrar detalle'}>
-                            {#if expandedDetail.has(e.id)}<ChevronUp size={11}/>{:else}<ChevronDown size={11}/>{/if}
-                        </button>
-                    {/if}
-                </div>
-                {#if e.detail && expandedDetail.has(e.id)}
-                    <pre class="tp-detail">{e.detail}</pre>
+        </div>
+    {:else}
+        <VirtualList
+            bind:this={virtualList}
+            items={visible}
+            itemHeight={26}
+            overscan={12}
+            stickyBottom={stickyScroll}
+            wrapClass="tp-list"
+            on:scroll={onVlScroll}
+            let:item={e}
+        >
+            <div class="tp-entry" style="--phase-color:{phaseColor(e.phase)};">
+                <span class="tp-time">{fmtTime(e.ts)}</span>
+                <span class="tp-icon">{phaseIcon(e.phase)}</span>
+                <span class="tp-phase">{e.phase}</span>
+                {#if e.step !== undefined}<span class="tp-step">#{e.step}</span>{/if}
+                <span class="tp-label" title={e.label}>{e.label}</span>
+                {#if e.elapsedMs !== undefined}
+                    <span class="tp-elapsed" class:warn={e.elapsedMs > 5000}>{fmtElapsed(e.elapsedMs)}</span>
                 {/if}
-            {/each}
-        {/if}
-    </div>
+                {#if e.ok === false}<span class="tp-fail">FAIL{e.exitCode !== undefined && e.exitCode !== null ? `:${e.exitCode}` : ''}</span>{/if}
+                {#if e.ok === true}<span class="tp-ok">OK</span>{/if}
+                {#if e.detail}
+                    <button class="tp-expand" on:click={() => toggleDetail(e.id)}
+                        title={isEN ? 'Show detail' : 'Mostrar detalle'}>
+                        {#if expandedDetail.has(e.id)}<ChevronUp size={11}/>{:else}<ChevronDown size={11}/>{/if}
+                    </button>
+                {/if}
+            </div>
+            {#if e.detail && expandedDetail.has(e.id)}
+                <pre class="tp-detail">{e.detail}</pre>
+            {/if}
+        </VirtualList>
+    {/if}
 
     {#if !stickyScroll}
-        <button class="tp-jump" on:click={() => { stickyScroll = true; listEl && (listEl.scrollTop = listEl.scrollHeight); }}>
+        <button class="tp-jump" on:click={() => { stickyScroll = true; virtualList?.scrollToBottom(); }}>
             ↓ {isEN ? 'Jump to latest' : 'Ir al último'}
         </button>
     {/if}

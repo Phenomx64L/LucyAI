@@ -212,3 +212,125 @@ export function phaseIcon(phase: TurnPhase): string {
 }
 
 export const PHASE_ORDER: TurnPhase[] = ['diagnose', 'analyze', 'propose', 'apply', 'verify', 'done'];
+
+// ── STUCK DETECTION ──────────────────────────────────────────────────────
+// Detects when the agent loop is repeating the same commands or making no
+// progress. The detector is lightweight and stateless — it analyses the
+// TurnLoopState.steps array that already exists.
+
+export interface StuckSignal {
+    isStuck: boolean;
+    reason: string;       // human-readable explanation
+    severity: 'none' | 'warning' | 'critical';
+    repeatedCmd?: string; // the command that keeps repeating
+}
+
+/**
+ * Analyse a turn-loop's step history for signs of stagnation.
+ *
+ * Heuristics:
+ *  1. Same command executed 3+ times across iterations → stuck
+ *  2. Last N commands produced identical output → no progress
+ *  3. Phase regression: went backwards (e.g. verify→diagnose→verify→diagnose)
+ *     more than twice → oscillating
+ */
+export function detectStuck(state: TurnLoopState): StuckSignal {
+    const none: StuckSignal = { isStuck: false, reason: '', severity: 'none' };
+    const steps = state.steps;
+    if (steps.length < 3) return none;
+
+    // 1. Repeated commands (normalised: trim + lowercase)
+    const cmdCounts = new Map<string, number>();
+    for (const s of steps) {
+        if (!s.command) continue;
+        const key = s.command.trim().toLowerCase();
+        cmdCounts.set(key, (cmdCounts.get(key) || 0) + 1);
+    }
+    for (const [cmd, count] of cmdCounts) {
+        if (count >= 3) {
+            return {
+                isStuck: true,
+                reason: `Same command executed ${count} times without resolution`,
+                severity: 'critical',
+                repeatedCmd: cmd.slice(0, 120),
+            };
+        }
+    }
+
+    // 2. Identical consecutive outputs (last 3 command outputs)
+    const outputs = steps.filter(s => s.output).map(s => s.output!.trim().slice(0, 2000));
+    if (outputs.length >= 3) {
+        const last3 = outputs.slice(-3);
+        if (last3[0] === last3[1] && last3[1] === last3[2] && last3[0].length > 0) {
+            return {
+                isStuck: true,
+                reason: 'Last 3 command outputs are identical — no progress',
+                severity: 'warning',
+            };
+        }
+    }
+
+    // 3. Phase oscillation: diagnose→...→diagnose→...→diagnose (3+ diag phases)
+    const diagCount = steps.filter(s => s.phase === 'diagnose').length;
+    if (diagCount >= 4 && state.iteration >= 2) {
+        return {
+            isStuck: true,
+            reason: `Excessive diagnosis cycles (${diagCount} diagnose phases) — possible oscillation`,
+            severity: 'warning',
+        };
+    }
+
+    return none;
+}
+
+// ── PERIODIC CHECKPOINTING ───────────────────────────────────────────────
+// Saves intermediate state during the turn-loop so crashes don't lose
+// progress.  Called from NexShellView after each phase completes.
+
+export interface TurnLoopCheckpoint {
+    ts: number;
+    loopId: string;
+    iteration: number;
+    phase: TurnPhase;
+    problem: string;
+    hostName: string;
+    stepsCount: number;
+    lastCommand?: string;
+    lastOutput?: string;
+    stuckSignal: StuckSignal;
+}
+
+const TL_CKPT_PREFIX = 'lucy_tl_ckpt_';
+
+export function saveTurnLoopCheckpoint(shellId: string, state: TurnLoopState): void {
+    try {
+        const stuck = detectStuck(state);
+        const lastStep = state.steps[state.steps.length - 1];
+        const ckpt: TurnLoopCheckpoint = {
+            ts: Date.now(),
+            loopId: state.id,
+            iteration: state.iteration,
+            phase: state.phase,
+            problem: state.problem.slice(0, 500),
+            hostName: state.hostName,
+            stepsCount: state.steps.length,
+            lastCommand: lastStep?.command?.slice(0, 300),
+            lastOutput: lastStep?.output?.slice(0, 1000),
+            stuckSignal: stuck,
+        };
+        localStorage.setItem(TL_CKPT_PREFIX + shellId, JSON.stringify(ckpt));
+    } catch {
+        // localStorage full or unavailable — non-fatal
+    }
+}
+
+export function clearTurnLoopCheckpoint(shellId: string): void {
+    try { localStorage.removeItem(TL_CKPT_PREFIX + shellId); } catch {}
+}
+
+export function getTurnLoopCheckpoint(shellId: string): TurnLoopCheckpoint | null {
+    try {
+        const raw = localStorage.getItem(TL_CKPT_PREFIX + shellId);
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
