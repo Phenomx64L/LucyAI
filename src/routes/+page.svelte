@@ -2556,17 +2556,21 @@ Use ONE of these patterns instead:
 
             // ── ReflectionGate: analizar respuesta ANTES de procesarla ─────────
             // Sub-millisecond, no LLM — regex + context comparison en Rust.
+            // Wrapped in a 50ms race so a slow IPC never blocks the response flow.
             try {
-                const verdict = await reflectBeforeEmit(resp, {
-                    currentCwd: t.cwd || null,
-                    recentPaths: (t.workingMemory?.recentPaths || []).slice(0, 10),
-                    lastOutputs: (t.workingMemory?.lastOutputs || []).slice(0, 5),
-                    lastCommands: (t.workingMemory?.lastCommands || []).slice(0, 5),
-                });
-                if (!isPass(verdict)) {
+                const _rgTimeout = new Promise(r => setTimeout(() => r('Pass'), 50));
+                const verdict = await Promise.race([
+                    reflectBeforeEmit(resp, {
+                        currentCwd: t.cwd || null,
+                        recentPaths: (t.workingMemory?.recentPaths || []).slice(0, 10),
+                        lastOutputs: (t.workingMemory?.lastOutputs || []).slice(0, 5),
+                        lastCommands: (t.workingMemory?.lastCommands || []).slice(0, 5),
+                    }),
+                    _rgTimeout,
+                ]);
+                if (verdict && verdict !== 'Pass' && !isPass(verdict)) {
                     const badge = renderVerdictBadge(verdict);
                     if (isEscalate(verdict)) {
-                        // BLOCKED: no ejecutar, mostrar razones al usuario
                         const reasons = getReasons(verdict);
                         const risk = getRisk(verdict);
                         t.messages = t.messages.filter(m => m.id !== streamMsgId);
@@ -2579,19 +2583,37 @@ Use ONE of these patterns instead:
                         });
                         fin(tabId); return;
                     }
-                    // WARN: inyectar badge pero continuar con la ejecución
                     t._reflectionBadge = badge;
                     pushTrace({ phase: 'warn', label: `ReflectionGate: ${getReasons(verdict).join('; ')}`, tabId: t.id });
                 }
             } catch (rgErr) {
-                // Fail-open: si el gate falla, continuar sin bloquear
                 console.warn('[reflection-gate] Error, continuing:', rgErr);
             }
 
-            // Para TOOL/EXECUTE/THOUGHT responses, eliminar streaming msg (se añadirá uno nuevo).
-            // Para text-only, se reutiliza el streaming msg (ver sección else al final).
+            // Para TOOL/EXECUTE/THOUGHT responses: preservar texto visible ANTES de
+            // procesar herramientas. BUG FIX: antes se eliminaba el streaming msg
+            // completo, borrando la explicación que el usuario ya estaba leyendo.
             const _hasToolResp = resp.includes('<TOOL>') || resp.includes('<EXECUTE') || /<THOUGHT>/i.test(resp);
-            if (_hasToolResp) t.messages = t.messages.filter(m => m.id !== streamMsgId);
+            if (_hasToolResp) {
+                const _streamMsg = t.messages.find(m => m.id === streamMsgId);
+                if (_streamMsg?.rawContent?.trim()) {
+                    // Promote: convertir streaming msg en mensaje lucy permanente
+                    const displayText = cleanStreamDisplay(_streamMsg.rawContent);
+                    if (displayText.trim().length > 20) {
+                        _streamMsg.id = Date.now() + Math.random();
+                        _streamMsg.role = 'lucy';
+                        const _rgBadgeT = t._reflectionBadge || '';
+                        _streamMsg.html = `<div class="mn">Lucy</div>${_rgBadgeT}${renderLucyMarkdown(displayText)}`;
+                        _streamMsg.rawRole = 'Lucy';
+                        _streamMsg.rawContent = displayText;
+                        if (_rgBadgeT) t._reflectionBadge = null;
+                    } else {
+                        t.messages = t.messages.filter(m => m.id !== streamMsgId);
+                    }
+                } else {
+                    t.messages = t.messages.filter(m => m.id !== streamMsgId);
+                }
+            }
             // ── Quick native tools: solo para respuestas simples sin plan multi-paso ──
             // BUG FIX: si el prompt original tiene MÚLTIPLES intenciones (verifica X y luego
             // busca Y), no podemos cortar después del primer tool. Antes: el usuario pedía
@@ -4857,12 +4879,11 @@ times the SAME way, switch tool kind entirely.
         t.messages=t.messages.filter(m=>m.id!==('streaming-'+tabId));
         t.isProcessing=false;
         t._cancelled = false; // Reset para próxima ejecución
-        // ── IncidentTimeline: detect open incidents (reconnected v1.4.0) ──
-        try {
-            const incidents = await invoke('incident_list', { shellId: null });
+        // ── IncidentTimeline: detect open incidents (fire-and-forget, no blocking) ──
+        invoke('incident_list', { shellId: null }).then(incidents => {
             const openInc = incidents?.find(i => i.status === 'open');
             activeIncidentId = openInc ? openInc.id : null;
-        } catch { activeIncidentId = null; }
+        }).catch(() => { activeIncidentId = null; });
         // Notificación nativa si la ventana está oculta y el comando tomó >5s
         try {
             const elapsed = (t._procStart ? (Date.now() - t._procStart) / 1000 : 0);
