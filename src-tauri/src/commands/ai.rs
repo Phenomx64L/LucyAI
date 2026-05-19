@@ -865,7 +865,15 @@ pub async fn ask_lucy_stream(
         std::time::Duration::from_secs(120) // 2 min for cloud APIs
     };
 
+    // BUG FIX: `stream_done` flag ensures both loops exit when the stream
+    // ends. Previously `break` only exited the inner line-parsing loop,
+    // leaving the outer byte-stream loop blocked on `.next().await`
+    // indefinitely — causing the "Procesando..." indicator to never stop.
+    let mut stream_done = false;
+
     while let Some(chunk) = byte_stream.next().await {
+        if stream_done { break; }
+
         // Check for timeout
         if start_time.elapsed() > stream_timeout {
             eprintln!("[ask_lucy_stream] Timeout after {} seconds waiting for stream", stream_timeout.as_secs());
@@ -883,7 +891,7 @@ pub async fn ask_lucy_stream(
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
             if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" { break; } // Break on [DONE] instead of continue
+                if data == "[DONE]" { stream_done = true; break; }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
                     // Check for end-of-stream indicators from various providers
                     let mut stream_ended = false;
@@ -934,8 +942,8 @@ pub async fn ask_lucy_stream(
                         let _ = window.emit(&chunk_event, t);
                     }
 
-                    // Break if stream has ended
                     if stream_ended {
+                        stream_done = true;
                         break;
                     }
                 }

@@ -4738,6 +4738,19 @@ times the SAME way, switch tool kind entirely.
         }
         // Marcar tab como cancelada para que runAI no procese más
         t._cancelled = true;
+
+        // BUG FIX: Preserve streamed text before fin() removes the streaming msg.
+        // Previously, cancelling mid-stream deleted the visible response entirely.
+        // Now we promote any streaming msg with content to a regular 'lucy' message.
+        const streamMsg = t.messages.find(m => m.id === ('streaming-' + tabId));
+        if (streamMsg && streamMsg.rawContent && streamMsg.rawContent.trim()) {
+            streamMsg.id = Date.now() + Math.random();
+            streamMsg.role = 'lucy';
+            // Remove the blinking cursor from the preserved HTML
+            streamMsg.html = (streamMsg.html || '').replace(/<span class="stream-cursor"><\/span>/g, '');
+            streamMsg.style = 'border-left-color:#f59e0b;opacity:0.85;';
+        }
+
         addMsg(tabId, {
             role: 'lucy',
             html: `<div class="mn">! Cancelado</div>Operación cancelada por el usuario.`,
