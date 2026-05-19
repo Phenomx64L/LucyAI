@@ -6222,7 +6222,9 @@ if (Test-Path $src) {
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
             {#if activeIncidentId && activeTabId === tab.id}
             <div style="padding:0 12px;">
-              <IncidentTimeline incidentId={activeIncidentId} {isEN} />
+              <IncidentTimeline incidentId={activeIncidentId} {isEN}
+                on:dismiss={() => { activeIncidentId = null; }}
+              />
             </div>
             {/if}
             <ChatThread

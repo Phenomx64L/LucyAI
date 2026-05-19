@@ -6,8 +6,13 @@
     import { invoke } from '@tauri-apps/api/core';
     import { onMount } from 'svelte';
 
+    import { createEventDispatcher } from 'svelte';
+
     export let incidentId: string;
     export let isEN: boolean = false;
+
+    const dispatch = createEventDispatcher<{ dismiss: void }>();
+    let closing = false;
 
     interface PhaseEntry {
         phase: string;
@@ -33,6 +38,8 @@
     interface IncidentRecord {
         id: string;
         title: string;
+        description: string;
+        host_name: string;
         phase: string;
         status: string;
         created_at: number;
@@ -46,14 +53,16 @@
     let error = '';
 
     // Derive phases from evidence timestamps grouped by phase
-    const PHASE_ORDER = ['detection', 'triage', 'investigation', 'containment', 'remediation', 'review'];
+    // Phase order matches Rust state machine in incident.rs
+    const PHASE_ORDER = ['detection', 'extract', 'plan', 'investigate', 'diagnose', 'report', 'done'];
     const PHASE_COLORS: Record<string, string> = {
         detection:     'var(--ops-status-warn, #f59e0b)',
-        triage:        'var(--ops-status-info, #60a5fa)',
-        investigation: 'var(--ops-cpu, #a78bfa)',
-        containment:   'var(--ops-status-error, #ef4444)',
-        remediation:   'var(--ops-status-ok, #10b981)',
-        review:        'var(--ops-status-muted, #475569)',
+        extract:       'var(--ops-status-info, #60a5fa)',
+        plan:          'var(--ops-cpu, #a78bfa)',
+        investigate:   '#60a5fa',
+        diagnose:      'var(--ops-status-error, #ef4444)',
+        report:        'var(--ops-status-ok, #10b981)',
+        done:          'var(--ops-status-muted, #475569)',
     };
 
     onMount(async () => {
@@ -103,6 +112,23 @@
         ? fmtDuration(incident.created_at, incident.resolved_at || Math.floor(Date.now() / 1000))
         : '';
 
+    async function closeIncident() {
+        if (closing || !incident) return;
+        closing = true;
+        try {
+            await invoke('incident_advance_phase', {
+                incidentId: incident.id,
+                toPhase: 'done',
+            });
+            incident.status = 'resolved';
+            incident.resolved_at = Math.floor(Date.now() / 1000);
+            dispatch('dismiss');
+        } catch (e) {
+            error = String(e);
+        }
+        closing = false;
+    }
+
     $: evidenceByPhase = (() => {
         const m = new Map<string, EvidenceMarker[]>();
         for (const ev of evidence) {
@@ -120,12 +146,26 @@
 {:else if incident}
     <div class="tl-wrap">
         <div class="tl-header">
-            <span class="tl-title">{isEN ? 'Incident Timeline' : 'Timeline del Incidente'}</span>
-            <span class="tl-duration">{totalDuration}</span>
-            <span class="tl-status" class:resolved={incident.status === 'resolved'}>
-                {incident.status}
+            <span class="tl-title" title="ID: {incident.id}">
+                {incident.title || (isEN ? 'Incident' : 'Incidente')}
+                {#if incident.host_name}
+                    <span class="tl-host">@ {incident.host_name}</span>
+                {/if}
             </span>
+            <span class="tl-duration">{totalDuration}</span>
+            {#if incident.status !== 'resolved' && incident.status !== 'done'}
+                <button class="tl-status tl-status-btn" on:click={closeIncident} disabled={closing}
+                        title={isEN ? 'Click to close this incident' : 'Clic para cerrar este incidente'}>
+                    {closing ? '...' : incident.status}
+                    <span class="tl-close-hint">✕</span>
+                </button>
+            {:else}
+                <span class="tl-status resolved">{isEN ? 'resolved' : 'resuelto'}</span>
+            {/if}
         </div>
+        {#if incident.description}
+            <div class="tl-desc">{incident.description}</div>
+        {/if}
 
         <div class="tl-track">
             {#each phases as ph, i}
@@ -210,6 +250,21 @@
         color: var(--ops-status-info, #60a5fa);
         font-variant-numeric: tabular-nums;
     }
+    .tl-host {
+        font-weight: 400;
+        font-size: 10px;
+        color: var(--txt3, #475569);
+        margin-left: 4px;
+    }
+    .tl-desc {
+        font-size: 10px;
+        color: var(--txt2, #94a3b8);
+        margin-bottom: 10px;
+        padding: 4px 6px;
+        background: rgba(255,255,255,.02);
+        border-radius: 4px;
+        border-left: 2px solid var(--ops-status-warn, #f59e0b);
+    }
     .tl-status {
         padding: 1px 8px;
         border-radius: 8px;
@@ -219,6 +274,27 @@
         background: rgba(245,158,11,.12);
         color: var(--ops-status-warn, #f59e0b);
     }
+    .tl-status-btn {
+        cursor: pointer;
+        border: 1px solid rgba(245,158,11,.25);
+        font-family: inherit;
+        transition: background .15s, border-color .15s;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .tl-status-btn:hover {
+        background: rgba(239,68,68,.15);
+        border-color: rgba(239,68,68,.4);
+        color: var(--ops-status-error, #ef4444);
+    }
+    .tl-status-btn:disabled { opacity: .5; cursor: wait; }
+    .tl-close-hint {
+        font-size: 8px;
+        opacity: 0;
+        transition: opacity .15s;
+    }
+    .tl-status-btn:hover .tl-close-hint { opacity: 1; }
     .tl-status.resolved {
         background: rgba(16,185,129,.12);
         color: var(--ops-status-ok, #10b981);
