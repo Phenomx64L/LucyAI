@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.1-7dd3fc" alt="v1.2.1" />
+  <img src="https://img.shields.io/badge/version-1.4.0-7dd3fc" alt="v1.4.0" />
   <img src="https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Svelte-5-orange?logo=svelte" alt="Svelte 5" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
