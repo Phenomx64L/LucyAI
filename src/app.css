@@ -117,6 +117,337 @@
   --state-pulse: 0.6s;
 }
 
+/* ── U9 — Circadian micro-tuning ─────────────────────────────────────
+   Subtle multiplicative shift on top of the active theme. Driven by
+   data-tod="morning|day|afternoon|evening|night" set by a JS hook based
+   on the user's local hour. Designed to be perceptual-only — no theme
+   replacement, just a warmth/saturation nudge.
+   - morning  : cool cyan-green tilt, full saturation     (6-11h)
+   - day      : neutral, slightly cooler                  (11-17h)
+   - afternoon: warmer accent, golden hour bias           (17-19h)
+   - evening  : warmer ambient, lower contrast            (19-22h)
+   - night    : coolest temperature, lowest contrast      (22-6h)
+   ──────────────────────────────────────────────────────────────────── */
+:root {
+  --tod-warmth:        0deg;     /* hue rotation of accent */
+  --tod-contrast:      1;        /* 0.85-1 — reduces fatigue at night */
+  --tod-saturation:    1;        /* 0.85-1 — duller at night */
+  --tod-bg-warmth:     0deg;     /* separate hue shift for bg */
+  --tod-transition:    4s var(--ease-out);
+}
+[data-tod="morning"] {
+  --tod-warmth:        -8deg;    /* cool tilt — fresh start */
+  --tod-contrast:      1;
+  --tod-saturation:    1.05;
+  --tod-bg-warmth:     -4deg;
+}
+[data-tod="day"] {
+  --tod-warmth:        0deg;
+  --tod-contrast:      1;
+  --tod-saturation:    1;
+  --tod-bg-warmth:     0deg;
+}
+[data-tod="afternoon"] {
+  --tod-warmth:        12deg;    /* warmer accent — golden tilt */
+  --tod-contrast:      0.98;
+  --tod-saturation:    0.98;
+  --tod-bg-warmth:     6deg;
+}
+[data-tod="evening"] {
+  --tod-warmth:        18deg;
+  --tod-contrast:      0.92;
+  --tod-saturation:    0.95;
+  --tod-bg-warmth:     10deg;
+}
+[data-tod="night"] {
+  --tod-warmth:        -4deg;    /* cool back — eye fatigue */
+  --tod-contrast:      0.85;
+  --tod-saturation:    0.88;
+  --tod-bg-warmth:     -2deg;
+}
+/* Apply ToD via filter on the warp background — non-destructive */
+:global(.bg-warp-gradient),
+:global(.sidebar-glass) {
+  transition: filter var(--tod-transition);
+  filter: hue-rotate(var(--tod-bg-warmth)) saturate(var(--tod-saturation)) contrast(var(--tod-contrast));
+}
+@media (prefers-reduced-motion: reduce) {
+  :global(.bg-warp-gradient),
+  :global(.sidebar-glass) { transition: none; }
+}
+
+/* ── U2 — Lucy Living Avatar moods ───────────────────────────────────
+   The avatar gains ambient "presence" by reacting to global data-lucy-mood
+   on <html>. Each state has a unique micro-animation that signals what
+   Lucy is doing/sensing without taking attention away from the main work.
+
+   Driven by $lib/lucy-mood.ts — call setLucyMood('thinking') etc.
+   ────────────────────────────────────────────────────────────────── */
+[data-lucy-mood] .lucy-avatar,
+[data-lucy-mood] :global(.lucy-avatar) {
+  transition: filter var(--motion-base) var(--ease-out),
+              box-shadow var(--motion-base) var(--ease-out),
+              transform var(--motion-base) var(--ease-out);
+}
+
+/* IDLE — gentle breathing scale, no color tint */
+[data-lucy-mood="idle"] :global(.lucy-avatar) {
+  animation: lucy-breath 6s ease-in-out infinite;
+}
+@keyframes lucy-breath {
+  0%, 100% { transform: scale(1);     filter: brightness(1); }
+  50%      { transform: scale(1.018); filter: brightness(1.04); }
+}
+
+/* THINKING — cyan inner pulse, slightly faster */
+[data-lucy-mood="thinking"] :global(.lucy-avatar) {
+  animation: lucy-think 2.2s ease-in-out infinite;
+  box-shadow: 0 0 0 1px rgba(59,158,255,0.25),
+              0 0 18px -2px rgba(59,158,255,0.55),
+              0 0 32px -8px rgba(59,158,255,0.35);
+}
+@keyframes lucy-think {
+  0%, 100% { transform: scale(1);    filter: brightness(1)    saturate(1.05); }
+  50%      { transform: scale(1.04); filter: brightness(1.15) saturate(1.25); }
+}
+
+/* EXECUTING — golden shimmer, faster cadence */
+[data-lucy-mood="executing"] :global(.lucy-avatar) {
+  animation: lucy-exec 1.4s ease-in-out infinite;
+  box-shadow: 0 0 0 1px rgba(245,158,11,0.30),
+              0 0 22px -2px rgba(245,158,11,0.55),
+              0 0 36px -8px rgba(245,158,11,0.30);
+}
+@keyframes lucy-exec {
+  0%, 100% { transform: scale(1)    rotate(0);     filter: brightness(1)   saturate(1.1) hue-rotate(0); }
+  50%      { transform: scale(1.05) rotate(0.6deg); filter: brightness(1.2) saturate(1.3) hue-rotate(-5deg); }
+}
+
+/* LISTENING — soft pink ring for voice input */
+[data-lucy-mood="listening"] :global(.lucy-avatar) {
+  animation: lucy-listen 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgba(244,114,182,0.35),
+              0 0 22px -2px rgba(244,114,182,0.50);
+}
+@keyframes lucy-listen {
+  0%, 100% { transform: scale(1);     box-shadow: 0 0 0 2px rgba(244,114,182,0.35), 0 0 22px -2px rgba(244,114,182,0.50); }
+  50%      { transform: scale(1.025); box-shadow: 0 0 0 4px rgba(244,114,182,0.22), 0 0 30px -2px rgba(244,114,182,0.65); }
+}
+
+/* CONCERNED — amber pulsating border, signals "needs attention" */
+[data-lucy-mood="concerned"] :global(.lucy-avatar) {
+  animation: lucy-concern 1.1s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgba(245,158,11,0.55),
+              0 0 28px -2px rgba(245,158,11,0.65),
+              0 0 48px -10px rgba(239,68,68,0.30);
+}
+@keyframes lucy-concern {
+  0%, 100% { transform: scale(1);    filter: brightness(1)    saturate(1.1); }
+  50%      { transform: scale(1.06); filter: brightness(1.18) saturate(1.4) hue-rotate(8deg); }
+}
+
+/* CONFIDENT — brief green burst, transient (1.5s auto-clear) */
+[data-lucy-mood="confident"] :global(.lucy-avatar) {
+  animation: lucy-confident 1.5s ease-out 1;
+  box-shadow: 0 0 0 2px rgba(16,185,129,0.55),
+              0 0 28px -2px rgba(16,185,129,0.65);
+}
+@keyframes lucy-confident {
+  0%   { transform: scale(1);    filter: brightness(1.5)  saturate(1.5); }
+  40%  { transform: scale(1.10); filter: brightness(1.25) saturate(1.3); }
+  100% { transform: scale(1);    filter: brightness(1)    saturate(1); }
+}
+
+/* Mood ambient bleed into the chat scroll area top border — sutil but felt */
+[data-lucy-mood="thinking"]  :global(.chat-area) { box-shadow: inset 0 1px 0 rgba(59,158,255,0.20); }
+[data-lucy-mood="executing"] :global(.chat-area) { box-shadow: inset 0 1px 0 rgba(245,158,11,0.25); }
+[data-lucy-mood="concerned"] :global(.chat-area) { box-shadow: inset 0 1px 0 rgba(245,158,11,0.45); }
+[data-lucy-mood="listening"] :global(.chat-area) { box-shadow: inset 0 1px 0 rgba(244,114,182,0.30); }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-lucy-mood] :global(.lucy-avatar) { animation: none !important; }
+}
+
+/* ── U6 — Density Modes ──────────────────────────────────────────────
+   Three modes that re-arrange the workspace based on intent:
+   • focus   — chat-only, sidebars collapsed, low-distraction reading mode
+   • explore — default, everything visible (current behavior)
+   • war-room — dashboard front-and-center, chat compact in sidebar
+
+   Switched via Ctrl+1/2/3 or auto-suggested on anomaly. Set `data-density`
+   on <body>.
+   ────────────────────────────────────────────────────────────────── */
+
+/* FOCUS — reading mode. Sidebar fades, posture strip hides */
+body[data-density="focus"] :global(.sidebar),
+body[data-density="focus"] :global(.posture-strip) {
+  opacity: 0.30;
+  pointer-events: none;
+  transition: opacity var(--motion-base) var(--ease-out);
+}
+body[data-density="focus"] :global(.sidebar:hover),
+body[data-density="focus"] :global(.posture-strip:hover) {
+  opacity: 1;
+  pointer-events: auto;
+}
+body[data-density="focus"] :global(.chat-wrap.on) {
+  max-width: 920px;
+  margin: 0 auto;
+  font-size: 14px;
+}
+body[data-density="focus"] :global(.tabbar),
+body[data-density="focus"] :global(.statusbar) {
+  opacity: 0.55;
+  transition: opacity var(--motion-base) var(--ease-out);
+}
+body[data-density="focus"] :global(.tabbar:hover),
+body[data-density="focus"] :global(.statusbar:hover) {
+  opacity: 1;
+}
+
+/* WAR-ROOM — dashboard claims the screen, chat retreats */
+body[data-density="war-room"] :global(.chat-wrap) {
+  max-width: 380px;
+  font-size: 11px;
+}
+body[data-density="war-room"] :global(.dash-card) {
+  box-shadow: 0 0 0 1px var(--accent-border), 0 4px 20px -4px rgba(0,0,0,0.55);
+}
+body[data-density="war-room"] :global(.posture-strip) {
+  font-size: 13px;
+  padding: 10px 16px;
+  background: rgba(245,158,11,0.04);
+  border-bottom: 1px solid rgba(245,158,11,0.20);
+}
+body[data-density="war-room"] :global(.anomaly-badge) {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* ── U8 v2 — Inline confidence markers + citation chips ──────────────
+   The LLM emits short markers within text to signal trust calibration:
+     [~hedge~]  → low confidence, dotted underline + italic
+     [!fact!]   → high confidence, subtle green underline
+     [?guess?]  → speculation, amber italic
+     <CITE>     → citation chip linking to a source
+   ────────────────────────────────────────────────────────────────── */
+.conf-inline {
+  cursor: help;
+  border-radius: 2px;
+  padding: 0 2px;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+.conf-inline:hover { background: rgba(255,255,255,0.06); }
+.conf-low {
+  text-decoration: underline dotted rgba(248,113,113,0.55) 1.5px;
+  text-underline-offset: 3px;
+  font-style: italic;
+  color: #f87171dd;
+}
+.conf-high {
+  text-decoration: underline solid rgba(52,211,153,0.45) 1.2px;
+  text-underline-offset: 3px;
+  color: var(--text-bright, #f1f5f9);
+}
+.conf-spec {
+  font-style: italic;
+  color: #fbbf24;
+  text-decoration: underline dotted rgba(251,191,36,0.55) 1.5px;
+  text-underline-offset: 3px;
+}
+.cite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  margin: 0 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: rgba(167,139,250,0.10);
+  border: 1px solid rgba(167,139,250,0.25);
+  border-radius: 3px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background var(--motion-fast) var(--ease-out),
+              border-color var(--motion-fast) var(--ease-out);
+}
+.cite-chip:hover {
+  background: rgba(167,139,250,0.20);
+  border-color: rgba(167,139,250,0.45);
+  color: var(--text-bright);
+}
+
+/* ── U4 — Heat layers ────────────────────────────────────────────────
+   Overlay classes for severity-on-a-list scenarios: threat scan rows,
+   process forest entries, file change lists. Compose with the host
+   element's own styling. Driven by $lib/heat-layer.ts.
+   ─────────────────────────────────────────────────────────────────── */
+.heat-cool {
+    /* default — no visual modification */
+}
+.heat-warm {
+    background-image: linear-gradient(90deg, rgba(59,158,255,0.06) 0%, transparent 50%);
+    border-left: 2px solid rgba(59,158,255,0.30);
+}
+.heat-hot {
+    background-image: linear-gradient(90deg, rgba(245,158,11,0.08) 0%, transparent 60%);
+    border-left: 2px solid rgba(245,158,11,0.45);
+}
+.heat-critical {
+    background-image: linear-gradient(90deg, rgba(239,68,68,0.10) 0%, transparent 70%);
+    border-left: 2px solid rgba(239,68,68,0.60);
+    animation: heat-pulse 2.4s ease-in-out infinite;
+}
+@keyframes heat-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    50%      { box-shadow: 0 0 0 1px rgba(239,68,68,0.25); }
+}
+/* Inline severity badge — small pill the host element can include */
+.heat-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    border-radius: 3px;
+    line-height: 1.5;
+}
+.heat-pill.heat-cool     { color: var(--text-muted); background: rgba(255,255,255,0.04); }
+.heat-pill.heat-warm     { color: var(--blue);  background: rgba(59,158,255,0.10);  border: 1px solid rgba(59,158,255,0.25); }
+.heat-pill.heat-hot      { color: var(--amber); background: rgba(245,158,11,0.10);  border: 1px solid rgba(245,158,11,0.30); }
+.heat-pill.heat-critical { color: var(--red);   background: rgba(239,68,68,0.12);   border: 1px solid rgba(239,68,68,0.40); }
+
+@media (prefers-reduced-motion: reduce) {
+    .heat-critical { animation: none; }
+}
+
+/* Mode indicator pill — sits in the statusbar */
+.density-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+.density-pill:hover { background: rgba(255,255,255,0.08); color: var(--text-main); }
+body[data-density="focus"]    .density-pill { color: var(--blue);   border-color: rgba(59,158,255,0.30); }
+body[data-density="war-room"] .density-pill { color: var(--amber);  border-color: rgba(245,158,11,0.30); }
+
 [data-theme="ocean"] {
   --bg-top:          #2a4a6e;
   --bg-mid:          #122236;

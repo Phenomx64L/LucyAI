@@ -219,19 +219,37 @@ pub static HTTP_CLIENT_FAST: Lazy<Client> = Lazy::new(|| {
 /// Los modelos NVIDIA NIM tienen formato "owner/model-name" y se validan
 /// por la regla `model.contains('/')` en ai.rs (no se listan aquí).
 pub const ALLOWED_MODELS: &[&str] = &[
-    // ── Gemini 3.1 (May 2026) ──
+    // ── Gemini 3.x lineup (refreshed May 2026 from ai.google.dev/gemini-api/docs) ──
+    // Pro accepts an effort hint via "::high" / "::medium" suffix that maps to
+    // thinkingConfig.thinkingLevel in resolve_gemini_model(). The base ID
+    // (without suffix) is what actually hits the API.
     "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite",            // production
+    "gemini-3.1-pro-preview::high",
+    "gemini-3.1-pro-preview::medium",
+    "gemini-3.5-flash",                 // GA — 1M ctx, frontier-class at lower cost
+    "gemini-3.1-flash-lite",            // GA — high-volume workhorse
     "gemini-3.1-flash-lite-preview",    // preview
+    // Legacy alias kept for old saved chats (resolved to gemini-3.5-flash server-side)
+    "gemini-3-flash-preview",
     // ── Gemini 2.5 (legacy — kept for compat with old chats) ──
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "gemini-2.5-flash-lite-preview",
     // ── Anthropic Claude (May 2026 lineup) ──
+    // Effort suffix "::low|::medium|::high|::xhigh|::max" is supported by
+    // resolve_anthropic_model() in ai.rs and stripped before the API call.
     "claude-opus-4-7",                  // flagship — 1M ctx
+    "claude-opus-4-7::low",
+    "claude-opus-4-7::medium",
+    "claude-opus-4-7::high",
+    "claude-opus-4-7::xhigh",
+    "claude-opus-4-7::max",
     "claude-sonnet-4-6",                // balanced — 1M ctx
-    "claude-haiku-4-5",                 // fast tier
+    "claude-sonnet-4-6::low",
+    "claude-sonnet-4-6::medium",
+    "claude-sonnet-4-6::high",
+    "claude-sonnet-4-6::max",
+    "claude-haiku-4-5",                 // fast tier (no effort param)
     // Legacy Claude
     "claude-opus-4-5",
     "claude-sonnet-4-5",

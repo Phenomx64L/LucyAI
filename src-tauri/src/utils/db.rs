@@ -580,28 +580,134 @@ pub struct PdfDocument {
     pub status:      String,  // 'ingesting' | 'done' | 'error'
 }
 
-/// Price constants per 1K tokens (as of 2026)
-pub const ANTHROPIC_INPUT_PRICE_PER_1K: f64 = 0.003;
-pub const ANTHROPIC_OUTPUT_PRICE_PER_1K: f64 = 0.015;
+// ── Per-model pricing (May 2026) ──────────────────────────────────────────
+// MUST be kept in sync with src/lib/model-pricing.ts (frontend source of truth).
+// Prices in USD per 1K tokens. Lookup is by base model id — the "::effort"
+// suffix (e.g. "::xhigh", "::max") is stripped before lookup since effort
+// changes the token COUNT, not the per-token rate.
+//
+// If a model id is not recognized, we conservatively fall back to a
+// generic "cloud-mid" price so the user still gets a non-zero estimate.
 
-pub const OPENAI_GPT4_INPUT_PRICE_PER_1K: f64 = 0.03;
-pub const OPENAI_GPT4_OUTPUT_PRICE_PER_1K: f64 = 0.06;
-
-pub const GOOGLE_GEMINI_INPUT_PRICE_PER_1K: f64 = 0.0005;
-pub const GOOGLE_GEMINI_OUTPUT_PRICE_PER_1K: f64 = 0.0015;
-
-/// Calculate token cost based on model and token counts
-pub fn calculate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
-    let (in_price, out_price) = match model {
-        m if m.contains("claude") => (ANTHROPIC_INPUT_PRICE_PER_1K, ANTHROPIC_OUTPUT_PRICE_PER_1K),
-        m if m.contains("gpt") => (OPENAI_GPT4_INPUT_PRICE_PER_1K, OPENAI_GPT4_OUTPUT_PRICE_PER_1K),
-        m if m.contains("gemini") => (GOOGLE_GEMINI_INPUT_PRICE_PER_1K, GOOGLE_GEMINI_OUTPUT_PRICE_PER_1K),
-        _ => (0.0, 0.0), // Unknown model, no cost
+/// Returns (input_per_1k, output_per_1k) USD prices for the given model.
+fn model_prices(model: &str) -> (f64, f64) {
+    // Strip "::effort" suffix — effort affects token count, not price.
+    let base = match model.find("::") {
+        Some(i) => &model[..i],
+        None => model,
     };
 
+    // Local Ollama: free
+    if base.starts_with("local-") {
+        return (0.0, 0.0);
+    }
+
+    // NVIDIA NIM (format "owner/model"): approximate average
+    if base.contains('/') {
+        return (0.0008, 0.0024);
+    }
+
+    match base {
+        // ── Anthropic Claude ──
+        "claude-opus-4-7"   |
+        "claude-opus-4-6"   |
+        "claude-opus-4-5"     => (0.015,   0.075),
+        "claude-sonnet-4-6" |
+        "claude-sonnet-4-5"   => (0.003,   0.015),
+        "claude-haiku-4-5"    => (0.0008,  0.004),
+
+        // ── Google Gemini ──
+        "gemini-3.1-pro-preview"        => (0.00125, 0.010),
+        "gemini-3.5-flash"              => (0.00030, 0.0025),
+        "gemini-3-flash-preview"        => (0.00030, 0.0025), // legacy alias
+        "gemini-3.1-flash-lite"         |
+        "gemini-3.1-flash-lite-preview" => (0.00010, 0.0004),
+        // Legacy 2.5
+        "gemini-2.5-pro"                => (0.00125, 0.010),
+        "gemini-2.5-flash"              => (0.00030, 0.0025),
+        "gemini-2.5-flash-lite-preview" => (0.00010, 0.0004),
+
+        // ── OpenAI GPT-5.x ──
+        "gpt-5.5"         => (0.005,   0.020),
+        "gpt-5.5-instant" => (0.002,   0.008),
+        "gpt-5.4-mini"    => (0.00020, 0.00080),
+        "gpt-5.4-nano"    => (0.00010, 0.00040),
+        "gpt-5.3-codex"   => (0.005,   0.020),
+        // Legacy
+        "gpt-4o"          => (0.0025,  0.010),
+        "gpt-4o-mini"     => (0.00015, 0.0006),
+
+        // Fallback for unknown cloud model — conservative mid-tier estimate.
+        _ => (0.001, 0.003),
+    }
+}
+
+// Legacy constants kept for backward compatibility with any external callers.
+pub const ANTHROPIC_INPUT_PRICE_PER_1K: f64 = 0.003;
+pub const ANTHROPIC_OUTPUT_PRICE_PER_1K: f64 = 0.015;
+pub const OPENAI_GPT4_INPUT_PRICE_PER_1K: f64 = 0.005;
+pub const OPENAI_GPT4_OUTPUT_PRICE_PER_1K: f64 = 0.020;
+pub const GOOGLE_GEMINI_INPUT_PRICE_PER_1K: f64 = 0.00030;
+pub const GOOGLE_GEMINI_OUTPUT_PRICE_PER_1K: f64 = 0.0025;
+
+/// Calculate token cost based on model and token counts.
+/// Uses the per-model table; falls back to a mid-tier estimate for unknown ids.
+pub fn calculate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
+    let (in_price, out_price) = model_prices(model);
     let input_cost = (input_tokens as f64 / 1000.0) * in_price;
     let output_cost = (output_tokens as f64 / 1000.0) * out_price;
     input_cost + output_cost
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::{calculate_cost, model_prices};
+
+    #[test]
+    fn opus_47_is_5x_sonnet_46() {
+        let opus = calculate_cost("claude-opus-4-7", 1000, 1000);
+        let sonnet = calculate_cost("claude-sonnet-4-6", 1000, 1000);
+        // 1k in + 1k out: opus = 0.015 + 0.075 = 0.090; sonnet = 0.003 + 0.015 = 0.018
+        // ratio = 0.090 / 0.018 = 5.0
+        assert!((opus / sonnet - 5.0).abs() < 0.01, "opus={} sonnet={}", opus, sonnet);
+    }
+
+    #[test]
+    fn effort_suffix_is_stripped_for_pricing() {
+        let plain  = calculate_cost("claude-opus-4-7",         1000, 1000);
+        let xhigh  = calculate_cost("claude-opus-4-7::xhigh",  1000, 1000);
+        let max    = calculate_cost("claude-opus-4-7::max",    1000, 1000);
+        // Same per-token price regardless of effort — effort affects token COUNT,
+        // not the rate. The frontend predictor multiplies by iterFactor separately.
+        assert!((plain - xhigh).abs() < 1e-9);
+        assert!((plain - max).abs() < 1e-9);
+    }
+
+    #[test]
+    fn flash_is_much_cheaper_than_pro() {
+        let pro   = model_prices("gemini-3.1-pro-preview");
+        let flash = model_prices("gemini-3.5-flash");
+        assert!(pro.0 > flash.0 * 3.0, "Pro input should cost ≥3× Flash");
+        assert!(pro.1 > flash.1 * 3.0, "Pro output should cost ≥3× Flash");
+    }
+
+    #[test]
+    fn local_and_unknown_models_handled() {
+        assert_eq!(model_prices("local-qwen2.5:7b"), (0.0, 0.0));
+        let nv = model_prices("microsoft/phi-3-mini-4k-instruct");
+        assert!(nv.0 > 0.0 && nv.1 > 0.0);
+        let unknown = model_prices("totally-fake-model-9000");
+        // Fallback to mid-tier, not zero — so we still log a cost estimate.
+        assert!(unknown.0 > 0.0 && unknown.1 > 0.0);
+    }
+
+    #[test]
+    fn legacy_gemini_3_flash_preview_uses_3_5_flash_price() {
+        // The id stays "gemini-3-flash-preview" in old logs, but charges 3.5 rate.
+        let legacy = model_prices("gemini-3-flash-preview");
+        let current = model_prices("gemini-3.5-flash");
+        assert_eq!(legacy, current);
+    }
 }
 
 /// Generate unique ID — nanosecond timestamp + monotonic counter.

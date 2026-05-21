@@ -25,7 +25,7 @@ async function loadPdfLibs() {
     }
     if (!_autoTableLazy) {
         const mod = await import('jspdf-autotable');
-        _autoTableLazy = (mod.default ?? mod) as typeof _autoTableLazy;
+        _autoTableLazy = (mod.default ?? mod) as unknown as typeof _autoTableLazy;
     }
     return { jsPDF: _jsPDFLazy, autoTable: _autoTableLazy! };
 }

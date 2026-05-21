@@ -547,10 +547,10 @@
 
                                         <!-- Inline download UI (PromptGuard 2 from HuggingFace) -->
                                         <div class="dl-box">
-                                            <label style="display:block;font-size:11px;color:var(--txt2);margin-bottom:4px;">
+                                            <label for="hf-token-input" style="display:block;font-size:11px;color:var(--txt2);margin-bottom:4px;">
                                                 {isEN ? 'HuggingFace token (read access to meta-llama/Llama-Prompt-Guard-2-86M):' : 'Token HuggingFace (acceso de lectura a meta-llama/Llama-Prompt-Guard-2-86M):'}
                                             </label>
-                                            <input type="password" bind:value={hfToken} placeholder="hf_..." disabled={downloading}
+                                            <input id="hf-token-input" type="password" bind:value={hfToken} placeholder="hf_..." disabled={downloading}
                                                    style="width:100%;padding:5px 8px;background:#0f1520;border:1px solid var(--bdr);border-radius:4px;color:var(--txt);font-family:var(--mono);font-size:11px;" />
                                             <div style="display:flex;gap:8px;margin-top:6px;align-items:center;">
                                                 <button class="dl-btn" on:click={startDownload} disabled={downloading || !hfToken.trim()}>

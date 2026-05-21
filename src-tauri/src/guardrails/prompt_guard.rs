@@ -29,7 +29,7 @@
 // makes the guardrail STRICTER, never lets bad inputs through that the
 // regex would have blocked.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::Emitter;
 #[cfg(feature = "ml-guard")]
@@ -76,11 +76,11 @@ pub fn status_info() -> StatusInfo {
 
     #[cfg(not(feature = "ml-guard"))]
     {
-        return StatusInfo {
+        StatusInfo {
             status: Status::FeatureDisabled,
             model_path: path_str,
             note: Some("Build without `ml-guard` feature — regex-only guardrail active.".to_string()),
-        };
+        }
     }
 
     #[cfg(feature = "ml-guard")]
@@ -254,7 +254,7 @@ pub async fn download_model(hf_token: &str, app: &tauri::AppHandle) -> Result<St
 async fn download_one_file(
     token: &str,
     filename: &str,
-    dest_dir: &PathBuf,
+    dest_dir: &Path,
     app: &tauri::AppHandle,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
@@ -287,7 +287,7 @@ async fn download_one_file(
         let body = res.text().await.unwrap_or_default();
         let snippet = &body[..body.len().min(200)];
         let msg = match code {
-            401 => format!("HF 401 — token inválido o sin acceso al modelo gated."),
+            401 => "HF 401 — token inválido o sin acceso al modelo gated.".to_string(),
             403 => format!("HF 403 — debes aceptar la licencia en huggingface.co/{} antes de descargar.", HF_REPO),
             404 => format!("HF 404 — archivo {} no encontrado en el repo.", filename),
             _   => format!("HF HTTP {}: {}", code, snippet),

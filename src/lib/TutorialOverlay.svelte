@@ -28,10 +28,66 @@
             tip: 'top',
             view: 'terminal',
             welcome: true,
-            tES: `✦ Bienvenido a Lucy v${LUCY_VERSION}`,
-            tEN: `✦ Welcome to Lucy v${LUCY_VERSION}`,
-            dES: 'Hola — esta es la mayor actualización desde el inicio del proyecto. Cubre <b>seguridad</b>, <b>rendimiento</b>, <b>arquitectura</b> y <b>nueva UX</b>. <br><br>Lo nuevo en v' + LUCY_VERSION + ':<br><br><b>🛡 Seguridad (5 vulnerabilidades estructurales cerradas)</b><br>• <b>WinRM password</b>: ya no se interpola en literal PowerShell — se lee de stdin (cierra S1: inyección PS vía credencial)<br>• <b>SSRF policy</b>: redirect hop-a-hop bloquea cloud-metadata + loopback (cierra S5)<br>• <b>Path traversal Windows</b>: enforce_sensitive_path rechaza UNC verbatim + protege ~/.ssh, AppData\\Lucy, system dirs (cierra S6)<br>• <b>UAC injection</b>: patterns explícitos en blocklist obfstr (cierra S10)<br>• <b>execute_cmd</b>: bypass-token flow consistente con PowerShell (cierra S2)<br>• <b>Guardrails layer</b>: 12 patrones regex + scanner role-aware (User/Tool/Assistant/Secret) — visible en footer 🛡 GUARD<br>• <b>LlamaFirewall Phase 2 (opcional)</b>: PromptGuard 2 ONNX feature-gated — badge 🧠 ML en footer cuando está instalado<br><br><b>🐛 Bug fixes críticos (4)</b><br>• runAI: race-token guard — cerrar tab mid-stream ya no deja CPU residual<br>• optional-chaining en getTab() en 3 callers que crasheaban silenciosamente<br>• 2 interval leaks corregidos (NexShell + scheduled tick HMR)<br><br><b>⚡ Rendimiento (3 wins medibles)</b><br>• Stream throttle: 20fps cap durante revelado → ~50% menos CPU<br>• spawn_blocking para fs reads en async (4 sites) — no más estancamiento del executor<br>• SQLite r2d2 pool (8 connections) — WAL ahora útil, reads paralelos<br>• Bundle: -482 kB raw / -158 kB gzip (Tabler per-icon imports + jspdf lazy)<br><br><b>🏗 Arquitectura (refactor estructural)</b><br>• Per-tab revision stores — granular reactivity en ChatThread (cousin tabs ya no se re-renderizan)<br>• 8 módulos extraídos del monolito +page.svelte: tabs-store, ql-popover, host-preflight, workspace-presets, etc.<br>• MEDIUMs polish: F6 JSON.parse guards, F7 widget cleanup, F9 debounce scroll, F11 debounce LS, F12 metricsHistory dedupe<br><br><b>🌐 Nuevas integraciones</b><br>• <b>Tavily</b> para search_web (AI-summarized, sin scraping, 1k búsquedas/mes gratis) con fallback DDG<br>• <b>Memoria auto-dedup</b> (Mem0-inspired): save_agent_memory detecta duplicados via bm25 + decay scoring con recency boost<br><br><b>✨ UX</b><br>• Autocomplete inline de flags (Tab/Enter) — destructivos al final, ⚠ icon<br>• Settings → Providers carga estado configurado al abrir (era invisible antes)<br>• Tab "🛡 Guardrails" en Settings con status regex + ML<br><br>Vamos a recorrer la interfaz.',
-            dEN: `Hi — this is the biggest update since the project started. Covers <b>security</b>, <b>performance</b>, <b>architecture</b> and <b>new UX</b>. <br><br>What's new in v${LUCY_VERSION}:<br><br><b>🛡 Security (5 structural vulnerabilities closed)</b><br>• <b>WinRM password</b>: no longer interpolated as a PowerShell literal — read from stdin (closes S1: PS injection via stored credential)<br>• <b>SSRF policy</b>: hop-by-hop redirect blocks cloud-metadata + loopback (closes S5)<br>• <b>Windows path traversal</b>: enforce_sensitive_path rejects \\\\?\\\\ UNC + protects ~/.ssh, AppData\\\\Lucy, system dirs (closes S6)<br>• <b>UAC injection</b>: explicit patterns in obfstr blocklist (closes S10)<br>• <b>execute_cmd</b>: bypass-token flow consistent with PowerShell (closes S2)<br>• <b>Guardrails layer</b>: 12 regex patterns + role-aware scanner (User/Tool/Assistant/Secret) — visible in footer 🛡 GUARD<br>• <b>LlamaFirewall Phase 2 (optional)</b>: PromptGuard 2 ONNX feature-gated — 🧠 ML badge in footer when installed<br><br><b>🐛 Critical bug fixes (4)</b><br>• runAI: race-token guard — closing tab mid-stream no longer leaves CPU residual<br>• optional-chaining in getTab() at 3 callers that crashed silently<br>• 2 interval leaks fixed (NexShell + scheduled tick HMR)<br><br><b>⚡ Performance (3 measurable wins)</b><br>• Stream throttle: 20fps cap during reveal → ~50% less CPU<br>• spawn_blocking for fs reads in async (4 sites) — no more executor stalls<br>• SQLite r2d2 pool (8 connections) — WAL finally useful, parallel reads<br>• Bundle: -482 kB raw / -158 kB gzip (Tabler per-icon imports + jspdf lazy)<br><br><b>🏗 Architecture (structural refactor)</b><br>• Per-tab revision stores — granular reactivity in ChatThread (cousin tabs no longer re-render)<br>• 8 modules extracted from +page.svelte monolith: tabs-store, ql-popover, host-preflight, workspace-presets, etc.<br>• MEDIUMs polish: F6 JSON.parse guards, F7 widget cleanup, F9 debounce scroll, F11 debounce LS, F12 metricsHistory dedupe<br><br><b>🌐 New integrations</b><br>• <b>Tavily</b> for search_web (AI-summarized, no scraping, 1k searches/month free) with DDG fallback<br>• <b>Auto-dedup memory</b> (Mem0-inspired): save_agent_memory detects duplicates via bm25 + decay scoring with recency boost<br><br><b>✨ UX</b><br>• Inline flag autocomplete (Tab/Enter) — destructive flags last, ⚠ icon<br>• Settings → Providers loads configured state on open (invisible before)<br>• "🛡 Guardrails" tab in Settings with regex + ML status<br><br>Let's walk through the interface.`,
+            tES: `✦ Bienvenido a Lucy v${LUCY_VERSION} — R&D Frontier`,
+            tEN: `✦ Welcome to Lucy v${LUCY_VERSION} — R&D Frontier`,
+            dES: `Hola Iván — Lucy v${LUCY_VERSION} cruza una frontera real: <b>diez capacidades que ningún otro asistente de IA tiene hoy</b>, todas locales, todas con audit trail.<br><br>` +
+                `<b>🔬 Frontier Capabilities (10/10)</b><br>` +
+                `• <b>F1 Process Lineage</b> — graba el árbol de cada proceso (parent → root) con hash SHA-256 verificable. <code>/help</code> + <code>&lt;TOOL&gt;process_ancestry:PID&lt;/TOOL&gt;</code><br>` +
+                `• <b>F2 State Snapshots</b> — captura estado del sistema cada 15 min y permite diff temporal. <code>/snapshot</code>, <code>/diff</code><br>` +
+                `• <b>F3 Causal Engine</b> — correlaciona arrivals de procesos con síntomas y rankea causas con reasoning. <code>&lt;TOOL&gt;diagnose_spike:60&lt;/TOOL&gt;</code><br>` +
+                `• <b>F4 Self-Healing</b> — recuerda fixes pasados y los propone (con HITL) ante síntomas parecidos. Auto-crystallize en cada incident resuelto.<br>` +
+                `• <b>F5 Sandbox Preview</b> — análisis estático antes de ejecutar destructivos + .wsb config para Windows Sandbox. <code>/preview &lt;cmd&gt;</code><br>` +
+                `• <b>F6 Object Bridge</b> — mantiene PowerShell objects vivos entre turnos; pipeable con un mini-DSL. <code>&lt;TOOL&gt;obj_query:procs | where Mem &gt; 100&lt;/TOOL&gt;</code><br>` +
+                `• <b>F7 Runbook Mining</b> — detecta workflows repetidos y los promueve a skills reusables. <code>/runbooks</code> → <code>/promote-runbook</code><br>` +
+                `• <b>F8 Mini-EDR</b> — clasifica procesos por 7 heurísticos (path/parent/cmdline/entropy/novelty/timing). <code>/preview</code> destructivos<br>` +
+                `• <b>F9 Knowledge Graph</b> — indexa tus repos y aprende qué archivos se tocan juntos. <code>/kg-add</code>, <code>/kg-view &lt;path&gt;</code><br>` +
+                `• <b>F10 Daily Patterns</b> — aprende tus rutinas semanales (Lun 9am → VSCode + Spotify). <code>/routines</code><br>` +
+                `• <b>🔎 Incident Detective</b> — sintetiza F3+F8+F9 en una sola consulta forense. <code>/detective</code><br><br>` +
+                `<b>🎨 UX nueva (10/10)</b><br>` +
+                `• <b>Living Avatar</b> — Lucy ahora respira (idle), pulsa cyan al pensar, brilla dorado al ejecutar, ámbar al preocuparse.<br>` +
+                `• <b>Density Modes</b> — Ctrl+1 (focus) · Ctrl+2 (explore) · Ctrl+3 (war room).<br>` +
+                `• <b>Chapter View</b> — investigaciones multi-paso se renderizan como un libro con índice navegable.<br>` +
+                `• <b>Predictive Chips</b> — sugerencias contextuales arriba del input según el último turno.<br>` +
+                `• <b>Drag-to-Lucy</b> — arrastra URLs, texto, imágenes, archivos: Lucy infiere qué hacer.<br>` +
+                `• <b>Tab Hover Preview</b> — pasa el mouse sobre una pestaña >500ms y ves los últimos mensajes.<br>` +
+                `• <b>Heat Layers</b> — overlays de severidad/recencia en listas de procesos y archivos.<br>` +
+                `• <b>Confidence Markers v2</b> — Lucy distingue [!hechos!], [~hedges~], [?especulaciones?] visualmente.<br>` +
+                `• <b>Circadian Theme</b> — los acentos se enfrían suavemente de día a noche.<br>` +
+                `• <b>Skill Picker</b> — <code>/skills</code> abre un modal con búsqueda fuzzy.<br><br>` +
+                `<b>📊 Telemetría interna</b><br>` +
+                `<code>/frontier-stats</code> muestra qué Frontier tools usaste, cuánto duraron, y error rate. 100% local.<br><br>` +
+                `<b>🏆 Numbers</b><br>` +
+                `103 tests passing · 9 stress tests · ~8,300 LOC R&D · 36 Tauri commands Frontier · 0 deuda técnica visible.<br><br>` +
+                `Vamos a recorrer la interfaz — y después un apartado dedicado a los <b>comandos internos</b>.`,
+            dEN: `Hi Iván — Lucy v${LUCY_VERSION} crosses a real frontier: <b>ten capabilities that no other AI assistant has today</b>, all local, all with an audit trail.<br><br>` +
+                `<b>🔬 Frontier Capabilities (10/10)</b><br>` +
+                `• <b>F1 Process Lineage</b> — records every process's parent chain (current → root) with verifiable SHA-256 hash.<br>` +
+                `• <b>F2 State Snapshots</b> — captures system state every 15 min and lets you diff over time. <code>/snapshot</code>, <code>/diff</code><br>` +
+                `• <b>F3 Causal Engine</b> — correlates process arrivals with symptoms and ranks causes with explainable reasoning.<br>` +
+                `• <b>F4 Self-Healing</b> — recalls past fixes and proposes them (with HITL) on similar symptoms. Auto-crystallizes resolved incidents.<br>` +
+                `• <b>F5 Sandbox Preview</b> — static analysis before destructive commands + .wsb config for Windows Sandbox. <code>/preview &lt;cmd&gt;</code><br>` +
+                `• <b>F6 Object Bridge</b> — keeps PowerShell objects alive across turns, pipeable with a small DSL.<br>` +
+                `• <b>F7 Runbook Mining</b> — detects repeated workflows and promotes them to reusable skills.<br>` +
+                `• <b>F8 Mini-EDR</b> — classifies processes by 7 behavioral heuristics (path/parent/cmdline/entropy/novelty/timing).<br>` +
+                `• <b>F9 Knowledge Graph</b> — indexes your repos and learns which files are touched together. <code>/kg-add</code>, <code>/kg-view</code><br>` +
+                `• <b>F10 Daily Patterns</b> — learns your weekly routines (Mon 9am → VSCode + Spotify). <code>/routines</code><br>` +
+                `• <b>🔎 Incident Detective</b> — synthesizes F3+F8+F9 into a single forensic query. <code>/detective</code><br><br>` +
+                `<b>🎨 New UX (10/10)</b><br>` +
+                `• <b>Living Avatar</b> — Lucy now breathes (idle), pulses cyan when thinking, glows gold when executing, amber when concerned.<br>` +
+                `• <b>Density Modes</b> — Ctrl+1 (focus) · Ctrl+2 (explore) · Ctrl+3 (war room).<br>` +
+                `• <b>Chapter View</b> — multi-step investigations render as a book with a navigable index.<br>` +
+                `• <b>Predictive Chips</b> — contextual suggestions above the input based on the last turn.<br>` +
+                `• <b>Drag-to-Lucy</b> — drag URLs, text, images, files: Lucy infers what to do.<br>` +
+                `• <b>Tab Hover Preview</b> — hover over a tab >500ms to see the last messages.<br>` +
+                `• <b>Heat Layers</b> — severity/recency overlays on process and file lists.<br>` +
+                `• <b>Confidence Markers v2</b> — Lucy visually distinguishes [!facts!], [~hedges~], [?speculation?].<br>` +
+                `• <b>Circadian Theme</b> — accents subtly cool from day to night.<br>` +
+                `• <b>Skill Picker</b> — <code>/skills</code> opens a modal with fuzzy search.<br><br>` +
+                `<b>📊 Internal telemetry</b><br>` +
+                `<code>/frontier-stats</code> shows which Frontier tools you used, how long they took, and error rate. 100% local.<br><br>` +
+                `<b>🏆 Numbers</b><br>` +
+                `103 tests passing · 9 stress tests · ~8,300 LOC R&D · 36 Tauri Frontier commands · 0 visible tech debt.<br><br>` +
+                `Let's walk through the interface — and we'll wrap up with a dedicated <b>internal commands</b> reference.`,
         },
         {
             sel: ['.chat-wrap.on .chat-area', '.chat-wrap.on', '.panel'],
@@ -81,6 +137,96 @@
             tEN: '◉ Audit Trail — Accountability',
             dES: 'Cada comando ejecutado, cada skill invocado y cada decisión del agente queda registrado con timestamp, usuario, host destino y resultado. Exporta a PDF para auditorías SOX, ISO 27001 o evidencia forense.',
             dEN: 'Every executed command, invoked skill and agent decision is logged with timestamp, user, target host and result. Export to PDF for SOX, ISO 27001 audits or forensic evidence.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Compliance"]', '.sidebar .sb-it[title*="ompliance"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'compliance',
+            tES: '⬡ Compliance — CIS Benchmarks',
+            tEN: '⬡ Compliance — CIS Benchmarks',
+            dES: 'Evalúa cada host contra los <b>CIS Benchmarks</b> (Center for Internet Security) para Windows Server, Ubuntu y RHEL. Cada control muestra <b>PASS / FAIL / N/A</b> con su evidencia y el comando de remediación. Exporta reportes PDF para auditores.',
+            dEN: 'Evaluate each host against <b>CIS Benchmarks</b> (Center for Internet Security) for Windows Server, Ubuntu and RHEL. Each control shows <b>PASS / FAIL / N/A</b> with its evidence and remediation command. Export PDF reports for auditors.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Memory"]', '.sidebar .sb-it[title*="emoria"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'memory',
+            tES: '◊ Explorador de Memoria',
+            tEN: '◊ Memory Browser',
+            dES: 'Visualiza todo lo que Lucy ha aprendido: hechos sobre tu infraestructura, comandos enseñados, preferencias, principios y <b>healing-patterns</b> auto-cristalizados desde incidentes resueltos. Filtra por tag, edita o elimina entradas. Persiste en SQLite con búsqueda de texto completo.',
+            dEN: 'Browse everything Lucy has learned: infrastructure facts, taught commands, preferences, principles and <b>healing-patterns</b> auto-crystallized from resolved incidents. Filter by tag, edit or delete entries. Persisted in SQLite with full-text search.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Capacity"]', '.sidebar .sb-it[title*="apacidad"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'capacity',
+            tES: '↗ Capacity Planning',
+            tEN: '↗ Capacity Planning',
+            dES: 'Proyección de uso de recursos basada en tendencias históricas. Lucy estima cuánto te queda de disco, RAM o CPU al ritmo actual de crecimiento, y avisa cuando un host se acerca al límite. Útil para presupuestar hardware con datos en mano.',
+            dEN: 'Resource usage projection based on historical trends. Lucy estimates how much disk, RAM or CPU you have left at the current growth rate, and warns when a host approaches its limit. Useful for hardware budgeting with hard data.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Diagn"]', '.sidebar .sb-it[title*="iagnostic"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'diagnostics',
+            tES: '⚕ Self-Diagnostics',
+            tEN: '⚕ Self-Diagnostics',
+            dES: 'Lucy se inspecciona a sí misma: estado del pool SQLite, salud de la cola de embeddings, MCP servers conectados, integridad del audit chain, espacio de la DB local, y health checks de cada feature Frontier. Si algo falla en Lucy, esta vista lo muestra primero.',
+            dEN: 'Lucy inspects herself: SQLite pool health, embeddings queue, connected MCP servers, audit chain integrity, local DB size, and health checks for every Frontier feature. If anything in Lucy is wrong, this view shows it first.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="permission"]', '.sidebar .sb-it[title*="ermiso"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'terminal',
+            tES: '🛡 Permisos — Reglas allow/block/ask',
+            tEN: '🛡 Permissions — allow/block/ask rules',
+            dES: 'Define <b>reglas regex</b> que decide Lucy antes de ejecutar cualquier comando o tocar cualquier ruta: <code>allow</code> (sin preguntar), <code>block</code> (rechazar), <code>ask</code> (HITL obligatorio). Cada regla tiene scope (comando, path, host) y registro de quién la creó. Es la primera barrera ante errores accidentales y la base del HITL universal.',
+            dEN: 'Define <b>regex rules</b> Lucy checks before running any command or touching any path: <code>allow</code> (no prompt), <code>block</code> (reject), <code>ask</code> (HITL required). Each rule has a scope (command, path, host) and an author log. First line of defense against accidental damage and the foundation of universal HITL.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="rinciple"]', '.sidebar .sb-it[title*="rincipi"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'terminal',
+            tES: '◈ Principios — Reglas que Lucy sigue',
+            tEN: '◈ Principles — Rules Lucy follows',
+            dES: 'Reglas de alto nivel que <b>siempre acompañan</b> al prompt del agente. Ejemplos: "Nunca tocar producción sin confirmación", "Si hay error de DNS, intenta resolver con 8.8.8.8 antes de escalarlo", "Prefiere PowerShell nativo sobre choco install". Son las máximas que Lucy nunca olvida.',
+            dEN: 'High-level rules that <b>always travel</b> with the agent prompt. Examples: "Never touch production without confirmation", "On DNS errors, try resolving with 8.8.8.8 before escalating", "Prefer native PowerShell over choco install". The maxims Lucy never forgets.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="Scheduled"]', '.sidebar .sb-it[title*="rogramad"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'terminal',
+            tES: '⏰ Programadas — Tareas recurrentes',
+            tEN: '⏰ Scheduled tasks',
+            dES: 'Lanza skills, runbooks o comandos en <b>cron</b> o intervalos: "verifica salud de servidores cada lunes 7am", "rota logs diarios", "scan de threats cada hora". Lucy registra cada ejecución en el audit trail. Los disparadores también pueden ser eventos (anomaly detected, incident opened).',
+            dEN: 'Launch skills, runbooks or commands on <b>cron</b> or intervals: "check server health every Monday 7am", "rotate logs daily", "threat scan every hour". Lucy logs each run in the audit trail. Triggers can also be events (anomaly detected, incident opened).',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="ub-Agent"]', '.sidebar .sb-it[title*="ub-Agent"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'terminal',
+            tES: '⊞ Sub-Agentes — Fork / Wait',
+            tEN: '⊞ Sub-Agents — Fork / Wait',
+            dES: 'Lucy puede <b>lanzar sub-tareas en paralelo</b> con <code>&lt;TOOL&gt;fork_task&lt;/TOOL&gt;</code> y esperar sus resultados con <code>&lt;TOOL&gt;wait_task&lt;/TOOL&gt;</code>. Útil para investigar 4 hosts simultáneamente o probar 3 hipótesis en paralelo. Este panel muestra forks activos y su output en tiempo real.',
+            dEN: 'Lucy can <b>fan out parallel sub-tasks</b> with <code>&lt;TOOL&gt;fork_task&lt;/TOOL&gt;</code> and gather their results via <code>&lt;TOOL&gt;wait_task&lt;/TOOL&gt;</code>. Useful for investigating 4 hosts simultaneously or testing 3 hypotheses in parallel. This panel shows active forks and their live output.',
+        },
+        {
+            sel: ['.sidebar .sb-it[title*="PDF"]', '.sidebar .sb-it[title*="ngest manual"]'],
+            fallback: '.sidebar',
+            tip: 'right',
+            view: 'terminal',
+            tES: '📕 PDF Intelligence',
+            tEN: '📕 PDF Intelligence',
+            dES: 'Arrastra manuales, RFPs, runbooks de proveedores o documentación de hardware en PDF — Lucy los ingiere, los <b>indexa por chunks</b>, y los expone como herramienta de búsqueda semántica (<code>&lt;TOOL&gt;pdf_search:query&lt;/TOOL&gt;</code>). Convierte tus PDF en conocimiento accionable.',
+            dEN: 'Drop vendor manuals, RFPs, runbooks or hardware docs as PDF — Lucy ingests, <b>chunks-indexes</b>, and exposes them as a semantic search tool (<code>&lt;TOOL&gt;pdf_search:query&lt;/TOOL&gt;</code>). Turn your PDFs into actionable knowledge.',
         },
         {
             // BUG FIX: previous selectors used S-capital "Skills" but the actual
@@ -168,8 +314,85 @@
             welcome: true,
             tES: '✦ Atajos esenciales',
             tEN: '✦ Essential shortcuts',
-            dES: '<b>Ctrl+P</b> · Paleta de comandos (busca cualquier vista, host o acción) — incluye <b>Exportar pestaña como Notebook</b>.<br><b>Ctrl+T</b> · Nueva terminal.<br><b>Ctrl+L</b> · Limpiar sesión actual.<br><b>Ctrl+F</b> · Buscar en NexShell.<br><b>Ctrl+Shift+Enter</b> · Ejecutar en background.<br><b>Tab</b> · Autocompletar comandos.<br><b>Esc</b> · Cancelar el agente o cerrar modal.',
-            dEN: '<b>Ctrl+P</b> · Command palette (find any view, host or action) — includes <b>Export tab as Notebook</b>.<br><b>Ctrl+T</b> · New terminal.<br><b>Ctrl+L</b> · Clear current session.<br><b>Ctrl+F</b> · Find in NexShell.<br><b>Ctrl+Shift+Enter</b> · Run in background.<br><b>Tab</b> · Autocomplete commands.<br><b>Esc</b> · Cancel the agent or close modal.',
+            dES: '<b>Ctrl+P</b> · Paleta de comandos (busca cualquier vista, host o acción) — incluye <b>Exportar pestaña como Notebook</b>.<br><b>Ctrl+T</b> · Nueva terminal.<br><b>Ctrl+L</b> · Limpiar sesión actual.<br><b>Ctrl+F</b> · Buscar en NexShell.<br><b>Ctrl+Shift+Enter</b> · Ejecutar en background.<br><b>Tab</b> · Autocompletar comandos.<br><b>Esc</b> · Cancelar el agente o cerrar modal.<br><br><b>NUEVO en v' + LUCY_VERSION + '</b>: <b>Ctrl+1/2/3</b> para alternar densidad (Focus / Explore / War Room).',
+            dEN: '<b>Ctrl+P</b> · Command palette (find any view, host or action) — includes <b>Export tab as Notebook</b>.<br><b>Ctrl+T</b> · New terminal.<br><b>Ctrl+L</b> · Clear current session.<br><b>Ctrl+F</b> · Find in NexShell.<br><b>Ctrl+Shift+Enter</b> · Run in background.<br><b>Tab</b> · Autocomplete commands.<br><b>Esc</b> · Cancel the agent or close modal.<br><br><b>NEW in v' + LUCY_VERSION + '</b>: <b>Ctrl+1/2/3</b> to toggle density (Focus / Explore / War Room).',
+        },
+        {
+            // ── Comandos internos / Internal commands ──
+            // Final step de la introducción a v1.7.0 — referencia rápida de
+            // los slash commands Frontier que el usuario puede teclear en cualquier
+            // momento. Welcome card (no spotlight) para que se vea cómoda de leer.
+            sel: ['body'],
+            fallback: 'body',
+            tip: 'top',
+            view: 'terminal',
+            welcome: true,
+            tES: '✦ Comandos internos · Referencia rápida',
+            tEN: '✦ Internal commands · Quick reference',
+            dES: `Todos estos se escriben en el input del chat. <b>Lucy también los puede usar autónomamente</b> vía <code>&lt;TOOL&gt;</code> tags durante el agent loop.<br><br>` +
+                `<b>📸 Observación temporal (F1 · F2 · F9)</b><br>` +
+                `<code>/snapshot</code> — captura el estado del sistema ahora<br>` +
+                `<code>/snapshots</code> — lista los snapshots recientes<br>` +
+                `<code>/diff [from to]</code> — compara dos snapshots (sin args: últimos 2)<br>` +
+                `<code>/kg-add &lt;dir&gt;</code> — añade un directorio al Knowledge Graph<br>` +
+                `<code>/kg-rm &lt;dir&gt;</code> — quita un directorio del KG<br>` +
+                `<code>/kg-roots</code> — lista los directorios indexados<br>` +
+                `<code>/kg-scan [lookback_min]</code> — fuerza un scan inmediato<br>` +
+                `<code>/kg-view &lt;path&gt;</code> — abre el grafo radial centrado en ese archivo<br><br>` +
+                `<b>🔎 Investigación (F3 · F8 · synthesis)</b><br>` +
+                `<code>/detective [seconds]</code> — investiga la ventana actual con F3+F8+F9 (alias: <code>/investigate</code>)<br><br>` +
+                `<b>🧠 Memoria y aprendizaje (F4 · F7 · F10)</b><br>` +
+                `<code>/runbooks [days]</code> — detecta workflows repetidos (alias: <code>/workflows</code>)<br>` +
+                `<code>/promote-runbook &lt;name&gt; :: &lt;cmd1&gt; ; &lt;cmd2&gt; ; ...</code> — convierte un runbook en skill<br>` +
+                `<code>/routines [days]</code> — aprende tus rutinas semanales (alias: <code>/patterns</code>)<br>` +
+                `<code>/skills</code> — abre el picker con búsqueda fuzzy (alias: <code>/skill-list</code>)<br><br>` +
+                `<b>🛡 Seguridad y preview (F5)</b><br>` +
+                `<code>/preview &lt;cmd&gt;</code> — análisis estático + .wsb opcional (alias: <code>/sandbox</code>)<br><br>` +
+                `<b>📊 Introspección</b><br>` +
+                `<code>/frontier-stats</code> — qué Frontier features usas más (alias: <code>/telemetry</code>)<br>` +
+                `<code>/recall &lt;query&gt;</code> — busca en tu historial de conversación<br>` +
+                `<code>/crystallize</code> — destila la sesión actual en un crystal<br>` +
+                `<code>/insights</code> — lista los insights destilados<br>` +
+                `<code>/route</code> — explica la última decisión del smart-router<br><br>` +
+                `<b>🎛 Configuración / utilidades</b><br>` +
+                `<code>/help</code> — lista completa<br>` +
+                `<code>/model &lt;nombre&gt;</code> — cambia modelo (parcial OK: "sonnet", "qwen", "flash")<br>` +
+                `<code>/theme &lt;nombre&gt;</code> — default, ocean, hacker, sunset, forest, twilight, mocha, graphite<br>` +
+                `<code>/smart-router on|off</code> · <code>/privacy on|off</code><br>` +
+                `<code>/clear</code> — limpia el chat actual<br><br>` +
+                `<b>Tip</b>: hover sobre una pestaña >500ms para ver un preview de sus últimos mensajes sin cambiar de tab.`,
+            dEN: `All of these are typed in the chat input. <b>Lucy can also use them autonomously</b> via <code>&lt;TOOL&gt;</code> tags during the agent loop.<br><br>` +
+                `<b>📸 Temporal observation (F1 · F2 · F9)</b><br>` +
+                `<code>/snapshot</code> — capture system state now<br>` +
+                `<code>/snapshots</code> — list recent snapshots<br>` +
+                `<code>/diff [from to]</code> — compare two snapshots (no args: last 2)<br>` +
+                `<code>/kg-add &lt;dir&gt;</code> — add a directory to the Knowledge Graph<br>` +
+                `<code>/kg-rm &lt;dir&gt;</code> — remove a directory from the KG<br>` +
+                `<code>/kg-roots</code> — list indexed directories<br>` +
+                `<code>/kg-scan [lookback_min]</code> — force an immediate scan<br>` +
+                `<code>/kg-view &lt;path&gt;</code> — open the radial graph centered on this file<br><br>` +
+                `<b>🔎 Investigation (F3 · F8 · synthesis)</b><br>` +
+                `<code>/detective [seconds]</code> — investigates current window with F3+F8+F9 (alias: <code>/investigate</code>)<br><br>` +
+                `<b>🧠 Memory and learning (F4 · F7 · F10)</b><br>` +
+                `<code>/runbooks [days]</code> — detects repeated workflows (alias: <code>/workflows</code>)<br>` +
+                `<code>/promote-runbook &lt;name&gt; :: &lt;cmd1&gt; ; &lt;cmd2&gt; ; ...</code> — turn a runbook into a skill<br>` +
+                `<code>/routines [days]</code> — learn your weekly routines (alias: <code>/patterns</code>)<br>` +
+                `<code>/skills</code> — open the fuzzy-search picker (alias: <code>/skill-list</code>)<br><br>` +
+                `<b>🛡 Safety and preview (F5)</b><br>` +
+                `<code>/preview &lt;cmd&gt;</code> — static analysis + optional .wsb (alias: <code>/sandbox</code>)<br><br>` +
+                `<b>📊 Introspection</b><br>` +
+                `<code>/frontier-stats</code> — which Frontier features you use most (alias: <code>/telemetry</code>)<br>` +
+                `<code>/recall &lt;query&gt;</code> — search your conversation history<br>` +
+                `<code>/crystallize</code> — distill the current session into a crystal<br>` +
+                `<code>/insights</code> — list distilled insights<br>` +
+                `<code>/route</code> — explain the last smart-router decision<br><br>` +
+                `<b>🎛 Settings / utilities</b><br>` +
+                `<code>/help</code> — full list<br>` +
+                `<code>/model &lt;name&gt;</code> — switch model (partial OK: "sonnet", "qwen", "flash")<br>` +
+                `<code>/theme &lt;name&gt;</code> — default, ocean, hacker, sunset, forest, twilight, mocha, graphite<br>` +
+                `<code>/smart-router on|off</code> · <code>/privacy on|off</code><br>` +
+                `<code>/clear</code> — clear current chat<br><br>` +
+                `<b>Tip</b>: hover a tab >500ms to preview its last messages without switching.`,
         }
     ];
 
@@ -229,6 +452,15 @@
         }
         if (!el && c.fallback) el = document.querySelector(c.fallback);
         if (el) {
+            // Sprint follow-up — auto-scroll target into view BEFORE measuring,
+            // so steps near the bottom of a scroll container (sidebar, dashboard)
+            // bring their target up to the safe area of the viewport.
+            try {
+                el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+            } catch {
+                // Older browsers don't accept 'instant' — fall back to default.
+                try { el.scrollIntoView(); } catch {}
+            }
             const r    = el.getBoundingClientRect();
             const pad  = 10;
             // padY: per-step vertical inflation. Useful for very thin
@@ -249,44 +481,55 @@
     }
 
     // ── Tooltip positioning — clamps fully inside viewport ──────────────────
-    // TW/TH are conservative max estimates; CSS also enforces max-height+scroll
+    //
+    // Strategy v2 (fixes the "Comandos internos" step being cut off at the
+    // bottom): we anchor the card at a SAFE top and let the CSS
+    // `max-height: calc(100vh - 28px)` + `.tut-body { overflow-y: auto }`
+    // guarantee the navigation footer is always visible. We DO NOT try to
+    // guess the actual height — we just place the card so the bottom is at
+    // most `h - p` away from the viewport edge.
     function tipStyle(s, w, h) {
         const TW  = 320;
-        const TH  = 340;   // conservative upper bound — CSS max-height handles overflow
+        const p   = 14;
+        // Effective max card height = full viewport minus margins.
+        const TH_MAX = h - p * 2;
+        // Welcome steps want a generous height so all content shows above the fold.
+        // Step-bound tooltips want a tighter card so they don't cover the target.
+        const TH_PREFERRED = (STEPS[step] || STEPS[0])?.welcome ? Math.min(640, TH_MAX) : Math.min(420, TH_MAX);
         const pos = (STEPS[step] || STEPS[0]).tip;
         const cx  = s.x + s.w / 2;
         const cy  = s.y + s.h / 2;
-        const p   = 14;
+
+        const clampTop = (raw) => Math.max(p, Math.min(raw, h - TH_PREFERRED - p));
 
         // Welcome / overview steps: center the card horizontally + vertically.
         if (s.welcome) {
             const left = Math.max(p, w / 2 - TW / 2);
-            const top  = Math.max(p, h / 2 - TH / 2);
-            return `left:${left}px;top:${top}px;`;
+            const top  = Math.max(p, h / 2 - TH_PREFERRED / 2);
+            return `left:${left}px;top:${top}px;max-height:${TH_PREFERRED}px;`;
         }
 
         if (pos === 'right') {
             const left = Math.min(s.x + s.w + p, w - TW - p);
-            const top  = Math.max(p, Math.min(cy - TH / 2, h - TH - p));
-            return `left:${left}px;top:${top}px;`;
+            const top  = clampTop(cy - TH_PREFERRED / 2);
+            return `left:${left}px;top:${top}px;max-height:${TH_PREFERRED}px;`;
         }
         if (pos === 'left') {
             const left = Math.max(p, s.x - TW - p);
-            const top  = Math.max(p, Math.min(cy - TH / 2, h - TH - p));
-            return `left:${left}px;top:${top}px;`;
+            const top  = clampTop(cy - TH_PREFERRED / 2);
+            return `left:${left}px;top:${top}px;max-height:${TH_PREFERRED}px;`;
         }
         if (pos === 'bottom') {
             const left = Math.max(p, Math.min(cx - TW / 2, w - TW - p));
-            const top  = Math.min(s.y + s.h + p, h - TH - p);
-            return `left:${left}px;top:${top}px;`;
+            const top  = clampTop(s.y + s.h + p);
+            return `left:${left}px;top:${top}px;max-height:${TH_PREFERRED}px;`;
         }
         // 'top' — show tooltip ABOVE the spotlight; force above if spotlight is near bottom
-        const left  = Math.max(p, Math.min(cx - TW / 2, w - TW - p));
-        // If element is in bottom 40% of screen, always show above it
-        const above = s.y - TH - p;
+        const left = Math.max(p, Math.min(cx - TW / 2, w - TW - p));
+        const above = s.y - TH_PREFERRED - p;
         const below = s.y + s.h + p;
-        const top   = above >= p ? above : Math.max(p, below);
-        return `left:${left}px;top:${top}px;`;
+        const top  = above >= p ? above : clampTop(below);
+        return `left:${left}px;top:${top}px;max-height:${TH_PREFERRED}px;`;
     }
 
     // ── Navigation ──────────────────────────────────────────────────────────

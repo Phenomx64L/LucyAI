@@ -99,6 +99,117 @@ fn extract_tokens_gemini(json: &serde_json::Value) -> Option<(u32, u32)> {
     Some((input, output))
 }
 
+/// Resolve a Gemini model selection into:
+///   1. The REAL model id Google's API expects (no "::effort" suffix)
+///   2. An optional `generationConfig` JSON object containing the right
+///      `thinkingConfig.thinkingLevel` value
+///
+/// Lucy exposes Gemini 3.x Pro as two dropdown entries — "::high" and
+/// "::medium" — so the user picks how much reasoning budget to spend BEFORE
+/// sending the prompt. This helper strips the suffix and produces the
+/// matching generationConfig.
+///
+/// For non-Pro models, or Pro without an explicit suffix, returns the model
+/// id unchanged and `None` (Google then picks its default thinking budget).
+///
+/// Also handles the legacy alias `gemini-3-flash-preview` → `gemini-3.5-flash`
+/// so old saved chats keep working after the May 2026 lineup refresh.
+fn resolve_gemini_model(raw_model: &str) -> (String, Option<serde_json::Value>) {
+    // Legacy alias — silently upgrade old chats to the GA model.
+    if raw_model == "gemini-3-flash-preview" {
+        return ("gemini-3.5-flash".to_string(), None);
+    }
+
+    // Effort suffix: "<id>::low" | "<id>::medium" | "<id>::high"
+    if let Some((base, effort)) = raw_model.split_once("::") {
+        let level = match effort.trim().to_lowercase().as_str() {
+            "low" | "bajo" => Some("low"),
+            "medium" | "med" | "medio" | "balanced" => Some("medium"),
+            "high" | "alto" | "deep" => Some("high"),
+            _ => None,
+        };
+        if let Some(lvl) = level {
+            let cfg = serde_json::json!({
+                "thinkingConfig": { "thinkingLevel": lvl }
+            });
+            return (base.to_string(), Some(cfg));
+        }
+        // Unrecognized suffix — strip it but don't add a config (safer than
+        // sending an unknown thinkingLevel to Google).
+        return (base.to_string(), None);
+    }
+
+    (raw_model.to_string(), None)
+}
+
+/// Merge an optional generationConfig into the given Gemini payload.
+/// If `cfg` is None, the payload is left untouched. If the payload already
+/// has a generationConfig, the keys are merged (cfg wins on conflicts).
+fn apply_gemini_generation_config(payload: &mut serde_json::Value, cfg: Option<serde_json::Value>) {
+    let Some(extra) = cfg else { return };
+    let Some(extra_obj) = extra.as_object().cloned() else { return };
+    let map = payload.as_object_mut();
+    let Some(map) = map else { return };
+    let entry = map.entry("generationConfig".to_string()).or_insert_with(|| serde_json::json!({}));
+    if let Some(existing) = entry.as_object_mut() {
+        for (k, v) in extra_obj { existing.insert(k, v); }
+    }
+}
+
+/// Resolve a Claude (Anthropic) model selection into:
+///   1. The REAL model id Anthropic's API expects (no "::effort" suffix)
+///   2. The effort string to send as `output_config.effort` — None when the
+///      model doesn't support effort, the suffix is missing, or it's invalid
+///
+/// Per platform.claude.com/docs/en/build-with-claude/effort:
+///   • Opus 4.7    accepts: low | medium | high | xhigh | max
+///   • Sonnet 4.6  accepts: low | medium | high | max     (no xhigh)
+///   • Opus 4.5    accepts: low | medium | high | max
+///   • Mythos      accepts: low | medium | high | max
+///   • Haiku 4.5   does NOT support effort
+///
+/// We accept multilingual aliases (alto/medio/bajo) for parity with the
+/// Gemini resolver, and silently strip unsupported suffixes (e.g.
+/// `claude-haiku-4-5::high` → just `claude-haiku-4-5` with no effort).
+fn resolve_anthropic_model(raw_model: &str) -> (String, Option<&'static str>) {
+    let Some((base, effort_raw)) = raw_model.split_once("::") else {
+        return (raw_model.to_string(), None);
+    };
+    let effort = match effort_raw.trim().to_lowercase().as_str() {
+        "low"   | "bajo"                       => Some("low"),
+        "medium"| "med"  | "medio" | "balanced"=> Some("medium"),
+        "high"  | "alto"                       => Some("high"),
+        "xhigh" | "x-high" | "extra-alto" | "extra-high" | "extra"
+                                               => Some("xhigh"),
+        "max"   | "maximo" | "máximo"          => Some("max"),
+        _ => None,
+    };
+    // Per-model whitelist of accepted effort values.
+    let supported: &[&str] = match base {
+        "claude-opus-4-7"   => &["low", "medium", "high", "xhigh", "max"],
+        "claude-sonnet-4-6" => &["low", "medium", "high",          "max"],
+        "claude-opus-4-5"   => &["low", "medium", "high",          "max"],
+        // Haiku / older models: no effort param at all.
+        _ => &[],
+    };
+    let final_effort = match effort {
+        Some(e) if supported.contains(&e) => Some(e),
+        _ => None, // unsupported combination — strip the suffix defensively
+    };
+    (base.to_string(), final_effort)
+}
+
+/// Merge `output_config.effort` into a Claude (Anthropic) payload.
+/// No-op when `effort` is None or the payload isn't an object.
+fn apply_anthropic_output_config(payload: &mut serde_json::Value, effort: Option<&str>) {
+    let Some(level) = effort else { return };
+    let Some(map) = payload.as_object_mut() else { return };
+    let entry = map.entry("output_config".to_string()).or_insert_with(|| serde_json::json!({}));
+    if let Some(existing) = entry.as_object_mut() {
+        existing.insert("effort".to_string(), serde_json::Value::String(level.to_string()));
+    }
+}
+
 // ── MAX TOKENS por modelo ────────────────────────────────────────────────────
 /// Devuelve el max_tokens óptimo para cada modelo de Anthropic.
 /// Si se pasa un override > 0, lo usa directamente (escalación por truncamiento).
@@ -653,8 +764,13 @@ pub async fn ask_lucy(
             HTTP_CLIENT.post(&api_key).json(&payload)
         },
         "anthropic" => {
-            let max_tok = get_max_tokens(&model, max_tokens_override);
-            let payload = json!({ "model": model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}] });
+            // Resolve "<id>::effort" → (clean_id, effort). The suffix only
+            // affects Opus 4.7 / Sonnet 4.6 / Opus 4.5; on Haiku/Sonnet 4.5
+            // the effort is stripped silently (model doesn't accept it).
+            let (clean_model, effort) = resolve_anthropic_model(&model);
+            let max_tok = get_max_tokens(&clean_model, max_tokens_override);
+            let mut payload = json!({ "model": clean_model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}] });
+            apply_anthropic_output_config(&mut payload, effort);
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -665,9 +781,12 @@ pub async fn ask_lucy(
             if let Some(imgs) = images {
                 for img in imgs { parts.push(json!({ "inlineData": { "mimeType": img["mimeType"], "data": img["data"] } })); }
             }
-            let payload = json!({ "contents": [{ "parts": parts }] });
+            // Resolve "<id>::effort" → (clean_id, generationConfig)
+            let (clean_model, gen_cfg) = resolve_gemini_model(&model);
+            let mut payload = json!({ "contents": [{ "parts": parts }] });
+            apply_gemini_generation_config(&mut payload, gen_cfg);
             // SECURITY: use x-goog-api-key header instead of ?key= query param
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model);
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", clean_model);
             HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
     };
@@ -823,8 +942,10 @@ pub async fn ask_lucy_stream(
             HTTP_CLIENT.post(&api_key).json(&payload)
         },
         "anthropic" => {
-            let max_tok = get_max_tokens(&model, max_tokens_override);
-            let payload = json!({ "model": model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
+            let (clean_model, effort) = resolve_anthropic_model(&model);
+            let max_tok = get_max_tokens(&clean_model, max_tokens_override);
+            let mut payload = json!({ "model": clean_model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
+            apply_anthropic_output_config(&mut payload, effort);
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -835,9 +956,14 @@ pub async fn ask_lucy_stream(
             if let Some(imgs) = images {
                 for img in imgs { parts.push(json!({ "inlineData": { "mimeType": img["mimeType"], "data": img["data"] } })); }
             }
-            let payload = json!({ "contents": [{ "parts": parts }] });
+            // Resolve "<id>::effort" → (clean_id, generationConfig). The
+            // effort suffix only affects Pro (3.1+) where it maps to
+            // thinkingConfig.thinkingLevel; other models ignore it.
+            let (clean_model, gen_cfg) = resolve_gemini_model(&model);
+            let mut payload = json!({ "contents": [{ "parts": parts }] });
+            apply_gemini_generation_config(&mut payload, gen_cfg);
             // SECURITY: API key in header, not query string
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse", model);
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse", clean_model);
             HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
     };
@@ -1024,15 +1150,19 @@ REGLAS:
                 .json(&payload)
         },
         "anthropic" => {
-            let payload = serde_json::json!({ "model": model, "max_tokens": 1024, "messages": [{"role": "user", "content": sys_prompt}] });
+            let (clean_model, effort) = resolve_anthropic_model(&model);
+            let mut payload = serde_json::json!({ "model": clean_model, "max_tokens": 1024, "messages": [{"role": "user", "content": sys_prompt}] });
+            apply_anthropic_output_config(&mut payload, effort);
             crate::state::HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
                 .json(&payload)
         },
         _ => { // gemini — SECURITY: key in header, not URL
-            let payload = serde_json::json!({ "contents": [{ "parts": [{"text": sys_prompt}] }] });
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model);
+            let (clean_model, gen_cfg) = resolve_gemini_model(&model);
+            let mut payload = serde_json::json!({ "contents": [{ "parts": [{"text": sys_prompt}] }] });
+            apply_gemini_generation_config(&mut payload, gen_cfg);
+            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", clean_model);
             crate::state::HTTP_CLIENT.post(&url).header("x-goog-api-key", &*api_key).json(&payload)
         }
     };
@@ -1150,4 +1280,163 @@ pub async fn list_nvidia_models() -> Result<Vec<String>, String> {
     }
 
     Ok(names)
+}
+
+#[cfg(test)]
+mod gemini_resolver_tests {
+    use super::{apply_gemini_generation_config, resolve_gemini_model};
+
+    #[test]
+    fn legacy_3_flash_preview_upgrades_to_3_5_flash() {
+        let (id, cfg) = resolve_gemini_model("gemini-3-flash-preview");
+        assert_eq!(id, "gemini-3.5-flash");
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn pro_high_strips_suffix_and_emits_high_thinking_level() {
+        let (id, cfg) = resolve_gemini_model("gemini-3.1-pro-preview::high");
+        assert_eq!(id, "gemini-3.1-pro-preview");
+        let cfg = cfg.expect("expected generationConfig for ::high");
+        assert_eq!(cfg["thinkingConfig"]["thinkingLevel"], "high");
+    }
+
+    #[test]
+    fn pro_medium_strips_suffix_and_emits_medium_thinking_level() {
+        let (id, cfg) = resolve_gemini_model("gemini-3.1-pro-preview::medium");
+        assert_eq!(id, "gemini-3.1-pro-preview");
+        let cfg = cfg.expect("expected generationConfig for ::medium");
+        assert_eq!(cfg["thinkingConfig"]["thinkingLevel"], "medium");
+    }
+
+    #[test]
+    fn pro_with_spanish_alto_alias_works() {
+        let (id, cfg) = resolve_gemini_model("gemini-3.1-pro-preview::alto");
+        assert_eq!(id, "gemini-3.1-pro-preview");
+        assert_eq!(cfg.expect("cfg")["thinkingConfig"]["thinkingLevel"], "high");
+    }
+
+    #[test]
+    fn unknown_effort_strips_suffix_but_no_cfg() {
+        let (id, cfg) = resolve_gemini_model("gemini-3.1-pro-preview::ludicrous");
+        assert_eq!(id, "gemini-3.1-pro-preview");
+        assert!(cfg.is_none(), "unknown effort should NOT emit a thinkingLevel");
+    }
+
+    #[test]
+    fn non_pro_models_pass_through_unchanged() {
+        let (id, cfg) = resolve_gemini_model("gemini-3.5-flash");
+        assert_eq!(id, "gemini-3.5-flash");
+        assert!(cfg.is_none());
+
+        let (id2, cfg2) = resolve_gemini_model("gemini-3.1-flash-lite");
+        assert_eq!(id2, "gemini-3.1-flash-lite");
+        assert!(cfg2.is_none());
+    }
+
+    #[test]
+    fn apply_config_merges_into_existing_payload() {
+        let mut payload = serde_json::json!({ "contents": [{"parts": [{"text": "hi"}]}] });
+        let cfg = Some(serde_json::json!({ "thinkingConfig": { "thinkingLevel": "high" } }));
+        apply_gemini_generation_config(&mut payload, cfg);
+        assert_eq!(payload["generationConfig"]["thinkingConfig"]["thinkingLevel"], "high");
+        // Original contents are preserved
+        assert_eq!(payload["contents"][0]["parts"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn apply_config_with_none_is_noop() {
+        let mut payload = serde_json::json!({ "contents": [] });
+        let before = payload.clone();
+        apply_gemini_generation_config(&mut payload, None);
+        assert_eq!(payload, before);
+    }
+}
+
+#[cfg(test)]
+mod anthropic_resolver_tests {
+    use super::{apply_anthropic_output_config, resolve_anthropic_model};
+
+    #[test]
+    fn opus_47_xhigh_is_accepted() {
+        let (id, eff) = resolve_anthropic_model("claude-opus-4-7::xhigh");
+        assert_eq!(id, "claude-opus-4-7");
+        assert_eq!(eff, Some("xhigh"));
+    }
+
+    #[test]
+    fn opus_47_all_five_levels_accepted() {
+        for level in ["low", "medium", "high", "xhigh", "max"] {
+            let (id, eff) = resolve_anthropic_model(&format!("claude-opus-4-7::{}", level));
+            assert_eq!(id, "claude-opus-4-7");
+            assert_eq!(eff, Some(level), "expected effort {} to pass for Opus 4.7", level);
+        }
+    }
+
+    #[test]
+    fn sonnet_46_rejects_xhigh_but_accepts_max() {
+        // Per docs Sonnet 4.6 has no xhigh tier; strip silently.
+        let (id, eff) = resolve_anthropic_model("claude-sonnet-4-6::xhigh");
+        assert_eq!(id, "claude-sonnet-4-6");
+        assert_eq!(eff, None);
+
+        let (_, eff2) = resolve_anthropic_model("claude-sonnet-4-6::max");
+        assert_eq!(eff2, Some("max"));
+    }
+
+    #[test]
+    fn haiku_does_not_support_effort() {
+        // Even with a valid level, Haiku gets stripped because the API doesn't accept it.
+        let (id, eff) = resolve_anthropic_model("claude-haiku-4-5::high");
+        assert_eq!(id, "claude-haiku-4-5");
+        assert_eq!(eff, None);
+    }
+
+    #[test]
+    fn spanish_aliases_work() {
+        let (_, e1) = resolve_anthropic_model("claude-opus-4-7::alto");
+        assert_eq!(e1, Some("high"));
+        let (_, e2) = resolve_anthropic_model("claude-opus-4-7::medio");
+        assert_eq!(e2, Some("medium"));
+        let (_, e3) = resolve_anthropic_model("claude-opus-4-7::bajo");
+        assert_eq!(e3, Some("low"));
+        let (_, e4) = resolve_anthropic_model("claude-opus-4-7::extra-alto");
+        assert_eq!(e4, Some("xhigh"));
+    }
+
+    #[test]
+    fn no_suffix_passes_through_unchanged() {
+        let (id, eff) = resolve_anthropic_model("claude-opus-4-7");
+        assert_eq!(id, "claude-opus-4-7");
+        assert_eq!(eff, None);
+    }
+
+    #[test]
+    fn apply_output_config_injects_effort() {
+        let mut payload = serde_json::json!({
+            "model": "claude-opus-4-7",
+            "max_tokens": 4096,
+            "messages": []
+        });
+        apply_anthropic_output_config(&mut payload, Some("medium"));
+        assert_eq!(payload["output_config"]["effort"], "medium");
+        // Original fields preserved
+        assert_eq!(payload["model"], "claude-opus-4-7");
+        assert_eq!(payload["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn apply_output_config_none_is_noop() {
+        let mut payload = serde_json::json!({ "model": "claude-opus-4-7" });
+        let before = payload.clone();
+        apply_anthropic_output_config(&mut payload, None);
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn unknown_effort_strips_to_none() {
+        let (id, eff) = resolve_anthropic_model("claude-opus-4-7::ludicrous");
+        assert_eq!(id, "claude-opus-4-7");
+        assert_eq!(eff, None);
+    }
 }

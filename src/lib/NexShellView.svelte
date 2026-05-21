@@ -1551,7 +1551,13 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     function rsDeletePlaybook(hostId, pbId) {
         const pbs = rsGetPlaybooks(hostId).filter(p => p.id !== pbId);
-        localStorage.setItem(`lucy_pb_${hostId}`, JSON.stringify(pbs));
+        // localStorage can throw on quota-exceeded or in private-browsing mode —
+        // wrap defensively so deleting a playbook never crashes the panel.
+        try {
+            localStorage.setItem(`lucy_pb_${hostId}`, JSON.stringify(pbs));
+        } catch (e) {
+            console.warn('[playbooks] localStorage write failed:', e);
+        }
         rshellSessions = [...rshellSessions];
     }
 

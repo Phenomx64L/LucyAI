@@ -7,7 +7,10 @@
     import MicOff from '@tabler/icons-svelte/icons/microphone-off';
 
     import Eraser from '@tabler/icons-svelte/icons/eraser';
-    import { ollamaOnline, nvidiaConfigured, nvidiaModels, localModels } from '$lib/models.js';
+    import { ollamaOnline, nvidiaConfigured, nvidiaModels as _nvidiaModels, localModels as _localModels } from '$lib/models.js';
+    // TS can't infer store types from .js — cast to Any writable
+    const localModels = _localModels as import('svelte/store').Writable<any[]>;
+    const nvidiaModels = _nvidiaModels as import('svelte/store').Writable<any[]>;
     import { suggestFlags, applyFlagCompletion, type FlagSuggestion } from '$lib/flag-completions';
 
     export let tab: any;
@@ -229,7 +232,7 @@
 
 <!-- ── INPUT BAR ── -->
 <div class="ibar" role="region" aria-label={isEN ? 'Message input area' : 'Área de entrada de mensaje'}
-    on:dragover|preventDefault={(e) => { e.dataTransfer.dropEffect = 'copy'; e.currentTarget.classList.add('drag-over'); }}
+    on:dragover|preventDefault={(e) => { if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; e.currentTarget.classList.add('drag-over'); }}
     on:dragleave={(e) => e.currentTarget.classList.remove('drag-over')}
     on:drop|preventDefault={(e) => { e.currentTarget.classList.remove('drag-over'); dispatch('filedrop', { event: e }); }}>
 
@@ -277,17 +280,17 @@
         <div class="iside">
             <button class="ia-btn" title={isEN ? 'Attach file' : 'Adjuntar archivo'}
                 on:click={() => dispatch('attach')} disabled={!!tab.pendingMessage}>
-                <Paperclip size={15} strokeWidth={1.8} />
+                <Paperclip size={15} stroke={1.8} />
             </button>
             <button class="ia-btn {tab.isListening ? 'mic-on' : ''}"
                 title={isEN ? 'Voice input' : 'Entrada de voz'}
                 on:click={() => dispatch('togglemic')}
                 disabled={tab.isProcessing && !tab.isListening}>
-                {#if tab.isListening}<MicOff size={15} strokeWidth={1.8} />{:else}<Mic size={15} strokeWidth={1.8} />{/if}
+                {#if tab.isListening}<MicOff size={15} stroke={1.8} />{:else}<Mic size={15} stroke={1.8} />{/if}
             </button>
             <button class="ia-btn" title={isEN ? 'Clear session (Ctrl+L)' : 'Limpiar sesión (Ctrl+L)'}
                 on:click={() => dispatch('clearsession')} disabled={tab.isProcessing}>
-                <Eraser size={15} strokeWidth={1.8} />
+                <Eraser size={15} stroke={1.8} />
             </button>
             <div class="ia-sep"></div>
 

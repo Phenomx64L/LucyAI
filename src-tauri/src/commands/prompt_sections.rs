@@ -302,7 +302,45 @@ impl PromptSection for WebKnowledgeSection {
         RULE 22 — WEB KNOWLEDGE: NEVER guess release dates, software versions, or information post-2024. Use <TOOL>search_web:query</TOOL> IMMEDIATELY and autonomously — do NOT ask the user for permission.\n\
         - SEARCH WEB: <TOOL>search_web:query</TOOL> — Tavily API (preferred, ~5 clean results with AI summary) or DuckDuckGo fallback. Use for documentation, current events, software versions.\n\
         - FETCH WEB: <TOOL>fetch:URL</TOOL> — Fetches full text of a webpage.\n\
-        - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot; call again for DIFFERENCE.".to_string()
+        - SYSTEM DIFF: <TOOL>system_diff:tasks</TOOL> or <TOOL>system_diff:network</TOOL> — Takes a snapshot; call again for DIFFERENCE.\n\
+        - STATE DIFF (Frontier F2): <TOOL>state_diff:N</TOOL> where N is the lookback window in MINUTES (max 14d=20160). Compares the current system state with the closest snapshot N minutes ago. Returns CPU/RAM/disk deltas + processes that appeared/disappeared. Use for questions like 'what changed since this morning?' or 'why is my machine slower now than 30 min ago?'.\n\
+        - PROCESS LINEAGE (Frontier F1): <TOOL>process_lineage:nameSubstring</TOOL> — Searches the recorded process history (last 14 days) for any process whose binary path or cmdline contains the substring. Returns each match's parent chain (who spawned it), first-seen timestamp, and whether it's still alive. Use for 'when did X first appear?' or 'what spawned this Y?'.\n\
+        - PROCESS ANCESTRY (Frontier F1): <TOOL>process_ancestry:PID</TOOL> — Returns the full parent chain (current → root) for a specific PID. Use right after `tasklist` when investigating a suspicious or high-resource process.\n\
+        - CAUSAL DIAGNOSE (Frontier F3): <TOOL>diagnose_spike</TOOL> or <TOOL>diagnose_spike:WINDOW_SEC</TOOL> — Correlates recent process arrivals with the symptom timestamp (default 'now') and ranks candidates by temporal proximity + novelty + path-oddness + resource intensity. Returns top 10 with explainable reasoning. Use for 'why did my machine get slow?' or 'what spiked just now?'.\n\
+        - HEALING RECALL (Frontier F4): <TOOL>healing_find:symptom description</TOOL> — Searches Lucy's memory for prior healing patterns matching this symptom. Returns ranked candidates with success counts and confidence. CRITICAL: if a high-confidence match exists (>0.6), propose it to the user with HITL confirmation BEFORE acting on it; do not auto-apply.\n\
+        - THREAT SCAN (Frontier F8): <TOOL>threat_scan</TOOL> or <TOOL>threat_scan:MINUTES</TOOL> — Behavioral classifier over recent process_lineage entries. Heuristics: path oddness (Temp/Downloads/AppData), parent oddness (Word→PS, WMI→PS macro/lateral), cmdline obfuscation (-enc, IEX, base64), name entropy, novelty vs 7-day baseline, off-hours timing. Returns per-process score 0-1 with band (benign/review/alert) and explainable reasons. Use proactively if user reports 'something weird', after a security event, or when investigating unfamiliar processes.\n\
+        - OBJECT QUERY (Frontier F6): <TOOL>obj_query:expression</TOOL> — Run small DSL queries against PowerShell objects stored from prior turns. Pipeline operators: `select <fields>`, `where <field> <op> <value>` (ops: =, !=, >, <, >=, <=, contains), `orderby <field> [desc|asc]`, `limit N`, `count`. Compose with `|`. Example: `<TOOL>obj_query:procs | where WorkingSet > 200 | orderby WorkingSet desc | limit 5</TOOL>`. Use 'last' as key to query the most-recent stored object. AVOIDS re-running expensive shell commands when you only need to filter/sort previous results.\n\
+        - RUNBOOK SCAN (Frontier F7): <TOOL>runbook_scan</TOOL> or <TOOL>runbook_scan:DAYS</TOOL> — Sequence-mines the user's recent command history for repeated 3-6 step workflows. Returns ranked candidates with confidence. When the user asks 'what do I do repeatedly?' or 'should I automate something?', call this and propose the top candidate as a saved skill.\n\
+        - DAILY PATTERNS (Frontier F10): <TOOL>daily_patterns</TOOL> or <TOOL>daily_patterns:DAYS</TOOL> — Mines (weekday × hour-band) signals from commands + process arrivals. Shows what app/command happens on which day at which time, with confidence = weeks_observed / total_weeks. Use when the user asks 'what's my routine?' or to pre-warm tools for predictable rhythms.\n\
+        - SANDBOX PREVIEW (Frontier F5): <TOOL>sandbox_preview:command</TOOL> — Static analysis of a potentially-destructive command BEFORE execution. Returns: paths/registry/services/network it would touch, whether elevation is required, a risk score, and (if Windows Sandbox is available) a .wsb config the user can launch for true isolated execution. ALWAYS call this before proposing rm/del/format/registry/service-modifying commands; never auto-execute without showing the preview.\n\
+        - KG RECENT FILES (Frontier F9): <TOOL>kg_recent</TOOL> or <TOOL>kg_recent:dir-prefix</TOOL> — Lists files most recently modified in the indexed roots, ordered by last_mtime DESC. Use for 'what have I been working on?' or to narrow context before a code-related question.\n\
+        - KG NEIGHBORS (Frontier F9): <TOOL>kg_neighbors:full-path</TOOL> — Returns files that have been modified within a 5-min window of the given file (co-touched edges), ranked by frequency. Use when investigating a single file to discover what else tends to change with it (typical workflow: open suspect file, ask what's connected).\n\
+        - KG EXTENSION SUMMARY (Frontier F9): <TOOL>kg_ext_summary</TOOL> or <TOOL>kg_ext_summary:dir-prefix</TOOL> — Returns the extension distribution under a path. Use to characterize a project ('this is mostly TypeScript with some Rust') without listing every file.\n\
+        - INCIDENT DETECTIVE (CROSS-FEATURE): <TOOL>incident_detective</TOOL> or <TOOL>incident_detective:WINDOW_SEC</TOOL> — The flagship synthesis tool. Combines F3 causal inference + F8 behavioral threat scan + F9 file activity in a single forensic window around the current moment (or a specified timestamp). Returns a one-line narrative + ranked candidates from all three modules. Use as the FIRST line of investigation when the user says 'something's wrong' or 'investigate this' — it covers the most ground per call.".to_string()
+    }
+}
+
+/// U8 v2 — Confidence calibration markers. Teaches the LLM to use the
+/// inline markers and citation chips that the frontend renders distinctly.
+pub struct ConfidenceCalibrationSection;
+impl PromptSection for ConfidenceCalibrationSection {
+    fn name(&self) -> &'static str { "ConfidenceCalibration" }
+    fn relevant(&self, _ctx: &PromptContext) -> bool { true }
+    fn priority(&self) -> u32 { 46 }
+    fn render(&self, _ctx: &PromptContext) -> String {
+        "RULE 23 — TRUST CALIBRATION: Mark parts of your answer with confidence so the user can see what to verify.\n\
+        - Inline markers (use SPARINGLY — at most 2-3 per response, on the words that matter):\n  \
+            [~hedged~]   — wraps a phrase you're unsure about (renders dotted-underlined)\n  \
+            [!certain!]  — wraps a fact you have direct evidence for (renders subtly underlined)\n  \
+            [?speculation?] — wraps a guess you're stating as a possibility (renders italic amber)\n\
+        - Citation chips: <CITE src=\"path-or-id\" kind=\"memory|file|url|tool\">short label</CITE>\n  \
+            Use whenever a claim comes from a specific source. Examples:\n  \
+            <CITE src=\"mem-12af\" kind=\"memory\">prior session</CITE>\n  \
+            <CITE src=\"C:/repo/main.rs:42\" kind=\"file\">main.rs:42</CITE>\n  \
+            <CITE src=\"https://example.com\" kind=\"url\">docs</CITE>\n  \
+            <CITE src=\"sysinfo:host\" kind=\"tool\">live host data</CITE>\n\
+        - Reserve the block-level <CONFIDENCE level=\"high|med|low\">…</CONFIDENCE> wrapper for whole-answer-level signals (e.g. when concluding an investigation).\n\
+        - Honesty discipline: don't hedge everything. If you have direct evidence, say so with [!fact!]. The goal is signal, not nervous-prose-everywhere.".to_string()
     }
 }
 
@@ -487,6 +525,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &AlternativeExecutorsSection,
         &FileToolsSection,
         &WebKnowledgeSection,
+        &ConfidenceCalibrationSection,
         &SubAgentsSection,
         &PersistentMemorySection,
         &TieredMemorySection,

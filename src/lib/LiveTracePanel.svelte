@@ -112,10 +112,10 @@
 </script>
 
 {#if open}
-<aside class="trace-panel" role="complementary" aria-label="Live agent trace">
+<aside class="trace-panel" aria-label="Live agent trace">
     <header class="tp-head">
         <div class="tp-title">
-            <Activity size={14} strokeWidth={2.2}/>
+            <Activity size={14} stroke={2.2}/>
             <span>{isEN ? 'Agent trace' : 'Telemetría'}</span>
             <span class="tp-count">{visible.length}</span>
         </div>

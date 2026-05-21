@@ -462,7 +462,7 @@ pub async fn incident_finalize(args: FinalizeArgs) -> Result<Incident, String> {
     }
     let ts = now_ts();
 
-    shared_db(|conn| {
+    let result = shared_db(|conn| {
         conn.execute(
             "UPDATE incidents
              SET phase = 'done', status = ?1, summary = ?2, root_cause = ?3,
@@ -472,6 +472,57 @@ pub async fn incident_finalize(args: FinalizeArgs) -> Result<Incident, String> {
         ).map_err(|e| format!("finalize update: {}", e))?;
 
         fetch_incident_row(conn, &args.incident_id)
+    })?;
+
+    // F4 completion — auto-crystallize resolved incidents into healing patterns.
+    // Only resolved (not abandoned) incidents become reusable patterns. We
+    // extract: title (incident.title), symptom (description), fix (root_cause+summary).
+    // Errors are swallowed: the incident finalize must succeed even if the
+    // memory write fails.
+    if status == "resolved" {
+        let _ = auto_crystallize_pattern(&result, &args.summary, &args.root_cause);
+    }
+
+    Ok(result)
+}
+
+/// Persist a healing pattern derived from a resolved incident. Internal helper —
+/// not exposed as a Tauri command (the entry point is incident_finalize).
+fn auto_crystallize_pattern(incident: &Incident, summary: &str, root_cause: &str) -> Result<(), String> {
+    // Skip if symptom is too short to be useful
+    if incident.description.trim().len() < 8 || root_cause.trim().len() < 4 {
+        return Ok(());
+    }
+
+    let payload = serde_json::json!({
+        "kind": "healing-pattern",
+        "symptom": incident.description.clone(),
+        "fix": format!("{}\n\nSummary: {}", root_cause, summary),
+        "host_name": incident.host_name.clone(),
+        "success_count": 1,
+        "last_used": now_ts(),
+        "created_at": now_ts(),
+        "source_incident_id": incident.id.clone(),
+    });
+    let content = payload.to_string();
+    let title = if incident.title.len() > 200 {
+        incident.title.chars().take(200).collect::<String>()
+    } else {
+        incident.title.clone()
+    };
+    let tags_json = serde_json::to_string(&vec![
+        "healing-pattern".to_string(),
+        "auto-crystallized".to_string(),
+        "from-incident".to_string(),
+    ]).unwrap_or_else(|_| "[]".to_string());
+
+    shared_db(|conn| {
+        conn.execute(
+            "INSERT INTO agent_memories (session_id, title, content, tags, files, importance, created_at)
+             VALUES ('', ?1, ?2, ?3, '[]', 5, ?4)",
+            params![title, content, tags_json, now_ts()],
+        ).map_err(|e| format!("crystallize insert: {}", e))?;
+        Ok(())
     })
 }
 
@@ -480,11 +531,18 @@ pub async fn incident_finalize(args: FinalizeArgs) -> Result<Incident, String> {
 #[tauri::command]
 pub async fn incident_list(shell_id: Option<String>) -> Result<Vec<Incident>, String> {
     shared_db(|conn| {
-        // Use a single match on shell_id to drive BOTH the SQL choice and the
-        // params binding. Previously this kept a parallel `has_filter` bool
-        // and unwrapped `shell_id` in the filter branch — correct by
-        // convention but the unwrap was invisible to the compiler. Now the
-        // type system guarantees we only deref the Some-side.
+        // Auto-close stale open incidents (>4h old) to prevent persistent
+        // false-positive banners from auto-triggered anomalies. Marks them
+        // as 'abandoned' so they're distinguishable from user-resolved ones.
+        let stale_cutoff = now_ts() - 4 * 3600;
+        conn.execute(
+            "UPDATE incidents SET status = 'abandoned', phase = 'done',
+                    resolved_at = ?1, updated_at = ?1,
+                    summary = 'Auto-closed: exceeded 4h without resolution'
+             WHERE status = 'open' AND created_at < ?2",
+            params![now_ts(), stale_cutoff],
+        ).ok();
+
         let sql = if shell_id.is_some() {
             "SELECT id, shell_id, host_name, title, description, phase, status,
                     validity_score, loop_count, max_loops, created_at, updated_at,

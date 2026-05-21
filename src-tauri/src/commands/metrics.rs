@@ -417,6 +417,89 @@ pub async fn get_cost_summary(period: String) -> Result<CostSummary, String> {
     })
 }
 
+// ── Cost history reset ────────────────────────────────────────────────────
+//
+// Lets the user wipe accumulated cost / token totals from the Cost Dashboard
+// without touching anything else (memories, skills, hosts, conversations).
+// This is the "fresh start" the user asked for so they don't have to
+// uninstall or hand-edit the DB.
+//
+// Scopes:
+//   • "day"   — only today's rows (LIKE 'YYYY-MM-DD%' for token_usage)
+//   • "month" — current calendar month
+//   • "all"   — every row in token_usage + daily_summary
+//
+// SAFETY:
+//   • Affects ONLY token_usage and daily_summary tables.
+//   • Audit trail is NOT touched — compliance / forensics stay intact.
+//   • Wrapped in a single transaction so the two tables stay consistent.
+//   • Returns the (deleted_rows, deleted_summary_rows) tuple so the UI
+//     can show the user exactly how much was wiped.
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CostResetResult {
+    pub scope: String,
+    pub deleted_token_rows: u64,
+    pub deleted_summary_rows: u64,
+}
+
+#[tauri::command]
+pub async fn reset_cost_history(scope: String) -> Result<CostResetResult, String> {
+    let scope_norm = scope.to_lowercase();
+    if !matches!(scope_norm.as_str(), "day" | "month" | "all") {
+        return Err(format!("Invalid scope '{}'. Expected: day | month | all", scope));
+    }
+
+    with_db(|conn| {
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("begin tx: {}", e))?;
+
+        let (deleted_token_rows, deleted_summary_rows) = match scope_norm.as_str() {
+            "day" => {
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                // token_usage.timestamp is ISO 8601 (e.g. "2026-05-20T14:33:01");
+                // a LIKE 'YYYY-MM-DD%' match captures every row from today.
+                let n_tu = tx.execute(
+                    "DELETE FROM token_usage WHERE timestamp LIKE ?1",
+                    rusqlite::params![format!("{}%", today)],
+                ).map_err(|e| format!("delete token_usage (day): {}", e))? as u64;
+                let n_ds = tx.execute(
+                    "DELETE FROM daily_summary WHERE date = ?1",
+                    rusqlite::params![&today],
+                ).map_err(|e| format!("delete daily_summary (day): {}", e))? as u64;
+                (n_tu, n_ds)
+            }
+            "month" => {
+                let prefix = chrono::Local::now().format("%Y-%m").to_string();
+                let n_tu = tx.execute(
+                    "DELETE FROM token_usage WHERE timestamp LIKE ?1",
+                    rusqlite::params![format!("{}%", prefix)],
+                ).map_err(|e| format!("delete token_usage (month): {}", e))? as u64;
+                let n_ds = tx.execute(
+                    "DELETE FROM daily_summary WHERE date LIKE ?1",
+                    rusqlite::params![format!("{}%", prefix)],
+                ).map_err(|e| format!("delete daily_summary (month): {}", e))? as u64;
+                (n_tu, n_ds)
+            }
+            _ /* "all" */ => {
+                let n_tu = tx.execute("DELETE FROM token_usage", [])
+                    .map_err(|e| format!("delete token_usage (all): {}", e))? as u64;
+                let n_ds = tx.execute("DELETE FROM daily_summary", [])
+                    .map_err(|e| format!("delete daily_summary (all): {}", e))? as u64;
+                (n_tu, n_ds)
+            }
+        };
+
+        tx.commit().map_err(|e| format!("commit reset: {}", e))?;
+
+        Ok(CostResetResult {
+            scope: scope_norm,
+            deleted_token_rows,
+            deleted_summary_rows,
+        })
+    })
+}
+
 /// Get token usage history (last N records)
 #[tauri::command]
 pub async fn get_token_history(limit: u32) -> Result<Vec<TokenUsage>, String> {

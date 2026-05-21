@@ -26,7 +26,7 @@
     let setupLoading = false;
     let setupError   = '';
     let setupStep    = 'form'; // 'form' | 'success'
-    let showWhatsNew = false;  // toggle the "What's new in 1.4.0" panel
+    let showWhatsNew = false;  // toggle the "What's new in 1.7.0" panel
 
     // Bumped each release. Keep in sync with package.json + Cargo.toml.
     const LUCY_VERSION = '1.4.0';
@@ -126,15 +126,15 @@
         )}
       </p>
 
-      <!-- ── What's new in 1.4.0 (collapsible) ─────────────────────────── -->
+      <!-- ── What's new in 1.7.0 — R&D Frontier (collapsible) ─────────── -->
       <button class="so-whatsnew-toggle" type="button" on:click={() => showWhatsNew = !showWhatsNew}>
         <span class="so-spark">✦</span>
         <span>{t(
-          `Novedades en v${LUCY_VERSION}`,
-          `Novidades em v${LUCY_VERSION}`,
-          `What's new in v${LUCY_VERSION}`,
-          `Nouveautés en v${LUCY_VERSION}`,
-          `Neu in v${LUCY_VERSION}`
+          `Novedades en v${LUCY_VERSION} · R&D Frontier`,
+          `Novidades em v${LUCY_VERSION} · R&D Frontier`,
+          `What's new in v${LUCY_VERSION} · R&D Frontier`,
+          `Nouveautés en v${LUCY_VERSION} · R&D Frontier`,
+          `Neu in v${LUCY_VERSION} · R&D Frontier`
         )}</span>
         <span class="so-chevron" class:open={showWhatsNew}>▸</span>
       </button>
@@ -143,57 +143,97 @@
           <li>
             <span class="so-bullet ok">●</span>
             {t(
-              'Indicador de estado ambient (idle / pensando / ejecutando) en el footer',
-              'Indicador de estado ambient (idle / pensando / executando) no rodapé',
-              'Ambient status indicator (idle / thinking / executing) in the footer'
+              'F1+F2: lineage de procesos con audit chain SHA-256 + snapshots de estado con diff temporal',
+              'F1+F2: lineage de processos com audit chain SHA-256 + snapshots de estado com diff temporal',
+              'F1+F2: process lineage with SHA-256 audit chain + state snapshots with temporal diff'
             )}
           </li>
           <li>
             <span class="so-bullet info">●</span>
             {t(
-              'Detección de anomalías estadísticas en CPU / RAM (z-score)',
-              'Detecção de anomalias estatísticas em CPU / RAM (z-score)',
-              'Statistical anomaly detection on CPU / RAM (z-score)'
+              'F3 Causal Engine: correlaciona arrivals con síntomas y explica POR QUÉ se puso lenta tu máquina',
+              'F3 Causal Engine: correlaciona arrivals com sintomas e explica POR QUE sua máquina ficou lenta',
+              'F3 Causal Engine: correlates arrivals with symptoms and explains WHY your machine slowed down'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'F4 Self-Healing: Lucy recuerda fixes pasados y los propone (con HITL) ante síntomas parecidos',
+              'F4 Self-Healing: Lucy lembra correções passadas e as propõe (com HITL) em sintomas parecidos',
+              'F4 Self-Healing: Lucy recalls past fixes and proposes them (with HITL) on similar symptoms'
             )}
           </li>
           <li>
             <span class="so-bullet warn">●</span>
             {t(
-              'Predictor de costo en vivo · estima tokens y USD antes de enviar',
-              'Preditor de custo em tempo real · estima tokens e USD antes de enviar',
-              'Live cost predictor · estimates tokens & USD before sending'
-            )}
-          </li>
-          <li>
-            <span class="so-bullet ok">●</span>
-            {t(
-              'Exportar conversación como Notebook reutilizable (.lucynote / .md)',
-              'Exportar conversa como Notebook reutilizável (.lucynote / .md)',
-              'Export conversation as a reusable Notebook (.lucynote / .md)'
+              'F5 Sandbox Preview: análisis estático + .wsb config para Windows Sandbox antes de comandos destructivos',
+              'F5 Sandbox Preview: análise estática + .wsb config para Windows Sandbox antes de comandos destrutivos',
+              'F5 Sandbox Preview: static analysis + .wsb config for Windows Sandbox before destructive commands'
             )}
           </li>
           <li>
             <span class="so-bullet info">●</span>
             {t(
-              'Búsqueda fuzzy en Reglas de Permisos · filtrar por acción',
-              'Busca fuzzy em Regras de Permissões · filtrar por ação',
-              'Fuzzy search in Permission Rules · filter by action'
-            )}
-          </li>
-          <li>
-            <span class="so-bullet danger">●</span>
-            {t(
-              'Hardening: ofuscación de blocklist, integrity check, release LTO',
-              'Hardening: ofuscação de blocklist, integrity check, release LTO',
-              'Hardening: blocklist obfuscation, integrity check, release LTO'
+              'F6 Object Bridge: pipea objetos PowerShell entre turnos con DSL — where / orderby / limit',
+              'F6 Object Bridge: piping de objetos PowerShell entre turnos com DSL — where / orderby / limit',
+              'F6 Object Bridge: pipe PowerShell objects across turns with a small DSL — where / orderby / limit'
             )}
           </li>
           <li>
             <span class="so-bullet ok">●</span>
             {t(
-              'Lucy ya no se detiene a media tarea cuando le pides múltiples cosas',
-              'Lucy não para mais no meio da tarefa quando você pede várias coisas',
-              'Lucy no longer stops mid-task when given multi-step prompts'
+              'F7 Runbook Mining: detecta workflows repetidos (≥3 veces) y los promueve a skills reusables',
+              'F7 Runbook Mining: detecta workflows repetidos (≥3 vezes) e os promove a skills reutilizáveis',
+              'F7 Runbook Mining: detects repeated workflows (≥3 times) and promotes them to reusable skills'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet danger">●</span>
+            {t(
+              'F8 Mini-EDR: clasifica procesos por 7 heurísticos (path, parent, cmdline, entropy, novelty, timing)',
+              'F8 Mini-EDR: classifica processos por 7 heurísticos (path, parent, cmdline, entropy, novelty, timing)',
+              'F8 Mini-EDR: classifies processes by 7 heuristics (path, parent, cmdline, entropy, novelty, timing)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'F9 Knowledge Graph: indexa tus repos y aprende qué archivos tocas juntos · viewer radial',
+              'F9 Knowledge Graph: indexa seus repos e aprende quais arquivos você toca juntos · viewer radial',
+              'F9 Knowledge Graph: indexes your repos and learns which files you touch together · radial viewer'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'F10 Daily Patterns: aprende tus rutinas semanales (Lun 9am → VSCode + Spotify)',
+              'F10 Daily Patterns: aprende suas rotinas semanais (Seg 9h → VSCode + Spotify)',
+              'F10 Daily Patterns: learns your weekly routines (Mon 9am → VSCode + Spotify)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet warn">●</span>
+            {t(
+              'Detective: sintetiza F3+F8+F9 en una sola consulta forense — el moat completo',
+              'Detective: sintetiza F3+F8+F9 em uma única consulta forense — o moat completo',
+              'Detective: synthesizes F3+F8+F9 into a single forensic query — the full moat'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'Nueva UX: avatar viviente, density modes (Ctrl+1/2/3), chapter view, predictive chips, drag-to-Lucy',
+              'Nova UX: avatar vivo, density modes (Ctrl+1/2/3), chapter view, predictive chips, drag-to-Lucy',
+              'New UX: living avatar, density modes (Ctrl+1/2/3), chapter view, predictive chips, drag-to-Lucy'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              '103 tests passing · 9 stress tests · 36 Tauri commands Frontier · todo local con audit trail',
+              '103 tests passing · 9 stress tests · 36 comandos Tauri Frontier · tudo local com audit trail',
+              '103 tests passing · 9 stress tests · 36 Frontier Tauri commands · all local with audit trail'
             )}
           </li>
         </ul>

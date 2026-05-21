@@ -90,6 +90,18 @@ import { listen } from '@tauri-apps/api/event';
     import { reflectBeforeEmit, isPass, isWarn, isEscalate, getReasons, getRisk, renderVerdictBadge } from '$lib/reflection-gate';
     import PostureStrip from '$lib/PostureStrip.svelte';
     import IncidentTimeline from '$lib/IncidentTimeline.svelte';
+    // Phase 3 (R&D Frontier) — circadian theme + density modes + Lucy moods + F2 snapshots
+    import { startTimeOfDay } from '$lib/time-of-day';
+    import { startLucyMood, setLucyMood } from '$lib/lucy-mood';
+    import { startDensityMode, densityMode, cycleDensityMode } from '$lib/density-mode';
+    import { startSnapshotLoop, manualSnapshot } from '$lib/state-snapshot-loop';
+    import { startProcessLineageLoop } from '$lib/process-lineage-loop';
+    import { startKnowledgeGraphLoop } from '$lib/knowledge-graph-loop';
+    import { classifyDrop, defaultPromptForKind } from '$lib/universal-drop';
+    import SkillPicker from '$lib/SkillPicker.svelte';
+    import KgMiniViewer from '$lib/KgMiniViewer.svelte';
+    import { predictChips, resetDismissed } from '$lib/predictive-chips';
+    import PredictiveChipStrip from '$lib/PredictiveChipStrip.svelte';
 
     // Phase 2c (May 2026) — extracted helpers from this file
     import { dispatchSlashCommand } from '$lib/page/slash-commands';
@@ -304,6 +316,105 @@ import { listen } from '@tauri-apps/api/event';
     let _scheduledTickInterval = null;    // poll due scheduled tasks every 60s
     let _openclawUnlisten = null;         // openclaw webhook listener (reconnected v1.4.0)
     let activeIncidentId = null;          // incident timeline (reconnected v1.4.0)
+    let predictiveChips = [];             // U5 — contextual next-action chips above input
+    // Sprint 8 — Skill picker + KG mini-viewer modal state
+    let showSkillPicker = false;
+    let kgViewerOpen = false;
+    let kgViewerPath = '';
+    let kgViewerNeighbors = [];           // KgNeighborNode[]
+    async function openKgViewerFor(path) {
+        kgViewerPath = path;
+        kgViewerNeighbors = [];
+        kgViewerOpen = true;
+        try {
+            const rows = await invoke('kg_neighbors', { path, topK: 16 });
+            kgViewerNeighbors = Array.isArray(rows) ? rows : [];
+        } catch (e) {
+            console.warn('[kg-viewer] load failed:', e);
+            kgViewerNeighbors = [];
+        }
+    }
+    function onSkillInvoke(event) {
+        const detail = event.detail;
+        if (!detail || !activeTabId) return;
+        const t = getTab(activeTabId);
+        if (!t) return;
+        // Drop the script content (it can be multi-line shell) into the input
+        // so the user reviews + sends. Never auto-execute — HITL.
+        t.inputValue = detail.script || detail.name;
+        tabs = [...tabs];
+        showSkillPicker = false;
+        setTimeout(() => {
+            const el = document.querySelector('.chat-wrap.on .ibox');
+            if (el instanceof HTMLElement) el.focus();
+        }, 30);
+    }
+
+    // Compute predictive chips from the current tab's last Lucy turn.
+    // Called from fin() after a turn lands so chips reflect what just happened.
+    function recomputePredictiveChips(tabId) {
+        try {
+            const t = getTab(tabId);
+            if (!t || !t.messages || t.messages.length === 0) { predictiveChips = []; return; }
+            // Find the latest Lucy message (skip streaming/system)
+            let lastLucy = null;
+            let lastUser = null;
+            for (let i = t.messages.length - 1; i >= 0; i--) {
+                const m = t.messages[i];
+                if (!lastLucy && (m.role === 'lucy') && m.rawContent) lastLucy = m;
+                if (!lastUser && (m.role === 'user') && m.rawContent) lastUser = m;
+                if (lastLucy && lastUser) break;
+            }
+            if (!lastLucy) { predictiveChips = []; return; }
+
+            const lucyText = String(lastLucy.rawContent || '');
+            const toolLabels = (lastLucy._toolLabels || []).map(s => String(s).toLowerCase());
+            const hadTools = toolLabels.length > 0 || /<TOOL>|<EXECUTE/.test(lucyText);
+            const hadError = /error|failed|✕|✖|exception/i.test(lucyText) || (lastLucy._anyError === true);
+            const hasOpenQuestion = /\?[\s]*$/.test(lucyText.trim()) || /pendiente|abierto|open/i.test(lucyText);
+
+            resetDismissed(); // new turn → restore dismissed chips
+            predictiveChips = predictChips({
+                lastLucyText: lucyText,
+                lastUserText: String(lastUser?.rawContent || ''),
+                hadTools,
+                toolLabels,
+                hadError,
+                hasOpenQuestion,
+                cwd: t.cwd || undefined,
+            });
+        } catch (err) {
+            console.warn('[chips] predict error:', err);
+            predictiveChips = [];
+        }
+    }
+
+    function onChipAction(event) {
+        const chip = event.detail.chip;
+        if (!chip || !activeTabId) return;
+        const t = getTab(activeTabId);
+        if (!t) return;
+        try {
+            if (chip.action.kind === 'fill_input') {
+                t.inputValue = chip.action.text;
+                tabs = [...tabs];
+                setTimeout(() => document.querySelector('.chat-wrap.on .ibox')?.focus(), 30);
+            } else if (chip.action.kind === 'slash') {
+                t.inputValue = chip.action.command;
+                tabs = [...tabs];
+                // Auto-submit slash commands
+                setTimeout(() => {
+                    const evt = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+                    document.querySelector('.chat-wrap.on .ibox')?.dispatchEvent(evt);
+                }, 30);
+            } else if (chip.action.kind === 'run_command') {
+                t.inputValue = chip.action.cmd;
+                tabs = [...tabs];
+            }
+        } catch (err) {
+            console.warn('[chips] action error:', err);
+        }
+    }
     /** Quick-look popover handle (see $lib/page/ql-popover.ts).
      *  `.detach()` cleans up listeners + DOM node on onDestroy / HMR. */
     let _qlHandle = null;
@@ -738,6 +849,18 @@ import { listen } from '@tauri-apps/api/event';
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // U9 — Circadian theme nudger (sutil hue/saturation shift según hora)
+        startTimeOfDay();
+        // U2 — Lucy mood ambient state machine
+        startLucyMood();
+        // U6 — Density modes (focus/explore/war-room) with Ctrl+1/2/3 keybinds
+        startDensityMode();
+        // F2 — Frontier: start system state snapshot loop (every 15 min)
+        startSnapshotLoop();
+        // F1 — Frontier: start process lineage polling (every 8 sec)
+        startProcessLineageLoop();
+        // F9 — Frontier: start knowledge graph indexer (every 5 min)
+        startKnowledgeGraphLoop();
         // Cargar secretos MCP desde OS Keyring (con migración desde localStorage si existen)
         try {
             const legacyObj = safeParseLS('lucy_mcp_secrets', null);
@@ -1475,16 +1598,66 @@ import { listen } from '@tauri-apps/api/event';
     const maximize = () => invoke('maximize_window');
     const cerrar   = () => invoke('close_window');
 
-    async function scrollChat() {
-        await tick();
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                document.querySelectorAll('.chat-wrap.on .chat-area').forEach(el => el.scrollTop = el.scrollHeight);
-                // Also scroll NexShell output if visible
-                if (activeView === 'nexshell' && activeShellId) {
-                    const rsEl = document.getElementById(`rshell-out-${activeShellId}`);
-                    if (rsEl) rsEl.scrollTop = rsEl.scrollHeight;
-                }
+    /**
+     * Scroll the active chat area to its bottom — robust to late renders.
+     *
+     * Why this version: the previous implementation used two RAFs and read
+     * scrollHeight once. That fails when a chat contains chapter views,
+     * code blocks, KaTeX, citation chips, or images — those calc their
+     * final height across multiple frames, so a single early scrollTop
+     * assignment leaves the user 1-2 messages above the bottom after every
+     * view-switch or tab-switch. The user reported being "dropped at the
+     * penultimate message" or "mid conversation".
+     *
+     * Strategy: poll scrollHeight each frame, re-applying scrollTop until
+     * the height stays the same for 2 consecutive frames (rendering done)
+     * OR we hit MAX_FRAMES (~200ms ceiling — never block forever).
+     *
+     * Bonus: also handles the case where the *target* element is not yet
+     * the .chat-wrap.on container because Svelte transitions are still
+     * mounting — we re-query each iteration.
+     */
+    function scrollChat() {
+        return new Promise((resolve) => {
+            tick().then(() => {
+                let lastHeight = -1;
+                let stableFrames = 0;
+                let totalFrames = 0;
+                const MAX_FRAMES = 18;  // ~300ms ceiling at 60fps
+
+                const tick_ = () => {
+                    const areas = document.querySelectorAll('.chat-wrap.on .chat-area');
+                    let currentHeight = 0;
+                    areas.forEach((el) => {
+                        el.scrollTop = el.scrollHeight;
+                        if (el.scrollHeight > currentHeight) currentHeight = el.scrollHeight;
+                    });
+
+                    // Mirror behavior for NexShell output panel
+                    if (activeView === 'nexshell' && activeShellId) {
+                        const rsEl = document.getElementById(`rshell-out-${activeShellId}`);
+                        if (rsEl) rsEl.scrollTop = rsEl.scrollHeight;
+                    }
+
+                    if (currentHeight === lastHeight && currentHeight > 0) {
+                        stableFrames++;
+                    } else {
+                        stableFrames = 0;
+                        lastHeight = currentHeight;
+                    }
+
+                    totalFrames++;
+                    if (stableFrames >= 2 || totalFrames >= MAX_FRAMES) {
+                        // Final guaranteed scroll after stabilization
+                        document.querySelectorAll('.chat-wrap.on .chat-area').forEach((el) => {
+                            el.scrollTop = el.scrollHeight;
+                        });
+                        resolve();
+                        return;
+                    }
+                    requestAnimationFrame(tick_);
+                };
+                requestAnimationFrame(tick_);
             });
         });
     }
@@ -1601,6 +1774,23 @@ import { listen } from '@tauri-apps/api/event';
         if (typeof _runToken === 'object') {
             _runToken[id] = (_runToken[id] || 0) + 1;
         }
+        // BUG FIX (May 2026): cerrar una pestaña con streaming activo dejaba
+        // el listener Tauri colgando hasta que el backend enviaba <stream-done>.
+        // El runAI loop seguía consumiendo tokens del LLM sobre un tab que ya
+        // no existe — desperdicio de API key + chunks llegando a un destino
+        // null que podía lanzar errores silenciosos en la consola.
+        // Replica el cleanup que ya hace cancelarEjecucion() ANTES de soltar
+        // el tab: marca _cancelled, desuscribe el listener y vacía la entrada
+        // de _activeStreams.
+        try {
+            t._cancelled = true;
+            const stream = _activeStreams.get(id);
+            if (stream) {
+                stream.cancelled = true;
+                if (stream.unlisten) stream.unlisten();
+                _activeStreams.delete(id);
+            }
+        } catch (e) { debug.log('[close-tab] stream cleanup error:', e); }
         try { destroyEnrichedWidgets(); } catch {}
         tabs = tabs.filter(x => x.id !== id);
         if (tabs.length && activeTabId === id) activeTabId = tabs[tabs.length-1].id;
@@ -1827,13 +2017,54 @@ import { listen } from '@tauri-apps/api/event';
         }
     }
 
-    const toggleMic = (tabId) => _toggleMic(tabId, _voiceOpts());
+    const toggleMic = (tabId) => {
+        _toggleMic(tabId, _voiceOpts());
+        // U2 — flip listening mood based on whether mic is now on/off
+        const t = getTab(tabId);
+        if (t?.isListening) setLucyMood('listening', { force: true });
+        else if (!t?.isProcessing) setLucyMood('idle', { force: true });
+    };
 
     // ── ADJUNTAR MÚLTIPLES ARCHIVOS ───────────────────────────────────────────
     const attach         = (tabId)    => _attach(tabId, _fileOpts());
     const removeFile     = (tabId, n) => _removeFile(tabId, n, _fileOpts());
     const handleFileDrop = (e, tabId) => _handleFileDrop(e, tabId, _fileOpts());
-    const onDrop         = (e)        => _onDrop(e, _fileOpts());
+    // U7 — Universal drop: classify before delegating. Files keep going to
+    // the existing file-drop handler; URLs/text/images get routed to the
+    // input box with a sensible default prompt.
+    const onDrop = (e) => {
+        try {
+            const dropped = classifyDrop(e.dataTransfer);
+            if (dropped.kind === 'files') {
+                // Preserve existing behavior — let the file-drop handler do its thing
+                return _onDrop(e, _fileOpts());
+            }
+            if (dropped.kind === 'url' || dropped.kind === 'image_uri' || dropped.kind === 'text') {
+                const prompt = defaultPromptForKind(dropped.kind, dropped, isEN);
+                if (prompt && activeTabId) {
+                    const t = getTab(activeTabId);
+                    if (t) {
+                        t.inputValue = prompt;
+                        tabs = [...tabs];
+                        setTimeout(() => {
+                            const el = document.querySelector('.chat-wrap.on .ibox');
+                            if (el instanceof HTMLElement) el.focus();
+                        }, 30);
+                        toast(isEN
+                            ? `Dropped ${dropped.kind === 'url' ? 'URL' : dropped.kind === 'image_uri' ? 'image' : 'text'} into input — review and send.`
+                            : `${dropped.kind === 'url' ? 'URL' : dropped.kind === 'image_uri' ? 'Imagen' : 'Texto'} cargado al input — revisa y envía.`,
+                            'info');
+                    }
+                    return;
+                }
+            }
+            // Unknown / fallback → original handler
+            return _onDrop(e, _fileOpts());
+        } catch (err) {
+            console.warn('[universal-drop] failed:', err);
+            return _onDrop(e, _fileOpts());
+        }
+    };
     const onPaste        = (e)        => _onPaste(e, _fileOpts());
 
     const speak = (text) => _speak(text, { getActiveLang: () => activeLang });
@@ -2290,6 +2521,9 @@ import { listen } from '@tauri-apps/api/event';
                 lucyConfig = { ...lucyConfig, privacyMode: !!on };
                 try { localStorage.setItem('lucy_privacy_mode', on ? '1' : '0'); } catch {}
             },
+            // Sprint 8 — openers for floating modals
+            openSkillPicker: () => { showSkillPicker = true; },
+            openKgViewer: (path) => { openKgViewerFor(path); },
         });
     }
 
@@ -2494,7 +2728,7 @@ Use ONE of these patterns instead:
             let _revealed = '';     // texto revelado al usuario hasta ahora
             let _prevAccLen = 0;    // longitud del accumulated anterior
             let _drainTimer = null;
-            const DRAIN_MS = 30;    // ms entre revelados (~33 tokens/seg)
+            const DRAIN_MS = 40;    // ms entre revelados — 40ms reduce flicker vs 30ms
 
             const cleanStreamDisplay = (text) => (codeGenIntent
                 ? text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, c) => '\n```powershell\n'+c.trim()+'\n```\n')
@@ -2513,15 +2747,19 @@ Use ONE of these patterns instead:
                 .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
                 .replace('__TRUNCATED__', '').trim();
 
+            let _lastRenderedLen = 0; // anti-flicker: skip re-render if nothing changed
             const renderRevealed = () => {
                 const t2 = getTab(tabId);
                 const msg = t2?.messages.find(m => m.id === streamMsgId);
                 if (!msg) return;
                 const display = cleanStreamDisplay(_revealed);
+                // Anti-flicker: skip DOM update if display text hasn't grown
+                if (display.length === _lastRenderedLen) return;
+                _lastRenderedLen = display.length;
                 msg.rawContent = display;
                 const withBadges = renderConfidenceTags(display);
                 const parsed = withBadges ? renderMd(withBadges) : '';
-                msg.html = `<div class="mn">Lucy</div>${parsed}<span class="stream-cursor"></span>`;
+                msg.html = `<div class="mn">Lucy</div><div class="stream-body">${parsed}</div><span class="stream-cursor"></span>`;
                 refresh(); scrollChat();
             };
 
@@ -2537,6 +2775,8 @@ Use ONE of these patterns instead:
                 renderRevealed();
             }, DRAIN_MS);
 
+            // U2 — Lucy mood: thinking while LLM streams
+            setLucyMood('thinking');
             const resp = await askLucyStream(aiParams, (accumulated) => {
                 const t2 = getTab(tabId);
                 if (t2?._cancelled) return;
@@ -2598,15 +2838,26 @@ Use ONE of these patterns instead:
                 const _streamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (_streamMsg?.rawContent?.trim()) {
                     // Promote: convertir streaming msg en mensaje lucy permanente
+                    // SMOOTH FIX: reusar el HTML del streaming (ya parseado con renderMd)
+                    // en vez de re-renderizar con renderLucyMarkdown que genera HTML distinto
+                    // y produce un "swap" visual abrupto.
                     const displayText = cleanStreamDisplay(_streamMsg.rawContent);
                     if (displayText.trim().length > 20) {
                         _streamMsg.id = Date.now() + Math.random();
                         _streamMsg.role = 'lucy';
-                        const _rgBadgeT = t._reflectionBadge || '';
-                        _streamMsg.html = `<div class="mn">Lucy</div>${_rgBadgeT}${renderLucyMarkdown(displayText)}`;
                         _streamMsg.rawRole = 'Lucy';
                         _streamMsg.rawContent = displayText;
-                        if (_rgBadgeT) t._reflectionBadge = null;
+                        // Quitar cursor y clase stream-body, mantener el resto del HTML intacto
+                        let existingHtml = _streamMsg.html || '';
+                        existingHtml = existingHtml.replace(/<span class="stream-cursor"><\/span>/g, '');
+                        existingHtml = existingHtml.replace(/class="stream-body"/g, 'class="stream-settled"');
+                        const _rgBadgeT = t._reflectionBadge || '';
+                        if (_rgBadgeT) {
+                            // Insertar badge justo después del header <div class="mn">Lucy</div>
+                            existingHtml = existingHtml.replace('</div>', `</div>${_rgBadgeT}`);
+                            t._reflectionBadge = null;
+                        }
+                        _streamMsg.html = existingHtml;
                     } else {
                         t.messages = t.messages.filter(m => m.id !== streamMsgId);
                     }
@@ -2647,8 +2898,10 @@ Use ONE of these patterns instead:
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
             const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search|principle_set|principle_delete|schedule_create|schedule_list):/i;
-            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
+            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|state_diff:|process_lineage:|process_ancestry:|diagnose_spike|healing_find:|threat_scan|obj_query:|runbook_scan|daily_patterns|sandbox_preview:|kg_neighbors:|kg_recent|kg_ext_summary|incident_detective|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
+                // U2 — Lucy mood: executing while agent loop runs tools
+                setLucyMood('executing', { force: true });
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
                 // raw puede venir vacío en auto-retry, así que buscamos el último mensaje user del historial
                 let originalUserGoal = (raw || '').trim();
@@ -3089,6 +3342,56 @@ Use ONE of these patterns instead:
                         ${citationsHtml}
                     `;
                     agentMsg.rawContent = displayText; // for search
+
+                    // U3 — Chapter view: auto-build chapterData when >= 4 tool steps
+                    // so the user can flip to a narrative chapter view of the investigation.
+                    if (agentToolCards.length >= 4) {
+                        try {
+                            // Cap each step's body to keep the chapter card layout consistent.
+                            // Long outputs (eventlog 100+ rows) destroyed the visual rhythm —
+                            // now they get a "truncated" footer chip and stay scrollable inside.
+                            const MAX_BODY_CHARS = 4000;
+                            const MAX_BODY_LINES = 40;
+                            const formatBody = (raw) => {
+                                if (!raw) return `<em style="color:var(--text-muted)">(no output captured)</em>`;
+                                let s = String(raw);
+                                const lines = s.split('\n');
+                                let truncated = false;
+                                if (lines.length > MAX_BODY_LINES) {
+                                    s = lines.slice(0, MAX_BODY_LINES).join('\n');
+                                    truncated = true;
+                                }
+                                if (s.length > MAX_BODY_CHARS) {
+                                    s = s.slice(0, MAX_BODY_CHARS);
+                                    truncated = true;
+                                }
+                                const escaped = s.replace(/[<>&]/g, (m) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m]));
+                                const footer = truncated
+                                    ? `<div style="margin-top:6px;font-size:10px;color:var(--text-muted);font-style:italic;">… (output truncated · full version in linear view)</div>`
+                                    : '';
+                                return `<pre>${escaped}</pre>${footer}`;
+                            };
+                            const steps = agentToolCards.map((c, i) => ({
+                                index: i + 1,
+                                label: String(c.label || `Step ${i + 1}`).slice(0, 60),
+                                status: c.status === 'error' ? 'error'
+                                      : c.status === 'done' || c.status === 'ok' ? 'ok'
+                                      : c.status === 'running' ? 'pending' : 'info',
+                                bodyHtml: formatBody(c.output),
+                                rationale: c.rationale || undefined,
+                            }));
+                            agentMsg.chapterData = {
+                                title: (raw || originalUserGoal || 'Agent task').slice(0, 140),
+                                objective: originalUserGoal && originalUserGoal !== raw ? originalUserGoal.slice(0, 280) : '',
+                                elapsedMs: Date.now() - (t._procStart || Date.now()),
+                                steps,
+                                finalHtml: displayText ? renderMd(displayText) : '',
+                            };
+                            agentMsg.viewMode = 'chapter'; // default to chapter view for long tasks
+                        } catch (chapErr) {
+                            console.warn('[chapter-view] build failed:', chapErr);
+                        }
+                    }
                     t.messages = [...t.messages];
                     refresh(); scrollChat();
                 };
@@ -3158,6 +3461,496 @@ Use ONE of these patterns instead:
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>system_diff:[^<]+<\/TOOL>/gi, '');
                         readOnlyTasks.push({ label: `[◑ Diff] ${diffM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('system_diff', {category:diffM[1].trim()}), 2, true).then(r => `[SYSTEM DIFF RESULT]\n${r}`) });
+                    }
+
+                    // F2 Frontier — temporal state diff (compare snapshots N minutes apart)
+                    const stateDiffM = agentResp.match(/<TOOL>state_diff:(\d+)<\/TOOL>/i);
+                    if (stateDiffM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>state_diff:\d+<\/TOOL>/gi, '');
+                        const lookbackMin = Math.max(1, Math.min(parseInt(stateDiffM[1], 10) || 60, 60 * 24 * 14));
+                        readOnlyTasks.push({
+                            label: `[◐ State Δ ${lookbackMin}min]`,
+                            fn: async () => {
+                                try {
+                                    const nowSec = Math.floor(Date.now() / 1000);
+                                    const sinceSec = nowSec - lookbackMin * 60;
+                                    const list = await invoke('state_snapshot_list', { sinceTs: sinceSec, limit: 200 });
+                                    if (!list || list.length < 2) {
+                                        // Force-capture one now so we have at least the latest baseline
+                                        try { await invoke('state_snapshot_capture'); } catch {}
+                                        return `[STATE DIFF] No hay suficientes snapshots en los últimos ${lookbackMin}min. Capturé uno ahora, vuelve a preguntar en unos minutos.`;
+                                    }
+                                    const toId = list[0].id;
+                                    const fromId = list[list.length - 1].id;
+                                    const d = await invoke('state_snapshot_diff', { fromId, toId });
+                                    const summary = [
+                                        `[STATE DIFF — ventana ${Math.round((d.to_ts - d.from_ts) / 60)}min]`,
+                                        `CPU change: ${d.cpu_delta_pct.toFixed(1)}%`,
+                                        `RAM change: ${d.ram_delta_mb}MB`,
+                                    ];
+                                    if (d.processes_appeared?.length) {
+                                        summary.push(`New processes (${d.processes_appeared.length}):`);
+                                        for (const p of d.processes_appeared.slice(0, 12)) {
+                                            summary.push(`  + ${p.name} (pid ${p.pid}, ${p.mem_mb}MB)`);
+                                        }
+                                    }
+                                    if (d.processes_disappeared?.length) {
+                                        summary.push(`Vanished processes (${d.processes_disappeared.length}):`);
+                                        for (const p of d.processes_disappeared.slice(0, 12)) {
+                                            summary.push(`  - ${p.name} (pid ${p.pid})`);
+                                        }
+                                    }
+                                    if (d.drive_changes?.length) {
+                                        summary.push(`Drive changes:`);
+                                        for (const c of d.drive_changes) {
+                                            summary.push(`  ${c.mount}: ${c.from_pct.toFixed(1)}% → ${c.to_pct.toFixed(1)}% (${c.used_delta_gb >= 0 ? '+' : ''}${c.used_delta_gb}GB)`);
+                                        }
+                                    }
+                                    return summary.join('\n');
+                                } catch (e) {
+                                    return `[STATE DIFF ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F1 Frontier — process lineage search (by name substring)
+                    const plM = agentResp.match(/<TOOL>process_lineage:([^<]+)<\/TOOL>/i);
+                    if (plM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>process_lineage:[^<]+<\/TOOL>/gi, '');
+                        const query = plM[1].trim().slice(0, 80);
+                        readOnlyTasks.push({
+                            label: `[⚯ Lineage] ${query}`,
+                            fn: async () => {
+                                try {
+                                    const rows = await invoke('process_lineage_search', { nameSubstring: query, limit: 25 });
+                                    if (!rows || rows.length === 0) return `[LINEAGE] No matches for "${query}"`;
+                                    const out = [`[LINEAGE for "${query}" — ${rows.length} results]`];
+                                    for (const r of rows.slice(0, 15)) {
+                                        const chain = JSON.parse(r.parent_chain || '[]').map((n) => `${n.name}(${n.pid})`).join(' ← ');
+                                        const when = new Date(r.first_seen * 1000).toLocaleString();
+                                        const alive = r.vanished_at ? `vanished ${new Date(r.vanished_at * 1000).toLocaleTimeString()}` : 'alive';
+                                        out.push(`pid=${r.pid} ${alive} · first seen ${when}`);
+                                        out.push(`  exe: ${r.exe_path}`);
+                                        out.push(`  chain: ${chain || '(orphan)'}`);
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[LINEAGE ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F1 Frontier — process ancestry for a specific pid
+                    const paM = agentResp.match(/<TOOL>process_ancestry:(\d+)<\/TOOL>/i);
+                    if (paM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>process_ancestry:\d+<\/TOOL>/gi, '');
+                        const pid = parseInt(paM[1], 10);
+                        readOnlyTasks.push({
+                            label: `[⚯ Ancestry pid ${pid}]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('process_lineage_for_pid', { pid });
+                                    if (!r) return `[ANCESTRY] No lineage record for pid ${pid} (may be too short-lived or already evicted).`;
+                                    const chain = JSON.parse(r.parent_chain || '[]').map((n) => `${n.name}(${n.pid})`).join(' ← ');
+                                    return [
+                                        `[ANCESTRY pid=${pid}]`,
+                                        `exe: ${r.exe_path}`,
+                                        `cmdline: ${r.cmdline}`,
+                                        `first seen: ${new Date(r.first_seen * 1000).toLocaleString()}`,
+                                        `chain: ${chain || '(orphan)'}`,
+                                    ].join('\n');
+                                } catch (e) {
+                                    return `[ANCESTRY ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F3 Frontier — causal inference: "why did the spike happen?"
+                    const dsM = agentResp.match(/<TOOL>diagnose_spike(?::(\d+))?<\/TOOL>/i);
+                    if (dsM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>diagnose_spike(?::\d+)?<\/TOOL>/gi, '');
+                        const window = dsM[1] ? parseInt(dsM[1], 10) : 120;
+                        readOnlyTasks.push({
+                            label: `[△ Diagnose ${window}s window]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('diagnose_spike', { symptomTs: null, windowSec: window });
+                                    const out = [`[CAUSAL ANALYSIS — window ${r.window_sec}s around symptom]`];
+                                    out.push(r.metric_context);
+                                    if (r.state_diff_summary) out.push(r.state_diff_summary);
+                                    out.push('');
+                                    if (!r.candidates || r.candidates.length === 0) {
+                                        out.push('No candidate processes found in the suspect window.');
+                                        out.push('Try a wider window (e.g. <TOOL>diagnose_spike:600</TOOL>) or run state_diff first.');
+                                    } else {
+                                        out.push(`Top ${r.candidates.length} suspects (ranked by confidence):`);
+                                        for (let i = 0; i < r.candidates.length; i++) {
+                                            const c = r.candidates[i];
+                                            const conf = (c.confidence * 100).toFixed(0);
+                                            const offset = c.temporal_offset_sec >= 0
+                                                ? `+${c.temporal_offset_sec}s after`
+                                                : `${Math.abs(c.temporal_offset_sec)}s before`;
+                                            out.push(`${i + 1}. ${c.name} (pid ${c.pid}) — confidence ${conf}%, ${offset} symptom`);
+                                            out.push(`   exe: ${c.exe_path}`);
+                                            if (c.parent_chain_summary) out.push(`   chain: ${c.parent_chain_summary}`);
+                                            for (const reason of c.reasoning) out.push(`   • ${reason}`);
+                                        }
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[DIAGNOSE ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F8 Frontier — behavioral threat scan
+                    const tsM = agentResp.match(/<TOOL>threat_scan(?::(\d+))?<\/TOOL>/i);
+                    if (tsM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>threat_scan(?::\d+)?<\/TOOL>/gi, '');
+                        const sinceMin = tsM[1] ? parseInt(tsM[1], 10) : 60;
+                        readOnlyTasks.push({
+                            label: `[⚠ Threat scan ${sinceMin}min]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('threat_scan', { sinceMin, minScore: 0.30, limit: 20 });
+                                    const out = [`[THREAT SCAN — last ${sinceMin}min · scanned ${r.total_scanned} processes]`];
+                                    out.push(`Alerts: ${r.alerts} · Reviews: ${r.reviews} · Benign: ${r.benign}`);
+                                    out.push(`Baseline window: ${r.baseline_days} days`);
+                                    if (!r.candidates || r.candidates.length === 0) {
+                                        out.push('No suspicious activity detected.');
+                                    } else {
+                                        for (const c of r.candidates) {
+                                            const pct = (c.score * 100).toFixed(0);
+                                            const stamp = new Date(c.first_seen * 1000).toLocaleTimeString();
+                                            out.push('');
+                                            out.push(`[${c.band.toUpperCase()}] ${c.name} (pid ${c.pid}) — score ${pct}% · started ${stamp}`);
+                                            if (c.exe_path) out.push(`  exe: ${c.exe_path}`);
+                                            if (c.parent_chain) out.push(`  chain: ${c.parent_chain}`);
+                                            if (c.cmdline_preview && c.cmdline_preview.length > 0) {
+                                                out.push(`  cmdline: ${c.cmdline_preview}`);
+                                            }
+                                            for (const reason of c.reasons) out.push(`  • ${reason}`);
+                                        }
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[THREAT SCAN ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F7 Frontier — runbook generator from observed history
+                    const rbgM = agentResp.match(/<TOOL>runbook_scan(?::(\d+))?<\/TOOL>/i);
+                    if (rbgM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>runbook_scan(?::\d+)?<\/TOOL>/gi, '');
+                        const days = rbgM[1] ? parseInt(rbgM[1], 10) : 30;
+                        readOnlyTasks.push({
+                            label: `[⌖ Runbook scan ${days}d]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('runbook_scan', { days, topK: 8 });
+                                    const out = [`[RUNBOOK SCAN — ${r.days_analyzed}d · ${r.total_sessions} sessions · ${r.total_commands} commands]`];
+                                    if (!r.candidates || r.candidates.length === 0) {
+                                        out.push('No repeated workflows detected yet. Need at least 3 sessions with the same 3-step sequence.');
+                                    } else {
+                                        out.push(`Detected ${r.candidates.length} candidate workflow(s):`);
+                                        for (const c of r.candidates) {
+                                            const pct = (c.confidence * 100).toFixed(0);
+                                            out.push('');
+                                            out.push(`• "${c.suggested_name}" — confidence ${pct}%, repeated ${c.frequency}×`);
+                                            out.push(`  sequence: ${c.sequence.join(' → ')}`);
+                                            const firstSample = new Date(c.sample_times[0] * 1000).toLocaleDateString();
+                                            const lastSample = new Date(c.sample_times[c.sample_times.length-1] * 1000).toLocaleDateString();
+                                            out.push(`  spans: ${firstSample} → ${lastSample}`);
+                                        }
+                                        out.push('');
+                                        out.push('Propose to the user: convert any high-confidence candidate into a saved skill / slash command.');
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[RUNBOOK ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F10 Frontier — daily routine patterns
+                    const dpM = agentResp.match(/<TOOL>daily_patterns(?::(\d+))?<\/TOOL>/i);
+                    if (dpM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>daily_patterns(?::\d+)?<\/TOOL>/gi, '');
+                        const days = dpM[1] ? parseInt(dpM[1], 10) : 28;
+                        readOnlyTasks.push({
+                            label: `[⌚ Daily patterns ${days}d]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('daily_patterns_scan', { days, minConfidence: 0.5 });
+                                    const out = [`[DAILY PATTERNS — ${r.days_analyzed}d · ${r.weeks_covered} weeks]`];
+                                    if (!r.patterns || r.patterns.length === 0) {
+                                        out.push('No stable weekly routines detected yet. Need ≥2 weeks of activity at the same time.');
+                                    } else {
+                                        // Group by weekday for readable output
+                                        const byDay = {};
+                                        for (const p of r.patterns) {
+                                            const k = p.weekday_label;
+                                            (byDay[k] = byDay[k] || []).push(p);
+                                        }
+                                        for (const day of ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']) {
+                                            if (!byDay[day]) continue;
+                                            out.push(`${day}:`);
+                                            for (const p of byDay[day].slice(0, 6)) {
+                                                const conf = (p.confidence * 100).toFixed(0);
+                                                out.push(`  ${p.hour_band}h · ${p.kind === 'process' ? '⊞' : '⌨'} ${p.signal} — ${p.weeks_observed} weeks (${conf}%)`);
+                                            }
+                                        }
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[DAILY PATTERNS ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F5 Frontier — sandbox preview of a destructive command
+                    const spM = agentResp.match(/<TOOL>sandbox_preview:([^<]+)<\/TOOL>/i);
+                    if (spM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>sandbox_preview:[^<]+<\/TOOL>/gi, '');
+                        const cmd = spM[1].trim();
+                        readOnlyTasks.push({
+                            label: `[⊠ Sandbox preview]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('sandbox_preview_command', { command: cmd });
+                                    const pct = (r.risk_score * 100).toFixed(0);
+                                    const out = [`[SANDBOX PREVIEW — risk ${pct}% (${r.risk_band})]`];
+                                    out.push(`Command: ${r.command}`);
+                                    if (r.destructive_reason) out.push(`Destructive: ${r.destructive_reason}`);
+                                    if (r.elevation_required) out.push('Requires elevation (admin/sudo)');
+                                    if (r.affected_paths?.length) out.push(`Paths touched: ${r.affected_paths.slice(0,6).join(', ')}`);
+                                    if (r.affected_registry_keys?.length) out.push(`Registry keys: ${r.affected_registry_keys.join(', ')}`);
+                                    if (r.affected_services?.length) out.push(`Services: ${r.affected_services.join(' | ')}`);
+                                    if (r.network_endpoints?.length) out.push(`Network: ${r.network_endpoints.join(', ')}`);
+                                    if (r.static_findings?.length) {
+                                        out.push('Findings:');
+                                        for (const f of r.static_findings) out.push(`  • ${f}`);
+                                    }
+                                    if (r.sandbox_available && r.sandbox_wsb_path) {
+                                        out.push('');
+                                        out.push(`Windows Sandbox config ready: ${r.sandbox_wsb_path}`);
+                                        out.push('User can double-click that .wsb file to run the command in isolation.');
+                                    } else if (!r.sandbox_available && r.destructive) {
+                                        out.push('');
+                                        out.push('Windows Sandbox not available on this host — static preview only.');
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[SANDBOX PREVIEW ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F9 Frontier — knowledge graph: recent files in a directory
+                    const kgrM = agentResp.match(/<TOOL>kg_recent(?::([^<]+))?<\/TOOL>/i);
+                    if (kgrM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>kg_recent(?::[^<]+)?<\/TOOL>/gi, '');
+                        const dirPrefix = kgrM[1] ? kgrM[1].trim() : null;
+                        readOnlyTasks.push({
+                            label: `[◍ Recent files] ${dirPrefix || '(all)'}`,
+                            fn: async () => {
+                                try {
+                                    const rows = await invoke('kg_recent_files', { dirPrefix, limit: 30 });
+                                    if (!rows || rows.length === 0) {
+                                        return `[KG RECENT] No indexed files yet${dirPrefix ? ' under "' + dirPrefix + '"' : ''}. Add a root with kg_add_root and run kg_index_now first.`;
+                                    }
+                                    const out = [`[KG RECENT FILES — ${rows.length} entries]`];
+                                    for (const f of rows.slice(0, 20)) {
+                                        const when = new Date(f.last_mtime * 1000).toLocaleString();
+                                        out.push(`  ${when} · ${f.path} (.${f.extension}, ${f.touch_count}×)`);
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[KG RECENT ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F9 Frontier — knowledge graph: co-touched neighbors of a file
+                    const kgnM = agentResp.match(/<TOOL>kg_neighbors:([^<]+)<\/TOOL>/i);
+                    if (kgnM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>kg_neighbors:[^<]+<\/TOOL>/gi, '');
+                        const path = kgnM[1].trim();
+                        readOnlyTasks.push({
+                            label: `[⛓ Neighbors] ${path.split(/[\\/]/).pop()}`,
+                            fn: async () => {
+                                try {
+                                    const rows = await invoke('kg_neighbors', { path, topK: 12 });
+                                    if (!rows || rows.length === 0) {
+                                        return `[KG NEIGHBORS] No co-touched edges recorded for "${path}". Either it's never been modified alongside another file, or it hasn't been indexed yet.`;
+                                    }
+                                    const out = [`[KG NEIGHBORS of ${path}]`];
+                                    for (const n of rows) {
+                                        const when = n.last_mtime ? new Date(n.last_mtime * 1000).toLocaleString() : '?';
+                                        out.push(`  weight=${n.weight} · ${n.path}  (.${n.extension}, ${when})`);
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[KG NEIGHBORS ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F9 Frontier — knowledge graph: extension breakdown
+                    const kgeM = agentResp.match(/<TOOL>kg_ext_summary(?::([^<]+))?<\/TOOL>/i);
+                    if (kgeM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>kg_ext_summary(?::[^<]+)?<\/TOOL>/gi, '');
+                        const dirPrefix = kgeM[1] ? kgeM[1].trim() : null;
+                        readOnlyTasks.push({
+                            label: `[◐ Ext breakdown] ${dirPrefix || '(all)'}`,
+                            fn: async () => {
+                                try {
+                                    const rows = await invoke('kg_ext_summary', { dirPrefix });
+                                    if (!rows || rows.length === 0) return `[KG EXT] No indexed files yet.`;
+                                    const out = [`[KG EXTENSION BREAKDOWN]`];
+                                    for (const r of rows) {
+                                        const ext = r.extension || '(no ext)';
+                                        out.push(`  .${ext} · ${r.file_count} files · ${r.total_touches} touches`);
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[KG EXT ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // Cross-feature — incident detective (F3+F8+F9 synthesis)
+                    const idM = agentResp.match(/<TOOL>incident_detective(?::(\d+))?<\/TOOL>/i);
+                    if (idM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>incident_detective(?::\d+)?<\/TOOL>/gi, '');
+                        const windowSec = idM[1] ? parseInt(idM[1], 10) : 300;
+                        readOnlyTasks.push({
+                            label: `[🔎 Detective ${windowSec}s]`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('incident_detective', { symptomTs: null, windowSec });
+                                    const pct = (r.confidence * 100).toFixed(0);
+                                    const out = [`[INCIDENT DETECTIVE — window ±${r.window_sec}s · overall confidence ${pct}%]`];
+                                    out.push('');
+                                    out.push(`Narrative: ${r.narrative}`);
+                                    out.push('');
+                                    if (r.threats?.length) {
+                                        out.push(`Behavioral threats (${r.threats.length}):`);
+                                        for (const t of r.threats.slice(0, 5)) {
+                                            const tp = (t.score * 100).toFixed(0);
+                                            out.push(`  [${t.band}] ${t.name} (pid ${t.pid}) — ${tp}%`);
+                                            for (const reason of t.reasons.slice(0, 2)) out.push(`    • ${reason}`);
+                                        }
+                                        out.push('');
+                                    }
+                                    if (r.causal?.candidates?.length) {
+                                        out.push(`Top causal candidates:`);
+                                        for (const c of r.causal.candidates.slice(0, 4)) {
+                                            const cp = (c.confidence * 100).toFixed(0);
+                                            const off = c.temporal_offset_sec >= 0 ? `+${c.temporal_offset_sec}s` : `${c.temporal_offset_sec}s`;
+                                            out.push(`  ${c.name} (pid ${c.pid}) · ${cp}% · ${off} from symptom`);
+                                        }
+                                        out.push('');
+                                    }
+                                    out.push(`File activity: ${r.touched_cluster_summary}`);
+                                    if (r.file_changes?.length) {
+                                        for (const f of r.file_changes.slice(0, 6)) {
+                                            const when = new Date(f.last_mtime * 1000).toLocaleTimeString();
+                                            out.push(`  ${when} · ${f.path}`);
+                                        }
+                                    }
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[DETECTIVE ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F6 Frontier — object bridge: query stored PS objects
+                    const oqM = agentResp.match(/<TOOL>obj_query:([^<]+)<\/TOOL>/i);
+                    if (oqM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>obj_query:[^<]+<\/TOOL>/gi, '');
+                        const expression = oqM[1].trim().slice(0, 400);
+                        const sessionId = (t.id || 'global');
+                        readOnlyTasks.push({
+                            label: `[⊞ Obj query] ${expression.slice(0, 32)}`,
+                            fn: async () => {
+                                try {
+                                    const r = await invoke('obj_bridge_query', { args: { sessionId, expression } });
+                                    if (r.is_count_only) {
+                                        return `[OBJ QUERY · ${r.key}] count = ${r.count}`;
+                                    }
+                                    const rows = Array.isArray(r.rows) ? r.rows : [];
+                                    const out = [`[OBJ QUERY · ${r.key} from ${r.source}] returned ${r.returned_rows}/${r.original_rows} rows`];
+                                    const preview = rows.slice(0, 15);
+                                    for (const row of preview) {
+                                        out.push(`  ${JSON.stringify(row).slice(0, 220)}`);
+                                    }
+                                    if (rows.length > 15) out.push(`  … (${rows.length - 15} more)`);
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[OBJ QUERY ERROR] ${String(e)}\n(Hint: usa el TOOL después de un comando PS — Lucy debe guardar el resultado primero via obj_bridge_store.)`;
+                                }
+                            }
+                        });
+                    }
+
+                    // F4 Frontier — self-healing: find similar fix from memory
+                    const hfM = agentResp.match(/<TOOL>healing_find:([^<]+)<\/TOOL>/i);
+                    if (hfM) {
+                        toolUsed = true;
+                        lucyText = lucyText.replace(/<TOOL>healing_find:[^<]+<\/TOOL>/gi, '');
+                        const symptom = hfM[1].trim().slice(0, 200);
+                        readOnlyTasks.push({
+                            label: `[💊 Healing recall] ${symptom.slice(0, 32)}`,
+                            fn: async () => {
+                                try {
+                                    const patterns = await invoke('healing_find_similar', { symptom, topK: 5 });
+                                    if (!patterns || patterns.length === 0) {
+                                        return `[HEALING] No prior fix patterns matched "${symptom}". This appears to be a new problem — investigate fresh.`;
+                                    }
+                                    const out = [`[HEALING MEMORY — ${patterns.length} prior fix(es) for "${symptom}"]`];
+                                    for (const p of patterns) {
+                                        const conf = (p.confidence * 100).toFixed(0);
+                                        out.push('');
+                                        out.push(`• ${p.title} — confidence ${conf}%, used ${p.success_count}× (last ${p.age_days}d ago)`);
+                                        if (p.symptom) out.push(`  symptom: ${p.symptom}`);
+                                        if (p.fix_description) out.push(`  fix: ${p.fix_description}`);
+                                    }
+                                    out.push('');
+                                    out.push('Propose the top one to the user with HITL confirmation before applying.');
+                                    return out.join('\n');
+                                } catch (e) {
+                                    return `[HEALING ERROR] ${String(e)}`;
+                                }
+                            }
+                        });
                     }
 
                     const mdM = agentResp.match(/<TOOL>mcp_discover:([^<]+)<\/TOOL>/i);
@@ -4880,10 +5673,25 @@ times the SAME way, switch tool kind entirely.
         t.isProcessing=false;
         t._cancelled = false; // Reset para próxima ejecución
         // ── IncidentTimeline: detect open incidents (fire-and-forget, no blocking) ──
+        // Skip stale auto-incidents (>2h old without resolution) to avoid persistent
+        // false-positive banners. The user can still see them in incident history.
         invoke('incident_list', { shellId: null }).then(incidents => {
-            const openInc = incidents?.find(i => i.status === 'open');
+            const nowSec = Math.floor(Date.now() / 1000);
+            const STALE_SECS = 2 * 3600; // 2 hours
+            const openInc = incidents?.find(i =>
+                i.status === 'open' && (nowSec - i.created_at) < STALE_SECS
+            );
             activeIncidentId = openInc ? openInc.id : null;
-        }).catch(() => { activeIncidentId = null; });
+            // U2 — concerned mood if active incident, otherwise back to idle
+            if (openInc) {
+                setLucyMood('concerned', { force: true });
+            } else {
+                setLucyMood('idle', { force: true });
+            }
+        }).catch(() => {
+            activeIncidentId = null;
+            setLucyMood('idle', { force: true });
+        });
         // Notificación nativa si la ventana está oculta y el comando tomó >5s
         try {
             const elapsed = (t._procStart ? (Date.now() - t._procStart) / 1000 : 0);
@@ -4901,6 +5709,8 @@ times the SAME way, switch tool kind entirely.
             _activeStreams.delete(tabId);
         }
         refresh();persistir();scrollChat();
+        // U5 — recompute predictive chips after the turn settles
+        try { recomputePredictiveChips(tabId); } catch {}
         // Re-enfocar el input del tab activo para que el usuario pueda seguir escribiendo
         setTimeout(() => {
             document.querySelector('.chat-wrap.on .ibox')?.focus();
@@ -5475,14 +6285,32 @@ if (Test-Path $src) {
     // ── NAVEGACIÓN DE VISTAS ─────────────────────────────────────────────────
 
     async function setView(v) {
-        if (v === activeView && !showWelcome) return;
+        // BUG FIX (May 2026): even if v === activeView, when the user is
+        // returning to Terminal IA from another module we need to re-scroll
+        // because Chrome/Edge re-paints the chat-area and resets scrollTop
+        // to the previous mid-conversation position. Without this, every
+        // round-trip leaves the user one or two messages above the bottom.
+        const sameView = (v === activeView && !showWelcome);
 
         const applyView = () => {
             // Dashboard/LogViewer lifecycle handled by their own onMount/onDestroy
             showWelcome = false;
             activeView  = v;
-            if (v === 'terminal') tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); });
+            if (v === 'terminal') {
+                tick().then(() => {
+                    scrollChat();
+                    document.querySelector('.chat-wrap.on .ibox')?.focus();
+                });
+            }
         };
+
+        // Even when the view didn't change, still re-scroll the active chat
+        // if we're on terminal. This covers the "click Memoria → click back to
+        // Terminal IA → dropped mid-conversation" path the user reported.
+        if (sameView) {
+            if (v === 'terminal') scrollChat();
+            return;
+        }
 
         // View Transitions API — navegadores modernos (Chrome 111+, Edge 111+)
         // Fallback: animación manual con viewFading para navegadores sin soporte
@@ -6134,48 +6962,100 @@ if (Test-Path $src) {
               </ul>
             </div>
 
-            <!-- CARD 5: Novedades (nuevas features) -->
+            <!-- CARD 5: R&D Frontier — flagship capabilities -->
             <div class="empty-section ec5" style="grid-column:1 / -1;border-color:rgba(167,139,250,.25);background:rgba(167,139,250,.04);">
-              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'What\'s new — Lucy OS v1.0' : 'Novedades — Lucy OS v1.0'}</span></div>
+              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'R&D Frontier — what Lucy v1.4 can do that nothing else can' : 'R&D Frontier — lo que Lucy v1.4 hace y nadie más'}</span></div>
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Non-blocking chat' : 'Chat no bloqueante'}</b> — {isEN ? 'type & queue messages while Lucy works, just like Gemini & Claude' : 'escribe y encola mensajes mientras Lucy trabaja, igual que Gemini y Claude'}</li>
-                  <li><b>{isEN ? 'Stop button' : 'Botón de parada'}</b> — {isEN ? 'square button replaces Send while processing — stops Lucy instantly' : 'cuadrado reemplaza Enviar mientras procesa — detiene a Lucy al instante'}</li>
-                  <li><b>{isEN ? 'Persistent memory' : 'Memoria persistente'}</b> — {isEN ? 'Lucy stores facts in SQLite across sessions with full-text search' : 'Lucy guarda hechos en SQLite entre sesiones con búsqueda de texto completo'}</li>
-                  <li><b>{isEN ? 'Sub-agents (fork/wait)' : 'Sub-agentes (fork/wait)'}</b> — {isEN ? 'Lucy can launch parallel sub-tasks and wait for their results' : 'Lucy puede lanzar sub-tareas en paralelo y esperar sus resultados'}</li>
+                  <li><b>F1 · Process Lineage</b> — {isEN ? 'records every process\'s parent chain with verifiable SHA-256 audit hash' : 'graba el árbol de cada proceso con hash SHA-256 verificable'} <code>/process_ancestry:PID</code></li>
+                  <li><b>F2 · State Snapshots</b> — {isEN ? 'auto-captures system state and lets you diff over time' : 'captura el estado del sistema y permite diff temporal'} <code>/snapshot /diff</code></li>
+                  <li><b>F3 · Causal Engine</b> — {isEN ? 'correlates process arrivals with symptoms — answers WHY your machine slowed' : 'correlaciona arrivals con síntomas — explica POR QUÉ se puso lenta'}</li>
+                  <li><b>F4 · Self-Healing</b> — {isEN ? 'recalls past fixes (with HITL) on similar symptoms · auto-crystallizes incidents' : 'recuerda fixes pasados (con HITL) ante síntomas parecidos · auto-crystallize'}</li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'MCP Servers' : 'Servidores MCP'}</b> — {isEN ? 'connect Git, SQLite, Filesystem, Shodan, VirusTotal via JSON-RPC' : 'conecta Git, SQLite, Filesystem, Shodan, VirusTotal vía JSON-RPC'}</li>
-                  <li><b>{isEN ? 'Cost tracking' : 'Control de costos'}</b> — {isEN ? 'token usage & estimated spend per model visible in the dashboard' : 'uso de tokens y costo estimado por modelo visible en el dashboard'}</li>
-                  <li><b>{isEN ? 'Permission rules' : 'Reglas de permisos'}</b> — {isEN ? 'allow / block / ask regex-based rules for commands and file paths' : 'reglas allow/block/ask basadas en regex para comandos y rutas'}</li>
-                  <li><b>{isEN ? 'Skills & Runbooks' : 'Skills y Runbooks'}</b> — {isEN ? 'persistent scripts with parameters, tags and usage counters in SQLite' : 'scripts persistentes con parámetros, tags y contadores de uso en SQLite'}</li>
+                  <li><b>F5 · Sandbox Preview</b> — {isEN ? 'static analysis + .wsb config before destructive commands' : 'análisis estático + .wsb config antes de destructivos'} <code>/preview &lt;cmd&gt;</code></li>
+                  <li><b>F6 · Object Bridge</b> — {isEN ? 'pipes PowerShell objects across turns with a small DSL' : 'pipea objetos PS entre turnos con mini-DSL'} <code>where / orderby / limit</code></li>
+                  <li><b>F7 · Runbook Mining</b> — {isEN ? 'detects repeated workflows and promotes them to reusable skills' : 'detecta workflows repetidos y los promueve a skills'} <code>/runbooks</code></li>
+                  <li><b>F8 · Mini-EDR</b> — {isEN ? 'classifies processes by 7 behavioral heuristics' : 'clasifica procesos por 7 heurísticos comportamentales'}</li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Live reasoning' : 'Razonamiento en vivo'}</b> — {isEN ? 'see Lucy\'s thoughts streaming in real time' : 'observa cómo Lucy piensa en tiempo real'}</li>
-                  <li><b>{isEN ? 'Multi-model compare' : 'Comparar modelos'}</b> — <code>/compare m1,m2 prompt</code> {isEN ? 'runs across N models in parallel' : 'lanza en N modelos en paralelo'}</li>
-                  <li><b>{isEN ? 'Context compression' : 'Compresión de contexto'}</b> — {isEN ? '2-phase: local dedup + LLM compression for long agent loops' : '2 fases: dedup local + compresión LLM para loops largos'}</li>
-                  <li><b>{isEN ? 'Error deduplication' : 'Deduplicación de errores'}</b> — {isEN ? 'repeating errors are detected and escalated, not retried indefinitely' : 'errores repetidos se detectan y escalan, no se reintentan indefinidamente'}</li>
+                  <li><b>F9 · Knowledge Graph</b> — {isEN ? 'indexes your repos · learns which files are touched together' : 'indexa tus repos · aprende qué archivos tocas juntos'} <code>/kg-view</code></li>
+                  <li><b>F10 · Daily Patterns</b> — {isEN ? 'learns your weekly routines (Mon 9am → VSCode + Spotify)' : 'aprende tus rutinas semanales (Lun 9am → VSCode + Spotify)'} <code>/routines</code></li>
+                  <li><b>🔎 Incident Detective</b> — {isEN ? 'synthesizes F3+F8+F9 into a single forensic query' : 'sintetiza F3+F8+F9 en una sola consulta forense'} <code>/detective</code></li>
+                  <li><b>📊 Telemetry</b> — {isEN ? 'which Frontier tools you use most · 100% local' : 'qué Frontier tools usas más · 100% local'} <code>/frontier-stats</code></li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- CARD 5b: UX delights -->
+            <div class="empty-section" style="grid-column:1 / -1;border-color:rgba(94,200,255,.20);background:rgba(94,200,255,.03);">
+              <div class="esec-hdr" style="color:#5ec8ff;border-color:rgba(94,200,255,.15);"><span class="esec-ico">✦</span><span>{isEN ? 'New UX (v1.4)' : 'UX nueva (v1.4)'}</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <ul class="esec-list">
+                  <li><b>{isEN ? 'Living Avatar' : 'Living Avatar'}</b> — {isEN ? 'Lucy breathes when idle, pulses cyan thinking, glows gold executing, amber when concerned' : 'Lucy respira en idle, pulsa cyan al pensar, dorado al ejecutar, ámbar al preocuparse'}</li>
+                  <li><b>{isEN ? 'Density modes' : 'Modos de densidad'}</b> — <code>Ctrl+1</code> {isEN ? 'focus' : 'focus'} · <code>Ctrl+2</code> {isEN ? 'explore' : 'explore'} · <code>Ctrl+3</code> {isEN ? 'war room' : 'war room'}</li>
+                  <li><b>{isEN ? 'Chapter View' : 'Vista de capítulos'}</b> — {isEN ? 'multi-step investigations render as a book with a navigable index' : 'investigaciones multi-paso se renderizan como un libro con índice'}</li>
+                  <li><b>{isEN ? 'Predictive Chips' : 'Chips predictivos'}</b> — {isEN ? 'contextual suggestions above the input based on the last turn' : 'sugerencias contextuales arriba del input según el último turno'}</li>
+                  <li><b>{isEN ? 'Drag-to-Lucy' : 'Drag-to-Lucy'}</b> — {isEN ? 'drag URLs, text, images, files: Lucy infers what to do' : 'arrastra URLs, texto, imágenes, archivos: Lucy infiere qué hacer'}</li>
+                </ul>
+                <ul class="esec-list">
+                  <li><b>{isEN ? 'Tab Hover Preview' : 'Vista previa de pestaña'}</b> — {isEN ? 'hover a tab >500ms to see its last messages without switching' : 'pasa el mouse >500ms para ver los últimos mensajes sin cambiar de tab'}</li>
+                  <li><b>{isEN ? 'Heat Layers' : 'Heat Layers'}</b> — {isEN ? 'severity/recency overlays on process and file lists' : 'overlays de severidad/recencia en listas de procesos y archivos'}</li>
+                  <li><b>{isEN ? 'Confidence Markers v2' : 'Confidence Markers v2'}</b> — {isEN ? 'Lucy visually distinguishes [!facts!], [~hedges~], [?speculation?]' : 'Lucy distingue visualmente [!hechos!], [~hedges~], [?especulación?]'}</li>
+                  <li><b>{isEN ? 'Circadian Theme' : 'Tema circadiano'}</b> — {isEN ? 'accents subtly cool from day to night' : 'los acentos se enfrían suavemente de día a noche'}</li>
+                  <li><b>{isEN ? 'Skill Picker' : 'Selector de skills'}</b> — <code>/skills</code> {isEN ? 'opens a fuzzy-search modal' : 'abre un modal con búsqueda fuzzy'}</li>
                 </ul>
               </div>
             </div>
 
           </div>
 
-          <!-- Fila de Reliability & Safety -->
+          <!-- Fila de Reliability & Safety — "siempre-activos" badges para que el usuario
+               vea claramente que estas barreras de seguridad están encendidas. -->
           <div class="empty-row2" style="margin-bottom:12px;">
             <div class="empty-section" style="border-color:rgba(52,211,153,.22);background:rgba(52,211,153,.03);">
               <div class="esec-hdr" style="color:#34d399;border-color:rgba(52,211,153,.18);">
-                <span class="esec-ico"><ShieldCheck size={16} /></span><span>{isEN ? 'Reliability & Safety' : 'Fiabilidad y Seguridad'}</span>
+                <span class="esec-ico"><ShieldCheck size={16} /></span>
+                <span>{isEN ? 'Reliability & Safety' : 'Fiabilidad y Seguridad'}</span>
+                <span class="safety-allon-badge" title={isEN ? 'These safety layers are always-on. They cannot be disabled.' : 'Estas capas de seguridad siempre están activas. No pueden desactivarse.'}>
+                  ✓ {isEN ? 'All on' : 'Todo activo'}
+                </span>
               </div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <ul class="esec-list">
-                  <li><b>PLAN / VERIFY / ROLLBACK</b> — {isEN ? 'for risky changes Lucy proposes a plan with a verification step and rollback command. If verify fails, rollback runs automatically.' : 'para cambios riesgosos Lucy propone un plan con verificación y comando de rollback. Si la verificación falla, el rollback se ejecuta solo.'}</li>
-                  <li><b>{isEN ? 'Host preflight' : 'Preflight de host'}</b> — {isEN ? 'before any remote command Lucy tests TCP reachability and fails fast on unreachable hosts (no more cryptic 15 s WinRM timeouts).' : 'antes de cada comando remoto Lucy prueba conectividad TCP y falla rápido en hosts inaccesibles (se acabaron los timeouts WinRM crípticos de 15 s).'}</li>
+                  <li>
+                    <span class="safety-pill on" aria-label="active">●</span>
+                    <b>PLAN / VERIFY / ROLLBACK</b> — {isEN ? 'for risky changes Lucy proposes a plan with a verification step and rollback command. If verify fails, rollback runs automatically.' : 'para cambios riesgosos Lucy propone un plan con verificación y comando de rollback. Si la verificación falla, el rollback se ejecuta solo.'}
+                  </li>
+                  <li>
+                    <span class="safety-pill on" aria-label="active">●</span>
+                    <b>{isEN ? 'Host preflight' : 'Preflight de host'}</b> — {isEN ? 'before any remote command Lucy tests TCP reachability and fails fast on unreachable hosts (no more cryptic 15 s WinRM timeouts).' : 'antes de cada comando remoto Lucy prueba conectividad TCP y falla rápido en hosts inaccesibles (se acabaron los timeouts WinRM crípticos de 15 s).'}
+                  </li>
+                  <li>
+                    <span class="safety-pill on" aria-label="active">●</span>
+                    <b>{isEN ? 'Admin elevation gating' : 'Ejecución con privilegios de admin'}</b> — {isEN ? 'every elevation request (RunAs / sudo) opens a UAC-style modal showing the exact command. Nothing runs without your explicit click.' : 'cada solicitud de elevación (RunAs / sudo) abre un modal estilo UAC mostrando el comando exacto. Nada se ejecuta sin tu clic explícito.'}
+                  </li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Destructive command guardian' : 'Guardián de comandos destructivos'}</b> — {isEN ? 'detects shutdown/reboot/rm -rf/Stop-Service/Restart-Service/etc. and requires explicit confirmation before execution.' : 'detecta shutdown/reboot/rm -rf/Stop-Service/Restart-Service/etc. y exige confirmación explícita antes de ejecutar.'}</li>
-                  <li><b>{isEN ? 'Dry-run mode' : 'Modo Dry-Run'}</b> — {isEN ? 'preview any PLAN with -WhatIf (PowerShell) or command echoing (shell) before committing changes.' : 'previsualiza cualquier PLAN con -WhatIf (PowerShell) o echoing de comando (shell) antes de aplicar cambios.'}</li>
+                  <li>
+                    <span class="safety-pill on" aria-label="active">●</span>
+                    <b>{isEN ? 'Destructive command guardian' : 'Guardián de comandos destructivos'}</b> — {isEN ? 'detects shutdown/reboot/rm -rf/Stop-Service/Restart-Service/etc. and requires explicit confirmation before execution.' : 'detecta shutdown/reboot/rm -rf/Stop-Service/Restart-Service/etc. y exige confirmación explícita antes de ejecutar.'}
+                  </li>
+                  <li>
+                    <span class="safety-pill on" aria-label="active">●</span>
+                    <b>{isEN ? 'Dry-run mode' : 'Modo Dry-Run'}</b> — {isEN ? 'every PLAN proposes Execute / Dry-Run / Cancel. Dry-Run runs with -WhatIf (PowerShell) or command echoing (shell) before committing changes.' : 'cada PLAN propone Ejecutar / Dry-Run / Cancelar. Dry-Run usa -WhatIf (PowerShell) o echoing de comando (shell) antes de aplicar cambios.'}
+                  </li>
+                  <li>
+                    <span class="safety-pill on" aria-label="active">●</span>
+                    <b>{isEN ? 'Authorization for restricted patterns' : 'Autorización para patrones restringidos'}</b> — {isEN ? 'commands matching block-listed regex (UAC injection, encoded PowerShell, sensitive paths) open an authorization panel before they touch the system.' : 'comandos que cumplen patrones bloqueados (UAC injection, PowerShell ofuscado, rutas sensibles) abren un panel de autorización antes de tocar el sistema.'}
+                  </li>
                 </ul>
+              </div>
+              <div class="safety-allon-note">
+                <ShieldCheck size={11} stroke={2}/>
+                <span>{isEN
+                  ? 'These six layers are built into Lucy and cannot be disabled. They run on every command — local or remote.'
+                  : 'Estas seis capas están integradas en Lucy y no se pueden desactivar. Corren en cada comando — local o remoto.'}</span>
               </div>
             </div>
           </div>
@@ -6237,6 +7117,10 @@ if (Test-Path $src) {
               on:codeclick={(e) => invoke('open_vscode', { path: e.detail.path })}
               on:fixclick={(e) => { if (window._lucyRunFix) window._lucyRunFix(e.detail.key); }}
             />
+            <!-- U5 — Predictive next-action chips. Only renders when there are chips for the active tab. -->
+            {#if activeTabId === tab.id && predictiveChips.length > 0}
+              <PredictiveChipStrip chips={predictiveChips} on:chipaction={onChipAction} />
+            {/if}
             <ChatInput
               {tab} {isEN} {costPrediction} {userChips} {chipsHidden}
               {pendingSecurityBlock} {LLM_GROUPS} {showChatSearch} bind:chatSearch
@@ -6258,7 +7142,7 @@ if (Test-Path $src) {
               on:stop={() => cancelarEjecucion(tab.id)}
               on:inputchange={autoResize}
               on:keydown={(e) => onKey(e.detail.event, tab.id)}
-              on:cancelpending={() => { getTab(tab.id).pendingMessage = null; refresh(); }}
+              on:cancelpending={() => { const _t = getTab(tab.id); if (_t) { _t.pendingMessage = null; refresh(); } }}
               on:chatSearchChange={() => {}}
               on:closeChatSearch={() => { showChatSearch = false; chatSearch = ''; }}
               on:filedrop={(e) => handleFileDrop(e.detail.event, tab.id)}
@@ -7737,6 +8621,44 @@ if (Test-Path $src) {
         {isEN}
         on:close={() => showPdfPanel = false}
       />
+    </div>
+  {/if}
+
+  <!-- Sprint 8 — Skill picker modal -->
+  <SkillPicker
+    open={showSkillPicker}
+    {isEN}
+    on:close={() => showSkillPicker = false}
+    on:invoke={onSkillInvoke}
+  />
+
+  <!-- Sprint 8 — KG mini-viewer modal -->
+  {#if kgViewerOpen}
+    <div class="kgv-backdrop"
+         role="button" tabindex="-1" aria-label="Close KG viewer"
+         on:click={() => { kgViewerOpen = false; }}
+         on:keydown={(e) => { if (e.key === 'Escape') kgViewerOpen = false; }}>
+      <div class="kgv-shell" role="dialog" tabindex="-1" aria-label="Knowledge Graph viewer"
+           on:click|stopPropagation
+           on:keydown|stopPropagation>
+        <header class="kgv-shell-head">
+          <span>⛓ {isEN ? 'Knowledge Graph' : 'Grafo de conocimiento'}</span>
+          <code class="kgv-shell-path" title={kgViewerPath}>{kgViewerPath.split(/[\\/]/).pop()}</code>
+          <button class="kgv-shell-close" on:click={() => { kgViewerOpen = false; }}>✕</button>
+        </header>
+        <div class="kgv-shell-body">
+          <KgMiniViewer
+            path={kgViewerPath}
+            neighbors={kgViewerNeighbors}
+            on:select={(e) => openKgViewerFor(e.detail.path)}
+          />
+          <div class="kgv-shell-hint">
+            {isEN
+              ? 'Click a node to recenter. Edges show co-modification frequency.'
+              : 'Click un nodo para recentrar. Las aristas muestran frecuencia de co-modificación.'}
+          </div>
+        </div>
+      </div>
     </div>
   {/if}
 

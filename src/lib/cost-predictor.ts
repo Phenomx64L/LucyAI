@@ -15,6 +15,7 @@
 
 import { COST_PER_1K } from './constants';
 import { formatTokens } from './text-utils';
+import { getPricing } from './model-pricing';
 
 export interface CostEstimate {
     /** Estimated input tokens for the first turn. */
@@ -35,40 +36,17 @@ export interface CostEstimate {
  *  These are conservative — better to over-quote than surprise the user. */
 const DEFAULT_ITER_FACTOR = 4;
 
-/** Map a model id to the pricing key in COST_PER_1K. */
-function pricingFor(model: string): { in: number; out: number; provider: string } {
-    const m = (model || '').toLowerCase();
-    if (m.startsWith('local-')) return { in: 0, out: 0, provider: 'local' };
-    if (m.startsWith('claude-')) return {
-        in:  COST_PER_1K.anthropic_in,
-        out: COST_PER_1K.anthropic_out,
-        provider: 'anthropic',
-    };
-    if (m.startsWith('gpt-4') || m.startsWith('gpt-5')) return {
-        in:  COST_PER_1K.openai_gpt4_in,
-        out: COST_PER_1K.openai_gpt4_out,
-        provider: 'openai',
-    };
-    if (m.startsWith('o1') || m.startsWith('gpt-o')) return {
-        in:  COST_PER_1K.openai_o1_in,
-        out: COST_PER_1K.openai_o1_out,
-        provider: 'openai',
-    };
-    if (m.startsWith('gpt-')) return {
-        in:  COST_PER_1K.openai_gpt4_in / 6, // mini-tier rough approx
-        out: COST_PER_1K.openai_gpt4_out / 6,
-        provider: 'openai',
-    };
-    if (m.includes('/')) return {
-        in:  COST_PER_1K.nvidia_in_avg,
-        out: COST_PER_1K.nvidia_out_avg,
-        provider: 'nvidia',
-    };
-    return {
-        in:  COST_PER_1K.gemini_in,
-        out: COST_PER_1K.gemini_out,
-        provider: 'gemini',
-    };
+/**
+ * Map a model id to its pricing — backed by the per-model table in
+ * $lib/model-pricing.ts so the predictor matches the footer indicator
+ * and the Rust calculate_cost(). Handles "::effort" suffixes.
+ *
+ * (`COST_PER_1K` from constants.ts is kept only for legacy callers in
+ * other files; new code should consume getPricing() directly.)
+ */
+function pricingFor(model: string): { in: number; out: number; provider: string; iterFactor: number } {
+    const p = getPricing(model);
+    return { in: p.inputPer1K, out: p.outputPer1K, provider: p.provider, iterFactor: p.iterFactor };
 }
 
 /**
@@ -104,9 +82,12 @@ export function predictCost(
     const px = pricingFor(model);
     const inputTokens = estimateTokens(prompt) + Math.ceil(contextChars / 4);
 
-    // Iteration factor: average historical (out / in) ratio for THIS model.
-    // Capped to [1.5, 8] to avoid runaway predictions if history is degenerate.
-    let iterFactor = DEFAULT_ITER_FACTOR;
+    // Iteration factor: prefer historical (out / in) ratio for THIS model
+    // when we have data — otherwise fall back to the per-model table value
+    // (which already encodes the "::effort" multiplier, so Opus 4.7::max
+    // predicts 20× the output tokens of Sonnet 4.6::low, as it should).
+    // Capped to [1.5, 20] so degenerate history can't blow up the estimate.
+    let iterFactor = px.iterFactor || DEFAULT_ITER_FACTOR;
     let confidence: CostEstimate['confidence'] = 'low';
     if (history.length > 0) {
         const ratios = history
@@ -114,7 +95,7 @@ export function predictCost(
             .filter((r): r is number => r !== null && Number.isFinite(r));
         if (ratios.length > 0) {
             const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
-            iterFactor = Math.max(1.5, Math.min(8, avg));
+            iterFactor = Math.max(1.5, Math.min(20, avg));
             confidence = ratios.length >= 10 ? 'high' : 'med';
         }
     }

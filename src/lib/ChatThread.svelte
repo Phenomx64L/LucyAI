@@ -6,6 +6,7 @@
     // bundle so no network fetch, no path resolution, no cache surprises.
     import { LUCY_AVATAR_DATA_URL as lucyAvatarUrl } from '$lib/assets/lucy-avatar-data';
     import { getTabRevStore } from '$lib/page/tabs-store';
+    import AgentChapterView from '$lib/AgentChapterView.svelte';
 
     export let tab: any;
     export let isEN: boolean = false;
@@ -79,7 +80,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="chat-area" on:click={handleAreaClick}>
-    {#each (tabRev, visibleMessages(tab.messages)) as msg (msg.id)}
+    {#each (void tabRev, visibleMessages(tab.messages)) as msg (msg.id)}
         {#if msg.role === 'thinking'}
             <div class="msg-thinking">
                 <div class="thinking-dots">
@@ -147,7 +148,27 @@
                             title={msg.pinned ? (isEN ? 'Unpin' : 'Quitar pin') : (isEN ? 'Pin to context' : 'Fijar al contexto')}
                             on:click={() => dispatch('pinmessage', { msg })}>·</button>
                     {/if}
-                    {@html msg.html}
+                    <!-- U3 — Chapter view for multi-step agent tasks -->
+                    {#if msg.chapterData && msg.viewMode !== 'linear'}
+                        <div class="mn">Lucy <span style="font-size:10px; opacity:0.6">(Agent · Chapter)</span></div>
+                        <AgentChapterView
+                            title={msg.chapterData.title}
+                            objective={msg.chapterData.objective}
+                            elapsedMs={msg.chapterData.elapsedMs}
+                            steps={msg.chapterData.steps}
+                            finalHtml={msg.chapterData.finalHtml}
+                            {isEN}
+                            on:flip={() => { msg.viewMode = 'linear'; tab.messages = [...tab.messages]; }} />
+                    {:else if msg.chapterData && msg.viewMode === 'linear'}
+                        <button class="chap-flip-back"
+                                on:click={() => { msg.viewMode = 'chapter'; tab.messages = [...tab.messages]; }}
+                                title={isEN ? 'Switch to chapter view' : 'Cambiar a vista de capítulos'}>
+                            ◆ {isEN ? 'Chapter view' : 'Vista de capítulos'}
+                        </button>
+                        {@html msg.html}
+                    {:else}
+                        {@html msg.html}
+                    {/if}
                     {#if msg.time}<div class="msg-time">{msg.time}</div>{/if}
                 {:else}
                     {@html msg.html}
@@ -204,11 +225,10 @@
      */
     :global(.lucy-avatar-wrap){
         position:relative !important;
-        display:inline-block !important;
+        display:block !important;
         float:left;
         margin:0 12px 4px 0;
         flex-shrink:0;
-        vertical-align:top;
     }
     :global(.lucy-avatar){
         display:block !important;
@@ -264,7 +284,7 @@
     }
     /* ── User avatar — initials in a tinted circle (matches Luna's blue) ─── */
     :global(.user-avatar){
-        display:inline-block !important;
+        display:block !important;
         float:right;
         width:38px !important;
         height:38px !important;
@@ -282,7 +302,6 @@
         box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 14px -2px rgba(59,158,255,.32);
         user-select:none;
         flex-shrink:0;
-        vertical-align:top;
         transition:transform .25s ease,box-shadow .25s ease;
         cursor:default;
     }
@@ -395,4 +414,27 @@
     :global(:root.light .msg-lucy a){color:var(--blue);}
     :global(:root.light .msg-lucy pre){background:#1a1f2e !important;color:#c8d0dc !important;border:1px solid #2a3448;border-radius:6px;}
     :global(:root.light .msg-lucy th){background:var(--bg3);color:var(--txt);}
+
+    /* U3 — Flip-back button to return to chapter view from linear */
+    .chap-flip-back {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin: 6px 0 10px;
+        padding: 4px 10px;
+        font-family: var(--mono, monospace);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        background: rgba(16,185,129,0.08);
+        color: var(--acc, #10b981);
+        border: 1px solid rgba(16,185,129,0.25);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background .15s ease, border-color .15s ease;
+    }
+    .chap-flip-back:hover {
+        background: rgba(16,185,129,0.16);
+        border-color: rgba(16,185,129,0.45);
+    }
 </style>

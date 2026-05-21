@@ -3,6 +3,9 @@
     import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
+    import { densityMode, cycleDensityMode } from '$lib/density-mode';
+    import { getPricing, pricingLabel } from '$lib/model-pricing';
+    import { getModelIcon } from '$lib/models.js';
 
     export let hostName: string = '---';
     export let lucyConfig: { name: string } = { name: '' };
@@ -64,11 +67,52 @@
     <div class="bi"><span>Host:</span><span style="color:#0f7b5a;">{lucyConfig.name} · {hostName}</span></div>
     {/if}
 
+    <!-- U6 — Density mode pill: click to cycle focus → explore → war-room -->
+    <button class="density-pill"
+            on:click={cycleDensityMode}
+            title={isEN
+                ? `Density: ${$densityMode}. Click to cycle. Ctrl+1=Focus, Ctrl+2=Explore, Ctrl+3=War Room.`
+                : `Densidad: ${$densityMode}. Click para alternar. Ctrl+1=Focus, Ctrl+2=Explore, Ctrl+3=War Room.`}>
+        <span class="density-glyph">
+            {$densityMode === 'focus'    ? '◉' :
+             $densityMode === 'war-room' ? '▦' : '◫'}
+        </span>
+        <span>{$densityMode === 'war-room' ? 'WAR' : $densityMode.toUpperCase()}</span>
+    </button>
+
     {#if activeTab}
         {@const _model = getEffectiveModel(activeTab)}
         {@const _shortModel = _model.includes('/') ? _model.split('/').pop() : _model}
+        {@const _pricing = getPricing(_model)}
+        {@const _isFree = _pricing.inputPer1K === 0 && _pricing.outputPer1K === 0}
+        {@const _modelIcon = getModelIcon(_model) || '◉'}
         <div class="bi" title={`${isEN ? 'Active model in this tab' : 'Modelo activo en esta pestaña'}: ${_model}`}>
-            <span>{isEN ? 'Model:' : 'Modelo:'}</span><span class="cm">◇ {_shortModel}</span>
+            <span>{isEN ? 'Model:' : 'Modelo:'}</span><span class="cm">{_modelIcon} {_shortModel}</span>
+        </div>
+
+        <!-- ── Dynamic per-model rate pill ──
+             Updates instantly when the user picks a different model or
+             changes the effort level. The pill shows the WORK rate
+             (input / output per 1M tokens) so the user can immediately
+             see what each call will cost them. -->
+        <div class="bi rate-pill" class:rate-free={_isFree}
+             title={isEN
+                ? `Rate for ${_shortModel}: ${pricingLabel(_model)}${_pricing.effort ? ` · effort ${_pricing.effort}` : ''}. Effort only multiplies token COUNT, not the per-token price.`
+                : `Tarifa para ${_shortModel}: ${pricingLabel(_model)}${_pricing.effort ? ` · esfuerzo ${_pricing.effort}` : ''}. El esfuerzo solo multiplica el NÚMERO de tokens, no la tarifa por token.`}>
+            <span>{isEN ? 'Rate:' : 'Tarifa:'}</span>
+            {#if _isFree}
+                <span class="rate-val rate-free-tag">{isEN ? 'Free · Local' : 'Gratis · Local'}</span>
+            {:else}
+                <span class="rate-val">
+                    ${(_pricing.inputPer1K * 1000).toFixed(_pricing.inputPer1K < 0.001 ? 3 : 2)}
+                    <span class="rate-sep">/</span>
+                    ${(_pricing.outputPer1K * 1000).toFixed(_pricing.outputPer1K < 0.001 ? 3 : 2)}
+                </span>
+                <span class="rate-unit">/1M</span>
+                {#if _pricing.effort}
+                    <span class="rate-effort" title={isEN ? 'Effort multiplier on token count' : 'Multiplicador del nivel de esfuerzo sobre el conteo de tokens'}>·{_pricing.effort}</span>
+                {/if}
+            {/if}
         </div>
     {/if}
 
@@ -145,4 +189,45 @@
     .cost-budget-fill.cy-bg{background:var(--amber);}
     .cost-budget-fill.cr-bg{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.45);}
     :global(:root:not(.light)) .bbar{border-top:1px solid var(--border-glass, var(--bdr))!important;}
+
+    /* ── Dynamic per-model rate pill ─────────────────────────────────────
+       Sits next to "Modelo:". Reactive — recomputes when the active tab
+       or its selected model changes, including the ::effort suffix. */
+    .rate-pill {
+        cursor: help;
+    }
+    .rate-pill .rate-val {
+        font-variant-numeric: tabular-nums;
+        color: var(--amber, #f59e0b);
+        font-weight: 600;
+    }
+    .rate-pill .rate-sep {
+        opacity: 0.45;
+        margin: 0 1px;
+    }
+    .rate-pill .rate-unit {
+        font-size: 9px;
+        opacity: 0.55;
+        margin-left: 2px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .rate-pill .rate-effort {
+        font-family: var(--font-mono);
+        font-size: 9px;
+        margin-left: 4px;
+        padding: 0 5px;
+        border-radius: 7px;
+        background: rgba(167, 139, 250, 0.10);
+        color: var(--purple, #a78bfa);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+    .rate-pill.rate-free .rate-val {
+        color: var(--acc, #10b981);
+    }
+    .rate-pill .rate-free-tag {
+        font-weight: 600;
+        font-size: 10px;
+    }
 </style>

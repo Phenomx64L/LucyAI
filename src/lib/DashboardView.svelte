@@ -328,15 +328,17 @@
     // ── Auto-incident bridge: report anomalies for debounced triggering ──
     // Hands off to $lib/anomaly-bridge which debounces and decides whether
     // the threshold has been sustained long enough to spin up an incident.
-    $: if (anomalyCpu) {
+    // Don't fire anomaly bridge if hostName hasn't resolved yet ('---' or empty)
+    // to avoid creating incidents with meaningless host identifiers.
+    $: if (anomalyCpu && hostName && hostName !== '---') {
         const hName = dashSelectedHost === 'local' ? hostName : dashSelectedHost;
         reportAnomaly(dashSelectedHost, hName, 'cpu', anomalyCpu, 'dashboard');
     }
-    $: if (anomalyRam) {
+    $: if (anomalyRam && hostName && hostName !== '---') {
         const hName = dashSelectedHost === 'local' ? hostName : dashSelectedHost;
         reportAnomaly(dashSelectedHost, hName, 'ram', anomalyRam, 'dashboard');
     }
-    $: if (anomalyDisk) {
+    $: if (anomalyDisk && hostName && hostName !== '---') {
         const hName = dashSelectedHost === 'local' ? hostName : dashSelectedHost;
         reportAnomaly(dashSelectedHost, hName, 'disk', anomalyDisk, 'dashboard');
     }

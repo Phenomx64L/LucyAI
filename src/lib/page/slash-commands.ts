@@ -28,6 +28,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { get } from 'svelte/store';
+import { safeJsonArray } from '$lib/safe-json';
 import { localModels, refreshLocalModels } from '$lib/models.js';
 
 // ── Context interface ────────────────────────────────────────────────────
@@ -35,6 +36,10 @@ export interface SlashCtx {
     isEN: boolean;
     currentTheme: string;
     lucyConfig: { name: string };
+    /** Sprint 8 — open the floating skill picker. Wired by the page. */
+    openSkillPicker?: () => void;
+    /** Sprint 8 — open the KG mini-viewer for a path. Wired by the page. */
+    openKgViewer?: (path: string) => void;
     /** Reactive accessors — passed in as snapshots so the module never
      *  reaches into Svelte stores directly (those are the page's
      *  responsibility to subscribe to). */
@@ -104,6 +109,10 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /smart-router on|off · activa/desactiva la elección automática de modelo<br>
                 /privacy on|off · hard-lock a Ollama local (sobrepasa cualquier selección cloud)<br>
                 /route · muestra la última decisión del smart-router (tier + razón)<br>
+                <b style="color:var(--blue)">— Frontier R&D —</b><br>
+                /snapshot · captura el estado del sistema (procesos, RAM, discos) en este instante<br>
+                /snapshots · lista snapshots recientes<br>
+                /diff [from to] · compara dos snapshots (sin args = últimos 2)<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -306,6 +315,374 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             const prompt = m[2].trim();
             if (models.length < 2) { sysMsg(`Necesitas al menos 2 modelos`, 'var(--amber)'); return true; }
             ctx.runMultiCompare(tabId, models, prompt);
+            return true;
+        }
+
+        // ── F2 Frontier: State snapshots ──────────────────────────────────
+        case 'snapshot': case 'snap': {
+            sysMsg(ctx.isEN ? 'Capturing system snapshot…' : 'Capturando snapshot del sistema…');
+            (async () => {
+                try {
+                    const id = await invoke<number>('state_snapshot_capture');
+                    sysMsg(ctx.isEN
+                        ? `Snapshot captured (id=${id}). Use /diff to compare with an earlier one.`
+                        : `Snapshot capturado (id=${id}). Usa /diff para comparar con uno anterior.`,
+                        'var(--acc)');
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+        case 'snapshots': case 'snaps': {
+            (async () => {
+                try {
+                    const list = await invoke<Array<{ id: number; captured_at: number; host_name: string }>>(
+                        'state_snapshot_list', { sinceTs: null, limit: 20 });
+                    if (!list || list.length === 0) {
+                        sysMsg(ctx.isEN ? 'No snapshots yet. Run /snapshot to capture one.' : 'No hay snapshots aún. Usa /snapshot para crear uno.', 'var(--amber)');
+                        return;
+                    }
+                    const rows = list.map(s => {
+                        const dt = new Date(s.captured_at * 1000).toLocaleString();
+                        return `<code style="font-family:var(--mono);font-size:11px;">id=${s.id} · ${dt} · ${s.host_name}</code>`;
+                    }).join('<br>');
+                    sysMsg(`<b>${ctx.isEN ? 'Recent snapshots:' : 'Snapshots recientes:'}</b><br>${rows}`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+        case 'diff': {
+            // /diff <from_id> <to_id>   or   /diff (uses latest 2)
+            (async () => {
+                try {
+                    let fromId: number, toId: number;
+                    const parts = arg.split(/\s+/).filter(Boolean);
+                    if (parts.length >= 2) {
+                        fromId = parseInt(parts[0], 10);
+                        toId   = parseInt(parts[1], 10);
+                        if (!fromId || !toId) { sysMsg('IDs inválidos. Uso: /diff <from_id> <to_id>', 'var(--amber)'); return; }
+                    } else {
+                        const list = await invoke<Array<{ id: number }>>('state_snapshot_list', { sinceTs: null, limit: 2 });
+                        if (!list || list.length < 2) {
+                            sysMsg(ctx.isEN ? 'Need at least 2 snapshots. Run /snapshot twice with some delay.' : 'Se necesitan al menos 2 snapshots. Usa /snapshot dos veces con tiempo entre ellos.', 'var(--amber)');
+                            return;
+                        }
+                        toId   = list[0].id;
+                        fromId = list[1].id;
+                    }
+                    const d = await invoke<any>('state_snapshot_diff', { fromId, toId });
+                    const span = Math.round((d.to_ts - d.from_ts) / 60);
+                    let html = `<b>${ctx.isEN ? `State diff (${span} min)` : `Diff de estado (${span} min)`}</b><br>`;
+                    html += `CPU: ${d.cpu_delta_pct.toFixed(1)}% Δ &nbsp;·&nbsp; RAM: ${d.ram_delta_mb}MB Δ<br>`;
+                    if (d.processes_appeared.length > 0) {
+                        html += `<br><span style="color:var(--blue)">${ctx.isEN ? 'Appeared:' : 'Aparecieron:'}</span> ${d.processes_appeared.slice(0, 8).map((p: any) => `<code>${p.name}</code>`).join(' ')}`;
+                    }
+                    if (d.processes_disappeared.length > 0) {
+                        html += `<br><span style="color:var(--amber)">${ctx.isEN ? 'Disappeared:' : 'Desaparecieron:'}</span> ${d.processes_disappeared.slice(0, 8).map((p: any) => `<code>${p.name}</code>`).join(' ')}`;
+                    }
+                    if (d.drive_changes.length > 0) {
+                        html += `<br><span style="color:var(--purple)">${ctx.isEN ? 'Drives:' : 'Discos:'}</span> ${d.drive_changes.map((c: any) => `${c.mount} ${c.from_pct.toFixed(0)}%→${c.to_pct.toFixed(0)}% (${c.used_delta_gb >= 0 ? '+' : ''}${c.used_delta_gb}GB)`).join(' · ')}`;
+                    }
+                    if (d.processes_appeared.length === 0 && d.processes_disappeared.length === 0 && d.drive_changes.length === 0) {
+                        html += `<br><i>${ctx.isEN ? 'No significant changes detected.' : 'Sin cambios significativos detectados.'}</i>`;
+                    }
+                    sysMsg(html);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
+        // ── F7 Frontier: runbook scan (+ auto-propose skill for high-confidence) ─
+        case 'runbooks': case 'workflows': {
+            const days = parseInt(arg, 10) || 30;
+            (async () => {
+                try {
+                    const r = await invoke<any>('runbook_scan', { days, topK: 8 });
+                    if (!r.candidates || r.candidates.length === 0) {
+                        sysMsg(ctx.isEN
+                            ? `No repeated workflows in the last ${days}d. Need 3+ sessions with the same 3-step sequence.`
+                            : `Sin workflows repetidos en los últimos ${days}d. Se necesitan 3+ sesiones con la misma secuencia de 3 pasos.`,
+                            'var(--amber)');
+                        return;
+                    }
+                    const rows = r.candidates.map((c: any) => {
+                        const pct = (c.confidence * 100).toFixed(0);
+                        // Auto-propose: confidence ≥ 70% gets a "Save as skill" hint
+                        const highConf = c.confidence >= 0.70;
+                        const proposeChip = highConf
+                            ? `<div style="margin-top:4px;font-size:10px;color:var(--blue);">
+                                  ⌖ ${ctx.isEN ? 'High confidence — consider saving as skill' : 'Alta confianza — considera guardarlo como skill'}
+                              </div>`
+                            : '';
+                        return `<div style="margin:6px 0;padding:4px 6px;background:rgba(16,185,129,${highConf ? 0.10 : 0.05});border-left:2px solid var(--acc);">
+                            <b>${c.suggested_name}</b> · ${c.frequency}× · ${pct}% conf<br>
+                            <code style="font-size:10px;opacity:0.85">${c.sequence.join(' → ')}</code>
+                            ${proposeChip}
+                        </div>`;
+                    }).join('');
+                    const topHigh = r.candidates.filter((c: any) => c.confidence >= 0.70).length;
+                    const summary = topHigh > 0
+                        ? `<br><div style="font-size:10px;color:var(--blue);margin-top:6px;">${ctx.isEN
+                            ? `→ ${topHigh} candidate(s) ready to be promoted to skills.`
+                            : `→ ${topHigh} candidato(s) listo(s) para promocionar a skill.`}</div>`
+                        : '';
+                    sysMsg(`<b>${ctx.isEN ? 'Detected workflows' : 'Workflows detectados'} (${r.days_analyzed}d, ${r.total_sessions} sessions):</b>${rows}${summary}`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+        // ── F10 Frontier: daily patterns ──────────────────────────────────
+        case 'routines': case 'pattern': case 'patterns': {
+            const days = parseInt(arg, 10) || 28;
+            (async () => {
+                try {
+                    const r = await invoke<any>('daily_patterns_scan', { days, minConfidence: 0.5 });
+                    if (!r.patterns || r.patterns.length === 0) {
+                        sysMsg(ctx.isEN
+                            ? `No stable weekly routines in the last ${days}d. Need observations in 2+ weeks.`
+                            : `Sin rutinas semanales estables en los últimos ${days}d. Se necesitan observaciones en 2+ semanas.`,
+                            'var(--amber)');
+                        return;
+                    }
+                    const byDay: Record<string, any[]> = {};
+                    for (const p of r.patterns) {
+                        (byDay[p.weekday_label] = byDay[p.weekday_label] || []).push(p);
+                    }
+                    let html = `<b>${ctx.isEN ? 'Daily routines' : 'Rutinas diarias'} (${r.weeks_covered} weeks):</b><br>`;
+                    for (const day of ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']) {
+                        if (!byDay[day]) continue;
+                        html += `<div style="margin-top:4px;"><b style="color:var(--acc);">${day}</b><br>`;
+                        for (const p of byDay[day].slice(0, 5)) {
+                            const conf = (p.confidence * 100).toFixed(0);
+                            const ico = p.kind === 'process' ? '⊞' : '⌨';
+                            html += `&nbsp;&nbsp;<code style="font-size:10px">${p.hour_band}h ${ico} ${p.signal}</code> <span style="opacity:0.6;font-size:10px">${p.weeks_observed}w · ${conf}%</span><br>`;
+                        }
+                        html += `</div>`;
+                    }
+                    sysMsg(html);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+        // ── F5 Frontier: sandbox preview ──────────────────────────────────
+        case 'preview': case 'sandbox': {
+            if (!arg) {
+                sysMsg(ctx.isEN ? 'Usage: /preview <command>' : 'Uso: /preview <comando>', 'var(--amber)');
+                return true;
+            }
+            (async () => {
+                try {
+                    const r = await invoke<any>('sandbox_preview_command', { command: arg });
+                    const pct = (r.risk_score * 100).toFixed(0);
+                    const bandColor = r.risk_band === 'destructive' ? 'var(--red)'
+                                    : r.risk_band === 'review' ? 'var(--amber)' : 'var(--acc)';
+                    let html = `<b style="color:${bandColor};">⊠ ${r.risk_band.toUpperCase()} · risk ${pct}%</b><br>`;
+                    html += `<code style="font-size:10px;opacity:0.85">${arg.slice(0, 200).replace(/[<>&]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] || m))}</code><br>`;
+                    if (r.destructive_reason) html += `<div style="color:var(--red);">⚠ ${r.destructive_reason}</div>`;
+                    if (r.elevation_required) html += `<div style="color:var(--amber);">⚡ ${ctx.isEN ? 'Requires elevation' : 'Requiere elevación'}</div>`;
+                    if (r.affected_paths?.length) html += `<div>📁 ${r.affected_paths.length} path(s)</div>`;
+                    if (r.affected_registry_keys?.length) html += `<div>🗝 ${r.affected_registry_keys.length} registry key(s)</div>`;
+                    if (r.affected_services?.length) html += `<div>⚙ ${r.affected_services.length} service(s)</div>`;
+                    if (r.network_endpoints?.length) html += `<div>🌐 ${r.network_endpoints.join(', ')}</div>`;
+                    if (r.sandbox_wsb_path) {
+                        html += `<div style="margin-top:6px;padding:4px 6px;background:rgba(59,158,255,0.10);border-left:2px solid var(--blue);font-size:10px;">
+                            ⊠ Windows Sandbox config saved: <code>${r.sandbox_wsb_path}</code><br>
+                            ${ctx.isEN ? 'Double-click that file to run the command in isolation.' : 'Doble clic ahí para ejecutar en aislamiento.'}
+                        </div>`;
+                    }
+                    sysMsg(html);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
+        // ── F9 Frontier: knowledge graph ─────────────────────────────────
+        case 'kg-add': {
+            if (!arg) { sysMsg(ctx.isEN ? 'Usage: /kg-add <directory-path>' : 'Uso: /kg-add <ruta-directorio>', 'var(--amber)'); return true; }
+            (async () => {
+                try {
+                    await invoke('kg_add_root', { root: arg });
+                    sysMsg(`✓ Root added: <code>${arg}</code>. Will be indexed within ~5 min, or run /kg-scan to force now.`);
+                } catch (e) { sysMsg(`Error: ${String(e)}`, 'var(--red)'); }
+            })();
+            return true;
+        }
+        case 'kg-rm': case 'kg-remove': {
+            if (!arg) { sysMsg('Usage: /kg-rm <directory-path>', 'var(--amber)'); return true; }
+            (async () => {
+                try {
+                    await invoke('kg_remove_root', { root: arg });
+                    sysMsg(`✓ Root removed: <code>${arg}</code>`);
+                } catch (e) { sysMsg(`Error: ${String(e)}`, 'var(--red)'); }
+            })();
+            return true;
+        }
+        case 'kg-roots': case 'kg-list': {
+            (async () => {
+                try {
+                    const roots = await invoke<string[]>('kg_list_roots');
+                    if (!roots || roots.length === 0) {
+                        sysMsg(ctx.isEN ? 'No KG roots configured. Use /kg-add <path> to start tracking.' : 'Sin roots configurados. Usa /kg-add <ruta>.', 'var(--amber)');
+                        return;
+                    }
+                    sysMsg(`<b>Knowledge Graph roots:</b><br>${roots.map(r => `<code>${r}</code>`).join('<br>')}`);
+                } catch (e) { sysMsg(`Error: ${String(e)}`, 'var(--red)'); }
+            })();
+            return true;
+        }
+        // ── F7 Sprint 7: promote a runbook candidate into a saved skill ──
+        case 'promote-runbook': case 'promote': {
+            // Usage: /promote-runbook <name> :: <step1> ; <step2> ; <step3>
+            // Example: /promote-runbook git-flow :: git status ; git add ; git commit ; git push
+            const m = arg.match(/^([^\s:]+)\s*::\s*(.+)$/);
+            if (!m) {
+                sysMsg(ctx.isEN
+                    ? 'Usage: /promote-runbook <name> :: <cmd1> ; <cmd2> ; <cmd3>'
+                    : 'Uso: /promote-runbook <nombre> :: <cmd1> ; <cmd2> ; <cmd3>', 'var(--amber)');
+                return true;
+            }
+            const name = m[1].trim();
+            const sequence = m[2].split(';').map(s => s.trim()).filter(Boolean);
+            if (sequence.length < 2) {
+                sysMsg(ctx.isEN ? 'Need at least 2 steps.' : 'Se necesitan al menos 2 pasos.', 'var(--amber)');
+                return true;
+            }
+            (async () => {
+                try {
+                    const r = await invoke<any>('runbook_promote', {
+                        args: { sequence, name, description: null, category: 'workflow' }
+                    });
+                    sysMsg(`<b style="color:var(--acc);">✓ Skill saved</b><br>
+                        <code>${r.name}</code> (id: <code>${r.skill_id}</code>)<br>
+                        <pre style="font-size:10px;margin:4px 0;padding:4px;background:rgba(0,0,0,0.25);">${r.script.replace(/[<>&]/g, (c: string) => (({'<':'&lt;','>':'&gt;','&':'&amp;'} as Record<string, string>)[c] || c))}</pre>
+                        ${ctx.isEN ? 'Invoke later with /skill or by typing the name.' : 'Invócalo después con /skill o tecleando el nombre.'}`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+        // ── Cross-feature: incident detective ────────────────────────────
+        case 'detective': case 'investigate': {
+            const windowSec = parseInt(arg, 10) || 300;
+            sysMsg(ctx.isEN ? `Investigating window ±${windowSec}s…` : `Investigando ventana ±${windowSec}s…`);
+            (async () => {
+                try {
+                    const r = await invoke<any>('incident_detective', { symptomTs: null, windowSec });
+                    const pct = (r.confidence * 100).toFixed(0);
+                    const bandColor = r.confidence >= 0.55 ? 'var(--red)' : r.confidence >= 0.30 ? 'var(--amber)' : 'var(--acc)';
+                    let html = `<b style="color:${bandColor};">🔎 Detective · ${pct}% confidence</b><br>`;
+                    html += `<div style="margin:6px 0;padding:6px;background:rgba(255,255,255,0.03);border-left:2px solid ${bandColor};font-size:11px;">${r.narrative.replace(/[<>&]/g, (c: string) => (({'<':'&lt;','>':'&gt;','&':'&amp;'} as Record<string, string>)[c] || c))}</div>`;
+                    if (r.threats?.length) {
+                        html += `<div><b>Threats:</b><br>`;
+                        for (const t of r.threats.slice(0, 3)) {
+                            const tp = (t.score * 100).toFixed(0);
+                            html += `&nbsp;&nbsp;<code style="font-size:10px">[${t.band}] ${t.name} (pid ${t.pid}) — ${tp}%</code><br>`;
+                        }
+                        html += `</div>`;
+                    }
+                    if (r.causal?.candidates?.length) {
+                        html += `<div><b>Causal candidates:</b><br>`;
+                        for (const c of r.causal.candidates.slice(0, 3)) {
+                            const cp = (c.confidence * 100).toFixed(0);
+                            html += `&nbsp;&nbsp;<code style="font-size:10px">${c.name} (pid ${c.pid}) — ${cp}%</code><br>`;
+                        }
+                        html += `</div>`;
+                    }
+                    if (r.file_changes?.length) {
+                        html += `<div><b>File activity:</b> ${r.touched_cluster_summary}</div>`;
+                    }
+                    sysMsg(html);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+        case 'kg-scan': {
+            sysMsg(ctx.isEN ? 'Scanning KG roots…' : 'Escaneando roots del KG…');
+            (async () => {
+                try {
+                    const lookback = parseInt(arg, 10) || (60 * 24); // default 24h lookback
+                    const r = await invoke<any>('kg_index_now', { sinceMin: lookback });
+                    if (!r.roots || r.roots.length === 0) {
+                        sysMsg(ctx.isEN ? 'No roots to scan. Add one with /kg-add.' : 'Sin roots para escanear. Usa /kg-add.', 'var(--amber)');
+                        return;
+                    }
+                    const rows = r.roots.map((s: any) =>
+                        `<code style="font-size:10px">${s.root}</code>: ${s.files_recorded} files, ${s.edges_added} edges (${s.elapsed_ms}ms)`
+                    ).join('<br>');
+                    sysMsg(`<b>KG scan complete</b> (${r.total_files_scanned} scanned, ${r.total_files_recorded} recorded, ${r.total_edges} edges)<br>${rows}`);
+                } catch (e) { sysMsg(`Error: ${String(e)}`, 'var(--red)'); }
+            })();
+            return true;
+        }
+
+        // ── Sprint 8: skill picker UI ────────────────────────────────────
+        case 'skills': case 'skill-list': {
+            if (ctx.openSkillPicker) {
+                ctx.openSkillPicker();
+            } else {
+                sysMsg('Skill picker UI not wired in this context.', 'var(--amber)');
+            }
+            return true;
+        }
+        // ── Sprint 8: KG mini-viewer ─────────────────────────────────────
+        case 'kg-view': case 'kg-viz': {
+            if (!arg) {
+                sysMsg(ctx.isEN ? 'Usage: /kg-view <full-file-path>' : 'Uso: /kg-view <ruta-completa>', 'var(--amber)');
+                return true;
+            }
+            if (ctx.openKgViewer) {
+                ctx.openKgViewer(arg);
+            } else {
+                sysMsg('KG viewer not wired in this context.', 'var(--amber)');
+            }
+            return true;
+        }
+        // ── Sprint 8: Frontier telemetry summary ─────────────────────────
+        case 'frontier-stats': case 'telemetry': {
+            (async () => {
+                try {
+                    const rows = await invoke<any[]>('frontier_telemetry_summary');
+                    if (!rows || rows.length === 0) {
+                        sysMsg(ctx.isEN
+                            ? 'No Frontier telemetry recorded yet. Use any Frontier tool (state_diff, threat_scan, detective…) and it will start populating.'
+                            : 'Sin telemetría aún. Usa cualquier Frontier tool y comenzará a poblarse.',
+                            'var(--amber)');
+                        return;
+                    }
+                    const top = rows.slice(0, 12);
+                    const total = rows.reduce((s, r) => s + r.invocations, 0);
+                    const html = top.map((r) => {
+                        const pct = total > 0 ? ((r.invocations / total) * 100).toFixed(0) : '0';
+                        const avg = r.avg_ms ? `${r.avg_ms.toFixed(0)}ms` : '—';
+                        const errPct = (r.error_rate * 100).toFixed(0);
+                        const errStyle = r.error_rate > 0.1 ? 'color:var(--red)' : 'color:var(--text-muted)';
+                        return `<div style="display:flex;gap:8px;font-size:10px;font-family:var(--mono);padding:2px 0;">
+                            <code style="flex:1">${r.feature_id}</code>
+                            <span style="color:var(--acc)">${r.invocations}×</span>
+                            <span>${pct}%</span>
+                            <span>${avg}</span>
+                            <span style="${errStyle}">${errPct}% err</span>
+                        </div>`;
+                    }).join('');
+                    sysMsg(`<b>${ctx.isEN ? 'Frontier feature usage' : 'Uso de features Frontier'} (${total} total invocations)</b>${html}`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
             return true;
         }
 
@@ -535,9 +912,11 @@ function runCrystallize(
                 sysMsg(`Crystal creado (id=${newId}) pero no pudo releerse.`, 'var(--yellow)');
                 return;
             }
-            const outcomes: string[] = JSON.parse(c.key_outcomes || '[]');
-            const files:    string[] = JSON.parse(c.files_affected || '[]');
-            const lessons:  string[] = JSON.parse(c.lessons || '[]');
+            // safeJsonArray: protege contra rows con JSON malformado (migración parcial,
+            // edición manual del .db, etc.). Antes lanzaba SyntaxError y la card quedaba en blanco.
+            const outcomes: string[] = safeJsonArray<string>(c.key_outcomes);
+            const files:    string[] = safeJsonArray<string>(c.files_affected);
+            const lessons:  string[] = safeJsonArray<string>(c.lessons);
             const body = `
                 <div class="mn">◆ Crystal #${c.id}</div>
                 <div style="margin-top:6px;font-size:13px;line-height:1.5;"><b>Narrativa:</b> ${escapeHtml(c.narrative)}</div>
@@ -743,9 +1122,7 @@ function runGraphNeighbors(
                 .sort((a, b) => a - b)
                 .map(h => {
                     const rows = byHop[h].map(n => {
-                        const tags = (() => {
-                            try { return JSON.parse(n.memory.tags || '[]'); } catch { return []; }
-                        })();
+                        const tags = safeJsonArray<string>(n.memory.tags);
                         const tagStr = tags.length
                             ? `<span style="color:var(--txt2);font-size:10px;">${tags.slice(0, 4).map((t: string) => escapeHtml(t)).join(', ')}</span>`
                             : '';
@@ -828,7 +1205,7 @@ function runInsightsList(sysMsg: (html: string, color?: string) => void) {
                 return;
             }
             const rows = list.map(i => {
-                const concepts: string[] = JSON.parse(i.concepts || '[]');
+                const concepts: string[] = safeJsonArray<string>(i.concepts);
                 const conf = (i.confidence * 100).toFixed(0);
                 const date = new Date(i.last_reinforced_at * 1000).toLocaleDateString();
                 const bar = '█'.repeat(Math.round(i.confidence * 10)) + '░'.repeat(10 - Math.round(i.confidence * 10));
@@ -917,9 +1294,11 @@ function runCrystalGet(
                 sysMsg(`Crystal #${id} no existe.`, 'var(--yellow)');
                 return;
             }
-            const outcomes: string[] = JSON.parse(c.key_outcomes || '[]');
-            const files:    string[] = JSON.parse(c.files_affected || '[]');
-            const lessons:  string[] = JSON.parse(c.lessons || '[]');
+            // safeJsonArray: protege contra rows con JSON malformado (migración parcial,
+            // edición manual del .db, etc.). Antes lanzaba SyntaxError y la card quedaba en blanco.
+            const outcomes: string[] = safeJsonArray<string>(c.key_outcomes);
+            const files:    string[] = safeJsonArray<string>(c.files_affected);
+            const lessons:  string[] = safeJsonArray<string>(c.lessons);
             const date = new Date(c.created_at * 1000).toLocaleString();
             const body = `
                 <div class="mn">◆ Crystal #${c.id}</div>

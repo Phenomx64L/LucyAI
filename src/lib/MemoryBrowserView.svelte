@@ -397,7 +397,7 @@
 <div class="memory-view">
     <header class="mv-header">
         <div class="mv-title">
-            <Brain size={22} strokeWidth={2}/>
+            <Brain size={22} stroke={2}/>
             <h2>{isEN ? 'Memory Browser' : 'Explorador de Memoria'}</h2>
         </div>
         <nav class="mv-tabs">

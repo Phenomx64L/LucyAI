@@ -10,12 +10,12 @@ import hljsYaml         from 'highlight.js/lib/languages/yaml';
 import hljsPlain        from 'highlight.js/lib/languages/plaintext';
 import { renderMd }     from '$lib/md-render';
 
-hljs.registerLanguage('powershell', hljsPS);
-hljs.registerLanguage('bash',       hljsBash);
-hljs.registerLanguage('shell',      hljsBash);
-hljs.registerLanguage('json',       hljsJson);
-hljs.registerLanguage('yaml',       hljsYaml);
-hljs.registerLanguage('plaintext',  hljsPlain);
+hljs.registerLanguage('powershell', hljsPS as any);
+hljs.registerLanguage('bash',       hljsBash as any);
+hljs.registerLanguage('shell',      hljsBash as any);
+hljs.registerLanguage('json',       hljsJson as any);
+hljs.registerLanguage('yaml',       hljsYaml as any);
+hljs.registerLanguage('plaintext',  hljsPlain as any);
 
 // ── warpBlock ────────────────────────────────────────────────────────────────
 // Builds the collapsible command-output block injected into Lucy messages.
@@ -43,20 +43,72 @@ export function warpBlock(cmd: string, output: string, ok: boolean, elapsedMs: n
 // Turns <CONFIDENCE level="high|med|low">reason</CONFIDENCE> into colored badges.
 // Applied BEFORE markdown parse so badges survive rendering.
 export function renderConfidenceTags(text: string): string {
-    if (!text || !text.includes('<CONFIDENCE')) return text;
-    return text.replace(/<CONFIDENCE\s+level=["']?(high|med|low)["']?\s*>([\s\S]*?)<\/CONFIDENCE>/gi, (_, lvl, reason) => {
-        const L = String(lvl).toLowerCase() as 'high' | 'med' | 'low';
-        const cfg = {
-            high: { bg: 'rgba(52,211,153,.12)',  bd: '#34d399', fg: '#10b981', ico: '✓', label: 'HIGH' },
-            med:  { bg: 'rgba(251,191,36,.12)',  bd: '#fbbf24', fg: '#d97706', ico: '◐', label: 'MED'  },
-            low:  { bg: 'rgba(248,113,113,.12)', bd: '#f87171', fg: '#ef4444', ico: '⚠', label: 'LOW'  },
-        }[L] ?? { bg: 'rgba(148,163,184,.12)', bd: '#94a3b8', fg: '#64748b', ico: '?', label: '?' };
-        const safeReason = String(reason).trim().replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return `\n\n<div class="conf-badge" style="display:inline-flex;align-items:center;gap:8px;margin:6px 0;padding:5px 10px;border-left:3px solid ${cfg.bd};background:${cfg.bg};border-radius:3px;font-size:11px;line-height:1.4;">
-            <span style="font-weight:700;color:${cfg.fg};letter-spacing:0.5px;">${cfg.ico} ${cfg.label}</span>
-            <span style="color:var(--txt2,#94a3b8);">${safeReason}</span>
-        </div>\n\n`;
-    });
+    if (!text) return text;
+    let out = text;
+
+    // ── Block-level: <CONFIDENCE level="high|med|low">reason</CONFIDENCE> ───
+    if (out.includes('<CONFIDENCE')) {
+        out = out.replace(/<CONFIDENCE\s+level=["']?(high|med|low)["']?\s*>([\s\S]*?)<\/CONFIDENCE>/gi, (_, lvl, reason) => {
+            const L = String(lvl).toLowerCase() as 'high' | 'med' | 'low';
+            const cfg = {
+                high: { bg: 'rgba(52,211,153,.12)',  bd: '#34d399', fg: '#10b981', ico: '✓', label: 'HIGH' },
+                med:  { bg: 'rgba(251,191,36,.12)',  bd: '#fbbf24', fg: '#d97706', ico: '◐', label: 'MED'  },
+                low:  { bg: 'rgba(248,113,113,.12)', bd: '#f87171', fg: '#ef4444', ico: '⚠', label: 'LOW'  },
+            }[L] ?? { bg: 'rgba(148,163,184,.12)', bd: '#94a3b8', fg: '#64748b', ico: '?', label: '?' };
+            const safeReason = String(reason).trim().replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `\n\n<div class="conf-badge" style="display:inline-flex;align-items:center;gap:8px;margin:6px 0;padding:5px 10px;border-left:3px solid ${cfg.bd};background:${cfg.bg};border-radius:3px;font-size:11px;line-height:1.4;">
+                <span style="font-weight:700;color:${cfg.fg};letter-spacing:0.5px;">${cfg.ico} ${cfg.label}</span>
+                <span style="color:var(--txt2,#94a3b8);">${safeReason}</span>
+            </div>\n\n`;
+        });
+    }
+
+    // ── U8 v2 — Inline confidence markers ────────────────────────────────
+    // Lightweight syntax for in-sentence hedging. The LLM can write
+    // "Esto [~probablemente~] sea por X" and the rendering will style the
+    // word as low-confidence with a tooltip.
+    //
+    //   [~text~]    — uncertain / hedge (dotted underline, italic)
+    //   [!text!]    — high confidence assertion (subtle green underline)
+    //   [?text?]    — speculative / guessing (italic + amber)
+    //
+    // Implemented as restricted character class so we don't conflict with
+    // markdown links/lists. Allowed inside: word chars, punctuation, spaces.
+    if (out.includes('[~') || out.includes('[!') || out.includes('[?')) {
+        // [~uncertain~]
+        out = out.replace(/\[~([^\[\]~\n]{1,160})~\]/g,
+            (_, t) => `<span class="conf-inline conf-low" title="Lucy is hedging — supporting evidence is partial.">${escapeHtmlMini(t)}</span>`);
+        // [!confident!]
+        out = out.replace(/\[!([^\[\]!\n]{1,160})!\]/g,
+            (_, t) => `<span class="conf-inline conf-high" title="Lucy has direct evidence for this claim.">${escapeHtmlMini(t)}</span>`);
+        // [?speculative?]
+        out = out.replace(/\[\?([^\[\]?\n]{1,160})\?\]/g,
+            (_, t) => `<span class="conf-inline conf-spec" title="Speculation — no direct evidence.">${escapeHtmlMini(t)}</span>`);
+    }
+
+    // ── U8 v2 — Citation chips: <CITE src="...">label</CITE> ─────────────
+    // Points back to where Lucy got the info: a memory id, file path,
+    // tool result, or URL. Rendered as a small clickable chip.
+    if (out.includes('<CITE')) {
+        out = out.replace(/<CITE\s+src=["']([^"']+)["'](?:\s+kind=["']([^"']+)["'])?\s*>([\s\S]*?)<\/CITE>/gi,
+            (_, src, kind, label) => {
+                const safeSrc = String(src).replace(/"/g, '&quot;');
+                const safeLabel = escapeHtmlMini(String(label).trim());
+                const ico = kind === 'memory' ? '⌬' :
+                            kind === 'file'   ? '⌸' :
+                            kind === 'url'    ? '◈' :
+                            kind === 'tool'   ? '⚯' : '※';
+                return `<a class="cite-chip" data-cite-src="${safeSrc}" data-cite-kind="${kind || 'ref'}" title="${safeSrc}">${ico} ${safeLabel}</a>`;
+            });
+    }
+
+    return out;
+}
+
+// Tiny html escape for confidence inline text (not for full markdown — we
+// want italics inside conf-spec to still get markdown'd).
+function escapeHtmlMini(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // ── renderLucyMarkdown ────────────────────────────────────────────────────────
@@ -213,7 +265,7 @@ export async function mountEnrichedWidgets(): Promise<void> {
 
         try {
             const parsed = JSON.parse(decodeURIComponent(jsonStr));
-            const enrichedData = { type, raw: '', parsed };
+            const enrichedData = { type: type as import('$lib/output-enricher').OutputType, raw: '', parsed };
 
             // Mount Svelte 4 component
             const instance = new EnrichedOutputWidget({

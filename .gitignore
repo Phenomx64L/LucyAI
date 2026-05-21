@@ -41,3 +41,7 @@ patch_*.mjs
 apply*.mjs
 apply_orchestrator*.js
 sync_lucy.cjs
+
+# Local test artifacts (system health HTML reports)
+src-tauri/Reporte_Sistema.html
+src-tauri/Reporte_Sistema_*.html

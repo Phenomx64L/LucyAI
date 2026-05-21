@@ -42,6 +42,48 @@
     }
 
     let showTabPicker = false;
+
+    // U1 — Tab preview hover: shows a tiny snapshot of the tab's last
+    // few messages when hovering for >500ms. No invasive workspace refactor —
+    // just a peek so the user can find the right tab faster.
+    let hoverTabId: string | null = null;
+    let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+    let previewVisible = false;
+    let previewAnchorX = 0;
+    let previewAnchorY = 0;
+
+    function onTabEnter(ev: MouseEvent, tab: any) {
+        if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+        hoverTabId = tab.id;
+        const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+        previewAnchorX = rect.left;
+        previewAnchorY = rect.bottom + 6;
+        hoverTimer = setTimeout(() => {
+            previewVisible = true;
+        }, 500);
+    }
+
+    function onTabLeave() {
+        if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+        previewVisible = false;
+        hoverTabId = null;
+    }
+
+    /** Compose the preview content from the last 3 messages of a tab. */
+    function buildPreview(tab: any): { lines: Array<{ role: string; text: string }>; cwd?: string } {
+        const msgs = Array.isArray(tab?.messages) ? tab.messages : [];
+        const recent = msgs
+            .filter((m: any) => m.rawContent && (m.role === 'user' || m.role === 'lucy'))
+            .slice(-3)
+            .map((m: any) => ({
+                role: m.role,
+                text: String(m.rawContent || '').slice(0, 120).replace(/\s+/g, ' ').trim(),
+            }));
+        return { lines: recent, cwd: tab?.cwd };
+    }
+
+    $: hoverTab = hoverTabId ? tabs.find(t => t.id === hoverTabId) : null;
+    $: hoverPreview = hoverTab ? buildPreview(hoverTab) : { lines: [] };
 </script>
 
 <header class="tb" data-tauri-drag-region>
@@ -64,7 +106,9 @@
                 <div class="tab" class:active={activeTabId === tab.id}
                      role="button" tabindex="0"
                      on:click={() => onTabClick(tab.id)}
-                     on:keydown>
+                     on:keydown
+                     on:mouseenter={(e) => onTabEnter(e, tab)}
+                     on:mouseleave={onTabLeave}>
                     <div class="tdot"></div>
                     {#if renamingTabId === tab.id}
                         <input
@@ -138,7 +182,7 @@
     <div class="win-controls">
         <button class="win-btn-icon panic-btn" on:click={() => dispatch('panic')}
                 title={isEN ? 'Stop All Processes (Panic)' : 'Detener todo (Pánico)'}>
-            <OctagonX size={14} strokeWidth={2.2} />
+            <OctagonX size={14} stroke={2.2} />
         </button>
         <button class="win-btn-icon" on:click={() => dispatch('toggleFocus')}
                 title={focusMode ? 'Ctrl+M — salir de focus' : 'Ctrl+M — modo focus'}>
@@ -158,6 +202,30 @@
         </div>
     </div>
 </header>
+
+<!-- U1 — Tab hover preview popover. Fixed-positioned so it doesn't constrain the header. -->
+{#if previewVisible && hoverTab}
+    <div class="tab-preview-pop"
+         style="left:{previewAnchorX}px; top:{previewAnchorY}px;"
+         role="tooltip">
+        <div class="tp-head">
+            <span class="tp-title">{hoverTab.title || 'Tab'}</span>
+            {#if hoverPreview.cwd}
+                <span class="tp-cwd" title={hoverPreview.cwd}>{hoverPreview.cwd}</span>
+            {/if}
+        </div>
+        {#if hoverPreview.lines.length === 0}
+            <div class="tp-empty">{isEN ? '(empty — no messages yet)' : '(vacía — sin mensajes)'}</div>
+        {:else}
+            {#each hoverPreview.lines as line}
+                <div class="tp-line tp-{line.role}">
+                    <span class="tp-role">{line.role === 'user' ? '›' : '◆'}</span>
+                    <span class="tp-text">{line.text}</span>
+                </div>
+            {/each}
+        {/if}
+    </div>
+{/if}
 
 <style>
     .tb{display:flex;align-items:center;height:38px;background:#0b0d14;border-bottom:1px solid var(--bdr);padding:0 0 0 14px;user-select:none;-webkit-app-region:drag;flex-shrink:0;}
@@ -211,4 +279,83 @@
     :global(.panic-btn:hover){color:#f87171 !important;background:rgba(239,68,68,.12) !important;}
     :global(:root:not(.light)) .tb{background:transparent !important;border-bottom:1px solid var(--border-glass, var(--bdr)) !important;}
     :global(:root:not(.light)) :global(.tab.active){background:var(--sidebar-overlay, var(--bg2)) !important;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-color:var(--border-glass, var(--bdr)) !important;}
+
+    /* ── U1 — Tab hover preview popover ─────────────────────────────────
+       Fixed-positioned so it floats over the chat without disturbing layout.
+       Pointer-events: none so the user can move into the chat area to dismiss
+       without clicking through it. */
+    .tab-preview-pop {
+        position: fixed;
+        z-index: 9000;
+        min-width: 240px;
+        max-width: 360px;
+        background: var(--bg-card, #161b22);
+        border: 1px solid var(--border-color, #1e293b);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-family: var(--font-mono, monospace);
+        font-size: 11px;
+        line-height: 1.5;
+        color: var(--text-main, #e2e8f0);
+        box-shadow: 0 8px 24px -8px rgba(0,0,0,0.55),
+                    0 0 0 1px rgba(16,185,129,0.10);
+        pointer-events: none;
+        animation: tp-fade-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes tp-fade-in {
+        from { opacity: 0; transform: translateY(-2px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+    .tp-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-bottom: 6px;
+        margin-bottom: 6px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .tp-title {
+        flex: 1;
+        font-weight: 700;
+        color: var(--acc, #10b981);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tp-cwd {
+        font-size: 9px;
+        color: var(--text-muted, #64748b);
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tp-line {
+        display: flex;
+        gap: 6px;
+        align-items: flex-start;
+        padding: 2px 0;
+    }
+    .tp-role {
+        flex-shrink: 0;
+        font-weight: 700;
+        opacity: 0.65;
+    }
+    .tp-lucy .tp-role { color: var(--acc); }
+    .tp-user .tp-role { color: var(--blue, #3b9eff); }
+    .tp-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        -webkit-box-orient: vertical;
+        opacity: 0.85;
+    }
+    .tp-empty {
+        font-style: italic;
+        color: var(--text-muted);
+        font-size: 10px;
+    }
 </style>

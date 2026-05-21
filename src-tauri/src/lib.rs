@@ -5,7 +5,7 @@ mod utils;
 mod commands;
 mod guardrails;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -233,7 +233,7 @@ pub fn run() {
 
             // Initialize the shared metrics/indexer DB once at startup.
             // Failing here would leave commands unable to read/write, so log and continue.
-            if let Err(e) = metrics::init(&app.handle()) {
+            if let Err(e) = metrics::init(app.handle()) {
                 eprintln!("[lucy] metrics::init failed: {}", e);
             }
 
@@ -547,6 +547,7 @@ pub fn run() {
             metrics::log_token_usage,
             metrics::get_cost_summary,
             metrics::get_token_history,
+            metrics::reset_cost_history,
             metrics::check_permission,
             metrics::save_permission_rule,
             metrics::list_permission_rules,
@@ -611,6 +612,54 @@ pub fn run() {
             incident::incident_get,
             incident::incident_phase_prompt,
             incident::incident_verify_chain,
+            // F2 Frontier — State snapshots (system state capture + temporal diff)
+            state_snapshot::state_snapshot_capture,
+            state_snapshot::state_snapshot_latest,
+            state_snapshot::state_snapshot_list,
+            state_snapshot::state_snapshot_diff,
+            // F1 Frontier — Process lineage tracker (parent chain + audit hash)
+            process_lineage::process_lineage_poll,
+            process_lineage::process_lineage_list,
+            process_lineage::process_lineage_for_pid,
+            process_lineage::process_lineage_search,
+            process_lineage::process_lineage_verify_chain,
+            // F4 Frontier — Self-healing pattern engine
+            self_healing::healing_save_pattern,
+            self_healing::healing_mark_success,
+            self_healing::healing_find_similar,
+            self_healing::healing_list_all,
+            self_healing::healing_delete_pattern,
+            // F3 Frontier — Causal inference engine
+            causal::diagnose_spike,
+            // F8 Frontier — Mini-EDR behavioral threat scanner
+            threat_scan::threat_scan,
+            // F6 Frontier — Cross-app object bridge (PowerShell objects pipeable across turns)
+            object_bridge::obj_bridge_store,
+            object_bridge::obj_bridge_list,
+            object_bridge::obj_bridge_clear,
+            object_bridge::obj_bridge_query,
+            // F7 Frontier — Runbook generator (sequence mining over user history)
+            runbook_gen::runbook_scan,
+            // F10 Frontier — Daily routine learning
+            daily_patterns::daily_patterns_scan,
+            // F5 Frontier — Sandbox-first preview of destructive commands
+            sandbox_preview::sandbox_preview_command,
+            // F9 Frontier — Personal Knowledge Graph
+            knowledge_graph::kg_add_root,
+            knowledge_graph::kg_remove_root,
+            knowledge_graph::kg_list_roots,
+            knowledge_graph::kg_index_now,
+            knowledge_graph::kg_recent_files,
+            knowledge_graph::kg_neighbors,
+            knowledge_graph::kg_ext_summary,
+            // F7 Sprint 7 — Promote a detected workflow into a saved skill
+            runbook_gen::runbook_promote,
+            // Cross-feature — Incident Detective (F3 + F8 + F9 synthesis)
+            incident_detective::incident_detective,
+            // Sprint 8 — Frontier telemetry (which Frontier tools the user actually uses)
+            frontier_telemetry::frontier_telemetry_record,
+            frontier_telemetry::frontier_telemetry_summary,
+            frontier_telemetry::frontier_telemetry_clear,
             // Semantic embeddings (Sprint 2 — vector search on skills, memories, runbooks)
             embeddings::embed_text,
             embeddings::embeddings_available,

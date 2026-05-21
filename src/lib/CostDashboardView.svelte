@@ -1,9 +1,12 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { getCostSummary } from '$lib/lucy-api';
+    import { invoke } from '@tauri-apps/api/core';
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
 
     import Settings from '@tabler/icons-svelte/icons/settings';
+
+    import Trash2 from '@tabler/icons-svelte/icons/trash';
 
     import Check from '@tabler/icons-svelte/icons/check';
     import { costSummaryDay, costSummaryMonth, costSummaryAll, tokenBudgetConfig } from '$lib/stores';
@@ -58,6 +61,46 @@
     // numeric input. Mirrors what GitHub Copilot / Cursor offer.
     const BUDGET_PRESETS = [10, 25, 50, 100, 250];
 
+    // ── Reset history modal ──
+    // Lets the user wipe accumulated cost without touching memories/skills/chats.
+    // Two-step confirmation (open modal → pick scope → confirm) so it's hard to
+    // trigger by accident. Backend command is reset_cost_history(scope).
+    let resetModalOpen = false;
+    let resetScope = 'month';   // 'day' | 'month' | 'all'
+    let resetBusy = false;
+    function openResetModal() {
+        resetScope = 'month';
+        resetModalOpen = true;
+    }
+    function closeResetModal() {
+        if (resetBusy) return;
+        resetModalOpen = false;
+    }
+    async function confirmReset() {
+        if (resetBusy) return;
+        resetBusy = true;
+        try {
+            const r = await invoke('reset_cost_history', { scope: resetScope });
+            // Refresh all three period stores so dashboard + footer pill update.
+            costSummaryDay.set(null);
+            costSummaryMonth.set(null);
+            costSummaryAll.set(null);
+            await refreshCosts();
+            resetModalOpen = false;
+            // Lightweight toast — reuse the dispatch channel the parent listens on.
+            try {
+                dispatch('toast', {
+                    msg: `${lang.resetDone} · ${r.deleted_token_rows} ${lang.resetRows}`,
+                    type: 'ok',
+                });
+            } catch {}
+        } catch (e) {
+            error = String(e);
+        } finally {
+            resetBusy = false;
+        }
+    }
+
     // Computed summaries
     let currentSummary = null;
     let budgetPercentage = 0;
@@ -97,6 +140,16 @@
             save: 'Guardar',
             disable: 'Desactivar control',
             budgetHint: 'Si lo desactivas, Lucy no mostrará alertas de gasto.',
+            reset: 'Restablecer',
+            resetTitle: 'Restablecer historial de costos',
+            resetIntro: 'Esto borra los registros de uso de tokens y costos acumulados. NO afecta tus conversaciones, memorias, skills, hosts ni datos de usuario.',
+            resetScopeDay: 'Solo hoy',
+            resetScopeMonth: 'Este mes',
+            resetScopeAll: 'Todo el historial',
+            resetConfirm: 'Sí, restablecer',
+            resetDanger: 'Esta acción no se puede deshacer.',
+            resetDone: 'Historial de costos restablecido',
+            resetRows: 'Filas eliminadas',
         },
         'en-US': {
             title: 'Cost Dashboard',
@@ -131,6 +184,16 @@
             save: 'Save',
             disable: 'Disable tracking',
             budgetHint: 'If disabled, Lucy will stop showing budget alerts.',
+            reset: 'Reset',
+            resetTitle: 'Reset cost history',
+            resetIntro: 'Wipes accumulated token usage and cost records. Does NOT affect your conversations, memories, skills, hosts, or user data.',
+            resetScopeDay: 'Today only',
+            resetScopeMonth: 'This month',
+            resetScopeAll: 'All history',
+            resetConfirm: 'Yes, reset',
+            resetDanger: 'This action cannot be undone.',
+            resetDone: 'Cost history reset',
+            resetRows: 'rows deleted',
         }
     };
 
@@ -209,6 +272,11 @@
             <button class="budget-cta" type="button" on:click={openBudgetModal} title={lang.editBudget}>
                 <Settings size={13} strokeWidth={2}/>
                 <span>{lang.editBudget}</span>
+            </button>
+            <!-- Reset history — destructive, hence the explicit color treatment + modal confirmation. -->
+            <button class="reset-cta" type="button" on:click={openResetModal} title={lang.resetTitle}>
+                <Trash2 size={13} stroke={2}/>
+                <span>{lang.reset}</span>
             </button>
             <select value={selectedPeriod} on:change={onPeriodChange} disabled={loading}>
                 <option value="day">{lang.day}</option>
@@ -340,6 +408,58 @@
         <div class="no-data">{lang.noData}</div>
     {/if}
 </div>
+
+<!-- ── Reset history modal ────────────────────────────────────────────────── -->
+{#if resetModalOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="bm-overlay" role="presentation" on:click={closeResetModal}
+         on:keydown={(e) => { if (e.key === 'Escape') closeResetModal(); }}>
+        <div class="bm-box rs-box" role="dialog" aria-modal="true" tabindex={-1}
+             use:focusTrap on:click|stopPropagation>
+            <div class="bm-hdr">
+                <h3>{lang.resetTitle}</h3>
+                <button class="bm-close" type="button" on:click={closeResetModal} aria-label="Close" disabled={resetBusy}>✕</button>
+            </div>
+            <div class="bm-body">
+                <p class="rs-intro">{lang.resetIntro}</p>
+
+                <div class="rs-scope">
+                    <label class="rs-opt" class:active={resetScope === 'day'}>
+                        <input type="radio" bind:group={resetScope} value="day" disabled={resetBusy}/>
+                        <span class="rs-opt-label">{lang.resetScopeDay}</span>
+                    </label>
+                    <label class="rs-opt" class:active={resetScope === 'month'}>
+                        <input type="radio" bind:group={resetScope} value="month" disabled={resetBusy}/>
+                        <span class="rs-opt-label">{lang.resetScopeMonth}</span>
+                    </label>
+                    <label class="rs-opt rs-opt-danger" class:active={resetScope === 'all'}>
+                        <input type="radio" bind:group={resetScope} value="all" disabled={resetBusy}/>
+                        <span class="rs-opt-label">{lang.resetScopeAll}</span>
+                    </label>
+                </div>
+
+                <div class="rs-warn">
+                    <AlertTriangle size={13} stroke={2}/>
+                    <span>{lang.resetDanger}</span>
+                </div>
+            </div>
+            <div class="bm-actions">
+                <button class="bm-btn-ghost" type="button" on:click={closeResetModal} disabled={resetBusy}>
+                    {lang.cancel}
+                </button>
+                <button class="bm-btn-danger" type="button" on:click={confirmReset} disabled={resetBusy}>
+                    {#if resetBusy}
+                        <span class="rs-spinner" aria-hidden="true"></span>
+                        {lang.loading}
+                    {:else}
+                        <Trash2 size={12} stroke={2}/>
+                        {lang.resetConfirm}
+                    {/if}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
 
 <!-- ── Budget editor modal ────────────────────────────────────────────────── -->
 {#if budgetModalOpen}
@@ -641,6 +761,88 @@
         background: rgba(16,185,129,0.18);
         border-color: var(--accent, #10b981);
     }
+
+    /* Reset history — destructive variant of the same CTA shape so it
+       sits visually beside "Editar presupuesto" without dominating. */
+    .reset-cta {
+        display: inline-flex; align-items: center; gap: 6px;
+        background: rgba(239,68,68,0.08);
+        border: 1px solid rgba(239,68,68,0.30);
+        color: #ef4444;
+        font-size: 12px; font-weight: 600; font-family: inherit;
+        padding: 6px 12px; border-radius: 7px;
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease;
+    }
+    .reset-cta:hover {
+        background: rgba(239,68,68,0.16);
+        border-color: rgba(239,68,68,0.6);
+    }
+    /* Reset modal-specific tweaks */
+    .rs-box { max-width: 460px; }
+    .rs-intro {
+        margin: 0 0 14px;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--text-main, #cbd5e1);
+    }
+    .rs-scope {
+        display: flex; flex-direction: column; gap: 6px;
+        margin-bottom: 12px;
+    }
+    .rs-opt {
+        display: flex; align-items: center; gap: 10px;
+        padding: 9px 12px;
+        background: rgba(255,255,255,0.025);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--text-main);
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease;
+    }
+    .rs-opt:hover { background: rgba(255,255,255,0.05); }
+    .rs-opt.active {
+        background: rgba(59,158,255,0.08);
+        border-color: rgba(59,158,255,0.35);
+    }
+    .rs-opt-danger.active {
+        background: rgba(239,68,68,0.10);
+        border-color: rgba(239,68,68,0.45);
+    }
+    .rs-opt input[type="radio"] { accent-color: var(--accent, #10b981); }
+    .rs-warn {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 8px 10px;
+        font-size: 11px; line-height: 1.4;
+        color: #f59e0b;
+        background: rgba(245,158,11,0.06);
+        border-left: 2px solid rgba(245,158,11,0.45);
+        border-radius: 4px;
+    }
+    .bm-btn-danger {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 8px 14px;
+        font-size: 12px; font-weight: 600; font-family: inherit;
+        color: #fff;
+        background: linear-gradient(180deg, #ef4444, #dc2626);
+        border: 1px solid rgba(220,38,38,0.5);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: opacity 140ms ease, transform 140ms ease;
+    }
+    .bm-btn-danger:hover:not(:disabled) { opacity: 0.92; }
+    .bm-btn-danger:disabled { opacity: 0.55; cursor: not-allowed; }
+    .rs-spinner {
+        display: inline-block;
+        width: 11px; height: 11px;
+        border: 2px solid rgba(255,255,255,0.30);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: rs-spin 0.7s linear infinite;
+    }
+    @keyframes rs-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .rs-spinner { animation: none; } }
     /* Inline button on the budget card — now has TEXT next to the icon
        so it's not invisible at small sizes. */
     .budget-edit-btn {

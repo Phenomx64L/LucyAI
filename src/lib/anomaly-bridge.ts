@@ -37,8 +37,8 @@ export interface AnomalyBridgeConfig {
 }
 
 const DEFAULT_CONFIG: AnomalyBridgeConfig = {
-    minSeverity: 'strong',
-    debounceMs: 30_000,
+    minSeverity: 'extreme',   // was 'strong' — too many false positives on desktops
+    debounceMs: 60_000,       // was 30s — 60s avoids transient spikes
     enabled: true,
     maxPerHost: 2,
 };
@@ -112,6 +112,13 @@ export async function reportAnomaly(
         return;
     }
 
+    // RAM/disk going DOWN (negative sigma) is usually memory being freed or
+    // disk space recovered — not a real problem. Only trigger on increases.
+    if ((metric === 'ram' || metric === 'disk') && anomaly.sigma < 0) {
+        pending.delete(key);
+        return;
+    }
+
     // Update or create pending entry
     const existing = pending.get(key);
     if (existing) {
@@ -181,6 +188,37 @@ export async function reportAnomaly(
 
         // P0 Feature 4: OS-level toast notification on anomaly trigger
         notifyAlert(metric, entry.sigma, hostName).catch(() => {});
+
+        // Sprint 8 — Auto-run Incident Detective for the anomaly window.
+        // Fire-and-forget: result is attached to the incident as evidence.
+        // Window: ±5 min around now (the anomaly is fresh).
+        invoke<any>('incident_detective', { symptomTs: null, windowSec: 300 })
+            .then((report) => {
+                if (!report) return;
+                // Persist the narrative as evidence on the incident so the
+                // user can see what Lucy thinks happened — without any LLM call.
+                invoke('incident_add_evidence', {
+                    args: {
+                        incident_id: incident.id,
+                        kind: 'observation',
+                        source: 'detective-auto',
+                        content: `Auto-Detective at anomaly:\n${report.narrative}\n\nConfidence: ${(report.confidence * 100).toFixed(0)}%\nThreats: ${report.threats?.length || 0}\nCausal candidates: ${report.causal?.candidates?.length || 0}\nFile activity: ${report.touched_cluster_summary || 'none'}`,
+                        tags: ['auto-detective', metric],
+                    }
+                }).catch(() => {});
+                // Emit a richer event so the UI can surface the narrative inline
+                window.dispatchEvent(new CustomEvent('lucy:auto-detective', {
+                    detail: { incidentId: incident.id, report }
+                }));
+            })
+            .catch(() => {}); // detective failure must NEVER block the anomaly path
+
+        // Telemetry: record that anomaly_bridge fired
+        invoke('frontier_telemetry_record', {
+            featureId: 'F8.anomaly_bridge_fire',
+            elapsedMs: 0,
+            failed: false,
+        }).catch(() => {});
 
         console.log(`[anomaly-bridge] Auto-triggered incident ${incident.id}: ${title}`);
     } catch (e) {

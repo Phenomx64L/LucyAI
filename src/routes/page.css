@@ -689,6 +689,51 @@ body.density-compact .chat{gap:2px !important;}
 .esec-list b{color:#94a3b8;}
 .esec-list code{font-family:var(--mono);font-size:11px;color:var(--acc);background:rgba(16,185,129,.07);padding:1px 5px;border-radius:3px;}
 .esec-list i{color:#64748b;}
+
+/* ── Safety "always-on" badges in the Welcome view ─────────────────
+   The Reliability & Safety card used to look like a feature list and
+   users mistook the items for togglable settings. These pills make
+   the on-state explicit without inviting a click. */
+.safety-allon-badge{
+    margin-left:auto;
+    display:inline-flex;align-items:center;gap:4px;
+    padding:2px 8px;
+    font-family:var(--mono);font-size:9px;font-weight:700;
+    letter-spacing:.4px;text-transform:uppercase;
+    color:#34d399;
+    background:rgba(52,211,153,.10);
+    border:1px solid rgba(52,211,153,.35);
+    border-radius:10px;
+    cursor:default;
+}
+.safety-pill{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:9px;height:9px;
+    font-size:8px;line-height:1;
+    color:#34d399;
+    margin-right:4px;
+    vertical-align:middle;
+    /* Soft breath so it reads as "live" rather than "static dot" */
+    animation:safety-breath 3.2s ease-in-out infinite;
+    text-shadow:0 0 6px rgba(52,211,153,.65);
+}
+.safety-pill.on{ color:#34d399; }
+@keyframes safety-breath{
+    0%,100%{ opacity:.85; }
+    50%    { opacity:1; }
+}
+.safety-allon-note{
+    margin-top:14px;padding:8px 10px;
+    display:flex;align-items:center;gap:8px;
+    background:rgba(52,211,153,.05);
+    border:1px solid rgba(52,211,153,.18);
+    border-radius:5px;
+    font-size:11px;color:#9bb6a4;line-height:1.4;
+}
+@media (prefers-reduced-motion: reduce){
+    .safety-pill{animation:none;}
+}
+
 /* Tip */
 .empty-tips{background:rgba(16,185,129,.03);border:1px solid rgba(16,185,129,.1);border-left:3px solid rgba(16,185,129,.3);border-radius:0 8px 8px 0;padding:10px 16px;font-size:12px;color:#0f7b5a;max-width:1000px;width:100%;margin-bottom:16px;line-height:1.6;}
 .tip-label{font-size:11px;font-weight:700;color:#0d9668;display:block;margin-bottom:4px;letter-spacing:.3px;}
@@ -1740,6 +1785,21 @@ body[data-state="error"] .igrp{
 /* ── TYPING ────────────────────────────────── */
 .typing{align-self:flex-start;display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid var(--acc);border-radius:0 10px 10px 10px;color:var(--txt2);font-style:italic;font-size:12px;}
 .stream-cursor{display:inline-block;width:2.5px;height:14px;background:var(--acc);border-radius:1px;vertical-align:middle;animation:stream-blink .8s ease-in-out infinite;box-shadow:0 0 8px rgba(16,185,129,.55),0 0 14px rgba(16,185,129,.25);margin-left:2px;}
+/* ── Stream body — anti-flicker container during progressive reveal ── */
+.stream-body{contain:layout style;will-change:contents;}
+.stream-body *{animation-fill-mode:both;}
+/* Settled: promoted from streaming to permanent — smooth cursor fadeout */
+.stream-settled{contain:none;will-change:auto;transition:opacity .15s ease;}
+
+/* Sprint 8 — KG viewer modal shell */
+.kgv-backdrop{position:fixed;inset:0;z-index:8700;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;}
+.kgv-shell{background:var(--bg-card,#161b22);border:1px solid var(--border-color,#1e293b);border-radius:8px;box-shadow:0 24px 64px -16px rgba(0,0,0,.65),0 0 0 1px rgba(16,185,129,.10);max-width:90vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;}
+.kgv-shell-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border-color);font-family:var(--font-mono,monospace);font-size:12px;color:var(--text-bright,#f1f5f9);}
+.kgv-shell-path{font-size:10px;color:var(--text-muted,#64748b);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.kgv-shell-close{margin-left:auto;width:24px;height:24px;border:1px solid rgba(255,255,255,.08);border-radius:4px;background:transparent;color:var(--text-muted);cursor:pointer;font-size:12px;line-height:1;}
+.kgv-shell-close:hover{background:rgba(255,255,255,.06);color:var(--text-bright);}
+.kgv-shell-body{padding:14px;display:flex;flex-direction:column;align-items:center;gap:8px;}
+.kgv-shell-hint{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-style:italic;text-align:center;}
 /* Thinking dots — shown before first token streams in (TTFT phase) */
 .stream-thinking{
   display:inline-flex;gap:5px;align-items:center;
