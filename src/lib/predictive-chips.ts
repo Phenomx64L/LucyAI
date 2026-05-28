@@ -1,72 +1,93 @@
 // ── predictive-chips.ts — U5 contextual next-action suggestions ──────────
 //
 // Looks at the LAST Lucy turn (message + tool cards + errors) and proposes
-// 1-3 short chips representing likely next actions. Sits between the
-// streaming layer and the input bar.
+// 1-3 short chips representing likely next actions.
 //
 // Design:
 //   • Pure heuristic — no LLM call. Fast (< 1ms), predictable, debuggable.
-//   • Pattern library: each pattern is a `ChipRule` with a matcher fn
-//     and a chip-generator fn. New patterns can be added without touching
-//     core logic.
+//   • Each ChipRule declares the conversation domains it belongs to.
+//     detectDomain() classifies the current turn; rules outside the detected
+//     domain are skipped. This prevents sysadmin chips during image analysis, etc.
+//   • Engagement scoring: clicks and dismisses are persisted to localStorage.
+//     Chips the user actually uses rise to the top; ignored chips sink.
 //   • Output is plain data — UI renders it.
-//   • Dismissed chips don't reappear for the same turn (sticky dismiss).
-//
-// Activation:
-//   • Called on each new Lucy message.
-//   • Returns [] if no patterns match (input strip hides).
-//   • Chips fade in with stagger animation; click executes or fills input.
 
 export interface PredictiveChip {
-    /** Stable id (used for dismiss-sticky and key in #each). */
-    id: string;
-    /** Short label shown on the chip. */
-    label: string;
-    /** Longer tooltip explaining what will happen. */
-    tooltip: string;
-    /** Icon glyph (single char or emoji). */
-    icon: string;
-    /** What to do on click. */
+    id:       string;
+    label:    string;
+    tooltip:  string;
+    icon:     string;
     action:
         | { kind: 'fill_input'; text: string }
         | { kind: 'run_command'; cmd: string }
         | { kind: 'slash'; command: string };
-    /** Severity hint for styling: info / suggest / caution. */
     severity?: 'info' | 'suggest' | 'caution';
 }
 
-/** Inputs available to chip rules. */
 export interface ChipContext {
-    /** Last Lucy reply, raw text (the rawContent of the message). */
-    lastLucyText: string;
-    /** Last user prompt (rawContent of the previous user message). */
-    lastUserText: string;
-    /** True if the last response touched tools (executed). */
-    hadTools: boolean;
-    /** Last tool-card labels, lowercased. */
-    toolLabels: string[];
-    /** True if any tool errored. */
-    hadError: boolean;
-    /** True if Lucy mentioned an open question / unresolved status. */
+    lastLucyText:  string;
+    lastUserText:  string;
+    hadTools:      boolean;
+    toolLabels:    string[];
+    hadError:      boolean;
     hasOpenQuestion: boolean;
-    /** Current working directory if known. */
-    cwd?: string;
+    cwd?:          string;
+    /** Detected conversation domains — computed by detectDomain(). */
+    domains:       Set<string>;
 }
 
 type ChipRule = {
     name: string;
+    /**
+     * Which conversation domains this chip belongs to.
+     * A chip only fires if at least one of its domains is in ctx.domains.
+     * Use ['general'] or omit for chips that should always be candidates.
+     */
+    domains: string[];
     matches: (ctx: ChipContext) => boolean;
-    build:  (ctx: ChipContext) => PredictiveChip | null;
+    build:   (ctx: ChipContext) => PredictiveChip | null;
 };
 
-// ── Pattern library ─────────────────────────────────────────────────────
+// ── Domain detection ─────────────────────────────────────────────────────
+// Cheap keyword scan over the combined turn text. Returns a Set of active
+// domain tags. 'general' is always present.
+
+export function detectDomain(userText: string, lucyText: string): Set<string> {
+    const t = (userText + ' ' + lucyText).toLowerCase();
+    const d = new Set<string>(['general']);
+
+    if (/cpu|ram|memoria|process|servicio|service|disco|disk|log|server|ping|red|network|sudo|systemctl|journald|firewall|puerto|port|daemon|cron|dnf|apt|yum|bash|shell|ssh|sftp/.test(t))
+        d.add('sysadmin');
+
+    if (/git|commit|branch|diff|código|function|bug|refactor|\.ts|\.py|\.rs|\.js|\.go|import|export|const|class|método|method|variable|repositorio|repo|build|test|linting/.test(t))
+        d.add('code');
+
+    if (/imagen|foto|photo|jpg|jpeg|png|gif|webp|svg|midjourney|stable.diffusion|ia.generativa|artefacto|fondo|render|pixel|resolución|ilustración|generada.por/.test(t))
+        d.add('image');
+
+    if (/lent[oa]|slow|tard[óo]|spike|congestión|congestion|alto.*cpu|cpu.*alto|lag|freeze|hang|bloqueado|blocking|timeout|latencia|latency/.test(t))
+        d.add('perf');
+
+    if (/incidente|incident|anomal|alerta|alert|degradad|outage|caída|down|p[0-9]\b|sev[0-9]\b/.test(t))
+        d.add('incident');
+
+    if (/archivo|file|carpeta|folder|directorio|directory|leer|escribir|crear|borrar|mover|copiar|read.*file|write.*file|new-item|remove-item/.test(t))
+        d.add('file');
+
+    if (/resumen|resumir|summary|resume|tl.?dr|sintetiz|simplifica|explica.en.pocas/.test(t))
+        d.add('summarize');
+
+    return d;
+}
+
+// ── Pattern library ──────────────────────────────────────────────────────
 
 const RULES: ChipRule[] = [
-    // After a successful read of code → suggest analyze
     {
         name: 'analyze-after-read',
-        matches: (c) => c.hadTools && c.toolLabels.some(l => /readfile|read file|abrir|open/.test(l)),
-        build: (_c) => ({
+        domains: ['code', 'file'],
+        matches: (c) => c.hadTools && c.toolLabels.some(l => /readfile|read.?file|abrir|open/.test(l)),
+        build: () => ({
             id: 'chip-analyze',
             label: 'Analiza este código',
             tooltip: 'Pide a Lucy un resumen técnico + posibles bugs del último archivo abierto',
@@ -76,10 +97,10 @@ const RULES: ChipRule[] = [
         }),
     },
 
-    // After detecting an error in tool output → suggest healing
     {
         name: 'healing-after-error',
-        matches: (c) => c.hadError || /error|failed|no such|denied|exception/i.test(c.lastLucyText),
+        domains: ['sysadmin', 'code', 'general'],
+        matches: (c) => c.hadError || /error|failed|no such|denied|exception|rechazado|fallo/i.test(c.lastLucyText),
         build: (c) => {
             const m = c.lastLucyText.match(/error[:\s]+([^.\n]{8,80})/i);
             const symptom = m ? m[1].trim() : 'error reciente';
@@ -94,12 +115,12 @@ const RULES: ChipRule[] = [
         },
     },
 
-    // After Lucy describes system state → suggest snapshot
     {
         name: 'snapshot-after-status',
+        domains: ['sysadmin', 'perf'],
         matches: (c) => /CPU|RAM|memoria|process|servicio|service|disco|disk/i.test(c.lastLucyText)
                      && !c.toolLabels.some(l => l.includes('snapshot')),
-        build: (_c) => ({
+        build: () => ({
             id: 'chip-snapshot',
             label: 'Capturar snapshot',
             tooltip: 'Guarda el estado actual del sistema para comparar más tarde (/snapshot)',
@@ -109,11 +130,11 @@ const RULES: ChipRule[] = [
         }),
     },
 
-    // After a slow operation → suggest diagnose_spike
     {
         name: 'diagnose-after-slow',
-        matches: (c) => /lent[oa]|slow|tard[óo]|spike|congestion|alto|high/i.test(c.lastLucyText),
-        build: (_c) => ({
+        domains: ['perf', 'sysadmin'],
+        matches: (c) => c.domains.has('perf'),
+        build: () => ({
             id: 'chip-diagnose',
             label: '¿Por qué se puso lenta?',
             tooltip: 'Correlaciona procesos recientes con el síntoma (F3 Causal Engine)',
@@ -123,11 +144,11 @@ const RULES: ChipRule[] = [
         }),
     },
 
-    // After git operations → suggest commit
     {
         name: 'commit-after-git',
+        domains: ['code'],
         matches: (c) => /git\s+status|git\s+diff|sin commitear|uncommitted/i.test(c.lastLucyText),
-        build: (_c) => ({
+        build: () => ({
             id: 'chip-git-commit',
             label: 'Generar commit',
             tooltip: 'Crea un commit message convencional a partir del diff actual',
@@ -137,12 +158,12 @@ const RULES: ChipRule[] = [
         }),
     },
 
-    // After Lucy proposes a plan → confirm
     {
         name: 'confirm-plan',
+        domains: ['sysadmin', 'code', 'general'],
         matches: (c) => /<PLAN>|plan propuesto|paso 1|step 1|primero,/i.test(c.lastLucyText)
                      && !c.lastLucyText.includes('CONFIRMADO'),
-        build: (_c) => ({
+        build: () => ({
             id: 'chip-confirm',
             label: 'Procede con el plan',
             tooltip: 'Confirma el plan y deja que Lucy ejecute los pasos',
@@ -152,11 +173,11 @@ const RULES: ChipRule[] = [
         }),
     },
 
-    // After incident detected → suggest state diff to investigate
     {
         name: 'investigate-incident',
-        matches: (c) => /incidente|incident|anomal/i.test(c.lastLucyText) && c.hasOpenQuestion,
-        build: (_c) => ({
+        domains: ['incident', 'sysadmin'],
+        matches: (c) => c.domains.has('incident') && c.hasOpenQuestion,
+        build: () => ({
             id: 'chip-state-diff',
             label: '¿Qué cambió?',
             tooltip: 'Compara el estado actual con el snapshot de hace 30 min',
@@ -166,11 +187,13 @@ const RULES: ChipRule[] = [
         }),
     },
 
-    // After a verbose output → summarize
     {
         name: 'summarize-long',
+        // Only offer "summarize" for technical/sysadmin content — not for image analysis
+        // or general chit-chat where a TL;DR adds no value.
+        domains: ['sysadmin', 'code', 'incident', 'perf', 'file'],
         matches: (c) => c.lastLucyText.length > 1600,
-        build: (_c) => ({
+        build: () => ({
             id: 'chip-summary',
             label: 'Resúmeme esto',
             tooltip: 'Pide un TL;DR de 3 líneas de la última respuesta',
@@ -179,25 +202,137 @@ const RULES: ChipRule[] = [
             severity: 'info',
         }),
     },
+
+    // ── New domain-aware chips ───────────────────────────────────────────
+
+    {
+        name: 'image-detect-ai',
+        domains: ['image'],
+        matches: (c) => /generada|generated|midjourney|stable.diffusion|ia|ai.art|artefacto/i.test(c.lastLucyText),
+        build: () => ({
+            id: 'chip-image-ai',
+            label: 'Detectar más artefactos',
+            tooltip: 'Pide un análisis más profundo de marcadores de IA en la imagen',
+            icon: '🔍',
+            action: { kind: 'fill_input', text: 'Dame un análisis más detallado de los artefactos típicos de IA generativa que puedas detectar en esta imagen.' },
+            severity: 'info',
+        }),
+    },
+
+    {
+        name: 'image-save-analysis',
+        domains: ['image'],
+        matches: (c) => c.lastLucyText.length > 400,
+        build: () => ({
+            id: 'chip-image-save',
+            label: 'Guardar análisis',
+            tooltip: 'Exporta el análisis de la imagen como archivo de texto',
+            icon: '⊞',
+            action: { kind: 'fill_input', text: 'Guarda el análisis anterior como un archivo .txt en el escritorio con un nombre descriptivo.' },
+            severity: 'suggest',
+        }),
+    },
+
+    {
+        name: 'open-question-followup',
+        domains: ['sysadmin', 'code', 'incident'],
+        matches: (c) => c.hasOpenQuestion && !c.hadError,
+        build: () => ({
+            id: 'chip-followup',
+            label: 'Continuar investigación',
+            tooltip: 'Lucy tiene una pregunta abierta — continuar desde donde quedamos',
+            icon: '→',
+            action: { kind: 'fill_input', text: 'Continúa con la investigación que dejaste pendiente.' },
+            severity: 'suggest',
+        }),
+    },
+
+    {
+        name: 'file-cleanup',
+        domains: ['file'],
+        matches: (c) => /temp|tmp|basura|trash|cache|log.*viejo|old.*log|cleanup/i.test(c.lastLucyText),
+        build: () => ({
+            id: 'chip-cleanup',
+            label: 'Limpiar archivos temporales',
+            tooltip: 'Elimina archivos temporales y caché mencionados',
+            icon: '🧹',
+            action: { kind: 'fill_input', text: 'Limpia los archivos temporales y caché que mencionaste, con confirmación antes de borrar.' },
+            severity: 'suggest',
+        }),
+    },
 ];
 
-/** Generate predictive chips for the current context. */
+// ── Engagement scoring ───────────────────────────────────────────────────
+// Persisted to localStorage so Lucy learns which chips the user actually uses.
+
+const STATS_KEY = 'lucy_chip_stats';
+
+interface ChipStats { clicks: number; dismisses: number; }
+
+function _loadStats(): Record<string, ChipStats> {
+    try {
+        return JSON.parse(localStorage.getItem(STATS_KEY) || '{}');
+    } catch { return {}; }
+}
+function _saveStats(s: Record<string, ChipStats>): void {
+    try { localStorage.setItem(STATS_KEY, JSON.stringify(s)); } catch {}
+}
+
+export function recordChipClick(id: string): void {
+    const s = _loadStats();
+    if (!s[id]) s[id] = { clicks: 0, dismisses: 0 };
+    s[id].clicks++;
+    _saveStats(s);
+}
+
+export function recordChipDismiss(id: string): void {
+    const s = _loadStats();
+    if (!s[id]) s[id] = { clicks: 0, dismisses: 0 };
+    s[id].dismisses++;
+    _saveStats(s);
+}
+
+/** Higher = show first. Chips the user clicks rise; chips they dismiss sink. */
+function _engagementScore(id: string, stats: Record<string, ChipStats>): number {
+    const st = stats[id];
+    if (!st) return 0;
+    return st.clicks - st.dismisses * 0.6;
+}
+
+// ── Main export ──────────────────────────────────────────────────────────
+
 export function predictChips(ctx: ChipContext): PredictiveChip[] {
+    const stats = _loadStats();
     const out: PredictiveChip[] = [];
     const seen = new Set<string>();
+
+    // Collect all matching chips (domain-filtered)
+    const candidates: Array<{ chip: PredictiveChip; score: number }> = [];
+
     for (const rule of RULES) {
         try {
+            // Domain gate: rule must share at least one domain with the detected domains.
+            const ruleDomains = rule.domains.length ? rule.domains : ['general'];
+            const domainMatch = ruleDomains.some(d => ctx.domains.has(d));
+            if (!domainMatch) continue;
+
             if (!rule.matches(ctx)) continue;
             const chip = rule.build(ctx);
-            if (!chip) continue;
-            if (seen.has(chip.id)) continue;
+            if (!chip || seen.has(chip.id)) continue;
             seen.add(chip.id);
-            out.push(chip);
-            if (out.length >= 3) break;
+            candidates.push({ chip, score: _engagementScore(chip.id, stats) });
         } catch {
-            // Defensive: a bad rule shouldn't break the strip
             continue;
         }
+    }
+
+    // Sort by engagement score desc — chips the user uses most float to top.
+    // Ties preserve rule declaration order (stable sort).
+    candidates.sort((a, b) => b.score - a.score);
+
+    for (const { chip } of candidates) {
+        out.push(chip);
+        if (out.length >= 3) break;
     }
     return out;
 }

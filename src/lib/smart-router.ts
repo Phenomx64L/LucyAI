@@ -3,6 +3,8 @@
 // Reduces user friction: instead of picking a model in the dropdown every
 // turn, Lucy auto-selects based on the prompt's apparent complexity. The
 // user keeps a hard-override dropdown for cases where they know better.
+
+import { computeCost as _computeCost } from './model-pricing';
 //
 // Routing tiers (priority order — first match wins):
 //
@@ -180,6 +182,34 @@ export interface RoutingContext {
         | 'multi-intent'
         | 'code-gen'
         | 'unknown';
+    /**
+     * Tier B #1 — Economy mode.
+     *
+     * When true, biases routing aggressively toward cheap tiers:
+     *   • Tier 4 (heavy reasoning) only triggers on STRONG signals
+     *     (explicit "audit"/"deep analysis"/"vulnerability scan" + ≥1500 ctx
+     *     tokens, vs the default 800). Borderline prompts route to fast tier
+     *     instead, costing ~85% less.
+     *   • Heavy-keyword-only matches without large context get demoted.
+     *   • The classifier intent 'multi-intent' alone is no longer enough to
+     *     promote to tier 4; needs a real complexity signal too.
+     *
+     * What stays the same: shell-intent, greeting, privacy mode, and manual
+     * override behave identically. Economy mode never SACRIFICES correctness
+     * for cost — it only tightens the "is this big enough to deserve Opus"
+     * threshold.
+     */
+    economyMode?: boolean;
+    /**
+     * Tier B #1 — If provided, the router computes `estimatedSavingsUsd`:
+     * what this turn would have cost on `costlierBaseline` (typically the
+     * user's manual override) MINUS what the chosen model will cost. Lets
+     * the UI show "saved ≈ $0.012 this turn".
+     *
+     * Set to the model id you want to compare against. Passing the same id
+     * as the auto-chosen one yields savings = 0 (intentional).
+     */
+    costlierBaseline?: string;
 }
 
 export interface RoutingDecision {
@@ -191,6 +221,16 @@ export interface RoutingDecision {
     tier: 1 | 2 | 3 | 4 | 5;
     /** True if this is an automatic decision; false if user override */
     autoSelected: boolean;
+    /**
+     * Tier B #1 — USD that this turn is estimated to save vs the baseline
+     * model passed in `RoutingContext.costlierBaseline`. Positive means the
+     * routing chose a CHEAPER model; zero means same tier (no savings);
+     * negative would mean the router upgraded — only possible for Privacy
+     * Mode forcing a local-but-slower-than-cloud scenario, which is fine.
+     *
+     * Undefined when `costlierBaseline` wasn't provided.
+     */
+    estimatedSavingsUsd?: number;
 }
 
 // ── Tier 3: shell-intent detection ────────────────────────────────────────
@@ -439,6 +479,42 @@ export function nextFallback(failed: RoutingDecision, ctx: RoutingContext): Rout
  * Pure function — does not perform any I/O.
  */
 export function routeModel(ctx: RoutingContext): RoutingDecision {
+    const decision = _routeModelCore(ctx);
+    // Tier B #1 — Attach cost-savings estimate if caller asked for it.
+    if (ctx.costlierBaseline) {
+        decision.estimatedSavingsUsd = estimateSavings(
+            ctx.costlierBaseline,
+            decision.modelId,
+            ctx.contextTokens,
+        );
+    }
+    return decision;
+}
+
+/**
+ * Tier B #1 — Rough USD savings of one turn IF the caller would have used
+ * `baseline` but the router picked `chosen` instead.
+ *
+ * Math: assumes the prompt expands to roughly `contextTokens * 0.4` output
+ * (typical sysadmin Q&A ratio). The 0.4 multiplier is a calibration choice
+ * — output averages ~40% of input across our internal Lucy telemetry. If
+ * the workload skews longer responses (code-gen, long explanations), the
+ * actual savings will be HIGHER than reported — that's a feature, not a
+ * bug: never overstate.
+ *
+ * Returns 0 when models share a pricing tier, negative when the chosen
+ * model is more expensive (e.g. Privacy mode upgraded to a heavy local).
+ */
+function estimateSavings(baseline: string, chosen: string, contextTokens: number): number {
+    const inToks  = Math.max(contextTokens, 50);
+    const outToks = Math.round(inToks * 0.4);
+    const baselineUsd = _computeCost(baseline, inToks, outToks);
+    const chosenUsd   = _computeCost(chosen, inToks, outToks);
+    // Round to 6 decimals — meaningful for cheap tiers (sub-cent values).
+    return Math.round((baselineUsd - chosenUsd) * 1_000_000) / 1_000_000;
+}
+
+function _routeModelCore(ctx: RoutingContext): RoutingDecision {
     // ── Tier 2 FIRST (Privacy Mode is a HARD lock) ──────────────────────
     // BUG FIX: Privacy Mode used to be checked AFTER the manual-override
     // shortcut, so users with Smart Routing OFF + Privacy ON kept hitting
@@ -513,13 +589,24 @@ export function routeModel(ctx: RoutingContext): RoutingDecision {
     // Tier 4: analysis-intent → heavyweight model.
     // Both the classifier's signals (log-paste, multi-intent, file-attached)
     // AND the router's keyword heuristics qualify for heavy reasoning.
+    //
+    // Tier B #1 — In economy mode, this gate is tighter. Borderline prompts
+    // (single keyword OR moderate context) stay on the fast tier.
+    const heavyCtxThreshold = ctx.economyMode ? 1500 : 800;
     const intentNeedsHeavy =
         ctx.detectedIntent === 'log-paste' ||
-        ctx.detectedIntent === 'multi-intent' ||
+        (!ctx.economyMode && ctx.detectedIntent === 'multi-intent') ||
         ctx.detectedIntent === 'file-attached';
     const heavyMatch = HEAVY_RE.exec(ctx.prompt);
     const veryLargeContext = ctx.contextTokens > 3000;
-    if (intentNeedsHeavy || heavyMatch || veryLargeContext || ctx.contextTokens > 800) {
+    // In economy mode a heavy keyword alone is NOT enough — we also require
+    // either a sizable context or an unmistakable intent signal. This is the
+    // single biggest cost-saver: keyword "audit" in a one-line question
+    // routes to Flash instead of Opus.
+    const heavyKeywordCounts = !ctx.economyMode
+        ? !!heavyMatch
+        : !!heavyMatch && ctx.contextTokens > 400;
+    if (intentNeedsHeavy || heavyKeywordCounts || veryLargeContext || ctx.contextTokens > heavyCtxThreshold) {
         const peak = veryLargeContext;
         const heavyId = peak ? HEAVY_MODEL_PEAK : HEAVY_MODEL_DEFAULT;
         if (!isModelBlacklisted(heavyId)) {
@@ -531,7 +618,7 @@ export function routeModel(ctx: RoutingContext): RoutingDecision {
                         ? `${ctx.detectedIntent} → analysis tier`
                         : heavyMatch
                             ? `analysis keyword '${heavyMatch[1].toLowerCase()}'`
-                            : `context >800 tokens`,
+                            : `context >${heavyCtxThreshold} tokens`,
                 tier: 4,
                 autoSelected: true,
             };

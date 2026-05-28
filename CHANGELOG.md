@@ -7,6 +7,232 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.1] — 2026-05-28
+
+The largest release since 1.4.0. Massive expansion in three directions:
+**(1)** new differentiators — Replay deterministic mode, Memory Graph
+visual, Session Recording — that no conventional AI tool (Cursor, Cline,
+Hermes, OpenInterpreter) currently ships; **(2)** production hardening —
+DB backup/restore, support bundle export, retired the broken Skills
+manager; **(3)** SRE-grade integrations — Inventory drift detection,
+multi-host log timeline, hash chain verification for incident audits,
+Dashboard expansion with page file + temperatures + network + failed
+logins + process lineage badges. 172 Rust tests + 117 vitest tests +
+0 svelte-check warnings + 0 cargo warnings end-to-end.
+
+### Tier S — Non-replicable differentiators
+
+- **Replay Deterministic Mode** (`replay.rs` + `ReplayBrowserView.svelte`).
+  Every successful LLM turn is auto-captured into `replay_snapshots` with
+  the EXACT prompt + context + system + model + effort. The browser lets
+  the operator re-execute any past turn against the same OR a different
+  model, with a shingled-Jaccard drift score quantifying how much the
+  response moved. No other agent tool captures the full reproducible
+  context — chat transcripts are not the same.
+- **Memory Graph 2.0** (`memory.rs::memory_graph` + `MemoryGraphView.svelte`).
+  Force-directed visualization of `agent_memories` with edges from three
+  signals: tag Jaccard, content Jaccard, AND embedding cosine when the
+  user has populated the `embeddings` table. Label-propagation community
+  detection (Louvain-lite) auto-colors clusters. Runtime threshold
+  sliders, top-tag pill filter, search bar, hover-neighbor highlighting,
+  anti-collision labels, auto-fit-to-view. Custom 200-line force sim
+  instead of D3 (saves ~70 KB).
+- **NexShell Session Recording** (`shell_recording.rs` + `ShellRecordingPlayer.svelte`).
+  Every cmd/out/err/exit event of a remote shell is time-coded with
+  millisecond resolution into SQLite. Playback overlay with timeline
+  scrubber, 0.5×/1×/2×/5×/instant speeds, per-event color coding, forward
+  coalescing for smooth scrubbing. Asciinema-class capability native to
+  the Lucy binary.
+
+### Tier A — Robustness / paridad superada
+
+- **Hierarchical forks + cost ledger** (`fork_results` schema migration).
+  `fork_save` accepts `parent_task_id`; `fork_update` accepts `tokens_in`/
+  `tokens_out` and computes `cost_usd` server-side via the per-vendor
+  pricing table. `ForksMonitorPanel` renders tree structure with indent
+  (`└─`) and shows aggregated cost across visible forks.
+- **Smart LLM filter in LogViewer**. Free-text "describe what to find"
+  input → Gemini Flash Lite translates to regex → applied with substring
+  fallback when LLM output is malformed.
+- **Capacity projection overlay** (`capacity::capacity_projection`).
+  OLS linear regression with R² over 14-day samples; Dashboard pills
+  show `↗ 12d to 95%` with tier-colored urgency.
+- **CVE matching curated DB** (`cve_match.rs`). 30 high-impact CVEs
+  (Log4Shell, EternalBlue, Heartbleed, regreSSHion, XZ backdoor,
+  PrintNightmare, Zerologon, etc.) matched against inventory software
+  with lenient semver + canonical name aliasing. 5 contract tests.
+- **Inventory drift detection** (`inventory_drift.rs` + `inventory_baselines`
+  schema). Per-host baseline snapshot; on rescan, computes structured
+  diff (software / ports / services / certs / scheduled) with added /
+  removed / changed categorization. 6 contract tests, including
+  case-insensitive software name match.
+
+### Tier B — Polish & UX
+
+- **Cost-aware automatic routing** (`smart-router.ts`). `economyMode`
+  flag tightens heavy-tier promotion gates (>1500 ctx vs default 800,
+  keyword needs >400 ctx). `costlierBaseline` produces
+  `estimatedSavingsUsd` per turn → Settings shows session savings ledger.
+- **Branching conversations** (`bifurcarTabDesde` in +page.svelte).
+  Ctrl+B or command palette → deep-clones the active tab up to the last
+  Lucy reply into a new tab with lineage badge. Original untouched.
+- **Theming JSON system** (`theme-loader.ts`). Custom themes as
+  validated JSON (whitelist of 9 vars, strict color regex). Import /
+  Export via clipboard, persistence in localStorage, dynamic `<style>`
+  tag injection. **16 vitest tests** cover validation paths.
+- **Multi-window detach**. Tauri `WebviewWindow` opens an independent
+  Lucy instance for dual-monitor workflow. Shares the SQLite DB across
+  windows but tabs are per-window.
+
+### Sprint A — Production hardening
+
+- **DB backup & restore** (`db_backup.rs`, **+3 tests**). Uses
+  `VACUUM INTO` for atomic snapshots; restore validates source SQLite +
+  integrity check + Lucy schema markers (`agent_memories` + `audit_chain`),
+  writes a timestamped safety backup of the live DB before clobbering.
+  Settings UI shows path + size + total rows.
+- **Support bundle export** (`support_bundle.rs`). One-click generates a
+  timestamped folder with `manifest.json`, `audit_trail.csv`,
+  `recent_incidents.json`, `system_snapshot.json`, `token_usage.csv`,
+  `diagnostics.json`. Excludes API keys and full memory content by
+  design.
+- **Skills Manager retired**. The 1250-line modal that never reached
+  production quality is removed from the render tree; the modal handler
+  becomes a toast pointing users to Runbooks. SkillPicker and
+  SkillBrowserModal remain operational.
+
+### Sprint B — SRE differentiators
+
+- **Multi-host log timeline** (`LogTimelineView.svelte`). Fetches the
+  same log path from N hosts in parallel; parses timestamps with 4
+  strategies (ISO 8601, syslog, bracket-tagged, Apache CLF); merges by
+  millisecond into a single interleaved timeline color-coded per host
+  via Okabe-Ito palette. Regex filter, level filter, auto-refresh.
+- **Inventory drift detection** — see Tier A above.
+
+### Sprint C — Dashboard polish
+
+- **D14 Editable thresholds per host/metric**. `getThresholds()` +
+  `sevVarFor()` centralize threshold lookup; per-metric ⚙ button opens
+  a floating editor for warn/crit values; persisted in
+  `lucy_thresholds_{host}__{metric}`.
+- **D15 Open incidents banner** (`dashboard_open_incidents`). Amber
+  banner at the top of the Dashboard with count + most-recent incident
+  title + CTA "Open incidents view →". 15-second refresh cadence.
+- **D17 Failed logins card** (`dashboard_failed_logins_24h`). Windows
+  Security event 4625 in the last 24h. Handles `ACCESS_DENIED` for
+  non-admin Lucy gracefully ("Requires admin to read Security log").
+- **D18 Process lineage badges** (`dashboard_process_lineage_brief`).
+  Top-processes table shows `● new` badge for processes first seen in
+  the last 24h via `process_lineage` table integration.
+- **D11 Reorderable widgets**. HTML5 drag & drop on dashboard sections
+  (CPU cores / storage / processes); per-section hide toggle; reset
+  button when layout is customized; persisted in
+  `lucy_dashboard_section_order` + `_hidden`.
+
+### Sprint D — Audit & memory pendientes
+
+- **Hash chain verification UI** (`hash_chain.rs`, **+3 tests**).
+  Recomputes the SHA-256 chain over `incident_action` rows, compares
+  stored vs expected, lists mismatches with position + reason. Surfaced
+  in IncidentPanel with green ✓ or red ⚠ badge + per-mismatch detail.
+- **Memory health timeline**. 30-day creation histogram above the
+  Memorias list, color-tier bars (top tercio green / middle cyan /
+  bottom transparent), tooltips per day.
+
+### Sprint E — Crystal viewer redesign
+
+- **Crystal viewer redesigned** (MemoryBrowserView crystals tab).
+  Gradient cards with shimmer, structured header (icon + id + project +
+  stat pills), border-left-coded sections (outcomes green / files blue /
+  lessons amber), file list with `›` bullets, mono footer with session
+  preview. Empty state with Diamond icon + onboarding explanation.
+
+### Dashboard expansion (no-Tier sprint)
+
+- **Page file / swap card** when host has swap configured.
+- **Temperatures card** when sensors are accessible (CPU/GPU/disk via
+  `sysinfo::Components`).
+- **Network throughput card** with cumulative MB/s delta tracker
+  (`LAST_NET` snapshot Mutex); per-interface badges sorted by traffic.
+
+### Memory module polish
+
+- **M1 Stats dashboard**. Six metric cards at the top of the Memorias
+  tab (total, pinned, untagged, expiring <7d, new this week, top
+  importance) with hot/warn coloring.
+- **M2 Bulk operations**. Per-card checkbox + bulk bar with
+  Clear / Select all / Add tag / Promote +1 / Delete actions.
+- **M3 AI suggest tags**. Gemini Flash Lite proposes 3-5 tags per
+  selected memory; per-memory ✓ Apply / ✕ Reject confirmation panel.
+- **Memory consolidation** (`memory_consolidate`). Jaccard clustering
+  over recent memories with `superseded_by` marking; preview mode
+  default.
+
+### Activity Feed widget
+
+- **24-hour activity rollup sidebar widget** (`activity_feed.rs` +
+  `ActivityFeedWidget.svelte`). Aggregates incidents + audit_trail +
+  scheduled_runs + state_snapshots + process_lineage + frontier_telemetry
+  into a single chronological feed. Moved to the Registros section
+  after initial placement caused Memoria/Capacidad/Diagnóstico to
+  scroll off-screen.
+
+### Infrastructure
+
+- **Tavily API key UI** in Settings. Reads keyring status (boolean
+  only — value never crosses IPC), validates prefix `tvly-` and length,
+  enables / clears via password input.
+- **DDG search cascade** (`local::search_web`). Three-endpoint fallback
+  (`lite.duckduckgo.com/lite/` first, then `html.duckduckgo.com`, then
+  `duckduckgo.com/html/?ia=web`). Lite endpoint with stable `<table>`
+  parser is the primary fix for the silent-failure mode where DDG
+  changes class names.
+- **Prompt caching telemetry** (`get_cache_stats`). Process-wide
+  Mutex-protected accumulator of Anthropic cache_creation/read tokens
+  with hit% computation; surfaced as `⚡ X% caché` footer badge.
+- **Test pipeline**: `npm run test:full` runs svelte-check + vitest +
+  cargo test in sequence; pre-commit hook tightened (svelte-check
+  baseline 0 errors, vitest enforced on frontend commits).
+- **Schema migrations**: `inventory_baselines`, `replay_snapshots`,
+  `shell_recordings` + `shell_recording_events`, ALTER TABLE on
+  `fork_results` for hierarchical + cost columns.
+
+### Bug fixes
+
+- **Sub-Agents panel poll only-when-running**. Polling condition required
+  `forks.some(status === 'running')` which was false on empty array →
+  panel never refreshed when opened before forks landed. Now polls
+  unconditionally every 3s while visible.
+- **Streaming → lucy token recompute**. Streaming messages were promoted
+  in-place to role 'lucy' without recomputing the token count → tab
+  budget undercounted long Lucy responses. Fixed in 3 promotion sites.
+- **SSH key pre-flight validation**. NexShell now calls `path_exists`
+  before invoking ssh so a typo'd key path gets a precise error instead
+  of "Permission denied (publickey)".
+- **Cost predictor prefix fallback** (`model-pricing.ts`). Unregistered
+  `claude-*` / `gpt-*` / `gemini-*` models used to fall through to
+  FALLBACK_PRICING (provider:'openai'); now route to the correct vendor
+  tier. Caught by the new `test:full` script.
+- **Memory Graph autofit cap + label collision**. Autofit was zooming
+  past 1.0× on small graphs, magnifying everything including labels.
+  Now caps at 1.0× and counter-scales font-size via `11/zoom`.
+  Anti-collision hides labels of lower-degree neighbors within 90px.
+
+### Stats
+
+- **+27 Tauri commands** registered.
+- **+15 backend modules** added.
+- **+10 frontend components** added (LogTimelineView, MemoryGraphView,
+  ReplayBrowserView, ShellRecordingPlayer, ActivityFeedWidget, and
+  more).
+- **+5 SQLite tables** + extensive ALTER TABLE migrations.
+- **172 Rust tests** (vs ~134 in 1.4.0).
+- **117 vitest tests** (vs ~32 in 1.4.0).
+- **Zero warnings** across svelte-check, cargo, vitest.
+
+---
+
 ## [1.4.0] — 2026-05-16
 
 The largest single release since the project started. Driven by a

@@ -18,19 +18,31 @@
     let pollTimer  = null;
     let expandedId = null;   // which row is expanded to show full result
 
+    // ── Filter scope (Sprint 6 fix) ────────────────────────────────────────
+    // Bug original: el panel filtraba SIEMPRE por tab_id activo, así que tras
+    // recargar la app (cuando los IDs de tab cambian) el panel quedaba vacío
+    // aunque hubiera forks históricos persistidos. Default 'all' garantiza
+    // que el usuario VEA el histórico al abrir el panel. Puede acotar a la
+    // tab actual con un toggle.
+    let scope = 'all';  // 'all' | 'tab'
+
     const t = (es, en) => isEN ? en : es;
 
     // ── Load from SQLite ───────────────────────────────────────────────────
     async function loadForks() {
         loading = true;
         try {
-            forks = await invoke('fork_list', { tabId: tabId || null, limit: 50 });
+            const filterTab = scope === 'tab' ? (tabId || null) : null;
+            forks = await invoke('fork_list', { tabId: filterTab, limit: 100 });
         } catch (e) {
             console.debug('[ForksMonitor] load error:', e);
         } finally {
             loading = false;
         }
     }
+
+    // Re-cargar cuando el usuario cambia el scope.
+    $: if (scope) { loadForks(); }
 
     async function clearOldForks() {
         await invoke('fork_clear', { days: 7 }).catch(console.debug);
@@ -69,10 +81,15 @@
     // ── Lifecycle ─────────────────────────────────────────────────────────
     onMount(() => {
         loadForks();
-        // Poll every 3s while any fork is running
-        pollTimer = setInterval(() => {
-            if (forks.some(f => f.status === 'running')) loadForks();
-        }, 3000);
+        // BUG FIX: previously this only polled "while any fork is running".
+        // That meant a user who opened the panel BEFORE running a task with
+        // forks (empty array → some() returns false) never saw the panel
+        // refresh as forks completed. The panel is only visible when the
+        // user explicitly opens it, so polling every 3s is cheap:
+        //   • One SELECT with LIMIT 100 (<1ms over the local SQLite pool)
+        //   • The panel is closed by default → no overhead in normal use
+        //   • Stops on unmount (onDestroy below)
+        pollTimer = setInterval(() => { loadForks(); }, 3000);
     });
 
     onDestroy(() => {
@@ -82,6 +99,51 @@
     $: runningCount = forks.filter(f => f.status === 'running').length;
     $: doneCount    = forks.filter(f => f.status === 'done').length;
     $: errorCount   = forks.filter(f => f.status === 'error').length;
+
+    // ── Tier A #1 — Cost ledger + tree shape ──────────────────────────────
+    // Sum cost across the visible window so the user sees "this session
+    // burned $X on sub-agents". Tokens are summed the same way for the
+    // detail tooltip.
+    $: totalCostUsd = forks.reduce((s, f) => s + (f.cost_usd || 0), 0);
+    $: totalTokens  = forks.reduce((s, f) => s + (f.tokens_in || 0) + (f.tokens_out || 0), 0);
+
+    /**
+     * Build a flat list of {fork, depth} for rendering. Roots come first,
+     * children indented under their parent. Children orphaned by missing
+     * parents still render at depth 0 so nothing disappears.
+     */
+    $: ledgerRows = (() => {
+        const byTaskId = new Map();
+        for (const f of forks) byTaskId.set(f.task_id, f);
+        const childrenOf = new Map();
+        for (const f of forks) {
+            const p = f.parent_task_id || '';
+            if (!p || !byTaskId.has(p)) continue;
+            if (!childrenOf.has(p)) childrenOf.set(p, []);
+            childrenOf.get(p).push(f);
+        }
+        const roots = forks.filter(f => !f.parent_task_id || !byTaskId.has(f.parent_task_id));
+        const out = [];
+        const walk = (f, depth) => {
+            out.push({ fork: f, depth });
+            const kids = childrenOf.get(f.task_id) || [];
+            for (const k of kids) walk(k, depth + 1);
+        };
+        for (const r of roots) walk(r, 0);
+        return out;
+    })();
+
+    function fmtCost(c) {
+        if (!c) return '—';
+        if (c < 0.001) return `$${c.toFixed(4)}`;
+        if (c < 0.1)   return `$${c.toFixed(3)}`;
+        return `$${c.toFixed(2)}`;
+    }
+    function fmtTokens(n) {
+        if (!n) return '—';
+        if (n < 1000) return String(n);
+        return `${(n/1000).toFixed(1)}k`;
+    }
 </script>
 
 <!-- ── Panel Header ─────────────────────────────────────────────────── -->
@@ -110,6 +172,24 @@
         <span class="s-item done">✓ {doneCount}</span>
         <span class="s-item error">✗ {errorCount}</span>
         <span class="s-total">{t('Total', 'Total')}: {forks.length}</span>
+        <!-- Tier A #1 — Cost ledger across visible forks -->
+        {#if totalCostUsd > 0 || totalTokens > 0}
+            <span class="s-cost" title={t(`Costo total de los ${forks.length} sub-agentes visibles. Incluye tokens de input + output. Estimado con ~4 chars/token.`, `Total cost across ${forks.length} visible sub-agents. Includes input + output tokens. Estimated at ~4 chars/token.`)}>
+                ⛁ {fmtCost(totalCostUsd)} · {fmtTokens(totalTokens)} {t('tokens', 'tokens')}
+            </span>
+        {/if}
+        <!-- Scope toggle — default 'all' (global history); 'tab' acota -->
+        <span class="scope-toggle" role="tablist" aria-label={t('Alcance', 'Scope')}>
+            <button class:active={scope === 'all'} on:click={() => scope = 'all'}
+                    title={t('Mostrar todos los sub-agentes registrados', 'Show all recorded sub-agents')}>
+                {t('Todos', 'All')}
+            </button>
+            <button class:active={scope === 'tab'} on:click={() => scope = 'tab'}
+                    disabled={!tabId}
+                    title={t('Solo los de esta pestaña', 'Only this tab')}>
+                {t('Esta tab', 'This tab')}
+            </button>
+        </span>
     </div>
 
     <!-- ── Fork list ──────────────────────────────────────────────────── -->
@@ -123,15 +203,25 @@
                 <small>{t('Cuando Lucy use fork_task, los resultados aparecerán aquí y persistirán entre sesiones.', 'When Lucy uses fork_task, results will appear here and persist across sessions.')}</small>
             </div>
         {:else}
-            {#each forks as fork, _fi (fork.id)}
+            {#each ledgerRows as row, _fi (row.fork.id)}
+                {@const fork = row.fork}
                 <div class="fork-row" class:expanded={expandedId === fork.id}
+                     class:fork-child={row.depth > 0}
+                     style="padding-left: {row.depth * 16}px"
                      in:staggerIn={{ index: _fi, step: 26 }}>
                     <!-- Row header -->
                     <button class="fork-row-btn" on:click={() => toggleExpand(fork.id)}>
+                        {#if row.depth > 0}<span class="f-tree" aria-hidden="true">└─</span>{/if}
                         <span class="f-status {statusClass(fork.status)}">{statusIcon(fork.status)}</span>
                         <span class="f-task-id">{fork.task_id}</span>
                         <span class="f-model">{fork.model}</span>
                         <span class="f-time">{timeAgo(fork.created_at)}</span>
+                        {#if fork.cost_usd > 0 || fork.tokens_in > 0}
+                            <span class="f-cost"
+                                  title={t(`tokens: ${fork.tokens_in} in / ${fork.tokens_out} out`, `tokens: ${fork.tokens_in} in / ${fork.tokens_out} out`)}>
+                                {fmtCost(fork.cost_usd)}
+                            </span>
+                        {/if}
                         {#if fork.finished_at}
                             <span class="f-elapsed">{elapsedMs(fork.created_at, fork.finished_at)}</span>
                         {/if}
@@ -218,6 +308,18 @@
     .s-item.error   { color: #f87171; }
     .s-total        { color: var(--text-muted, #64748b); margin-left: auto; }
 
+    /* Scope toggle — Sprint 6 fix for "Sub-Agents never reports info" */
+    .scope-toggle { display: inline-flex; gap: 2px; padding: 2px;
+        background: rgba(255,255,255,0.04); border-radius: 6px; }
+    .scope-toggle button {
+        background: transparent; border: 0; color: var(--text-muted, #94a3b8);
+        font: inherit; font-size: 10px; padding: 3px 10px; border-radius: 4px;
+        cursor: pointer; transition: background .12s, color .12s;
+    }
+    .scope-toggle button:hover:not(:disabled) { background: rgba(255,255,255,0.05); color: var(--text-main, #cbd5e1); }
+    .scope-toggle button.active { background: rgba(16,185,129,0.18); color: var(--accent, #10b981); }
+    .scope-toggle button:disabled { opacity: 0.4; cursor: not-allowed; }
+
     /* Fork list */
     .forks-list {
         flex: 1;
@@ -254,6 +356,19 @@
     .f-time        { color: var(--text-muted, #64748b); font-size: 10px; flex-shrink: 0; }
     .f-elapsed     { color: #818cf8; font-size: 10px; flex-shrink: 0; }
     .f-expand      { font-size: 9px; color: var(--text-muted, #64748b); flex-shrink: 0; }
+    /* Tier A #1 — Cost ledger + tree */
+    .f-cost        { color: #10b981; font-size: 10px; flex-shrink: 0; font-weight: 600; }
+    .f-tree        { color: var(--text-muted, #64748b); font-size: 11px; flex-shrink: 0; margin-right: 4px; }
+    .fork-child    { background: rgba(255,255,255,0.015); }
+    .s-cost        {
+        color: #10b981;
+        background: rgba(16,185,129,0.10);
+        padding: 1px 8px;
+        border-radius: 8px;
+        font-size: 10px;
+        font-weight: 600;
+        margin-left: 4px;
+    }
 
     .status-running { color: #fbbf24; }
     .status-done    { color: #34d399; }

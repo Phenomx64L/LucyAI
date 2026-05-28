@@ -92,6 +92,14 @@ import { listen } from '@tauri-apps/api/event';
     import IncidentTimeline from '$lib/IncidentTimeline.svelte';
     // Phase 3 (R&D Frontier) — circadian theme + density modes + Lucy moods + F2 snapshots
     import { startTimeOfDay } from '$lib/time-of-day';
+    import {
+        bootCustomThemes,
+        listCustomThemes,
+        upsertCustomTheme,
+        deleteCustomTheme,
+        importThemeJson,
+        exportThemeJson,
+    } from '$lib/theme-loader';
     import { startLucyMood, setLucyMood } from '$lib/lucy-mood';
     import { startDensityMode, densityMode, cycleDensityMode } from '$lib/density-mode';
     import { startSnapshotLoop, manualSnapshot } from '$lib/state-snapshot-loop';
@@ -100,7 +108,7 @@ import { listen } from '@tauri-apps/api/event';
     import { classifyDrop, defaultPromptForKind } from '$lib/universal-drop';
     import SkillPicker from '$lib/SkillPicker.svelte';
     import KgMiniViewer from '$lib/KgMiniViewer.svelte';
-    import { predictChips, resetDismissed } from '$lib/predictive-chips';
+    import { predictChips, resetDismissed, detectDomain, recordChipClick } from '$lib/predictive-chips';
     import PredictiveChipStrip from '$lib/PredictiveChipStrip.svelte';
 
     // Phase 2c (May 2026) — extracted helpers from this file
@@ -124,6 +132,7 @@ import { listen } from '@tauri-apps/api/event';
     import StatusBar       from '$lib/StatusBar.svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
+    import ReplayBrowserView from '$lib/ReplayBrowserView.svelte';
     import TutorialOverlay from '$lib/TutorialOverlay.svelte';
     import NexShellView    from '$lib/NexShellView.svelte';
     import DashboardView   from '$lib/DashboardView.svelte';
@@ -142,12 +151,12 @@ import { listen } from '@tauri-apps/api/event';
     import { staggerIn }    from '$lib/stagger';
     // ── Lazy-loaded: solo se descargan cuando el usuario los abre por primera vez ──
     let _lazyPermissions   = null;
-    let _lazySkills        = null;
+    // _lazySkills retired Sprint A #3 — see comment near lazyPermissions definition
     let _lazyPrinciples    = null;
     let _lazySchedules     = null;
     let _lazyProfile       = null;
     const lazyPermissions  = () => _lazyPermissions  || (_lazyPermissions  = import('$lib/PermissionRulesModal.svelte').then(m => m.default));
-    const lazySkills       = () => _lazySkills        || (_lazySkills        = import('$lib/SkillsManagerModal.svelte').then(m => m.default));
+    // Sprint A #3 — lazySkills retired alongside SkillsManagerModal.
     const lazyPrinciples   = () => _lazyPrinciples   || (_lazyPrinciples   = import('$lib/PrinciplesModal.svelte').then(m => m.default));
     const lazySchedules    = () => _lazySchedules    || (_lazySchedules    = import('$lib/ScheduledTasksModal.svelte').then(m => m.default));
     let _lazyRemoteDiff    = null;
@@ -195,8 +204,206 @@ import { listen } from '@tauri-apps/api/event';
 
     // smartRouting + privacyMode restored (see /smart-router and /privacy slash
     // commands). Persisted in localStorage alongside the rest of lucyConfig.
-    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, userAvatarUrl: '' };
+    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, economyMode: false, userAvatarUrl: '' };
     let _lastRouteDecision = null;  // RoutingDecision | null — type erased for plain-JS <script>
+    // Tier B #1 — Session-wide accumulated savings (USD). Reset at app start;
+    // not persisted (this is "since you opened Lucy", not "all time").
+    let _economySavingsUsd = 0;
+
+    // ── Tavily API key state (Dashboard sprint extra) ───────────────────
+    // Read once at settings-modal open + after every save. We NEVER store
+    // the actual key in JS — the OS keyring holds it. Only a boolean
+    // "is_set" comes back from the backend.
+    let _tavilyKeySet   = false;
+    let _tavilyKeyDraft = '';
+    let _tavilyKeyBusy  = false;
+    let _tavilyKeyError = '';
+    let _tavilyKeyMsg   = '';
+
+    async function refreshTavilyKeyStatus() {
+        try {
+            _tavilyKeySet = !!(await invoke('get_tavily_api_key_status'));
+        } catch (e) {
+            // Keyring inaccessible — surface but don't break the modal.
+            _tavilyKeySet = false;
+            _tavilyKeyError = String(e);
+        }
+    }
+    async function saveTavilyKey() {
+        _tavilyKeyBusy = true;
+        _tavilyKeyError = '';
+        _tavilyKeyMsg = '';
+        const v = _tavilyKeyDraft.trim();
+        // Empty input + existing key = "delete the key" (UX confirm first).
+        if (!v && _tavilyKeySet) {
+            if (!confirm(isEN ? 'Remove the Tavily API key?' : '¿Borrar la clave de Tavily?')) {
+                _tavilyKeyBusy = false; return;
+            }
+        }
+        try {
+            await invoke('set_tavily_api_key', { apiKey: v });
+            _tavilyKeyDraft = '';
+            await refreshTavilyKeyStatus();
+            _tavilyKeyMsg = _tavilyKeySet
+                ? (isEN ? 'Tavily key saved — Lucy will use it on next web search.'
+                        : 'Clave de Tavily guardada — Lucy la usará en la próxima búsqueda.')
+                : (isEN ? 'Tavily key removed.' : 'Clave de Tavily borrada.');
+            // Auto-clear the success message after 4s
+            setTimeout(() => { _tavilyKeyMsg = ''; }, 4000);
+        } catch (e) {
+            _tavilyKeyError = String(e?.message || e);
+        } finally {
+            _tavilyKeyBusy = false;
+        }
+    }
+
+    // Auto-refresh status when the Settings modal opens. Svelte reactive
+    // statement watches the modal flag.
+    $: if (showSettingsModal) {
+        refreshTavilyKeyStatus();
+        refreshDbInfo();
+    }
+
+    // ── Sprint A #1 — DB backup / restore state ─────────────────────────
+    // Read on every Settings open so the file size + row counts are fresh.
+    let _dbInfo = null;          // { path, size_bytes, last_modified, tables[] }
+    let _dbBusy = false;
+    let _dbError = '';
+    let _dbMsg   = '';
+
+    function _fmtBytes(n) {
+        if (n == null) return '—';
+        if (n < 1024)        return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+        return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    }
+
+    async function refreshDbInfo() {
+        try { _dbInfo = await invoke('db_info'); }
+        catch (e) { _dbInfo = null; _dbError = String(e); }
+    }
+
+    async function createDbBackup() {
+        _dbBusy = true; _dbError = ''; _dbMsg = '';
+        try {
+            const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+            const defaultName = `lucy-backup-${ts}.db`;
+            // Native save-as dialog via rfd in Rust. Returns '' on cancel.
+            const target = await invoke('pick_save_path', {
+                defaultName,
+                extensions: ['db', 'sqlite', 'bak'],
+            });
+            if (!target) { _dbBusy = false; return; }
+            const sizeBytes = await invoke('db_backup_create', { targetPath: target });
+            _dbMsg = (isEN ? 'Backup saved: ' : 'Backup guardado: ')
+                + _fmtBytes(sizeBytes) + ' → ' + target;
+            setTimeout(() => { _dbMsg = ''; }, 6000);
+            await refreshDbInfo();
+        } catch (e) {
+            _dbError = String(e?.message || e);
+        } finally {
+            _dbBusy = false;
+        }
+    }
+
+    async function restoreDbBackup() {
+        if (!confirm(isEN
+            ? 'Restore will REPLACE your current database. A safety copy of the current DB will be kept. Lucy must restart after. Continue?'
+            : 'Restaurar REEMPLAZARÁ tu DB actual. Se guardará una copia de seguridad de la DB actual. Lucy debe reiniciar después. ¿Continuar?')) return;
+        _dbBusy = true; _dbError = ''; _dbMsg = '';
+        try {
+            const source = await invoke('pick_file_with_filter', {
+                extensions: ['db', 'sqlite', 'bak'],
+            });
+            if (!source) { _dbBusy = false; return; }
+            const r = await invoke('db_backup_restore', { sourcePath: source });
+            _dbMsg = (isEN
+                ? `Restored ${r.source_rows} memories. RESTART Lucy now. Safety copy at: `
+                : `Restauradas ${r.source_rows} memorias. REINICIA Lucy ahora. Copia de seguridad en: `)
+                + (r.backup_kept_at || '—');
+            // Auto-close the settings modal — the restart instruction is more
+            // visible in the bar above than buried in the modal.
+            setTimeout(() => {
+                toast(isEN ? '⚠ Restart Lucy now to load the restored database.'
+                           : '⚠ Reinicia Lucy ahora para cargar la base restaurada.', 'warn');
+            }, 200);
+        } catch (e) {
+            _dbError = String(e?.message || e);
+        } finally {
+            _dbBusy = false;
+        }
+    }
+
+    // ── Sprint A #2 — Support bundle export state ───────────────────────
+    let _bundleBusy = false;
+    let _bundleError = '';
+    let _bundleMsg = '';
+
+    async function exportSupportBundle() {
+        _bundleBusy = true; _bundleError = ''; _bundleMsg = '';
+        try {
+            const target = await invoke('pick_folder_path', {
+                title: isEN ? 'Pick a folder for the support bundle' : 'Elige carpeta para el bundle',
+            });
+            if (!target) { _bundleBusy = false; return; }
+            const r = await invoke('export_support_bundle', { targetDir: target });
+            _bundleMsg = (isEN ? 'Bundle written: ' : 'Bundle escrito: ')
+                + r.summary + ' → ' + r.path;
+            setTimeout(() => { _bundleMsg = ''; }, 8000);
+        } catch (e) {
+            _bundleError = String(e?.message || e);
+        } finally {
+            _bundleBusy = false;
+        }
+    }
+
+    // ── Tier B #3 — Custom theme management state ───────────────────────
+    // Mirrored in localStorage by theme-loader.ts. We keep a reactive copy
+    // here so the dots list re-renders when the user imports/deletes a theme.
+    let _customThemes = listCustomThemes();
+    let _showCustomThemeEditor = false;
+    let _customThemeDraft = '';
+    let _customThemeError = '';
+
+    function _importCustomThemeFromDraft() {
+        _customThemeError = '';
+        try {
+            const theme = importThemeJson(_customThemeDraft);
+            _customThemes = upsertCustomTheme(theme);
+            setWarpTheme('custom-' + theme.id);
+            _customThemeDraft = '';
+            _showCustomThemeEditor = false;
+            toast(isEN ? `Theme "${theme.name}" applied` : `Tema "${theme.name}" aplicado`, 'info');
+        } catch (e) {
+            _customThemeError = String(e?.message || e);
+        }
+    }
+    function _exportActiveCustomTheme() {
+        const id = currentTheme.startsWith('custom-')
+            ? currentTheme.slice('custom-'.length) : null;
+        if (!id) return;
+        const t = _customThemes.find(x => x.id === id);
+        if (!t) return;
+        const json = exportThemeJson(t);
+        try {
+            navigator.clipboard?.writeText(json);
+            toast(isEN ? 'Theme JSON copied to clipboard' : 'JSON del tema copiado al portapapeles', 'info');
+        } catch {
+            // Clipboard API can fail under restrictive permissions — fall
+            // back to dumping into the editor for manual copy.
+            _customThemeDraft = json;
+            _showCustomThemeEditor = true;
+        }
+    }
+    function _deleteActiveCustomTheme() {
+        const id = currentTheme.startsWith('custom-')
+            ? currentTheme.slice('custom-'.length) : null;
+        if (!id) return;
+        if (!confirm(isEN ? `Delete custom theme "${id}"?` : `¿Borrar tema personalizado "${id}"?`)) return;
+        _customThemes = deleteCustomTheme(id);
+        setWarpTheme('default');
+    }
     let db                 = null;
     let showSetupOverlay   = true;
     let appReady           = false;
@@ -374,14 +581,16 @@ import { listen } from '@tauri-apps/api/event';
             const hasOpenQuestion = /\?[\s]*$/.test(lucyText.trim()) || /pendiente|abierto|open/i.test(lucyText);
 
             resetDismissed(); // new turn → restore dismissed chips
+            const userText = String(lastUser?.rawContent || '');
             predictiveChips = predictChips({
                 lastLucyText: lucyText,
-                lastUserText: String(lastUser?.rawContent || ''),
+                lastUserText: userText,
                 hadTools,
                 toolLabels,
                 hadError,
                 hasOpenQuestion,
                 cwd: t.cwd || undefined,
+                domains: detectDomain(userText, lucyText),
             });
         } catch (err) {
             console.warn('[chips] predict error:', err);
@@ -394,6 +603,7 @@ import { listen } from '@tauri-apps/api/event';
         if (!chip || !activeTabId) return;
         const t = getTab(activeTabId);
         if (!t) return;
+        recordChipClick(chip.id);
         try {
             if (chip.action.kind === 'fill_input') {
                 t.inputValue = chip.action.text;
@@ -447,6 +657,8 @@ import { listen } from '@tauri-apps/api/event';
     let depStatus          = null;
     // ── COMMAND PALETTE ───────────────────────────
     let showPalette        = false;
+    /** Tier S #1 — Deterministic Replay Mode browser overlay */
+    let showReplayBrowser  = false;
     let uiDensity          = safeGetLS('lucy_density', 'comfortable');
     let workspacePresets   = safeParseLS('lucy_presets', []);
 
@@ -523,7 +735,7 @@ import { listen } from '@tauri-apps/api/event';
     let activeView         = 'terminal'; // 'terminal' | 'dashboard' | 'logviewer' | 'nexshell' | 'memory' | …
     let showLiveTrace      = false;       // Floating trace panel (Alt+T or FAB toggle)
     let showPermissionRulesModal = false;
-    let showSkillsManagerModal   = false;
+    // showSkillsManagerModal retired Sprint A #3 — handler converted to no-op toast
     let showPrinciplesModal      = false;
     let showSchedulesModal       = false;
     let showForksMonitor       = false;
@@ -734,11 +946,41 @@ import { listen } from '@tauri-apps/api/event';
         { icon:'⊕', label:'Cambiar API Key',         cat:'Sistema',     action:()=>{$showChangeKeyModal=true;showPalette=false;} },
         { icon:'🔌', label:'Configurar Proveedores', cat:'Sistema',     action:()=>{showProviderConfig=true;showPalette=false;} },
         { icon:'≡', label:'Abrir Audit Log',         cat:'Sistema',     action:()=>{abrirAudit();showPalette=false;} },
+        // Tier S #1 — Replay browser. Lets the user reproduce any past LLM turn.
+        { icon:'⌕', label: isEN ? 'Replay browser (deterministic)' : 'Navegador de replays (determinístico)',
+                                                      cat:'Sistema',     action:()=>{showReplayBrowser=true;showPalette=false;} },
+        // Tier B #4 — Open a second Lucy window for dual-monitor workflow.
+        { icon:'⛶', label: isEN ? 'Open second Lucy window (dual-monitor)' : 'Abrir segunda ventana de Lucy (dual-monitor)',
+                                                      cat:'Vista',       action:()=>{showPalette=false; abrirVentanaIndependiente();} },
+        // Tier B #2 — Branch the current tab at its last Lucy reply.
+        { icon:'↳', label: isEN ? 'Branch tab from last Lucy reply' : 'Bifurcar pestaña desde última respuesta Lucy',
+                                                      cat:'Terminal',
+                                                      hint:'Ctrl+B',
+                                                      action:()=>{
+                                                          showPalette = false;
+                                                          if (!activeTabId) return;
+                                                          const t = getTab(activeTabId);
+                                                          if (!t) return;
+                                                          // Find the last Lucy bubble — the natural branch point
+                                                          // ("what if I'd answered something else here").
+                                                          const lastLucy = [...t.messages].reverse().find(m => m.role === 'lucy');
+                                                          if (lastLucy) bifurcarTabDesde(activeTabId, lastLucy.id);
+                                                      } },
         { icon:'◈', label:'Ver comandos aprendidos', cat:'Memoria',     action:()=>{abrirMemoria();showPalette=false;} },
         { icon:'⊕', label:'Cambiar idioma',          cat:'Sistema',     action:()=>{showPalette=false;toast('Cambia el idioma en la barra inferior','info');} },
         // Acciones rápidas del sidebar
         ...quickActions.map(a => ({ icon:a.icono, label:a.nombre, cat:'Acción rápida',
             action:()=>{ejecutarDesdeSidebar(a);showPalette=false;} })),
+        // ── UI-3 (Sprint 2): Runbooks ───────────────────────────────────────
+        // Surfaces every saved runbook in the palette so the user can fuzzy-
+        // search "deploy" or "restart" and fire it without leaving the keyboard.
+        ...$runbooks.map(rb => ({
+            icon: rb.icon || '▸',
+            label: `Ejecutar runbook: ${rb.name}`,
+            cat: 'Runbook',
+            hint: `${rb.steps?.length || 0} pasos`,
+            action: () => { ejecutarRunbook(rb); showPalette = false; }
+        })),
         // Hosts
         ...$hosts.map(h => ({ icon:h.type==='windows'?'⊡':'◈', label:`Conectar a ${h.name}`, cat:'Host',
             action:()=>{dashSelectedHost=h.id;setView('dashboard');showPalette=false;} })),
@@ -795,6 +1037,15 @@ import { listen } from '@tauri-apps/api/event';
     // use getEffectiveModel(tab) instead of tab.selectedModel directly.
     function getEffectiveModel(tab, prompt = '') {
         if (!tab) return 'gemini-2.5-flash';
+        // ── Auto-fallback override (May 2026) ───────────────────────────────
+        // Set by runAI's catch block when the primary provider failed and
+        // we're recursing with a backup. One-shot: cleared as soon as
+        // consumed so it doesn't sticky-override future turns.
+        if (tab._fallbackModel) {
+            const fb = tab._fallbackModel;
+            tab._fallbackModel = null; // consume
+            return fb;
+        }
         if (tab.selectedModel === 'nvidia-custom') {
             const m = (tab.nvidiaCustomModel || '').trim();
             return m || 'nvidia-custom';  // fallback keeps it invalid so Rust returns a clear error
@@ -817,8 +1068,18 @@ import { listen } from '@tauri-apps/api/event';
                 manualOverride: manual,
                 smartRoutingEnabled: !!lucyConfig.smartRouting,
                 privacyMode: !!lucyConfig.privacyMode,
+                // Tier B #1 — Forward economy mode so the router tightens
+                // heavy-tier promotion thresholds. The manual model becomes
+                // the baseline for the savings estimate.
+                economyMode: !!lucyConfig.economyMode,
+                costlierBaseline: manual,
             });
             _lastRouteDecision = decision;
+            // Accumulate session-wide savings when economy mode is active —
+            // surface in StatusBar / Settings so the user sees real $ saved.
+            if (lucyConfig.economyMode && typeof decision.estimatedSavingsUsd === 'number') {
+                _economySavingsUsd = (_economySavingsUsd || 0) + Math.max(0, decision.estimatedSavingsUsd);
+            }
             return decision.modelId || manual;
         } catch (e) {
             debug.warn('[smart-router] routing failed, falling back to manual:', e);
@@ -849,6 +1110,9 @@ import { listen } from '@tauri-apps/api/event';
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // Tier B #3 — Inject any user-defined custom themes into the DOM
+        // so `data-theme="custom-<id>"` selectors work from app start.
+        bootCustomThemes();
         // U9 — Circadian theme nudger (sutil hue/saturation shift según hora)
         startTimeOfDay();
         // U2 — Lucy mood ambient state machine
@@ -1098,6 +1362,8 @@ import { listen } from '@tauri-apps/api/event';
                     runbooksDir: savedRb || '',
                     smartRouting: safeGetLS('lucy_smart_routing', '0') === '1',
                     privacyMode:  safeGetLS('lucy_privacy_mode',  '0') === '1',
+                    // Tier B #1 — Economy mode (cost-aware routing bias)
+                    economyMode:  safeGetLS('lucy_economy_mode',  '0') === '1',
                     userAvatarUrl: safeGetLS('lucy_user_avatar', ''),
                 };
                 showSetupOverlay = false;
@@ -1750,6 +2016,121 @@ import { listen } from '@tauri-apps/api/event';
         tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
     }
 
+    // ── Tier B #4 — Detach a second Lucy window (dual-monitor) ─────────
+    // Opens a sibling Tauri webview pointing at the same SvelteKit URL.
+    // The new window is fully independent — its own tabs, its own state —
+    // but shares the local SQLite DB so memory / replays / audit-trail are
+    // consistent across both instances.
+    //
+    // Why a "fresh instance" rather than "detach this tab specifically":
+    // bidirectional tab-state sync between webviews is a substantial
+    // engineering task (broadcast channels, conflict resolution on
+    // simultaneous edits). A fresh instance gets 90% of the dual-monitor
+    // value (work in window A, reference docs in window B) at 10% of the
+    // cost. Cross-window tab handoff stays as a v2 task.
+    async function abrirVentanaIndependiente() {
+        try {
+            const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+            const label = 'lucy-detached-' + Date.now().toString(36);
+            // The new window loads the app root — same URL the main window
+            // started with — so it picks up the same theme/locale from
+            // localStorage automatically. A unique label is required for
+            // Tauri's window registry; "lucy-detached-*" is whitelisted in
+            // capabilities/default.json.
+            // eslint-disable-next-line no-new
+            new WebviewWindow(label, {
+                url: '/',
+                title: 'Lucy — ' + (isEN ? 'Detached' : 'Independiente'),
+                width: 1100,
+                height: 760,
+                center: true,
+                resizable: true,
+            });
+            toast(
+                isEN
+                    ? 'Opening a second Lucy window…'
+                    : 'Abriendo segunda ventana de Lucy…',
+                'info',
+            );
+        } catch (e) {
+            toast(
+                isEN
+                    ? 'Could not open detached window: ' + String(e)
+                    : 'No se pudo abrir ventana independiente: ' + String(e),
+                'error',
+            );
+        }
+    }
+
+    // ── Tier B #2 — Branch a tab at a specific message ─────────────────
+    // Clones the source tab's state UP TO (and including) the chosen
+    // message. Useful for:
+    //   • "What if I had asked something different at this point?"
+    //   • Exploring two answers in parallel without losing the original
+    //   • Snapshotting a session before a risky experiment
+    //
+    // Clone semantics:
+    //   • messages: deep-copied via JSON round-trip, sliced to [0..msgIdx]
+    //   • workingMemory: full clone (so the new tab inherits memory state)
+    //   • execEngine, selectedModel, contextMax: inherited
+    //   • recognition + transient runtime state: reinitialized (a branch is
+    //     a fresh interactive session — we don't want two tabs racing on
+    //     the same speech recognizer)
+    //
+    // Title format: original title + " · ↳ msg N" so the user can tell
+    // branches apart in the tab bar.
+    function bifurcarTabDesde(srcTabId, msgId) {
+        const src = getTab(srcTabId);
+        if (!src) return null;
+        const msgIdx = src.messages.findIndex(m => m.id === msgId);
+        if (msgIdx < 0) return null;
+        // Slice up to AND INCLUDING the target message so the branch
+        // includes the bubble the user clicked on.
+        const slicedMsgs = src.messages.slice(0, msgIdx + 1);
+        // Deep clone via JSON round-trip — drops functions, DOM refs, and
+        // any Svelte-internal proxies that would re-bind incorrectly.
+        const clonedMsgs = JSON.parse(JSON.stringify(slicedMsgs));
+        const clonedWM = src.workingMemory
+            ? JSON.parse(JSON.stringify(src.workingMemory))
+            : null;
+        const newId = Date.now().toString() + '_b';
+        const newTitle = `${src.title || 'Branch'} · ↳ msg ${msgIdx + 1}`;
+        const t = {
+            id: newId, title: newTitle,
+            messages: clonedMsgs,
+            attachedFiles: [], inputValue: '',
+            selectedModel: src.selectedModel || 'gemini-3-flash-preview',
+            nvidiaCustomModel: src.nvidiaCustomModel || '',
+            contextMax: src.contextMax || 50000,
+            _histIdx: undefined,
+            isProcessing: false, usedVoice: false, isListening: false,
+            pendingMessage: null,
+            _committed: '', _shouldListen: false,
+            execEngine: src.execEngine || 'powershell',
+            workingMemory: clonedWM || {
+                currentHost: null, lastCommands: [], recentErrors: [],
+                activeIncident: null, turnCount: 0, compactedDigest: '',
+            },
+            // Mark provenance so future features (audit trail, replay browser)
+            // can show "branched from tab X at message Y" lineage.
+            _branchedFrom: { srcTabId, msgId, branchedAt: Date.now() },
+            recognition: initRecognition(newId, _voiceOpts()),
+        };
+        tabs = [...tabs, t];
+        activeTabId = newId;
+        showWelcome = false;
+        syncTabsStore(tabs);
+        persistir();
+        toast(
+            isEN
+                ? `Branched into a new tab at message ${msgIdx + 1}`
+                : `Bifurcado a una nueva pestaña en el mensaje ${msgIdx + 1}`,
+            'info',
+        );
+        tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+        return newId;
+    }
+
     function cerrarTab(id, e) {
         e.stopPropagation();
         const t = getTab(id);
@@ -1791,6 +2172,19 @@ import { listen } from '@tauri-apps/api/event';
                 _activeStreams.delete(id);
             }
         } catch (e) { debug.log('[close-tab] stream cleanup error:', e); }
+        // ── BUG FIX (May 2026): _pendingPlans leak on tab close ─────────────
+        // When the user closed a tab with a PLAN card waiting for click, the
+        // entry in _pendingPlans was never removed → the map grew unbounded
+        // across sessions. Walk the map and drop everything tied to this tab.
+        try {
+            for (const [pid, p] of _pendingPlans.entries()) {
+                if (p && p.tabId === id) {
+                    _pendingPlans.delete(pid);
+                    logTaskEvent('plan_orphaned', p.risk || 'med', null,
+                        { reason: 'tab_closed', planId: pid }, id);
+                }
+            }
+        } catch (e) { debug.log('[close-tab] pending plans cleanup error:', e); }
         try { destroyEnrichedWidgets(); } catch {}
         tabs = tabs.filter(x => x.id !== id);
         if (tabs.length && activeTabId === id) activeTabId = tabs[tabs.length-1].id;
@@ -1942,6 +2336,17 @@ import { listen } from '@tauri-apps/api/event';
                 e.preventDefault();
                 showPalette = !showPalette;
                 break;
+            case 'b': case 'B':
+                // Tier B #2 — Branch current tab at its last Lucy reply.
+                e.preventDefault();
+                if (activeTabId) {
+                    const _t = getTab(activeTabId);
+                    if (_t) {
+                        const _lastLucy = [...(_t.messages || [])].reverse().find(m => m.role === 'lucy');
+                        if (_lastLucy) bifurcarTabDesde(activeTabId, _lastLucy.id);
+                    }
+                }
+                break;
             case 'r': case 'R':
                 e.preventDefault();
                 historyQuery = ''; $showHistoryModal = !$showHistoryModal;
@@ -2081,7 +2486,12 @@ import { listen } from '@tauri-apps/api/event';
         // renderLucyMarkdown() output is already DOMPurify-clean, so this is a no-op
         // for well-formed messages and a safety net for everything else.
         if (obj.html && typeof obj.html === 'string') {
-            obj.html = safeHtml(obj.html, { allowImages: true });
+            // allowPlanCards: preserve <button>, style=, and data-plan-* attributes
+            // produced by renderPlanCard(). Detection by attribute presence is safe
+            // because an attacker-controlled string cannot reach this code path without
+            // first passing through the LLM response parser which strips raw HTML.
+            const hasPlanCard = obj.html.includes('data-plan-id=');
+            obj.html = safeHtml(obj.html, { allowImages: true, allowPlanCards: hasPlanCard });
         }
         // Memory v2: per-message token estimate. Stored ONCE at creation
         // (cheap char-based heuristic) so context-window math doesn't have
@@ -2206,8 +2616,78 @@ import { listen } from '@tauri-apps/api/event';
         refresh(); scrollChat();
     }
 
+    // ── Provider auto-fallback chain (May 2026) ────────────────────────────────
+    // When the user's primary model fails persistently (Gemini quota hit,
+    // Anthropic overload, network outage), automatically try the next
+    // configured provider instead of showing the user a dead-end error.
+    // Heuristics for provider detection are string-prefix based — same
+    // convention used everywhere else in ai.rs.
+    function _getProviderForModel(model) {
+        if (!model) return 'unknown';
+        const m = String(model).toLowerCase();
+        if (m.startsWith('local-'))       return 'local';
+        if (m.startsWith('gemini'))       return 'gemini';
+        if (m.startsWith('claude'))       return 'anthropic';
+        if (m.startsWith('gpt') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('o4')) return 'openai';
+        if (m.includes('/') && !m.startsWith('local-')) return 'nvidia'; // NIM model ids contain '/'
+        return 'unknown';
+    }
+    // Fast, cheap default model per provider — used when we fall back from a
+    // failing primary. Picks the most-reliable model in each lineup so the
+    // user always gets *some* response rather than a hard error.
+    function _getDefaultModelForProvider(provider) {
+        switch (provider) {
+            case 'gemini':    return 'gemini-2.5-flash';      // GA, 1M ctx, cheap
+            case 'anthropic': return 'claude-haiku-4-5';      // fastest Claude
+            case 'openai':    return 'gpt-4o-mini';           // cheap OpenAI
+            case 'nvidia':    return 'meta/llama-3.3-70b-instruct'; // free NIM
+            case 'local':     return null; // requires user's actual installed model
+            default:          return null;
+        }
+    }
+    // Returns the model id to try as a fallback, or null if none available.
+    // Walks `configuredProviders` skipping the current model's provider and
+    // any provider that already failed earlier in this same send (caller
+    // tracks via the `excluded` set).
+    async function _findFallbackModel(currentModel, excluded = new Set()) {
+        try {
+            const configured = await invoke('get_configured_providers').catch(() => []);
+            const currentProv = _getProviderForModel(currentModel);
+            excluded.add(currentProv);
+            // Priority order — most reliable cloud first, then NIM, then local.
+            const order = ['anthropic', 'gemini', 'openai', 'nvidia', 'local'];
+            for (const prov of order) {
+                if (excluded.has(prov)) continue;
+                if (!configured.includes(prov)) continue;
+                const candidate = _getDefaultModelForProvider(prov);
+                if (candidate) return { model: candidate, provider: prov };
+            }
+        } catch (e) { debug.warn('[fallback] lookup failed:', e); }
+        return null;
+    }
+    // Detects errors that mean the primary provider is unrecoverable for this
+    // request — quota exhausted, persistent 5xx, network down. These warrant
+    // a fallback attempt. Other errors (auth, malformed payload, user cancel)
+    // should fail loud rather than silently degrading to a different model.
+    function _isRetryableProviderError(err) {
+        const s = String(err || '').toLowerCase();
+        return /tras\s+\d+\s+intentos|http\s+(429|5\d\d)|rate.?limit|quota|overload|tiempo de espera|timeout|econnrefused|enotfound|network|fetch failed/i.test(s);
+    }
+
     // ── PLAN/ACT/VERIFY (opus-4-7 #3) ──────────────────────────────────────────
-    const _pendingPlans = new Map(); // planId -> { ...plan, tabId, doSpeak }
+    const _pendingPlans = new Map(); // planId -> { ...plan, tabId, doSpeak, createdAt }
+    // TTL: plans abandoned for >30 min are stale (user moved on). Purged
+    // lazily on the next plan-create or plan-click. Prevents the Map from
+    // growing unbounded when users open destructive prompts and walk away.
+    const _PLAN_MAX_AGE_MS = 30 * 60 * 1000;
+    function _purgeStalePlans() {
+        const cutoff = Date.now() - _PLAN_MAX_AGE_MS;
+        for (const [pid, p] of _pendingPlans.entries()) {
+            if (!p || (p.createdAt && p.createdAt < cutoff)) {
+                _pendingPlans.delete(pid);
+            }
+        }
+    }
 
     // ── Host preflight — see $lib/page/host-preflight.ts ──
 
@@ -2229,9 +2709,134 @@ import { listen } from '@tauri-apps/api/event';
         });
     }
 
+    // ── PLAN result interpretation helpers (May 2026) ──────────────────────────
+    // The original executePlan ran CMD + VERIFY + ROLLBACK but left the user
+    // staring at raw cards when things went wrong. Three new behaviors:
+    //   • Detect "needs admin" errors and surface an actionable elevation hint
+    //   • Detect "logical failure" (VERIFY ran ok but proves goal not met)
+    //   • Auto-launch a Lucy follow-up that interprets the result in prose
+    // All three only fire on failure paths — happy path stays token-cheap.
+
+    /// Match common Windows/PowerShell error fingerprints that mean "this needed
+    /// admin privileges". Both Spanish and English variants because PS localizes
+    /// its error strings based on the Windows display language.
+    function _detectElevationError(text) {
+        if (!text) return false;
+        return /PermissionDenied|Acceso\s+denegado|Access\s+is\s+denied|Access\s+denied|requires?\s+elevation|UnauthorizedAccess|No\s+se\s+puede\s+abrir\s+el\s+servicio.*en\s+el\s+equipo|CouldNot(Stop|Start|Set|Restart|Pause|Resume)Service|necesita.*admin|Run\s+as\s+administrator/i.test(String(text));
+    }
+
+    /// Compare CMD intent against VERIFY output to catch the case where the
+    /// command "succeeded" (no exception) but didn't actually do what was asked.
+    /// Returns a human-readable diagnostic string, or null if no mismatch found.
+    function _detectPlanLogicalFailure(cmd, verifyOut) {
+        if (!cmd || !verifyOut) return null;
+        const c = String(cmd).toLowerCase();
+        const v = String(verifyOut).toLowerCase();
+
+        // Service control mismatches
+        if (/\bstop-service\b|\bstop-process\b/.test(c) && /\brunning\b/.test(v)) {
+            return 'El comando intentó DETENER pero VERIFY muestra que sigue ACTIVO.';
+        }
+        if (/\bstart-service\b/.test(c) && /\bstopped\b/.test(v) && !/running/.test(v)) {
+            return 'El comando intentó ARRANCAR pero VERIFY muestra que sigue DETENIDO.';
+        }
+        if (/\brestart-service\b/.test(c) && /\bstopped\b/.test(v) && !/running/.test(v)) {
+            return 'El comando intentó REINICIAR pero VERIFY muestra el servicio DETENIDO (sólo paró, no arrancó).';
+        }
+        // Disable / Enable mismatches
+        if (/\bdisable-/.test(c) && /\benabled\s*:\s*true\b|\bstatus\s*:\s*enabled\b/i.test(verifyOut)) {
+            return 'El comando intentó DESHABILITAR pero VERIFY muestra que sigue HABILITADO.';
+        }
+        // File deletion mismatches (when VERIFY uses Test-Path)
+        if (/\bremove-item\b|\bdel\s/.test(c) && /\btest-path/i.test(cmd + ' ' + verifyOut) && /\btrue\b/.test(v)) {
+            return 'El comando intentó BORRAR pero VERIFY muestra que el archivo/carpeta sigue existiendo.';
+        }
+        return null;
+    }
+
+    /// Lazy LLM follow-up — launches ask_lucy with a focused interpretation
+    /// prompt and renders the response as a normal Lucy message. Only called
+    /// when the PLAN execution had a problem; happy paths skip this entirely
+    /// to save tokens. Fails gracefully — if the LLM call errors, at minimum
+    /// surface the elevation hint manually.
+    async function _interpretPlanResult({ tabId, t, actualCmd, out, verify, verifyOut, needsElevation, logicalFail }) {
+        const interpretPrompt = `[PLAN RESULT INTERPRETATION]
+Comando ejecutado:
+${String(actualCmd).substring(0, 400)}
+
+Salida CMD:
+${String(out || '(sin salida)').substring(0, 2000)}
+${verify ? '\nComando VERIFY: ' + String(verify).substring(0, 200) : ''}
+${verifyOut ? '\nSalida VERIFY:\n' + String(verifyOut).substring(0, 1500) : ''}
+${needsElevation ? '\n[DETECTOR: PermissionDenied — requiere elevación de Admin]' : ''}
+${logicalFail ? '\n[DETECTOR: ' + logicalFail + ']' : ''}
+
+Interpreta el resultado en MÁXIMO 4 líneas:
+1. Qué pasó realmente (1 línea, directo).
+2. Por qué falló si aplica (1 línea, cita el error específico).
+3. Acción concreta para el usuario (1-2 líneas).
+
+REGLAS DE FORMATO:
+- Si necesita elevación: indica EXACTAMENTE "Cierra Lucy y reábrela como Administrador (clic derecho sobre el ícono → Ejecutar como administrador)".
+- Si VERIFY confirmó fallo lógico: explica qué demostró el VERIFY y por qué eso contradice el objetivo.
+- NO uses <EXECUTE>, <PLAN>, <TOOL> ni etiquetas XML/JSON.
+- NO repitas el comando completo, ya lo vio el usuario en las tarjetas de arriba.
+- Lenguaje directo, sin floritura ni "espero que esto ayude".`;
+
+        try {
+            const interp = await invoke('ask_lucy', {
+                prompt: interpretPrompt,
+                context: '',
+                userName: lucyConfig.name,
+                runbooksDir: lucyConfig.runbooksDir || null,
+                model: getEffectiveModel(t),
+                lang: userLang,
+                hostsJson: JSON.stringify($hosts),
+                images: null,
+            });
+            const cleanInterp = (interp || '')
+                .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                .replace(/<EXECUTE[^>]*>[\s\S]*?<\/EXECUTE[^>]*>/gi, '')
+                .replace(/<PLAN>[\s\S]*?<\/PLAN>/gi, '')
+                .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                .trim();
+            if (cleanInterp) {
+                addMsg(tabId, {
+                    role: 'lucy',
+                    html: `<div class="mn" style="color:#60a5fa;">⌬ Análisis del resultado</div>${renderLucyMarkdown(cleanInterp)}`,
+                    rawContent: cleanInterp,
+                });
+            }
+        } catch (e) {
+            debug.warn('[plan-interpret] follow-up failed:', e);
+            // Fallback: at minimum show the elevation hint if we detected it,
+            // so the user isn't left guessing when the LLM is unreachable.
+            if (needsElevation) {
+                addMsg(tabId, {
+                    role: 'lucy',
+                    html: `<div class="mn" style="color:#f59e0b;">⚠ Requiere privilegios de Administrador</div>
+                           <div style="font-size:12px;color:var(--txt);line-height:1.5;margin-top:4px;">El comando falló por permisos insuficientes. Cierra Lucy y reábrela como <b>Administrador</b> (clic derecho sobre el ícono → <b>Ejecutar como administrador</b>) para que pueda controlar servicios del sistema como Spooler, Themes, RpcSs, etc.</div>`,
+                    style: 'border-left-color:#f59e0b;',
+                });
+            }
+        }
+    }
+
     async function executePlan(planId, mode) {
+        _purgeStalePlans(); // lazy GC
         const p = _pendingPlans.get(planId);
-        if (!p) return;
+        if (!p) {
+            // Plan was either purged (>30 min old) or already executed.
+            // Show a friendly notice instead of silently doing nothing.
+            toast('Este plan ya no está disponible (expirado o ejecutado). Pide a Lucy una nueva propuesta.', 'warn');
+            return;
+        }
+        // Hard TTL check — defensive in case the lazy purge missed it.
+        if (p.createdAt && (Date.now() - p.createdAt) > _PLAN_MAX_AGE_MS) {
+            _pendingPlans.delete(planId);
+            toast('Este plan expiró (>30 min). Por seguridad debe regenerarse.', 'warn');
+            return;
+        }
         const { target, engine, desc, cmd, verify, rollback, tabId } = p;
         const t = getTab(tabId); if (!t) return;
         const actualCmd = mode === 'dryrun' ? toDryRunCmd(cmd, engine) : cmd;
@@ -2304,18 +2909,39 @@ import { listen } from '@tauri-apps/api/event';
             const wb = warpBlock(actualCmd, out || '(sin salida)', true, elapsed, mode==='dryrun'?'DRY-RUN':'PLAN');
             addMsg(tabId, { role:'lucy', html:`<div class="mn">Lucy</div>${wb}`, rawContent:`[${label}] ${actualCmd}\n${out||''}` });
 
+            // verifyOut & verifyFailed live OUTSIDE the if-block so the
+            // post-plan interpreter (added May 2026) can see them after
+            // VERIFY + any auto-rollback have completed.
+            let verifyOut = '';
+            let verifyFailed = false;
+            let logicalFail = null;
             if (mode !== 'dryrun' && verify) {
                 const vT0 = Date.now();
-                let verifyFailed = false;
                 let verifyErr = '';
                 try {
-                    const vout = await _runPlanStep(target, verify, engine);
+                    verifyOut = await _runPlanStep(target, verify, engine);
                     const vEl = Date.now() - vT0;
-                    addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#34d399;">✓ VERIFY</div>${warpBlock(verify, vout||'(sin salida)', true, vEl, 'VERIFY')}`, rawContent:`[VERIFY] ${verify}\n${vout||''}` });
+                    addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#34d399;">✓ VERIFY</div>${warpBlock(verify, verifyOut||'(sin salida)', true, vEl, 'VERIFY')}`, rawContent:`[VERIFY] ${verify}\n${verifyOut||''}` });
                 } catch (ve) {
                     verifyFailed = true;
                     verifyErr = String(ve).substring(0, 400);
                     addMsg(tabId, { role:'lucy', html:`<div class="mn" style="color:#f59e0b;">⚠ VERIFY failed</div><pre style="color:#f87171;font-size:11px;">${verifyErr}</pre>`, style:'border-left-color:#f59e0b;' });
+                }
+
+                // NEW: logical-failure detection. VERIFY ran without throwing, but
+                // its output proves the CMD didn't achieve its goal (e.g. Stop-Service
+                // exited 0 but service still shows "Running"). Promote to verifyFailed
+                // so the existing AUTO-ROLLBACK path takes over.
+                if (!verifyFailed && verifyOut) {
+                    logicalFail = _detectPlanLogicalFailure(actualCmd, verifyOut);
+                    if (logicalFail) {
+                        verifyFailed = true;
+                        addMsg(tabId, {
+                            role: 'lucy',
+                            html: `<div class="mn" style="color:#f59e0b;">⚠ Fallo lógico detectado</div><div style="font-size:11px;color:var(--txt2);margin:4px 0;">${logicalFail}</div>`,
+                            style: 'border-left-color:#f59e0b;'
+                        });
+                    }
                 }
 
                 // AUTO-ROLLBACK: si VERIFY falló y hay ROLLBACK definido, ejecutarlo automáticamente.
@@ -2355,9 +2981,34 @@ import { listen } from '@tauri-apps/api/event';
                     });
                 }
             }
+
+            // ── POST-PLAN INTERPRETATION (May 2026) ──────────────────────────
+            // Close the conversational loop. Without this, the user is left
+            // staring at raw warpBlock cards with no analysis. We only call
+            // Lucy if something went wrong (token-cheap on happy paths).
+            const needsElevation = _detectElevationError(out) || _detectElevationError(verifyOut);
+            const hadProblem = needsElevation || verifyFailed || logicalFail;
+            if (hadProblem && mode !== 'dryrun') {
+                await _interpretPlanResult({
+                    tabId, t, actualCmd, out, verify, verifyOut,
+                    needsElevation, logicalFail,
+                });
+            }
         } catch (e) {
             _updateWM(t, { type:'exec', cmd:actualCmd, target, ok:false, ms:Date.now()-t0, err:e });
-            addMsg(tabId, { role:'lucy', html:`<div class="mn">!</div>Error: <pre style="color:#f87171;">${String(e).substring(0,500)}</pre>`, style:'border-left-color:#ef4444;' });
+            // Detect elevation errors even when execute_powershell threw an exception
+            // (e.g. SECURITY_BLOCK from the bypass-token path or a hard PermissionDenied).
+            const errStr = String(e).substring(0, 500);
+            const needsElev = _detectElevationError(errStr);
+            addMsg(tabId, { role:'lucy', html:`<div class="mn">!</div>Error: <pre style="color:#f87171;">${errStr}</pre>`, style:'border-left-color:#ef4444;' });
+            if (needsElev) {
+                addMsg(tabId, {
+                    role: 'lucy',
+                    html: `<div class="mn" style="color:#f59e0b;">⚠ Requiere privilegios de Administrador</div>
+                           <div style="font-size:12px;color:var(--txt);line-height:1.5;margin-top:4px;">Este comando necesita elevación. Cierra Lucy y reábrela como <b>Administrador</b> (clic derecho sobre el ícono → <b>Ejecutar como administrador</b>).</div>`,
+                    style: 'border-left-color:#f59e0b;',
+                });
+            }
         } finally {
             _pendingPlans.delete(planId);
             fin(tabId);
@@ -2449,8 +3100,14 @@ import { listen } from '@tauri-apps/api/event';
         }
 
         let disp=raw||"Analiza los archivos adjuntos.";
-        if(t.attachedFiles.length){const n=t.attachedFiles.map(f=>f.type==='image'?`◑ ${f.name}`:`· ${f.name}`).join(', ');disp+=`<br><span style="font-size:0.85em;color:#10b981;">Archivos: ${n}</span>`;}
-        addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>${disp}`});
+        let _msgAttachments = undefined;
+        if(t.attachedFiles.length){
+            const textFiles=t.attachedFiles.filter(f=>f.type!=='image');
+            const imageFiles=t.attachedFiles.filter(f=>f.type==='image');
+            if(textFiles.length){const n=textFiles.map(f=>`· ${f.name}`).join(', ');disp+=`<br><span style="font-size:0.85em;color:#10b981;">Archivos: ${n}</span>`;}
+            if(imageFiles.length){_msgAttachments=imageFiles.map(f=>({name:f.name,previewUrl:f.previewUrl}));}
+        }
+        addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>${disp}`,attachments:_msgAttachments});
         // U6: auto-rename tab con el primer mensaje del usuario
         if (raw && (t.title === 'Nueva Terminal' || t.title === 'New Terminal')) {
             t.title = raw.substring(0, 30).trim() + (raw.length > 30 ? '…' : '');
@@ -2479,8 +3136,32 @@ import { listen } from '@tauri-apps/api/event';
                 return;
             }
             if(found.script==='TOOL_SYSINFO'){t.isProcessing=true;refresh();try{const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");}catch(e){addMsg(tabId,{role:'lucy',html:`Error: ${e}`,style:'border-left-color:#ef4444;'});}fin(tabId);return;}
-            try{await invoke('execute_powershell',{script:found.script,forceExecute:false});addMsg(tabId,{role:'lucy',html:`<div class="mn">[Quick] Lucy (Rápida)</div>${found.respuesta}`,style:'border-left-color:#10b981;'});if(doSpeak)speak(found.respuesta);fin(tabId);}
-            catch(err){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Aviso</div>Comando falló.`,style:'border-left-color:#f59e0b;',button:{text:'↻ Intentar con IA',action:()=>runAI(tabId,raw,doSpeak)}});if(doSpeak)speak("Falló.");fin(tabId);}
+            // ── BUG FIX (May 2026 benchmark): Quick path swallowed output ─────
+            // Previously: `await invoke(...)` ran the script but DISCARDED its
+            // return value; the displayed message was only the pre-canned
+            // `respuesta` ("Iniciando get-date..."). For cmdlets where the
+            // user actually wants to SEE results (Get-Date, Get-Service, etc.)
+            // this looked like a hang. Fix: capture the output and append it
+            // in a styled <pre> like the other Quick path at line ~1413 does.
+            try {
+                const _qOut = await invoke('execute_powershell', { script: found.script, forceExecute: false });
+                const _qOutTrim = String(_qOut || '').trim();
+                const _outBlock = _qOutTrim
+                    ? `<br><span style="font-size:11px;color:var(--txt2);font-family:var(--mono);white-space:pre-wrap;display:block;margin-top:6px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;"><code>${_qOutTrim.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></span>`
+                    : '';
+                addMsg(tabId, {
+                    role: 'lucy',
+                    html: `<div class="mn">[Quick] Lucy (Rápida)</div>${found.respuesta}${_outBlock}`,
+                    rawContent: `${found.respuesta}\n${_qOutTrim}`,
+                    style: 'border-left-color:#10b981;'
+                });
+                if (doSpeak) speak(found.respuesta);
+                fin(tabId);
+            } catch(err) {
+                addMsg(tabId, { role:'lucy', html:`<div class="mn">! Aviso</div>Comando falló.`, style:'border-left-color:#f59e0b;', button:{ text:'↻ Intentar con IA', action:()=>runAI(tabId,raw,doSpeak) } });
+                if (doSpeak) speak("Falló.");
+                fin(tabId);
+            }
         } else { await runAI(tabId,raw,doSpeak); }
     }
 
@@ -2597,6 +3278,16 @@ import { listen } from '@tauri-apps/api/event';
         let _reasoningTickerRef = null;
         // Best-effort DESIGN.md detection — non-blocking. Caches per cwd.
         refreshDesignMd().catch(() => {});
+        // ── Memory decay reinforcement (F1+, May 2026) ──────────────────────
+        // Bump updated_at on Core memory entries whose key/value appears in
+        // the user's message. Keeps facts the user actively mentions fresh;
+        // unused facts decay naturally and stop polluting the system prompt.
+        // Fire-and-forget — never blocks the message send, never throws.
+        if (raw && raw.length > 0 && raw.length < 4000) {
+            invoke('memory_core_reinforce', { text: raw })
+                .then(n => { if (n > 0) debug.log(`[memory-decay] reinforced ${n} entries from user msg`); })
+                .catch(e => debug.log('[memory-decay] reinforce failed:', e));
+        }
         // Mostrar indicador "Lucy pensando" inline
         addThinking(tabId);
         await scrollChat();
@@ -2723,6 +3414,23 @@ Use ONE of these patterns instead:
             // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
             const codeGenIntent = /dame\s+(un\s+)?script|escrib[ea]\s+(un\s+)?script|crea\s+(un\s+)?script|genera\s+(un\s+)?script|give\s+me\s+(a\s+)?script|write\s+(a\s+)?script|create\s+(a\s+)?script|generate\s+(a\s+)?script|hazme\s+(un\s+)?script|necesito\s+(un\s+)?script|quiero\s+(un\s+)?script|dame\s+.*c[oó]digo|dame\s+.*powershell|haz\s+.*script/i.test(raw);
 
+            // ── INFORMATIONAL INTENT: user asks for a command to USE themselves, not to auto-execute ──
+            // Signals: "dame el comando", "cómo se hace", "qué comando", "muéstrame cómo", etc.
+            // This guard runs REGARDLESS of what the LLM emits — it enforces show-not-run at frontend level.
+            const infoIntent = !codeGenIntent && (
+                /dame\s+(el\s+|un\s+)?comando|d[ií]me\s+(el\s+)?comando|cu[aá]l\s+es\s+el\s+comando/i.test(raw) ||
+                /qu[eé]\s+comando|c[oó]mo\s+(se\s+)?hac[eo]|c[oó]mo\s+(se\s+)?ejecuta|c[oó]mo\s+puedo/i.test(raw) ||
+                /para\s+(ejecutarlo|correrlo|hacerlo)\s+(yo|manual|mismo|solo|a\s+mano)/i.test(raw) ||
+                /give\s+me\s+(the\s+|a\s+)?command|show\s+me\s+(how|the\s+command)|what\s+command/i.test(raw) ||
+                /how\s+(do\s+I|to)\s+\w|mu[eé]strame\s+(c[oó]mo|el)/i.test(raw) ||
+                /solo\s+(qu[eé]|dame|dime|mu[eé]strame)\s/i.test(raw)
+            );
+
+            // ── LINUX-ON-WINDOWS GUARD: detect Linux-specific syntax in <EXECUTE> on Windows ──
+            // Applied post-response to catch cases where the LLM ignores OS Guard prompt rule.
+            const _isLinuxCmd = (cmd) =>
+                /^\s*(sudo\s|apt(-get)?\s|yum\s|dnf\s|pacman\s|brew\s|systemctl\s|journalctl|service\s+\w+\s+(start|stop|restart|status)|chmod\s|chown\s|chgrp\s|useradd\s|userdel\s|groupadd\s|passwd\s|crontab\s|bash\s+-[ce]|sh\s+-[ce]|mount\s|umount\s|fdisk\s|lsblk|mkfs\.|iptables\s|ip\s+(route|addr|link)|ufw\s|sestatus|getenforce|setenforce)/i.test(cmd.trim());
+
             // ── Token buffer: revelado progresivo tipo Gemini/ChatGPT ──
             let _tokenQ = [];       // cola de fragmentos de texto entrantes
             let _revealed = '';     // texto revelado al usuario hasta ahora
@@ -2730,10 +3438,11 @@ Use ONE of these patterns instead:
             let _drainTimer = null;
             const DRAIN_MS = 40;    // ms entre revelados — 40ms reduce flicker vs 30ms
 
-            const cleanStreamDisplay = (text) => (codeGenIntent
+            const cleanStreamDisplay = (text) => (codeGenIntent || infoIntent
                 ? text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, c) => '\n```powershell\n'+c.trim()+'\n```\n')
                        .replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, c) => '\n```cmd\n'+c.trim()+'\n```\n')
-                : text.replace(/<EXECUTE>[\s\S]*?<\/EXECUTE>/gi, '')
+                : text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (m, c) =>
+                        _isLinuxCmd(c) ? '\n```bash\n'+c.trim()+'\n```\n' : '')
                       .replace(/<EXECUTE_CMD>[\s\S]*?<\/EXECUTE_CMD>/gi, ''))
                 .replace(/<EXECUTE_WMIC>[\s\S]*?<\/EXECUTE_WMIC>/gi, '')
                 .replace(/<EXECUTE_NETSH>[\s\S]*?<\/EXECUTE_NETSH>/gi, '')
@@ -2847,6 +3556,11 @@ Use ONE of these patterns instead:
                         _streamMsg.role = 'lucy';
                         _streamMsg.rawRole = 'Lucy';
                         _streamMsg.rawContent = displayText;
+                        // Sprint 3, AI-6 — Re-tokenize on streaming→lucy promotion.
+                        // The placeholder was created with ~0 tokens (empty body);
+                        // without this recompute, pruneTabForBudget undercounts long
+                        // Lucy responses and the tab grows past its intended budget.
+                        _streamMsg.tokens = Math.ceil(displayText.length / 4);
                         // Quitar cursor y clase stream-body, mantener el resto del HTML intacto
                         let existingHtml = _streamMsg.html || '';
                         existingHtml = existingHtml.replace(/<span class="stream-cursor"><\/span>/g, '');
@@ -2949,10 +3663,96 @@ Use ONE of these patterns instead:
                             tabId,
                             detail: `Args (truncated): ${String(args).slice(0, 240)}\n\nHint to LLM: ${hintAlt || 'switch strategy'}`,
                         });
+                        // Telemetry: persistent log for "which models get stuck most"
+                        logTaskEvent('agent_loop_block', 'tool_loop', null, {
+                            model: _loopModelName, kind, args_excerpt: String(args).slice(0, 120),
+                            count: prev + 1, iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
+                        }, tabId);
                         return { blocked: true, msg: `[LOOP BLOCKED] Has llamado a "${kind}" con los mismos argumentos ${prev} veces ya. STOP. Ese camino no converge. ${hintAlt || 'Cambia de estrategia: prueba una herramienta distinta, modifica los argumentos, o entrega tu respuesta final al usuario explicando lo que encontraste hasta ahora.'}` };
                     }
                     return { blocked: false, msg: null };
                 };
+                // ── Telemetry: which model is driving this agent loop? ──────
+                // Captured once per loop so the loop-blockers below can attach
+                // it to the task_events row without recomputing each time.
+                // Powers the loop_block_stats() query → users can spot which
+                // models get stuck most often and adjust their default.
+                const _loopModelName = (typeof getEffectiveModel === 'function' ? getEffectiveModel(t) : null) || 'unknown';
+
+                // ── Same-target loop dedup (May 2026) ────────────────────────
+                // Catches the bug fingerprint: Lucy creates a file, opens it,
+                // then keeps trying to "re-open" or "verify" with variant
+                // commands (Start-Process → start → explorer → cmd /c start),
+                // each one a DIFFERENT command text but acting on the SAME
+                // path. checkToolLoop misses these because it hashes the full
+                // command string. This sibling hashes the TARGETS extracted
+                // from each command and counts them across iterations.
+                const targetCallCounts = new Map();
+                const MAX_SAME_TARGET = 3; // create + open + verify is fine; 4+ is stuck
+                // Pull paths / URLs / -Name args from a command string.
+                // Conservative — only matches strings that clearly look like
+                // file paths (have an extension), URLs, or named arguments.
+                // Avoids false positives on generic verbs or flag names.
+                const extractCmdTargets = (cmd) => {
+                    const targets = new Set();
+                    if (!cmd) return targets;
+                    const s = String(cmd);
+                    // 1. Quoted strings (single or double) that look like paths or URLs
+                    const quotedRe = /(["'])([^"']{3,240})\1/g;
+                    let m;
+                    while ((m = quotedRe.exec(s)) !== null) {
+                        const inner = m[2];
+                        const hasSlash = /[\\\/]/.test(inner);
+                        const hasExt = /\.[a-zA-Z0-9]{2,5}(\s|$)/.test(inner);
+                        const isDrive = /^[a-zA-Z]:/.test(inner);
+                        const isUrl = /^https?:\/\//i.test(inner);
+                        if (isUrl || (hasSlash && (hasExt || isDrive))) {
+                            targets.add('p:' + inner.toLowerCase().trim());
+                        }
+                    }
+                    // 2. Bare Windows absolute paths: C:\...\file.ext (no quotes needed)
+                    const winPaths = s.match(/\b[a-zA-Z]:\\[^\s"'<>|;,]+\.[a-zA-Z0-9]{2,5}\b/g) || [];
+                    for (const p of winPaths) targets.add('p:' + p.toLowerCase());
+                    // 3. Bare URLs
+                    const urls = s.match(/https?:\/\/[^\s"'<>|;,)]+/gi) || [];
+                    for (const u of urls) targets.add('p:' + u.toLowerCase().replace(/[.,;:]+$/, ''));
+                    // 4. -Name / -ServiceName / -ProcessName / -ComputerName arguments
+                    const named = s.matchAll(/-(?:Name|ServiceName|ProcessName|ComputerName|InputObject|Path|FilePath|LiteralPath)\s+["']?([A-Za-z][\w.\\\/:-]{1,180})["']?/gi);
+                    for (const nm of named) {
+                        if (nm[1]) targets.add('n:' + nm[1].toLowerCase());
+                    }
+                    return targets;
+                };
+                // Check + increment all targets found in cmd. Returns the
+                // first target that crosses the threshold (or {blocked:false}).
+                const checkTargetLoop = (cmd, hintAlt = '') => {
+                    const targets = extractCmdTargets(cmd);
+                    if (targets.size === 0) return { blocked: false, msg: null };
+                    for (const tgt of targets) {
+                        const prev = targetCallCounts.get(tgt) || 0;
+                        targetCallCounts.set(tgt, prev + 1);
+                        if (prev + 1 > MAX_SAME_TARGET) {
+                            const label = tgt.slice(2); // strip the 'p:' or 'n:' prefix for display
+                            pushTrace({
+                                phase: 'info',
+                                label: `⊗ Same-target loop blocked: "${label}" referenced ${prev + 1}× across variant commands`,
+                                tabId,
+                                detail: `Lucy is acting on the same file/URL/service repeatedly with different commands. The first attempt likely succeeded. Force-stopping the loop.`,
+                            });
+                            // Telemetry: capture which models hit target-loops most
+                            logTaskEvent('agent_loop_block', 'target_loop', null, {
+                                model: _loopModelName, target: label, count: prev + 1,
+                                iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
+                            }, tabId);
+                            return {
+                                blocked: true,
+                                msg: `[SAME-TARGET LOOP BLOCKED] El objetivo "${label}" ha aparecido en ${prev + 1} comandos distintos durante esta tarea. ${hintAlt || 'Esto suele significar que el primer comando funcionó y estás intentando "verificar" o "re-ejecutar" con variantes que no aportan nada nuevo.'} STOP. Entrega tu respuesta final al usuario confirmando el estado actual, sin ejecutar más comandos sobre este target.`,
+                            };
+                        }
+                    }
+                    return { blocked: false, msg: null };
+                };
+
                 // ── Error fingerprint dedup: blocks after MAX_SAME_ERROR identical failures ──
                 const errorFingerprints = new Map();
                 const MAX_SAME_ERROR = 2;
@@ -2966,6 +3766,11 @@ Use ONE of these patterns instead:
                     const count = (errorFingerprints.get(fp) || 0) + 1;
                     errorFingerprints.set(fp, count);
                     if (count > MAX_SAME_ERROR) {
+                        // Telemetry: track which models trigger repeat-error blocks
+                        logTaskEvent('agent_loop_block', 'error_repeat', null, {
+                            model: _loopModelName, fingerprint: fp.slice(0, 120),
+                            count, iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
+                        }, tabId);
                         return `\n\n[⊗ REPEATED BUILD ERROR — seen ${count} times]\nThis exact error pattern has appeared ${count} times already. STOP retrying the same approach.\nYou MUST pivot: try a completely different strategy, simplify the code, remove the failing dependency, or explain to the user why this approach won't work.`;
                     }
                     return null;
@@ -4376,19 +5181,41 @@ Use ONE of these patterns instead:
                         // si pidió 'ollama' pero no hay local activo, sube a 'auto' (proveedor más barato disponible).
                         const forkModel = pickSubAgentModel(subAgentModel, activeTab?.selectedModel);
 
-                        // Persistir en SQLite inmediatamente como 'running'
+                        // Tier A #1 — Build the full input now so we can
+                        // estimate tokens accurately when the fork finishes.
+                        // The estimate uses ~4 chars/token (same heuristic as
+                        // pruneTabForBudget). It's coarse but unblocks the
+                        // cost ledger without round-tripping through the
+                        // server for exact usage data.
+                        const _fPrompt = `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano. Completa la siguiente tarea y responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas):\n\n${fInstruction}`;
+                        const _fCtx = agentCtx.substring(Math.max(0, agentCtx.length - 3000));
+                        // Persistir en SQLite inmediatamente como 'running'.
+                        // parentTaskId: si hay un fork "padre" activo en este loop, lo asociamos.
+                        // El loop principal es top-level; un fork sólo se vuelve "padre" cuando
+                        // su propio ask_lucy emite <TOOL>fork_task:...</TOOL> — algo que la
+                        // tubería actual no permite (los sub-agentes corren sin tool-loop).
+                        // Por ahora todos los forks son root ('') pero el campo está listo.
+                        // Visible error trail: a silent catch was hiding
+                        // schema-migration mismatches when fork_results gained
+                        // new columns. Surface failures in console + LiveTrace
+                        // so we never silently lose Sub-Agent visibility again.
                         const fDbId = await invoke('fork_save', {
                             taskId: fTaskId,
                             tabId: tabId || '',
                             sessionId: String(agentTaskId),
                             model: forkModel,
-                            instruction: fInstruction
-                        }).catch(() => null);
+                            instruction: fInstruction,
+                            parentTaskId: '',
+                        }).catch(e => {
+                            console.error('[fork_save] persistence failed:', e);
+                            pushTrace({ phase: 'warn', label: '✗ fork_save failed', detail: String(e), tabId });
+                            return null;
+                        });
 
                         // Sub-agente de un solo paso — sin tool loop, modelo configurable
                         const _fPromise = invoke('ask_lucy', {
-                            prompt: `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano. Completa la siguiente tarea y responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas):\n\n${fInstruction}`,
-                            context: agentCtx.substring(Math.max(0, agentCtx.length - 3000)),
+                            prompt: _fPrompt,
+                            context: _fCtx,
                             userName: lucyConfig.name,
                             runbooksDir: lucyConfig.runbooksDir || null,
                             model: forkModel,
@@ -4399,9 +5226,18 @@ Use ONE of these patterns instead:
                             const resultStr = String(r);
                             forkedTasks[fTaskId].status = 'done';
                             forkedTasks[fTaskId].result = resultStr;
-                            // Persistir resultado en SQLite
-                            invoke('fork_update', { taskId: fTaskId, status: 'done', result: resultStr, errorMsg: null })
-                                .catch(debug.log);
+                            // Estimación de tokens — 4 chars/token approx
+                            const tIn  = Math.ceil((_fPrompt.length + _fCtx.length) / 4);
+                            const tOut = Math.ceil(resultStr.length / 4);
+                            // Persistir resultado + tokens en SQLite (server computes cost_usd)
+                            invoke('fork_update', {
+                                taskId: fTaskId, status: 'done',
+                                result: resultStr, errorMsg: null,
+                                tokensIn: tIn, tokensOut: tOut,
+                            }).catch(e => {
+                                console.error('[fork_update done] failed:', e);
+                                pushTrace({ phase: 'warn', label: '✗ fork_update(done) failed', detail: String(e), tabId });
+                            });
                             finishToolCard(_fCard, resultStr.substring(0, 120), true);
                             stepsHtml += `[✓ Fork listo] ${esc(fTaskId)}\n`;
                             renderAgentTask();
@@ -4410,9 +5246,15 @@ Use ONE of these patterns instead:
                             const errStr = String(e);
                             forkedTasks[fTaskId].status = 'error';
                             forkedTasks[fTaskId].result = errStr;
-                            // Persistir error en SQLite
-                            invoke('fork_update', { taskId: fTaskId, status: 'error', result: null, errorMsg: errStr })
-                                .catch(debug.log);
+                            // Persistir error en SQLite (no token data on failure)
+                            invoke('fork_update', {
+                                taskId: fTaskId, status: 'error',
+                                result: null, errorMsg: errStr,
+                                tokensIn: null, tokensOut: null,
+                            }).catch(e => {
+                                console.error('[fork_update error] failed:', e);
+                                pushTrace({ phase: 'warn', label: '✗ fork_update(error) failed', detail: String(e), tabId });
+                            });
                             finishToolCard(_fCard, errStr, false);
                             return `[ERROR en sub-tarea] ${errStr}`;
                         });
@@ -4615,6 +5457,17 @@ Use ONE of these patterns instead:
                         lucyText = lucyText.replace(/<TOOL>writefile:[^<]+<\/TOOL>/gi, '').replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
                         const _wPath = wfM[1].trim();
                         const _fileContent = fcM[1];
+                        // ── Anti-loop: same file written N+ times means model is stuck regenerating ──
+                        // Different from editCountsByPath (which is for editfile partial patches).
+                        // For writefile (full-content rewrite), 3+ rewrites in one task strongly
+                        // suggests the model is iterating on tweaks instead of finishing.
+                        const _wfChk = checkToolLoop('writefile', _wPath,
+                            `Ya reescribiste "${_wPath}" varias veces en esta tarea. Detén las iteraciones de polishing y entrega tu respuesta final al usuario con el archivo que ya escribiste — más iteraciones sólo van a introducir bugs.`);
+                        if (_wfChk.blocked) {
+                            toolResults.push(_wfChk.msg);
+                            stepsHtml += `[⊗ Write loop bloqueado] ${esc(_wPath.substring(0,40))}...\n`;
+                            renderAgentTask();
+                        } else {
                         const _writeCard = newToolCard('⊞', `Write ${_wPath}`, 'write');
                         try {
                             const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
@@ -4636,6 +5489,7 @@ Use ONE of these patterns instead:
                             toolResults.push(`[WRITE ERROR] ${e}`);
                             finishToolCard(_writeCard, _errSummary, false);
                         }
+                        } // close: else (writefile not loop-blocked)
                     }
 
                     // ── <TOOL>cd:/new/path</TOOL> — change logical working directory ──
@@ -4671,7 +5525,10 @@ Use ONE of these patterns instead:
                     const execPsM    = (!execCmdM && !execWmicM && !execNetshM && !execRegM && !execVbsM && !execRemoteM) ? agentResp.match(/<EXECUTE>([\s\S]*?)(?:<\/EXECUTE>|$)/i) : null;
                     const execM = execRemoteM || execCmdM || execWmicM || execNetshM || execRegM || execVbsM || execPsM;
 
-                    if (execM) {
+                    // Guard: never execute if user only asked for the command (infoIntent)
+                    //        or if Lucy emitted a Linux command while running on Windows.
+                    const _agentCmd = (execM && execM[1] ? execM[1] : '').trim();
+                    if (execM && !infoIntent && !_isLinuxCmd(_agentCmd)) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
                                            .replace(/<EXECUTE>[\s\S]*?(?:<\/EXECUTE>|$)/gi, '')
@@ -4735,10 +5592,17 @@ Use ONE of these patterns instead:
 
                             // ── Generic anti-loop: same exec cmd repeated means model is stuck ──
                             const _execChk = checkToolLoop('execute:' + execType, cmd, 'Ese comando falla o devuelve lo mismo repetidamente. Cambia de estrategia: ajusta los parámetros, prueba otra herramienta nativa, o entrega tu análisis final con lo que ya sabes.');
-                            const _execBlocked = _execChk.blocked;
+                            // ── Same-target anti-loop: catches "open file 4 different ways" ──
+                            // Only runs if exec-loop didn't already block (avoid double-pushing
+                            // two LOOP_BLOCKED messages for the same iteration).
+                            const _tgtChk = !_execChk.blocked
+                                ? checkTargetLoop(cmd, 'Si abriste/creaste/modificaste algo y ya funcionó, no hace falta re-ejecutar variantes. Confirma al usuario el resultado y termina el turno.')
+                                : { blocked: false, msg: null };
+                            const _execBlocked = _execChk.blocked || _tgtChk.blocked;
                             if (_execBlocked) {
-                                toolResults.push(_execChk.msg);
-                                stepsHtml += `[⊗ Loop bloqueado] ${esc(execType)}: ${esc(cmd.substring(0,40))}...\n`;
+                                toolResults.push(_execChk.msg || _tgtChk.msg);
+                                const _blockKind = _execChk.blocked ? 'Loop bloqueado' : 'Target loop bloqueado';
+                                stepsHtml += `[⊗ ${_blockKind}] ${esc(execType)}: ${esc(cmd.substring(0,40))}...\n`;
                                 renderAgentTask();
                             }
                             // ── Detect destructive commands requiring confirmation ──
@@ -5117,6 +5981,13 @@ times the SAME way, switch tool kind entirely.
                             tabId,
                             detail: `Original goal: ${originalUserGoal.slice(0, 240)}`,
                         });
+                        // Telemetry: persistent record of which model burned through
+                        // the full iteration budget without finishing — strong signal
+                        // that this model/goal combo needs intervention or routing.
+                        logTaskEvent('agent_loop_block', 'max_loops', null, {
+                            model: _loopModelName, max: MAX_LOOPS,
+                            goal_excerpt: originalUserGoal.slice(0, 200),
+                        }, tabId);
                         finishReasoning();
                         renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.`);
                     }
@@ -5124,6 +5995,88 @@ times the SAME way, switch tool kind entirely.
                 clearAgentCheckpoint(tabId);
                 if(doSpeak) speak("Listo.");
                 fin(tabId);return;
+            }
+
+            // ── BUG FIX (May 2026): empty Lucy response detection ──────────
+            // If the LLM returns nothing (e.g. Gemini safety-blocked the
+            // response without throwing an HTTP error, or Anthropic returned
+            // an empty content block), previously the user saw NOTHING happen
+            // — spinner stopped silently and the chat looked frozen. Surface
+            // a clear, actionable error instead of failing invisibly.
+            // ── BUG FIX (May 2026): false-positive on infoIntent/codeGenIntent ──
+            // The original code stripped <EXECUTE> tags unconditionally. But in
+            // info/codeGen intent modes, the user explicitly asked for code —
+            // the EXECUTE *content* IS the visible answer (rendered as ```ps```
+            // blocks by the CODE GENERATION GUARD downstream). Stripping them
+            // made the detector fire after Lucy correctly delivered code,
+            // showing the user a confusing "empty response" warning right
+            // below a perfectly visible code block.
+            // Fix: keep EXECUTE INNER content in those modes; strip outer tags only.
+            const _respClean = (resp || '')
+                .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                .replace(/<EXECUTE[^>]*>([\s\S]*?)<\/EXECUTE[^>]*>/gi,
+                    (_m, inner) => (infoIntent || codeGenIntent) ? String(inner || '') : '')
+                .replace(/<PLAN>[\s\S]*?<\/PLAN>/gi, '')
+                .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
+                .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
+                .trim();
+            if (_respClean.length === 0) {
+                // ── Provider auto-fallback (May 2026) ───────────────────────
+                // Before giving up, see if we have another configured provider
+                // we can route this through. Empty Gemini response is often
+                // a safety-filter quirk that doesn't reproduce on Claude.
+                const _fb = await _findFallbackModel(aiParams.model);
+                if (_fb && retryCount < 1) {
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn" style="color:#60a5fa;">⇄ Cambiando de modelo</div>
+                               <div style="font-size:12px;color:var(--txt);margin-top:4px;">
+                                   <b>${aiParams.model}</b> devolvió una respuesta vacía. Reintentando con <b>${_fb.model}</b> (${_fb.provider})…
+                               </div>`,
+                        style: 'border-left-color:#60a5fa;',
+                    });
+                    logTaskEvent('provider_fallback', 'empty_response', null,
+                        { from: aiParams.model, to: _fb.model, reason: 'empty_response' }, tabId);
+                    // Recurse once with the fallback model (retryCount guard
+                    // prevents an infinite loop if both providers fail).
+                    fin(tabId);
+                    const t2 = getTab(tabId);
+                    if (t2) {
+                        // Stash the fallback so getEffectiveModel picks it up
+                        t2._fallbackModel = _fb.model;
+                    }
+                    return await runAI(tabId, raw, doSpeak, retryCount + 1);
+                }
+                addMsg(tabId, {
+                    role: 'lucy',
+                    html: `<div class="mn" style="color:#f59e0b;">⚠ Respuesta vacía del modelo</div>
+                           <div style="font-size:12px;color:var(--txt);line-height:1.5;margin-top:4px;">
+                               El modelo devolvió una respuesta sin contenido visible. Causas comunes:
+                               <ul style="margin:6px 0 0 16px;padding:0;font-size:11.5px;">
+                                   <li><b>Safety filter de Gemini/Claude</b> bloqueó la salida — reformula la pregunta</li>
+                                   <li>Timeout del modelo mid-respuesta — reintenta</li>
+                                   <li>Prompt demasiado largo agotó el budget de output — divide en pasos</li>
+                                   <li>Mode collapse por contexto contaminado — abre un tab nuevo si esto se repite</li>
+                               </ul>
+                           </div>`,
+                    style: 'border-left-color:#f59e0b;',
+                });
+                // ── BUG FIX (May 2026 benchmark): break the mode-collapse loop ──
+                // Push a synthetic Sistema message (NOT Lucy: '') so that the
+                // next turn's HISTORIAL shows an explanatory marker instead of
+                // an empty Lucy response. Without this, Gemini sees its own
+                // empty turn in history and pattern-matches: "Lucy returned
+                // nothing → I'll do the same". The marker breaks that loop by
+                // giving Gemini a CLEAR REASON (and an instruction to resume
+                // normal behavior) framed as a system note, not Lucy's voice.
+                t.messages.push({
+                    id: Date.now() + Math.random(),
+                    role: 'hidden',
+                    rawRole: 'Sistema',
+                    rawContent: '[Sistema: la respuesta anterior del modelo llegó vacía (probable safety filter, timeout o budget agotado). NO es un patrón a continuar — en este turno responde normalmente y de forma completa al usuario.]',
+                });
+                fin(tabId); return;
             }
 
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Lucy',rawContent:resp});
@@ -5145,10 +6098,17 @@ times the SAME way, switch tool kind entirely.
             let safeResp = resp;
             // Telemetry: log confidence badges emitted by Lucy (once per response)
             logConfidenceFromText(safeResp, tabId);
-            if (codeGenIntent) {
+            if (codeGenIntent || infoIntent) {
                 // Convert any <EXECUTE> tags to code blocks so they display as text, not execute
                 safeResp = safeResp.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, code) => '\n```powershell\n' + code.trim() + '\n```\n');
                 safeResp = safeResp.replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, code) => '\n```cmd\n' + code.trim() + '\n```\n');
+            } else {
+                // Linux-on-Windows guard: if Lucy emits a Linux command wrapped in <EXECUTE>,
+                // convert it to a bash code block instead of executing it locally on Windows.
+                safeResp = safeResp.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (match, cmd) => {
+                    if (_isLinuxCmd(cmd)) return '\n```bash\n' + cmd.trim() + '\n```\n';
+                    return match;
+                });
             }
 
             // ── PLAN/ACT/VERIFY (opus-4-7 #3): intercept <PLAN> tags BEFORE any exec ──
@@ -5156,11 +6116,12 @@ times the SAME way, switch tool kind entirely.
             // wait for user click (Execute / Dry-Run / Cancel). Strip raw EXECUTE tags
             // if a PLAN is present (they'd be duplicates).
             const plans = parsePlanTags(safeResp);
-            if (plans.length && !codeGenIntent) {
+            if (plans.length && !codeGenIntent && !infoIntent) {
                 let cardHtml = '';
                 for (const plan of plans) {
                     const planId = 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
-                    _pendingPlans.set(planId, { ...plan, tabId, doSpeak });
+                    _purgeStalePlans();
+                    _pendingPlans.set(planId, { ...plan, tabId, doSpeak, createdAt: Date.now() });
                     cardHtml += renderPlanCard(plan, planId);
                     // Strip the raw PLAN tag from safeResp display
                     safeResp = safeResp.replace(plan.raw, '');
@@ -5205,7 +6166,8 @@ times the SAME way, switch tool kind entirely.
                         rollback: '',
                     };
                     const planId = 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
-                    _pendingPlans.set(planId, { ...synthPlan, tabId, doSpeak });
+                    _purgeStalePlans();
+                    _pendingPlans.set(planId, { ...synthPlan, tabId, doSpeak, createdAt: Date.now() });
                     safeResp = safeResp.replace(firstDestructive[0], '');
                     const prose = safeResp.replace(/<EXECUTE[^>]*>[\s\S]*?<\/EXECUTE[^>]*>/gi,'').trim();
                     const proseHtml = prose ? renderLucyMarkdown(prose) : '';
@@ -5333,7 +6295,7 @@ times the SAME way, switch tool kind entirely.
             // ── EXECUTE_REMOTE (single): execute against a configured remote host ────
             // Fallback for single <EXECUTE_REMOTE> tags (if no batch above)
             const execRemoteM = safeResp.match(/<EXECUTE_REMOTE\s+target=["']?([^"'>]+)["']?>([\s\S]*?)<\/EXECUTE_REMOTE>/i);
-            if (execRemoteM && !codeGenIntent) {
+            if (execRemoteM && !codeGenIntent && !infoIntent) {
                 const hostId = execRemoteM[1].trim();
                 const cmd = execRemoteM[2].trim();
                 const hostIdClean = hostId.replace(/^LucyHost_/, '');
@@ -5409,13 +6371,17 @@ times the SAME way, switch tool kind entirely.
             const execRegM   = safeResp.match(/<EXECUTE_REG>([\s\S]*?)<\/EXECUTE_REG>/i);
             const execVbsM   = safeResp.match(/<EXECUTE_CSCRIPT>([\s\S]*?)<\/EXECUTE_CSCRIPT>/i) || safeResp.match(/```vbs?\n([\s\S]*?)\n```/i);
             const execPsM    = (!execCmdM && !execWmicM && !execNetshM && !execRegM && !execVbsM)
-                ? (safeResp.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i) || safeResp.match(/\`\`\`(?:powershell|ps1|bash|cmd)\n?([\s\S]*?)\n?\`\`\`/i))
+                // When infoIntent is active, DO NOT match ```code blocks``` — they are intentional
+                // display-only blocks produced by the CODE GENERATION GUARD above. Matching them
+                // would re-execute what was explicitly converted to a code block for the user.
+                ? (safeResp.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i) || (!infoIntent ? safeResp.match(/\`\`\`(?:powershell|ps1|bash|cmd)\n?([\s\S]*?)\n?\`\`\`/i) : null))
                 : null;
 
             const execM = execCmdM || execWmicM || execNetshM || execRegM || execVbsM || execPsM;
             // Si el tab está en modo PowerShell, <EXECUTE_CMD> también corre por PS (PS ejecuta cmds nativos)
             const execType = (execCmdM && t.execEngine !== 'powershell') ? 'cmd' : execWmicM ? 'wmic' : execNetshM ? 'netsh' : execRegM ? 'reg' : execVbsM ? 'cscript' : 'powershell';
-            if(execM){
+            const _postCmd = (execM && execM[1] ? execM[1] : '').trim();
+            if(execM && !infoIntent && !_isLinuxCmd(_postCmd)){
                 const cmd=execM[1].trim();
                 // ── Destructive command detection (shared with agent loop) ──
                 if (isDestructiveCmd(cmd)) {
@@ -5520,6 +6486,8 @@ times the SAME way, switch tool kind entirely.
                     existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`;
                     existingStreamMsg.rawRole = 'Lucy';
                     existingStreamMsg.rawContent = clean;
+                    // AI-6 — see comment near streamMsg.role='lucy' above.
+                    existingStreamMsg.tokens = Math.ceil(clean.length / 4);
                     refresh();
                 } else {
                     addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
@@ -5529,6 +6497,37 @@ times the SAME way, switch tool kind entirely.
             }
         }catch(e){
             _lastErrorAt = Date.now();
+            // ── Provider auto-fallback on critical errors (May 2026) ───────
+            // If the failure is a transient/quota/network error AND we have
+            // another configured provider AND we haven't already fallen back
+            // once, swap models and retry the entire turn. The user sees a
+            // single "switching to backup" notice instead of a dead error.
+            const _currentModel = (typeof aiParams !== 'undefined' && aiParams && aiParams.model)
+                ? aiParams.model
+                : getEffectiveModel(t);
+            if (retryCount < 1 && _isRetryableProviderError(e)) {
+                const _fb = await _findFallbackModel(_currentModel);
+                if (_fb) {
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        html: `<div class="mn" style="color:#60a5fa;">⇄ Cambiando de modelo</div>
+                               <div style="font-size:12px;color:var(--txt);margin-top:4px;">
+                                   <b>${_currentModel}</b> falló: <code style="font-size:10.5px;opacity:0.8;">${String(e).slice(0, 140)}</code><br>
+                                   Reintentando con <b>${_fb.model}</b> (${_fb.provider})…
+                               </div>`,
+                        style: 'border-left-color:#60a5fa;',
+                    });
+                    logTaskEvent('provider_fallback', 'critical_error', null,
+                        { from: _currentModel, to: _fb.model, reason: String(e).slice(0, 200) }, tabId);
+                    // Stash fallback model so getEffectiveModel uses it on retry
+                    if (t) t._fallbackModel = _fb.model;
+                    // Stop the current run before recursing — fin() flushes
+                    // the streaming bubble + clears _activeStreams.
+                    if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+                    fin(tabId);
+                    return await runAI(tabId, raw, doSpeak, retryCount + 1);
+                }
+            }
             addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});
         }
         finally{
@@ -5640,6 +6639,8 @@ times the SAME way, switch tool kind entirely.
             // Remove the blinking cursor from the preserved HTML
             streamMsg.html = (streamMsg.html || '').replace(/<span class="stream-cursor"><\/span>/g, '');
             streamMsg.style = 'border-left-color:#f59e0b;opacity:0.85;';
+            // AI-6 — re-tokenize after cancel-mid-stream preservation.
+            streamMsg.tokens = Math.ceil(String(streamMsg.rawContent || '').length / 4);
         }
 
         addMsg(tabId, {
@@ -5844,6 +6845,46 @@ if (Test-Path $src) {
             if (_pendingChunk) flushChunk();
             // Si fue cancelado mientras esperábamos, devolver lo acumulado hasta ahora
             if (streamState.cancelled) return accumulated || '';
+
+            // ── Tier S #1 — Auto-capture turn for deterministic replay ──
+            // Fire-and-forget. Failures must NOT block the chat flow, so we
+            // wrap in a Promise.resolve().catch and never await. The full
+            // input (params.prompt + params.context + system rules already
+            // embedded by ask_lucy_stream) is what makes replay possible
+            // later — without the context_block the rerun would diverge.
+            try {
+                const latencyMs = Math.round(performance.now() - t0);
+                const cleanResult = String(result || '');
+                // Effort suffix is part of params.model when present (e.g.
+                // 'claude-opus-4-7::high'). We split for the dedicated column
+                // so the browser can group by base model regardless of effort.
+                const modelRaw = String(params.model || '');
+                const [modelBase, effort = ''] = modelRaw.split('::');
+                Promise.resolve(invoke('replay_save', {
+                    args: {
+                        label: '',
+                        task_id: '',
+                        tab_id: tabId || '',
+                        model: modelBase,
+                        effort,
+                        // system_prompt is built server-side; we don't have it
+                        // verbatim here. Store the params block as the closest
+                        // reproducible input (the server will rebuild system
+                        // rules from the same params on replay).
+                        system_prompt: '',
+                        user_prompt: String(params.prompt || ''),
+                        context_block: String(params.context || ''),
+                        images_b64: params.images ? JSON.stringify(params.images) : '[]',
+                        original_response: cleanResult,
+                        original_tokens_in: null,
+                        original_tokens_out: null,
+                        original_latency_ms: latencyMs,
+                        temperature: 0.0,
+                        seed: null,
+                    },
+                })).catch(() => { /* silent: replay must never break chat */ });
+            } catch { /* defensive */ }
+
             return result;
         } catch(e) {
             if (streamState.cancelled) return accumulated || '';
@@ -6839,7 +7880,23 @@ if (Test-Path $src) {
         if (m === 'newrunbook') abrirNuevoRunbook();
         else if (m === 'newaction') { editingActionIdx = null; newActionName = ''; newActionScript = ''; newActionIcon = 'bolt'; $showNewActionModal = true; }
         else if (m === 'permissions') showPermissionRulesModal = true;
-        else if (m === 'skills') showSkillsManagerModal = true;
+        // Sprint A #3 — Skills decision: SkillsManagerModal is permanently
+        // disabled. Its 1250-line UI never reached production quality and
+        // the underlying "skill_run" workflow has been superseded by Runbooks
+        // (manual flow) and the in-progress MCP tool calling (automated flow).
+        // We intentionally short-circuit here so any stale entry point — old
+        // sidebar item, /skills slash command landing on 'skills' modal,
+        // command palette — silently becomes a no-op informational toast.
+        // SkillPicker + SkillBrowserModal remain available; only the Manager
+        // is gone. If MCP servers ship, the manager UI can be rebuilt then.
+        else if (m === 'skills') {
+            toast(
+                isEN
+                    ? 'Skills Manager has been retired. Use Runbooks instead.'
+                    : 'Skills Manager fue retirado. Usa Runbooks en su lugar.',
+                'info',
+            );
+        }
         else if (m === 'principles') showPrinciplesModal = true;
         else if (m === 'schedules') showSchedulesModal = true;
         else if (m === 'settings') showSettingsModal = true;
@@ -7919,7 +8976,62 @@ if (Test-Path $src) {
                 aria-label="AMOLED" title={isEN ? 'AMOLED — pure black for OLED screens' : 'AMOLED — negro puro para pantallas OLED'} on:click={() => setWarpTheme('amoled')}></button>
               <button type="button" class="theme-dot theme-dot-nord" class:active={currentTheme === 'nord'}
                 aria-label="Nord" title={isEN ? 'Nord — cool slate-blue, eye-friendly' : 'Nord — azul gris frío, descansa la vista'} on:click={() => setWarpTheme('nord')}></button>
+              <!-- Tier B #3 — Custom themes appear as dots after built-ins.
+                   Each one renders with its own --accent inline as a hint
+                   to which theme it is without having to hover. -->
+              {#each _customThemes as ct (ct.id)}
+                <button type="button" class="theme-dot theme-dot-custom"
+                        class:active={currentTheme === 'custom-' + ct.id}
+                        aria-label={ct.name}
+                        title={ct.name + ' · ' + (isEN ? 'custom theme' : 'tema personalizado')}
+                        style={`background: linear-gradient(135deg, ${ct.vars['--bg-top'] || '#2a2a3a'}, ${ct.vars['--bg-mid'] || '#15151f'});`}
+                        on:click={() => setWarpTheme('custom-' + ct.id)}></button>
+              {/each}
             </div>
+
+            <!-- Tier B #3 — Custom themes management row -->
+            <div class="custom-theme-controls">
+              <button class="settings-btn settings-btn-sm" on:click={() => _showCustomThemeEditor = !_showCustomThemeEditor}
+                      title={isEN ? 'Define a custom theme by pasting JSON' : 'Define un tema personalizado pegando JSON'}>
+                + {isEN ? 'Custom theme' : 'Tema personalizado'}
+              </button>
+              {#if _customThemes.length > 0 && currentTheme.startsWith('custom-')}
+                <button class="settings-btn settings-btn-sm" on:click={_exportActiveCustomTheme}
+                        title={isEN ? 'Copy the active custom theme as JSON' : 'Copia el tema activo como JSON'}>
+                  ↗ {isEN ? 'Export' : 'Exportar'}
+                </button>
+                <button class="settings-btn settings-btn-sm settings-btn-danger"
+                        on:click={_deleteActiveCustomTheme}
+                        title={isEN ? 'Delete the active custom theme' : 'Borrar el tema activo'}>
+                  ✕ {isEN ? 'Delete' : 'Borrar'}
+                </button>
+              {/if}
+            </div>
+            {#if _showCustomThemeEditor}
+              <textarea class="custom-theme-textarea"
+                        bind:value={_customThemeDraft}
+                        placeholder={`{
+  "id": "mocha-dark",
+  "name": "Mocha Dark",
+  "vars": {
+    "--bg-top": "#4a3b2b",
+    "--bg-mid": "#241b12",
+    "--bg-bottom": "#0f0806",
+    "--accent": "#d4a574"
+  }
+}`}></textarea>
+              <div class="custom-theme-actions">
+                <button class="settings-btn settings-btn-sm" on:click={_importCustomThemeFromDraft}>
+                  ◆ {isEN ? 'Import & apply' : 'Importar y aplicar'}
+                </button>
+                <button class="settings-btn settings-btn-sm" on:click={() => { _customThemeDraft = ''; _showCustomThemeEditor = false; }}>
+                  {isEN ? 'Cancel' : 'Cancelar'}
+                </button>
+                {#if _customThemeError}
+                  <span class="custom-theme-err">⚠ {_customThemeError}</span>
+                {/if}
+              </div>
+            {/if}
           </div>
           {/if}
 
@@ -7987,12 +9099,48 @@ if (Test-Path $src) {
             </div>
           </div>
 
+          <!-- Tier B #1 — Economy mode toggle. Requires smartRouting to be ON
+               to have any effect (it tightens the auto-router's heavy-tier gate).
+               If user enables economy without smart routing, the toggle still
+               persists but the explanation makes the precondition clear. -->
+          <div class="settings-row">
+            <label class="settings-label" for="set-economy">
+              {isEN ? 'Economy mode' : 'Modo economía'}
+              <span class="help-i" title={isEN
+                ? 'When ON (and Smart routing is also ON), the router demotes borderline prompts to the fast tier — saves ~85% on input tokens. Keyword "audit" + small context routes to Flash instead of Opus. Aggressive Opus promotion still triggers on very large context (>1500 tokens) where it genuinely matters.'
+                : 'Si está activo (y Smart routing también), el router demota prompts borderline a tier rápido — ahorra ~85% en tokens. Palabra "audit" + contexto chico va a Flash en vez de Opus. Promoción agresiva a Opus sigue activa con contexto muy grande (>1500 tokens) donde sí importa.'}>ⓘ</span>
+            </label>
+            <div style="display:flex;gap:6px;">
+              <button class="settings-btn" class:settings-btn-on={lucyConfig.economyMode}
+                on:click={() => { lucyConfig = { ...lucyConfig, economyMode: true };  try { localStorage.setItem('lucy_economy_mode', '1'); } catch {} }}>
+                ⛁ {isEN ? 'On' : 'Activado'}
+              </button>
+              <button class="settings-btn" class:settings-btn-on={!lucyConfig.economyMode}
+                on:click={() => { lucyConfig = { ...lucyConfig, economyMode: false }; try { localStorage.setItem('lucy_economy_mode', '0'); } catch {} }}>
+                ○ {isEN ? 'Off' : 'Apagado'}
+              </button>
+            </div>
+          </div>
+
           {#if lucyConfig.smartRouting && _lastRouteDecision}
           <div class="settings-row" style="margin-top:-4px; padding-top:0;">
             <span class="settings-label" style="font-size:10px; opacity:0.6;">↳ {isEN ? 'Last decision' : 'Última decisión'}:</span>
             <span class="effective-model-hint" title={_lastRouteDecision.reason}>
               <code>{_lastRouteDecision.modelId}</code>
               <span style="font-size:10px;opacity:0.6;margin-left:6px;">tier {_lastRouteDecision.tier}</span>
+            </span>
+          </div>
+          {/if}
+
+          {#if lucyConfig.economyMode && _economySavingsUsd > 0}
+          <!-- Tier B #1 — Session savings ledger. Sums positive
+               estimatedSavingsUsd across every routed turn since the app
+               opened. Resets on reload (the prompt is "this session"). -->
+          <div class="settings-row" style="margin-top:-4px; padding-top:0;">
+            <span class="settings-label" style="font-size:10px; opacity:0.6;">⛁ {isEN ? 'Saved this session' : 'Ahorrado en esta sesión'}:</span>
+            <span class="effective-model-hint" style="color:#10b981;font-weight:600;">
+              ≈ ${_economySavingsUsd.toFixed(_economySavingsUsd < 0.01 ? 4 : 3)}
+              <span style="font-size:10px;opacity:0.6;margin-left:6px;">{isEN ? 'vs. manual baseline' : 'vs. baseline manual'}</span>
             </span>
           </div>
           {/if}
@@ -8163,12 +9311,109 @@ if (Test-Path $src) {
             </button>
           </div>
 
+          <!-- Tavily API key — drives `search_web` reliability. Without it,
+               Lucy falls back to DuckDuckGo scraping which is fragile.
+               Status read from the OS keyring at modal open + after every save. -->
+          <div class="settings-row">
+            <span class="settings-label" style="display:flex;align-items:center;gap:6px;">
+              {isEN ? 'Tavily search key' : 'Tavily (búsqueda web)'}
+              <span class="help-i" title={isEN
+                ? 'Optional but recommended. Tavily gives clean web search results (1000/month free at tavily.com). Without it, Lucy uses fragile DuckDuckGo scraping.'
+                : 'Opcional pero recomendado. Tavily da resultados limpios de búsqueda web (1000/mes gratis en tavily.com). Sin él, Lucy usa scraping frágil de DuckDuckGo.'}>ⓘ</span>
+              {#if _tavilyKeySet}
+                <span class="tavily-status-ok" title={isEN ? 'Key is configured' : 'Clave configurada'}>● {isEN ? 'set' : 'configurada'}</span>
+              {:else}
+                <span class="tavily-status-off" title={isEN ? 'Key NOT configured — using DDG fallback' : 'Clave NO configurada — usando fallback DDG'}>○ {isEN ? 'not set' : 'sin configurar'}</span>
+              {/if}
+            </span>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <input
+                type="password"
+                bind:value={_tavilyKeyDraft}
+                placeholder={_tavilyKeySet ? '••••••••••' : 'tvly-...'}
+                disabled={_tavilyKeyBusy}
+                style="background:var(--bg3);border:1px solid var(--bdr);border-radius:5px;color:var(--txt);font-size:12px;padding:4px 8px;width:200px;font-family:var(--mono);"
+                on:keydown={(e) => { if (e.key === 'Enter' && _tavilyKeyDraft.trim() && !_tavilyKeyBusy) saveTavilyKey(); }}/>
+              <button class="settings-btn" disabled={_tavilyKeyBusy || (!_tavilyKeyDraft.trim() && !_tavilyKeySet)}
+                      on:click={saveTavilyKey}>
+                {_tavilyKeyBusy ? '⟳' : (_tavilyKeyDraft.trim() ? (isEN ? 'Save' : 'Guardar') : (isEN ? 'Clear' : 'Borrar'))}
+              </button>
+            </div>
+          </div>
+          {#if _tavilyKeyError}
+            <div class="settings-row" style="margin-top:-4px;padding-top:0;">
+              <span style="font-size:10px;color:#ef4444;">⚠ {_tavilyKeyError}</span>
+            </div>
+          {/if}
+          {#if _tavilyKeyMsg}
+            <div class="settings-row" style="margin-top:-4px;padding-top:0;">
+              <span style="font-size:10px;color:#10b981;">✓ {_tavilyKeyMsg}</span>
+            </div>
+          {/if}
+
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Company Runbooks' : 'Runbooks Empresariales'}</span>
             <button class="settings-btn" on:click={() => { showSettingsModal = false; window.selectRunbooksDir(); }}>
               {isEN ? 'Select Directory' : 'Seleccionar Directorio'}
             </button>
           </div>
+
+          <!-- Sprint A #1 — DB backup / restore. Live DB info + 2 actions. -->
+          <div class="settings-row settings-row-stacked" style="flex-direction:column;align-items:stretch;gap:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+              <span class="settings-label" style="display:flex;align-items:center;gap:6px;">
+                {isEN ? 'Database' : 'Base de datos'}
+                <span class="help-i" title={isEN
+                  ? 'Lucy stores everything (memories, audit log, replays, recordings) in a single SQLite file. Backup before risky changes; restore moves you to a previous state.'
+                  : 'Lucy guarda todo (memorias, audit, replays, grabaciones) en un solo archivo SQLite. Haz backup antes de cambios riesgosos; restaurar te lleva a un estado previo.'}>ⓘ</span>
+              </span>
+              {#if _dbInfo}
+                <span style="font-size:10px;color:var(--txt2);font-family:var(--mono);">
+                  {_fmtBytes(_dbInfo.size_bytes)} · {_dbInfo.tables.reduce((s, t) => s + t.rows, 0).toLocaleString()} {isEN ? 'rows' : 'filas'}
+                </span>
+              {/if}
+            </div>
+            {#if _dbInfo}
+              <div style="font-size:10px;color:#64748b;font-family:var(--mono);word-break:break-all;background:rgba(0,0,0,0.2);padding:4px 8px;border-radius:4px;">
+                {_dbInfo.path}
+              </div>
+            {/if}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="settings-btn" disabled={_dbBusy} on:click={createDbBackup}
+                      title={isEN ? 'Atomic SQLite VACUUM INTO — safe even with the app running' : 'VACUUM INTO atómico de SQLite — seguro aunque la app esté corriendo'}>
+                {_dbBusy ? '⟳' : '↓'} {isEN ? 'Backup now' : 'Hacer backup'}
+              </button>
+              <button class="settings-btn settings-btn-warn" disabled={_dbBusy} on:click={restoreDbBackup}
+                      title={isEN ? 'Replace current DB with a backup file. Requires restart.' : 'Reemplaza la DB actual con un archivo de backup. Requiere reinicio.'}>
+                {_dbBusy ? '⟳' : '↑'} {isEN ? 'Restore from file' : 'Restaurar desde archivo'}
+              </button>
+            </div>
+            {#if _dbMsg}<span style="font-size:10px;color:#10b981;">✓ {_dbMsg}</span>{/if}
+            {#if _dbError}<span style="font-size:10px;color:#ef4444;">⚠ {_dbError}</span>{/if}
+          </div>
+
+          <!-- Sprint A #2 — Support bundle export. -->
+          <div class="settings-row">
+            <span class="settings-label" style="display:flex;align-items:center;gap:6px;">
+              {isEN ? 'Support bundle' : 'Bundle de soporte'}
+              <span class="help-i" title={isEN
+                ? 'Creates a folder with audit log, recent incidents, system snapshot, token usage, and row counts. NO API keys or memory content. For sending to support.'
+                : 'Crea una carpeta con audit log, incidentes recientes, snapshot del sistema, uso de tokens y conteos. NO incluye API keys ni contenido de memorias. Para enviar a soporte.'}>ⓘ</span>
+            </span>
+            <button class="settings-btn" disabled={_bundleBusy} on:click={exportSupportBundle}>
+              {_bundleBusy ? '⟳' : '⌗'} {isEN ? 'Export bundle' : 'Exportar bundle'}
+            </button>
+          </div>
+          {#if _bundleMsg}
+            <div class="settings-row" style="margin-top:-4px;padding-top:0;">
+              <span style="font-size:10px;color:#10b981;">✓ {_bundleMsg}</span>
+            </div>
+          {/if}
+          {#if _bundleError}
+            <div class="settings-row" style="margin-top:-4px;padding-top:0;">
+              <span style="font-size:10px;color:#ef4444;">⚠ {_bundleError}</span>
+            </div>
+          {/if}
 
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'About' : 'Acerca de'}</span>
@@ -8549,19 +9794,11 @@ if (Test-Path $src) {
   {/await}
   {/if}
 
-  <!-- ── SKILLS MANAGER MODAL (lazy) ── -->
-  {#if showSkillsManagerModal}
-  {#await lazySkills() then SkillsManagerComp}
-    <svelte:component this={SkillsManagerComp}
-      isOpen={showSkillsManagerModal}
-      activeModel={getEffectiveModel(activeTab)}
-      configuredProviders={configuredProvs}
-      on:close={() => showSkillsManagerModal = false}
-      {isEN}
-      on:toast={e => toast(e.detail.msg, e.detail.type)}
-    />
-  {/await}
-  {/if}
+  <!-- ── SKILLS MANAGER MODAL (retired Sprint A #3) ──
+       Removed from render tree because the 1250-line UI never reached
+       production quality. SkillPicker + SkillBrowserModal remain available
+       for the /skills slash command and skill execution. If MCP rebuilds
+       the Manager UI later, restore from git history. -->
 
   <!-- ── PRINCIPLES MODAL (lazy) ── -->
   {#if showPrinciplesModal}
@@ -8612,6 +9849,15 @@ if (Test-Path $src) {
         on:close={() => showForksMonitor = false}
       />
     </div>
+  {/if}
+
+  <!-- ── REPLAY BROWSER (Tier S #1 — Deterministic Replay) ── -->
+  {#if showReplayBrowser}
+    <ReplayBrowserView
+      {isEN}
+      initialTabId={activeTabId || null}
+      on:close={() => showReplayBrowser = false}
+    />
   {/if}
 
   <!-- ── PDF INTELLIGENCE PANEL (Sprint 4 Pillar 4) ── -->

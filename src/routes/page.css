@@ -372,6 +372,30 @@ html.app-hidden *::after{
 .theme-dot-midnight{background:linear-gradient(180deg,#1a3050 0%,#050912 100%);}
 .theme-dot-amoled  {background:linear-gradient(180deg,#1a1a1a 0%,#000000 100%);border-color:rgba(255,255,255,.20);}
 .theme-dot-nord    {background:linear-gradient(180deg,#3b4252 0%,#1a1c22 100%);}
+/* Tier B #3 — Custom theme dot. Inline background comes from theme.vars. */
+.theme-dot-custom  {border-color:rgba(255,255,255,.18);position:relative;}
+.theme-dot-custom::after{
+    content:'★';position:absolute;top:-1px;right:1px;
+    font-size:8px;color:rgba(255,255,255,.55);line-height:1;
+}
+/* Custom theme editor controls in the settings modal */
+.custom-theme-controls{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
+.custom-theme-textarea{
+    width:100%;min-height:140px;margin-top:8px;
+    background:rgba(0,0,0,0.3);border:1px solid var(--bdr);border-radius:5px;
+    color:var(--txt);font-family:var(--mono);font-size:11px;
+    padding:8px 10px;outline:none;resize:vertical;
+}
+.custom-theme-textarea:focus{border-color:var(--acc-b);}
+.custom-theme-actions{display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;}
+.custom-theme-err{font-size:11px;color:#ef4444;background:rgba(239,68,68,.10);
+    padding:2px 8px;border-radius:4px;}
+.settings-btn-sm{font-size:11px;padding:3px 9px;}
+.settings-btn-danger{color:#ef4444;border-color:rgba(239,68,68,.25);}
+.settings-btn-danger:hover{background:rgba(239,68,68,.10);}
+/* Sprint A — Warn variant for "irreversible but not destructive" actions (DB restore) */
+.settings-btn-warn{color:#f59e0b;border-color:rgba(245,158,11,.25);}
+.settings-btn-warn:hover:not(:disabled){background:rgba(245,158,11,.10);}
 /* ── TITLEBAR ──────────────────────────────── */
 .tb{display:flex;align-items:center;height:38px;background:#0b0d14;border-bottom:1px solid var(--bdr);padding:0 0 0 14px;user-select:none;-webkit-app-region:drag;flex-shrink:0;}
 #tabs-list,.win-btn,.btn-new,.tb-btns,.tabs-area{-webkit-app-region:no-drag;}
@@ -562,6 +586,9 @@ html.app-hidden *::after{
 .cmp-body{flex:1;max-height:340px;overflow-y:auto;font-size:12px;line-height:1.45;}
 .cmp-stat{font-size:10px;color:var(--txt3);margin-top:6px;font-family:var(--mono);text-align:right;}
 .help-i{display:inline-block;margin-left:6px;color:var(--txt3);font-size:11px;cursor:help;border:1px solid var(--txt3);border-radius:50%;width:14px;height:14px;line-height:12px;text-align:center;opacity:.6;transition:.15s;}
+/* Tavily key status indicators (Dashboard sprint extra) */
+.tavily-status-ok{font-size:10px;color:var(--acc, #10b981);background:rgba(16,185,129,.10);padding:1px 7px;border-radius:8px;font-weight:600;letter-spacing:.3px;}
+.tavily-status-off{font-size:10px;color:#94a3b8;background:rgba(148,163,184,.10);padding:1px 7px;border-radius:8px;font-weight:600;letter-spacing:.3px;}
 .help-i:hover{opacity:1;color:var(--acc);border-color:var(--acc);}
 .preset-chip{display:inline-flex;align-items:center;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:14px;overflow:hidden;}
 .preset-apply{background:transparent;border:none;color:var(--txt1);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit;}
@@ -862,6 +889,8 @@ body.density-compact .chat{gap:2px !important;}
 .wb-toggle{background:none;border:none;color:#475569;cursor:pointer;font-size:10px;padding:0 2px;line-height:1;flex-shrink:0;transition:.1s;}
 .wb-toggle:hover{color:var(--txt2);}
 .wb-out{background:#0a0c15;padding:8px 10px;font-size:11px;color:#94a3b8;overflow-x:auto;margin:0;border-top:1px solid rgba(255,255,255,.04);max-height:300px;overflow-y:auto;transition:max-height .3s ease,padding .2s ease,opacity .2s ease;}
+.wb-empty{font-style:italic;color:#4ade80;opacity:0.75;font-size:10.5px;letter-spacing:0.2px;}
+.wb-err .wb-empty{color:#f59e0b;}
 .wb-enriched-mount{border-top:1px solid rgba(255,255,255,.04);}
 .wb-enriched-mount:empty{display:none;}
 .wb-enrich-badge{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,.12);color:#60a5fa;font-weight:500;letter-spacing:.3px;text-transform:uppercase;flex-shrink:0;}

@@ -169,6 +169,17 @@
                     {:else}
                         {@html msg.html}
                     {/if}
+                    {#if msg.attachments?.length}
+                        <div class="msg-img-gallery">
+                            {#each msg.attachments as att}
+                                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                                <figure class="msg-img-fig" title={att.name} on:click={() => { const w=window.open('','_blank'); if(w){w.document.write(`<img src="${att.previewUrl}" style="max-width:100%;max-height:100vh;">`);} }} on:keydown>
+                                    <img src={att.previewUrl} alt={att.name} class="msg-img-thumb" />
+                                    <figcaption class="msg-img-cap">{att.name}</figcaption>
+                                </figure>
+                            {/each}
+                        </div>
+                    {/if}
                     {#if msg.time}<div class="msg-time">{msg.time}</div>{/if}
                 {:else}
                     {@html msg.html}
@@ -196,6 +207,11 @@
      * The gradient angle (135deg) matches the avatar's gradient direction
      * so the whole interface has visual continuity.
      */
+    :global(.msg-img-gallery){display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+    :global(.msg-img-fig){margin:0;cursor:zoom-in;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);transition:transform 0.15s,box-shadow 0.15s;}
+    :global(.msg-img-fig:hover){transform:scale(1.03);box-shadow:0 4px 20px rgba(0,0,0,0.5);}
+    :global(.msg-img-thumb){display:block;max-width:260px;max-height:180px;object-fit:contain;background:rgba(0,0,0,0.2);}
+    :global(.msg-img-cap){display:block;font-size:10px;color:#64748b;padding:3px 6px;background:rgba(0,0,0,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;}
     :global(.msg-user){
         align-self:flex-end;
         background:linear-gradient(135deg,#22283a 0%,#1c2030 60%,#191c28 100%);

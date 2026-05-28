@@ -128,7 +128,28 @@ export function getPricing(model: string | null | undefined): ModelPricing & { e
 
     const { base, multiplier, effort } = splitEffort(m);
     const base_l = base.toLowerCase();
-    const pricing = MODEL_PRICING[base_l] || MODEL_PRICING[base] || FALLBACK_PRICING;
+    let pricing = MODEL_PRICING[base_l] || MODEL_PRICING[base];
+
+    // Prefix-based fallback — protects against model rename churn (e.g.
+    // claude-3-5-sonnet → claude-sonnet-4-5 → claude-sonnet-4-6). Without this
+    // an unknown claude-* falls through to FALLBACK_PRICING which is tagged
+    // 'openai', and the cost-predictor reports the wrong provider tier.
+    // Picks a conservative mid-tier price for each vendor — exact pricing
+    // requires the model to be in MODEL_PRICING above.
+    if (!pricing) {
+        if (base_l.startsWith('claude-')) {
+            // Mid-tier (Sonnet) anthropic pricing — better than 'openai' mislabel
+            pricing = { inputPer1K: 0.003, outputPer1K: 0.015, iterFactor: 4, provider: 'anthropic' };
+        } else if (base_l.startsWith('gemini-')) {
+            // Mid-tier Gemini Flash pricing
+            pricing = { inputPer1K: 0.00030, outputPer1K: 0.0025, iterFactor: 3, provider: 'gemini' };
+        } else if (base_l.startsWith('gpt-')) {
+            // Mid-tier GPT pricing
+            pricing = { inputPer1K: 0.005, outputPer1K: 0.020, iterFactor: 4, provider: 'openai' };
+        } else {
+            pricing = FALLBACK_PRICING;
+        }
+    }
     return {
         inputPer1K: pricing.inputPer1K,
         outputPer1K: pricing.outputPer1K,

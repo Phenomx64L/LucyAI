@@ -21,6 +21,21 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 
+// ── Cloud embedding fallback (Tier 1) ─────────────────────────────────────
+//
+// When Ollama is unavailable (not installed, model not pulled, daemon down),
+// fall back to Gemini's text-embedding-004 API. Both models output 768-dim
+// vectors so they can coexist in the same `embeddings` table without
+// dimension-mismatch errors during cosine search.
+//
+// Caveat: vectors from different models live in different latent spaces, so
+// cosine scores between an Ollama-embedded query and a Gemini-embedded passage
+// are noisy. In practice this only matters when the user oscillates between
+// having/not having Ollama mid-session — a rare situation. The `model` column
+// records which embedder produced each row so a future re-index command can
+// fix the inconsistency.
+const GEMINI_EMBED_MODEL: &str = "text-embedding-004";
+
 // ── Types exposed to the frontend ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,10 +139,88 @@ async fn embed_via_ollama(text: &str, model: Option<String>) -> Result<(Vec<f32>
     Ok((v, m))
 }
 
+/// Call Google's Gemini embedding API as a cloud fallback when Ollama is down.
+/// Returns (vec, "text-embedding-004"). Reads the API key from the same keyring
+/// entry the ask_lucy commands use.
+async fn embed_via_gemini(text: &str) -> Result<(Vec<f32>, String), String> {
+    let api_key = Entry::new("LucySysAdmin", "gemini_api_key")
+        .map_err(|e| format!("keyring: {}", e))?
+        .get_password()
+        .map_err(|_| "Gemini API key no configurada (sin Ollama y sin Gemini, no hay embeddings).".to_string())?;
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:embedContent",
+        GEMINI_EMBED_MODEL
+    );
+    let body = serde_json::json!({
+        "model": format!("models/{}", GEMINI_EMBED_MODEL),
+        "content": { "parts": [{ "text": text }] }
+    });
+    let resp = HTTP_CLIENT
+        .post(&url)
+        .header("x-goog-api-key", &api_key)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Gemini embed request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text_body = resp.text().await.unwrap_or_default();
+        return Err(format!("Gemini embed HTTP {}: {}", status, text_body));
+    }
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Gemini embed: JSON inválido: {}", e))?;
+    let arr = json["embedding"]["values"].as_array()
+        .ok_or("Gemini embed: respuesta sin embedding.values")?;
+    let v: Vec<f32> = arr.iter()
+        .filter_map(|x| x.as_f64().map(|f| f as f32))
+        .collect();
+    if v.is_empty() {
+        return Err("Gemini embed: vector vacío".to_string());
+    }
+    Ok((v, GEMINI_EMBED_MODEL.to_string()))
+}
+
+/// Try Ollama first (preferred — free, local, no rate limits, no telemetry),
+/// fall back to Gemini text-embedding-004 if Ollama isn't reachable.
+///
+/// This is the function ALL call sites should use. The individual `embed_via_*`
+/// helpers exist for tests and the `embeddings_available` smoke check only.
+async fn embed_with_fallback(
+    text: &str,
+    model: Option<String>,
+) -> Result<(Vec<f32>, String), String> {
+    match embed_via_ollama(text, model.clone()).await {
+        Ok(r) => Ok(r),
+        Err(ollama_err) => {
+            // Only fall back to Gemini if the user has it configured. If both
+            // are unavailable, return a combined error so the caller can show
+            // a useful "configure one of these" message.
+            match embed_via_gemini(text).await {
+                Ok(r) => {
+                    crate::utils::logging::write_app_log(
+                        "INFO",
+                        &format!("Embedding fallback: Ollama failed ({}), used Gemini instead.", ollama_err),
+                    );
+                    Ok(r)
+                }
+                Err(gem_err) => Err(format!(
+                    "Sin embeddings: Ollama no disponible ({}) y Gemini tampoco ({}). Configura uno de los dos en Ajustes → Proveedores.",
+                    ollama_err.lines().next().unwrap_or("?"),
+                    gem_err.lines().next().unwrap_or("?")
+                )),
+            }
+        }
+    }
+}
+
 // ── Internal helper (used by pdf.rs and other sibling modules) ────────────
 
 /// Compute and upsert an embedding without the text-dedup check.
-/// Skips silently if Ollama is unavailable — embeddings are best-effort.
+/// Skips silently if both Ollama and Gemini are unavailable — embeddings are best-effort.
 pub(crate) async fn embed_and_store(
     entity_type: String,
     entity_id: String,
@@ -137,7 +230,7 @@ pub(crate) async fn embed_and_store(
     if text.trim().is_empty() {
         return Ok(());
     }
-    let (v, used_model) = embed_via_ollama(&text, model).await?;
+    let (v, used_model) = embed_with_fallback(&text, model).await?;
     let dims = v.len() as i64;
     let blob = vec_to_blob(&v);
     let id = generate_id();
@@ -161,25 +254,30 @@ pub(crate) async fn embed_and_store(
 
 /// Compute an embedding for arbitrary text and return the raw vector.
 /// Useful for frontend search queries; storage is the caller's responsibility.
+/// Tries Ollama first, falls back to Gemini cloud if Ollama is unreachable.
 #[tauri::command]
 pub async fn embed_text(text: String, model: Option<String>) -> Result<Vec<f32>, String> {
-    let (v, _) = embed_via_ollama(&text, model).await?;
+    let (v, _) = embed_with_fallback(&text, model).await?;
     Ok(v)
 }
 
-/// Crate-visible wrapper around the private `embed_via_ollama` so sibling
-/// modules (e.g. `metrics::save_agent_memory` Stage 2 dedup) can embed
-/// content without going through the Tauri command boundary. Returns
-/// (vector, actual_model_used).
+/// Crate-visible wrapper so sibling modules (e.g. `metrics::save_agent_memory`
+/// Stage 2 dedup) can embed content without going through the Tauri command
+/// boundary. Returns (vector, actual_model_used). Uses the same Ollama-first
+/// + Gemini-fallback chain as the public commands.
+///
+/// Note: the function name still mentions "ollama" for backward compatibility
+/// with existing callers — it actually goes through embed_with_fallback now.
 pub(crate) async fn embed_via_ollama_pub(text: &str, model: Option<String>) -> Result<(Vec<f32>, String), String> {
-    embed_via_ollama(text, model).await
+    embed_with_fallback(text, model).await
 }
 
-/// Check whether the embeddings system is available (Ollama reachable + model
-/// installed). Runs a 1-token embed as smoke test. Returns `true` on success.
+/// Check whether the embeddings system is available. Returns `true` if EITHER
+/// Ollama OR Gemini can produce an embedding (the fallback chain works).
+/// Runs a 1-token embed as smoke test.
 #[tauri::command]
 pub async fn embeddings_available(model: Option<String>) -> Result<bool, String> {
-    match embed_via_ollama("ok", model).await {
+    match embed_with_fallback("ok", model).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -210,7 +308,7 @@ pub async fn upsert_embedding(
         }
     }
 
-    let (v, used_model) = embed_via_ollama(&text, model).await?;
+    let (v, used_model) = embed_with_fallback(&text, model).await?;
     let dims = v.len() as i64;
     let blob = vec_to_blob(&v);
     let id = generate_id();

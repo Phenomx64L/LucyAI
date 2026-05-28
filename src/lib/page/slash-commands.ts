@@ -113,6 +113,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 /snapshot · captura el estado del sistema (procesos, RAM, discos) en este instante<br>
                 /snapshots · lista snapshots recientes<br>
                 /diff [from to] · compara dos snapshots (sin args = últimos 2)<br>
+                <b style="color:var(--blue)">— Telemetría &amp; salud —</b><br>
+                /loop-stats [días=30] · qué modelos disparan más anti-loops (tool / target / max)<br>
+                /decay-stats · cuántas entradas Core memory están frescas / envejeciendo / stale<br>
                 /help · muestra esta ayuda`);
             return true;
 
@@ -686,10 +689,168 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── /loop-stats — agent-loop blocks by model (May 2026 telemetry) ──
+        // Shows which models trigger the safety nets (tool-loop, target-loop,
+        // error-repeat, max-loops) most often. Drives model-selection decisions.
+        case 'loop-stats':
+        case 'loops':
+        case 'loopstats': {
+            const days = parseInt(arg, 10);
+            runLoopStats(Number.isFinite(days) && days > 0 ? days : 30, sysMsg);
+            return true;
+        }
+
+        // ── /decay-stats — Core memory decay status (May 2026) ──
+        // Shows how many Core memory entries are fresh / aging / stale, so
+        // the user can decide what to re-affirm or prune.
+        case 'decay-stats':
+        case 'decay':
+        case 'memorystats': {
+            runDecayStats(sysMsg);
+            return true;
+        }
+
         default:
             sysMsg(`Comando desconocido: /${cmd}. Usa /help para ver disponibles.`, 'var(--amber)');
             return true;
     }
+}
+
+// ── /loop-stats runner ─────────────────────────────────────────────────────
+
+interface LoopBlockStatRow {
+    model:         string;
+    event_subtype: string;
+    count:         number;
+    last_ts:       number;
+}
+
+/** Render the agent-loop block telemetry as an inline table. */
+function runLoopStats(days: number, sysMsg: (html: string, color?: string) => void) {
+    (async () => {
+        try {
+            const rows = await invoke<LoopBlockStatRow[]>('loop_block_stats', { days });
+            if (!rows || rows.length === 0) {
+                sysMsg(`<div class="mn">⌬ Loop telemetry (últimos ${days} días)</div>
+                    <div style="margin-top:6px;font-size:11px;color:var(--txt2);">
+                        Ninguna trigger de loop registrada — Lucy ha estado terminando turnos sin tropezar con
+                        las safety nets. Si esperabas ver datos, verifica que los agent loops están corriendo
+                        (cualquier mensaje que use &lt;TOOL&gt; o &lt;EXECUTE&gt;) y que haya pasado un mensaje
+                        después de los fixes.
+                    </div>`);
+                return;
+            }
+            // Subtype → label/color/icon
+            const subtypeMeta: Record<string, { label: string; color: string; icon: string }> = {
+                tool_loop:    { label: 'Tool loop',    color: '#f59e0b', icon: '↻' },
+                target_loop:  { label: 'Target loop',  color: '#ef4444', icon: '⊗' },
+                error_repeat: { label: 'Error repeat', color: '#f87171', icon: '⚠' },
+                max_loops:    { label: 'MAX_LOOPS',    color: '#dc2626', icon: '⊘' },
+            };
+            // Group by model so we can print one block per model with subtotals
+            const byModel: Record<string, LoopBlockStatRow[]> = {};
+            let grandTotal = 0;
+            for (const r of rows) {
+                (byModel[r.model] ||= []).push(r);
+                grandTotal += r.count;
+            }
+            const modelOrder = Object.keys(byModel).sort((a, b) => {
+                const sumA = byModel[a].reduce((s, r) => s + r.count, 0);
+                const sumB = byModel[b].reduce((s, r) => s + r.count, 0);
+                return sumB - sumA;
+            });
+            const formatAge = (ts: number) => {
+                const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+                if (ageSec < 60)    return `hace ${ageSec}s`;
+                if (ageSec < 3600)  return `hace ${Math.floor(ageSec / 60)}m`;
+                if (ageSec < 86400) return `hace ${Math.floor(ageSec / 3600)}h`;
+                return `hace ${Math.floor(ageSec / 86400)}d`;
+            };
+            const modelBlocks = modelOrder.map(model => {
+                const items = byModel[model];
+                const sum = items.reduce((s, r) => s + r.count, 0);
+                const rowsHtml = items.map(r => {
+                    const meta = subtypeMeta[r.event_subtype] || { label: r.event_subtype, color: 'var(--txt2)', icon: '·' };
+                    return `<tr>
+                        <td style="padding:2px 8px 2px 0;color:${meta.color};">${meta.icon} ${meta.label}</td>
+                        <td style="padding:2px 8px 2px 0;text-align:right;font-variant-numeric:tabular-nums;">${r.count}</td>
+                        <td style="padding:2px 0;color:var(--txt3);font-size:10.5px;">${formatAge(r.last_ts)}</td>
+                    </tr>`;
+                }).join('');
+                return `<div style="margin-top:8px;">
+                    <div style="font-family:var(--mono);font-size:11.5px;color:var(--txt);"><b>${escapeHtml(model)}</b> <span style="color:var(--txt3);">— ${sum} block${sum === 1 ? '' : 's'}</span></div>
+                    <table style="border-collapse:collapse;margin-top:2px;font-size:11px;">
+                        ${rowsHtml}
+                    </table>
+                </div>`;
+            }).join('');
+            sysMsg(`<div class="mn">⌬ Loop telemetry (últimos ${days} días)</div>
+                <div style="margin-top:2px;font-size:11px;color:var(--txt2);">
+                    <b style="color:var(--txt);">${grandTotal}</b> trigger${grandTotal === 1 ? '' : 's'} totales
+                    en <b>${modelOrder.length}</b> modelo${modelOrder.length === 1 ? '' : 's'}.
+                    Modelos con muchos blocks suelen beneficiarse de un upgrade (Flash → Pro, Haiku → Sonnet) para tareas complejas.
+                </div>
+                ${modelBlocks}`);
+        } catch (e) {
+            sysMsg(`loop_block_stats falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
+}
+
+// ── /decay-stats runner ────────────────────────────────────────────────────
+
+interface DecayStatsResp {
+    total:  number;
+    fresh:  number;
+    aging:  number;
+    stale:  number;
+    pinned: number;
+    inject_threshold: number;
+    aging_threshold:  number;
+}
+
+/** Render the Core memory decay summary. */
+function runDecayStats(sysMsg: (html: string, color?: string) => void) {
+    (async () => {
+        try {
+            const s = await invoke<DecayStatsResp>('memory_core_decay_stats');
+            if (!s || s.total === 0) {
+                sysMsg(`<div class="mn">⌬ Core memory decay</div>
+                    <div style="margin-top:6px;font-size:11px;color:var(--txt2);">
+                        No hay entradas Core memory todavía. Lucy las añade automáticamente cuando
+                        descubre facts sobre tu identidad / preferencias / entorno (vía &lt;REMEMBER&gt;).
+                    </div>`);
+                return;
+            }
+            const bar = (label: string, val: number, color: string) => {
+                const pct = s.total > 0 ? Math.round((val / s.total) * 100) : 0;
+                return `<div style="display:flex;align-items:center;gap:8px;margin-top:3px;font-size:11px;">
+                    <span style="width:60px;color:${color};">${label}</span>
+                    <div style="flex:1;height:6px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden;">
+                        <div style="width:${pct}%;height:100%;background:${color};"></div>
+                    </div>
+                    <span style="font-variant-numeric:tabular-nums;width:48px;text-align:right;color:var(--txt2);">${val} (${pct}%)</span>
+                </div>`;
+            };
+            sysMsg(`<div class="mn">⌬ Core memory decay</div>
+                <div style="margin-top:4px;font-size:11px;color:var(--txt2);">
+                    <b style="color:var(--txt);">${s.total}</b> entradas totales.
+                    Half-life por sección: identity 365d · preference 180d · host 90d · context 60d.
+                </div>
+                ${bar('● Fresh',  s.fresh,  '#34d399')}
+                ${bar('● Aging',  s.aging,  '#fbbf24')}
+                ${bar('● Stale',  s.stale,  '#f87171')}
+                ${bar('● Pinned', s.pinned, '#60a5fa')}
+                <div style="margin-top:8px;font-size:10.5px;color:var(--txt3);">
+                    <b>Fresh</b> (score ≥ ${s.aging_threshold.toFixed(2)}): se inyectan normales al prompt.
+                    <b>Aging</b> (entre ${s.inject_threshold.toFixed(2)} y ${s.aging_threshold.toFixed(2)}): se inyectan con tag <code>[~aging~]</code> para que Lucy hedge.
+                    <b>Stale</b> (&lt; ${s.inject_threshold.toFixed(2)}): se filtran del prompt (visibles en UI por si quieres reconfirmar).
+                    <b>Pinned</b>: opt-out total del decay (siempre score 1.0).
+                </div>`);
+        } catch (e) {
+            sysMsg(`memory_core_decay_stats falló: ${String(e).substring(0, 200)}`, 'var(--red)');
+        }
+    })();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

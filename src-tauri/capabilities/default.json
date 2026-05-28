@@ -1,12 +1,16 @@
 {
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window + Tier B #4 detached windows",
   "windows": [
-    "main"
+    "main",
+    "lucy-detached-*"
   ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-title",
+    "core:window:allow-close",
     "sql:default",
     "notification:default"
   ]

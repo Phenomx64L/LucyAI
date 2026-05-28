@@ -1085,6 +1085,32 @@ async fn invalidate_dir_cache_for_parent(file_path: &std::path::Path) {
     }
 }
 
+/// Sprint 3, NS-5 — Light-weight existence probe used by NexShell to
+/// pre-validate SSH key paths before attempting a connection. Returns the
+/// resolved-path information so the caller can surface a precise error
+/// ("file not found" vs "is a directory" vs "permission denied") instead of
+/// letting `ssh` produce its terse generic "Permission denied (publickey)".
+///
+/// Why a dedicated command: `list_directory` is too heavy (it walks the
+/// parent, sorts entries, caches them). A binary existence check is one
+/// `metadata()` call.
+#[tauri::command]
+pub async fn path_exists(path: String) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    let resolved = resolve_path(&path);
+    match std::fs::metadata(resolved.as_path()) {
+        Ok(md) => Ok(json!({
+            "exists": true,
+            "is_file": md.is_file(),
+            "is_dir":  md.is_dir(),
+            "size":    md.len(),
+        })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound =>
+            Ok(json!({ "exists": false, "is_file": false, "is_dir": false, "size": 0 })),
+        Err(e) => Err(format!("{}: {}", path, e)),
+    }
+}
+
 #[tauri::command]
 pub async fn list_directory(path: String) -> Result<Vec<serde_json::Value>, String> {
     use serde_json::json;
@@ -1647,41 +1673,27 @@ pub async fn search_web(query: String) -> Result<String, String> {
         }
     }
 
-    // ── DuckDuckGo fallback path (legacy, fragile) ──
+    // ── DuckDuckGo fallback (multi-endpoint resilient) ──
+    //
+    // DDG periodically restructures their HTML and the previous scraper —
+    // tied to `class="result__snippet"` — went silent every time they did.
+    // We now try THREE endpoints in cascade, each with its own parser:
+    //
+    //   1. lite.duckduckgo.com/lite/ — Plain table-based HTML used by
+    //      screen readers + low-bandwidth clients. Most stable of the
+    //      three because DDG can't restyle it without breaking a11y.
+    //   2. html.duckduckgo.com/html/ — The "no JS" endpoint. Still works
+    //      most of the time but classes drift across releases.
+    //   3. duckduckgo.com/html/?ia=web — Same as above with explicit
+    //      "web" interactive arg. Sometimes responds when the others 502.
+    //
+    // First successful parse wins. If all three return zero results we
+    // surface a clear actionable message ("set TAVILY_API_KEY for
+    // reliable search") instead of pretending nothing happened.
     use once_cell::sync::Lazy;
-    static SNIPPET_RES: Lazy<Vec<regex::Regex>> = Lazy::new(|| {
-        ["(?s)<a class=\"result__snippet[^>]*>(.*?)</a>",
-         "(?s)<a[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>(.*?)</a>",
-         "(?s)<div class=\"result__snippet[^>]*>(.*?)</div>",
-        ].iter().filter_map(|p| regex::Regex::new(p).ok()).collect()
-    });
-    static URL_RES: Lazy<Vec<regex::Regex>> = Lazy::new(|| {
-        ["(?s)<a class=\"result__url[^>]*>(.*?)</a>",
-         "(?s)<a[^>]*class=\"[^\"]*result__url[^\"]*\"[^>]*>(.*?)</a>",
-         "(?s)<span class=\"result__url[^>]*>(.*?)</span>",
-        ].iter().filter_map(|p| regex::Regex::new(p).ok()).collect()
-    });
     static TAG_STRIP: Lazy<regex::Regex> = Lazy::new(|| {
         regex::Regex::new(r"<[^>]+>").unwrap()
     });
-
-    let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(&query));
-    let res = crate::state::HTTP_CLIENT_FAST
-        .get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .send()
-        .await
-        .map_err(|e| format!("Error fetching web: {}", e))?;
-
-    if res.status().as_u16() >= 400 {
-        return Err(format!("Web search returned HTTP {}", res.status()));
-    }
-
-    let html = res.text().await.unwrap_or_default();
-
-    // Decode common HTML entities. (Full entity decoding would need a crate,
-    // but these 6 cover ~99% of what DDG produces for English/Spanish results.)
     fn decode_entities(s: &str) -> String {
         s.replace("&amp;", "&")
          .replace("&lt;", "<")
@@ -1692,51 +1704,148 @@ pub async fn search_web(query: String) -> Result<String, String> {
          .replace("&nbsp;", " ")
     }
 
-    // Try each snippet regex in turn until one yields results
-    let snippets: Vec<String> = SNIPPET_RES.iter()
-        .find_map(|re| {
-            let caps: Vec<_> = re.captures_iter(&html)
-                .map(|c| c[1].to_string())
-                .collect();
-            if caps.is_empty() { None } else { Some(caps) }
-        })
-        .unwrap_or_default();
+    let q = urlencoding::encode(&query);
+    let endpoints = [
+        format!("https://lite.duckduckgo.com/lite/?q={}", q),
+        format!("https://html.duckduckgo.com/html/?q={}", q),
+        format!("https://duckduckgo.com/html/?q={}&ia=web", q),
+    ];
 
-    let urls: Vec<String> = URL_RES.iter()
-        .find_map(|re| {
-            let caps: Vec<_> = re.captures_iter(&html)
-                .map(|c| c[1].trim().to_string())
-                .collect();
-            if caps.is_empty() { None } else { Some(caps) }
-        })
-        .unwrap_or_default();
+    for (idx, endpoint) in endpoints.iter().enumerate() {
+        let res = crate::state::HTTP_CLIENT_FAST
+            .get(endpoint)
+            // A common modern Chrome UA — DDG sometimes returns an empty
+            // body to UAs it suspects are bots. Pinning to a current Edge
+            // signature keeps us inside the "human" bucket.
+            .header("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+                 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0")
+            .header("Accept-Language", "en-US,en;q=0.9,es;q=0.8")
+            .send()
+            .await;
+        let Ok(res) = res else { continue; };
+        if res.status().as_u16() >= 400 { continue; }
+        let html = res.text().await.unwrap_or_default();
+        if html.is_empty() { continue; }
 
-    if snippets.is_empty() && urls.is_empty() {
-        crate::utils::logging::write_app_log(
-            "WARNING",
-            &format!("search_web: zero results — DuckDuckGo HTML format may have changed (query: '{}')", query)
-        );
-        return Ok("No results found — the search provider's HTML format may have changed.".to_string());
+        let parsed = if idx == 0 {
+            // Lite endpoint — stable table layout
+            parse_ddg_lite(&html, &TAG_STRIP, decode_entities)
+        } else {
+            // html/ endpoint — class-based, may break
+            parse_ddg_html(&html, &TAG_STRIP, decode_entities)
+        };
+        if !parsed.is_empty() {
+            return Ok(parsed.join("\n\n"));
+        }
     }
 
-    let mut results = Vec::new();
+    // All three endpoints failed to produce results. Most likely:
+    //   • DDG is blocking the client IP (rate limit / suspicion)
+    //   • Provider HTML changed AGAIN
+    //   • Network is offline
+    // Either way, the user-facing message must be ACTIONABLE.
+    crate::utils::logging::write_app_log(
+        "WARNING",
+        &format!("search_web: all DDG endpoints empty for query '{}'", query)
+    );
+    Ok(format!(
+        "No web results found across 3 DuckDuckGo endpoints. \
+         For reliable search, configure a Tavily API key (free 1000/month at tavily.com) — \
+         Lucy will use it automatically. Query: '{}'",
+        query
+    ))
+}
+
+/// Parse the lite.duckduckgo.com/lite/ table layout.
+///
+/// Layout (per result):
+///   <tr><td valign="top">N.</td><td><a class="result-link" ...>Title</a></td></tr>
+///   <tr><td>&nbsp;</td><td class="result-snippet">Snippet…</td></tr>
+///   <tr><td>&nbsp;</td><td class="link-text">www.example.com</td></tr>
+///
+/// We extract pairs by walking matches in document order.
+fn parse_ddg_lite(
+    html: &str,
+    tag_strip: &regex::Regex,
+    decode: fn(&str) -> String,
+) -> Vec<String> {
+    use once_cell::sync::Lazy;
+    static LINK_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(
+        r#"(?s)<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#).unwrap());
+    static SNIPPET_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(
+        r#"(?s)<td[^>]*class="result-snippet"[^>]*>(.*?)</td>"#).unwrap());
+
+    let links: Vec<(String, String)> = LINK_RE.captures_iter(html)
+        .map(|c| (c[1].to_string(), c[2].to_string()))
+        .collect();
+    let snippets: Vec<String> = SNIPPET_RE.captures_iter(html)
+        .map(|c| c[1].to_string())
+        .collect();
+
+    let mut out = Vec::new();
+    let pairs = links.len().min(snippets.len()).min(5);
+    for i in 0..pairs {
+        let (url, title) = &links[i];
+        let snip = &snippets[i];
+        let title_clean = decode(&tag_strip.replace_all(title, "").trim());
+        let snip_clean  = decode(&tag_strip.replace_all(snip,  "").trim());
+        out.push(format!("* {} — {}\n  {}", title_clean, url, snip_clean));
+    }
+    // Even when snippet/title counts don't match exactly (rare), return
+    // whatever we got — partial > nothing.
+    if out.is_empty() && !links.is_empty() {
+        for (url, title) in links.iter().take(5) {
+            let title_clean = decode(&tag_strip.replace_all(title, "").trim());
+            out.push(format!("* {} — {}", title_clean, url));
+        }
+    }
+    out
+}
+
+/// Parse the html.duckduckgo.com/html/ class-based layout (legacy).
+fn parse_ddg_html(
+    html: &str,
+    tag_strip: &regex::Regex,
+    decode: fn(&str) -> String,
+) -> Vec<String> {
+    use once_cell::sync::Lazy;
+    // Multiple regex variants because the exact class spelling drifts
+    // between DDG deploys ("result__snippet", "result__snippet js-...", etc.).
+    static SNIPPET_RES: Lazy<Vec<regex::Regex>> = Lazy::new(|| {
+        ["(?s)<a[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>(.*?)</a>",
+         "(?s)<div[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>(.*?)</div>",
+         "(?s)<span[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>(.*?)</span>",
+        ].iter().filter_map(|p| regex::Regex::new(p).ok()).collect()
+    });
+    static URL_RES: Lazy<Vec<regex::Regex>> = Lazy::new(|| {
+        ["(?s)<a[^>]*class=\"[^\"]*result__url[^\"]*\"[^>]*>(.*?)</a>",
+         "(?s)<span[^>]*class=\"[^\"]*result__url[^\"]*\"[^>]*>(.*?)</span>",
+        ].iter().filter_map(|p| regex::Regex::new(p).ok()).collect()
+    });
+
+    let snippets: Vec<String> = SNIPPET_RES.iter()
+        .find_map(|re| {
+            let caps: Vec<_> = re.captures_iter(html).map(|c| c[1].to_string()).collect();
+            if caps.is_empty() { None } else { Some(caps) }
+        })
+        .unwrap_or_default();
+    let urls: Vec<String> = URL_RES.iter()
+        .find_map(|re| {
+            let caps: Vec<_> = re.captures_iter(html).map(|c| c[1].trim().to_string()).collect();
+            if caps.is_empty() { None } else { Some(caps) }
+        })
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
     for i in 0..snippets.len().min(5).min(urls.len().max(1)) {
         let snip_raw = snippets.get(i).cloned().unwrap_or_default();
         let url_raw  = urls.get(i).cloned().unwrap_or_else(|| "(no url)".to_string());
-
-        // Strip ALL remaining tags then decode entities — robust to <b>, <em>,
-        // <span class="highlight">, etc. that DDG sprinkles inside snippets.
-        let snip = decode_entities(&TAG_STRIP.replace_all(&snip_raw, "").trim());
-        let url  = decode_entities(&TAG_STRIP.replace_all(&url_raw, "").trim());
-
-        results.push(format!("* {}: {}", url, snip));
+        let snip = decode(&tag_strip.replace_all(&snip_raw, "").trim());
+        let url  = decode(&tag_strip.replace_all(&url_raw, "").trim());
+        out.push(format!("* {}: {}", url, snip));
     }
-
-    if results.is_empty() {
-        return Ok("No results found.".to_string());
-    }
-
-    Ok(results.join("\n\n"))
+    out
 }
 
 // ── PER-TAB CWD ──────────────────────────────────────────────────────────────
@@ -1923,5 +2032,49 @@ mod tests {
             result.is_err(),
             "WMIC must block /format: (XSL injection). Got Ok({:?})", result.ok()
         );
+    }
+
+    // ── Sprint 5, TEST-2 — path_exists (NS-5 backend) ──────────────────────
+    // Contract: returns Ok with structured info on success OR non-existence,
+    // only returns Err on real I/O failures (permission denied, etc).
+
+    /// CONTRACT: an existing FILE reports exists=true, is_file=true, is_dir=false.
+    #[tokio::test]
+    async fn path_exists_existing_file_reports_file() {
+        // Use std::env::current_exe — guaranteed to exist on every test runner.
+        let exe = std::env::current_exe().expect("current_exe should resolve");
+        let r = path_exists(exe.to_string_lossy().to_string()).await
+            .expect("path_exists must not Err on a real file");
+        assert_eq!(r["exists"], true,  "real file should report exists=true");
+        assert_eq!(r["is_file"], true, "real file should report is_file=true");
+        assert_eq!(r["is_dir"], false, "real file should NOT be dir");
+        assert!(r["size"].as_u64().unwrap_or(0) > 0, "real exe size should be >0");
+    }
+
+    /// CONTRACT: an existing DIRECTORY reports exists=true, is_dir=true, is_file=false.
+    #[tokio::test]
+    async fn path_exists_existing_dir_reports_dir() {
+        let tmp = std::env::temp_dir();
+        let r = path_exists(tmp.to_string_lossy().to_string()).await
+            .expect("path_exists must not Err on temp dir");
+        assert_eq!(r["exists"], true,  "temp dir should report exists=true");
+        assert_eq!(r["is_dir"], true,  "temp dir should report is_dir=true");
+        assert_eq!(r["is_file"], false,"temp dir should NOT be file");
+    }
+
+    /// CONTRACT: missing path returns Ok with exists=false, NOT Err.
+    /// This matters because the SSH key pre-flight in NexShellView uses the
+    /// `exists` boolean to decide whether to surface a precise error message.
+    /// If we returned Err on NotFound, the caller would never see the
+    /// "file not found" branch and would fall into the generic catch.
+    #[tokio::test]
+    async fn path_exists_missing_path_returns_ok_with_false() {
+        let bogus = format!("C:\\nope\\not_here_{}.bogus", chrono::Local::now().timestamp_nanos_opt().unwrap_or(0));
+        let r = path_exists(bogus).await
+            .expect("path_exists must return Ok(exists=false), not Err, on missing paths");
+        assert_eq!(r["exists"], false);
+        assert_eq!(r["is_file"], false);
+        assert_eq!(r["is_dir"], false);
+        assert_eq!(r["size"], 0);
     }
 }

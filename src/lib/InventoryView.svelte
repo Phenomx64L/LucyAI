@@ -70,6 +70,160 @@
         scanning = false;
     }
 
+    // ── Sprint B #2 — Drift detection ──────────────────────────────────
+    // Lets the user pin "this is the trusted state" then see what's
+    // drifted since. Per-host baseline stored in inventory_baselines.
+    let baseline = null;        // InventoryBaseline | null
+    let driftReport = null;     // DriftReport | null
+    let driftLoading = false;
+    let driftError = '';
+
+    async function refreshBaselineInfo() {
+        try {
+            baseline = await invoke('inventory_get_baseline', { hostId: selectedHost });
+        } catch {
+            baseline = null;
+        }
+    }
+
+    async function saveBaseline() {
+        if (!snapshot) {
+            toast(isEN ? 'Run a scan first.' : 'Escanea primero.', 'warn');
+            return;
+        }
+        const label = prompt(
+            isEN ? 'Label for this baseline (optional):' : 'Etiqueta para este baseline (opcional):',
+            new Date().toISOString().slice(0, 10),
+        );
+        if (label === null) return;
+        try {
+            await invoke('inventory_set_baseline', {
+                hostId: selectedHost,
+                snapshot: {
+                    ports: snapshot.ports,
+                    services: snapshot.services,
+                    software: snapshot.software,
+                    certs: snapshot.certs,
+                    scheduled: snapshot.scheduled,
+                },
+                label: label || '',
+            });
+            await refreshBaselineInfo();
+            driftReport = null; // reset — current snapshot IS the new baseline now
+            toast(isEN
+                ? `Baseline saved (${snapshot.software.length} software, ${snapshot.ports.length} ports).`
+                : `Baseline guardado (${snapshot.software.length} software, ${snapshot.ports.length} puertos).`);
+        } catch (e) {
+            toast('Save error: ' + e, 'error');
+        }
+    }
+
+    async function computeDrift() {
+        if (!snapshot) {
+            toast(isEN ? 'Run a scan first.' : 'Escanea primero.', 'warn');
+            return;
+        }
+        if (!baseline) {
+            toast(isEN ? 'No baseline saved for this host yet.' : 'Sin baseline guardado para este host.', 'warn');
+            return;
+        }
+        driftLoading = true; driftError = '';
+        try {
+            driftReport = await invoke('inventory_compute_drift', {
+                hostId: selectedHost,
+                currentSnapshot: {
+                    ports: snapshot.ports,
+                    services: snapshot.services,
+                    software: snapshot.software,
+                    certs: snapshot.certs,
+                    scheduled: snapshot.scheduled,
+                },
+            });
+            activeTab = 'drift';
+            const t = driftReport.totals;
+            const n = t.added + t.removed + t.changed;
+            toast(n === 0
+                ? (isEN ? '✓ No drift detected since baseline.' : '✓ Sin deriva desde el baseline.')
+                : (isEN ? `Drift: +${t.added} / -${t.removed} / Δ${t.changed}`
+                        : `Deriva: +${t.added} / -${t.removed} / Δ${t.changed}`),
+                n === 0 ? 'info' : 'warn',
+            );
+        } catch (e) {
+            driftError = String(e);
+        }
+        driftLoading = false;
+    }
+
+    async function deleteBaseline() {
+        if (!confirm(isEN
+            ? 'Delete the baseline for this host? This cannot be undone.'
+            : '¿Borrar el baseline de este host? Es irreversible.')) return;
+        try {
+            await invoke('inventory_delete_baseline', { hostId: selectedHost });
+            baseline = null;
+            driftReport = null;
+            toast(isEN ? 'Baseline removed.' : 'Baseline borrado.');
+        } catch (e) {
+            toast('Delete error: ' + e, 'error');
+        }
+    }
+
+    function fmtRelTime(unixSec) {
+        const d = Math.floor(Date.now()/1000) - unixSec;
+        if (d < 60)    return isEN ? 'just now' : 'ahora';
+        if (d < 3600)  return `${Math.floor(d/60)}m`;
+        if (d < 86400) return `${Math.floor(d/3600)}h`;
+        return `${Math.floor(d/86400)}d`;
+    }
+
+    // Auto-refresh baseline info when the user switches host.
+    $: if (selectedHost) {
+        refreshBaselineInfo();
+        // Stale drift report when host changes — could be misleading
+        driftReport = null;
+    }
+
+    // ── Tier A #4 (sprint extra) — CVE scan against curated DB ──────────
+    // Sends the current snapshot's `software[]` to the backend cve_scan
+    // command and renders the result as a new tab. Pure-local, no cloud.
+    let cveScanning = false;
+    let cveResult   = null;  // { matches: [...], scanned_count, db_size, stale_warning }
+
+    async function runCveScan() {
+        if (!snapshot?.software?.length) {
+            toast(isEN ? 'No software in snapshot — scan inventory first.'
+                       : 'Sin software en el snapshot — escanea inventario primero.', 'warn');
+            return;
+        }
+        cveScanning = true;
+        try {
+            const payload = snapshot.software.map(s => ({
+                name: s.name || '',
+                version: s.version || null,
+            }));
+            cveResult = await invoke('cve_scan', { software: payload });
+            activeTab = 'cves';
+            const n = cveResult.matches.length;
+            const crit = cveResult.matches.filter(m => m.cve.severity === 'CRITICAL').length;
+            toast(
+                isEN
+                    ? `CVE scan: ${n} matches (${crit} CRITICAL) across ${cveResult.scanned_count} products`
+                    : `CVE scan: ${n} coincidencias (${crit} CRÍTICAS) sobre ${cveResult.scanned_count} productos`,
+                n > 0 ? 'warn' : 'info',
+            );
+        } catch(e) {
+            toast('CVE scan error: ' + e, 'error');
+        }
+        cveScanning = false;
+    }
+
+    function severityClass(sev) {
+        if (sev === 'CRITICAL') return 'sev-crit';
+        if (sev === 'HIGH')     return 'sev-high';
+        if (sev === 'MEDIUM')   return 'sev-med';
+        return 'sev-low';
+    }
+
     let exporting = false;
     async function exportPdf() {
         if (!snapshot) return;
@@ -113,6 +267,29 @@
         {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ScanSearch size={12} strokeWidth={2}/> {isEN ? 'Scan' : 'Escanear'}{/if}
       </button>
       {#if snapshot}
+        <!-- Sprint B #2 — Drift detection group: baseline save + drift compute -->
+        {#if baseline}
+          <button class="view-btn" on:click={computeDrift} disabled={driftLoading}
+                  title={isEN
+                    ? `Compute drift vs baseline (${fmtRelTime(baseline.updated_at)} old${baseline.label ? ': ' + baseline.label : ''})`
+                    : `Calcular deriva vs baseline (${fmtRelTime(baseline.updated_at)} de antigüedad${baseline.label ? ': ' + baseline.label : ''})`}
+                  style="display:flex;align-items:center;gap:5px;">
+            {#if driftLoading}↻{:else}◑{/if} {isEN ? 'Drift' : 'Deriva'}
+          </button>
+        {/if}
+        <button class="view-btn" on:click={saveBaseline}
+                title={baseline
+                  ? (isEN ? 'Overwrite baseline with current snapshot' : 'Sobrescribir baseline con snapshot actual')
+                  : (isEN ? 'Save current snapshot as the trusted baseline for this host' : 'Guardar snapshot actual como baseline de confianza')}
+                style="display:flex;align-items:center;gap:5px;">
+          ◇ {baseline ? (isEN ? 'Update baseline' : 'Actualizar baseline') : (isEN ? 'Set baseline' : 'Set baseline')}
+        </button>
+        <!-- Tier A #4 — CVE scan trigger. Requires a snapshot with software list. -->
+        <button class="view-btn" on:click={runCveScan} disabled={cveScanning || !snapshot.software?.length}
+                title={isEN ? 'Scan installed software against curated CVE DB' : 'Escanear software contra DB curada de CVEs'}
+                style="display:flex;align-items:center;gap:5px;">
+          {#if cveScanning}↻{:else}🛡{/if} CVEs
+        </button>
         <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF" style="display:flex;align-items:center;gap:5px;">
           {#if exporting}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF
         </button>
@@ -148,6 +325,27 @@
       <span class="inv-card-num">{snapshot.scheduled.length}</span>
       <span class="inv-card-lbl">{isEN ? 'Scheduled' : 'Programadas'}</span>
     </button>
+    {#if cveResult}
+      <!-- Tier A #4 — CVE summary card. Color reflects worst severity. -->
+      {@const _crit = cveResult.matches.filter(m => m.cve.severity === 'CRITICAL').length}
+      {@const _high = cveResult.matches.filter(m => m.cve.severity === 'HIGH').length}
+      <button class="inv-card inv-card-cve" class:active={activeTab==='cves'} on:click={() => activeTab='cves'}>
+        <span class="inv-card-num" style={_crit > 0 ? 'color:#ef4444' : _high > 0 ? 'color:#f59e0b' : 'color:var(--acc)'}>
+          {cveResult.matches.length}
+        </span>
+        <span class="inv-card-lbl">CVEs</span>
+      </button>
+    {/if}
+    {#if driftReport}
+      <!-- Sprint B #2 — Drift summary card. Color: green=clean, amber=changes, red=removed -->
+      {@const _t = driftReport.totals}
+      {@const _n = _t.added + _t.removed + _t.changed}
+      {@const _color = _n === 0 ? 'color:var(--acc)' : _t.removed > 0 ? 'color:#ef4444' : 'color:#f59e0b'}
+      <button class="inv-card inv-card-cve" class:active={activeTab==='drift'} on:click={() => activeTab='drift'}>
+        <span class="inv-card-num" style={_color}>{_n}</span>
+        <span class="inv-card-lbl">{isEN ? 'drift' : 'deriva'}</span>
+      </button>
+    {/if}
   </div>
 
   <!-- Search -->
@@ -217,6 +415,134 @@
         {#if !snapshot.scheduled.length}<tr><td class="empty">{isEN ? 'No scheduled tasks' : 'Sin tareas programadas'}</td></tr>{/if}
       </tbody>
     </table>
+
+    {:else if activeTab === 'drift' && driftReport}
+    <!-- Sprint B #2 — Drift detection report. -->
+    {#if driftError}
+      <div class="view-error" style="margin-bottom:8px;">{driftError}</div>
+    {/if}
+    <div class="drift-meta">
+      {#if driftReport.has_baseline}
+        {isEN ? 'Comparing against baseline saved' : 'Comparando contra baseline guardado'}
+        <strong>{fmtRelTime(driftReport.baseline_age_secs > 0 ? Math.floor(Date.now()/1000) - driftReport.baseline_age_secs : Math.floor(Date.now()/1000))}</strong>
+        {isEN ? 'ago' : 'antes'}{baseline?.label ? ` (${baseline.label})` : ''}
+        ·
+        <span style="color:var(--acc);">+{driftReport.totals.added}</span>
+        <span style="color:#ef4444;">-{driftReport.totals.removed}</span>
+        <span style="color:#f59e0b;">Δ{driftReport.totals.changed}</span>
+        ·
+        <button class="drift-mini-btn" on:click={deleteBaseline}>{isEN ? 'Forget baseline' : 'Borrar baseline'}</button>
+      {:else}
+        {isEN ? 'No baseline saved.' : 'Sin baseline guardado.'}
+      {/if}
+    </div>
+    {#each driftReport.categories as cat}
+      {#if cat.added.length + cat.removed.length + cat.changed.length > 0}
+      <div class="drift-cat">
+        <div class="drift-cat-hdr">
+          <span class="drift-cat-name">{cat.name}</span>
+          <span class="drift-cat-counts">
+            {#if cat.added.length}<span class="drift-pill add">+{cat.added.length}</span>{/if}
+            {#if cat.removed.length}<span class="drift-pill rem">−{cat.removed.length}</span>{/if}
+            {#if cat.changed.length}<span class="drift-pill chg">Δ{cat.changed.length}</span>{/if}
+          </span>
+        </div>
+        {#if cat.added.length}
+          <div class="drift-list">
+            <div class="drift-list-hdr">+ {isEN ? 'Added' : 'Añadido'}</div>
+            {#each cat.added as item}
+              <div class="drift-row add">
+                <span class="drift-icon">+</span>
+                <span class="drift-detail">
+                  {#if cat.name === 'software'}{item.name} <span class="mono">{item.version || ''}</span>
+                  {:else if cat.name === 'ports'}<span class="mono">{item.port}</span> · {item.process || '-'}
+                  {:else if cat.name === 'services'}{item.name} <span class="mono">({item.status})</span>
+                  {:else if cat.name === 'certs'}{item.subject || item.path}
+                  {:else}<span class="mono">{item.entry}</span>
+                  {/if}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if cat.removed.length}
+          <div class="drift-list">
+            <div class="drift-list-hdr">− {isEN ? 'Removed' : 'Removido'}</div>
+            {#each cat.removed as item}
+              <div class="drift-row rem">
+                <span class="drift-icon">−</span>
+                <span class="drift-detail">
+                  {#if cat.name === 'software'}{item.name} <span class="mono">{item.version || ''}</span>
+                  {:else if cat.name === 'ports'}<span class="mono">{item.port}</span> · {item.process || '-'}
+                  {:else if cat.name === 'services'}{item.name} <span class="mono">({item.status})</span>
+                  {:else if cat.name === 'certs'}{item.subject || item.path}
+                  {:else}<span class="mono">{item.entry}</span>
+                  {/if}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if cat.changed.length}
+          <div class="drift-list">
+            <div class="drift-list-hdr">Δ {isEN ? 'Changed' : 'Cambiado'}</div>
+            {#each cat.changed as ch}
+              <div class="drift-row chg">
+                <span class="drift-icon">Δ</span>
+                <span class="drift-detail">
+                  <strong>{ch.identifier}</strong>
+                  · <span class="mono">{ch.field}</span>:
+                  <span class="mono" style="color:#ef4444;">{ch.from}</span>
+                  →
+                  <span class="mono" style="color:var(--acc);">{ch.to}</span>
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      {/if}
+    {/each}
+    {#if driftReport.totals.added + driftReport.totals.removed + driftReport.totals.changed === 0}
+      <div class="empty" style="color:var(--acc);">
+        ✓ {isEN ? 'No drift detected since baseline.' : 'Sin deriva desde el baseline.'}
+      </div>
+    {/if}
+
+    {:else if activeTab === 'cves' && cveResult}
+    <!-- Tier A #4 — CVE matches. Curated DB scan results. -->
+    <div class="cve-meta">
+      {isEN ? 'Scanned' : 'Escaneados'}: {cveResult.scanned_count} ·
+      DB: {cveResult.db_size} CVEs ·
+      <span style="color:#94a3b8;">{cveResult.stale_warning}</span>
+    </div>
+    <table class="inv-table">
+      <thead><tr>
+        <th>{isEN ? 'Severity' : 'Severidad'}</th>
+        <th>CVE</th>
+        <th>{isEN ? 'Product' : 'Producto'}</th>
+        <th>{isEN ? 'Installed' : 'Instalado'}</th>
+        <th>{isEN ? 'Description' : 'Descripción'}</th>
+        <th>CVSS</th>
+      </tr></thead>
+      <tbody>
+        {#each cveResult.matches as m}
+        <tr>
+          <td><span class="badge {severityClass(m.cve.severity)}">{m.cve.severity}</span></td>
+          <td class="mono"><a href="https://nvd.nist.gov/vuln/detail/{m.cve.cve_id}" target="_blank" rel="noopener noreferrer" style="color:var(--acc);text-decoration:none;">{m.cve.cve_id}</a></td>
+          <td class="mono">{m.cve.product}</td>
+          <td class="mono">{m.software_version}</td>
+          <td style="font-size:11px;max-width:480px;">{m.cve.description}</td>
+          <td class="mono" style="text-align:right;font-weight:600;">{m.cve.cvss_score.toFixed(1)}</td>
+        </tr>
+        {/each}
+        {#if !cveResult.matches.length}
+          <tr><td colspan="6" class="empty" style="color:var(--acc);">
+            ✓ {isEN ? 'No known CVEs match the installed software in this snapshot.' : 'Sin CVEs conocidos contra el software instalado.'}
+          </td></tr>
+        {/if}
+      </tbody>
+    </table>
     {/if}
   </div>
   {:else if !scanning}
@@ -257,7 +583,32 @@
     .mono{font-family:var(--mono);font-size:11px;}
     .badge{font-size:10px;padding:1px 6px;border-radius:8px;font-weight:600;}
     .badge.ok{background:rgba(16,185,129,.08);color:var(--acc);}
+    .badge.sev-crit{background:rgba(239,68,68,.18);color:#ef4444;border:1px solid rgba(239,68,68,.35);}
+    .badge.sev-high{background:rgba(245,158,11,.16);color:#f59e0b;border:1px solid rgba(245,158,11,.30);}
+    .badge.sev-med {background:rgba(96,165,250,.14);color:#60a5fa;border:1px solid rgba(96,165,250,.25);}
+    .badge.sev-low {background:rgba(148,163,184,.14);color:#94a3b8;}
     .empty{text-align:center;color:#334155;padding:20px!important;font-style:italic;}
+    .cve-meta{padding:4px 0 10px;font-size:10px;color:#64748b;letter-spacing:0.3px;}
+    /* Sprint B #2 — Drift visualization */
+    .drift-meta{padding:6px 10px 10px;font-size:11px;color:var(--txt2);display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+    .drift-mini-btn{background:transparent;border:1px solid var(--bdr);color:var(--txt2);font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;}
+    .drift-mini-btn:hover{background:rgba(239,68,68,.10);color:#ef4444;border-color:rgba(239,68,68,.30);}
+    .drift-cat{margin-bottom:12px;background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;}
+    .drift-cat-hdr{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+    .drift-cat-name{font-size:11px;font-weight:700;color:var(--txt);text-transform:uppercase;letter-spacing:.3px;}
+    .drift-cat-counts{display:flex;gap:4px;margin-left:auto;}
+    .drift-pill{font-size:9px;padding:1px 6px;border-radius:8px;font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums;}
+    .drift-pill.add{background:rgba(16,185,129,.18);color:var(--acc);}
+    .drift-pill.rem{background:rgba(239,68,68,.18);color:#ef4444;}
+    .drift-pill.chg{background:rgba(245,158,11,.16);color:#f59e0b;}
+    .drift-list{margin-top:4px;}
+    .drift-list-hdr{font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.4px;padding:6px 0 3px;}
+    .drift-row{display:flex;gap:8px;padding:3px 0;font-size:11px;align-items:baseline;}
+    .drift-row .drift-icon{width:14px;text-align:center;font-weight:700;flex-shrink:0;font-family:var(--mono);}
+    .drift-row.add  .drift-icon{color:var(--acc);}
+    .drift-row.rem  .drift-icon{color:#ef4444;}
+    .drift-row.chg  .drift-icon{color:#f59e0b;}
+    .drift-detail{color:var(--txt);}
 
     :global(:root.light) .inv-card{background:#fff;}
     :global(:root.light) .inv-table th{background:var(--bg3);}

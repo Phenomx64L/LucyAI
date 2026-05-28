@@ -163,7 +163,7 @@
     {#each tab.attachedFiles ?? [] as file}
         <div class="sf-bdg">
             {#if file.type === 'image'}
-                <img src={file.previewUrl} alt="p" style="width:22px;height:22px;object-fit:cover;border-radius:3px;">
+                <img src={file.previewUrl} alt="p" style="height:48px;width:auto;max-width:80px;object-fit:cover;border-radius:4px;display:block;">
             {:else}
                 <span>·</span>
             {/if}

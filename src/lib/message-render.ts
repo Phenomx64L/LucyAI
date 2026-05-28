@@ -36,7 +36,12 @@ export function warpBlock(cmd: string, output: string, ok: boolean, elapsedMs: n
     const enrichBadge = (enrichedType && enrichedType !== 'plain')
         ? `<span class="wb-enrich-badge">${enrichedType.replace('-', ' ')}</span>`
         : '';
-    return `<div class="warp-block ${st}"${enrichAttr}><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span>${enrichBadge}<button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${so || '(sin salida)'}</pre><div class="wb-enriched-mount"></div></div>`;
+    // Empty-state: visible indicator instead of invisible/dim plain text.
+    // Covers commands that succeed silently (Stop-Process, Set-*, Move-Item, etc.)
+    const outputHtml = so && so.trim()
+        ? so
+        : `<span class="wb-empty">${ok ? '✓ Comando completado (sin salida)' : '⚠ Sin salida de error'}</span>`;
+    return `<div class="warp-block ${st}"${enrichAttr}><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span>${enrichBadge}<button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${outputHtml}</pre><div class="wb-enriched-mount"></div></div>`;
 }
 
 // ── renderConfidenceTags ──────────────────────────────────────────────────────

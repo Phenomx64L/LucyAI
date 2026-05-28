@@ -6,6 +6,7 @@
     import { densityMode, cycleDensityMode } from '$lib/density-mode';
     import { getPricing, pricingLabel } from '$lib/model-pricing';
     import { getModelIcon } from '$lib/models.js';
+    import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
 
     export let hostName: string = '---';
     export let lucyConfig: { name: string } = { name: '' };
@@ -46,8 +47,26 @@
         probeMlGuard();
         const onFocus = () => probeMlGuard();
         window.addEventListener('focus', onFocus);
-        return () => window.removeEventListener('focus', onFocus);
+        // Sprint 4, UI-7 — Prompt cache telemetry poll.
+        // Reads the process-wide counters exposed by Rust `get_cache_stats`.
+        // 8s cadence: cheap (one Mutex lock + JSON serialize) and matches the
+        // user's reading pace — they don't need real-time refresh on a footer.
+        const refreshCache = async () => {
+            try { cacheStats = await invoke('get_cache_stats'); } catch {}
+        };
+        refreshCache();
+        const cacheTimer = setInterval(refreshCache, 8000);
+        return () => {
+            window.removeEventListener('focus', onFocus);
+            clearInterval(cacheTimer);
+        };
     });
+
+    // ── UI-7 — Cache hit footer indicator ────────────────────────────────
+    // Compute logic lives in $lib/cache-stats-helpers (testable in vitest).
+    // Only renders when Anthropic responses have actually exercised the cache.
+    let cacheStats: CacheStats | null = null;
+    $: cacheHitPct = computeCacheHitPct(cacheStats);
 
     // Visual mapping. The badge is intentionally subtle — we show it only
     // when it's `active` (a positive signal worth seeing) or when the
@@ -137,6 +156,17 @@
     {#if activeTab?._streamTPS && activeTab._streamTPS > 0}
         <div class="bi" title={`${isEN ? 'Tokens per second' : 'Tokens por segundo'}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
             <span>{isEN ? 'Stream:' : 'Stream:'}</span><span class="cok">~{activeTab._streamTPS} t/s</span>
+        </div>
+    {/if}
+
+    {#if cacheHitPct !== null && cacheStats}
+        <!-- UI-7 — Prompt cache hit indicator. Only renders for sessions
+             where Anthropic responses actually exercised the ephemeral cache. -->
+        <div class="bi"
+             title={isEN
+                ? `Prompt cache (this session): ${cacheStats.calls_with_cache_activity}/${cacheStats.calls_total_anthropic} Anthropic calls used the cache. Read: ${cacheStats.cache_read_total.toLocaleString()} tokens at 0.1× price. Write: ${cacheStats.cache_creation_total.toLocaleString()} tokens at 1.25× price.`
+                : `Cache de prompt (esta sesión): ${cacheStats.calls_with_cache_activity}/${cacheStats.calls_total_anthropic} llamadas Anthropic usaron caché. Leído: ${cacheStats.cache_read_total.toLocaleString()} tokens a 0.1× precio. Escrito: ${cacheStats.cache_creation_total.toLocaleString()} tokens a 1.25×.`}>
+            <span>⚡</span><span class={cacheHitTier(cacheHitPct)} data-testid="cache-badge-pct">{cacheHitPct.toFixed(0)}% {isEN ? 'cached' : 'caché'}</span>
         </div>
     {/if}
 

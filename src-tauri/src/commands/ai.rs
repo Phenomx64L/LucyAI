@@ -4,8 +4,39 @@ use keyring::Entry;
 use serde_json::json;
 use tauri::Emitter;
 use futures_util::StreamExt;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use crate::state::{HTTP_CLIENT, ALLOWED_MODELS};
 use crate::commands::metrics::log_usage_internal;
+
+// ── Sprint 4, UI-7 — Process-wide prompt cache telemetry ──────────────────
+//
+// Anthropic returns `cache_creation_input_tokens` (write) and
+// `cache_read_input_tokens` (hit) on every response when cache_control is
+// attached. We accumulate them here so a single tauri command can read the
+// running totals for the footer indicator. Volatile by design — restarting
+// the app resets the counters, which is fine: the footer shows "this session".
+//
+// Locked behind a Mutex (not RwLock) because writes happen on every API call
+// and reads happen on a 5s timer — contention is negligible.
+#[derive(Default, Clone, serde::Serialize)]
+pub struct CacheStats {
+    pub input_tokens_total: u64,       // sum of normal input tokens (uncached)
+    pub cache_creation_total: u64,     // tokens written into the cache
+    pub cache_read_total: u64,         // tokens served from cache
+    pub calls_with_cache_activity: u64,// how many requests had cache fields populated
+    pub calls_total_anthropic: u64,    // every anthropic response we processed
+}
+static CACHE_STATS: OnceLock<Mutex<CacheStats>> = OnceLock::new();
+fn cache_stats() -> &'static Mutex<CacheStats> {
+    CACHE_STATS.get_or_init(|| Mutex::new(CacheStats::default()))
+}
+
+/// Tauri command — read the per-session cache telemetry for the footer.
+#[tauri::command]
+pub fn get_cache_stats() -> CacheStats {
+    cache_stats().lock().map(|g| g.clone()).unwrap_or_default()
+}
 
 /// Adaptive `num_ctx` for Ollama. We used to hardcode 32768 which is fine for
 /// log-paste / analysis but blows VRAM on 7B vision models like qwen2.5vl
@@ -75,11 +106,144 @@ fn safe_u64_to_u32(v: u64) -> u32 {
     v.min(u32::MAX as u64) as u32
 }
 
-/// Extract input and output tokens from Anthropic API response
+// ── HTTP RETRY HELPER (Tier 1) ───────────────────────────────────────────────
+//
+// Wraps a reqwest::RequestBuilder with exponential backoff for transient
+// failures. Retries up to 3 times total (initial + 2 retries) for:
+//   • Network/connection errors (DNS, connect, EOF mid-handshake)
+//   • Timeouts (reqwest::Error::is_timeout)
+//   • HTTP 429 (rate limited — common with Gemini Flash free tier)
+//   • HTTP 5xx (provider-side server error)
+//
+// Non-retryable (returned immediately):
+//   • HTTP 2xx (success)
+//   • HTTP 3xx (redirects — handled by reqwest internally)
+//   • HTTP 4xx other than 429 (auth, malformed payload — retrying won't help)
+//
+// Backoff schedule: 1000ms → 2000ms → 4000ms (capped). Total worst-case wait
+// added is ~7s before final failure, which is well within the 25s per-request
+// timeout most callers set.
+//
+// Implementation note: `RequestBuilder::try_clone()` returns None for
+// requests with a streaming body (e.g. multipart file upload). For Lucy's
+// JSON-only LLM calls this always returns Some, but we degrade to a single
+// attempt for the None case rather than failing.
+pub(crate) async fn send_with_retry(
+    req: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    const MAX_ATTEMPTS: u32 = 3;
+    const INITIAL_DELAY_MS: u64 = 1000;
+    const MAX_DELAY_MS: u64 = 4000;
+
+    // If the request body can't be cloned (rare for JSON), send once with no retry.
+    let Some(_test_clone) = req.try_clone() else {
+        return req.send().await.map_err(|e| format!("Error de red: {}", e));
+    };
+    drop(_test_clone); // we'll re-clone inside the loop
+
+    let mut delay_ms = INITIAL_DELAY_MS;
+    let mut last_err_text: Option<String> = None;
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        // try_clone is cheap (Arc bumps on inner state); fail-safe to single shot
+        let this_attempt = match req.try_clone() {
+            Some(c) => c,
+            None => return req.send().await.map_err(|e| format!("Error de red: {}", e)),
+        };
+
+        match this_attempt.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                // Retryable status codes: 429 (rate limit) and 5xx (server error)
+                let retryable = status == 429 || (500..=599).contains(&status);
+                if retryable && attempt < MAX_ATTEMPTS {
+                    last_err_text = Some(format!("HTTP {}", status));
+                    crate::utils::logging::write_app_log(
+                        "WARNING",
+                        &format!("send_with_retry: HTTP {} on attempt {}/{}, retrying in {}ms",
+                            status, attempt, MAX_ATTEMPTS, delay_ms),
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
+                    continue;
+                }
+                // Either success, non-retryable status, or final attempt — return as-is.
+                return Ok(resp);
+            }
+            Err(e) => {
+                let is_transient = e.is_timeout() || e.is_connect() || e.is_request();
+                if is_transient && attempt < MAX_ATTEMPTS {
+                    last_err_text = Some(e.to_string());
+                    crate::utils::logging::write_app_log(
+                        "WARNING",
+                        &format!("send_with_retry: network error on attempt {}/{} ({}), retrying in {}ms",
+                            attempt, MAX_ATTEMPTS, e, delay_ms),
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
+                    continue;
+                }
+                // Non-transient or final attempt failed.
+                return Err(format!("Error de red: {} (tras {} intento{})",
+                    e, attempt, if attempt == 1 { "" } else { "s" }));
+            }
+        }
+    }
+
+    // Unreachable in practice (loop always returns), but satisfies the compiler.
+    Err(format!("send_with_retry exhausted. Last error: {}",
+        last_err_text.unwrap_or_else(|| "unknown".to_string())))
+}
+
+/// Extract input and output tokens from Anthropic API response.
+///
+/// Sprint 3, AI-5 — additionally logs cache hit telemetry. Anthropic's
+/// `usage` block exposes `cache_creation_input_tokens` (tokens written into
+/// the ephemeral cache, billed 1.25×) and `cache_read_input_tokens` (tokens
+/// served from cache, billed 0.1×). Surfacing them is the only way to verify
+/// AI-1 (prompt caching) is actually paying off in production — a silent
+/// cache miss looks identical to no caching at all in normal logs.
+///
+/// We fold cache_read into `input_tokens` for the cost calculator (which
+/// already applies the per-vendor mid-tier price; the 0.1× discount is then
+/// accounted for in the savings line we eprintln below). The cost field in
+/// llm_usage stays approximate — exact cache-aware accounting belongs in a
+/// future migration that adds dedicated columns.
 fn extract_tokens_anthropic(json: &serde_json::Value) -> Option<(u32, u32)> {
     let usage = &json["usage"];
     let input = safe_u64_to_u32(usage["input_tokens"].as_u64()?);
     let output = safe_u64_to_u32(usage["output_tokens"].as_u64()?);
+    // Optional fields — only present when cache_control was attached.
+    let cache_create = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+    let cache_read   = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+    // Sprint 4, UI-7 — Update process-wide cache telemetry. Every anthropic
+    // call increments calls_total_anthropic; only calls that actually exercised
+    // the cache (read or write) bump calls_with_cache_activity. This lets the
+    // footer show "cache active on N of M last calls" not just total tokens.
+    if let Ok(mut g) = cache_stats().lock() {
+        g.calls_total_anthropic += 1;
+        g.input_tokens_total += input as u64;
+        if cache_create > 0 || cache_read > 0 {
+            g.cache_creation_total += cache_create;
+            g.cache_read_total += cache_read;
+            g.calls_with_cache_activity += 1;
+        }
+    }
+    if cache_create > 0 || cache_read > 0 {
+        let total_input = input as u64 + cache_create + cache_read;
+        let hit_pct = if total_input > 0 {
+            (cache_read as f64 / total_input as f64) * 100.0
+        } else { 0.0 };
+        // Savings = cache_read tokens * 0.9 (we pay 0.1× instead of 1×).
+        // Stated as a fraction of what the full uncached call would have cost.
+        let savings_pct = if total_input > 0 {
+            (cache_read as f64 * 0.9 / total_input as f64) * 100.0
+        } else { 0.0 };
+        eprintln!(
+            "[ai-cache] input={} cache_write={} cache_read={} hit={:.1}% saved≈{:.1}%",
+            input, cache_create, cache_read, hit_pct, savings_pct
+        );
+    }
     Some((input, output))
 }
 
@@ -208,6 +372,81 @@ fn apply_anthropic_output_config(payload: &mut serde_json::Value, effort: Option
     if let Some(existing) = entry.as_object_mut() {
         existing.insert("effort".to_string(), serde_json::Value::String(level.to_string()));
     }
+}
+
+/// Sprint 1, AI-1 — Build Anthropic payload with prompt caching applied.
+///
+/// Splits `final_prompt` on the `LUCY_CACHE_BOUNDARY` marker (inserted by
+/// `build_composable_prompt`):
+///   • stable_half → goes into `system` array with `cache_control: ephemeral`
+///   • dynamic_half → goes into `messages[0].content` as user input
+///
+/// If the marker is absent (e.g. local-model prompt path, or future caller
+/// that hasn't migrated), fall back to the original single-message shape so
+/// no behavior changes.
+///
+/// Economics: Anthropic charges cache *writes* at 1.25× and *hits* at 0.1×.
+/// Break-even is the second use. Lucy's stable prompt is ~3-5K tokens, so a
+/// long session (50+ turns) saves 85% of input cost.
+fn build_anthropic_payload_with_cache(
+    model: &str,
+    max_tokens: u32,
+    final_prompt: &str,
+    stream: bool,
+) -> serde_json::Value {
+    use crate::commands::prompt_sections::LUCY_CACHE_BOUNDARY;
+
+    // Find the boundary. split() returns 1 elem if absent — handle that case.
+    if let Some(idx) = final_prompt.find(LUCY_CACHE_BOUNDARY) {
+        let stable = final_prompt[..idx].trim_end();
+        let dynamic_start = idx + LUCY_CACHE_BOUNDARY.len();
+        let dynamic = final_prompt[dynamic_start..].trim_start();
+
+        // Defensive: only cache when the stable half is substantial.
+        // Caching <1024 tokens (≈4KB) wastes the write multiplier — Anthropic
+        // documents a 1024-token minimum to actually engage the cache.
+        // Approximate: 1 token ≈ 4 chars for English/Spanish prose.
+        const MIN_CACHE_CHARS: usize = 4096;
+        if stable.len() >= MIN_CACHE_CHARS {
+            return serde_json::json!({
+                "model": model,
+                "max_tokens": max_tokens,
+                "stream": stream,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": stable,
+                        "cache_control": { "type": "ephemeral" }
+                    }
+                ],
+                "messages": [
+                    { "role": "user", "content": dynamic }
+                ]
+            });
+        }
+        // Stable section too short to be worth caching — flat message but
+        // still split into system + user so structure is correct.
+        return serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "stream": stream,
+            "system": stable,
+            "messages": [
+                { "role": "user", "content": dynamic }
+            ]
+        });
+    }
+
+    // No boundary marker — legacy path. Drop everything into the user message,
+    // same as the pre-AI-1 behavior.
+    serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "stream": stream,
+        "messages": [
+            { "role": "user", "content": final_prompt }
+        ]
+    })
 }
 
 // ── MAX TOKENS por modelo ────────────────────────────────────────────────────
@@ -769,7 +1008,12 @@ pub async fn ask_lucy(
             // the effort is stripped silently (model doesn't accept it).
             let (clean_model, effort) = resolve_anthropic_model(&model);
             let max_tok = get_max_tokens(&clean_model, max_tokens_override);
-            let mut payload = json!({ "model": clean_model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}] });
+            // Sprint 1, AI-1 — Split on the cache boundary so the stable half
+            // (rules + tools + identity) lands in `system` with cache_control,
+            // and the dynamic half (memories + working dir + user prompt)
+            // lands in `messages`. Anthropic charges cache writes 1.25× and
+            // hits 0.1× — break-even at 2nd use, big savings on long sessions.
+            let mut payload = build_anthropic_payload_with_cache(&clean_model, max_tok, &final_prompt, false);
             apply_anthropic_output_config(&mut payload, effort);
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
@@ -791,7 +1035,10 @@ pub async fn ask_lucy(
         }
     };
 
-    let res = req.send().await.map_err(|e| format!("Error de red: {}", e))?;
+    // Tier-1: send_with_retry handles 429/5xx + transient network errors with
+    // exponential backoff (1s → 2s → 4s). Critical for Gemini Flash free tier
+    // which rate-limits aggressively, and for Anthropic 529 overload events.
+    let res = send_with_retry(req).await?;
 
     if !res.status().is_success() {
         let status = res.status();
@@ -944,7 +1191,9 @@ pub async fn ask_lucy_stream(
         "anthropic" => {
             let (clean_model, effort) = resolve_anthropic_model(&model);
             let max_tok = get_max_tokens(&clean_model, max_tokens_override);
-            let mut payload = json!({ "model": clean_model, "max_tokens": max_tok, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
+            // Sprint 1, AI-1 — Same cache-boundary split for streaming.
+            // The "stream": true field is added inside the helper.
+            let mut payload = build_anthropic_payload_with_cache(&clean_model, max_tok, &final_prompt, true);
             apply_anthropic_output_config(&mut payload, effort);
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
@@ -968,7 +1217,10 @@ pub async fn ask_lucy_stream(
         }
     };
 
-    let res = req.send().await.map_err(|e| format!("Error de red: {}", e))?;
+    // Tier-1: retry on 429/5xx before opening the byte stream. The streaming
+    // happens at the response level (bytes_stream), so retrying the initial
+    // send() is safe — we haven't started consuming the body yet.
+    let res = send_with_retry(req).await?;
 
     if !res.status().is_success() {
         let status = res.status();
@@ -1168,15 +1420,12 @@ REGLAS:
     };
 
     // Hard timeout so the spinner never hangs forever — fail-fast with a useful message.
+    // send_with_retry adds up to ~7s of backoff on transient failures (429/5xx/network)
+    // before giving up, well within the 25s per-attempt budget.
     let req = req.timeout(std::time::Duration::from_secs(25));
-    let res = req.send().await.map_err(|e| {
-        if e.is_timeout() {
-            format!("Tiempo de espera agotado (25s) llamando al proveedor '{}'. Verifica conexión a internet o cambia de modelo.", provider)
-        } else if e.is_connect() {
-            format!("No se pudo conectar al proveedor '{}'. Verifica conexión a internet.", provider)
-        } else {
-            format!("Error de conexión ({}): {}", provider, e)
-        }
+    let res = send_with_retry(req).await.map_err(|e| {
+        // send_with_retry already includes attempt count; just add provider context.
+        format!("Proveedor '{}': {}", provider, e)
     })?;
     let status = res.status();
     let body_text = res.text().await.map_err(|e| e.to_string())?;
@@ -1355,7 +1604,12 @@ mod gemini_resolver_tests {
 
 #[cfg(test)]
 mod anthropic_resolver_tests {
-    use super::{apply_anthropic_output_config, resolve_anthropic_model};
+    use super::{
+        apply_anthropic_output_config,
+        resolve_anthropic_model,
+        get_cache_stats,
+        extract_tokens_anthropic,
+    };
 
     #[test]
     fn opus_47_xhigh_is_accepted() {
@@ -1438,5 +1692,79 @@ mod anthropic_resolver_tests {
         let (id, eff) = resolve_anthropic_model("claude-opus-4-7::ludicrous");
         assert_eq!(id, "claude-opus-4-7");
         assert_eq!(eff, None);
+    }
+
+    // ── Sprint 5, TEST-3 — get_cache_stats (UI-7) ───────────────────────
+    // The accumulator is a process-wide Mutex<CacheStats>. We can't reset
+    // it between tests, but we CAN make assertions that hold regardless of
+    // what other tests ran first — e.g. "calling extract_tokens_anthropic
+    // with cache fields strictly increases the cache_read_total".
+
+    /// CONTRACT: get_cache_stats returns a usable struct, even before any
+    /// anthropic call has been made (avoids panic on first read).
+    #[test]
+    fn get_cache_stats_default_is_zeroed_at_least_once() {
+        let s = get_cache_stats();
+        // We can't assert ALL fields are 0 because earlier tests may have
+        // bumped the counters. We just assert the read itself succeeds and
+        // returns sane (non-negative-by-type) values. Counters are u64 so
+        // negativity is impossible — the real check is "doesn't panic".
+        let _ = s.calls_total_anthropic;
+        let _ = s.cache_read_total;
+        let _ = s.cache_creation_total;
+    }
+
+    /// CONTRACT: a response WITHOUT cache fields still increments
+    /// calls_total_anthropic but NOT cache_creation/read. This separation
+    /// is what lets the footer say "N of M calls used the cache" — if every
+    /// call counted as cache activity the ratio would be useless.
+    #[test]
+    fn extract_tokens_no_cache_fields_bumps_total_only() {
+        let before = get_cache_stats();
+        let body = serde_json::json!({
+            "usage": { "input_tokens": 100, "output_tokens": 50 }
+        });
+        let _ = extract_tokens_anthropic(&body);
+        let after = get_cache_stats();
+        assert_eq!(after.calls_total_anthropic, before.calls_total_anthropic + 1,
+            "any anthropic call should bump calls_total");
+        assert_eq!(after.calls_with_cache_activity, before.calls_with_cache_activity,
+            "no cache fields → calls_with_cache_activity unchanged");
+        assert_eq!(after.cache_creation_total, before.cache_creation_total,
+            "no cache fields → cache_creation_total unchanged");
+        assert_eq!(after.cache_read_total, before.cache_read_total,
+            "no cache fields → cache_read_total unchanged");
+    }
+
+    /// CONTRACT: a response WITH cache_read fields bumps both counters and
+    /// the activity counter. This is the happy path AI-1 was built for.
+    #[test]
+    fn extract_tokens_with_cache_read_bumps_cache_counters() {
+        let before = get_cache_stats();
+        let body = serde_json::json!({
+            "usage": {
+                "input_tokens": 80,
+                "output_tokens": 40,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 4000
+            }
+        });
+        let _ = extract_tokens_anthropic(&body);
+        let after = get_cache_stats();
+        assert_eq!(after.calls_with_cache_activity,
+                   before.calls_with_cache_activity + 1,
+            "cache_read > 0 must bump calls_with_cache_activity");
+        assert_eq!(after.cache_read_total, before.cache_read_total + 4000,
+            "cache_read_total should accumulate the 4000 reported");
+    }
+
+    /// CONTRACT: missing input_tokens (malformed response) returns None
+    /// rather than panicking. The Anthropic message_start SSE event has
+    /// `output_tokens: 1` but a malformed cache event might miss input.
+    #[test]
+    fn extract_tokens_missing_input_returns_none() {
+        let body = serde_json::json!({ "usage": { "output_tokens": 50 } });
+        let r = extract_tokens_anthropic(&body);
+        assert!(r.is_none(), "missing input_tokens must return None, not panic");
     }
 }

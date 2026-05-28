@@ -11,7 +11,7 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
     import { fly, fade } from 'svelte/transition';
-    import { dismissChip, isDismissed } from '$lib/predictive-chips';
+    import { dismissChip, isDismissed, recordChipDismiss } from '$lib/predictive-chips';
     import type { PredictiveChip } from '$lib/predictive-chips';
 
     export let chips: PredictiveChip[] = [];
@@ -29,7 +29,8 @@
 
     function onDismiss(ev: Event, id: string) {
         ev.stopPropagation();
-        dismissChip(id);
+        dismissChip(id);        // hides for this turn
+        recordChipDismiss(id);  // persists: lowers engagement score long-term
         chips = chips; // trigger reactivity
     }
 </script>

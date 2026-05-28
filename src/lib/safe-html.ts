@@ -49,9 +49,17 @@ export function escapeHtmlAttr(s: unknown): string {
  *
  * Default profile blocks: <script>, <iframe>, <object>, <embed>, on*= handlers,
  * javascript: URLs, style= attributes (CSS exfil vectors).
+ *
+ * allowPlanCards — extends the profile to preserve interactive plan card elements:
+ *   <button>, inline style=, data-plan-id, data-plan-action, data-plan-card-id.
+ *   These attributes are safe because (a) event handlers remain forbidden,
+ *   (b) plan card HTML is produced by renderPlanCard() which escapes all
+ *   LLM/user content before injection, and (c) this is a local desktop app.
  */
-export function safeHtml(input: string, opts?: { allowImages?: boolean }): string {
-    const allowImages = opts?.allowImages ?? false;
+export function safeHtml(input: string, opts?: { allowImages?: boolean; allowPlanCards?: boolean }): string {
+    const allowImages    = opts?.allowImages    ?? false;
+    const allowPlanCards = opts?.allowPlanCards ?? false;
+
     const config: any = {
         ALLOWED_TAGS: [
             'p', 'span', 'div', 'br', 'hr',
@@ -61,13 +69,23 @@ export function safeHtml(input: string, opts?: { allowImages?: boolean }): strin
             'a',
             'table', 'thead', 'tbody', 'tr', 'th', 'td',
             'blockquote', 'small', 'sup', 'sub',
+            ...(allowPlanCards ? ['button'] : []),
         ],
-        ALLOWED_ATTR: ['href', 'title', 'class', 'id', 'target', 'rel', 'colspan', 'rowspan'],
+        ALLOWED_ATTR: [
+            'href', 'title', 'class', 'id', 'target', 'rel', 'colspan', 'rowspan',
+            ...(allowPlanCards ? ['style', 'disabled'] : []),
+        ],
+        // data-plan-* are specifically whitelisted for plan card interactivity;
+        // all other data-* remain blocked (ALLOW_DATA_ATTR: false).
+        ADD_ATTR: allowPlanCards ? ['data-plan-id', 'data-plan-action', 'data-plan-card-id'] : [],
         ALLOW_DATA_ATTR: false,
-        // Block inline event handlers and javascript: URLs explicitly
-        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style'],
+        // Block inline event handlers and javascript: URLs explicitly.
+        // style= is blocked in the default profile; allowed in the plan-card profile
+        // only because plan card HTML never contains unsanitized LLM content.
+        FORBID_ATTR: allowPlanCards
+            ? ['onerror', 'onload', 'onclick', 'onmouseover']
+            : ['onerror', 'onload', 'onclick', 'onmouseover', 'style'],
         FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'link', 'meta'],
-        // Disable URL schemes other than http/https/mailto
         ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
     };
     if (allowImages) {

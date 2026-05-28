@@ -84,6 +84,25 @@
         }
     }
 
+    // ── Sprint D — Hash chain verification ─────────────────────────────
+    // Recomputes the SHA-256 chain over this incident's `incident_action`
+    // rows and compares against stored hashes. Surfaces tampering with a
+    // clear "✓ verified" badge or a list of broken rows.
+    let chainReport = null;     // ChainVerifyReport
+    let chainBusy = false;
+    let chainError = '';
+
+    async function verifyHashChain() {
+        if (!incident?.id) return;
+        chainBusy = true; chainError = '';
+        try {
+            chainReport = await invoke('verify_incident_chain', { incidentId: incident.id });
+        } catch (e) {
+            chainError = String(e);
+        }
+        chainBusy = false;
+    }
+
     // ── Auto-generate runbook when incident resolves ──────────────────────
     // The transition from non-resolved → resolved fires once. We:
     //   1. Generate a runbook from the incident's evidence + hypotheses,
@@ -277,6 +296,62 @@
     </div>
     {/if}
 
+    <!-- ── Sprint D — Hash chain verification ─────────────────────────────── -->
+    <div class="inc-section">
+        <div class="inc-section-header">
+            <span>{isEN ? 'Hash chain integrity' : 'Integridad de la cadena'}</span>
+            {#if chainReport}
+                {#if chainReport.fully_valid}
+                    <span class="hc-badge ok" title={isEN ? 'All actions hash-verified' : 'Todas las acciones verificadas'}>
+                        ✓ {chainReport.verified_ok}/{chainReport.total_actions}
+                    </span>
+                {:else}
+                    <span class="hc-badge bad" title={isEN ? 'Tamper detected' : 'Manipulación detectada'}>
+                        ⚠ {chainReport.mismatches.length}/{chainReport.total_actions}
+                    </span>
+                {/if}
+            {/if}
+            <button class="inc-btn inc-btn-subtle" style="margin-left:auto;font-size:10px;"
+                    on:click={verifyHashChain} disabled={chainBusy}>
+                {chainBusy ? '⟳' : '◇'} {isEN ? 'Verify' : 'Verificar'}
+            </button>
+        </div>
+        {#if chainError}
+            <div class="inc-empty" style="color:#ef4444;">{chainError}</div>
+        {:else if !chainReport}
+            <div class="inc-empty">
+                {isEN
+                    ? 'Click Verify to recompute the SHA-256 chain over this incident\'s actions and confirm no row was tampered with.'
+                    : 'Pulsa Verificar para recomputar la cadena SHA-256 sobre las acciones de este incidente y confirmar que ninguna fila fue manipulada.'}
+            </div>
+        {:else if chainReport.fully_valid}
+            <div class="inc-empty hc-ok-msg">
+                ✓ {isEN
+                    ? `Verified ${chainReport.verified_ok} action${chainReport.verified_ok === 1 ? '' : 's'} — chain intact.`
+                    : `${chainReport.verified_ok} acción${chainReport.verified_ok === 1 ? '' : 'es'} verificada${chainReport.verified_ok === 1 ? '' : 's'} — cadena íntegra.`}
+            </div>
+        {:else}
+            <div class="hc-mismatches">
+                <div style="font-size:11px;color:#ef4444;margin-bottom:6px;">
+                    ⚠ {isEN
+                        ? `${chainReport.mismatches.length} chain break${chainReport.mismatches.length === 1 ? '' : 's'} detected`
+                        : `${chainReport.mismatches.length} ruptura${chainReport.mismatches.length === 1 ? '' : 's'} de cadena detectada${chainReport.mismatches.length === 1 ? '' : 's'}`}
+                </div>
+                {#each chainReport.mismatches as m}
+                    <div class="hc-mismatch">
+                        <span class="hc-pos">#{m.position}</span>
+                        <span class="hc-reason">{m.reason}</span>
+                        <span class="hc-id mono">{m.action_id.slice(0, 12)}…</span>
+                        <div class="hc-hashes mono">
+                            <span class="hc-h-lbl">stored:</span>   <span style="color:#ef4444;">{m.stored_hash.slice(0, 16) || '(empty)'}…</span><br/>
+                            <span class="hc-h-lbl">expected:</span> <span style="color:var(--acc, #10b981);">{m.expected_hash.slice(0, 16)}…</span>
+                        </div>
+                    </div>
+                {/each}
+            </div>
+        {/if}
+    </div>
+
     <!-- ── Evidence list ──────────────────────────────────────────────────── -->
     <div class="inc-section">
         <div class="inc-section-header">
@@ -423,6 +498,24 @@
     .inc-btn-danger:hover:not(:disabled)    { background: rgba(239,68,68,.2); }
 
     .inc-section { border-top: 1px solid rgba(255,255,255,.05); padding-top:8px; }
+    /* Sprint D — Hash chain verification */
+    .hc-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; font-family: var(--mono); margin-left: 6px; }
+    .hc-badge.ok  { background: rgba(16,185,129,.18); color: var(--acc, #10b981); }
+    .hc-badge.bad { background: rgba(239,68,68,.18); color: #ef4444; animation: hc-pulse 1.4s ease-in-out infinite; }
+    @keyframes hc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .hc-ok-msg { color: var(--acc, #10b981) !important; }
+    .hc-mismatches { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
+    .hc-mismatch {
+        background: rgba(239,68,68,.05); border: 1px solid rgba(239,68,68,.18);
+        border-radius: 4px; padding: 6px 8px; font-size: 11px;
+        display: flex; flex-direction: column; gap: 3px;
+    }
+    .hc-mismatch .hc-pos    { color: #ef4444; font-weight: 600; }
+    .hc-mismatch .hc-reason { color: #fbbf24; font-family: var(--mono); font-size: 10px; }
+    .hc-mismatch .hc-id     { color: var(--txt2); font-size: 10px; }
+    .hc-hashes              { font-size: 9px; line-height: 1.5; }
+    .hc-h-lbl               { color: var(--txt2); display: inline-block; width: 60px; }
+    .mono                   { font-family: var(--mono); }
     .inc-section-header {
         display:flex; justify-content:space-between; align-items:center;
         font-size:10px; text-transform:uppercase; letter-spacing:.5px;

@@ -389,9 +389,15 @@ pub async fn kg_index_now(since_min: Option<i64>) -> Result<KgIndexBatchResult, 
     }).await.map_err(|e| format!("join: {}", e))?
 }
 
-/// List files within or under a directory, ordered by last_mtime DESC.
-#[tauri::command]
-pub async fn kg_recent_files(dir_prefix: Option<String>, limit: Option<i64>) -> Result<Vec<KgFile>, String> {
+/// Sync version of kg_recent_files — callable from non-async contexts like
+/// the PromptSection trait (which composes the system prompt synchronously).
+/// shared_db() is already sync internally, so this is a thin wrapper that
+/// skips the #[tauri::command] async ceremony.
+///
+/// Returns an empty Vec on any DB error (the prompt builder should NOT fail
+/// just because the knowledge graph is unavailable — that's a non-essential
+/// enhancement).
+pub fn kg_recent_files_sync(dir_prefix: Option<String>, limit: Option<i64>) -> Vec<KgFile> {
     let cap = limit.unwrap_or(50).clamp(1, 500);
     shared_db(move |conn| {
         ensure_tables(conn)?;
@@ -426,7 +432,13 @@ pub async fn kg_recent_files(dir_prefix: Option<String>, limit: Option<i64>) -> 
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
-    })
+    }).unwrap_or_default()
+}
+
+/// List files within or under a directory, ordered by last_mtime DESC.
+#[tauri::command]
+pub async fn kg_recent_files(dir_prefix: Option<String>, limit: Option<i64>) -> Result<Vec<KgFile>, String> {
+    Ok(kg_recent_files_sync(dir_prefix, limit))
 }
 
 /// Return the strongest co-touched neighbors of a given path.

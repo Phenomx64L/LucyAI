@@ -169,6 +169,50 @@ pub fn pick_file_path() -> Result<String, String> {
     }
 }
 
+/// Sprint A — Native "save as" dialog for the DB backup feature.
+///
+/// Returns the absolute path the user picked, or empty string on cancel.
+/// Filters limit the chosen extension to SQLite-friendly suffixes.
+#[tauri::command]
+pub fn pick_save_path(default_name: String, extensions: Vec<String>) -> Result<String, String> {
+    let exts_borrow: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+    let mut dlg = rfd::FileDialog::new()
+        .set_title("Save as")
+        .set_file_name(&default_name);
+    if !exts_borrow.is_empty() {
+        dlg = dlg.add_filter("SQLite DB", &exts_borrow);
+    }
+    match dlg.save_file() {
+        Some(p) => Ok(p.to_string_lossy().to_string()),
+        None => Ok(String::new()),
+    }
+}
+
+/// Sprint A — Native folder picker for the support bundle feature.
+#[tauri::command]
+pub fn pick_folder_path(title: Option<String>) -> Result<String, String> {
+    let mut dlg = rfd::FileDialog::new();
+    if let Some(t) = title { dlg = dlg.set_title(t); }
+    match dlg.pick_folder() {
+        Some(p) => Ok(p.to_string_lossy().to_string()),
+        None => Ok(String::new()),
+    }
+}
+
+/// Sprint A — Pick an existing file with extension filter (for DB restore).
+#[tauri::command]
+pub fn pick_file_with_filter(extensions: Vec<String>) -> Result<String, String> {
+    let exts_borrow: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+    let mut dlg = rfd::FileDialog::new();
+    if !exts_borrow.is_empty() {
+        dlg = dlg.add_filter("Supported", &exts_borrow);
+    }
+    match dlg.pick_file() {
+        Some(p) => Ok(p.to_string_lossy().to_string()),
+        None => Ok(String::new()),
+    }
+}
+
 /// Escribe bytes (base64) en un archivo PDF temporal y devuelve la ruta absoluta.
 /// Lo usa PdfIngestPanel cuando se arrastra un PDF desde el explorador, ya que
 /// Tauri no expone `File.path` en el webview.

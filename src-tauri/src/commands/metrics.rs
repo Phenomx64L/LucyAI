@@ -116,6 +116,19 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_agent_memories_expires \
          ON agent_memories(expires_at) WHERE expires_at > 0",
+        // ── Tier A #1 — Hierarchical forks + cost ledger ─────────────────
+        // parent_task_id: the task_id of the fork that spawned THIS one.
+        // Empty string = top-level fork (no parent). Enables tree rendering
+        // in ForksMonitorPanel and lineage analysis ("who spawned who").
+        //
+        // Cost fields: each ask_lucy call inside a fork reports its token
+        // counts and we sum them here. cost_usd is denormalized so the UI
+        // can sort/filter by spend without recomputing from a price table.
+        "ALTER TABLE fork_results ADD COLUMN parent_task_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE fork_results ADD COLUMN tokens_in      INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE fork_results ADD COLUMN tokens_out     INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE fork_results ADD COLUMN cost_usd       REAL    NOT NULL DEFAULT 0.0",
+        "CREATE INDEX IF NOT EXISTS idx_fork_parent ON fork_results(parent_task_id)",
         // agentmemory-inspired crystals (Tier 2 #4). Each row is the LLM-
         // distilled digest of a completed agent session: 1-2 sentence
         // narrative + key outcomes + files affected + lessons learned.
@@ -1896,6 +1909,60 @@ pub struct TelemetryBucket {
     pub count: i64,
 }
 
+/// One row of agent-loop-block stats: which model triggered which kind of
+/// block, and how often, in the requested time window.
+///
+/// Used by `/loop-stats` and the quality dashboard to answer questions like
+/// "is Gemini Flash hitting target-loops more than Gemini Pro?". Drives
+/// model-selection decisions: if a model trips the safety nets repeatedly
+/// on a particular task type, the user knows to switch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopBlockStat {
+    pub model:         String,
+    pub event_subtype: String,   // 'tool_loop' | 'target_loop' | 'error_repeat' | 'max_loops'
+    pub count:         i64,
+    pub last_ts:       i64,
+}
+
+/// Aggregated loop-block events grouped by (model, subtype). Filters to the
+/// last `days` of data (default 30, max 365). Returns rows sorted so the
+/// "loudest" model+kind combos surface first.
+///
+/// Relies on the existing task_events table — agent_loop_event_log writes
+/// rows with event_type='agent_loop_block' and metadata.model populated.
+#[tauri::command]
+pub async fn loop_block_stats(days: Option<i64>) -> Result<Vec<LoopBlockStat>, String> {
+    let days = days.unwrap_or(30).clamp(1, 365);
+    let cutoff = chrono::Utc::now().timestamp() - days * 86400;
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(json_extract(metadata, '$.model'), 'unknown') AS model,
+                COALESCE(subtype, 'unknown')                          AS event_subtype,
+                COUNT(*)                                              AS count,
+                MAX(timestamp)                                        AS last_ts
+             FROM task_events
+             WHERE event_type = 'agent_loop_block'
+               AND timestamp >= ?1
+             GROUP BY model, event_subtype
+             ORDER BY count DESC, model ASC"
+        ).map_err(|e| format!("loop_block_stats prepare: {}", e))?;
+        let rows: Vec<LoopBlockStat> = stmt
+            .query_map(rusqlite::params![cutoff], |r| {
+                Ok(LoopBlockStat {
+                    model:         r.get(0)?,
+                    event_subtype: r.get(1)?,
+                    count:         r.get(2)?,
+                    last_ts:       r.get(3)?,
+                })
+            })
+            .map_err(|e| format!("loop_block_stats query: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    })
+}
+
 /// Query aggregated telemetry data for the quality dashboard.
 /// Returns event summaries grouped by type for the given period.
 #[tauri::command]
@@ -1987,6 +2054,9 @@ pub async fn get_confidence_distribution(
 //   fork_clear  — prune rows older than N days (housekeeping)
 
 /// Persist a newly launched fork as 'running'. Returns the row id.
+///
+/// Tier A #1 — `parent_task_id` defaults to '' (root fork). Pass the
+/// task_id of the spawning fork to build a tree.
 #[tauri::command]
 pub async fn fork_save(
     task_id: String,
@@ -1994,34 +2064,54 @@ pub async fn fork_save(
     session_id: String,
     model: String,
     instruction: String,
+    parent_task_id: Option<String>,
 ) -> Result<String, String> {
     let id = generate_id();
+    let parent = parent_task_id.unwrap_or_default();
     with_db(|conn| {
         conn.execute(
             "INSERT INTO fork_results
-             (id, task_id, tab_id, session_id, model, instruction, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running')",
-            rusqlite::params![&id, &task_id, &tab_id, &session_id, &model, &instruction],
+             (id, task_id, tab_id, session_id, model, instruction, status, parent_task_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7)",
+            rusqlite::params![&id, &task_id, &tab_id, &session_id, &model, &instruction, &parent],
         ).map_err(|e| format!("fork_save: {}", e))?;
         Ok(id.clone())
     })
 }
 
 /// Mark a fork as done or error. Stores result text or error message.
+///
+/// Tier A #1 — also accepts optional `tokens_in` / `tokens_out`; the cost
+/// is computed server-side via `calculate_cost(model, in, out)` so the
+/// per-vendor pricing table stays the single source of truth.
 #[tauri::command]
 pub async fn fork_update(
     task_id: String,
     status: String,   // 'done' | 'error'
     result: Option<String>,
     error_msg: Option<String>,
+    tokens_in: Option<i64>,
+    tokens_out: Option<i64>,
 ) -> Result<(), String> {
+    let t_in  = tokens_in.unwrap_or(0).max(0);
+    let t_out = tokens_out.unwrap_or(0).max(0);
     with_db(|conn| {
+        // Resolve the fork's model so calculate_cost picks the right tier.
+        let model: String = conn.query_row(
+            "SELECT model FROM fork_results WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![&task_id],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| String::new());
+        let cost = if t_in > 0 || t_out > 0 {
+            calculate_cost(&model, t_in.try_into().unwrap_or(0), t_out.try_into().unwrap_or(0))
+        } else { 0.0 };
         conn.execute(
             "UPDATE fork_results
              SET status = ?1, result = ?2, error_msg = ?3,
+                 tokens_in = ?4, tokens_out = ?5, cost_usd = ?6,
                  finished_at = strftime('%s','now')
-             WHERE task_id = ?4 AND status = 'running'",
-            rusqlite::params![&status, &result, &error_msg, &task_id],
+             WHERE task_id = ?7 AND status = 'running'",
+            rusqlite::params![&status, &result, &error_msg, t_in, t_out, cost, &task_id],
         ).map_err(|e| format!("fork_update: {}", e))?;
         Ok(())
     })
@@ -2033,7 +2123,8 @@ pub async fn fork_get(task_id: String) -> Result<Option<ForkResult>, String> {
     with_db(|conn| {
         let r = conn.query_row(
             "SELECT id, task_id, tab_id, session_id, model, instruction,
-                    status, result, error_msg, created_at, finished_at
+                    status, result, error_msg, created_at, finished_at,
+                    parent_task_id, tokens_in, tokens_out, cost_usd
              FROM fork_results WHERE task_id = ?1
              ORDER BY created_at DESC LIMIT 1",
             rusqlite::params![&task_id],
@@ -2049,6 +2140,10 @@ pub async fn fork_get(task_id: String) -> Result<Option<ForkResult>, String> {
                 error_msg:   row.get(8)?,
                 created_at:  row.get(9)?,
                 finished_at: row.get(10)?,
+                parent_task_id: row.get(11)?,
+                tokens_in:   row.get(12)?,
+                tokens_out:  row.get(13)?,
+                cost_usd:    row.get(14)?,
             }),
         ).ok();
         Ok(r)
@@ -2078,12 +2173,17 @@ pub async fn fork_list(
                 error_msg:   row.get(8)?,
                 created_at:  row.get(9)?,
                 finished_at: row.get(10)?,
+                parent_task_id: row.get(11)?,
+                tokens_in:   row.get(12)?,
+                tokens_out:  row.get(13)?,
+                cost_usd:    row.get(14)?,
             })
         }
         let rows: Vec<ForkResult> = if let Some(ref tid) = tab_id {
             let mut stmt = conn.prepare(
                 "SELECT id, task_id, tab_id, session_id, model, instruction,
-                        status, result, error_msg, created_at, finished_at
+                        status, result, error_msg, created_at, finished_at,
+                        parent_task_id, tokens_in, tokens_out, cost_usd
                  FROM fork_results WHERE tab_id = ?1
                  ORDER BY created_at DESC LIMIT ?2"
             ).map_err(|e| format!("fork_list prepare (tab): {}", e))?;
@@ -2094,7 +2194,8 @@ pub async fn fork_list(
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, task_id, tab_id, session_id, model, instruction,
-                        status, result, error_msg, created_at, finished_at
+                        status, result, error_msg, created_at, finished_at,
+                        parent_task_id, tokens_in, tokens_out, cost_usd
                  FROM fork_results
                  ORDER BY created_at DESC LIMIT ?1"
             ).map_err(|e| format!("fork_list prepare (all): {}", e))?;

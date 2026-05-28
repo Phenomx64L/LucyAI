@@ -6,6 +6,7 @@
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     import ChartBar from '@tabler/icons-svelte/icons/chart-bar';
     import { analyzeLogPatterns, levelColor, formatLevelSummary } from '$lib/log-analysis';
+    import LogTimelineView from '$lib/LogTimelineView.svelte';
     export let hosts = [];
     // svelte-ignore export_let_unused
     export let hostName = '';
@@ -24,9 +25,19 @@
     let logLinesEl     = null;
     let logTailCount   = 100;
 
-    $: filteredLog = logFilter
-        ? logLines.filter(l => l.toLowerCase().includes(logFilter.toLowerCase()))
-        : logLines;
+    // Filter accepts both substring AND regex literals (smart filter writes
+    // regex into `logFilter`). We compile once per filter change; if the
+    // input isn't a valid regex we degrade to substring matching.
+    $: filterRe = (() => {
+        if (!logFilter) return null;
+        try { return new RegExp(logFilter, 'i'); }
+        catch { return null; }
+    })();
+    $: filteredLog = !logFilter
+        ? logLines
+        : filterRe
+            ? logLines.filter(l => filterRe.test(l))
+            : logLines.filter(l => l.toLowerCase().includes(logFilter.toLowerCase()));
 
     $: logLevelClass = (line) => {
         const l = line.toLowerCase();
@@ -82,6 +93,9 @@
     });
 
     // ── Pattern Analysis (P0 Feature 2) ────────────────────────────────────
+    // Sprint B #4 — Multi-host log timeline overlay
+    let showTimeline = false;
+
     let showAnalysis = false;
     let analysisResult = null;
     let analysisLoading = false;
@@ -99,6 +113,60 @@
         }
         analysisLoading = false;
     }
+
+    // ── Tier A #2 — Smart LLM filter ───────────────────────────────────────
+    // The user types a natural-language description ("auth failures from
+    // external IPs", "errors mentioning Cassandra timeout"). Lucy returns a
+    // regex literal which we apply as the line filter. The regex stays
+    // visible in the input so the user can edit it manually after.
+    //
+    // We keep the system prompt deliberately narrow: ONLY return the regex
+    // body, no flags, no slashes, no commentary. Any deviation falls back
+    // to applying the raw user text as a substring filter so the feature
+    // never produces 0 results on bad LLM output.
+    let smartFilterQuery = '';
+    let smartFilterBusy  = false;
+
+    async function applySmartFilter() {
+        const q = smartFilterQuery.trim();
+        if (!q) return;
+        smartFilterBusy = true;
+        try {
+            const sample = logLines.slice(-30).join('\n').slice(-3000);
+            const prompt =
+                `User wants to filter log lines matching: "${q}"\n\n` +
+                `Sample of the actual log (last lines):\n---\n${sample}\n---\n\n` +
+                `Output ONLY a JavaScript regex pattern body (no slashes, no flags, no commentary, no markdown). ` +
+                `Use case-insensitive heuristics yourself (e.g. character classes like [Ee]) since we apply the regex without the /i flag. ` +
+                `If the request is too vague to translate to regex, output the most relevant literal substring instead.`;
+            const result = await invoke('ask_lucy', {
+                prompt, context: '',
+                userName: '', runbooksDir: null,
+                model: 'gemini-3.5-flash-lite',  // cheapest tier — this is a 1-line task
+                lang: 'es-MX', hostsJson: null, images: null,
+            });
+            const raw = String(result || '').trim();
+            // Strip common LLM noise: markdown fences, leading `/`, trailing `/i`, etc.
+            const cleaned = raw
+                .replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '')
+                .replace(/^\//, '').replace(/\/[gimsuy]*$/, '')
+                .split('\n')[0]
+                .trim();
+            // Sanity: try compiling. If it fails, fall back to substring filter.
+            try {
+                // eslint-disable-next-line no-new
+                new RegExp(cleaned);
+                logFilter = cleaned;
+            } catch {
+                logFilter = q;
+            }
+        } catch (e) {
+            // Backend failure → substring fallback so the user gets SOMETHING.
+            logFilter = q;
+        } finally {
+            smartFilterBusy = false;
+        }
+    }
 </script>
 
 <div class="view-wrap">
@@ -115,7 +183,22 @@
     </div>
   </div>
   <div class="log-toolbar">
-    <input class="minp" placeholder={isEN ? "Filter lines..." : "Filtrar líneas..."} bind:value={logFilter} style="flex:1;height:28px;padding:0 8px;font-size:12px;">
+    <input class="minp" placeholder={isEN ? "Filter (regex ok)..." : "Filtrar (regex válido)..."} bind:value={logFilter} style="flex:1;height:28px;padding:0 8px;font-size:12px;">
+    <!-- Tier A #2 — Smart LLM filter: free-text → regex via cheap model.
+         Falls back to substring if the model returns invalid regex. -->
+    <input class="minp"
+           placeholder={isEN ? "✨ Describe what to find…" : "✨ Describe qué buscar…"}
+           bind:value={smartFilterQuery}
+           on:keydown={(e) => { if (e.key === 'Enter' && smartFilterQuery.trim() && !smartFilterBusy) applySmartFilter(); }}
+           disabled={smartFilterBusy}
+           style="flex:1;height:28px;padding:0 8px;font-size:12px;background:rgba(96,165,250,0.06);"
+           title={isEN ? 'LLM-translate description to regex and apply' : 'LLM traduce tu descripción a regex y aplica'}>
+    <button class="view-btn" on:click={applySmartFilter}
+            disabled={!smartFilterQuery.trim() || smartFilterBusy}
+            style="font-size:11px;"
+            title={isEN ? 'Apply smart filter' : 'Aplicar filtro inteligente'}>
+        {smartFilterBusy ? '⟳' : '✨'}
+    </button>
     <select class="view-select" bind:value={logTailCount} style="width:110px;">
       <option value={50}>50 {isEN ? 'lines' : 'líneas'}</option>
       <option value={100}>100 {isEN ? 'lines' : 'líneas'}</option>
@@ -128,6 +211,12 @@
     <button class="view-btn" on:click={runAnalysis} disabled={analysisLoading || !logLines.length}
         style="display:flex;align-items:center;gap:4px;font-size:11px;" title={isEN ? 'Analyze patterns' : 'Analizar patrones'}>
         <ChartBar size={12} strokeWidth={2}/> {analysisLoading ? '...' : (isEN ? 'Analyze' : 'Analizar')}
+    </button>
+    <!-- Sprint B #4 — Multi-host log timeline. Fetches the same path from
+         several hosts in parallel and renders entries interleaved by ts. -->
+    <button class="view-btn" on:click={() => showTimeline = true}
+            style="font-size:11px;" title={isEN ? 'Fetch same log from multiple hosts and merge by timestamp' : 'Lee el mismo log de varios hosts y mergea por timestamp'}>
+        ⇄ {isEN ? 'Multi-host' : 'Multi-host'}
     </button>
     {#if showAnalysis}
     <button class="view-btn" on:click={() => showAnalysis = false} style="font-size:11px;">
@@ -223,6 +312,12 @@
   {/if}
   {#if analysisError}<div class="view-error" style="margin:0 16px 8px;"><AlertTriangle size={12} strokeWidth={2}/> {analysisError}</div>{/if}
 </div>
+
+<!-- Sprint B #4 — Multi-host log timeline overlay -->
+{#if showTimeline}
+  <LogTimelineView {hosts} {hostName} {isEN}
+                   on:close={() => showTimeline = false}/>
+{/if}
 
 <style>
     .minp{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--bdr2);color:white;padding:10px 12px;border-radius:7px;outline:none;font-family:inherit;font-size:13px;transition:border-color .2s;}

@@ -1,0 +1,1022 @@
+<!--
+  MemoryGraphView.svelte — Tier S #2 + Memory Graph 2.0 (sprint largo)
+
+  Interactive force-directed visualization of Lucy's long-term memory.
+  Reads from the `memory_graph` Tauri command (memory.rs) which returns
+  up to 250 nodes + 1500 edges from agent_memories.
+
+  Memory Graph 2.0 additions:
+    V1  — Opaque background (no more bleed-through of underlying UI)
+    V2  — Always-visible labels for connected nodes
+    V3  — Color nodes by detected community (palette of 8)
+    V5  — Search bar that fades non-matching nodes
+    V7  — Highlight neighbors on hover (rest dimmed)
+    V9  — Header stats bar (nodes · edges · clusters · density)
+    V11 — Bigger nodes (more legible)
+    V12 — "Open in browser" button that closes overlay + jumps to memoria
+    V14 — Runtime threshold sliders (tag / content / embedding)
+    +   — Tag pill filter row
+    +   — Legend always visible (with community count)
+
+  Backend additions consumed:
+    • community: i32       — Louvain-lite community assignment per node
+    • stats: {...}         — edges_by_kind, density, community_count, orphans
+    • top_tags: [(s,n)]    — top 12 tags for the filter pills
+
+  Why SVG + custom force simulation (no D3.js):
+    • D3 weighs ~70KB gzipped; we use ~200 lines of physics here
+    • Svelte 5 reactivity drives the redraw — no manual DOM diff cost
+    • At ≤250 nodes the O(n²) repulsion is < 4ms per tick on a desktop
+
+  Interactions:
+    • Drag node — lock its position (re-drag to release)
+    • Wheel — zoom in/out (cursor-anchored)
+    • Drag empty space — pan
+    • Click node — open detail panel
+    • Hover node — highlight its neighbors, dim the rest
+    • Type in search — fade non-matching nodes
+    • Click tag pill — filter to nodes carrying that tag
+    • Sliders — adjust tag/content/embedding thresholds in realtime
+    • ESC — close the overlay (or close detail panel if open)
+-->
+<script lang="ts">
+    import { onMount, onDestroy, createEventDispatcher, tick } from 'svelte';
+    import { invoke } from '@tauri-apps/api/core';
+
+    export let isEN: boolean = false;
+    const dispatch = createEventDispatcher<{
+        close: void;
+        openmemoria: { memoryId: number };
+    }>();
+
+    // ── Backend shape (mirror of MemoryGraph in memory.rs) ───────────────
+    interface MemoryNode {
+        id: number;
+        title: string;
+        importance: number;
+        access_count: number;
+        created_at: number;
+        tags: string[];
+        preview: string;
+        community: number;    // -1 = singleton
+    }
+    interface MemoryEdge {
+        source: number;
+        target: number;
+        kind: 'tag' | 'content' | 'embedding';
+        weight: number;
+    }
+    interface MemoryGraphStats {
+        edges_tag: number;
+        edges_content: number;
+        edges_embedding: number;
+        community_count: number;
+        density: number;
+        orphan_count: number;
+    }
+    interface MemoryGraph {
+        nodes: MemoryNode[];
+        edges: MemoryEdge[];
+        truncated_nodes: boolean;
+        truncated_edges: boolean;
+        total_memories: number;
+        stats: MemoryGraphStats;
+        top_tags: Array<[string, number]>;
+    }
+
+    // ── Internal simulation state ────────────────────────────────────────
+    interface SimNode extends MemoryNode {
+        x: number; y: number;
+        vx: number; vy: number;
+        pinned: boolean;
+        degree: number;
+    }
+
+    let graph: MemoryGraph | null = null;
+    let simNodes: SimNode[] = [];
+    let nodesById: Map<number, SimNode> = new Map();
+    /** id → Set of neighbor ids — precomputed once per load for fast hover */
+    let neighborsOf: Map<number, Set<number>> = new Map();
+    let loading = false;
+    let error = '';
+    let minImportance = 0;
+    let selectedNode: SimNode | null = null;
+    let hoveredNodeId: number | null = null;
+
+    // V5 — Search state
+    let searchQuery = '';
+    // Tag filter — when set, only nodes carrying this tag stay full opacity
+    let activeTagFilter: string | null = null;
+
+    // V14 — Threshold sliders (sent to backend, trigger refetch)
+    let tagThreshold = 0.30;
+    let contentThreshold = 0.25;
+    let embeddingThreshold = 0.65;
+    let useEmbeddings = true;
+
+    // ── Viewport ─────────────────────────────────────────────────────────
+    let viewW = 800, viewH = 600;
+    let zoom = 1.0;
+    let panX = 0, panY = 0;
+
+    let draggingNode: SimNode | null = null;
+    let draggingPan = false;
+    let lastPx = 0, lastPy = 0;
+
+    // ── Force parameters (calibrated) ────────────────────────────────────
+    const K_REPEL  = 1800;
+    const K_SPRING = 0.04;
+    const REST_LEN = 80;
+    const K_CENTER = 0.005;
+    const DAMPING  = 0.85;
+    const MAX_VEL  = 12;
+
+    let simRunning = false;
+    let rafId: number | null = null;
+    let ticksSinceLoad = 0;
+
+    // ── V3 — Community palette (8 categorical colors, color-blind friendly)
+    // Picked from the Okabe-Ito palette + tweaks for dark backgrounds.
+    const COMMUNITY_PALETTE = [
+        '#56b4e9',  // sky blue
+        '#e69f00',  // orange
+        '#009e73',  // bluish green
+        '#f0e442',  // yellow
+        '#d55e00',  // vermillion
+        '#cc79a7',  // reddish purple
+        '#0072b2',  // blue
+        '#bfbfbf',  // gray
+    ];
+    function communityColor(c: number): string {
+        if (c < 0) return '#5a6478'; // singleton
+        return COMMUNITY_PALETTE[c % COMMUNITY_PALETTE.length];
+    }
+
+    // ── Backend fetch ────────────────────────────────────────────────────
+    let _refetchTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleRefetch(): void {
+        // Debounce slider input — wait 300ms after the last drag before
+        // hitting the DB. Without this, dragging the slider triggers ~60
+        // refetches per second.
+        if (_refetchTimer) clearTimeout(_refetchTimer);
+        _refetchTimer = setTimeout(() => { loadGraph(); }, 300);
+    }
+
+    async function loadGraph(): Promise<void> {
+        loading = true;
+        error = '';
+        try {
+            const g = await invoke<MemoryGraph>('memory_graph', {
+                limit: 200,
+                minImportance,
+                tagThreshold,
+                contentThreshold,
+                embeddingThreshold,
+                useEmbeddings,
+            });
+            graph = g;
+            initSimulation(g);
+        } catch (e) {
+            error = String(e);
+            graph = null;
+        } finally {
+            loading = false;
+        }
+    }
+
+    function initSimulation(g: MemoryGraph): void {
+        stopSim();
+        // Pre-compute degree + neighbors for sizing and V7 hover-highlight.
+        const degree = new Map<number, number>();
+        const neighbors = new Map<number, Set<number>>();
+        for (const e of g.edges) {
+            degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+            degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+            if (!neighbors.has(e.source)) neighbors.set(e.source, new Set());
+            if (!neighbors.has(e.target)) neighbors.set(e.target, new Set());
+            neighbors.get(e.source)!.add(e.target);
+            neighbors.get(e.target)!.add(e.source);
+        }
+        neighborsOf = neighbors;
+
+        const cx = viewW / 2;
+        const cy = viewH / 2;
+        const R = Math.min(viewW, viewH) * 0.35;
+        simNodes = g.nodes.map((n, i) => {
+            // V3 — seed initial position by community: nodes of the same
+            // community cluster start near each other → faster convergence,
+            // visible clusters from frame 1.
+            const c = n.community < 0 ? i : n.community;
+            const angle = (c / Math.max(g.stats.community_count, 1)) * Math.PI * 2
+                        + (i % 7) * 0.3;
+            const r = R * (0.6 + 0.4 * Math.random());
+            return {
+                ...n,
+                x: cx + Math.cos(angle) * r,
+                y: cy + Math.sin(angle) * r,
+                vx: 0, vy: 0,
+                pinned: false,
+                degree: degree.get(n.id) ?? 0,
+            };
+        });
+        nodesById = new Map(simNodes.map((n) => [n.id, n]));
+        ticksSinceLoad = 0;
+        // Re-arm the auto-fit one-shot whenever the data reloads. Without
+        // this, refetch (changing thresholds) keeps stale viewport.
+        autoFitPending = true;
+        startSim();
+    }
+
+    /** When true, the next time `ticksSinceLoad` reaches AUTOFIT_AT we'll
+     *  auto-fit the viewport to the graph. Reset on every load.
+     *  AUTOFIT_AT = 60: enough ticks for the force sim to spread clusters
+     *  but BEFORE the user has had time to interact (drag/zoom). */
+    const AUTOFIT_AT = 60;
+    let autoFitPending = true;
+
+    function startSim(): void {
+        if (simRunning) return;
+        simRunning = true;
+        const tick = () => {
+            if (!simRunning) return;
+            stepSimulation();
+            ticksSinceLoad++;
+            // One-shot auto-fit once the layout has roughly settled.
+            // Skips if the user already manipulated zoom/pan (drag wakes
+            // the sim → we don't want to fight their viewport).
+            if (autoFitPending && ticksSinceLoad >= AUTOFIT_AT) {
+                fitToView();
+                autoFitPending = false;
+            }
+            if (ticksSinceLoad > 400) {
+                simRunning = false;
+                rafId = null;
+                return;
+            }
+            simNodes = simNodes;
+            rafId = requestAnimationFrame(tick);
+        };
+        rafId = requestAnimationFrame(tick);
+    }
+    function stopSim(): void {
+        simRunning = false;
+        if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+    }
+
+    function stepSimulation(): void {
+        if (!graph) return;
+        const n = simNodes.length;
+        if (n === 0) return;
+        // 1. Pairwise repulsion (O(n²) — fine at n ≤ 250)
+        for (let i = 0; i < n; i++) {
+            const a = simNodes[i];
+            for (let j = i + 1; j < n; j++) {
+                const b = simNodes[j];
+                let dx = b.x - a.x;
+                let dy = b.y - a.y;
+                let d2 = dx * dx + dy * dy;
+                if (d2 < 0.01) { d2 = 0.01; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
+                const d = Math.sqrt(d2);
+                const f = K_REPEL / d2;
+                const fx = (dx / d) * f;
+                const fy = (dy / d) * f;
+                if (!a.pinned) { a.vx -= fx; a.vy -= fy; }
+                if (!b.pinned) { b.vx += fx; b.vy += fy; }
+            }
+        }
+        // 2. Springs on edges (slightly stronger when same community)
+        for (const e of graph.edges) {
+            const a = nodesById.get(e.source);
+            const b = nodesById.get(e.target);
+            if (!a || !b) continue;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            const sameComm = a.community >= 0 && a.community === b.community;
+            const k = K_SPRING * (0.5 + e.weight) * (sameComm ? 1.4 : 1.0);
+            const f = k * (d - REST_LEN);
+            const fx = (dx / d) * f;
+            const fy = (dy / d) * f;
+            if (!a.pinned) { a.vx += fx; a.vy += fy; }
+            if (!b.pinned) { b.vx -= fx; b.vy -= fy; }
+        }
+        // 3. Center pull
+        // With very few nodes the repulsion dominates the weak default
+        // center pull and nodes drift off-screen. Scale K_CENTER up
+        // adaptively when n is small so a 5-node graph stays centered.
+        const cx = viewW / 2;
+        const cy = viewH / 2;
+        const centerScale = simNodes.length < 20 ? 4.0 : (simNodes.length < 60 ? 1.6 : 1.0);
+        const k = K_CENTER * centerScale;
+        for (const node of simNodes) {
+            if (node.pinned) continue;
+            node.vx += (cx - node.x) * k;
+            node.vy += (cy - node.y) * k;
+        }
+        // 4. Integrate + clamp + damp
+        for (const node of simNodes) {
+            if (node.pinned) { node.vx = 0; node.vy = 0; continue; }
+            const vmag = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+            if (vmag > MAX_VEL) {
+                node.vx = (node.vx / vmag) * MAX_VEL;
+                node.vy = (node.vy / vmag) * MAX_VEL;
+            }
+            node.x += node.vx;
+            node.y += node.vy;
+            node.vx *= DAMPING;
+            node.vy *= DAMPING;
+        }
+    }
+
+    // ── Pointer handlers ─────────────────────────────────────────────────
+    function screenToWorld(sx: number, sy: number, rect: DOMRect): { x: number; y: number } {
+        return {
+            x: (sx - rect.left) / zoom - panX,
+            y: (sy - rect.top)  / zoom - panY,
+        };
+    }
+    function onNodePointerDown(ev: PointerEvent, node: SimNode): void {
+        ev.stopPropagation();
+        (ev.target as Element)?.setPointerCapture?.(ev.pointerId);
+        draggingNode = node;
+        node.pinned = true;
+        ticksSinceLoad = 0;
+        startSim();
+    }
+    function onPointerMove(ev: PointerEvent): void {
+        if (draggingNode) {
+            const svgEl = ev.currentTarget as SVGElement;
+            const rect = svgEl.getBoundingClientRect();
+            const w = screenToWorld(ev.clientX, ev.clientY, rect);
+            draggingNode.x = w.x;
+            draggingNode.y = w.y;
+            simNodes = simNodes;
+        } else if (draggingPan) {
+            panX += (ev.clientX - lastPx) / zoom;
+            panY += (ev.clientY - lastPy) / zoom;
+            lastPx = ev.clientX;
+            lastPy = ev.clientY;
+        }
+    }
+    function onPointerUp(ev: PointerEvent): void {
+        if (draggingNode) {
+            (ev.target as Element)?.releasePointerCapture?.(ev.pointerId);
+            draggingNode = null;
+        }
+        draggingPan = false;
+    }
+    function onSvgPointerDown(_ev: PointerEvent): void {
+        draggingPan = true;
+        lastPx = _ev.clientX;
+        lastPy = _ev.clientY;
+    }
+    function onWheel(ev: WheelEvent): void {
+        ev.preventDefault();
+        const svgEl = ev.currentTarget as SVGElement;
+        const rect = svgEl.getBoundingClientRect();
+        const wxBefore = (ev.clientX - rect.left) / zoom - panX;
+        const wyBefore = (ev.clientY - rect.top)  / zoom - panY;
+        const factor = ev.deltaY < 0 ? 1.15 : 1 / 1.15;
+        zoom = Math.max(0.2, Math.min(4, zoom * factor));
+        const wxAfter = (ev.clientX - rect.left) / zoom - panX;
+        const wyAfter = (ev.clientY - rect.top)  / zoom - panY;
+        panX += (wxAfter - wxBefore);
+        panY += (wyAfter - wyBefore);
+    }
+    function onNodeClick(ev: MouseEvent, node: SimNode): void {
+        ev.stopPropagation();
+        selectedNode = node;
+    }
+    function closeDetail(): void { selectedNode = null; }
+
+    /**
+     * Auto-fit zoom + pan so every node is visible with comfortable padding.
+     * Without this, after the force sim runs, nodes often end up partially
+     * off-screen — especially small graphs where the center attraction is
+     * weak relative to repulsion. The user reported one edge going off the
+     * canvas — this prevents it.
+     *
+     * Padding: 60px on each side so labels at the edges aren't clipped.
+     * Zoom clamped to [0.5, 2.5] to avoid extremes that hurt readability.
+     */
+    function fitToView(): void {
+        if (simNodes.length === 0) return;
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const n of simNodes) {
+            if (n.x < minX) minX = n.x;
+            if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.y > maxY) maxY = n.y;
+        }
+        const PAD = 60;
+        const bboxW = Math.max(1, maxX - minX);
+        const bboxH = Math.max(1, maxY - minY);
+        const scaleX = (viewW - PAD * 2) / bboxW;
+        const scaleY = (viewH - PAD * 2) / bboxH;
+        // BUG FIX (May 2026): autofit used to allow zoom UP TO 2.5 — this
+        // magnified small graphs so nodes + labels grew proportionally and
+        // labels overlapped because the visual radius was now huge. The fix:
+        // never zoom past 1.0 (= "show at natural size"). Small graphs
+        // simply use the viewport; the user can wheel-in if they want detail.
+        const newZoom = Math.min(scaleX, scaleY, 1.0);
+        zoom = Math.max(0.3, newZoom);
+        // Center the bbox in the viewport. The transform is
+        // `translate(panX*zoom, panY*zoom) scale(zoom)` so we need:
+        //   bboxCenter * zoom + panOffset = viewCenter
+        // → panOffset (= panX * zoom) = viewCenter - bboxCenter * zoom
+        const bboxCx = (minX + maxX) / 2;
+        const bboxCy = (minY + maxY) / 2;
+        panX = (viewW / 2 - bboxCx * zoom) / zoom;
+        panY = (viewH / 2 - bboxCy * zoom) / zoom;
+    }
+
+    /** "Reset view" button — re-fits instead of returning to zoom=1/pan=0,
+     *  which is what the user actually wants ("show me everything"). */
+    function resetView(): void { fitToView(); }
+    function resetPins(): void {
+        for (const n of simNodes) n.pinned = false;
+        ticksSinceLoad = 0;
+        startSim();
+    }
+    function onKeyDown(ev: KeyboardEvent): void {
+        if (ev.key === 'Escape') {
+            if (selectedNode) closeDetail();
+            else dispatch('close');
+        }
+    }
+
+    // V12 — Open this memory in the Memorias tab and close the overlay.
+    function openInBrowser(node: SimNode): void {
+        dispatch('openmemoria', { memoryId: node.id });
+        dispatch('close');
+    }
+
+    // ── Reactive filters ─────────────────────────────────────────────────
+    $: searchQueryLower = searchQuery.trim().toLowerCase();
+    function nodeMatchesSearch(n: SimNode): boolean {
+        if (!searchQueryLower) return true;
+        if (n.title.toLowerCase().includes(searchQueryLower)) return true;
+        if (n.preview.toLowerCase().includes(searchQueryLower)) return true;
+        for (const t of n.tags) if (t.toLowerCase().includes(searchQueryLower)) return true;
+        return false;
+    }
+    function nodeMatchesTag(n: SimNode): boolean {
+        if (!activeTagFilter) return true;
+        const af = activeTagFilter.toLowerCase();
+        for (const t of n.tags) if (t.toLowerCase() === af) return true;
+        return false;
+    }
+
+    /** V7 — Opacity of a node given current hover/search/tag filters. */
+    function nodeOpacity(n: SimNode): number {
+        const matchesSearch = nodeMatchesSearch(n);
+        const matchesTag = nodeMatchesTag(n);
+        if (!matchesSearch || !matchesTag) return 0.12;
+        if (hoveredNodeId == null) return 1.0;
+        if (n.id === hoveredNodeId) return 1.0;
+        const nbrs = neighborsOf.get(hoveredNodeId);
+        if (nbrs && nbrs.has(n.id)) return 1.0;
+        return 0.2;
+    }
+    function edgeOpacity(e: MemoryEdge): number {
+        const aMatches = nodesById.get(e.source);
+        const bMatches = nodesById.get(e.target);
+        if (!aMatches || !bMatches) return 0;
+        if (!nodeMatchesSearch(aMatches) || !nodeMatchesSearch(bMatches)) return 0.05;
+        if (!nodeMatchesTag(aMatches) || !nodeMatchesTag(bMatches)) return 0.05;
+        if (hoveredNodeId == null) return 1.0;
+        if (e.source === hoveredNodeId || e.target === hoveredNodeId) return 1.0;
+        return 0.08;
+    }
+
+    // ── Visual mapping ───────────────────────────────────────────────────
+    // V11 — Bigger nodes: more weight on importance + degree.
+    function nodeRadius(n: SimNode): number {
+        const baseR = 6 + Math.min(n.importance, 10) * 1.0;
+        const degBonus = Math.min(n.degree * 0.8, 8);
+        return baseR + degBonus;
+    }
+    function nodeColor(n: SimNode): string {
+        if (n.pinned) return '#f59e0b';
+        if (selectedNode?.id === n.id) return '#10b981';
+        return communityColor(n.community);
+    }
+    function edgeStroke(e: MemoryEdge): string {
+        if (e.kind === 'tag')       return 'rgba(244,114,182,0.45)';
+        if (e.kind === 'embedding') return 'rgba(168,85,247,0.40)';
+        return 'rgba(96,165,250,0.30)'; // content
+    }
+
+    // V14 — Slider input is debounced so we only refetch once.
+    $: if (tagThreshold || contentThreshold || embeddingThreshold || useEmbeddings != null) {
+        // The condition is artificial — Svelte tracks deps. Always-true.
+        // We use scheduleRefetch directly to debounce.
+    }
+
+    /**
+     * Bug fix (May 2026): when two nodes are visually close, their labels
+     * overlap and become illegible. We hide the label of the LOWER-degree
+     * node when a higher-degree neighbor sits within ~80 userspace px.
+     * Hovered or selected nodes always keep their label regardless.
+     *
+     * Cheap: O(n) per node since we already have `nodesById`. Recomputed
+     * reactively only when sim or zoom changes.
+     */
+    function shouldShowLabel(n: SimNode): boolean {
+        // Always show for the actively-engaged node.
+        if (hoveredNodeId === n.id) return true;
+        if (selectedNode?.id === n.id) return true;
+        // Hide labels of isolated nodes unless zoomed in (they're often
+        // noise — auto-saved memories without context). The user can wheel-
+        // in to see them.
+        if (n.degree === 0 && zoom < 1.3) return false;
+        // Anti-collision: if a node within COLLISION_R has STRICTLY higher
+        // degree, hide this one's label. Ties: lower id wins (stable).
+        const COLLISION_R = 90; // userspace px
+        for (const other of simNodes) {
+            if (other.id === n.id) continue;
+            const dx = other.x - n.x;
+            const dy = other.y - n.y;
+            // Cheap squared-distance early-out.
+            if (dx * dx + dy * dy > COLLISION_R * COLLISION_R) continue;
+            if (other.degree > n.degree) return false;
+            if (other.degree === n.degree && other.id < n.id) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Counter-scale font size so labels stay approximately 11px on screen
+     * regardless of the user's wheel-zoom level. Without this, zooming in
+     * past 1.5x makes text gigantic and unreadable. The text element lives
+     * inside the scaled <g>, so we divide our target size by zoom.
+     */
+    $: labelFontSize = Math.max(7, Math.min(14, 11 / zoom));
+    /** Same idea for the y-offset above the node. */
+    $: labelYOffset = (size: number) => size + 6 / zoom;
+
+    function onTagPillClick(tag: string): void {
+        activeTagFilter = (activeTagFilter === tag) ? null : tag;
+    }
+
+    /** Programmatically focus the SVG so keyboard works without click. */
+    function focusCanvas(): void {
+        tick().then(() => {
+            const el = document.getElementById('mg-canvas') as SVGElement | null;
+            (el as unknown as HTMLElement | null)?.focus?.();
+        });
+    }
+
+    // ── Lifecycle ────────────────────────────────────────────────────────
+    onMount(() => {
+        window.addEventListener('keydown', onKeyDown);
+        viewW = Math.min(window.innerWidth - 80, 1400);
+        viewH = Math.min(window.innerHeight - 240, 900);
+        loadGraph().then(focusCanvas);
+    });
+    onDestroy(() => {
+        stopSim();
+        window.removeEventListener('keydown', onKeyDown);
+        if (_refetchTimer) clearTimeout(_refetchTimer);
+    });
+
+    // Re-fetch on importance filter change (immediate, no debounce — slider rarely moves)
+    let lastMinImp = minImportance;
+    $: if (minImportance !== lastMinImp) {
+        lastMinImp = minImportance;
+        loadGraph();
+    }
+</script>
+
+<div class="mg-overlay" role="dialog" aria-label="Memory graph">
+    <!-- ── Header ───────────────────────────────────────────────────────── -->
+    <div class="mg-header">
+        <div class="mg-title">
+            <span class="mg-glyph">◊</span>
+            <span>{isEN ? 'Memory Graph' : 'Grafo de Memoria'}</span>
+            {#if graph}
+                <span class="mg-count">
+                    {graph.nodes.length}{graph.truncated_nodes ? '/' + graph.total_memories : ''} {isEN ? 'nodes' : 'nodos'}
+                    · {graph.edges.length} {isEN ? 'edges' : 'aristas'}
+                    · {graph.stats.community_count} {isEN ? 'clusters' : 'clusters'}
+                    · {graph.stats.orphan_count} {isEN ? 'orphans' : 'huérfanas'}
+                </span>
+            {/if}
+        </div>
+        <div class="mg-actions">
+            <!-- V5 — Search bar -->
+            <input class="mg-search" type="search"
+                   bind:value={searchQuery}
+                   placeholder={isEN ? '⌕ Search title / tag / content…' : '⌕ Buscar título / tag / contenido…'}/>
+            <label class="mg-filter" title={isEN ? 'Minimum importance' : 'Importancia mínima'}>
+                <span>min⮬</span>
+                <input type="range" min="0" max="10" step="1" bind:value={minImportance}/>
+                <span class="mg-filter-val">{minImportance}</span>
+            </label>
+            <button class="mg-btn" on:click={resetView}>↺ {isEN ? 'view' : 'vista'}</button>
+            <button class="mg-btn" on:click={resetPins}>⤓ {isEN ? 'pins' : 'fijados'}</button>
+            <button class="mg-btn" on:click={loadGraph} disabled={loading}>↻</button>
+            <button class="mg-btn mg-close" on:click={() => dispatch('close')} title="Esc">✕</button>
+        </div>
+    </div>
+
+    <!-- ── Filter row: tag pills + threshold sliders ───────────────────── -->
+    {#if graph}
+    <div class="mg-filter-row">
+        <!-- Tag pills (top 12) -->
+        <div class="mg-tag-pills">
+            <span class="mg-tag-label">{isEN ? 'Tags:' : 'Tags:'}</span>
+            {#each graph.top_tags as [tag, count]}
+                <button class="mg-tag-pill"
+                        class:active={activeTagFilter === tag}
+                        on:click={() => onTagPillClick(tag)}>
+                    {tag} <span class="mg-tag-count">{count}</span>
+                </button>
+            {/each}
+            {#if activeTagFilter}
+                <button class="mg-tag-clear" on:click={() => activeTagFilter = null}
+                        title={isEN ? 'Clear tag filter' : 'Limpiar filtro de tag'}>✕</button>
+            {/if}
+        </div>
+        <!-- V14 — Threshold sliders -->
+        <details class="mg-thresholds">
+            <summary>⚙ {isEN ? 'thresholds' : 'umbrales'}</summary>
+            <div class="mg-thr-grid">
+                <label>
+                    <span class="mg-thr-lbl pink">tag</span>
+                    <input type="range" min="0.05" max="0.95" step="0.05"
+                           bind:value={tagThreshold}
+                           on:input={scheduleRefetch}/>
+                    <span class="mg-thr-val">{tagThreshold.toFixed(2)}</span>
+                </label>
+                <label>
+                    <span class="mg-thr-lbl blue">content</span>
+                    <input type="range" min="0.05" max="0.95" step="0.05"
+                           bind:value={contentThreshold}
+                           on:input={scheduleRefetch}/>
+                    <span class="mg-thr-val">{contentThreshold.toFixed(2)}</span>
+                </label>
+                <label>
+                    <span class="mg-thr-lbl purple">embedding</span>
+                    <input type="range" min="0.30" max="0.99" step="0.01"
+                           bind:value={embeddingThreshold}
+                           on:input={scheduleRefetch}
+                           disabled={!useEmbeddings}/>
+                    <span class="mg-thr-val">{embeddingThreshold.toFixed(2)}</span>
+                </label>
+                <label class="mg-thr-toggle">
+                    <input type="checkbox"
+                           bind:checked={useEmbeddings}
+                           on:change={scheduleRefetch}/>
+                    <span>{isEN ? 'Use embeddings' : 'Usar embeddings'}</span>
+                </label>
+            </div>
+        </details>
+    </div>
+    {/if}
+
+    <!-- ── Canvas ──────────────────────────────────────────────────────── -->
+    <div class="mg-canvas-wrap">
+        {#if loading && !graph}
+            <div class="mg-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+        {:else if error}
+            <div class="mg-empty mg-err">{error}</div>
+        {:else if graph && graph.nodes.length === 0}
+            <div class="mg-empty">
+                {isEN
+                    ? 'No memories yet. As Lucy learns, this graph populates.'
+                    : 'Sin memorias todavía. A medida que Lucy aprende, este grafo se llena.'}
+            </div>
+        {:else if graph && graph.edges.length === 0}
+            <div class="mg-empty mg-hint">
+                <div style="font-size:16px;margin-bottom:8px;">∅</div>
+                {isEN
+                    ? 'Your memories exist but none meet the similarity thresholds for connections. Lower the thresholds in ⚙ above (try tag 0.15 / content 0.15) to see edges form.'
+                    : 'Tus memorias existen pero ninguna alcanza los umbrales de similitud para conectarse. Baja los umbrales en ⚙ arriba (prueba tag 0.15 / content 0.15) para ver aristas.'}
+            </div>
+        {:else if graph}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <svg id="mg-canvas" width={viewW} height={viewH}
+                 role="application" tabindex="0"
+                 aria-label={isEN ? 'Memory graph — drag nodes / wheel zoom / type to search' : 'Grafo de memoria — arrastra nodos / rueda zoom / escribe para buscar'}
+                 on:pointerdown={onSvgPointerDown}
+                 on:pointermove={onPointerMove}
+                 on:pointerup={onPointerUp}
+                 on:wheel|preventDefault={onWheel}
+                 viewBox="0 0 {viewW} {viewH}"
+                 class:dragging={draggingPan || draggingNode !== null}
+                 style="touch-action:none;">
+                <g transform="translate({panX * zoom},{panY * zoom}) scale({zoom})">
+                    <!-- Edges first so they sit under nodes -->
+                    {#each graph.edges as edge (edge.source + '-' + edge.target)}
+                        {@const a = nodesById.get(edge.source)}
+                        {@const b = nodesById.get(edge.target)}
+                        {#if a && b}
+                            {@const op = edgeOpacity(edge)}
+                            <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                                  stroke={edgeStroke(edge)}
+                                  stroke-width={0.7 + edge.weight * 2.2}
+                                  opacity={op}/>
+                        {/if}
+                    {/each}
+                    <!-- Nodes -->
+                    {#each simNodes as node (node.id)}
+                        {@const op = nodeOpacity(node)}
+                        {@const r  = nodeRadius(node)}
+                        <g class="mg-node" class:pinned={node.pinned}
+                           role="button" tabindex="0"
+                           aria-label={node.title}
+                           opacity={op}
+                           on:pointerdown={(e) => onNodePointerDown(e, node)}
+                           on:click={(e) => onNodeClick(e, node)}
+                           on:mouseenter={() => hoveredNodeId = node.id}
+                           on:mouseleave={() => hoveredNodeId = null}
+                           on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectedNode = node; } }}>
+                            <circle cx={node.x} cy={node.y} r={r}
+                                    fill={nodeColor(node)}
+                                    stroke="rgba(255,255,255,0.55)"
+                                    stroke-width="0.9"/>
+                            <!-- V2 — Label with anti-collision + zoom-counter-scale.
+                                 Hidden when a denser neighbor is within ~90px to
+                                 avoid the overlap the user reported in
+                                 Memory Graph 2.0 first iteration. -->
+                            {#if shouldShowLabel(node)}
+                                <text x={node.x} y={node.y - labelYOffset(r)}
+                                      text-anchor="middle"
+                                      font-size={labelFontSize}
+                                      class="mg-node-label">{node.title.slice(0, 32)}</text>
+                            {/if}
+                        </g>
+                    {/each}
+                </g>
+            </svg>
+        {/if}
+
+        <!-- ── Detail panel ────────────────────────────────────────────── -->
+        {#if selectedNode}
+            <aside class="mg-detail">
+                <div class="mg-detail-hdr">
+                    <span class="mg-detail-title">{selectedNode.title}</span>
+                    <button class="mg-btn mg-close" on:click={closeDetail}>✕</button>
+                </div>
+                <div class="mg-detail-meta">
+                    <span title={isEN ? 'Importance' : 'Importancia'}>⮬ {selectedNode.importance}</span>
+                    <span title={isEN ? 'Access count' : 'Veces accedida'}>◎ {selectedNode.access_count}</span>
+                    <span title={isEN ? 'Connections' : 'Conexiones'}>⛓ {selectedNode.degree}</span>
+                    {#if selectedNode.community >= 0}
+                        <span class="mg-comm-chip"
+                              style="background:{communityColor(selectedNode.community)}33; color:{communityColor(selectedNode.community)};"
+                              title={isEN ? 'Cluster id' : 'Cluster'}>
+                            ◯ cluster {selectedNode.community}
+                        </span>
+                    {/if}
+                </div>
+                {#if selectedNode.tags.length}
+                    <div class="mg-detail-tags">
+                        {#each selectedNode.tags as tag}<span class="mg-tag">{tag}</span>{/each}
+                    </div>
+                {/if}
+                <div class="mg-detail-preview">{selectedNode.preview}</div>
+                <!-- V12 — Open in Memorias tab -->
+                <button class="mg-open-btn" on:click={() => selectedNode && openInBrowser(selectedNode)}>
+                    → {isEN ? 'Open in Memorias' : 'Abrir en Memorias'}
+                </button>
+            </aside>
+        {/if}
+
+        <!-- ── Legend ──────────────────────────────────────────────────── -->
+        {#if graph}
+        <div class="mg-legend">
+            <span><span class="lg-swatch lg-tag"></span> {isEN ? 'tag' : 'tag'} ({graph.stats.edges_tag})</span>
+            <span><span class="lg-swatch lg-content"></span> {isEN ? 'content' : 'contenido'} ({graph.stats.edges_content})</span>
+            <span><span class="lg-swatch lg-emb"></span> {isEN ? 'embedding' : 'embedding'} ({graph.stats.edges_embedding})</span>
+            <span><span class="lg-dot lg-pinned"></span> {isEN ? 'pinned' : 'fijado'}</span>
+            <span class="mg-density">
+                {isEN ? 'density' : 'densidad'}: {(graph.stats.density * 100).toFixed(2)}%
+            </span>
+        </div>
+        {/if}
+    </div>
+</div>
+
+<style>
+    /* V1 — Opaque background (was rgba(8,10,18,0.97) — bled through) */
+    .mg-overlay {
+        position: fixed; inset: 0;
+        background: #0a0d18;
+        backdrop-filter: blur(10px) saturate(140%);
+        -webkit-backdrop-filter: blur(10px) saturate(140%);
+        display: flex; flex-direction: column;
+        z-index: 9000;
+        font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+        color: var(--text-main, #cbd5e1);
+    }
+    .mg-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 16px;
+        background: rgba(15, 19, 31, 0.98);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        gap: 10px; flex-wrap: wrap;
+    }
+    .mg-title { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
+    .mg-glyph { color: var(--accent, #10b981); font-size: 16px; }
+    .mg-count { font-size: 10px; color: var(--text-muted, #94a3b8); font-weight: 400; letter-spacing: 0.3px; }
+    .mg-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    /* V5 — Search input */
+    .mg-search {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.10);
+        color: var(--text-main, #cbd5e1);
+        font: inherit; font-size: 11px;
+        padding: 4px 10px; border-radius: 5px;
+        width: 260px; outline: none;
+        transition: border-color .12s;
+    }
+    .mg-search:focus { border-color: var(--accent, #10b981); }
+    .mg-search::placeholder { color: var(--text-muted, #94a3b8); }
+
+    .mg-btn {
+        background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+        color: var(--text-muted, #94a3b8); font: inherit; font-size: 11px;
+        padding: 4px 10px; border-radius: 5px; cursor: pointer;
+        transition: background .12s, color .12s, border-color .12s;
+    }
+    .mg-btn:hover:not(:disabled) { background: rgba(255,255,255,0.07); color: var(--text-main, #cbd5e1); }
+    .mg-btn:disabled { opacity: 0.45; cursor: default; }
+    .mg-btn.mg-close:hover { background: rgba(239,68,68,0.15); color: #ef4444; border-color: rgba(239,68,68,0.3); }
+    .mg-filter {
+        display: inline-flex; align-items: center; gap: 6px; font-size: 10px;
+        color: var(--text-muted); background: rgba(255,255,255,0.03);
+        padding: 3px 8px; border-radius: 5px;
+    }
+    .mg-filter input[type="range"] { width: 80px; }
+    .mg-filter-val { color: var(--accent, #10b981); font-weight: 600; min-width: 12px; }
+
+    /* Filter row (tags + threshold sliders) */
+    .mg-filter-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 6px 16px;
+        background: rgba(15, 19, 31, 0.94);
+        border-bottom: 1px solid rgba(255,255,255,0.04);
+        flex-wrap: wrap;
+    }
+    .mg-tag-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
+    .mg-tag-label { font-size: 10px; color: var(--text-muted); letter-spacing: 0.3px; }
+    .mg-tag-pill {
+        background: rgba(244,114,182,0.08); border: 1px solid rgba(244,114,182,0.18);
+        color: #f472b6; font: inherit; font-size: 10px;
+        padding: 2px 8px; border-radius: 10px; cursor: pointer;
+        transition: background .12s, border-color .12s;
+    }
+    .mg-tag-pill:hover { background: rgba(244,114,182,0.18); }
+    .mg-tag-pill.active {
+        background: rgba(244,114,182,0.30); border-color: rgba(244,114,182,0.55);
+        color: #fff;
+    }
+    .mg-tag-count { color: #f472b6; opacity: 0.7; margin-left: 3px; }
+    .mg-tag-pill.active .mg-tag-count { color: #fff; }
+    .mg-tag-clear {
+        background: rgba(239,68,68,0.10); border: 1px solid rgba(239,68,68,0.20);
+        color: #ef4444; font: inherit; font-size: 9px;
+        padding: 2px 6px; border-radius: 8px; cursor: pointer;
+    }
+
+    /* Threshold dropdown — anchored to the right edge of its parent so it
+       never bleeds past the viewport (bug reported when the page was
+       narrow + the details menu opened naturally at the natural position). */
+    .mg-thresholds {
+        font-size: 10px; color: var(--text-muted);
+        position: relative;
+    }
+    .mg-thresholds summary {
+        cursor: pointer; padding: 3px 8px;
+        background: rgba(255,255,255,0.04); border-radius: 5px;
+        user-select: none;
+        list-style: none;          /* hide native disclosure triangle */
+    }
+    .mg-thresholds summary::-webkit-details-marker { display: none; }
+    .mg-thresholds summary:hover { background: rgba(255,255,255,0.06); }
+    .mg-thresholds[open] summary { background: rgba(16,185,129,0.10); color: var(--accent); }
+    .mg-thr-grid {
+        /* Single column: each slider gets its own row → labels never collide
+           with values from the next column. The 2-col grid was visually
+           cramped and confusing — clearer to stack. */
+        display: flex; flex-direction: column;
+        gap: 10px; padding: 12px 14px;
+        background: rgba(20, 24, 36, 0.98);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px;
+        box-shadow: 0 8px 32px -8px rgba(0,0,0,0.55);
+        /* Anchor to the right edge of the parent so it grows leftward and
+           never crosses the viewport boundary. top:100%+6px places it just
+           below the summary chip. */
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 50;
+        width: 280px;
+        max-width: calc(100vw - 32px);
+    }
+    .mg-thr-grid label {
+        display: grid;
+        grid-template-columns: 80px 1fr 38px;  /* label · slider · value */
+        align-items: center; gap: 10px;
+        font-size: 10px; white-space: nowrap;
+    }
+    .mg-thr-grid input[type="range"] { width: 100%; min-width: 0; }
+    .mg-thr-grid .mg-thr-toggle {
+        grid-template-columns: 18px 1fr; /* checkbox · label */
+        padding-top: 6px;
+        border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .mg-thr-lbl {
+        display: inline-block; min-width: 60px; padding: 1px 6px; border-radius: 4px;
+        font-weight: 600; text-align: center;
+    }
+    .mg-thr-lbl.pink   { background: rgba(244,114,182,0.18); color: #f472b6; }
+    .mg-thr-lbl.blue   { background: rgba(96,165,250,0.18); color: #60a5fa; }
+    .mg-thr-lbl.purple { background: rgba(168,85,247,0.18); color: #a855f7; }
+    .mg-thr-val { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 32px; text-align: right; }
+    .mg-thr-toggle { grid-column: 1 / -1; gap: 8px; }
+
+    .mg-canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+    svg { display: block; cursor: grab; outline: none; }
+    svg.dragging { cursor: grabbing; }
+    .mg-node { cursor: pointer; transition: opacity .15s; }
+    .mg-node:hover circle { stroke: #fff; stroke-width: 1.6; }
+    /* Font-size is set inline per-node so the value reflects current zoom
+       (counter-scaled to remain ~11px on screen regardless of zoom level). */
+    .mg-node-label {
+        font-family: var(--font-mono);
+        fill: rgba(220,228,240,0.92);
+        user-select: none;
+        pointer-events: none;
+        /* Tiny dark stroke makes labels readable over edges + lighter nodes */
+        paint-order: stroke fill;
+        stroke: rgba(10,13,24,0.85);
+        stroke-width: 2.5;
+    }
+    .mg-node.pinned .mg-node-label { fill: #f59e0b; }
+
+    .mg-empty {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        font-size: 12px; color: var(--text-muted); padding: 20px;
+        text-align: center;
+    }
+    .mg-empty.mg-hint { max-width: 420px; margin: auto; line-height: 1.6; }
+    .mg-err { color: #ef4444; }
+
+    .mg-detail {
+        position: absolute; top: 12px; right: 12px;
+        width: 340px; max-height: calc(100vh - 140px);
+        overflow-y: auto;
+        background: rgba(20, 24, 36, 0.98);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 8px; padding: 12px 14px;
+        font-size: 11px; line-height: 1.5;
+        box-shadow: 0 8px 32px -8px rgba(0,0,0,0.6);
+    }
+    .mg-detail-hdr { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+    .mg-detail-title { font-size: 12px; font-weight: 600; color: var(--accent); }
+    .mg-detail-meta { display: flex; gap: 12px; font-size: 10px; color: var(--text-muted); margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+    .mg-comm-chip { font-size: 9px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+    .mg-detail-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .mg-tag {
+        font-size: 9px; padding: 1px 6px; border-radius: 8px;
+        background: rgba(244,114,182,0.12); color: #f472b6;
+    }
+    .mg-detail-preview {
+        font-family: var(--font-mono); font-size: 11px;
+        color: var(--text-main); white-space: pre-wrap; word-break: break-word;
+        max-height: 240px; overflow-y: auto;
+    }
+    /* V12 — Open in Memorias button */
+    .mg-open-btn {
+        margin-top: 10px; width: 100%;
+        background: rgba(16,185,129,0.15);
+        border: 1px solid rgba(16,185,129,0.30);
+        color: var(--accent, #10b981); font: inherit; font-size: 11px;
+        padding: 5px 10px; border-radius: 5px; cursor: pointer;
+        transition: background .12s;
+    }
+    .mg-open-btn:hover { background: rgba(16,185,129,0.25); }
+
+    .mg-legend {
+        position: absolute; bottom: 12px; left: 12px;
+        display: flex; gap: 14px; font-size: 10px; color: var(--text-muted);
+        background: rgba(20, 24, 36, 0.92);
+        padding: 6px 12px; border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.06);
+        align-items: center; flex-wrap: wrap;
+        max-width: calc(100vw - 380px);
+    }
+    .lg-swatch { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 4px; }
+    .lg-tag    { background: rgba(244,114,182,0.6); }
+    .lg-content{ background: rgba(96,165,250,0.6); }
+    .lg-emb    { background: rgba(168,85,247,0.6); }
+    .lg-dot    { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
+    .lg-pinned { background: #f59e0b; }
+    .mg-density { color: var(--accent, #10b981); font-weight: 600; }
+</style>

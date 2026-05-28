@@ -121,6 +121,16 @@ pub struct ForkResult {
     pub error_msg:   Option<String>,
     pub created_at:  i64,
     pub finished_at: Option<i64>,
+    /// Tier A #1 — task_id of the fork that spawned this one. '' = root.
+    #[serde(default)]
+    pub parent_task_id: String,
+    /// Tier A #1 — token & cost ledger (only meaningful for status='done').
+    #[serde(default)]
+    pub tokens_in:  i64,
+    #[serde(default)]
+    pub tokens_out: i64,
+    #[serde(default)]
+    pub cost_usd:   f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -344,6 +354,118 @@ CREATE TABLE IF NOT EXISTS fork_results (
 CREATE INDEX IF NOT EXISTS idx_fork_tab     ON fork_results(tab_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fork_status  ON fork_results(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_fork_task_id ON fork_results(task_id);
+
+-- ── Replay Deterministic Mode (Tier S #1) ──────────────────────────────
+-- Snapshot of a single LLM turn so it can be re-run later byte-for-byte.
+-- Every field needed to reproduce the EXACT call is captured:
+--   • model + effort suffix
+--   • full system_prompt (the composable identity + rules block)
+--   • the user_prompt verbatim
+--   • the context_block that was injected (memories + working dir + history)
+--   • images (b64 JSON array) if any
+--   • original response + tokens + latency for comparison
+--
+-- Why store full text instead of references: the underlying memories /
+-- working dir / history MUTATE over time. A reference would replay against
+-- *today's* context, not the original. The whole point of replay is to ask
+-- "given this EXACT input back then, what does the model say NOW?".
+--
+-- Storage cost: ~5-30KB per snapshot. At 100 snapshots per day that's ~3MB
+-- per day, ~1GB per year — acceptable for a local SQLite DB. We add a TTL
+-- prune command (replay_clear) for housekeeping.
+CREATE TABLE IF NOT EXISTS replay_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    label           TEXT    NOT NULL DEFAULT '',
+    task_id         TEXT    NOT NULL DEFAULT '',
+    tab_id          TEXT    NOT NULL DEFAULT '',
+    model           TEXT    NOT NULL,
+    effort          TEXT    NOT NULL DEFAULT '',
+    system_prompt   TEXT    NOT NULL DEFAULT '',
+    user_prompt     TEXT    NOT NULL,
+    context_block   TEXT    NOT NULL DEFAULT '',
+    images_b64      TEXT    NOT NULL DEFAULT '[]',   -- JSON array
+    original_response TEXT  NOT NULL DEFAULT '',
+    original_tokens_in  INTEGER NOT NULL DEFAULT 0,
+    original_tokens_out INTEGER NOT NULL DEFAULT 0,
+    original_latency_ms INTEGER NOT NULL DEFAULT 0,
+    temperature     REAL    NOT NULL DEFAULT 0.0,
+    seed            INTEGER NULL,                    -- only OpenAI/Gemini/Ollama
+    replays_run     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_replay_created ON replay_snapshots(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_replay_label   ON replay_snapshots(label);
+CREATE INDEX IF NOT EXISTS idx_replay_tab     ON replay_snapshots(tab_id, created_at DESC);
+
+-- ── NexShell Session Recording (Tier S #3) ────────────────────────────
+-- Persistent timeline of every command + output of a remote shell session.
+-- Two-table split:
+--   • shell_recordings        — one row per recording (the "tape")
+--   • shell_recording_events  — many rows per recording (cmd/out/err/exit)
+--
+-- Why split: a single shell session can emit thousands of chunks. Storing
+-- each chunk as a separate row keeps writes cheap (no read-modify-write
+-- on a giant blob) and lets the player paginate by time range during
+-- playback instead of loading the entire tape into memory.
+--
+-- t_ms = milliseconds since recording start, NOT wall-clock. The recording
+-- is replayable independently of when it was made — useful for sharing or
+-- for replaying at a different speed.
+--
+-- Events are append-only. Once a recording is finished (ended_at set), the
+-- tape is immutable except for delete.
+
+CREATE TABLE IF NOT EXISTS shell_recordings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT    NOT NULL,
+    host_id     TEXT    NOT NULL DEFAULT '',
+    host_name   TEXT    NOT NULL DEFAULT '',
+    host_type   TEXT    NOT NULL DEFAULT '',   -- 'windows' | 'linux' | 'rdp'
+    title       TEXT    NOT NULL DEFAULT '',
+    started_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    ended_at    INTEGER NULL,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    byte_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_shellrec_host    ON shell_recordings(host_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shellrec_session ON shell_recordings(session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shellrec_started ON shell_recordings(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS shell_recording_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id  INTEGER NOT NULL,
+    t_ms          INTEGER NOT NULL,            -- ms since recording started
+    kind          TEXT    NOT NULL,            -- 'cmd' | 'out' | 'err' | 'meta' | 'exit'
+    data          TEXT    NOT NULL DEFAULT '',
+    FOREIGN KEY (recording_id) REFERENCES shell_recordings(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_shellrecev_rid_t ON shell_recording_events(recording_id, t_ms);
+
+-- ── Inventory Drift Detection (Sprint B #2) ────────────────────────────
+-- Stores a per-host "baseline" snapshot taken at a known-good moment.
+-- Future scans diff against this baseline to surface drift: software
+-- installed/removed, services changed, ports opened, scheduled tasks
+-- added, etc.
+--
+-- Why a single row per host (not history): drift is "since the baseline
+-- you trusted". A growing snapshot history would just become noise — if
+-- you want point-in-time comparisons, you already have state_snapshots
+-- for system-level drift. This table is specifically for inventory diff
+-- against the operator-chosen reference.
+--
+-- snapshot_json shape mirrors the InventoryView snapshot: { ports[],
+-- services[], software[], certs[], scheduled[] }. Stored as TEXT JSON
+-- because the structure evolves over time and rigid columns would mean
+-- ALTER TABLE on every Inventory schema bump.
+
+CREATE TABLE IF NOT EXISTS inventory_baselines (
+    host_id        TEXT    PRIMARY KEY,
+    label          TEXT    NOT NULL DEFAULT '',
+    snapshot_json  TEXT    NOT NULL,
+    created_at     INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at     INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_inv_baseline_updated ON inventory_baselines(updated_at DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS conversation_turns_fts
     USING fts5(content, tab_title, role, content='conversation_turns', content_rowid='id');
@@ -643,12 +765,15 @@ fn model_prices(model: &str) -> (f64, f64) {
 }
 
 // Legacy constants kept for backward compatibility with any external callers.
-pub const ANTHROPIC_INPUT_PRICE_PER_1K: f64 = 0.003;
-pub const ANTHROPIC_OUTPUT_PRICE_PER_1K: f64 = 0.015;
-pub const OPENAI_GPT4_INPUT_PRICE_PER_1K: f64 = 0.005;
-pub const OPENAI_GPT4_OUTPUT_PRICE_PER_1K: f64 = 0.020;
-pub const GOOGLE_GEMINI_INPUT_PRICE_PER_1K: f64 = 0.00030;
-pub const GOOGLE_GEMINI_OUTPUT_PRICE_PER_1K: f64 = 0.0025;
+// `#[allow(dead_code)]` because nothing in-tree references them — they exist
+// only so an external consumer (e.g. a future dashboard plugin) could read the
+// rough per-vendor mid-tier price without going through `model_prices()`.
+#[allow(dead_code)] pub const ANTHROPIC_INPUT_PRICE_PER_1K: f64 = 0.003;
+#[allow(dead_code)] pub const ANTHROPIC_OUTPUT_PRICE_PER_1K: f64 = 0.015;
+#[allow(dead_code)] pub const OPENAI_GPT4_INPUT_PRICE_PER_1K: f64 = 0.005;
+#[allow(dead_code)] pub const OPENAI_GPT4_OUTPUT_PRICE_PER_1K: f64 = 0.020;
+#[allow(dead_code)] pub const GOOGLE_GEMINI_INPUT_PRICE_PER_1K: f64 = 0.00030;
+#[allow(dead_code)] pub const GOOGLE_GEMINI_OUTPUT_PRICE_PER_1K: f64 = 0.0025;
 
 /// Calculate token cost based on model and token counts.
 /// Uses the per-model table; falls back to a mid-tier estimate for unknown ids.

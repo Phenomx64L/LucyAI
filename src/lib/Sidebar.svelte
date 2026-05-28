@@ -36,6 +36,8 @@
 
     import FilePdf from '@tabler/icons-svelte/icons/file-type-pdf';
     import { runbooks } from '$lib/stores';
+    import { safeGetLS, safeSetLSString } from '$lib/safe-ls';
+    import ActivityFeedWidget from '$lib/ActivityFeedWidget.svelte';
 
     // ── Props ────────────────────────────────────────────────────────────────
     export let activeView: string = 'terminal';
@@ -52,6 +54,21 @@
     export let showForksMonitor: boolean = false;
     export let showPdfPanel: boolean = false;
     export let ICON_MAP: Record<string, any> = {};
+
+    // ── UI-2 (Sprint 1) — Sidebar section collapse state ─────────────────────
+    // Sistema / Runbooks / Acciones directas are now collapsible (Registros
+    // already was). Persisted per-section to localStorage so the user's
+    // preferred layout survives reload. Default to expanded for discoverability.
+    // When sidebarCollapsed === true (sidebar collapsed to icons-only), these
+    // booleans are ignored — every section renders as a single column of icons.
+    let sistemaOpen: boolean    = safeGetLS('lucy_sb_sistema_open', '1') !== '0';
+    let runbooksOpen: boolean   = safeGetLS('lucy_sb_runbooks_open', '1') !== '0';
+    let accionesOpen: boolean   = safeGetLS('lucy_sb_acciones_open', '1') !== '0';
+    function toggleSection(name: 'sistema' | 'runbooks' | 'acciones') {
+        if (name === 'sistema')  { sistemaOpen  = !sistemaOpen;  safeSetLSString('lucy_sb_sistema_open',  sistemaOpen  ? '1' : '0'); }
+        if (name === 'runbooks') { runbooksOpen = !runbooksOpen; safeSetLSString('lucy_sb_runbooks_open', runbooksOpen ? '1' : '0'); }
+        if (name === 'acciones') { accionesOpen = !accionesOpen; safeSetLSString('lucy_sb_acciones_open', accionesOpen ? '1' : '0'); }
+    }
 
     const dispatch = createEventDispatcher<{
         setview: { view: string };
@@ -85,8 +102,19 @@
         {#if !sidebarCollapsed}<span class="sb-togtxt">{isEN ? 'Collapse' : 'Colapsar'}</span>{/if}
     </button>
 
-    <!-- ── Sistema ── -->
-    <div class="sb-lbl">Sistema</div>
+    <!-- ── Sistema (collapsible — Sprint 1 UI-2) ── -->
+    <div class="sb-lbl sb-accordion-hdr" role="button" tabindex="0"
+         on:click={() => toggleSection('sistema')}
+         on:keydown={(e) => e.key === 'Enter' && toggleSection('sistema')}>
+        {#if !sidebarCollapsed}
+            <span>{isEN ? 'System' : 'Sistema'}</span>
+            <span class="sb-accordion-arrow" class:open={sistemaOpen}>{sistemaOpen ? '▾' : '▸'}</span>
+        {:else}
+            <span style="font-size:10px;">≡</span>
+        {/if}
+    </div>
+    {#if sistemaOpen || sidebarCollapsed}
+    <div class="sb-accordion-body">
     <div class="sb-it" class:act={activeView==='dashboard'} role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'dashboard' })} on:keydown
          title="Dashboard — métricas del sistema">
@@ -141,17 +169,32 @@
          title={isEN ? 'Self-Diagnostics — unified health checks' : 'Auto-Diagnóstico — chequeos de salud unificados'}>
         <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{isEN ? 'Diagnostics' : 'Diagnóstico'}</span>
     </div>
+    </div>
+    {/if}
     <div class="sb-div"></div>
 
-    <!-- ── Runbooks ── -->
-    <div class="sb-lbl" style="display:flex;justify-content:space-between;align-items:center;padding-right:14px;">
-        {#if !sidebarCollapsed}<span>RUNBOOKS</span>{/if}
+    <!-- ── Runbooks (collapsible) ── -->
+    <div class="sb-lbl sb-accordion-hdr" style="padding-right:14px;"
+         role="button" tabindex="0">
         {#if !sidebarCollapsed}
-        <button on:click={() => dispatch('openmodal', { modal: 'newrunbook' })}
-                style="background:none;border:none;color:var(--acc);cursor:pointer;font-size:15px;font-weight:bold;line-height:1;padding:0 5px;"
-                title={isEN ? 'New runbook' : 'Nuevo runbook'}>+</button>
+            <!-- Clicking the label toggles; clicking + button opens the modal -->
+            <span style="flex:1;cursor:pointer;"
+                  on:click={() => toggleSection('runbooks')}
+                  on:keydown={(e) => e.key === 'Enter' && toggleSection('runbooks')}
+                  role="button" tabindex="0">RUNBOOKS</span>
+            <span class="sb-accordion-arrow" class:open={runbooksOpen}
+                  on:click={() => toggleSection('runbooks')}
+                  on:keydown
+                  role="button" tabindex="0">{runbooksOpen ? '▾' : '▸'}</span>
+            <button on:click|stopPropagation={() => dispatch('openmodal', { modal: 'newrunbook' })}
+                    style="background:none;border:none;color:var(--acc);cursor:pointer;font-size:15px;font-weight:bold;line-height:1;padding:0 5px;"
+                    title={isEN ? 'New runbook' : 'Nuevo runbook'}>+</button>
+        {:else}
+            <span style="font-size:10px;">≡</span>
         {/if}
     </div>
+    {#if runbooksOpen || sidebarCollapsed}
+    <div class="sb-accordion-body">
     {#if !$runbooks.length && !sidebarCollapsed}
         <div style="padding:4px 14px 8px;font-size:11px;color:#334155;font-style:italic;">{isEN ? 'No runbooks' : 'Sin runbooks'}</div>
     {/if}
@@ -172,21 +215,33 @@
         {/if}
     </div>
     {/each}
+    </div>
+    {/if}
 
     <div class="sb-div"></div>
 
-    <!-- ── Acciones directas ── -->
-    <div class="sb-lbl" style="display:flex;justify-content:space-between;align-items:center;padding-right:14px;">
+    <!-- ── Acciones directas (collapsible) ── -->
+    <div class="sb-lbl sb-accordion-hdr" style="padding-right:14px;">
         {#if !sidebarCollapsed}
-            <div>
+            <span style="flex:1;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"
+                  on:click={() => toggleSection('acciones')}
+                  on:keydown={(e) => e.key === 'Enter' && toggleSection('acciones')}
+                  role="button" tabindex="0">
                 <span>{isEN ? 'Direct actions' : 'Acciones directas'}</span>
                 <span class="sb-noai-badge" title={isEN ? 'Execute PowerShell directly, no AI' : 'Ejecutan PowerShell directamente, sin IA'}>{isEN ? 'NO AI' : 'SIN IA'}</span>
-            </div>
-            <button on:click={() => dispatch('openmodal', { modal: 'newaction' })}
+            </span>
+            <span class="sb-accordion-arrow" class:open={accionesOpen}
+                  on:click={() => toggleSection('acciones')}
+                  on:keydown role="button" tabindex="0">{accionesOpen ? '▾' : '▸'}</span>
+            <button on:click|stopPropagation={() => dispatch('openmodal', { modal: 'newaction' })}
                     style="background:none;border:none;color:var(--acc);cursor:pointer;font-size:16px;font-weight:bold;line-height:1;padding:0 5px;"
                     title={isEN ? 'Add direct action' : 'Añadir acción directa'}>+</button>
+        {:else}
+            <span style="font-size:10px;">≡</span>
         {/if}
     </div>
+    {#if accionesOpen || sidebarCollapsed}
+    <div class="sb-accordion-body">
 
     {#each quickActions as accion, i}
     <div class="sb-it sb-action-item" role="button" tabindex="0"
@@ -208,6 +263,8 @@
         {/if}
     </div>
     {/each}
+    </div>
+    {/if}
 
     <div class="sb-div" style="margin-top:auto;"></div>
 
@@ -224,6 +281,11 @@
     </div>
     {#if registrosOpen || sidebarCollapsed}
     <div class="sb-accordion-body">
+        <!-- Activity Feed (24h) — vive aquí porque su naturaleza es
+             registro/histórico, no acción. Antes estaba sobre Runbooks y
+             desplazaba Memoria/Capacidad/Diagnóstico fuera del viewport. -->
+        <ActivityFeedWidget {isEN} {sidebarCollapsed}
+            on:navigate={(e) => dispatch('setview', { view: e.detail.view })} />
         <div class="sb-it" role="button" tabindex="0"
              on:click={() => dispatch('memoriaabierta')} on:keydown
              title={isEN ? 'Custom commands learned by Lucy' : 'Comandos aprendidos por Lucy'}>
@@ -257,11 +319,18 @@
          title={isEN ? 'Manage permission rules' : 'Gestionar reglas de permisos'}>
         <span class="sb-ico"><ShieldCheck size={18}/></span><span class="sb-txt">{isEN ? 'Permissions' : 'Permisos'}</span>
     </div>
+    <!-- Skills module disabled — never reached production-ready behaviour and
+         duplicates Runbooks functionality. Hidden from the sidebar pending a
+         decision: rebuild on top of MCP servers, or remove entirely (Sprint 6+).
+         The modal handler stays wired in case we want to re-enable quickly. -->
+    <!--
     <div class="sb-it" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'skills' })} on:keydown
          title={isEN ? 'Manage skills' : 'Gestionar skills y runbooks'}>
         <span class="sb-ico"><Zap size={18}/></span><span class="sb-txt">{isEN ? 'Skills' : 'Skills'}</span>
     </div>
+    -->
+    {#if false}<Zap size={1}/>{/if}
     <div class="sb-it" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'principles' })} on:keydown
          title={isEN ? 'Behavioral principles' : 'Principios — reglas que Lucy sigue'}>

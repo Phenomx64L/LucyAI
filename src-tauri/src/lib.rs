@@ -5,7 +5,7 @@ mod utils;
 mod commands;
 mod guardrails;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry, activity_feed, replay, shell_recording, cve_match, db_backup, support_bundle, inventory_drift, dashboard_integrations, hash_chain};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -445,6 +445,7 @@ pub fn run() {
             guardrails::download_prompt_guard_model,
             // AI
             ai::ask_lucy,
+            ai::get_cache_stats,
             commands::mcp::call_mcp_tool,
             commands::mcp::discover_mcp_tools,
             ai::ask_lucy_stream,
@@ -476,6 +477,9 @@ pub fn run() {
             ui::pick_and_read_file,
             ui::pick_multiple_files,
             ui::pick_file_path,
+            ui::pick_save_path,
+            ui::pick_folder_path,
+            ui::pick_file_with_filter,
             ui::pick_pdf_path,
             ui::save_temp_pdf,
             ui::pick_directory,
@@ -483,6 +487,8 @@ pub fn run() {
             // Sistema local
             system::get_system_health,
             system::get_system_health_json,
+            system::get_tavily_api_key_status,
+            system::set_tavily_api_key,
             // Hosts remotos
             hosts::execute_remote_windows,
             hosts::get_remote_health_windows,
@@ -507,6 +513,7 @@ pub fn run() {
             local::read_file_lines,
             local::write_file_content,
             local::list_directory,
+            local::path_exists,
             local::search_files,
             local::edit_file,
             local::analyze_code,
@@ -593,6 +600,7 @@ pub fn run() {
             // Quality Telemetry (opus-4-7 Tier 2.A)
             metrics::log_task_event,
             metrics::get_task_telemetry,
+            metrics::loop_block_stats,
             metrics::get_confidence_distribution,
             // Provider Management (Multi-LLM Support)
             providers::save_credential,
@@ -660,6 +668,8 @@ pub fn run() {
             frontier_telemetry::frontier_telemetry_record,
             frontier_telemetry::frontier_telemetry_summary,
             frontier_telemetry::frontier_telemetry_clear,
+            // Sprint 1, UI-1 — Activity Feed sidebar widget
+            activity_feed::activity_feed,
             // Semantic embeddings (Sprint 2 — vector search on skills, memories, runbooks)
             embeddings::embed_text,
             embeddings::embeddings_available,
@@ -672,6 +682,38 @@ pub fn run() {
             memory::memory_core_list,
             memory::memory_core_delete,
             memory::memory_core_render,
+            memory::memory_core_reinforce,
+            memory::memory_core_decay_stats,
+            memory::memory_consolidate,
+            memory::memory_graph,
+            replay::replay_save,
+            replay::replay_list,
+            replay::replay_get,
+            replay::replay_bump_count,
+            replay::replay_relabel,
+            replay::replay_delete,
+            replay::replay_clear_old,
+            replay::replay_drift,
+            shell_recording::shell_recording_start,
+            shell_recording::shell_recording_append,
+            shell_recording::shell_recording_finish,
+            shell_recording::shell_recording_list,
+            shell_recording::shell_recording_events,
+            shell_recording::shell_recording_delete,
+            shell_recording::shell_recording_rename,
+            cve_match::cve_scan,
+            db_backup::db_info,
+            db_backup::db_backup_create,
+            db_backup::db_backup_restore,
+            support_bundle::export_support_bundle,
+            inventory_drift::inventory_set_baseline,
+            inventory_drift::inventory_get_baseline,
+            inventory_drift::inventory_delete_baseline,
+            inventory_drift::inventory_compute_drift,
+            dashboard_integrations::dashboard_open_incidents,
+            dashboard_integrations::dashboard_process_lineage_brief,
+            dashboard_integrations::dashboard_failed_logins_24h,
+            hash_chain::verify_incident_chain,
             memory::memory_working_append,
             memory::memory_working_list,
             memory::memory_working_clear,
@@ -715,6 +757,7 @@ pub fn run() {
             // Capacity Planning (P0 Feature 3)
             capacity::save_metrics_sample,
             capacity::get_capacity_trends,
+            capacity::capacity_projection,
             capacity::downsample_metrics,
             // OS Notifications (P0 Feature 4)
             notify::send_notification,

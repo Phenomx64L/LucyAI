@@ -36,6 +36,7 @@
     import type { DetectedPattern, PatternReport } from '$lib/agentmemory/patterns';
     import { verifyMemories, resolveContradiction, severityLabel, severityColor, resolutionLabel } from '$lib/agentmemory/verify';
     import type { Contradiction, VerifyReport, Resolution } from '$lib/agentmemory/verify';
+    import MemoryGraphView from '$lib/MemoryGraphView.svelte';
 
     export let isEN: boolean = false;
 
@@ -54,6 +55,65 @@
     let memLoading = false;
     let memError: string | null = null;
     let memSearchTimer: any = null;
+    /** V12 — When the user jumps from the graph via "Abrir en Memorias",
+     *  we highlight + scroll to this memory id instead of filtering. FTS5
+     *  doesn't index the numeric id, so a filter-by-id query returns empty
+     *  (the bug the user reported). Highlight-and-scroll is also better UX. */
+    let highlightedMemId: number | null = null;
+    let _highlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // ── Sprint D — Memory health timeline ──────────────────────────────
+    // Renders a tiny histogram of memory creation events across the last
+    // 30 days, plus rolling counts. Drives the "Memory health" mini-chart
+    // at the top of the Memorias tab.
+    interface TimelineBucket {
+        day_iso: string;
+        date: Date;
+        created: number;
+    }
+    $: memTimeline = (() => {
+        if (!memorias.length) return [];
+        const now = Date.now();
+        const cutoff = now - 30 * 86400_000;
+        const buckets: Map<string, TimelineBucket> = new Map();
+        // Seed 30 day buckets so empty days render too.
+        for (let i = 29; i >= 0; i--) {
+            const d = new Date(now - i * 86400_000);
+            const iso = d.toISOString().slice(0, 10);
+            buckets.set(iso, { day_iso: iso, date: d, created: 0 });
+        }
+        for (const m of memorias) {
+            const ts = (m.created_at || 0) * 1000;
+            if (ts < cutoff) continue;
+            const iso = new Date(ts).toISOString().slice(0, 10);
+            const b = buckets.get(iso);
+            if (b) b.created++;
+        }
+        return Array.from(buckets.values());
+    })();
+    $: memTimelineMax = Math.max(1, ...memTimeline.map(b => b.created));
+
+    /** Jump to a specific memory id: clear filters, ensure it's loaded,
+     *  scroll it into view, flash a green border. */
+    async function jumpToMemory(id: number) {
+        // Clear filters so the memory is guaranteed to be in the visible list.
+        memQuery = '';
+        memImportance = 0;
+        await loadMemorias();
+        highlightedMemId = id;
+        // Wait for Svelte to render the list, then scroll the row.
+        setTimeout(() => {
+            const el = document.querySelector(
+                `[data-mem-id="${id}"]`
+            ) as HTMLElement | null;
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 80);
+        // Auto-clear the highlight after 4s so the visual cue doesn't linger.
+        if (_highlightTimer) clearTimeout(_highlightTimer);
+        _highlightTimer = setTimeout(() => { highlightedMemId = null; }, 4000);
+    }
 
     async function loadMemorias() {
         memLoading = true;
@@ -88,6 +148,189 @@
         } catch (e) {
             memError = String(e);
         }
+    }
+
+    // ── M1 — Stats dashboard ─────────────────────────────────────────────
+    // Derived from the current `memorias` list. Cheap O(n) — no DB hit.
+    $: memStats = (() => {
+        const now = Math.floor(Date.now() / 1000);
+        const total = memorias.length;
+        let pinned = 0, untagged = 0, expiringSoon = 0, recent7d = 0;
+        let highestImp = 0;
+        for (const m of memorias) {
+            if (m.importance === 10) pinned++;
+            if (!tagList(m.tags).length) untagged++;
+            // expires_at: 0 = never. >0 = unix sec; "soon" = within 7d.
+            const exp = ((m as unknown) as { expires_at?: number }).expires_at || 0;
+            if (exp > 0 && exp < now + 7 * 86400) expiringSoon++;
+            if (m.created_at >= now - 7 * 86400) recent7d++;
+            if (m.importance > highestImp) highestImp = m.importance;
+        }
+        return { total, pinned, untagged, expiringSoon, recent7d, highestImp };
+    })();
+
+    // ── M2 — Bulk operations ─────────────────────────────────────────────
+    // A Set of selected memory ids. Empty = bulk bar hidden. The bar
+    // appears above the list with "Tag N", "Promote N", "Delete N" buttons.
+    let bulkSelected: Set<number> = new Set();
+    let bulkBusy = false;
+
+    function toggleBulkSelect(id: number, ev?: Event) {
+        if (ev) ev.stopPropagation();
+        const next = new Set(bulkSelected);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        bulkSelected = next;
+    }
+    function bulkSelectAll() {
+        bulkSelected = new Set(memorias.map(m => m.id));
+    }
+    function bulkClearSelection() {
+        bulkSelected = new Set();
+    }
+    async function bulkDelete() {
+        if (bulkSelected.size === 0) return;
+        if (!confirm(isEN
+            ? `Delete ${bulkSelected.size} selected memories? Cannot be undone.`
+            : `¿Borrar ${bulkSelected.size} memorias seleccionadas? Irreversible.`)) return;
+        bulkBusy = true;
+        try {
+            // Run sequentially — DB pool is single-conn aware and the UI
+            // shows progress better. For 100 memories this is ~2-3 seconds.
+            for (const id of bulkSelected) {
+                try { await invoke('delete_agent_memory', { id }); }
+                catch { /* keep going; report at the end */ }
+            }
+            bulkSelected = new Set();
+            await loadMemorias();
+        } finally {
+            bulkBusy = false;
+        }
+    }
+    async function bulkPromote() {
+        // Bumps importance +1 on each selected memory (capped at 10).
+        // Uses save_agent_memory_full which is the "update or insert" path.
+        if (bulkSelected.size === 0) return;
+        bulkBusy = true;
+        try {
+            for (const id of bulkSelected) {
+                const m = memorias.find(x => x.id === id);
+                if (!m) continue;
+                const newImp = Math.min(10, (m.importance || 1) + 1);
+                if (newImp === m.importance) continue;
+                try {
+                    await invoke('save_agent_memory_full', {
+                        id, title: m.title, content: m.content,
+                        tags: tagList(m.tags), files: tagList(m.files),
+                        importance: newImp, sessionId: m.session_id || '',
+                    });
+                } catch { /* ignore per-row failures */ }
+            }
+            bulkSelected = new Set();
+            await loadMemorias();
+        } finally {
+            bulkBusy = false;
+        }
+    }
+    async function bulkAddTag() {
+        if (bulkSelected.size === 0) return;
+        const t = prompt(isEN
+            ? `Add tag to ${bulkSelected.size} memories:`
+            : `Añadir tag a ${bulkSelected.size} memorias:`);
+        const tagClean = (t || '').trim().toLowerCase();
+        if (!tagClean) return;
+        bulkBusy = true;
+        try {
+            for (const id of bulkSelected) {
+                const m = memorias.find(x => x.id === id);
+                if (!m) continue;
+                const existing = tagList(m.tags);
+                if (existing.includes(tagClean)) continue;
+                try {
+                    await invoke('save_agent_memory_full', {
+                        id, title: m.title, content: m.content,
+                        tags: [...existing, tagClean],
+                        files: tagList(m.files),
+                        importance: m.importance,
+                        sessionId: m.session_id || '',
+                    });
+                } catch { /* keep going */ }
+            }
+            bulkSelected = new Set();
+            await loadMemorias();
+        } finally {
+            bulkBusy = false;
+        }
+    }
+
+    // ── M3 — Auto-tag suggestion via LLM ─────────────────────────────────
+    // For each selected memory without tags, ask Gemini Flash Lite to
+    // suggest 3-5 short tags. The user reviews + accepts/rejects per memory.
+    let autoTagBusy = false;
+    let autoTagSuggestions: Record<number, string[]> = {};
+
+    async function autoTagSelected() {
+        if (bulkSelected.size === 0) return;
+        autoTagBusy = true;
+        autoTagSuggestions = {};
+        try {
+            for (const id of bulkSelected) {
+                const m = memorias.find(x => x.id === id);
+                if (!m) continue;
+                // Skip memories that already have tags — auto-tag is for
+                // the untagged ones unless the user really wants to overwrite.
+                const existing = tagList(m.tags);
+                const prompt =
+                    `Suggest 3 to 5 short, lowercased, kebab-case tags for this memory. ` +
+                    `Output ONLY a comma-separated list, no explanation, no markdown.\n\n` +
+                    `Title: ${m.title}\n\nContent:\n${m.content.slice(0, 1500)}` +
+                    (existing.length ? `\n\nExisting tags (avoid duplicating): ${existing.join(', ')}` : '');
+                try {
+                    const result = await invoke<string>('ask_lucy', {
+                        prompt, context: '',
+                        userName: '', runbooksDir: null,
+                        model: 'gemini-3.5-flash-lite',
+                        lang: 'es-MX', hostsJson: null, images: null,
+                    });
+                    const cleaned = String(result || '')
+                        .split('\n')[0]
+                        .split(',')
+                        .map(s => s.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''))
+                        .filter(s => s.length >= 2 && s.length <= 30 && !existing.includes(s));
+                    autoTagSuggestions = { ...autoTagSuggestions, [id]: cleaned.slice(0, 5) };
+                } catch {
+                    autoTagSuggestions = { ...autoTagSuggestions, [id]: [] };
+                }
+            }
+        } finally {
+            autoTagBusy = false;
+        }
+    }
+
+    /** Accept the suggested tags for a specific memory (M3 confirmation step). */
+    async function acceptAutoTags(id: number) {
+        const sugg = autoTagSuggestions[id] || [];
+        if (sugg.length === 0) return;
+        const m = memorias.find(x => x.id === id);
+        if (!m) return;
+        const merged = [...new Set([...tagList(m.tags), ...sugg])];
+        try {
+            await invoke('save_agent_memory_full', {
+                id, title: m.title, content: m.content,
+                tags: merged,
+                files: tagList(m.files),
+                importance: m.importance,
+                sessionId: m.session_id || '',
+            });
+            const next = { ...autoTagSuggestions };
+            delete next[id];
+            autoTagSuggestions = next;
+            await loadMemorias();
+        } catch (e) { memError = String(e); }
+    }
+    function rejectAutoTags(id: number) {
+        const next = { ...autoTagSuggestions };
+        delete next[id];
+        autoTagSuggestions = next;
     }
 
     // ── Crystals ──
@@ -168,6 +411,9 @@
     let graphResults: GraphNeighbor[] = [];
     let graphLoading = false;
     let graphError: string | null = null;
+    /** Tier S #2 — switch between text BFS and full visual force-directed graph */
+    let graphMode: 'table' | 'visual' = 'table';
+    let showVisualGraph = false;
 
     async function runGraphQuery() {
         const id = parseInt(graphSeedId, 10);
@@ -432,6 +678,61 @@
     <!-- ══════════════════════════ MEMORIES ══════════════════════════ -->
     {#if activeTab === 'memorias'}
     <section class="mv-section">
+        <!-- M1 — Stats dashboard. Read-only summary above the search row. -->
+        {#if memorias.length > 0}
+        <div class="mv-stats">
+            <div class="mv-stat">
+                <span class="mv-stat-num">{memStats.total}</span>
+                <span class="mv-stat-lbl">{isEN ? 'memories' : 'memorias'}</span>
+            </div>
+            <div class="mv-stat" class:hot={memStats.pinned > 0}>
+                <span class="mv-stat-num">{memStats.pinned}</span>
+                <span class="mv-stat-lbl">📌 {isEN ? 'pinned' : 'fijadas'}</span>
+            </div>
+            <div class="mv-stat" class:hot={memStats.untagged > 0}>
+                <span class="mv-stat-num">{memStats.untagged}</span>
+                <span class="mv-stat-lbl">∅ {isEN ? 'untagged' : 'sin tags'}</span>
+            </div>
+            <div class="mv-stat" class:warn={memStats.expiringSoon > 0}>
+                <span class="mv-stat-num">{memStats.expiringSoon}</span>
+                <span class="mv-stat-lbl">⏱ {isEN ? 'expire <7d' : 'expiran <7d'}</span>
+            </div>
+            <div class="mv-stat">
+                <span class="mv-stat-num">{memStats.recent7d}</span>
+                <span class="mv-stat-lbl">⊕ {isEN ? 'new this week' : 'nuevas 7d'}</span>
+            </div>
+            <div class="mv-stat">
+                <span class="mv-stat-num">{memStats.highestImp}</span>
+                <span class="mv-stat-lbl">⮬ {isEN ? 'top importance' : 'top importancia'}</span>
+            </div>
+        </div>
+
+        <!-- Sprint D — Memory health timeline (30-day creation histogram) -->
+        {#if memTimeline.length}
+        <div class="mv-timeline" title={isEN ? '30-day memory creation cadence' : 'Cadencia de creación de memorias (30 días)'}>
+            <div class="mv-timeline-lbl">⏱ {isEN ? '30 days' : '30 días'}</div>
+            <div class="mv-timeline-bars">
+                {#each memTimeline as b}
+                    <div class="mv-tl-bar"
+                         style="height: {Math.max(2, (b.created / memTimelineMax) * 24)}px;
+                                background: {b.created === 0
+                                    ? 'rgba(148,163,184,.10)'
+                                    : b.created >= memTimelineMax * 0.66
+                                        ? '#10b981'
+                                        : b.created >= memTimelineMax * 0.33
+                                            ? '#56b4e9'
+                                            : 'rgba(86,180,233,.55)'};"
+                         title={`${b.day_iso}: ${b.created} ${isEN ? 'memories created' : 'memorias creadas'}`}></div>
+                {/each}
+            </div>
+            <div class="mv-timeline-end">
+                <span>{memTimeline[0]?.day_iso?.slice(5) || ''}</span>
+                <span>{isEN ? 'today' : 'hoy'}</span>
+            </div>
+        </div>
+        {/if}
+        {/if}
+
         <div class="mv-toolbar">
             <div class="mv-search">
                 <Search size={14}/>
@@ -448,6 +749,34 @@
                 <RefreshCw size={14}/>
             </button>
         </div>
+
+        <!-- M2 — Bulk operations bar. Only visible when ≥1 memory selected. -->
+        {#if bulkSelected.size > 0}
+        <div class="mv-bulk-bar">
+            <span class="mv-bulk-count">
+                {bulkSelected.size} {isEN ? 'selected' : 'seleccionadas'}
+            </span>
+            <button class="mv-bulk-btn" on:click={bulkClearSelection}>
+                {isEN ? 'Clear' : 'Limpiar'}
+            </button>
+            <button class="mv-bulk-btn" on:click={bulkSelectAll}>
+                {isEN ? `Select all (${memorias.length})` : `Seleccionar todas (${memorias.length})`}
+            </button>
+            <button class="mv-bulk-btn" disabled={bulkBusy} on:click={bulkAddTag}>
+                ⌖ {isEN ? 'Add tag' : 'Añadir tag'}
+            </button>
+            <button class="mv-bulk-btn" disabled={bulkBusy} on:click={bulkPromote}>
+                ⮬ {isEN ? 'Promote +1' : 'Subir +1'}
+            </button>
+            <button class="mv-bulk-btn" disabled={autoTagBusy || bulkBusy} on:click={autoTagSelected}
+                    title={isEN ? 'Use LLM to suggest tags for each selected memory' : 'Usa LLM para sugerir tags por memoria'}>
+                {autoTagBusy ? '⟳ ' : '✦ '}{isEN ? 'AI suggest tags' : 'Sugerir tags (IA)'}
+            </button>
+            <button class="mv-bulk-btn warn" disabled={bulkBusy} on:click={bulkDelete}>
+                ✕ {isEN ? 'Delete' : 'Borrar'}
+            </button>
+        </div>
+        {/if}
 
         <!-- Admin actions strip -->
         <div class="mv-admin">
@@ -468,8 +797,17 @@
         {:else}
             <ul class="mv-list">
                 {#each memorias as m (m.id)}
-                    <li class="mv-card">
+                    <li class="mv-card"
+                        class:mv-card-selected={bulkSelected.has(m.id)}
+                        class:mv-card-highlight={highlightedMemId === m.id}
+                        data-mem-id={m.id}>
                         <div class="mv-card-head">
+                            <!-- M2 — Bulk select checkbox -->
+                            <input type="checkbox" class="mv-bulk-cb"
+                                   checked={bulkSelected.has(m.id)}
+                                   on:change={(e) => toggleBulkSelect(m.id, e)}
+                                   on:click|stopPropagation
+                                   title={isEN ? 'Select for bulk action' : 'Seleccionar para acción en lote'}/>
                             <span class="mv-id">#{m.id}</span>
                             <span class="mv-card-title">{m.title}</span>
                             <span class="mv-imp" style="color:{importanceColor(m.importance)};" title="importance">
@@ -485,6 +823,28 @@
                                 <span class="mv-tag">{t}</span>
                             {/each}
                         </div>
+                        <!-- M3 — Suggested tags panel (visible after Auto-tag run) -->
+                        {#if autoTagSuggestions[m.id]}
+                            <div class="mv-autotag-panel">
+                                {#if autoTagSuggestions[m.id].length === 0}
+                                    <span class="mv-autotag-empty">
+                                        ⟳ {isEN ? 'LLM returned no usable tags' : 'LLM no devolvió tags utilizables'}
+                                    </span>
+                                    <button class="mv-bulk-btn" on:click={() => rejectAutoTags(m.id)}>{isEN ? 'Dismiss' : 'Descartar'}</button>
+                                {:else}
+                                    <span class="mv-autotag-label">✦ {isEN ? 'AI suggests:' : 'IA sugiere:'}</span>
+                                    {#each autoTagSuggestions[m.id] as st}
+                                        <span class="mv-tag mv-tag-sugg">{st}</span>
+                                    {/each}
+                                    <button class="mv-bulk-btn accept" on:click={() => acceptAutoTags(m.id)}>
+                                        ✓ {isEN ? 'Apply' : 'Aplicar'}
+                                    </button>
+                                    <button class="mv-bulk-btn" on:click={() => rejectAutoTags(m.id)}>
+                                        ✕ {isEN ? 'Reject' : 'Rechazar'}
+                                    </button>
+                                {/if}
+                            </div>
+                        {/if}
                     </li>
                 {/each}
             </ul>
@@ -494,6 +854,10 @@
 
     <!-- ══════════════════════════ CRYSTALS ══════════════════════════ -->
     {#if activeTab === 'crystals'}
+    <!-- Sprint E — Crystal viewer redesign.
+         Old viewer was a flat text block; new design uses gradient cards
+         with badge sections (Narrative / Outcomes / Files / Lessons) so
+         the operator can scan a session distillation at a glance. -->
     <section class="mv-section">
         <div class="mv-toolbar">
             <span class="mv-hint">{isEN ? 'Run /crystallize from a chat tab to distill a session.' : 'Usa /crystallize en una pestaña para destilar una sesión.'}</span>
@@ -505,43 +869,101 @@
         {#if crystalsLoading}
             <div class="mv-loading">{isEN ? 'Loading…' : 'Cargando…'}</div>
         {:else if crystals.length === 0}
-            <div class="mv-empty">{isEN ? 'No crystals yet.' : 'Sin crystals todavía.'}</div>
+            <div class="mv-empty crystal-empty">
+                <Diamond size={32} color="#a78bfa" />
+                <p>{isEN ? 'No crystals yet.' : 'Sin crystals todavía.'}</p>
+                <small>{isEN
+                    ? 'Crystals are LLM-distilled summaries of completed agent sessions: narrative + outcomes + files affected + lessons learned. Run /crystallize in a chat tab to create one.'
+                    : 'Los crystals son resúmenes destilados por LLM de sesiones completadas: narrativa + outcomes + archivos afectados + lecciones. Usa /crystallize en una pestaña para crear uno.'}</small>
+            </div>
         {:else}
-            <ul class="mv-list">
+            <ul class="crystal-grid">
                 {#each crystals as c (c.id)}
-                    <li class="mv-card" class:expanded={expandedCrystal === c.id}>
-                        <div class="mv-card-head clickable"
-                            on:click={() => expandedCrystal = expandedCrystal === c.id ? null : c.id}
-                            on:keydown={(e) => e.key === 'Enter' && (expandedCrystal = expandedCrystal === c.id ? null : c.id)}
-                            role="button" tabindex="0">
-                            <Diamond size={14} color="#a78bfa"/>
-                            <span class="mv-id">#{c.id}</span>
-                            <span class="mv-card-title">{previewText(c.narrative, 120)}</span>
-                            <span class="mv-date">{fmtDate(c.created_at)}</span>
-                            <button class="mv-del" title={isEN ? 'Delete' : 'Borrar'}
-                                on:click|stopPropagation={() => deleteCrystal(c.id)}><Trash size={13}/></button>
+                    {@const outcomes = tagList(c.key_outcomes)}
+                    {@const files = tagList(c.files_affected)}
+                    {@const lessons = tagList(c.lessons)}
+                    {@const isExpanded = expandedCrystal === c.id}
+                    <li class="crystal-card" class:expanded={isExpanded}>
+                        <div class="crystal-shimmer"></div>
+                        <header class="crystal-head">
+                            <div class="crystal-icon">
+                                <Diamond size={18} color="#a78bfa" />
+                            </div>
+                            <div class="crystal-meta">
+                                <div class="crystal-id-row">
+                                    <span class="crystal-id">#{c.id}</span>
+                                    {#if c.project}<span class="crystal-project">{c.project}</span>{/if}
+                                    <span class="crystal-date">{fmtDate(c.created_at)}</span>
+                                </div>
+                                <div class="crystal-stats">
+                                    {#if outcomes.length}<span class="crystal-stat-pill outcomes-pill">⊕ {outcomes.length} {isEN ? 'outcomes' : 'outcomes'}</span>{/if}
+                                    {#if files.length}<span class="crystal-stat-pill files-pill">⌗ {files.length} {isEN ? 'files' : 'archivos'}</span>{/if}
+                                    {#if lessons.length}<span class="crystal-stat-pill lessons-pill">✦ {lessons.length} {isEN ? 'lessons' : 'lecciones'}</span>{/if}
+                                </div>
+                            </div>
+                            <button class="crystal-del" title={isEN ? 'Delete' : 'Borrar'}
+                                    on:click={() => deleteCrystal(c.id)}>
+                                <Trash size={13}/>
+                            </button>
+                        </header>
+
+                        <!-- Narrative is always visible — it's the headline. -->
+                        <div class="crystal-narrative">
+                            {#if isExpanded}
+                                {c.narrative}
+                            {:else}
+                                {previewText(c.narrative, 280)}
+                            {/if}
                         </div>
-                        {#if expandedCrystal === c.id}
-                            <div class="mv-card-detail">
-                                <p><strong>{isEN ? 'Narrative' : 'Narrativa'}:</strong> {c.narrative}</p>
-                                {#if tagList(c.key_outcomes).length}
-                                    <div><strong>Outcomes:</strong>
-                                        <ul>{#each tagList(c.key_outcomes) as o}<li>{o}</li>{/each}</ul>
+
+                        {#if isExpanded}
+                            {#if outcomes.length}
+                                <div class="crystal-section outcomes">
+                                    <div class="crystal-section-hdr">
+                                        <span class="crystal-section-glyph">⊕</span>
+                                        <span>{isEN ? 'Outcomes' : 'Outcomes'}</span>
                                     </div>
-                                {/if}
-                                {#if tagList(c.files_affected).length}
-                                    <div><strong>{isEN ? 'Files' : 'Archivos'}:</strong>
-                                        <ul class="mono">{#each tagList(c.files_affected) as f}<li>{f}</li>{/each}</ul>
+                                    <ul class="crystal-bullet-list">
+                                        {#each outcomes as o}<li>{o}</li>{/each}
+                                    </ul>
+                                </div>
+                            {/if}
+                            {#if files.length}
+                                <div class="crystal-section files">
+                                    <div class="crystal-section-hdr">
+                                        <span class="crystal-section-glyph">⌗</span>
+                                        <span>{isEN ? 'Files affected' : 'Archivos afectados'}</span>
                                     </div>
-                                {/if}
-                                {#if tagList(c.lessons).length}
-                                    <div><strong>{isEN ? 'Lessons' : 'Lecciones'}:</strong>
-                                        <ul>{#each tagList(c.lessons) as l}<li>{l}</li>{/each}</ul>
+                                    <ul class="crystal-file-list">
+                                        {#each files as f}<li class="mono">{f}</li>{/each}
+                                    </ul>
+                                </div>
+                            {/if}
+                            {#if lessons.length}
+                                <div class="crystal-section lessons">
+                                    <div class="crystal-section-hdr">
+                                        <span class="crystal-section-glyph">✦</span>
+                                        <span>{isEN ? 'Lessons learned' : 'Lecciones'}</span>
                                     </div>
+                                    <ul class="crystal-bullet-list">
+                                        {#each lessons as l}<li>{l}</li>{/each}
+                                    </ul>
+                                </div>
+                            {/if}
+                            <div class="crystal-footer">
+                                <span class="mono">{c.source_chars.toLocaleString()} chars</span>
+                                {#if c.session_id}
+                                    <span> · session </span><code class="mono">{c.session_id.slice(0, 16)}</code>
                                 {/if}
-                                <p class="mv-meta">{isEN ? 'Source' : 'Fuente'}: {c.source_chars.toLocaleString()} chars · session <code>{(c.session_id || '—').slice(0,12)}</code></p>
                             </div>
                         {/if}
+
+                        <button class="crystal-expand-btn"
+                                on:click={() => expandedCrystal = isExpanded ? null : c.id}>
+                            {isExpanded
+                                ? (isEN ? '▴ Collapse' : '▴ Colapsar')
+                                : (isEN ? '▾ Show details' : '▾ Ver detalles')}
+                        </button>
                     </li>
                 {/each}
             </ul>
@@ -597,6 +1019,12 @@
     <section class="mv-section">
         <div class="mv-toolbar">
             <span class="mv-hint">{isEN ? 'BFS from a memory id over shared concepts / files / sessions.' : 'BFS desde un id de memoria por concepts / files / sessions.'}</span>
+            <!-- Tier S #2 — open full visual force-directed graph in overlay -->
+            <button class="mv-graph-btn" on:click={() => showVisualGraph = true}
+                    title={isEN ? 'Open interactive visual graph (force-directed)' : 'Abrir grafo visual interactivo (force-directed)'}
+                    style="margin-left:auto;">
+                ◊ {isEN ? 'Visual graph' : 'Grafo visual'}
+            </button>
         </div>
         <div class="mv-graph-form">
             <label>
@@ -865,6 +1293,23 @@
     {/if}
 </div>
 
+<!-- Tier S #2 — Full-screen force-directed memory graph overlay -->
+{#if showVisualGraph}
+    <MemoryGraphView {isEN}
+        on:close={() => showVisualGraph = false}
+        on:openmemoria={(e) => {
+            // V12 — Memory Graph 2.0: jump from the visual graph to the
+            // Memorias tab. We do NOT filter by id — FTS5 doesn't index
+            // the numeric id, so a filter-by-id would return empty even
+            // though the memory exists (bug reported by user). Instead,
+            // jumpToMemory() clears filters, loads everything, scrolls to
+            // the row, and flashes a highlight border.
+            showVisualGraph = false;
+            activeTab = 'memorias';
+            jumpToMemory(e.detail.memoryId);
+        }}/>
+{/if}
+
 <style>
     .memory-view {
         flex: 1;
@@ -1002,12 +1447,295 @@
         transition: border-color .15s, background .15s;
     }
     .mv-card:hover { border-color: rgba(255,255,255,.12); }
-    .mv-card.expanded { background: rgba(167,139,250,.04); border-color: rgba(167,139,250,.25); }
+    /* .mv-card.expanded retired Sprint E — crystals use dedicated styles now */
+    /* M2 — selected card visual state */
+    .mv-card.mv-card-selected {
+        background: rgba(16,185,129,.06);
+        border-color: rgba(16,185,129,.30);
+        box-shadow: inset 2px 0 0 var(--acc, #10b981);
+    }
+    /* V12 — Highlight when arrived from the visual graph "Open in Memorias".
+       Pulsa por 4s después de jumpToMemory(); auto-aclara por timer en JS. */
+    .mv-card.mv-card-highlight {
+        background: rgba(16,185,129,.10) !important;
+        border-color: rgba(16,185,129,.60) !important;
+        box-shadow: 0 0 0 2px rgba(16,185,129,.35),
+                    0 6px 22px -8px rgba(16,185,129,.40);
+        animation: mvHighlightPulse 0.9s ease-in-out 2;
+    }
+    @keyframes mvHighlightPulse {
+        0%, 100% { box-shadow: 0 0 0 2px rgba(16,185,129,.35),
+                               0 6px 22px -8px rgba(16,185,129,.40); }
+        50%      { box-shadow: 0 0 0 4px rgba(16,185,129,.55),
+                               0 10px 30px -6px rgba(16,185,129,.55); }
+    }
+    .mv-bulk-cb {
+        cursor: pointer; margin-right: 4px;
+        width: 14px; height: 14px;
+        accent-color: var(--acc, #10b981);
+    }
+    /* M1 — Stats dashboard cards */
+    .mv-stats {
+        display: flex; gap: 8px; padding: 8px 12px;
+        flex-wrap: wrap; flex-shrink: 0;
+    }
+    .mv-stat {
+        background: rgba(255,255,255,.03);
+        border: 1px solid rgba(255,255,255,.06);
+        border-radius: 6px;
+        padding: 6px 12px;
+        display: flex; flex-direction: column; align-items: center;
+        min-width: 72px;
+    }
+    .mv-stat-num { font-size: 18px; font-weight: 300; color: var(--txt); line-height: 1.1; }
+    .mv-stat-lbl { font-size: 9px; color: var(--txt2); text-transform: uppercase; letter-spacing: .3px; margin-top: 2px; }
+    .mv-stat.hot   { border-color: rgba(245,158,11,.30); background: rgba(245,158,11,.05); }
+    .mv-stat.hot   .mv-stat-num { color: #f59e0b; }
+    .mv-stat.warn  { border-color: rgba(239,68,68,.30); background: rgba(239,68,68,.05); }
+    .mv-stat.warn  .mv-stat-num { color: #ef4444; }
+    /* Sprint E — Crystal viewer redesign */
+    .crystal-empty {
+        display: flex; flex-direction: column; align-items: center;
+        gap: 12px; padding: 40px 24px; max-width: 480px; margin: 0 auto;
+        line-height: 1.6;
+    }
+    .crystal-empty small { color: var(--txt2); font-size: 11px; }
+
+    .crystal-grid {
+        list-style: none; margin: 0; padding: 0 12px 12px;
+        display: flex; flex-direction: column; gap: 12px;
+    }
+    .crystal-card {
+        position: relative; overflow: hidden;
+        background: linear-gradient(135deg, rgba(167,139,250,.04), rgba(96,165,250,.02));
+        border: 1px solid rgba(167,139,250,.16);
+        border-radius: 10px;
+        padding: 14px 16px;
+        transition: border-color .15s, box-shadow .15s;
+    }
+    .crystal-card:hover {
+        border-color: rgba(167,139,250,.32);
+        box-shadow: 0 4px 18px -8px rgba(167,139,250,.30);
+    }
+    .crystal-card.expanded {
+        background: linear-gradient(135deg, rgba(167,139,250,.08), rgba(96,165,250,.04));
+        border-color: rgba(167,139,250,.40);
+    }
+    /* Subtle diagonal shimmer for visual interest */
+    .crystal-shimmer {
+        position: absolute; top: -40%; right: -20%;
+        width: 140px; height: 220px;
+        background: linear-gradient(135deg, transparent, rgba(167,139,250,.06), transparent);
+        transform: rotate(15deg);
+        pointer-events: none;
+    }
+    .crystal-head {
+        display: flex; align-items: flex-start; gap: 10px;
+        margin-bottom: 10px; position: relative;
+    }
+    .crystal-icon {
+        background: rgba(167,139,250,.10);
+        border: 1px solid rgba(167,139,250,.25);
+        border-radius: 8px; padding: 6px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+    }
+    .crystal-meta { flex: 1; min-width: 0; }
+    .crystal-id-row {
+        display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+        margin-bottom: 6px;
+    }
+    .crystal-id {
+        color: #a78bfa; font-family: var(--mono);
+        font-size: 11px; font-weight: 700;
+        background: rgba(167,139,250,.10);
+        padding: 1px 8px; border-radius: 4px;
+    }
+    .crystal-project {
+        color: var(--txt2); font-size: 10px; font-family: var(--mono);
+        background: rgba(255,255,255,.04);
+        padding: 1px 6px; border-radius: 4px;
+    }
+    .crystal-date {
+        color: var(--txt2); font-size: 10px;
+        margin-left: auto; font-family: var(--mono);
+    }
+    .crystal-stats {
+        display: flex; gap: 6px; flex-wrap: wrap;
+    }
+    .crystal-stat-pill {
+        font-size: 10px; padding: 2px 8px;
+        border-radius: 10px; font-weight: 600;
+        border: 1px solid;
+    }
+    .crystal-stat-pill.outcomes-pill {
+        background: rgba(16,185,129,.10); color: #10b981;
+        border-color: rgba(16,185,129,.25);
+    }
+    .crystal-stat-pill.files-pill {
+        background: rgba(96,165,250,.10); color: #60a5fa;
+        border-color: rgba(96,165,250,.25);
+    }
+    .crystal-stat-pill.lessons-pill {
+        background: rgba(251,191,36,.10); color: #fbbf24;
+        border-color: rgba(251,191,36,.25);
+    }
+    .crystal-del {
+        background: transparent; border: 0; padding: 4px;
+        color: var(--txt2); cursor: pointer;
+        opacity: 0.5; transition: opacity .15s, color .15s;
+        align-self: flex-start;
+    }
+    .crystal-del:hover { opacity: 1; color: #ef4444; }
+    .crystal-narrative {
+        color: var(--txt); font-size: 12px; line-height: 1.65;
+        padding: 8px 12px;
+        background: rgba(0,0,0,.18);
+        border-left: 3px solid rgba(167,139,250,.40);
+        border-radius: 0 6px 6px 0;
+        margin-bottom: 8px;
+    }
+    .crystal-card.expanded .crystal-narrative {
+        white-space: pre-wrap; word-break: break-word;
+    }
+    .crystal-section {
+        margin-top: 10px;
+        padding: 10px 12px;
+        background: rgba(255,255,255,.02);
+        border-radius: 6px;
+    }
+    .crystal-section.outcomes { border-left: 3px solid rgba(16,185,129,.50); }
+    .crystal-section.files    { border-left: 3px solid rgba(96,165,250,.50); }
+    .crystal-section.lessons  { border-left: 3px solid rgba(251,191,36,.50); }
+    .crystal-section-hdr {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 10px; font-weight: 700; letter-spacing: .4px;
+        text-transform: uppercase; margin-bottom: 6px;
+        color: var(--txt2);
+    }
+    .crystal-section.outcomes .crystal-section-hdr { color: #10b981; }
+    .crystal-section.files    .crystal-section-hdr { color: #60a5fa; }
+    .crystal-section.lessons  .crystal-section-hdr { color: #fbbf24; }
+    .crystal-section-glyph { font-size: 13px; }
+    .crystal-bullet-list, .crystal-file-list {
+        margin: 0; padding: 0 0 0 18px;
+        font-size: 11px; line-height: 1.7; color: var(--txt);
+    }
+    .crystal-bullet-list li { margin-bottom: 2px; }
+    .crystal-file-list li {
+        list-style: none; position: relative;
+        padding-left: 14px; margin-bottom: 2px;
+        word-break: break-all;
+    }
+    .crystal-file-list li::before {
+        content: '›'; position: absolute; left: 0;
+        color: #60a5fa; font-weight: 700;
+    }
+    .crystal-footer {
+        margin-top: 10px; padding-top: 8px;
+        border-top: 1px solid rgba(255,255,255,.06);
+        font-size: 10px; color: var(--txt2);
+    }
+    .crystal-expand-btn {
+        margin-top: 10px; width: 100%;
+        background: rgba(167,139,250,.08);
+        border: 1px solid rgba(167,139,250,.20);
+        color: #a78bfa; font: inherit; font-size: 10px;
+        padding: 5px 10px; border-radius: 5px;
+        cursor: pointer; letter-spacing: .3px;
+        transition: background .12s, border-color .12s;
+    }
+    .crystal-expand-btn:hover {
+        background: rgba(167,139,250,.16);
+        border-color: rgba(167,139,250,.35);
+    }
+
+    /* Sprint D — Memory health timeline */
+    .mv-timeline {
+        display: flex; align-items: flex-end; gap: 8px;
+        padding: 8px 12px;
+        background: rgba(255,255,255,.02);
+        border: 1px solid rgba(255,255,255,.04);
+        border-radius: 6px;
+        margin: 0 12px 8px;
+    }
+    .mv-timeline-lbl {
+        font-size: 9px; color: var(--txt2);
+        text-transform: uppercase; letter-spacing: .4px;
+        min-width: 60px;
+    }
+    .mv-timeline-bars {
+        flex: 1; display: flex; align-items: flex-end;
+        gap: 2px; height: 28px;
+    }
+    .mv-tl-bar {
+        flex: 1; border-radius: 1px;
+        transition: background .15s;
+        cursor: help;
+    }
+    .mv-tl-bar:hover { filter: brightness(1.4); }
+    .mv-timeline-end {
+        display: flex; flex-direction: column; gap: 2px;
+        font-size: 9px; color: var(--txt2);
+        align-items: flex-end; min-width: 36px;
+    }
+    /* M2 — Bulk operations bar */
+    .mv-bulk-bar {
+        display: flex; align-items: center; gap: 6px;
+        padding: 6px 12px;
+        background: rgba(16,185,129,.06);
+        border: 1px solid rgba(16,185,129,.20);
+        border-radius: 6px; margin: 0 12px 6px;
+        flex-wrap: wrap;
+    }
+    .mv-bulk-count {
+        font-size: 11px; font-weight: 600;
+        color: var(--acc, #10b981);
+        margin-right: 6px;
+    }
+    .mv-bulk-btn {
+        background: rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08);
+        color: var(--txt); font: inherit; font-size: 11px;
+        padding: 3px 9px; border-radius: 4px; cursor: pointer;
+        transition: background .12s, border-color .12s;
+    }
+    .mv-bulk-btn:hover:not(:disabled) {
+        background: rgba(255,255,255,.07);
+        border-color: rgba(255,255,255,.16);
+    }
+    .mv-bulk-btn:disabled { opacity: 0.45; cursor: default; }
+    .mv-bulk-btn.warn {
+        background: rgba(239,68,68,.10); color: #ef4444;
+        border-color: rgba(239,68,68,.25);
+    }
+    .mv-bulk-btn.warn:hover:not(:disabled) { background: rgba(239,68,68,.20); }
+    .mv-bulk-btn.accept {
+        background: rgba(16,185,129,.18); color: var(--acc, #10b981);
+        border-color: rgba(16,185,129,.35);
+    }
+    .mv-bulk-btn.accept:hover:not(:disabled) { background: rgba(16,185,129,.28); }
+    /* M3 — Auto-tag suggestions panel inside card */
+    .mv-autotag-panel {
+        display: flex; align-items: center; gap: 6px;
+        margin-top: 6px; padding: 6px 8px;
+        background: rgba(168,85,247,.06);
+        border: 1px dashed rgba(168,85,247,.25);
+        border-radius: 5px;
+        flex-wrap: wrap;
+    }
+    .mv-autotag-label { font-size: 10px; color: #a855f7; font-weight: 600; letter-spacing: .3px; }
+    .mv-autotag-empty { font-size: 11px; color: var(--txt2); font-style: italic; flex: 1; }
+    .mv-tag-sugg {
+        background: rgba(168,85,247,.15) !important;
+        color: #a855f7 !important;
+        border: 1px dashed rgba(168,85,247,.40);
+    }
     .mv-card-head {
         display: flex; align-items: center; gap: 8px;
         flex-wrap: wrap;
     }
-    .mv-card-head.clickable { cursor: pointer; }
+    /* .mv-card-head.clickable retired Sprint E with crystal redesign */
     .mv-id { color: var(--txt2); font-size: 10px; font-family: var(--mono); }
     .mv-card-title { color: var(--txt); font-size: 13px; font-weight: 500; flex: 1; min-width: 0; }
     .mv-imp { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; }
@@ -1036,17 +1764,7 @@
         transition: .15s;
     }
     .mv-del:hover { background: rgba(239,68,68,.12); color: #f87171; }
-    .mv-card-detail {
-        padding-top: 8px;
-        border-top: 1px solid rgba(255,255,255,.06);
-        color: var(--txt2); font-size: 12px;
-        line-height: 1.55;
-        margin-top: 8px;
-    }
-    .mv-card-detail strong { color: var(--txt); font-weight: 600; }
-    .mv-card-detail ul { padding-left: 18px; margin: 4px 0; }
-    .mv-card-detail ul.mono { font-family: var(--mono); font-size: 11px; }
-    .mv-meta { color: var(--txt2); font-size: 10px; font-style: italic; margin-top: 6px; }
+    /* .mv-card-detail retired Sprint E with crystal redesign */
     .mv-confidence {
         display: flex; align-items: center; gap: 8px;
         margin: 4px 0;

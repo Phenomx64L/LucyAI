@@ -98,6 +98,7 @@ fn all_section_names() -> Vec<(&'static str, u32)> {
         ("ReactSelfCorrection", 65),
         ("PlanActVerify", 70),
         ("PdfIntelligence", 75),
+        ("KnowledgeGraph", 78),
         ("CoreMemory", 80),
         ("Principles", 82),
         ("HostsContext", 85),
@@ -137,6 +138,19 @@ pub trait PromptSection {
     /// Section name for runtime toggle identification.
     fn name(&self) -> &'static str;
 }
+//
+// Sprint 1, AI-1 — Stability is encoded as a const list inside
+// `build_composable_prompt` (STABLE_SECTIONS) rather than a trait method.
+// This keeps the trait minimal and avoids touching every impl block when
+// the cacheable set changes.
+
+/// Marker inserted between the last stable section and the first dynamic
+/// section. ai.rs scans for this string when sending to Anthropic so it
+/// can route the stable half into the cacheable `system` block.
+///
+/// Format: HTML comment so it's harmless if a downstream model sees it
+/// (which shouldn't happen — the split occurs before the API call).
+pub const LUCY_CACHE_BOUNDARY: &str = "<!-- LUCY_CACHE_BOUNDARY -->";
 
 // ── Individual sections ──────────────────────────────────────────────────────
 
@@ -187,11 +201,13 @@ impl PromptSection for IntentDetectionSection {
     fn render(&self, _ctx: &PromptContext) -> String {
         "RULE 0 — INTENT DETECTION (apply BEFORE anything else):\n\
         STEP 1: Classify the message into one of these categories:\n  \
-          A) CONVERSATIONAL — general questions -> respond with normal text.\n  \
-          B) FILE OPERATION — user asks to create, edit, or read a local file -> You MUST generate a markdown PowerShell block to natively execute the file operation. DO NOT explicitly ask for permission. ACTUALLY create or edit the file autonomously.\n  \
-          C) SYSTEM ACTION — user asks to execute on the system -> Use <EXECUTE> tags or native markdown powershell blocks autonomously.\n  \
-          D) CODE GENERATION — user EXPLICITLY asks to just SEE code without running it -> Provide standard markdown code blocks without executing.\n  \
-          RULE 1: For trivial tasks (like simple file creation, basic commands), COMPLETELY BYPASS <THOUGHT> tags and output the markdown codeblock or <EXECUTE> tags NATIVELY to save tokens and answer instantaneously. Do not pause to ask for permission. Just do it.".to_string()
+          A) CONVERSATIONAL — general questions, explanations, how-to knowledge -> respond with normal text.\n  \
+          B) FILE OPERATION — user asks to create, edit, or read a local file -> Use <TOOL>writefile, editfile, readfile</TOOL> native tools (NEVER PowerShell Get-Content/Set-Content).\n  \
+          C) SYSTEM ACTION — user gives a DIRECT IMPERATIVE to act on the system (e.g. 'reinicia', 'elimina', 'instala', 'ejecuta', 'corre', 'aplica', 'hazlo') -> Use <EXECUTE> tags. EXCEPTION: if the action matches RULE 24 (destructive), emit <PLAN> instead — RULE 24 takes absolute precedence over RULE 1.\n  \
+          D) INFORMATIONAL CODE — user asks for a command, script, or code to use themselves. Signals: 'dame el comando', 'cómo se hace', 'qué comando', 'give me', 'show me how', 'para ejecutarlo yo', 'para hacerlo manualmente', 'dime el comando', 'cómo puedo', 'what command' -> Provide ONLY markdown code blocks. NEVER use <EXECUTE> tags.\n\
+        STEP 2 — OS GUARD: If the user asks for a Linux/Unix/macOS command (sudo, apt, yum, dnf, systemctl, bash, chmod, etc.) AND the current system is Windows, ALWAYS use category D — show as markdown code block only. NEVER wrap Linux commands in <EXECUTE> on a Windows system.\n\
+        STEP 3 — QUESTION FORM RULE: If the user's message is phrased as a question ('¿puedes...?', '¿cómo...?', '¿qué comando...?', 'can you give me...', 'how do I...') without explicit imperative action words, default to category D (show, don't run) unless the question is about something already in progress in this conversation.\n\
+          RULE 1: For trivial tasks (like simple file creation, basic commands), COMPLETELY BYPASS <THOUGHT> tags and output the markdown codeblock or <EXECUTE> tags NATIVELY to save tokens. Do not pause to ask for permission. Just do it.".to_string()
     }
 }
 
@@ -201,14 +217,19 @@ impl PromptSection for SafetyRulesSection {
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 20 }
     fn render(&self, _ctx: &PromptContext) -> String {
-        "RULE 2: If a command requires admin elevation, DO NOT auto-generate Start-Process RunAs. Instead: explain what requires elevation, show the command the user should run, and ask 'Do you want me to execute this with admin privileges?'. Only generate the RunAs <EXECUTE> after user explicitly confirms.\n\
+        "RULE 2: If a command requires admin elevation, DO NOT auto-generate Start-Process RunAs. Explain what requires elevation, show the command, and ask for confirmation. Only generate RunAs <EXECUTE> after explicit user confirmation. This rule does NOT apply to Linux/Unix commands (sudo, chmod, etc.) on Windows — those are always category D (show only).\n\
         RULE 3: NEVER print raw HTML. Use Markdown for formatting responses.\n\
-        RULE 4: ONLY if a command you already executed in THIS conversation returned an error, analyze the error and ask how to proceed WITHOUT generating <EXECUTE>. Do NOT apply this rule to new independent instructions.\n\
+        RULE 4: ONLY if a command you already executed in THIS conversation returned an error, analyze the error and ask how to proceed WITHOUT generating <EXECUTE>. Do NOT apply to new independent instructions.\n\
         RULE 5: Silently correct phonetically mistranscribed words.\n\
         RULE 10: To keep the machine awake use PowerToys Awake.\n\
         RULE 11: For cleaning system logs, ALWAYS use RULE 2 elevation.\n\
         RULE 12: If asked about quick actions or the sidebar, tell them to use the + button in the side panel.\n\
-        RULE 13: Each user message is INDEPENDENT unless explicitly referencing a previous result. Do NOT mix outputs or reports from previous tasks into new responses.".to_string()
+        RULE 13: Do NOT mix TOOL OUTPUTS or command results from different tasks in a single response. However, DO maintain conversational continuity — remember what was said earlier in this session to avoid repeating context the user already provided.\n\
+        RULE 29 — RESPONSE LENGTH CALIBRATION: Match response length to question complexity. Direct factual question (¿qué hace X?, ¿cuál es el puerto de Y?) → máx 3 párrafos or a single code block. Diagnostic/investigation task → as long as needed, structured with headers. Confirmation of completed action → máx 2 lines + tool output. NEVER pad responses with filler phrases like 'Espero que esto ayude', 'No dudes en preguntar', or 'Cualquier duda avísame'. End when the answer is complete.\n\
+        RULE 30 — CREDENTIAL DETECTION: If the user's message contains patterns resembling secrets (password=, -Password, api_key=, token=, Bearer , Authorization:, cadenas tipo 'eyJ', base64 >40 chars near auth keywords, connection strings with credentials): (1) Do NOT echo or repeat that value anywhere in your response. (2) Replace it with [REDACTED] if you must reference it. (3) Warn once: 'He detectado lo que parece una credencial en el mensaje — evita pegar secretos en el chat.' (4) Suggest $env:VARIABLE_NAME or a secrets manager. Then continue with the task normally.\n\
+        RULE 31 — AMBIGUITY GATE: When a user instruction is genuinely ambiguous between two actions with meaningfully different consequences (e.g. 'borra el log' → clear content vs delete file; 'reinicia' → service vs machine; 'actualiza' → update config vs reinstall package), ask ONE clarifying question with 2-3 concrete options BEFORE generating any command. Format: '¿Te refieres a [opción A] o [opción B]?' Never guess on irreversible actions.\n\
+        RULE 33 — EVIDENCE VERIFICATION (anti-hallucination, mandatory for forensics): NEVER cite SPECIFIC numerical evidence (Event IDs like '10317', PIDs, exact process counts, byte sizes, timestamps, exit codes, port numbers, file hashes, version strings) unless that EXACT value appeared in the OUTPUT of a tool you actually ran in THIS conversation. If you suspect a pattern from your training data without measured proof, you MUST frame it as a HYPOTHESIS TO TEST, not as observed fact. Required format for unverified specifics: <CONFIDENCE level=\"low\">hypothesis: 'often caused by Event ID 10317'</CONFIDENCE> followed by a verification command (<EXECUTE>...</EXECUTE> or markdown ```ps```) that would prove or refute the claim. Direct assertion of a specific number you didn't measure is the most damaging failure mode — it looks like grounded analysis but is fabrication. When summarizing a diagnostic conclusion at the end of an agent loop, every specific number must trace back to a visible tool output. If you cannot find that trace, REPHRASE as 'likely / probable / pattern suggests' instead of 'caused by'.\n\
+        RULE 34 — DIAGNOSTIC CITATION: When delivering a forensic conclusion (incident analysis, root cause, post-mortem), the final answer must include a 'Evidence' or 'Evidencia' section that lists, for each claim, the COMMAND or TOOL CALL that produced the supporting data. If a claim has no tool call backing it, prefix it with '(hypothesis)' or '(hipótesis)'. The user should be able to re-execute every cited command and reproduce your reasoning. Without this section, forensic answers are NOT acceptable — they are stories that look like analysis.".to_string()
     }
 }
 
@@ -330,9 +351,9 @@ impl PromptSection for ConfidenceCalibrationSection {
     fn render(&self, _ctx: &PromptContext) -> String {
         "RULE 23 — TRUST CALIBRATION: Mark parts of your answer with confidence so the user can see what to verify.\n\
         - Inline markers (use SPARINGLY — at most 2-3 per response, on the words that matter):\n  \
-            [~hedged~]   — wraps a phrase you're unsure about (renders dotted-underlined)\n  \
-            [!certain!]  — wraps a fact you have direct evidence for (renders subtly underlined)\n  \
-            [?speculation?] — wraps a guess you're stating as a possibility (renders italic amber)\n\
+            [~hedged~]   — wraps a phrase you're unsure about (renders dotted-underlined). Example: El proceso [~podría estar bloqueado~] por el antivirus.\n  \
+            [!fact text!] — wraps a specific fact you have direct evidence for (renders subtly underlined). Example: El servicio lleva [!detenido desde las 03:14!] según el log. NEVER write just [!certain!] — always wrap the actual claim text.\n  \
+            [?speculation?] — wraps a guess you're stating as a possibility (renders italic amber). Example: [?Quizás sea un problema de permisos?]\n\
         - Citation chips: <CITE src=\"path-or-id\" kind=\"memory|file|url|tool\">short label</CITE>\n  \
             Use whenever a claim comes from a specific source. Examples:\n  \
             <CITE src=\"mem-12af\" kind=\"memory\">prior session</CITE>\n  \
@@ -416,9 +437,12 @@ impl PromptSection for CodeWorkflowSection {
         1. Explore codebase with searchfiles/readfile.\n\
         2. Implement with editfile/writefile.\n\
         3. ALWAYS verify with build/test commands via <EXECUTE>.\n\
-        ⚠️ NEVER chain commands with `&&` in PowerShell. Use `;` or separate calls.\n\
+        ⚠️ POWERSHELL SYNTAX: NEVER chain commands with `&&` — use `;` or separate <EXECUTE> calls. `&&` only works in CMD/bash.\n\
         ⚠️ Use `--manifest-path` for Cargo, `--prefix` for npm.\n\
-        4. On failure: read error → <THOUGHT> → fix → retry. Work autonomously as a senior developer.".to_string()
+        4. On failure: read error → <THOUGHT> → fix → retry. Work autonomously as a senior developer.\n\
+        RULE 28 — SCRIPT SELF-REVIEW (apply before showing any generated script > 5 lines):\n\
+        Silently check the script for: (1) variables used before initialization, (2) hardcoded paths that assume a specific user or machine, (3) commands that can fail silently without error handling, (4) PowerShell-specific syntax used in bash context or vice versa. Fix issues silently. Only mention corrections if they change the logic significantly.\n\
+        RULE 32 — IDEMPOTENCY PREFERENCE: When generating scripts or commands, prefer idempotent forms that are safe to run multiple times: use `New-Item -Force` instead of checking existence first; `Set-Content` instead of `Add-Content` when replacing; `CREATE OR REPLACE` / `IF NOT EXISTS` in SQL; `-ErrorAction SilentlyContinue` on non-critical reads; `Copy-Item -Force` for overwrites. When idempotency is NOT achievable (e.g. appending to a log, incrementing a counter), add a comment `# NOTE: not idempotent — running twice will duplicate the effect` so the user is aware.".to_string()
     }
 }
 
@@ -428,7 +452,7 @@ impl PromptSection for ReactSelfCorrectionSection {
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 65 }
     fn render(&self, _ctx: &PromptContext) -> String {
-        "RULE 23 — REACT SELF-CORRECTION (MANDATORY on failure): Tool results arrive tagged with [EXIT_CODE: N]. \
+        "RULE 27 — REACT SELF-CORRECTION (MANDATORY on failure): Tool results arrive tagged with [EXIT_CODE: N]. \
         0 = success, 1 = soft warning (inspect), 2 = hard failure (MUST reflect). \
         If you see `[TOOL FAILURE DETECTED]`, your NEXT response MUST begin with <THOUGHT> (≤80 words): \
         (a) probable root cause, (b) was command wrong or environment unexpected, (c) a DIFFERENT next action. \
@@ -460,6 +484,63 @@ impl PromptSection for PdfIntelligenceSection {
         "RULE 7 — PDF GENERATION: Use Edge Headless. NEVER call 'msedge' as bare command — use full path with & operator.\n\
         RULE 26 — PDF INTELLIGENCE: Users can ingest PDF manuals using the PDF panel (sidebar). When ingested, content is stored as episodic memories AND semantic vectors. \
         Search with: (1) <TOOL>memoria_buscar:terms</TOOL> for FTS, (2) <TOOL>pdf_search:question</TOOL> for semantic. Cite document name and section.".to_string()
+    }
+}
+
+/// Injects the user's recent file activity from the Personal Knowledge Graph.
+/// Gives Lucy implicit context like "the file I was just editing" without the
+/// user having to spell it out — they can ask "summarize the function I added"
+/// and Lucy knows which file to look at.
+///
+/// Two-tier query: first try files under the current working directory; if
+/// nothing comes back (cwd not indexed yet), fall back to the 5 most recently
+/// touched files anywhere in tracked roots. Capped at 8 entries so the block
+/// stays under ~600 chars even with long Windows paths.
+///
+/// Skipped entirely when the knowledge graph is empty (no roots configured) —
+/// the section returns "" and the prompt builder drops empty sections.
+pub struct KnowledgeGraphBlock;
+impl PromptSection for KnowledgeGraphBlock {
+    fn name(&self) -> &'static str { "KnowledgeGraph" }
+    fn relevant(&self, _ctx: &PromptContext) -> bool { true } // self-skipping when KG is empty
+    fn priority(&self) -> u32 { 78 }
+    fn render(&self, ctx: &PromptContext) -> String {
+        use crate::commands::knowledge_graph::kg_recent_files_sync;
+        // Prefer files under the current working dir — gives strong "session context"
+        let cwd_files = kg_recent_files_sync(Some(ctx.working_dir.to_string()), Some(8));
+        let files = if !cwd_files.is_empty() {
+            cwd_files
+        } else {
+            // Fallback: 5 most-recently-touched globally
+            kg_recent_files_sync(None, Some(5))
+        };
+        if files.is_empty() {
+            return String::new();
+        }
+
+        // Format timestamps as relative (e.g. "hace 2h") for human-readable context.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let humanize_age = |ts: i64| -> String {
+            let age_sec = (now - ts).max(0);
+            if age_sec < 60          { format!("hace {}s", age_sec) }
+            else if age_sec < 3600   { format!("hace {}m", age_sec / 60) }
+            else if age_sec < 86400  { format!("hace {}h", age_sec / 3600) }
+            else                     { format!("hace {}d", age_sec / 86400) }
+        };
+
+        let mut out = String::with_capacity(640);
+        out.push_str("--- RECENT FILE ACTIVITY (Personal Knowledge Graph) ---\n");
+        out.push_str("Files the user has touched recently (most recent first). Use this as IMPLICIT context — when the user says 'el archivo que estaba editando', 'esa función', or makes other unresolved references, this list is usually the answer. Do NOT echo this block verbatim back to the user.\n");
+        for f in files.iter().take(8) {
+            let ext_tag = if f.extension.is_empty() { String::new() } else { format!(" .{}", f.extension) };
+            out.push_str(&format!("  · {}{} ({}, {} touches)\n",
+                f.path, ext_tag, humanize_age(f.last_mtime), f.touch_count));
+        }
+        out.push_str("--- END RECENT FILE ACTIVITY ---");
+        out
     }
 }
 
@@ -502,7 +583,7 @@ impl PromptSection for UserInstructionSection {
     fn priority(&self) -> u32 { 100 } // always last
     fn render(&self, ctx: &PromptContext) -> String {
         format!(
-            "The user's name is {name}. Always address them by name.\nINSTRUCTION: {prompt}",
+            "The user's name is {name}. Use their name only when it feels natural — do NOT start every response with 'Hola, {name}' or any greeting. In an ongoing conversation, skip the greeting entirely and continue directly. Reserve greetings for the very first message of a new session.\nINSTRUCTION: {prompt}",
             name = ctx.user_name,
             prompt = ctx.user_prompt,
         )
@@ -533,6 +614,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &ReactSelfCorrectionSection,
         &PlanActVerifySection,
         &PdfIntelligenceSection,
+        &KnowledgeGraphBlock,
         &CoreMemoryBlock,
         &PrinciplesBlock,
         &HostsContextBlock,
@@ -547,12 +629,56 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         .collect();
     active.sort_by_key(|s| s.priority());
 
+    // ── Sprint 1, AI-1 — Cache boundary insertion ────────────────────────
+    // Sections whose content is STABLE across all turns of a session (rules,
+    // tool catalog, output-format guidance, identity) are placed BEFORE a
+    // boundary marker. ai.rs splits on the marker for Anthropic prompt
+    // caching: stable half → `system` block with cache_control: ephemeral
+    // → 90% discount on subsequent hits.
+    //
+    // Stable list = anything that doesn't depend on per-turn state. If you
+    // add a new section that varies turn-to-turn, do NOT include its name
+    // here. False positives = stale cached content = bad answers.
+    const STABLE_SECTIONS: &[&str] = &[
+        "Identity",              // user_name + lang — fixed during a session
+        "IntentDetection",
+        "SafetyRules",
+        "MemoryRules",
+        "HostRouting",
+        "AlternativeExecutors",
+        "FileTools",
+        "WebKnowledge",
+        "ConfidenceCalibration",
+        "SubAgents",
+        "PersistentMemory",
+        "TieredMemory",
+        "CodeWorkflow",
+        "ReactSelfCorrection",
+        "PlanActVerify",
+        "PdfIntelligence",
+    ];
+    let is_stable = |name: &str| STABLE_SECTIONS.contains(&name);
+
     // Estimate capacity: most prompts are 4-8 KB
     let mut out = String::with_capacity(8192);
+    let mut boundary_inserted = false;
+    let mut prev_was_stable = false;
     for (i, section) in active.iter().enumerate() {
         if i > 0 { out.push('\n'); }
+        let stable = is_stable(section.name());
+        // Insert the boundary EXACTLY when we transition from stable → dynamic.
+        // This way the cacheable half is always a contiguous prefix.
+        if !boundary_inserted && prev_was_stable && !stable {
+            out.push_str(LUCY_CACHE_BOUNDARY);
+            out.push('\n');
+            boundary_inserted = true;
+        }
         out.push_str(&section.render(ctx));
+        prev_was_stable = stable;
     }
+    // Edge case: every active section was stable (rare — UserInstruction is
+    // always dynamic). Don't emit a trailing-only boundary because there's
+    // nothing after it to put in the user message.
     out
 }
 

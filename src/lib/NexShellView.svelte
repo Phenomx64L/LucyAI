@@ -8,6 +8,7 @@
     import { tick, createEventDispatcher, onDestroy } from 'svelte';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
     import { staggerIn } from '$lib/stagger';
+    import ShellRecordingPlayer from '$lib/ShellRecordingPlayer.svelte';
     import { logAuditEntry } from '$lib/audit';
     import { analyzeCommand, shouldBlock, checkPermissionRules } from '$lib/hooks/command-guard';
     import { guardConfig } from '$lib/stores';
@@ -28,67 +29,19 @@
         extractCommand as skExtractCommand, extractVerdict as skExtractVerdict, cleanResponse as skCleanResponse
     } from '$lib/skills/skill-engine';
     import { registerBuiltinSkills } from '$lib/skills/builtin/index';
+    // Debug logs subsystem extracted to its own module (May 2026 audit).
+    // addDebugLog + downloadDebugLogs preserve the original API so call sites
+    // throughout this file are unchanged. The buffer + window globals live
+    // in the module now.
+    import { addDebugLog, downloadDebugLogs as _downloadDebugLogsRaw } from '$lib/page/nexshell-debug-logs';
 
     // Register built-in skills once on module load
     registerBuiltinSkills();
 
     const dispatch = createEventDispatcher();
 
-    // ── LOGGING SYSTEM ──────────────────────────────────────────────────────
-    let debugLogs = [];
-    const MAX_LOGS = 2000;
-    function addDebugLog(category, message, data = null) {
-        const timestamp = new Date().toISOString();
-        const entry = { timestamp, category, message, data };
-        debugLogs = [entry, ...debugLogs].slice(0, MAX_LOGS);
-
-        // Log to console for real-time inspection
-        const logMsg = `[${timestamp}] [${category}] ${message}${data ? ' → ' + JSON.stringify(data) : ''}`;
-        console.log(logMsg);
-
-        // Store in window for easy access
-        if (typeof window !== 'undefined') {
-            window.__lucy_debug_logs = debugLogs;
-            window.__lucy_debug_export = () => {
-                const content = debugLogs
-                    .map(l => `${l.timestamp} [${l.category}] ${l.message}${l.data ? ' → ' + JSON.stringify(l.data) : ''}`)
-                    .join('\n');
-                console.log('=== COPY LOGS BELOW ===');
-                console.log(content);
-                console.log('=== END LOGS ===');
-                return content;
-            };
-        }
-    }
-    function downloadDebugLogs() {
-        try {
-            const content = debugLogs
-                .map(l => `${l.timestamp} [${l.category}] ${l.message}${l.data ? ' → ' + JSON.stringify(l.data) : ''}`)
-                .join('\n');
-
-            if (!content.trim()) {
-                toast(isEN ? 'No logs available' : 'No hay logs disponibles', 'info');
-                return;
-            }
-
-            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', `nexshell-debug-${Date.now()}.log`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            // Release the object URL — prevents the Blob memory from being
-            // pinned indefinitely. 1s delay so the click had time to start.
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-            toast(isEN ? 'Logs downloaded' : 'Logs descargados', 'success');
-        } catch (e) {
-            toast(`Error: ${e}`, 'error');
-            console.error('Download failed:', e);
-        }
-    }
+    // Thin wrapper so existing call sites don't need to pass toast/isEN.
+    function downloadDebugLogs() { _downloadDebugLogsRaw(toast, isEN); }
 
     // ── Props (from parent) ─────────────────────────────────────────────────
     export let rshellSessions = [];
@@ -139,6 +92,10 @@
     let pbForm                 = { name: '', commands: '' };
 
     let showBroadcast          = false;
+    // Tier S #3 — Session recording player overlay
+    let showRecPlayer          = false;
+    let recPlayerHostId        = null;
+    let recPlayerOpenId        = null;
     let broadcastShellId       = null;
     let broadcastCmd           = '';
     let broadcastSelected      = new Set();
@@ -216,6 +173,48 @@
 
     const getShell = (id) => rshellSessions.find(s => s.id === id);
 
+    /**
+     * Adaptive watchdog timeout (Sprint 1, NS-2).
+     *
+     * The watchdog kills a remote session if no chunks arrive for the budget
+     * window. A flat 5min was killing legitimate long-running commands
+     * (apt upgrade, npm install, cargo build, rsync, docker pull...).
+     *
+     * Heuristic table — first match wins, ordered most-specific first:
+     *   60 min — system upgrades, dist-upgrade, OS package transactions
+     *   30 min — large rsync/scp/sftp transfers
+     *   30 min — heavy builds (cargo, gradle, maven, npm install)
+     *   15 min — git clone/pull, docker pull, downloads (wget/curl -O)
+     *    5 min — default for everything else
+     *
+     * NOT a hard cap on runtime — the user can still cancel manually. This
+     * only governs the "silent for too long" detection.
+     */
+    function computeWatchdogMs(cmd) {
+        if (!cmd) return 5 * 60_000;
+        const c = cmd.toLowerCase();
+        // 60 min — full-system updates
+        if (/\b(apt|apt-get)\s+(upgrade|dist-upgrade|full-upgrade)\b/.test(c)) return 60 * 60_000;
+        if (/\b(yum|dnf|zypper)\s+(update|upgrade|distro-sync)\b/.test(c))     return 60 * 60_000;
+        if (/\bpacman\s+-Syu\b/.test(c))                                       return 60 * 60_000;
+        if (/\bchocolatey\s+upgrade\b|\bchoco\s+upgrade\b|\bwinget\s+upgrade\s+--all\b/.test(c)) return 60 * 60_000;
+        // 30 min — large transfers
+        if (/\brsync\b|\bscp\b|\bsftp\b\s/.test(c))                            return 30 * 60_000;
+        // 30 min — heavy builds + npm/cargo/pip installs
+        if (/\bnpm\s+install\b|\byarn\s+install\b|\bpnpm\s+install\b/.test(c)) return 30 * 60_000;
+        if (/\bcargo\s+(build|install|update)\b/.test(c))                      return 30 * 60_000;
+        if (/\bgradle\s+(build|assemble)\b|\bmvn\s+(install|package)\b/.test(c)) return 30 * 60_000;
+        if (/\bdocker\s+build\b/.test(c))                                      return 30 * 60_000;
+        if (/\bpip\s+install\b/.test(c))                                       return 30 * 60_000;
+        // 15 min — moderate downloads / clones
+        if (/\bgit\s+(clone|pull|fetch)\b/.test(c))                            return 15 * 60_000;
+        if (/\bdocker\s+pull\b/.test(c))                                       return 15 * 60_000;
+        if (/\bwget\b|\bcurl\b.*\s-O\b|\bcurl\b.*--output\b/.test(c))          return 15 * 60_000;
+        if (/\binvoke-webrequest\b/.test(c))                                   return 15 * 60_000;
+        // Default — quick commands, no excuse to be silent for >5 min
+        return 5 * 60_000;
+    }
+
     // ── Reactive: sorted/filtered host list ─────────────────────────────────
     $: nsHostsSorted = (() => {
         let list = hosts.filter(h =>
@@ -282,6 +281,77 @@
         });
     }
 
+    // ── Session Recording (Tier S #3) ──────────────────────────────────────
+    // Persistent timeline of every cmd/out/err/exit for a shell session.
+    // Storage in SQLite via shell_recording_* commands. The frontend keeps
+    // a tiny per-session metadata object (recording_id + t0_ms) on the
+    // shell session itself: `s._rec = { id, t0 }`. When grabbing, every
+    // chunk handler fires-and-forgets an append.
+    //
+    // We never await the append — a slow disk shouldn't stall the chat.
+    // Failed appends are silently dropped; the recording will be missing
+    // some events but the live UI keeps working.
+    async function rsRecordingStart(id) {
+        const s = getShell(id);
+        if (!s || s._rec) return;
+        try {
+            const recId = await invoke('shell_recording_start', {
+                args: {
+                    session_id: id,
+                    host_id: s.host?.id || '',
+                    host_name: s.host?.name || '',
+                    host_type: s.host?.type || '',
+                    title: '',
+                },
+            });
+            s._rec = { id: recId, t0: Date.now() };
+            rshellSessions = [...rshellSessions];
+            rsLogTo(id, 'info', `● Grabación iniciada (#${recId})`);
+        } catch (e) {
+            rsLogTo(id, 'err', `No se pudo iniciar grabación: ${String(e)}`);
+        }
+    }
+
+    async function rsRecordingStop(id) {
+        const s = getShell(id);
+        if (!s || !s._rec) return;
+        const recId = s._rec.id;
+        s._rec = null;
+        rshellSessions = [...rshellSessions];
+        try {
+            await invoke('shell_recording_finish', { recordingId: recId, title: null });
+            rsLogTo(id, 'info', `■ Grabación finalizada (#${recId})`);
+        } catch (e) {
+            rsLogTo(id, 'err', `No se pudo finalizar grabación: ${String(e)}`);
+        }
+    }
+
+    /** Append fire-and-forget. Never await; never throw. */
+    function rsRecordingAppend(id, kind, data) {
+        const s = getShell(id);
+        if (!s?._rec || !data) return;
+        const tMs = Date.now() - s._rec.t0;
+        // We slice large chunks to keep individual rows reasonable. SQLite
+        // handles big TEXT fine, but the player will paginate output and
+        // smaller rows give smoother scrubbing.
+        const MAX_ROW = 8192;
+        const text = String(data);
+        if (text.length <= MAX_ROW) {
+            invoke('shell_recording_append', {
+                recordingId: s._rec.id, tMs, kind, data: text,
+            }).catch(() => {});
+        } else {
+            // Chunk into ≤8KB pieces, all sharing the same t_ms so the
+            // player can re-assemble them as one logical burst.
+            for (let i = 0; i < text.length; i += MAX_ROW) {
+                const slice = text.slice(i, i + MAX_ROW);
+                invoke('shell_recording_append', {
+                    recordingId: s._rec.id, tMs, kind, data: slice,
+                }).catch(() => {});
+            }
+        }
+    }
+
     // ── Log to history ──────────────────────────────────────────────────────
     function rsLogTo(id, type, text, meta = {}) {
         const s = getShell(id);
@@ -314,6 +384,10 @@
     function rsHandleStreamChunk(id, chunk, isErr) {
         const s = getShell(id);
         if (!s || !s.isStreaming) return;
+        // Bump the watchdog — any chunk means the connection is alive.
+        if (typeof s._streamWatchdogBump === 'function') s._streamWatchdogBump();
+        // Tier S #3 — Record this chunk if a session recording is active.
+        rsRecordingAppend(id, isErr ? 'err' : 'out', chunk);
         s.streamOut = (s.streamOut || '') + chunk;
         // Cap streaming buffer at 100KB to prevent unbounded memory growth
         // on long-running shell sessions (verbose logs, tail -f, etc.). The
@@ -359,6 +433,18 @@
     function rsStreamDone(id, exitCode = null, durationMs = null) {
         const s = getShell(id);
         if (!s || !s.isStreaming) return;
+        // Stop the watchdog — natural completion, no hang to worry about.
+        if (s._streamWatchdogInterval) {
+            try { clearInterval(s._streamWatchdogInterval); } catch {}
+            s._streamWatchdogInterval = null;
+            s._streamWatchdogBump = null;
+        }
+        // Tier S #3 — record the exit event before any final cleanup. The
+        // payload is JSON-encoded so the player can show exit + duration
+        // without parsing free text.
+        rsRecordingAppend(id, 'exit', JSON.stringify({
+            exit_code: exitCode, duration_ms: durationMs,
+        }));
         const finalOut = s.streamOut || '';
         if (finalOut.trim()) rsLogTo(id, 'out', finalOut, { exitCode, durationMs });
         // Log to audit trail
@@ -659,6 +745,14 @@
                 });
                 // If guard blocks and user cancels, we still need to resolve
                 const checkCancel = setInterval(() => {
+                    // Defensive: stop polling if the component went away
+                    // mid-wait (user navigated to another view). Without
+                    // this guard the interval ticks forever against stale state.
+                    if (_componentDestroyed) {
+                        clearInterval(checkCancel);
+                        resolve();
+                        return;
+                    }
                     if (!guardAssessment && !fixApplied) {
                         clearInterval(checkCancel);
                         resolve();
@@ -800,6 +894,9 @@
                         resolve();
                     });
                     const check = setInterval(() => {
+                        // Same defensive guard as turn-loop checkCancel — bail
+                        // out cleanly if the component unmounted mid-wait.
+                        if (_componentDestroyed) { clearInterval(check); resolve(); return; }
                         if (!guardAssessment && !executed) { clearInterval(check); resolve(); }
                     }, 500);
                 });
@@ -856,6 +953,10 @@
     function rsRunStreaming(id, cmd) {
         const s = getShell(id);
         if (!s) return Promise.resolve('');
+        // Tier S #3 — record the command BEFORE we mark isStreaming so the
+        // chunk handler can already consume the 'cmd' event before the
+        // first stdout arrives.
+        rsRecordingAppend(id, 'cmd', cmd);
         s.running = true;
         s.isStreaming = true;
         s.streamOut = '';
@@ -865,6 +966,42 @@
         rshellSessions = [...rshellSessions];
         return new Promise((resolve) => {
             s._streamResolve = resolve;
+            // ── Adaptive Watchdog (Sprint 1, NS-2) ───────────────────────────
+            // Was a hardcoded 5 min for ALL commands — but legitimate long
+            // operations (`apt upgrade`, `npm install`, `cargo build`, `rsync`)
+            // legitimately go silent for 10-30 min while compiling / fetching.
+            // The flat watchdog killed them as false-positives.
+            //
+            // Now: timeout is selected from a small heuristic table by
+            // command shape. The user sees the chosen budget as a badge
+            // during execution so they know what to expect.
+            //
+            // Categories (silent-period budget in MS):
+            //   60 min — heavy installs / system upgrades / sync
+            //   30 min — long downloads, builds, image pulls
+            //   15 min — clones, transfers
+            //    5 min — default (Get-*, ls, ping, anything quick)
+            const watchdogMs = computeWatchdogMs(cmd);
+            s._streamWatchdogBudget = watchdogMs;
+            let _lastChunkAt = Date.now();
+            s._streamWatchdogBump = () => { _lastChunkAt = Date.now(); };
+            const _watchdog = setInterval(() => {
+                if (!s.isStreaming) {
+                    clearInterval(_watchdog);
+                    return;
+                }
+                if (Date.now() - _lastChunkAt > watchdogMs) {
+                    clearInterval(_watchdog);
+                    const mins = Math.round(watchdogMs / 60000);
+                    rsLogTo(id, 'err', `⏱ Watchdog: ${mins} min sin chunks. Cerrando sesión por seguridad.`);
+                    invoke('kill_shell_session', { sessionId: id }).catch(() => {});
+                    const sx = getShell(id);
+                    if (sx) { sx.running = false; sx.isStreaming = false; rshellSessions = [...rshellSessions]; }
+                    if (s._streamResolve) { s._streamResolve(s.streamOut || ''); s._streamResolve = null; }
+                }
+            }, 30_000); // check every 30s — cheap, doesn't need to be precise
+            s._streamWatchdogInterval = _watchdog;
+
             invoke('stream_shell_cmd', {
                 sessionId: id,
                 host: s.host.host, username: s.host.username, command: cmd,
@@ -872,6 +1009,7 @@
                 port: s.host.port || (s.host.type === 'linux' ? 22 : 5985),
                 password: s.host.password || null, keyPath: s.host.sshKeyPath || null
             }).catch(e => {
+                clearInterval(_watchdog);
                 rsLogTo(id, 'err', String(e));
                 const sx = getShell(id);
                 if (sx) { sx.running = false; sx.isStreaming = false; }
@@ -949,6 +1087,32 @@
             return;
         }
 
+        // ── NS-5 (Sprint 3): SSH key path pre-flight ────────────────────────
+        // If the user configured a key path but the file is missing/typo'd,
+        // ssh will fail with the generic "Permission denied (publickey)" —
+        // making it look like an auth problem when it's actually a typo.
+        // Surface a precise error BEFORE we burn a connection attempt.
+        if (h.type === 'linux' && h.sshKeyPath) {
+            try {
+                const probe = await invoke('path_exists', { path: h.sshKeyPath });
+                if (!probe?.exists) {
+                    rsLogTo(id, 'err',
+                        `✗ SSH key no encontrada: ${h.sshKeyPath} · Verifica la ruta en el host (Editar → SSH Key Path).`);
+                    return;
+                }
+                if (!probe?.is_file) {
+                    rsLogTo(id, 'err',
+                        `✗ La ruta de SSH key no es un archivo: ${h.sshKeyPath}`);
+                    return;
+                }
+            } catch (e) {
+                // Probe itself errored (e.g. permission denied reading metadata).
+                // Don't block — surface a warning and let ssh try anyway.
+                rsLogTo(id, 'warn',
+                    `· No pude verificar la SSH key (${String(e).slice(0,120)}). Intento conectar de todas formas…`);
+            }
+        }
+
         // ── Normal WinRM/SSH path ──────────────────────────────────────────────
         const outUnlisten  = await listen(`ssh-out-${id}`,  (e) => rsHandleStreamChunk(id, String(e.payload), false));
         const errUnlisten  = await listen(`ssh-err-${id}`,  (e) => rsHandleStreamChunk(id, String(e.payload), true));
@@ -965,11 +1129,42 @@
 
         rsLogTo(id, 'info', `Conectando a ${h.name} (${h.host})...`);
         const testCmd = h.type === 'linux' ? 'echo "Lucy:OK" && uname -a' : 'echo "Lucy:OK"; $env:OS';
+        // ── NS-4 (Sprint 2): Auto-reconnect con backoff exponencial ─────────
+        // Networks blip. WinRM listeners restart. SSH daemons get reloaded.
+        // A failed first attempt rarely means the host is permanently down —
+        // it usually means "try again in a few seconds". We retry up to
+        // RECONNECT_MAX times with delays 2s / 4s / 8s before surfacing the
+        // failure to the user. Cancelable: if the user closes the shell
+        // mid-retry the existence check (getShell) bails out.
+        const RECONNECT_MAX = 3;
+        const RECONNECT_DELAYS_MS = [2_000, 4_000, 8_000];
+        let out = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt <= RECONNECT_MAX; attempt++) {
+            // Bail if the user closed the shell mid-retry.
+            if (!getShell(id)) return;
+            if (attempt > 0) {
+                const delay = RECONNECT_DELAYS_MS[attempt - 1] || 8_000;
+                rsLogTo(id, 'info', `⟳ Reintento ${attempt}/${RECONNECT_MAX} en ${Math.round(delay/1000)}s…`);
+                await new Promise(r => setTimeout(r, delay));
+                if (!getShell(id)) return; // user closed during the wait
+            }
+            try {
+                out = await invoke('execute_shell_cmd', {
+                    host: h.host, username: h.username, command: testCmd,
+                    hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985), password: pwd || null, keyPath: h.sshKeyPath||null
+                });
+                lastErr = null;
+                break; // success — exit retry loop
+            } catch (e) {
+                lastErr = e;
+                if (attempt < RECONNECT_MAX) {
+                    rsLogTo(id, 'warn', `· Intento ${attempt + 1} falló: ${String(e).slice(0, 120)}`);
+                }
+            }
+        }
         try {
-            const out = await invoke('execute_shell_cmd', {
-                host: h.host, username: h.username, command: testCmd,
-                hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985), password: pwd || null, keyPath: h.sshKeyPath||null
-            });
+            if (lastErr) throw lastErr;
             const s = getShell(id);
             if (s) { s.connected = true; rshellSessions = [...rshellSessions]; }
             rsLogTo(id, 'info', `✓ ${isEN ? 'Connected to' : 'Conectado a'} ${h.name} · ${h.type === 'linux' ? 'SSH activo' : 'WinRM'}`);
@@ -994,14 +1189,53 @@
                 if (data.tools)      rsLogTo(id, 'info', `Herramientas: ${data.tools}`);
             }).catch(() => {});
 
-        } catch(e) { rsLogTo(id, 'err', `✗ No se pudo conectar: ${e}`); }
+        } catch(e) {
+            rsLogTo(id, 'err', `✗ No se pudo conectar tras ${RECONNECT_MAX + 1} intentos: ${e}`);
+        }
     }
 
     // ── Close shell ─────────────────────────────────────────────────────────
     function cerrarShell(id) {
         const dying = getShell(id);
+        // Tier S #3 — if a recording is active, finalize it BEFORE we wipe
+        // the session state. The finish call is async but we don't await
+        // (it's an INSERT, milliseconds) — the user closing the shell
+        // shouldn't have to wait for SQLite.
+        if (dying?._rec) rsRecordingStop(id);
         if (dying?._unlisten) dying._unlisten();
         if (dying?.isStreaming) invoke('kill_shell_session', { sessionId: id }).catch(() => {});
+        // ── BUG FIX (May 2026): _streamResolve hang on shell close ──────────
+        // Any code awaiting `rsRunStreaming(id, cmd)` when the user closes
+        // the shell would hang forever — the done event never fires after
+        // _unlisten() removed the listener. Resolve with empty string so
+        // the caller's chain progresses to its finally block.
+        if (dying?._streamResolve) {
+            try { dying._streamResolve(''); } catch {}
+            dying._streamResolve = null;
+        }
+        // Stop the watchdog if active (mirrors rsStreamDone cleanup).
+        if (dying?._streamWatchdogInterval) {
+            try { clearInterval(dying._streamWatchdogInterval); } catch {}
+            dying._streamWatchdogInterval = null;
+            dying._streamWatchdogBump = null;
+        }
+        // ── BUG FIX (May 2026): orphaned tailIntervals on shell close ───────
+        // tailIntervals keys are `${shellId}::${path}` — when the shell goes
+        // away we must clear any tails that were polling it, otherwise the
+        // timers keep firing against a dead session, push log noise into the
+        // closed shell's history (now invisible), and leak memory.
+        const prefix = `${id}::`;
+        for (const key of Object.keys(tailIntervals)) {
+            if (key.startsWith(prefix)) {
+                clearTimeout(tailIntervals[key]);
+                delete tailIntervals[key];
+            }
+        }
+        // Cancel any pending AI suggestion timer for this shell too.
+        if (dying?._aiSuggTimer) {
+            try { clearTimeout(dying._aiSuggTimer); } catch {}
+            dying._aiSuggTimer = null;
+        }
         rshellSessions = rshellSessions.filter(s => s.id !== id);
         if (activeShellId === id) {
             const otra = rshellSessions.find(s => !s.minimized) || rshellSessions[rshellSessions.length-1];
@@ -2013,6 +2247,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             {#if h.color && h.color !== '#10b981'}<span class="ns-color-dot" style="background:{h.color};"></span>{/if}
             {#if sess}
               <span class="ns-conn-pill {sess.connected ? 'ns-conn-ok' : 'ns-conn-wait'}">{sess.connected ? '● Conectado' : '⟳ Conectando…'}</span>
+              {#if sess._rec}<span class="ns-rec-badge" title={isEN ? 'Recording active' : 'Grabando'}>● REC</span>{/if}
             {:else if h.lastActivity}
               <span class="ns-activity-ts">{nsRelTime(h.lastActivity)}</span>
             {/if}
@@ -2028,11 +2263,42 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
           <div class="ns-card-actions">
             {#if sess}
               <button class="ns-act-btn ns-act-open" on:click|stopPropagation={() => activeShellId = sess.id}><ArrowUp size={11}/> Ver</button>
+              <!-- Tier S #3 — Toggle recording on/off for this shell session.
+                   Only meaningful for non-RDP sessions (RDP is clipboard-mode,
+                   the actual command stream isn't observed). -->
+              {#if !sess.rdpMode}
+                <button class="ns-act-btn"
+                        class:ns-act-recording={sess._rec}
+                        on:click|stopPropagation={() => sess._rec ? rsRecordingStop(sess.id) : rsRecordingStart(sess.id)}
+                        title={sess._rec
+                            ? (isEN ? 'Stop recording' : 'Detener grabación')
+                            : (isEN ? 'Start recording' : 'Iniciar grabación')}>
+                    {sess._rec ? '■ REC' : '● REC'}
+                </button>
+              {/if}
+              <!-- NS-6 (Sprint 4) — Manual reconnect when the session is dead.
+                   Pairs with NS-4's auto-retry on initial connect: that covered
+                   the "didn't connect the first time" path. This covers "lost
+                   the connection mid-session" (e.g. laptop sleep, VPN drop)
+                   where automatic recovery isn't safe and the user wants a
+                   one-click resurrection. We tear down the dead session first
+                   so abrirRShell creates a fresh one. -->
+              {#if !sess.connected && !sess.running && !sess.isStreaming && !sess.rdpMode}
+                <button class="ns-act-btn ns-act-connect" on:click|stopPropagation={() => {
+                    rsDetenerTodosTails(sess.id);
+                    cerrarShell(sess.id);
+                    abrirRShell(h);
+                  }}><Zap size={11}/> {isEN ? 'Reconnect' : 'Reconectar'}</button>
+              {/if}
               <button class="ns-act-btn ns-act-close" on:click|stopPropagation={() => { rsDetenerTodosTails(sess.id); cerrarShell(sess.id); }}><X size={12}/></button>
             {:else}
               <button class="ns-act-btn ns-act-connect" on:click|stopPropagation={() => abrirRShell(h)}><Zap size={11}/> {isEN ? 'Connect' : 'Conectar'}</button>
             {/if}
             <button class="ns-act-btn ns-act-edit" on:click|stopPropagation={() => abrirHostModal(h)}><Edit2 size={11}/></button>
+            <!-- Tier S #3 — Open the recording player scoped to this host -->
+            <button class="ns-act-btn ns-act-play"
+                    on:click|stopPropagation={() => { recPlayerHostId = h.id; recPlayerOpenId = null; showRecPlayer = true; }}
+                    title={isEN ? 'Open recordings for this host' : 'Ver grabaciones de este host'}>►</button>
           </div>
         </div>
       {/each}
@@ -2826,6 +3092,15 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
   on:cancel={() => incidentPrompt = null}
 />
 
+<!-- Tier S #3 — Shell recording player overlay -->
+{#if showRecPlayer}
+    <ShellRecordingPlayer
+        {isEN}
+        initialHostId={recPlayerHostId}
+        initialRecordingId={recPlayerOpenId}
+        on:close={() => { showRecPlayer = false; recPlayerHostId = null; recPlayerOpenId = null; }}/>
+{/if}
+
 <style>
     /* ══════════════════════════════════════════════════════════════════════════ */
     /* NexShell View Styles                                                      */
@@ -3046,6 +3321,29 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .ns-conn-ok  { background:rgba(0,230,130,.15);color:#00e682;border-color:rgba(0,230,130,.3); }
     .ns-conn-wait{ background:rgba(255,200,0,.12);color:#ffc800;border-color:rgba(255,200,0,.25); }
     .ns-activity-ts{ font-size:9px;color:#2a3a4a;margin-left:auto; }
+    /* Tier S #3 — Recording badge + button states */
+    .ns-rec-badge{
+        font-size:9px;font-weight:700;letter-spacing:0.4px;
+        background:rgba(239,68,68,.18);color:#ef4444;
+        border:1px solid rgba(239,68,68,.32);
+        padding:1px 6px;border-radius:8px;
+        animation: nsRecPulse 1.6s ease-in-out infinite;
+    }
+    @keyframes nsRecPulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.55; }
+    }
+    .ns-act-recording{
+        background:rgba(239,68,68,.18) !important;
+        color:#ef4444 !important;
+        border-color:rgba(239,68,68,.30) !important;
+    }
+    .ns-act-play{
+        background:rgba(96,165,250,.12) !important;
+        color:#60a5fa !important;
+        border-color:rgba(96,165,250,.24) !important;
+    }
+    .ns-act-play:hover{ background:rgba(96,165,250,.22) !important; }
 
     /* Bootstrap env badges on card */
     .ns-card-env{

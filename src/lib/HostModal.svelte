@@ -105,6 +105,87 @@
     // Reactive: filter protocols by category for a cleaner UX
     $: protocolHint = PROTOCOLS.find(p => p.value === hostForm.protocol);
 
+    // ── Test connection state ──────────────────────────────────────────────
+    // Lets the user verify the host is reachable BEFORE saving — avoids the
+    // "saved a typo, fail at first use" frustration that was the #1 NexShell
+    // pain point reported in the May 2026 audit.
+    let testResult = null;    // { ok: bool, message: string, elapsedMs: number } | null
+    let testRunning = false;
+
+    /** Validates inputs, then runs a tiny `echo` command against the host
+     *  to confirm credentials + network reach. Idempotent — the user can
+     *  run it multiple times; each run replaces the previous result.
+     */
+    async function testConnection() {
+        // Pre-validate same fields as guardarHost — surface friendly errors
+        // up front instead of failing inside the Rust execute_shell_cmd call.
+        if (!hostForm.host.trim())     { testResult = { ok: false, message: 'Falta host/IP', elapsedMs: 0 }; return; }
+        if (!hostForm.username.trim()) { testResult = { ok: false, message: 'Falta usuario', elapsedMs: 0 }; return; }
+        // Determine which protocols we can actually preflight via execute_shell_cmd.
+        // Database/HTTP protocols don't have an SSH-style echo, so we skip them.
+        const supported = ['ssh', 'winrm'];
+        if (!supported.includes(hostForm.protocol)) {
+            testResult = { ok: false, message: `Test no disponible para protocolo "${hostForm.protocol}" — sólo SSH y WinRM por ahora.`, elapsedMs: 0 };
+            return;
+        }
+        // For SSH, password OR key path must be provided
+        if (hostForm.protocol === 'ssh' && !hostPassword.trim() && !hostForm.sshKeyPath.trim()) {
+            testResult = { ok: false, message: 'SSH requiere contraseña o ruta a clave privada', elapsedMs: 0 };
+            return;
+        }
+        // For WinRM, password is required
+        if (hostForm.protocol === 'winrm' && !hostPassword.trim()) {
+            testResult = { ok: false, message: 'WinRM requiere contraseña', elapsedMs: 0 };
+            return;
+        }
+
+        testRunning = true;
+        testResult = null;
+        const hostType = hostForm.type;
+        const port = hostForm.port || defaultPort(hostForm.protocol);
+        const testCmd = hostType === 'linux'
+            ? 'echo "Lucy:OK" && uname -a 2>&1 | head -1'
+            : 'echo Lucy:OK';
+        const t0 = Date.now();
+        try {
+            const out = await invoke('execute_shell_cmd', {
+                host:     hostForm.host.trim(),
+                username: hostForm.username.trim(),
+                command:  testCmd,
+                hostType,
+                port,
+                password: hostPassword.trim() || null,
+                keyPath:  hostForm.sshKeyPath.trim() || null,
+            });
+            const elapsed = Date.now() - t0;
+            const safeOut = String(out || '').trim();
+            if (safeOut.includes('Lucy:OK')) {
+                // Take the most informative line — usually uname -a output on Linux,
+                // empty echo on Windows. Truncate to keep the UI compact.
+                const detail = safeOut.replace(/Lucy:OK\s*/g, '').trim().slice(0, 120);
+                testResult = {
+                    ok: true,
+                    message: detail ? `Conectado: ${detail}` : 'Conexión exitosa',
+                    elapsedMs: elapsed,
+                };
+            } else {
+                testResult = {
+                    ok: false,
+                    message: `Respuesta inesperada: ${safeOut.slice(0, 200)}`,
+                    elapsedMs: elapsed,
+                };
+            }
+        } catch (e) {
+            testResult = {
+                ok: false,
+                message: String(e).slice(0, 240),
+                elapsedMs: Date.now() - t0,
+            };
+        } finally {
+            testRunning = false;
+        }
+    }
+
     async function guardarHost() {
         if (!hostForm.name.trim() || !hostForm.host.trim() || !hostForm.username.trim()) return;
         hostSaving = true;
@@ -324,6 +405,22 @@
     </div>
     {/if}
 
+    <!-- Test connection result (May 2026) — visible only after first attempt -->
+    {#if testResult}
+      <div style="margin:0 14px 8px;padding:8px 10px;border-radius:6px;font-size:11px;line-height:1.4;
+                  background:{testResult.ok ? 'rgba(52,211,153,0.08)' : 'rgba(248,113,113,0.08)'};
+                  border:1px solid {testResult.ok ? 'rgba(52,211,153,0.25)' : 'rgba(248,113,113,0.25)'};
+                  color:{testResult.ok ? '#10b981' : '#f87171'};">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <b style="font-family:var(--mono);">{testResult.ok ? '✓' : '✗'}</b>
+          <span style="flex:1;color:var(--txt);">{testResult.message}</span>
+          {#if testResult.elapsedMs > 0}
+            <span style="font-size:10px;color:var(--txt2);font-variant-numeric:tabular-nums;">{testResult.elapsedMs < 1000 ? `${testResult.elapsedMs}ms` : `${(testResult.elapsedMs/1000).toFixed(1)}s`}</span>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
     <!-- Footer buttons -->
     <div class="hm-footer">
       {#if editingHost}
@@ -331,8 +428,17 @@
         <Trash2 size={13}/> {isEN ? 'Delete' : 'Eliminar'}
       </button>
       {/if}
+      <!-- Test button — only meaningful for SSH/WinRM; disabled while running.
+           Lives between Cancel and Save so it's discoverable without dominating
+           the footer. Uses ghost styling so it doesn't compete with Save. -->
+      <button class="hm-btn hm-ghost" style="display:flex;align-items:center;gap:6px;"
+        on:click={testConnection}
+        disabled={testRunning || hostSaving}
+        title={isEN ? 'Verify connection before saving' : 'Verificar conexión antes de guardar'}>
+        {testRunning ? (isEN ? '↻ Testing...' : '↻ Probando...') : (isEN ? '⚡ Test connection' : '⚡ Probar conexión')}
+      </button>
       <button class="hm-btn hm-ghost" on:click={cancel}>{isEN ? 'Cancel' : 'Cancelar'}</button>
-      <button class="hm-btn hm-pri" on:click={guardarHost} disabled={hostSaving}>
+      <button class="hm-btn hm-pri" on:click={guardarHost} disabled={hostSaving || testRunning}>
         {hostSaving ? (isEN ? '↻ Saving...' : '↻ Guardando...') : editingHost ? (isEN ? 'Update Host' : 'Actualizar Host') : (isEN ? 'Save Host' : 'Guardar Host')}
       </button>
     </div>
