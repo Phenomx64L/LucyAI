@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.5] — 2026-05-29
+
+A stabilization release — four targeted fixes for issues surfaced during
+internal benchmark runs. No new features; the goal is to make v1.4.4
+boringly reliable. **218 Rust tests · 134 vitest · 0 warnings.**
+
+### Fixes
+
+- **`Respuesta vacía del modelo` false positive on `EXECUTE_CMD`-only
+  responses** (commit `fa2a2a1`). The agent-loop entry check at
+  `+page.svelte:3931` previously required `FILE_TOOL_RE`, `NATIVE_TOOL_RE`,
+  or `<THOUGHT>` to enter the loop. When the LLM emitted ONLY
+  `<EXECUTE_CMD>` blocks (no THOUGHT wrapper, common on audit prompts),
+  none matched → the response fell through to the empty-response
+  detector, which stripped the EXECUTE_CMD block and incorrectly
+  surfaced "Safety filter blocked the output" or "Mode collapse". The
+  retry usually worked because the LLM non-deterministically wrapped
+  with `<THOUGHT>` on the second pass — that's why the user saw it as
+  "random". Fix is defense-in-depth: extend the entry condition to
+  include `<EXECUTE_CMD>`, `<EXECUTE>`, `<PLAN>`, AND make the empty-
+  response detector suppress the warning whenever ANY actionable block
+  was present in the raw response. True empty responses (safety filter,
+  timeout) still surface correctly.
+
+- **Efficiency regression on long audit/compliance prompts** (commit
+  `f8078e6`). Three combined changes addressing the multi-factor root
+  cause:
+  - **Compact MCP catalog** in the system prompt (`prompt_sections.rs`).
+    The v1.4.2 inputSchema injection had grown the catalog to ~4-5 KB
+    for users with GitHub MCP (26 tools) + filesystem (11 tools). On
+    Gemini Flash with finite output budget for long agent loops, that
+    pressure showed up as truncated final commands ("Informe_Seguridad_Com"
+    instead of "...Compliance.pdf"). Reduced to 10 tools/server with
+    signature only (was 20 with description). Lucy still has the full
+    catalog cached locally; she can re-discover for details. Estimated
+    saving: 2-3 KB per system prompt.
+  - **Stricter writefile loop guard** (`+page.svelte:5837`). The
+    generic `checkToolLoop` blocked only on the 4th identical call.
+    For writefile-to-the-same-path that's too lenient — once a generated
+    script has 2 PowerShell parse errors in a row, the rewrites won't
+    converge. Per-tab counter now blocks on the 3rd attempt with an
+    explicit hint naming the three recurring failure modes (unbalanced
+    `@{}`, missing Catch, broken string interpolation) and telling Lucy
+    to SPLIT, not patch.
+  - **PowerShell parse-error guard** (`+page.svelte:6304`). New
+    detector for parse-error signatures in tool results — "El literal
+    de hash estaba incompleto", "Token … inesperado", "Falta un bloque
+    Catch/Finally", plus English equivalents. On ≥2 parse errors per
+    iteration, injects a strong split-into-smaller-scripts hint into
+    the next LLM turn's context. Logged via
+    `logTaskEvent('agent_loop_block', 'ps_parse_errors', ...)`.
+
+- **DB integrity false-positive in Self-Diagnostics** (commit `aca96d5`).
+  `PRAGMA quick_check` was failing intermittently with "unable to
+  validate the inverted index for FTS5 table main.file_index: database
+  is locked" when smart_chips, agent_memories, and audit_trail had
+  concurrent writes in flight. That's lock contention, NOT corruption.
+  Three changes to `check_database_health()`:
+  - `busy_timeout(5000ms)` on the diagnostics connection so quick_check
+    waits up to 5 s for the conflicting writer.
+  - One-shot retry after 200 ms if the result string matches lock
+    contention signatures.
+  - Triage in the UI message: locked-out result → yellow WARNING with
+    "Integrity check skipped (DB busy — transient lock, no corruption).
+    Re-run when idle to verify." instead of red ERROR. Real corruption
+    still surfaces in red.
+
+- **Simplify-skill cleanup pass on the v1.4.4 diff** (commit `ce6634e`).
+  4-agent code review (reuse / simplification / efficiency / altitude)
+  applied 5 fixes plus the LiveTraceDock removal users had asked for:
+  - **DELETE `file_diff.rs`** (164 LOC + 5 tests). Dead code: frontend
+    used the existing JS line-by-line renderer in `renderSingleCardHtml`,
+    never called `compute_text_diff` Tauri command.
+  - **Fix `cite-chips` digit-corruption bug**. The placeholder/stash
+    scheme used bare digit indices ("0","1",…) and restored via
+    `/(\d+)/g`, silently clobbering user-prose numbers ("port 8080",
+    "error 42"). Switched to non-collidable `\x01`-sentinel
+    placeholders. Added a regression test asserting no sentinels leak
+    to output.
+  - **Extract `mdCell()` helper** in `notebook.ts`. user/lucy/thought/
+    tool branches built the same markdown cell shape via copy-paste.
+    `mdCell(header, body)` + `splitPreservingTrail` shrink
+    `notebookToIpynb` from ~70 to ~45 LOC.
+  - **Move `window._lucyWriteUndo` → `t._writeUndo`**. Global Map
+    collided across tabs and leaked across reloads. Per-tab scope.
+  - **Replace pause spin-wait with event-driven Promise**.
+    `while(t._paused) await setTimeout(200)` was a polling loop.
+    `togglepause`-off and hard cancel drain `t._resumeWaiters[]`
+    immediately. Zero polling, sub-frame resume latency.
+  - **REMOVED `LiveTraceDock.svelte`** (-245 LOC). User flagged the
+    always-visible vertical sparkline as redundant with the existing
+    FAB. Deletion restores the original FAB-only UX.
+
+### Numbers
+
+- **218 Rust tests** (same — 5 file_diff tests removed, 0 net change
+  in test surface for fixed code paths) — all green.
+- **134 vitest** (+1 regression test for cite-chips digit corruption) — all green.
+- **0 svelte-check warnings**, **0 cargo warnings**.
+- Net LOC: −420 (file_diff removal + dock removal + simplifications)
+  offset by ~80 LOC of new guard code.
+
+---
+
 ## [1.4.4] — 2026-05-29
 
 The "finish what we started" release. Closes most of the remaining Terminal

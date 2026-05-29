@@ -15,7 +15,7 @@
     const dispatch = createEventDispatcher();
 
     // Bumped per release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.4.4';
+    const LUCY_VERSION = '1.4.5';
 
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout
@@ -31,6 +31,20 @@
             tES: `✦ Bienvenido a Lucy v${LUCY_VERSION} — R&D Frontier`,
             tEN: `✦ Welcome to Lucy v${LUCY_VERSION} — R&D Frontier`,
             dES: `Hola Iván — Lucy v${LUCY_VERSION} cruza una frontera real: <b>diez capacidades que ningún otro asistente de IA tiene hoy</b>, todas locales, todas con audit trail.<br><br>` +
+                `<b>🆕 Nuevo en v1.4.2-v1.4.5 — Productividad + MCP</b><br>` +
+                `• <b>MCP first-class</b> (1.4.2) — Configuración → MCP. Registra servers (filesystem, github, postgres…), Lucy los invoca por nombre. Connection pool 50× más rápido. <code>mcp_query:&lt;nombre&gt;</code><br>` +
+                `• <b>Smart Chips 3 capas</b> (1.4.2) — sugerencias arriba del input con badge ⚡ heurística · ✦ LLM · ◊ memoria. Lucy aprende qué clicks haces. <code>/chip-stats</code><br>` +
+                `• <b>Configuración con tabs</b> (1.4.2) — Apariencia · IA · MCP · Sistema. Iconos Tabler line, sin más controles aplastados.<br>` +
+                `• <b>Auto-titling de tabs</b> (1.4.3) — Lucy renombra tus pestañas con un título corto cuando termina el primer turno.<br>` +
+                `• <b>Pin de mensajes</b> (1.4.3) — botón · en cada mensaje. Los pinneados quedan en un strip arriba con click-to-scroll. No vuelvas a perder el objetivo.<br>` +
+                `• <b>Tab header rico</b> (1.4.3) — dot azul/ámbar/rojo/gris según actividad · pill 3-letras del modelo · hover preview con costo + tokens.<br>` +
+                `• <b>Atajos visibles en input vacío</b> (1.4.3) — Ctrl+P / Tab / / / @ / Esc cuando no estás escribiendo.<br>` +
+                `• <b>Modo conciso</b> (1.4.3) — botón ≡ en input. Lucy responde en 3 líneas máx. Para preguntas rápidas sin perder transcripción.<br>` +
+                `• <b>Cite chips clickeables</b> (1.4.4) — rutas, hosts (@), memorias (#42), URLs en respuestas de Lucy son clickeables. Color por tipo.<br>` +
+                `• <b>Diff inline en tool cards</b> (1.4.4) — cuando Lucy escribe un archivo, ves el diff línea por línea. <code>/revert &lt;path&gt;</code> deshace.<br>` +
+                `• <b>Cancelación granular</b> (1.4.4) — ⏸ pausa entre iteraciones · ⏭ salta la próxima tool · 🛑 cancela todo.<br>` +
+                `• <b>Branch ⌥ + Replay ⏪</b> (1.4.4) — botones por mensaje de Lucy: bifurca el chat o re-ejecuta un turno con replay.<br>` +
+                `• <b>Notebook export</b> (1.4.4) — <code>/notebook</code> exporta el tab a <code>.ipynb</code> abrible en Jupyter / VSCode.<br><br>` +
                 `<b>✨ Novedades v1.4.1 — Hardening + SRE</b><br>` +
                 `• <b>DB Backup/Restore</b> atómico (VACUUM INTO) desde Configuración → Datos.<br>` +
                 `• <b>Support Bundle</b> exportable (manifest + audit CSV + diagnostics) para tickets.<br>` +
@@ -71,6 +85,20 @@
                 `103 tests passing · 9 stress tests · ~8,300 LOC R&D · 36 Tauri commands Frontier · 0 deuda técnica visible.<br><br>` +
                 `Vamos a recorrer la interfaz — y después un apartado dedicado a los <b>comandos internos</b>.`,
             dEN: `Hi Iván — Lucy v${LUCY_VERSION} crosses a real frontier: <b>ten capabilities that no other AI assistant has today</b>, all local, all with an audit trail.<br><br>` +
+                `<b>🆕 New in v1.4.2-v1.4.5 — Productivity + MCP</b><br>` +
+                `• <b>First-class MCP</b> (1.4.2) — Settings → MCP. Register servers (filesystem, github, postgres…), Lucy invokes them by name. Connection pool 50× faster. <code>mcp_query:&lt;name&gt;</code><br>` +
+                `• <b>3-layer Smart Chips</b> (1.4.2) — suggestions above the input with ⚡ heuristic · ✦ LLM · ◊ memory badges. Lucy learns what you click. <code>/chip-stats</code><br>` +
+                `• <b>Tabbed Settings</b> (1.4.2) — Appearance · AI · MCP · System. Tabler line icons, no more cramped controls.<br>` +
+                `• <b>Auto-titled tabs</b> (1.4.3) — Lucy renames tabs with a short title after the first meaningful turn.<br>` +
+                `• <b>Pinned-messages strip</b> (1.4.3) — · button on each message. Pinned messages sit in a sticky strip with click-to-scroll. Stop losing the goal mid-investigation.<br>` +
+                `• <b>Rich tab header</b> (1.4.3) — blue/amber/red/grey dot by activity · 3-letter model pill · hover preview with cost + tokens.<br>` +
+                `• <b>Empty-input shortcut hints</b> (1.4.3) — Ctrl+P / Tab / / / @ / Esc visible when not typing.<br>` +
+                `• <b>Brief mode</b> (1.4.3) — ≡ toggle in input. Lucy answers in 3 lines max. Quick Q&A without losing the transcript.<br>` +
+                `• <b>Clickable cite chips</b> (1.4.4) — file paths, @hosts, #memories, URLs in Lucy's responses are clickable. Color-coded by kind.<br>` +
+                `• <b>Inline diff in tool cards</b> (1.4.4) — when Lucy writes a file you see the line-by-line diff. <code>/revert &lt;path&gt;</code> undoes.<br>` +
+                `• <b>Granular cancel</b> (1.4.4) — ⏸ pause between iterations · ⏭ skip next tool · 🛑 cancel everything.<br>` +
+                `• <b>Branch ⌥ + Replay ⏪</b> (1.4.4) — buttons on Lucy messages: branch the chat or re-run a turn with replay.<br>` +
+                `• <b>Notebook export</b> (1.4.4) — <code>/notebook</code> exports the tab as <code>.ipynb</code> openable in Jupyter / VSCode.<br><br>` +
                 `<b>✨ What's new in v1.4.1 — Hardening + SRE</b><br>` +
                 `• <b>DB Backup/Restore</b> (atomic VACUUM INTO) from Settings → Data.<br>` +
                 `• <b>Support Bundle</b> export (manifest + audit CSV + diagnostics) for tickets.<br>` +

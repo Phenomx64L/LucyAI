@@ -29,7 +29,7 @@
     let showWhatsNew = false;  // toggle the "What's new in 1.7.0" panel
 
     // Bumped each release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.4.4';
+    const LUCY_VERSION = '1.4.5';
 
     // ── Helpers de i18n ──────────────────────────────────────────────────────
     $: t = (es, pt, en, fr = en, de = en) =>
@@ -140,6 +140,46 @@
       </button>
       {#if showWhatsNew}
         <ul class="so-whatsnew-list">
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'v1.4.2 — MCP first-class: registra filesystem/github/postgres en Configuración, Lucy los llama por nombre. Connection pool 50× más rápido.',
+              'v1.4.2 — MCP first-class: registre filesystem/github/postgres em Configuração, Lucy chama por nome. Connection pool 50× mais rápido.',
+              'v1.4.2 — First-class MCP: register filesystem/github/postgres in Settings, Lucy calls them by name. Connection pool 50× faster.'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'v1.4.2 — Smart Chips 3 capas (⚡ heurística / ✦ LLM / ◊ memoria). Lucy aprende qué clicks haces. /chip-stats',
+              'v1.4.2 — Smart Chips 3 camadas (⚡ heurística / ✦ LLM / ◊ memória). Lucy aprende seus clicks. /chip-stats',
+              'v1.4.2 — 3-layer Smart Chips (⚡ heuristic / ✦ LLM / ◊ memory). Lucy learns which you click. /chip-stats'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'v1.4.3 — Auto-titling de tabs · pin de mensajes con strip sticky · tab header rico (modelo + costo en hover) · Modo conciso (≡)',
+              'v1.4.3 — Auto-titling de tabs · pin de mensagens com strip sticky · tab header rico (modelo + custo no hover) · Modo conciso (≡)',
+              'v1.4.3 — Auto-titled tabs · pinned-messages sticky strip · rich tab header (model + cost on hover) · Brief mode (≡)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'v1.4.4 — Cite chips clickeables (paths/hosts/memorias/URLs) · diff inline en writefile + /revert · cancel granular (⏸ ⏭ 🛑) · /notebook export a .ipynb',
+              'v1.4.4 — Cite chips clicáveis (paths/hosts/memórias/URLs) · diff inline em writefile + /revert · cancel granular (⏸ ⏭ 🛑) · /notebook export para .ipynb',
+              'v1.4.4 — Clickable cite chips (paths/hosts/memories/URLs) · inline diff in writefile + /revert · granular cancel (⏸ ⏭ 🛑) · /notebook export to .ipynb'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet warn">●</span>
+            {t(
+              'v1.4.5 — Estabilización: fix de falso "Respuesta vacía" en EXECUTE_CMD-only · MCP catalog compacto (−3 KB system prompt) · guard de PowerShell parse-errors · DB integrity sin falso positivo bajo carga',
+              'v1.4.5 — Estabilização: fix de falso "Resposta vazia" em EXECUTE_CMD-only · MCP catalog compacto (−3 KB system prompt) · guard de PowerShell parse-errors · DB integrity sem falso positivo sob carga',
+              'v1.4.5 — Stabilization: fixed false "Empty response" on EXECUTE_CMD-only · compact MCP catalog (−3 KB system prompt) · PowerShell parse-error guard · DB integrity no longer false-positives under load'
+            )}
+          </li>
           <li>
             <span class="so-bullet ok">●</span>
             {t(
