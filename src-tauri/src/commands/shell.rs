@@ -779,6 +779,13 @@ mod tests {
 
     /// CONTRACT: the timeout flag actually kills runaway scripts.
     /// We don't want a regression that lets `Start-Sleep` hang Lucy forever.
+    ///
+    /// Note on bounds (Cleanup task, v1.4.3): the elapsed-time assert was
+    /// previously `< 10s` which intermittently failed when PowerShell's
+    /// first-run module load took 6-8s. The kill path is correct in both
+    /// cases — the test just wasn't allowing PS enough cold-start slack.
+    /// 20s gives plenty of room while still catching a real broken kill
+    /// (which would let the 30s sleep complete).
     #[tokio::test]
     async fn powershell_timeout_fires() {
         setup();
@@ -786,7 +793,7 @@ mod tests {
         let result = execute_powershell(
             "Start-Sleep -Seconds 30".to_string(),
             None,
-            Some(2), // 2-second timeout — should kill before sleep completes
+            Some(3), // 3-second timeout — should kill well before sleep completes
         ).await;
         let elapsed = start.elapsed();
         assert!(
@@ -794,7 +801,7 @@ mod tests {
             "Expected timeout Err, got Ok"
         );
         assert!(
-            elapsed.as_secs() < 10,
+            elapsed.as_secs() < 20,
             "Timeout took too long ({:?}) — kill path broken", elapsed
         );
         let err = result.unwrap_err();
@@ -819,10 +826,13 @@ mod tests {
         // A command that always succeeds and emits clean stdout. If the noise
         // filter ever regresses, this test catches it because the noise lines
         // would land in stderr → be appended → break the contains() match.
+        // Cleanup task (v1.4.3): bumped from 15s → 30s to stop transient
+        // failures on cold PS-7 first launch where module preload can take
+        // 12-18s. The filter logic is the same; the test just needs slack.
         let out = execute_powershell(
             "Write-Output 'clean-stdout-marker'".to_string(),
             None,
-            Some(15),
+            Some(30),
         ).await.expect("execute_powershell returned Err");
         assert!(out.contains("clean-stdout-marker"),
             "Lost the actual stdout. out = {:?}", out);

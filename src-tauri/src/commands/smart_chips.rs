@@ -118,6 +118,169 @@ pub async fn generate_smart_chips(
     Ok(Vec::new())
 }
 
+// ── Tab auto-title (Quick-win B / v1.4.3) ───────────────────────────────
+//
+// After Lucy responds, the frontend asks this command for a tight 3-5
+// word title summarizing the conversation. Reuses the same provider
+// routing (Gemini Flash → Anthropic Haiku fallback) as smart_chips but
+// asks for a plain string instead of a JSON array.
+//
+// Latency: same 400-800ms range. Cost: ~$0.0001 because output is tiny.
+// Only runs ONCE per tab — the frontend tracks `_titleAuto` and skips
+// once the user manually renames the tab.
+
+#[tauri::command]
+pub async fn generate_tab_title(
+    turns: Vec<TurnSummary>,
+    lang: Option<String>,
+) -> Result<String, String> {
+    if turns.is_empty() {
+        return Ok(String::new());
+    }
+    let recent: Vec<&TurnSummary> = turns.iter().rev().take(4).rev().collect();
+    let lang = lang.unwrap_or_else(|| "es-MX".into());
+    let lang_label = if lang.starts_with("es") { "Spanish" } else { "English" };
+
+    let sys = format!(
+        "You name a chat tab with a SHORT, SCANNABLE title that captures the topic.\n\
+        RULES:\n\
+        1. 3-5 words MAX. No punctuation other than spaces. No quotes. No emoji.\n\
+        2. Title Case. Language: {lang}.\n\
+        3. Focus on the SUBJECT, not what Lucy is doing. \
+        \"GitHub commits review\" not \"Listing commits\".\n\
+        4. Be specific. \"CPU spike Tuesday\" beats \"Performance issue\".\n\
+        5. Output ONLY the title — no preamble, no explanation, no JSON.",
+        lang = lang_label,
+    );
+
+    let mut user_prompt = String::from("Recent conversation:\n\n");
+    for (i, t) in recent.iter().enumerate() {
+        let truncated: String = t.text.chars().take(400).collect();
+        user_prompt.push_str(&format!("[{i}] {role}: {txt}\n\n",
+            i = i + 1, role = t.role.to_uppercase(), txt = truncated));
+    }
+    user_prompt.push_str("Title:");
+
+    // Gemini first.
+    if let Ok(key) = read_keyring("gemini_api_key") {
+        if let Ok(raw) = call_gemini_for_text(&key, "gemini-2.5-flash", &sys, &user_prompt).await {
+            return Ok(sanitize_title(&raw));
+        }
+    }
+    // Fallback Anthropic.
+    if let Ok(key) = read_keyring("anthropic_api_key") {
+        if let Ok(raw) = call_anthropic_for_text(&key, "claude-haiku-4-5", &sys, &user_prompt).await {
+            return Ok(sanitize_title(&raw));
+        }
+    }
+    Ok(String::new())
+}
+
+/// Clean up the raw LLM output for use as a tab title.
+/// Strips quotes, fences, trailing punctuation, caps at 5 words / 48 chars.
+/// Trims aggressively because models love to wrap titles in surrounding
+/// whitespace that breaks visual alignment in the tab strip.
+fn sanitize_title(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    // Drop a leading/trailing markdown fence if present, including the
+    // ```json variants. Has to happen BEFORE trim_matches('`') so we don't
+    // accidentally peel one backtick at a time.
+    if s.starts_with("```") {
+        s = s.trim_start_matches("```json").to_string();
+        s = s.trim_start_matches("```").to_string();
+        if let Some(idx) = s.rfind("```") { s.truncate(idx); }
+        s = s.trim().to_string();
+    }
+    // Now strip remaining surrounding quotes / inline backticks.
+    s = s.trim().trim_matches('"').trim_matches('\'').trim_matches('`').trim().to_string();
+    // Trailing punctuation that adds nothing to a tab title.
+    s = s.trim_end_matches(|c: char| c == '.' || c == ',' || c == ':' || c == ';').to_string();
+    // Drop a "Title:" prefix some models slip in.
+    if let Some(rest) = s.strip_prefix("Title:").or_else(|| s.strip_prefix("title:")) {
+        s = rest.trim().to_string();
+    }
+    // Cap words.
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.len() > 5 {
+        s = words[..5].join(" ");
+    } else {
+        // Rejoin to collapse any leftover internal whitespace.
+        s = words.join(" ");
+    }
+    // Cap chars (in case of one absurdly long word).
+    s.chars().take(48).collect()
+}
+
+async fn call_gemini_for_text(
+    api_key: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model, api_key,
+    );
+    let payload = json!({
+        "system_instruction": { "parts": [{ "text": system }] },
+        "contents": [{ "role": "user", "parts": [{ "text": user }] }],
+        "generationConfig": { "temperature": 0.3, "maxOutputTokens": 32 }
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build().map_err(|e| e.to_string())?;
+    let res = client.post(&url)
+        .header("Content-Type", "application/json")
+        .json(&payload).send().await
+        .map_err(|e| format!("gemini network: {}", e))?;
+    if !res.status().is_success() {
+        return Err(format!("gemini http {}", res.status()));
+    }
+    let body: Value = res.json().await.map_err(|e| format!("gemini json: {}", e))?;
+    let text = body
+        .get("candidates").and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("content")).and_then(|c| c.get("parts"))
+        .and_then(|p| p.as_array()).and_then(|a| a.first())
+        .and_then(|p| p.get("text")).and_then(|t| t.as_str())
+        .unwrap_or("").to_string();
+    Ok(text)
+}
+
+async fn call_anthropic_for_text(
+    api_key: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let payload = json!({
+        "model": model,
+        "max_tokens": 32,
+        "temperature": 0.3,
+        "system": system,
+        "messages": [{ "role": "user", "content": user }],
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build().map_err(|e| e.to_string())?;
+    let res = client.post("https://api.anthropic.com/v1/messages")
+        .header("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&payload).send().await
+        .map_err(|e| format!("anthropic network: {}", e))?;
+    if !res.status().is_success() {
+        return Err(format!("anthropic http {}", res.status()));
+    }
+    let body: Value = res.json().await.map_err(|e| format!("anthropic json: {}", e))?;
+    let text = body
+        .get("content").and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|b| b.get("text")).and_then(|t| t.as_str())
+        .unwrap_or("").to_string();
+    Ok(text)
+}
+
 // ── Prompt construction ─────────────────────────────────────────────────
 
 fn build_chip_system_prompt(lang_label: &str) -> String {
@@ -454,5 +617,48 @@ mod tests {
     fn handles_malformed_array_gracefully() {
         let raw = "not even json";
         assert!(parse_chip_array(raw).is_err());
+    }
+
+    // ── Title sanitizer tests ──
+    #[test]
+    fn title_strips_surrounding_quotes() {
+        assert_eq!(sanitize_title("\"GitHub Commits Review\""), "GitHub Commits Review");
+        assert_eq!(sanitize_title("'Quick CPU Check'"), "Quick CPU Check");
+    }
+
+    #[test]
+    fn title_drops_trailing_punctuation() {
+        assert_eq!(sanitize_title("DNS Lookup Issue."), "DNS Lookup Issue");
+        assert_eq!(sanitize_title("Disk Cleanup:"), "Disk Cleanup");
+    }
+
+    #[test]
+    fn title_caps_at_five_words() {
+        let r = sanitize_title("One Two Three Four Five Six Seven Eight");
+        assert_eq!(r.split_whitespace().count(), 5);
+        assert_eq!(r, "One Two Three Four Five");
+    }
+
+    #[test]
+    fn title_strips_markdown_fence() {
+        assert_eq!(sanitize_title("```\nCPU Spike\n```"), "CPU Spike");
+    }
+
+    #[test]
+    fn title_drops_title_prefix() {
+        assert_eq!(sanitize_title("Title: Network Audit"), "Network Audit");
+        assert_eq!(sanitize_title("title: Quick Diagnosis"), "Quick Diagnosis");
+    }
+
+    #[test]
+    fn title_caps_total_chars() {
+        let huge = "a".repeat(120);
+        let r = sanitize_title(&huge);
+        assert!(r.chars().count() <= 48);
+    }
+
+    #[test]
+    fn title_preserves_short_input() {
+        assert_eq!(sanitize_title("Lucy Memory"), "Lucy Memory");
     }
 }

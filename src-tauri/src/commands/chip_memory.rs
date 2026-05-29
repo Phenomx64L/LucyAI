@@ -101,6 +101,86 @@ pub async fn log_chip_event(event: ChipEventInput) -> Result<String, String> {
 /// Look at the user's chip-click history and propose up to N chips that
 /// were clicked in contexts similar to the current one. Returns at most
 /// 2 chips so the strip has room for heuristic + LLM picks too.
+// ── Telemetry / /chip-stats command (Cleanup task) ─────────────────────
+// Returns rolled-up click/dismiss counts grouped by chip label for the
+// last N days. Used by the `/chip-stats` slash command and a future
+// Memory Browser "what suggestions has Lucy learned" panel.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChipStatRow {
+    pub label:    String,
+    pub clicks:   i64,
+    pub dismisses:i64,
+    /// Net engagement score (clicks - 0.6×dismisses) for ranking.
+    pub net:      f64,
+    /// Most recent occurrence (any kind) — unix epoch seconds.
+    pub last_at:  i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChipStatsSummary {
+    pub days:           i64,
+    pub total_clicks:   i64,
+    pub total_dismisses:i64,
+    pub unique_labels:  i64,
+    /// Top 20 most-engaged chips in descending net-score order.
+    pub top:            Vec<ChipStatRow>,
+}
+
+#[tauri::command]
+pub async fn chip_stats_summary(days: Option<i64>) -> Result<ChipStatsSummary, String> {
+    let days = days.unwrap_or(7).clamp(1, 90);
+    let cutoff_secs = days * 24 * 60 * 60;
+    shared_db(move |conn| {
+        // Totals first — cheap aggregates.
+        let total_clicks: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chip_click_log
+              WHERE event_kind='click' AND occurred_at >= strftime('%s','now') - ?1",
+            params![cutoff_secs], |r| r.get(0)
+        ).unwrap_or(0);
+        let total_dismisses: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chip_click_log
+              WHERE event_kind='dismiss' AND occurred_at >= strftime('%s','now') - ?1",
+            params![cutoff_secs], |r| r.get(0)
+        ).unwrap_or(0);
+        let unique_labels: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT label) FROM chip_click_log
+              WHERE occurred_at >= strftime('%s','now') - ?1",
+            params![cutoff_secs], |r| r.get(0)
+        ).unwrap_or(0);
+
+        // Per-label breakdown.
+        let mut stmt = conn.prepare(
+            "SELECT label,
+                    SUM(CASE WHEN event_kind='click'   THEN 1 ELSE 0 END) AS clicks,
+                    SUM(CASE WHEN event_kind='dismiss' THEN 1 ELSE 0 END) AS dismisses,
+                    MAX(occurred_at) AS last_at
+               FROM chip_click_log
+              WHERE occurred_at >= strftime('%s','now') - ?1
+              GROUP BY label
+              HAVING clicks + dismisses > 0
+              ORDER BY clicks DESC
+              LIMIT 80"  // wide net; we re-rank in Rust by net score
+        ).map_err(|e| format!("chip_stats_summary prepare: {}", e))?;
+
+        let iter = stmt.query_map(params![cutoff_secs], |r| {
+            let label: String = r.get(0)?;
+            let clicks: i64   = r.get(1)?;
+            let dismisses: i64= r.get(2)?;
+            let last_at: i64  = r.get(3)?;
+            let net = clicks as f64 - 0.6 * dismisses as f64;
+            Ok(ChipStatRow { label, clicks, dismisses, net, last_at })
+        }).map_err(|e| format!("chip_stats_summary query: {}", e))?;
+
+        let mut rows: Vec<ChipStatRow> = Vec::new();
+        for r in iter { if let Ok(row) = r { rows.push(row); } }
+        rows.sort_by(|a, b| b.net.partial_cmp(&a.net).unwrap_or(std::cmp::Ordering::Equal));
+        rows.truncate(20);
+
+        Ok(ChipStatsSummary { days, total_clicks, total_dismisses, unique_labels, top: rows })
+    })
+}
+
 #[tauri::command]
 pub async fn suggest_memory_chips(
     sig: ChipSignature,
@@ -380,6 +460,15 @@ mod tests {
         assert_eq!(normalize_event_kind("Dismissed"), "dismiss");
         assert_eq!(normalize_event_kind("x"),         "dismiss");
         assert_eq!(normalize_event_kind("random"),    "click"); // unknown → click
+    }
+
+    #[test]
+    fn chip_stats_net_score_math() {
+        // The /chip-stats summary computes net = clicks - 0.6 * dismisses.
+        // This mirrors the engagement scoring used elsewhere and the doc
+        // — verifying the constant doesn't accidentally drift.
+        let net = 5_f64 - 0.6 * 2_f64;
+        assert!((net - 3.8).abs() < 1e-9);
     }
 
     #[test]

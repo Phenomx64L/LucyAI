@@ -149,6 +149,7 @@ import { listen } from '@tauri-apps/api/event';
     import SelfDiagnosticsView from '$lib/SelfDiagnosticsView.svelte';
     import MemoryBrowserView from '$lib/MemoryBrowserView.svelte';
     import LiveTracePanel    from '$lib/LiveTracePanel.svelte';
+    import LiveTraceDock     from '$lib/LiveTraceDock.svelte';
     import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
     import ProfileSwitcher from '$lib/ProfileSwitcher.svelte';
     import StatusOrb        from '$lib/StatusOrb.svelte';
@@ -688,12 +689,70 @@ import { listen } from '@tauri-apps/api/event';
     }
 
     let _smartChipsInflight = new Set();
+
+    // Quick-win B: per-tab debounce + turn-id of the last title we generated,
+    // so the LLM-titler doesn't fire twice for the same conversation state.
+    let _titleInflight = new Set();
+    let _lastTitledTurn = new Map(); // tabId → turnSig
+    /**
+     * Request an LLM-generated short title for this tab. Skipped when:
+     *   • Tab title was manually set (t._titleAuto === false).
+     *   • Tab already had a title generated for THIS exact turn signature.
+     *   • Privacy mode is on (no cloud calls).
+     *   • A title request is already in flight for this tab.
+     * Best-effort: any error is swallowed; the heuristic title persists.
+     */
+    async function requestAutoTitleForTab(tabId, lastLucy, lastUser) {
+        const t = getTab(tabId);
+        if (!t) return;
+        if (t._titleAuto === false) return;       // user took control
+        if (lucyConfig?.privacyMode) return;      // no cloud calls
+        if (_titleInflight.has(tabId)) return;
+        const turnSig = `${lastLucy?.id || ''}::${lastUser?.id || ''}`;
+        if (_lastTitledTurn.get(tabId) === turnSig) return; // already done
+        _titleInflight.add(tabId);
+        try {
+            const turns = [];
+            if (lastUser?.rawContent) {
+                turns.push({ role: 'user', text: String(lastUser.rawContent).slice(0, 400),
+                             had_tools: false, had_error: false, tool_labels: [] });
+            }
+            turns.push({ role: 'lucy', text: String(lastLucy?.rawContent || '').slice(0, 400),
+                         had_tools: (lastLucy._toolLabels || []).length > 0,
+                         had_error: !!lastLucy?._anyError, tool_labels: [] });
+            const newTitle = await invoke('generate_tab_title', {
+                turns,
+                lang: userLang || 'es-MX',
+            });
+            const clean = String(newTitle || '').trim();
+            if (!clean) return;
+            // Race guard — only apply if tab still exists, still auto-titled,
+            // and we're still on the same turn.
+            const cur = getTab(tabId);
+            if (!cur || cur._titleAuto === false) return;
+            // Don't replace if user renamed mid-flight (defensive)
+            if (cur.title === clean) return;
+            cur.title = clean;
+            cur._titleAuto = true;
+            _lastTitledTurn.set(tabId, turnSig);
+            tabs = [...tabs];
+        } catch (e) {
+            console.warn('[auto-title] failed:', e);
+        } finally {
+            _titleInflight.delete(tabId);
+        }
+    }
     async function requestSmartChipsForTab(tabId, lastLucy, lastUser, heuristicChips, sig) {
         if (_smartChipsInflight.has(tabId)) return; // debounce
         _smartChipsInflight.add(tabId);
         // Snapshot the "current turn signature" so we can detect if the
         // user moved on by the time async calls return. Cheap: message ids.
         const turnSig = `${lastLucy?.id || ''}::${lastUser?.id || ''}`;
+        // Quick-win B: fire-and-forget the auto-title in parallel. Doesn't
+        // affect chip rendering (the await below ignores this promise).
+        // Only runs when the tab title is still auto-generated AND we
+        // haven't done it for this turn already.
+        requestAutoTitleForTab(tabId, lastLucy, lastUser).catch(() => {});
         try {
             // ── Layer 3 (memory) — always safe to run, no cloud call ──
             // Runs even in privacy mode because it's pure local SQLite.
@@ -2425,6 +2484,9 @@ import { listen } from '@tauri-apps/api/event';
         if (!t) return;
         const nuevo = renameValue.trim();
         t.title = nuevo || 'Terminal';
+        // Quick-win B: user explicitly renamed → the LLM-titler must NEVER
+        // overwrite this title again on future turns.
+        t._titleAuto = false;
         renamingTabId = null;
         renameValue = '';
         refresh();
@@ -3306,9 +3368,14 @@ REGLAS DE FORMATO:
             if(imageFiles.length){_msgAttachments=imageFiles.map(f=>({name:f.name,previewUrl:f.previewUrl}));}
         }
         addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>${disp}`,attachments:_msgAttachments});
-        // U6: auto-rename tab con el primer mensaje del usuario
+        // U6: auto-rename tab con el primer mensaje del usuario (fallback heuristic).
+        // The proper LLM-generated title arrives a few seconds later via
+        // requestAutoTitle() — see recomputePredictiveChips. Marking
+        // _titleAuto = true tells that path it MAY overwrite, since the
+        // current title was set automatically and not by the user.
         if (raw && (t.title === 'Nueva Terminal' || t.title === 'New Terminal')) {
             t.title = raw.substring(0, 30).trim() + (raw.length > 30 ? '…' : '');
+            t._titleAuto = true;
             tabs = tabs;
         }
         const limpio=limpiar(raw); let found=null;
@@ -8395,6 +8462,14 @@ if (Test-Path $src) {
 
         {#each tabs as tab (tab.id)}
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
+            <!-- Quick-win L: thin always-visible activity sparkline. Only
+                 mounted for the ACTIVE tab to avoid 60 buckets × N tabs
+                 of reactive churn. Clicking opens the full LiveTracePanel. -->
+            {#if activeTabId === tab.id}
+              <LiveTraceDock {isEN} activeTabId={tab.id}
+                visible={!showLiveTrace}
+                on:click={() => showLiveTrace = true} />
+            {/if}
             {#if activeIncidentId && activeTabId === tab.id}
             <div style="padding:0 12px;">
               <IncidentTimeline incidentId={activeIncidentId} {isEN}

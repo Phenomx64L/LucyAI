@@ -29,7 +29,7 @@
     let showWhatsNew = false;  // toggle the "What's new in 1.7.0" panel
 
     // Bumped each release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.4.2';
+    const LUCY_VERSION = '1.4.3';
 
     // ── Helpers de i18n ──────────────────────────────────────────────────────
     $: t = (es, pt, en, fr = en, de = en) =>

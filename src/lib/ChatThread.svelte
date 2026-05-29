@@ -53,6 +53,39 @@
         }
     }
 
+    // Quick-win G: derive the up-to-3 pinned-message summaries that the
+    // sticky strip renders. Compact preview (first 80 chars) so the chip
+    // fits in one line. Limits to 3 — beyond that the strip would steal
+    // too much vertical space.
+    $: pinnedSummaries = (() => {
+        const msgs = Array.isArray(tab?.messages) ? tab.messages : [];
+        return msgs
+            .filter((m: any) => m.pinned && (m.role === 'user' || m.role === 'lucy') && m.rawContent)
+            .slice(-3)
+            .map((m: any) => ({
+                id: m.id,
+                role: m.role,
+                msg: m,
+                preview: String(m.rawContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+            }));
+    })();
+
+    /**
+     * Smooth-scroll the chat area to the given message's bubble and
+     * pulse-highlight it briefly so the user sees where they landed.
+     * Used by the pinned-strip chips to jump back to context.
+     */
+    function scrollToMsg(id: any) {
+        // Defer one tick so any DOM mutations from Svelte's reactivity settle.
+        setTimeout(() => {
+            const el = document.querySelector(`[data-msg-id="${id}"]`) as HTMLElement | null;
+            if (!el) return;
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('msg-jump-pulse');
+            setTimeout(() => el.classList.remove('msg-jump-pulse'), 1200);
+        }, 30);
+    }
+
     function visibleMessages(messages: any[]) {
         return messages.filter(m =>
             m.role !== 'hidden' && (
@@ -78,6 +111,30 @@
         return trimmed.slice(0, 2).toUpperCase();
     }
 </script>
+
+<!-- Quick-win G: Pinned messages strip — sticky at the top of the chat
+     area, shows up to 3 pinned message previews so the user keeps the
+     "north star" visible while scrolling through long investigations.
+     Click → smooth-scrolls to that message in the thread.
+     × → unpins by re-dispatching pinmessage (parent toggles). -->
+{#if pinnedSummaries.length > 0}
+    <div class="pin-strip" role="region" aria-label={isEN ? 'Pinned messages' : 'Mensajes fijados'}>
+        {#each pinnedSummaries as p (p.id)}
+            <button class="pin-chip pin-chip-{p.role}"
+                    on:click={() => scrollToMsg(p.id)}
+                    title={isEN ? 'Jump to this message' : 'Saltar a este mensaje'}>
+                <span class="pin-glyph">●</span>
+                <span class="pin-role">{p.role === 'user' ? '›' : '◆'}</span>
+                <span class="pin-text">{p.preview}</span>
+                <span class="pin-x" role="button" tabindex="0"
+                      aria-label="Unpin"
+                      title={isEN ? 'Unpin' : 'Quitar pin'}
+                      on:click|stopPropagation={() => dispatch('pinmessage', { msg: p.msg })}
+                      on:keydown={(e) => { if (e.key==='Enter') { e.stopPropagation(); dispatch('pinmessage',{msg:p.msg}); } }}>×</span>
+            </button>
+        {/each}
+    </div>
+{/if}
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="chat-area" on:click={handleAreaClick}>
@@ -124,6 +181,7 @@
             </div>
         {:else}
             <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''} msg-enter"
+                data-msg-id={msg.id}
                 style={msg.style || ''}>
                 {#if msg.role === 'lucy' || msg.role === 'streaming'}
                     <span class="lucy-avatar-wrap" title="Lucy · v1.4.0">
@@ -416,6 +474,59 @@
        fork available without a Tabler icon dependency. */
     .msg-branch{position:absolute;top:6px;right:28px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:13px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;font-weight:700;line-height:1;}
     .msg-branch:hover{opacity:1;background:rgba(16,185,129,.14);color:var(--acc, #10b981);}
+
+    /* Quick-win G — Pinned-message sticky strip + jump-target pulse. */
+    .pin-strip{
+        display:flex; gap:6px; flex-wrap:nowrap; overflow-x:auto;
+        padding:6px 14px;
+        background:linear-gradient(to bottom, rgba(251,191,36,.06), transparent);
+        border-bottom:1px solid rgba(251,191,36,.18);
+        scrollbar-width:thin;
+    }
+    .pin-strip::-webkit-scrollbar{height:3px;}
+    .pin-strip::-webkit-scrollbar-thumb{background:rgba(251,191,36,.30);border-radius:2px;}
+    .pin-chip{
+        display:inline-flex; align-items:center; gap:6px;
+        background:rgba(251,191,36,.08);
+        border:1px solid rgba(251,191,36,.25);
+        color:var(--txt,#dde3ea);
+        font-family:var(--mono,monospace);
+        font-size:11px;
+        padding:4px 8px;
+        border-radius:12px;
+        cursor:pointer;
+        transition:background .15s, border-color .15s;
+        white-space:nowrap;
+        flex-shrink:0;
+        max-width:340px;
+    }
+    .pin-chip:hover{background:rgba(251,191,36,.16); border-color:rgba(251,191,36,.45);}
+    .pin-glyph{font-size:6px; color:#fbbf24; line-height:1;}
+    .pin-role{font-weight:700; opacity:.7;}
+    .pin-chip-user .pin-role{color:var(--blue,#3b9eff);}
+    .pin-chip-lucy .pin-role{color:var(--acc,#10b981);}
+    .pin-text{overflow:hidden; text-overflow:ellipsis; max-width:260px;}
+    .pin-x{
+        display:inline-flex; align-items:center; justify-content:center;
+        width:13px; height:13px; border-radius:50%;
+        color:var(--txt3,#475569); background:transparent;
+        font-size:11px; line-height:1; cursor:pointer; margin-left:2px;
+        transition:.12s;
+    }
+    .pin-chip:hover .pin-x{color:var(--txt2,#94a3b8);}
+    .pin-x:hover{color:var(--red,#ef4444)!important; background:rgba(239,68,68,.10);}
+
+    /* Pulse animation applied when the user jumps to a message via the
+       pinned strip. Removes after 1.2s — short enough to confirm landing,
+       long enough to spot it inside a screenful of text. */
+    :global(.msg-jump-pulse){
+        animation: msg-jump-pulse 1.2s ease-out;
+    }
+    @keyframes msg-jump-pulse{
+        0%   { box-shadow: 0 0 0 0 rgba(251,191,36,.55); }
+        45%  { box-shadow: 0 0 0 8px rgba(251,191,36,.0);  }
+        100% { box-shadow: 0 0 0 0 rgba(251,191,36,0);     }
+    }
     :global(.msg-user),:global(.msg-lucy){position:relative;}
     :global(.msg-pinned){border-left:2px solid #fbbf24 !important;}
     .msg-thinking{display:flex;align-items:center;gap:10px;padding:10px 14px;align-self:flex-start;}

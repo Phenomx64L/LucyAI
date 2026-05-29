@@ -689,6 +689,46 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── /chip-stats — predictive-chip engagement summary (v1.4.3) ─────
+        case 'chip-stats': case 'chips-stats': {
+            (async () => {
+                try {
+                    const sum = await invoke<any>('chip_stats_summary', { days: 7 });
+                    if (!sum || sum.total_clicks + sum.total_dismisses === 0) {
+                        sysMsg(ctx.isEN
+                            ? 'No chip activity in the last 7 days. Click or dismiss any predictive chip and stats will populate.'
+                            : 'Sin actividad de chips en los últimos 7 días. Haz clic o descarta un chip y comenzará a llenarse.',
+                            'var(--amber)');
+                        return;
+                    }
+                    const hdr = ctx.isEN
+                        ? `Chip engagement · last ${sum.days} days`
+                        : `Engagement de chips · últimos ${sum.days} días`;
+                    const totals = ctx.isEN
+                        ? `${sum.total_clicks} clicks · ${sum.total_dismisses} dismisses · ${sum.unique_labels} unique`
+                        : `${sum.total_clicks} clicks · ${sum.total_dismisses} descartes · ${sum.unique_labels} únicos`;
+                    const rows = (sum.top || []).slice(0, 12).map((r: any) => {
+                        const label = String(r.label || '').slice(0, 32);
+                        const ratio = r.clicks > 0 || r.dismisses > 0
+                            ? `${r.clicks}c / ${r.dismisses}d`
+                            : '—';
+                        const netColor = r.net >= 3 ? 'var(--acc)'
+                                       : r.net <= 0 ? 'var(--red)'
+                                       : 'var(--text-muted)';
+                        return `<div style="display:flex;gap:8px;font-size:10px;font-family:var(--mono);padding:2px 0;">
+                            <code style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${label}</code>
+                            <span style="color:var(--text-muted);min-width:62px;text-align:right;">${ratio}</span>
+                            <span style="color:${netColor};min-width:42px;text-align:right;">net ${r.net.toFixed(1)}</span>
+                        </div>`;
+                    }).join('');
+                    sysMsg(`<b>${hdr}</b><div style="font-size:10.5px;color:var(--text-muted);margin:2px 0 6px;">${totals}</div>${rows}`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── /loop-stats — agent-loop blocks by model (May 2026 telemetry) ──
         // Shows which models trigger the safety nets (tool-loop, target-loop,
         // error-repeat, max-loops) most often. Drives model-selection decisions.

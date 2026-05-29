@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.3] — 2026-05-29
+
+A polish release. Focused on Terminal IA improvements (auto-titled tabs,
+pinned-messages strip), the always-visible live-trace dock, and cleanup
+chores (chip telemetry exposed via `/chip-stats`, flaky shell tests
+stabilized). **218 Rust tests · 117 vitest · 0 warnings.**
+
+### Terminal IA
+
+- **Auto-titled tabs** (`generate_tab_title`). After Lucy's first
+  meaningful response, a tiny background call to Gemini Flash (Anthropic
+  Haiku fallback) generates a 3-5 word title summarizing the
+  conversation. Replaces the previous "first 30 chars of prompt"
+  heuristic with something scannable. Skipped under Privacy Mode and
+  permanently disabled once the user manually renames the tab
+  (`t._titleAuto = false`). Title is sanitized: quotes / fences /
+  "Title:" prefix stripped, capped at 5 words / 48 chars. 7 unit tests
+  cover the cleaner.
+- **Pinned-messages strip** at the top of the chat. Up to 3 pinned
+  messages render as horizontally-scrollable chips with a 80-char
+  preview. Click → smooth-scrolls to the message with a 1.2s amber
+  pulse-highlight so you can spot where you landed. × on the chip
+  unpins. Solves "I keep losing the goal in long investigations".
+
+### Moats
+
+- **Live-trace dock** (`LiveTraceDock.svelte`). A 22px vertical
+  sparkline anchored to the right edge of the chat area, ALWAYS visible
+  when the chat view is open. 60 buckets × 1s = last 60 seconds of
+  agent activity, color-coded by dominant phase (violet thought / blue
+  llm.turn / amber tool / green exec / red error). Heartbeat dot at
+  the top pulses when an event landed in the current second. Click
+  anywhere → opens the full LiveTracePanel. Gives operators a
+  permanent "is Lucy alive?" signal without opening anything. Mounted
+  only on the active tab to avoid per-tab reactive churn.
+
+### Cleanup
+
+- **`/chip-stats` slash command** + `chip_stats_summary` Tauri command.
+  Surfaces 7-day rolled-up engagement from `chip_click_log`: total
+  clicks/dismisses, unique labels, top 12 by net score (clicks - 0.6 ×
+  dismisses). Net score color-coded (green ≥3 / red ≤0). Lets you see
+  which suggestions YOU actually use vs the noise floor.
+- **Flaky shell tests stabilized**. `powershell_timeout_fires` elapsed
+  bound 10s → 20s + timeout 2s → 3s; `stderr_noise_is_filtered` timeout
+  15s → 30s. Both contracts unchanged — just give PowerShell cold-start
+  (which can take 12-18s on PS-7 first launch) enough slack.
+
+### Numbers
+
+- **218 Rust tests** (+8 net new: 7 title sanitizer, 1 chip-stats math) — all green.
+- **117 vitest** — all green.
+- **0 svelte-check warnings**, **0 cargo warnings**.
+
+---
+
 ## [1.4.2] — 2026-05-29
 
 A focused follow-up to 1.4.1. Three themes: **(1)** first-class MCP
