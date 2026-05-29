@@ -15,7 +15,7 @@
     const dispatch = createEventDispatcher();
 
     // Bumped per release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.4.0';
+    const LUCY_VERSION = '1.4.2';
 
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout
@@ -31,6 +31,17 @@
             tES: `✦ Bienvenido a Lucy v${LUCY_VERSION} — R&D Frontier`,
             tEN: `✦ Welcome to Lucy v${LUCY_VERSION} — R&D Frontier`,
             dES: `Hola Iván — Lucy v${LUCY_VERSION} cruza una frontera real: <b>diez capacidades que ningún otro asistente de IA tiene hoy</b>, todas locales, todas con audit trail.<br><br>` +
+                `<b>✨ Novedades v1.4.1 — Hardening + SRE</b><br>` +
+                `• <b>DB Backup/Restore</b> atómico (VACUUM INTO) desde Configuración → Datos.<br>` +
+                `• <b>Support Bundle</b> exportable (manifest + audit CSV + diagnostics) para tickets.<br>` +
+                `• <b>Inventory Drift</b> — baseline por host y diff estructurado (software/puertos/servicios/certs).<br>` +
+                `• <b>Multi-Host Log Timeline</b> — superpón logs de varios hosts con 4 parsers de timestamp.<br>` +
+                `• <b>Hash Chain Verifier</b> en Auditoría — recomputa SHA-256 e indica el punto exacto de mismatch.<br>` +
+                `• <b>Dashboard expandido</b> — page file, temperaturas, red, failed logins (4625), umbrales editables, widgets re-ordenables (drag-and-drop).<br>` +
+                `• <b>Memory Graph 2.0</b> — embeddings + comunidades (Louvain-lite) + paleta Okabe-Ito color-blind friendly.<br>` +
+                `• <b>Crystal Viewer</b> rediseñado — tarjetas con gradiente, secciones estructuradas con border-left por tier.<br>` +
+                `• <b>Tavily key</b> en Configuración (búsqueda web premium, opcional).<br>` +
+                `• <b>Skills Manager retirado</b> — SkillPicker (<code>/skills</code>) sigue activo.<br><br>` +
                 `<b>🔬 Frontier Capabilities (10/10)</b><br>` +
                 `• <b>F1 Process Lineage</b> — graba el árbol de cada proceso (parent → root) con hash SHA-256 verificable. <code>/help</code> + <code>&lt;TOOL&gt;process_ancestry:PID&lt;/TOOL&gt;</code><br>` +
                 `• <b>F2 State Snapshots</b> — captura estado del sistema cada 15 min y permite diff temporal. <code>/snapshot</code>, <code>/diff</code><br>` +
@@ -60,6 +71,17 @@
                 `103 tests passing · 9 stress tests · ~8,300 LOC R&D · 36 Tauri commands Frontier · 0 deuda técnica visible.<br><br>` +
                 `Vamos a recorrer la interfaz — y después un apartado dedicado a los <b>comandos internos</b>.`,
             dEN: `Hi Iván — Lucy v${LUCY_VERSION} crosses a real frontier: <b>ten capabilities that no other AI assistant has today</b>, all local, all with an audit trail.<br><br>` +
+                `<b>✨ What's new in v1.4.1 — Hardening + SRE</b><br>` +
+                `• <b>DB Backup/Restore</b> (atomic VACUUM INTO) from Settings → Data.<br>` +
+                `• <b>Support Bundle</b> export (manifest + audit CSV + diagnostics) for tickets.<br>` +
+                `• <b>Inventory Drift</b> — per-host baseline and structured diff (software/ports/services/certs).<br>` +
+                `• <b>Multi-Host Log Timeline</b> — overlay logs from multiple hosts with 4 timestamp parsers.<br>` +
+                `• <b>Hash Chain Verifier</b> in Audit — recomputes SHA-256 and pinpoints mismatch position.<br>` +
+                `• <b>Expanded Dashboard</b> — pagefile, temperatures, network, failed logins (4625), editable thresholds, drag-to-reorder widgets.<br>` +
+                `• <b>Memory Graph 2.0</b> — embeddings + community detection (Louvain-lite) + Okabe-Ito color-blind palette.<br>` +
+                `• <b>Crystal Viewer</b> redesigned — gradient cards, structured sections with tier-colored border-left.<br>` +
+                `• <b>Tavily key</b> in Settings (premium web search, optional).<br>` +
+                `• <b>Skills Manager retired</b> — SkillPicker (<code>/skills</code>) is still active.<br><br>` +
                 `<b>🔬 Frontier Capabilities (10/10)</b><br>` +
                 `• <b>F1 Process Lineage</b> — records every process's parent chain (current → root) with verifiable SHA-256 hash.<br>` +
                 `• <b>F2 State Snapshots</b> — captures system state every 15 min and lets you diff over time. <code>/snapshot</code>, <code>/diff</code><br>` +
@@ -229,29 +251,151 @@
             dEN: 'Drop vendor manuals, RFPs, runbooks or hardware docs as PDF — Lucy ingests, <b>chunks-indexes</b>, and exposes them as a semantic search tool (<code>&lt;TOOL&gt;pdf_search:query&lt;/TOOL&gt;</code>). Turn your PDFs into actionable knowledge.',
         },
         {
-            // BUG FIX: previous selectors used S-capital "Skills" but the actual
-            // title attribute is "Manage skills and runbooks" / "Gestionar
-            // skills y runbooks" — lowercase. CSS attribute selectors are
-            // case-sensitive on values. Without a match the fallback ".sidebar"
-            // fired and the spotlight illuminated the ENTIRE sidebar.
-            sel: ['.sidebar .sb-it[title*="skills"]', '.sidebar .sb-it[title*="Skills"]'],
-            fallback: '.sidebar .sb-it[title*="killbook"], .sidebar .sb-it[title*="runbook"]',
-            tip: 'right',
-            view: 'terminal',
-            tES: '▸ Skills Manager',
-            tEN: '▸ Skills Manager',
-            dES: 'Automatización pura. Crea "Macros" y Playbooks ejecutables con 1 clic impulsados por IA. Guarda tus rutinas frecuentes — Lucy las ejecutará al detectar los <b>triggers</b>. Parámetros, tags y contadores de uso persistidos en SQLite.',
-            dEN: 'Pure automation. Create 1-click executable Macros & Playbooks powered by AI. Save your frequent routines — Lucy runs them when it detects the <b>triggers</b>. Parameters, tags and usage counters persisted in SQLite.',
-        },
-        {
             sel: ['.sidebar [title*="Settings"]', '.sidebar [title*="Configurac"]'],
             fallback: '.sidebar',
             tip: 'right',
             view: 'terminal',
-            tES: '⚙ Configuración & Seguridad',
-            tEN: '⚙ System Settings',
-            dES: 'Configura tus Modelos (LLM multi-provider), <b>Permission Rules</b> (reglas allow/block/ask basadas en regex), <b>Cost Tracking</b> (tokens y gasto por modelo), y <b>MCP Secrets</b>. El protocolo MCP permite a Lucy aprender nuevas herramientas de forma dinámica.',
-            dEN: 'Configure LLMs (multi-provider), <b>Permission Rules</b> (regex-based allow/block/ask), <b>Cost Tracking</b> (tokens and spend per model), and <b>MCP Secrets</b>. The MCP protocol enables dynamic "plug and play" tool learning.',
+            tES: '⚙ Configuración — Hub central',
+            tEN: '⚙ Settings — Central hub',
+            dES: 'Abre el modal de Configuración (icono ⚙ en la sidebar o <code>Ctrl+P</code> → "Configuración"). Es el hub donde vives entre sesiones: <b>Proveedores LLM</b>, <b>Privacidad</b>, <b>Temas</b>, <b>Datos</b>, <b>MCP</b>, <b>Verificador</b>, <b>Perfiles</b>, <b>Permisos</b>, <b>Runbooks</b>. En los siguientes pasos recorreremos cada sub-módulo.',
+            dEN: 'Open the Settings modal (⚙ icon in the sidebar or <code>Ctrl+P</code> → "Settings"). The hub you live in between sessions: <b>LLM Providers</b>, <b>Privacy</b>, <b>Themes</b>, <b>Data</b>, <b>MCP</b>, <b>Verifier</b>, <b>Profiles</b>, <b>Permissions</b>, <b>Runbooks</b>. The next steps walk through every sub-module.',
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · Proveedores LLM & API Keys',
+            tEN: '⚙ Settings · LLM Providers & API Keys',
+            dES: `<b>Sub-módulo: Proveedores</b><br><br>` +
+                `Lucy es <b>multi-LLM</b> — puedes mezclar Claude (Anthropic), Gemini (Google), GPT (OpenAI), Ollama local y NVIDIA NIM en una sola sesión.<br><br>` +
+                `• <b>Configurar Proveedores</b> abre un modal donde pegas la API key de cada proveedor. Las claves se guardan en <b>Windows Credential Manager</b> (keyring), nunca en localStorage.<br>` +
+                `• <b>Probar conexión</b> valida la key antes de guardar.<br>` +
+                `• <b>Modelo activo</b> se ve en el StatusBar inferior. Puedes cambiarlo con <code>/model &lt;nombre&gt;</code> (matching parcial: "sonnet", "qwen", "flash").<br>` +
+                `• <b>Effort suffix</b>: añade <code>::low|medium|high|xhigh|max</code> al nombre del modelo para controlar reasoning/tokens.<br>` +
+                `• <b>Tavily API key</b> (opcional) — habilita búsqueda web premium con resultados extraíbles. Si no la configuras, Lucy cae a DuckDuckGo lite.<br><br>` +
+                `<i>Tip</i>: la key value NUNCA cruza el IPC boundary del backend — el frontend solo recibe un boolean de status.`,
+            dEN: `<b>Sub-module: Providers</b><br><br>` +
+                `Lucy is <b>multi-LLM</b> — mix Claude (Anthropic), Gemini (Google), GPT (OpenAI), local Ollama and NVIDIA NIM in the same session.<br><br>` +
+                `• <b>Configure Providers</b> opens a modal to paste each provider's API key. Keys are stored in <b>Windows Credential Manager</b> (keyring), never in localStorage.<br>` +
+                `• <b>Test connection</b> validates the key before saving.<br>` +
+                `• <b>Active model</b> shows in the bottom StatusBar. Switch with <code>/model &lt;name&gt;</code> (partial match: "sonnet", "qwen", "flash").<br>` +
+                `• <b>Effort suffix</b>: append <code>::low|medium|high|xhigh|max</code> to the model name to control reasoning/tokens.<br>` +
+                `• <b>Tavily API key</b> (optional) — enables premium web search with extractable results. If absent, Lucy falls back to DuckDuckGo lite.<br><br>` +
+                `<i>Tip</i>: the key value NEVER crosses the IPC boundary from the backend — the frontend only receives a status boolean.`,
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · Privacidad, Smart-Router & Economy',
+            tEN: '⚙ Settings · Privacy, Smart-Router & Economy',
+            dES: `<b>Sub-módulo: Privacidad & Routing</b><br><br>` +
+                `• <b>Privacy mode</b> — fuerza a Lucy a usar solo modelos <b>locales</b> (Ollama / NVIDIA NIM on-prem). Bloquea cualquier llamada saliente a Anthropic/Google/OpenAI. Útil para datos regulados (HIPAA, datos clasificados).<br>` +
+                `• <b>Smart-Routing</b> — Lucy analiza tu prompt y elige el modelo más barato capaz de resolverlo. Para "muestra ls" usa un modelo barato; para "diagnostica este crash dump" escala a un modelo grande. Ahorra ~40-60% en gasto típico.<br>` +
+                `• <b>Economy mode</b> — caps duros: limita tokens por turno y prefiere caching agresivo. Ideal cuando estás cerca del budget mensual.<br>` +
+                `• <code>/route</code> — explica POR QUÉ el smart-router eligió el modelo que eligió en el último turno.<br>` +
+                `• <code>/smart-router on|off</code> y <code>/privacy on|off</code> son alternativas vía slash command.<br><br>` +
+                `<b>Budget tracking</b>: el StatusBar muestra cache-hit % y gasto acumulado del mes. <b>Reset mensual</b> automático el día 1.`,
+            dEN: `<b>Sub-module: Privacy & Routing</b><br><br>` +
+                `• <b>Privacy mode</b> — forces Lucy to use only <b>local</b> models (Ollama / on-prem NVIDIA NIM). Blocks any outbound call to Anthropic/Google/OpenAI. Useful for regulated data (HIPAA, classified).<br>` +
+                `• <b>Smart-Routing</b> — Lucy analyzes your prompt and picks the cheapest model that can solve it. "show ls" gets a cheap model; "diagnose this crash dump" escalates to a large model. Typical savings: ~40-60%.<br>` +
+                `• <b>Economy mode</b> — hard caps: limits tokens per turn and prefers aggressive caching. Ideal near monthly budget cap.<br>` +
+                `• <code>/route</code> — explains WHY the smart-router picked the model it picked last turn.<br>` +
+                `• <code>/smart-router on|off</code> and <code>/privacy on|off</code> are slash-command alternatives.<br><br>` +
+                `<b>Budget tracking</b>: StatusBar shows cache-hit % and month-to-date spend. Auto-reset on day 1.`,
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · Temas personalizados (JSON)',
+            tEN: '⚙ Settings · Custom themes (JSON)',
+            dES: `<b>Sub-módulo: Apariencia</b><br><br>` +
+                `Temas built-in: <code>default · ocean · hacker · sunset · forest · twilight · mocha · graphite</code>. Cambia con <code>/theme &lt;nombre&gt;</code> o desde el modal.<br><br>` +
+                `<b>Custom theme JSON</b> — pega un JSON con exactamente <b>9 variables CSS</b> whitelistadas:<br>` +
+                `<code>--bg</code>, <code>--bg2</code>, <code>--bg3</code>, <code>--txt</code>, <code>--txt2</code>, <code>--txt3</code>, <code>--acc</code>, <code>--bdr</code>, <code>--bdr2</code>.<br><br>` +
+                `Cualquier variable fuera de ese whitelist se rechaza — no se permite inyección arbitraria de CSS. Esto protege contra XSS y mantiene la UI consistente.<br><br>` +
+                `<b>Circadian theme</b>: los acentos se enfrían suavemente del día a la noche (hue shift basado en hora local). Se aplica encima del tema base.`,
+            dEN: `<b>Sub-module: Appearance</b><br><br>` +
+                `Built-in themes: <code>default · ocean · hacker · sunset · forest · twilight · mocha · graphite</code>. Switch with <code>/theme &lt;name&gt;</code> or from the modal.<br><br>` +
+                `<b>Custom theme JSON</b> — paste a JSON with exactly <b>9 whitelisted CSS variables</b>:<br>` +
+                `<code>--bg</code>, <code>--bg2</code>, <code>--bg3</code>, <code>--txt</code>, <code>--txt2</code>, <code>--txt3</code>, <code>--acc</code>, <code>--bdr</code>, <code>--bdr2</code>.<br><br>` +
+                `Any variable outside that whitelist is rejected — no arbitrary CSS injection allowed. This protects against XSS and keeps the UI consistent.<br><br>` +
+                `<b>Circadian theme</b>: accents subtly cool from day to night (hue shift based on local time). Applied on top of the base theme.`,
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · Datos (Backup, Restore, Support Bundle)',
+            tEN: '⚙ Settings · Data (Backup, Restore, Support Bundle)',
+            dES: `<b>Sub-módulo: Datos & Soporte — NUEVO en v1.4.1</b><br><br>` +
+                `<b>📦 DB Backup</b> — copia atómica de toda la base SQLite (memorias, audit chain, incidents, snapshots, embeddings) usando <code>VACUUM INTO</code>. Genera un archivo <code>.lucydb</code> en la ruta que elijas (file picker nativo). Es atómico: no produce archivos corruptos aunque crashee a la mitad.<br><br>` +
+                `<b>♻ DB Restore</b> — carga un <code>.lucydb</code>. Antes de sobrescribir crea un <b>safety backup</b> de tu DB actual. La restauración valida que el archivo contenga las tablas marker (<code>agent_memories</code> + <code>audit_chain</code>) — rechaza archivos que no sean de Lucy.<br><br>` +
+                `<b>📤 Support Bundle</b> — exporta una carpeta con manifest, audit CSV, incidents JSON, system snapshot, token usage CSV y diagnostics. Adjúntala a un ticket de soporte. <b>NUNCA</b> incluye API keys ni contenido completo de memorias.<br><br>` +
+                `<i>Recomendación</i>: backup semanal a un disco externo + bundle solo si reportas un bug.`,
+            dEN: `<b>Sub-module: Data & Support — NEW in v1.4.1</b><br><br>` +
+                `<b>📦 DB Backup</b> — atomic copy of the entire SQLite DB (memories, audit chain, incidents, snapshots, embeddings) using <code>VACUUM INTO</code>. Writes a <code>.lucydb</code> file at the path you pick (native file picker). Atomic: no corrupt files even if it crashes mid-flight.<br><br>` +
+                `<b>♻ DB Restore</b> — loads a <code>.lucydb</code>. Before overwriting, creates a <b>safety backup</b> of your current DB. Restore validates the file contains marker tables (<code>agent_memories</code> + <code>audit_chain</code>) — rejects non-Lucy files.<br><br>` +
+                `<b>📤 Support Bundle</b> — exports a folder with manifest, audit CSV, incidents JSON, system snapshot, token usage CSV and diagnostics. Attach to a support ticket. <b>NEVER</b> includes API keys or full memory contents.<br><br>` +
+                `<i>Recommendation</i>: weekly backup to external disk + bundle only when reporting a bug.`,
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · MCP — Model Context Protocol',
+            tEN: '⚙ Settings · MCP — Model Context Protocol',
+            dES: `<b>Sub-módulo: MCP — cómo extender Lucy hoy</b><br><br>` +
+                `<b>MCP (Model Context Protocol)</b> es el estándar abierto de Anthropic para que Lucy hable con <b>herramientas externas</b> (filesystem, GitHub, Postgres, Brave Search, Slack…) sin recompilar. En Lucy v${LUCY_VERSION} la integración es <b>on-demand</b>: no hay un "Manager de servers" persistente — Lucy arranca el server como subproceso JSON-RPC cuando lo invoca, recupera lo que necesita y lo cierra.<br><br>` +
+                `<b>🔧 Flujo real en Lucy</b><br>` +
+                `<b>1. Guarda las variables/API keys en Configuración</b><br>` +
+                `Configuración → sección "<b>Variables / API Keys para MCP</b>". Añade pares clave-valor (ej. <code>GITHUB_TOKEN</code> = <code>ghp_xxx</code>, <code>BRAVE_API_KEY</code> = <code>BSA…</code>). Se persisten en <b>Windows Credential Manager</b> (OS Keyring) — nunca en localStorage. Lucy las inyecta como variables de entorno al spawnear el server.<br><br>` +
+                `<b>2. Descubre las tools de un server</b><br>` +
+                `Pídele a Lucy en el chat: <i>"descubre las tools del server <code>npx -y @modelcontextprotocol/server-filesystem C:/Users/eleue/Desktop</code>"</i>. Lucy ejecuta <code>&lt;TOOL&gt;mcp_discover:&lt;cmd&gt;&lt;/TOOL&gt;</code> y te devuelve el catálogo (nombre, descripción, schema de cada tool).<br><br>` +
+                `<b>3. Invoca una tool</b><br>` +
+                `Lucy llama <code>&lt;TOOL&gt;mcp_query:&lt;cmd&gt;|||&lt;tool_name&gt;|||&lt;args_json&gt;&lt;/TOOL&gt;</code>. Ejemplo: <code>mcp_query:npx -y @modelcontextprotocol/server-filesystem C:/data|||read_file|||{"path":"notes.md"}</code>.<br><br>` +
+                `<b>4. Permisos</b><br>` +
+                `Cada <code>mcp_query</code> pasa por las mismas <b>Permission Rules</b> que las tools nativas — bloquéalas/permítelas por regex.<br><br>` +
+                `<b>Servers útiles (npm)</b>: <code>@modelcontextprotocol/server-filesystem</code>, <code>-server-github</code>, <code>-server-postgres</code>, <code>-server-brave-search</code>, <code>-server-slack</code>, <code>-server-puppeteer</code>.<br><br>` +
+                `<i>Tip</i>: requiere Node + <code>npx</code> en PATH (o sustituye por el comando que arranque tu server local).`,
+            dEN: `<b>Sub-module: MCP — how to extend Lucy today</b><br><br>` +
+                `<b>MCP (Model Context Protocol)</b> is Anthropic's open standard so Lucy can talk to <b>external tools</b> (filesystem, GitHub, Postgres, Brave Search, Slack…) without recompiling. In Lucy v${LUCY_VERSION} the integration is <b>on-demand</b>: there is no persistent "server manager" — Lucy spawns the server as a JSON-RPC subprocess when it invokes it, gets what it needs, and closes it.<br><br>` +
+                `<b>🔧 Real flow in Lucy</b><br>` +
+                `<b>1. Save vars/API keys in Settings</b><br>` +
+                `Settings → "<b>Variables / API Keys for MCP</b>" section. Add key-value pairs (e.g. <code>GITHUB_TOKEN</code> = <code>ghp_xxx</code>, <code>BRAVE_API_KEY</code> = <code>BSA…</code>). Persisted in <b>Windows Credential Manager</b> (OS Keyring) — never in localStorage. Lucy injects them as env vars when spawning the server.<br><br>` +
+                `<b>2. Discover a server's tools</b><br>` +
+                `Ask Lucy in chat: <i>"discover the tools of server <code>npx -y @modelcontextprotocol/server-filesystem C:/Users/eleue/Desktop</code>"</i>. Lucy runs <code>&lt;TOOL&gt;mcp_discover:&lt;cmd&gt;&lt;/TOOL&gt;</code> and returns the catalog (name, description, schema for each tool).<br><br>` +
+                `<b>3. Invoke a tool</b><br>` +
+                `Lucy calls <code>&lt;TOOL&gt;mcp_query:&lt;cmd&gt;|||&lt;tool_name&gt;|||&lt;args_json&gt;&lt;/TOOL&gt;</code>. Example: <code>mcp_query:npx -y @modelcontextprotocol/server-filesystem C:/data|||read_file|||{"path":"notes.md"}</code>.<br><br>` +
+                `<b>4. Permissions</b><br>` +
+                `Every <code>mcp_query</code> goes through the same <b>Permission Rules</b> as native tools — block/allow them by regex.<br><br>` +
+                `<b>Useful servers (npm)</b>: <code>@modelcontextprotocol/server-filesystem</code>, <code>-server-github</code>, <code>-server-postgres</code>, <code>-server-brave-search</code>, <code>-server-slack</code>, <code>-server-puppeteer</code>.<br><br>` +
+                `<i>Tip</i>: requires Node + <code>npx</code> on PATH (or replace with whatever command starts your local server).`,
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · Verificador & Sub-Agentes',
+            tEN: '⚙ Settings · Verifier & Sub-Agents',
+            dES: `<b>Sub-módulo: Verificador</b><br><br>` +
+                `Lucy ejecuta un <b>bucle agéntico</b>: ejecuta → verifica → repite. El <b>Verifier</b> es el modelo que evalúa si el output cumple el objetivo.<br><br>` +
+                `• <b>Verifier mode</b>: <code>same</code> (mismo modelo del turno), <code>cheaper</code> (un modelo barato), <code>off</code> (sin verificación).<br>` +
+                `• <b>Verifier model</b>: si eliges <code>cheaper</code>, aquí seleccionas cuál (típicamente Haiku o Flash o un Ollama local).<br>` +
+                `• <b>Sub-Agents model</b>: el modelo que usan los forks lanzados con <code>fork_task</code>. Suele ser un modelo intermedio — los sub-agentes investigan en paralelo y Lucy sintetiza.<br><br>` +
+                `<b>Cost ledger</b>: cada fork registra <code>tokens_in/out</code> y <code>cost_usd</code> en el panel Sub-Agentes. Útil para ver si los forks valen la pena.`,
+            dEN: `<b>Sub-module: Verifier</b><br><br>` +
+                `Lucy runs an <b>agentic loop</b>: execute → verify → iterate. The <b>Verifier</b> is the model that evaluates whether the output meets the goal.<br><br>` +
+                `• <b>Verifier mode</b>: <code>same</code> (same model as turn), <code>cheaper</code> (a cheap model), <code>off</code> (no verification).<br>` +
+                `• <b>Verifier model</b>: if you pick <code>cheaper</code>, here you select which one (typically Haiku, Flash, or a local Ollama).<br>` +
+                `• <b>Sub-Agents model</b>: the model used by forks launched with <code>fork_task</code>. Typically an intermediate model — sub-agents investigate in parallel and Lucy synthesizes.<br><br>` +
+                `<b>Cost ledger</b>: every fork records <code>tokens_in/out</code> and <code>cost_usd</code> in the Sub-Agents panel. Helps see if forks are worth it.`,
+        },
+        {
+            sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
+            tES: '⚙ Configuración · Perfiles, Permisos & Runbooks',
+            tEN: '⚙ Settings · Profiles, Permissions & Runbooks',
+            dES: `<b>Sub-módulos finales</b><br><br>` +
+                `<b>👤 Profiles</b> — múltiples identidades con configuración independiente. Útil si compartes la máquina o separas "trabajo" / "lab personal" / "incident response". Cada profile tiene su propia DB, sus memorias y sus reglas.<br><br>` +
+                `<b>🛡 Permission Rules</b> — reglas regex que Lucy consulta ANTES de ejecutar cualquier comando o tocar cualquier ruta: <code>allow</code> (sin preguntar), <code>block</code> (rechazar), <code>ask</code> (HITL obligatorio). Scope por comando, path o host. Es tu primera barrera contra errores accidentales.<br><br>` +
+                `<b>📂 Runbooks dir</b> — carpeta donde Lucy guarda runbooks markdown auto-promovidos desde workflows repetidos (F7 Runbook Mining). Por defecto: <code>%APPDATA%/Lucy/runbooks</code>. Puedes apuntarla a un repo Git para versionarlos en equipo.<br><br>` +
+                `<b>◈ Principles</b> — máximas de alto nivel que SIEMPRE acompañan al prompt del agente (ej. "Nunca tocar producción sin confirmación"). Configurables aquí o en su panel dedicado.<br><br>` +
+                `<b>🗑 Reset & Wipe</b> — al final del modal: "Borrar conversaciones", "Resetear memorias", "Factory reset". Cada acción pide confirmación doble.`,
+            dEN: `<b>Final sub-modules</b><br><br>` +
+                `<b>👤 Profiles</b> — multiple identities with independent config. Useful if you share the machine or separate "work" / "personal lab" / "incident response". Each profile has its own DB, memories and rules.<br><br>` +
+                `<b>🛡 Permission Rules</b> — regex rules Lucy checks BEFORE running any command or touching any path: <code>allow</code> (no prompt), <code>block</code> (reject), <code>ask</code> (HITL required). Scope by command, path or host. Your first barrier against accidental damage.<br><br>` +
+                `<b>📂 Runbooks dir</b> — folder where Lucy stores markdown runbooks auto-promoted from repeated workflows (F7 Runbook Mining). Default: <code>%APPDATA%/Lucy/runbooks</code>. Point it at a Git repo to version-control them as a team.<br><br>` +
+                `<b>◈ Principles</b> — high-level maxims that ALWAYS travel with the agent prompt (e.g. "Never touch production without confirmation"). Configurable here or in their dedicated panel.<br><br>` +
+                `<b>🗑 Reset & Wipe</b> — at the modal's bottom: "Clear conversations", "Reset memories", "Factory reset". Each requires double confirmation.`,
         },
         {
             sel: ['.sidebar .sb-it[title*="Dashboard"]', '.sidebar'],

@@ -33,6 +33,7 @@
 
     const dispatch = createEventDispatcher<{
         pinmessage: { msg: any };
+        branchmessage: { msg: any };
         buttonaction: { msg: any; event: MouseEvent };
         togglereasoning: { msg: any };
         codeclick: { path: string };
@@ -147,6 +148,17 @@
                         <button class="msg-pin" class:on={msg.pinned}
                             title={msg.pinned ? (isEN ? 'Unpin' : 'Quitar pin') : (isEN ? 'Pin to context' : 'Fijar al contexto')}
                             on:click={() => dispatch('pinmessage', { msg })}>·</button>
+                        <!-- Quick-win I — Branch-from-here. Spawns a new tab cloning
+                             the conversation up to and including THIS message, so
+                             the user can explore an alternative continuation without
+                             losing the original thread. Only shown on Lucy turns
+                             (branching after the question, not after the prompt). -->
+                        {#if msg.role === 'lucy'}
+                            <button class="msg-branch"
+                                title={isEN ? 'Branch a new tab from here' : 'Bifurcar en una nueva pestaña desde aquí'}
+                                aria-label={isEN ? 'Branch from this message' : 'Bifurcar desde este mensaje'}
+                                on:click={() => dispatch('branchmessage', { msg })}>⌥</button>
+                        {/if}
                     {/if}
                     <!-- U3 — Chapter view for multi-step agent tasks -->
                     {#if msg.chapterData && msg.viewMode !== 'linear'}
@@ -356,8 +368,22 @@
         :global(.msg-lucy.streaming-active) :global(.lucy-avatar),
         :global(.msg-lucy.msg-skel) :global(.lucy-avatar){animation:none;}
     }
-    :global(.skel-block){display:flex;flex-direction:column;gap:7px;padding:4px 0;}
-    :global(.skel-line){height:11px;border-radius:4px;background:linear-gradient(90deg,#0f1520 25%,#1e293b 50%,#0f1520 75%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;}
+    /* v1.4.2 — taller bars with accent-tinted shimmer (was 11px dark grey,
+       invisible on most themes). See page.css for full reasoning. */
+    :global(.skel-block){display:flex;flex-direction:column;gap:9px;padding:6px 0;}
+    :global(.skel-line){
+        height:14px;
+        border-radius:6px;
+        background:linear-gradient(90deg,
+            var(--bg3, #0f1520) 0%,
+            var(--bg4, #1e293b) 30%,
+            color-mix(in srgb, var(--acc, #10b981) 32%, var(--bg4, #1e293b)) 50%,
+            var(--bg4, #1e293b) 70%,
+            var(--bg3, #0f1520) 100%);
+        background-size:220% 100%;
+        animation:shimmer 1.4s ease-in-out infinite;
+        border:1px solid color-mix(in srgb, var(--bdr, #1a2030) 80%, transparent);
+    }
     @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
     :global(.sys-msg){align-self:center;color:#334155;font-size:11px;font-style:italic;}
     :global(.mn){font-size:11px;font-weight:700;margin-bottom:5px;}
@@ -383,6 +409,13 @@
     .msg-pin{position:absolute;top:6px;right:6px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:12px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;}
     .msg-pin:hover{opacity:1;background:rgba(167,139,250,.15);}
     .msg-pin.on{opacity:1;color:#fbbf24;text-shadow:0 0 6px rgba(251,191,36,.5);}
+    /* Quick-win I — Branch button. Sits to the LEFT of the pin button so
+       both controls are clustered in the same corner. Uses a teal accent
+       (Lucy's primary) to distinguish from pin's amber. The ⌥ glyph (option
+       key / "alt") is the closest single-char approximation of a branching
+       fork available without a Tabler icon dependency. */
+    .msg-branch{position:absolute;top:6px;right:28px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:13px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;font-weight:700;line-height:1;}
+    .msg-branch:hover{opacity:1;background:rgba(16,185,129,.14);color:var(--acc, #10b981);}
     :global(.msg-user),:global(.msg-lucy){position:relative;}
     :global(.msg-pinned){border-left:2px solid #fbbf24 !important;}
     .msg-thinking{display:flex;align-items:center;gap:10px;padding:10px 14px;align-self:flex-start;}

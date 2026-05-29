@@ -29,7 +29,7 @@
     let showWhatsNew = false;  // toggle the "What's new in 1.7.0" panel
 
     // Bumped each release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.4.0';
+    const LUCY_VERSION = '1.4.2';
 
     // ── Helpers de i18n ──────────────────────────────────────────────────────
     $: t = (es, pt, en, fr = en, de = en) =>
@@ -126,20 +126,68 @@
         )}
       </p>
 
-      <!-- ── What's new in 1.7.0 — R&D Frontier (collapsible) ─────────── -->
+      <!-- ── What's new in 1.4.1 — Hardening + SRE + MCP usage (collapsible) ─ -->
       <button class="so-whatsnew-toggle" type="button" on:click={() => showWhatsNew = !showWhatsNew}>
         <span class="so-spark">✦</span>
         <span>{t(
-          `Novedades en v${LUCY_VERSION} · R&D Frontier`,
-          `Novidades em v${LUCY_VERSION} · R&D Frontier`,
-          `What's new in v${LUCY_VERSION} · R&D Frontier`,
-          `Nouveautés en v${LUCY_VERSION} · R&D Frontier`,
-          `Neu in v${LUCY_VERSION} · R&D Frontier`
+          `Novedades en v${LUCY_VERSION} · Hardening + SRE + MCP`,
+          `Novidades em v${LUCY_VERSION} · Hardening + SRE + MCP`,
+          `What's new in v${LUCY_VERSION} · Hardening + SRE + MCP`,
+          `Nouveautés en v${LUCY_VERSION} · Hardening + SRE + MCP`,
+          `Neu in v${LUCY_VERSION} · Hardening + SRE + MCP`
         )}</span>
         <span class="so-chevron" class:open={showWhatsNew}>▸</span>
       </button>
       {#if showWhatsNew}
         <ul class="so-whatsnew-list">
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'v1.4.1 — DB Backup/Restore atómico (VACUUM INTO) + Support Bundle exportable para tickets',
+              'v1.4.1 — Backup/Restore atômico do DB (VACUUM INTO) + Support Bundle exportável para tickets',
+              'v1.4.1 — Atomic DB Backup/Restore (VACUUM INTO) + exportable Support Bundle for tickets'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'v1.4.1 — Inventory Drift (baseline por host) + Multi-Host Log Timeline con 4 parsers de timestamp',
+              'v1.4.1 — Inventory Drift (baseline por host) + Multi-Host Log Timeline com 4 parsers de timestamp',
+              'v1.4.1 — Inventory Drift (per-host baseline) + Multi-Host Log Timeline with 4 timestamp parsers'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet warn">●</span>
+            {t(
+              'v1.4.1 — Hash Chain Verifier en Auditoría + Memory Graph 2.0 (embeddings + comunidades)',
+              'v1.4.1 — Hash Chain Verifier na Auditoria + Memory Graph 2.0 (embeddings + comunidades)',
+              'v1.4.1 — Hash Chain Verifier in Audit + Memory Graph 2.0 (embeddings + communities)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet ok">●</span>
+            {t(
+              'v1.4.1 — Dashboard expandido (pagefile, temps, red, failed logins, umbrales editables, widgets drag-to-reorder)',
+              'v1.4.1 — Dashboard expandido (pagefile, temps, rede, falhas de login, thresholds editáveis, widgets drag-to-reorder)',
+              'v1.4.1 — Expanded Dashboard (pagefile, temps, network, failed logins, editable thresholds, drag-to-reorder widgets)'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'MCP (Model Context Protocol): integración on-demand. Guarda variables/API keys en Configuración → "Variables / API Keys para MCP" (van al Windows Credential Manager, no a localStorage).',
+              'MCP (Model Context Protocol): integração on-demand. Salve variáveis/API keys em Configuração → "Variables / API Keys para MCP" (vão ao Windows Credential Manager, não ao localStorage).',
+              'MCP (Model Context Protocol): on-demand integration. Save vars/API keys in Settings → "Variables / API Keys for MCP" (stored in Windows Credential Manager, not localStorage).'
+            )}
+          </li>
+          <li>
+            <span class="so-bullet info">●</span>
+            {t(
+              'MCP — uso: pide a Lucy en el chat "descubre tools de <comando del server>" — Lucy ejecuta mcp_discover (lista tools) y mcp_query (las invoca). Requiere Node/npx en PATH. Cada llamada pasa por Permission Rules.',
+              'MCP — uso: peça à Lucy no chat "descubra tools de <comando do server>" — Lucy executa mcp_discover (lista) e mcp_query (invoca). Requer Node/npx no PATH. Cada chamada passa por Permission Rules.',
+              'MCP — usage: ask Lucy in chat "discover tools of <server command>" — Lucy runs mcp_discover (lists tools) and mcp_query (invokes them). Requires Node/npx on PATH. Every call goes through Permission Rules.'
+            )}
+          </li>
           <li>
             <span class="so-bullet ok">●</span>
             {t(

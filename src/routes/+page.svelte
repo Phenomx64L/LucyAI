@@ -85,6 +85,9 @@ import { listen } from '@tauri-apps/api/event';
     import Book2 from '@tabler/icons-svelte/icons/book-2';
 
     import FilePdf from '@tabler/icons-svelte/icons/file-type-pdf';
+    // ── Settings-modal tab icons (v1.4.2) — Tabler set, line variant ──
+    import IconPalette from '@tabler/icons-svelte/icons/palette';
+    import IconPlug    from '@tabler/icons-svelte/icons/plug-connected';
 
     // Phase 2c — reconnected orphans (reflection gate, posture strip, incident timeline, webhook listener)
     import { reflectBeforeEmit, isPass, isWarn, isEscalate, getReasons, getRisk, renderVerdictBadge } from '$lib/reflection-gate';
@@ -108,7 +111,8 @@ import { listen } from '@tauri-apps/api/event';
     import { classifyDrop, defaultPromptForKind } from '$lib/universal-drop';
     import SkillPicker from '$lib/SkillPicker.svelte';
     import KgMiniViewer from '$lib/KgMiniViewer.svelte';
-    import { predictChips, resetDismissed, detectDomain, recordChipClick } from '$lib/predictive-chips';
+    import { predictChips, resetDismissed, detectDomain, recordChipClick,
+             backendChipToPredictive, mergeChips } from '$lib/predictive-chips';
     import PredictiveChipStrip from '$lib/PredictiveChipStrip.svelte';
 
     // Phase 2c (May 2026) — extracted helpers from this file
@@ -167,6 +171,7 @@ import { listen } from '@tauri-apps/api/event';
     const lazyProfile      = () => _lazyProfile       || (_lazyProfile       = import('$lib/ProfileModal.svelte').then(m => m.default));
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
+    import McpServersModal       from '$lib/McpServersModal.svelte';
     import { countUp }     from '$lib/actions';
     import { safeParseLS, safeSetLS, safeSetLSString, safeGetLS, safeRemoveLS } from '$lib/safe-ls';
     import { debug } from '$lib/debug';
@@ -204,7 +209,7 @@ import { listen } from '@tauri-apps/api/event';
 
     // smartRouting + privacyMode restored (see /smart-router and /privacy slash
     // commands). Persisted in localStorage alongside the rest of lucyConfig.
-    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, economyMode: false, userAvatarUrl: '' };
+    let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, economyMode: false, userAvatarUrl: '', briefMode: false };
     let _lastRouteDecision = null;  // RoutingDecision | null — type erased for plain-JS <script>
     // Tier B #1 — Session-wide accumulated savings (USD). Reset at app start;
     // not persisted (this is "since you opened Lucy", not "all time").
@@ -436,6 +441,14 @@ import { listen } from '@tauri-apps/api/event';
     let mcpSecrets = {};          // cargado en onMount desde OS Keyring
     let _newMcpK = '';
     let _newMcpV = '';
+    // ── MCP Servers Registry (v1.4.2) — first-class server list backed by
+    // the `mcp_servers` SQLite table. Cached locally so we can:
+    //   1. Resolve "is this arg a known server NAME?" without a roundtrip.
+    //   2. Render tools_cache in the system prompt block.
+    //   3. Decide between mcp_server_call (registry) vs call_mcp_tool (legacy)
+    //      when the agent emits an mcp_query / mcp_discover tag.
+    let mcpServers = [];
+    let showMcpServersModal = false;
 
     // Sub-agent mode (Plan A — improved UX)
     //   'auto'   → pick cheapest reachable cloud model (preferred default)
@@ -498,6 +511,12 @@ import { listen } from '@tauri-apps/api/event';
     let sidebarResizing    = false;  // drag-to-resize activo
     let registrosOpen      = false;  // accordion sidebar "Registros"
     let showSettingsModal     = false;  // modal de Configuración/Preferencias
+    // ── Settings modal tabbed UX (v1.4.2) ──
+    // The modal used to render every section in one tall column, which made
+    // it cramped and hard to scan. Splitting into 4 logical tabs (Apariencia,
+    // IA, MCP, Sistema) keeps each view focused. The default is 'apariencia'
+    // because that's the entry users tweak most often (theme, font, density).
+    let activeSettingsTab = 'apariencia';
     let showProviderConfig    = false;  // modal de Configuración de Proveedores (IA múltiples)
     let currentTheme = safeGetLS('lucy_warp_theme', 'default'); // 'default' | 'ocean' | 'hacker'
     function setWarpTheme(t) {
@@ -582,7 +601,8 @@ import { listen } from '@tauri-apps/api/event';
 
             resetDismissed(); // new turn → restore dismissed chips
             const userText = String(lastUser?.rawContent || '');
-            predictiveChips = predictChips({
+            const detectedDomains = detectDomain(userText, lucyText);
+            const heuristicChips = predictChips({
                 lastLucyText: lucyText,
                 lastUserText: userText,
                 hadTools,
@@ -590,11 +610,165 @@ import { listen } from '@tauri-apps/api/event';
                 hadError,
                 hasOpenQuestion,
                 cwd: t.cwd || undefined,
-                domains: detectDomain(userText, lucyText),
+                domains: detectedDomains,
             });
+            // Capture signature for downstream Layer-3 click logging AND
+            // for the synchronous memory-chip lookup below. Stored on a
+            // module-level var so onChipAction can read it later when the
+            // user actually clicks something.
+            _lastChipSignature = {
+                domains:    [...detectedDomains],
+                toolLabels: toolLabels.slice(0, 8),
+                hadError,
+                lang:       userLang || 'es-MX',
+            };
+            // Render the heuristic chips IMMEDIATELY so the user sees
+            // something within 1ms. The LLM call (Layer 1) + memory lookup
+            // (Layer 3) augment them in 400-800ms when they return. We
+            // track the tabId at call-time so a late-arriving response
+            // from a previous turn doesn't clobber the chips of a newer turn.
+            predictiveChips = heuristicChips;
+            requestSmartChipsForTab(tabId, lastLucy, lastUser, heuristicChips, _lastChipSignature);
         } catch (err) {
             console.warn('[chips] predict error:', err);
             predictiveChips = [];
+        }
+    }
+
+    /**
+     * Fire the Layer-1 (LLM) chip generator in the background. When it
+     * returns, merge with the heuristic chips already on screen — but
+     * only if the user is still on the same tab and same turn (otherwise
+     * the suggestions would be stale).
+     *
+     * Skipped entirely when:
+     *   • privacyMode is on (no cloud calls allowed)
+     *   • a previous smart-chip request for this tab is still in flight
+     *     (debounce — avoids stacking calls during rapid agent loops)
+     */
+    // ── Layer-3 (memory) chip plumbing ──────────────────────────────────
+    // _lastChipSignature is a compact fingerprint of the conversation turn
+    // for which the currently visible chips were generated. We capture it
+    // when we compute chips and reuse it when the user clicks/dismisses
+    // one — that way the "what was the context at click time" is unambiguous
+    // and survives a turn-switch race. Shape:
+    //   { domains: string[], toolLabels: string[], hadError: bool, lang: string }
+    let _lastChipSignature = null;
+
+    /** Tauri bridge to persist a chip click/dismiss to chip_click_log.
+     *  Silent on errors — Layer-3 is best-effort, never blocks the UI. */
+    async function logChipEventBackend(chip, sig, kind) {
+        if (!sig || !chip) return;
+        // Extract the LLM intent if present; fall back to a heuristic-based
+        // tag derived from the severity so heuristic clicks still segment.
+        const intent = chip.source === 'llm'
+            ? (chip.id.startsWith('llm-') ? 'other' : 'other')  // backend-provided shape lost in transit; default 'other'
+            : (chip.severity === 'caution' ? 'fix'
+              : chip.severity === 'suggest' ? 'verify'
+              : 'other');
+        const text = chip.action?.kind === 'fill_input' ? chip.action.text
+                   : chip.action?.kind === 'slash'      ? chip.action.command
+                   : chip.action?.cmd || chip.label;
+        try {
+            await invoke('log_chip_event', {
+                event: {
+                    label:       chip.label,
+                    text,
+                    intent,
+                    domains:     sig.domains || [],
+                    tool_labels: sig.toolLabels || [],
+                    had_error:   !!sig.hadError,
+                    lang:        sig.lang || userLang || 'es-MX',
+                    event_kind:  kind,
+                },
+            });
+        } catch (e) {
+            console.warn('[chip-memory] log failed:', e);
+        }
+    }
+
+    let _smartChipsInflight = new Set();
+    async function requestSmartChipsForTab(tabId, lastLucy, lastUser, heuristicChips, sig) {
+        if (_smartChipsInflight.has(tabId)) return; // debounce
+        _smartChipsInflight.add(tabId);
+        // Snapshot the "current turn signature" so we can detect if the
+        // user moved on by the time async calls return. Cheap: message ids.
+        const turnSig = `${lastLucy?.id || ''}::${lastUser?.id || ''}`;
+        try {
+            // ── Layer 3 (memory) — always safe to run, no cloud call ──
+            // Runs even in privacy mode because it's pure local SQLite.
+            const memoryPromise = invoke('suggest_memory_chips', {
+                sig: {
+                    domains:     sig?.domains     || [],
+                    tool_labels: sig?.toolLabels  || [],
+                    had_error:   !!sig?.hadError,
+                    lang:        sig?.lang        || userLang || 'es-MX',
+                },
+                limit: 2,
+            }).catch(e => { console.warn('[memory-chips]', e); return []; });
+
+            // ── Layer 1 (LLM) — skipped under privacy mode ──
+            let llmPromise = Promise.resolve([]);
+            if (!lucyConfig?.privacyMode) {
+                const turns = [];
+                if (lastUser?.rawContent) {
+                    turns.push({
+                        role: 'user',
+                        text: String(lastUser.rawContent).slice(0, 600),
+                        had_tools: false,
+                        had_error: false,
+                        tool_labels: [],
+                    });
+                }
+                turns.push({
+                    role: 'lucy',
+                    text: String(lastLucy?.rawContent || '').slice(0, 600),
+                    had_tools: (lastLucy._toolLabels || []).length > 0
+                        || /<TOOL>|<EXECUTE/.test(String(lastLucy?.rawContent || '')),
+                    had_error: /error|failed|✕|✖|exception/i.test(String(lastLucy?.rawContent || ''))
+                        || (lastLucy._anyError === true),
+                    tool_labels: (lastLucy._toolLabels || []).map(String).slice(0, 8),
+                });
+
+                const langCode = userLang || 'es-MX';
+                const curTabForModel = getTab(tabId);
+                const modelHint = curTabForModel?.selectedModel || undefined;
+                llmPromise = invoke('generate_smart_chips', {
+                    turns, lang: langCode, modelHint,
+                }).catch(e => { console.warn('[smart-chips/llm]', e); return []; });
+            }
+
+            // Race-free: wait for BOTH before painting. Worst case still
+            // <1s because both run in parallel.
+            const [memoryRaw, llmRaw] = await Promise.all([memoryPromise, llmPromise]);
+
+            // Staleness guard: did the user switch tabs or get a new turn?
+            const curTab = getTab(activeTabId);
+            if (activeTabId !== tabId || !curTab) return;
+            const curLucy = [...curTab.messages].reverse().find(m => m.role === 'lucy' && m.rawContent);
+            const curUser = [...curTab.messages].reverse().find(m => m.role === 'user' && m.rawContent);
+            const curSig = `${curLucy?.id || ''}::${curUser?.id || ''}`;
+            if (curSig !== turnSig) return;
+
+            const llmChips    = Array.isArray(llmRaw)    ? llmRaw.map((c, i)    => ({ ...backendChipToPredictive(c, i), source: 'llm' }))    : [];
+            const memoryChips = Array.isArray(memoryRaw) ? memoryRaw.map((c, i) => ({ ...backendChipToPredictive(c, 100 + i), source: 'memory' })) : [];
+
+            // No background sources returned anything → leave heuristics in place.
+            if (llmChips.length === 0 && memoryChips.length === 0) return;
+
+            // Merge with priority: Memory chips first (highest trust because
+            // YOU clicked them before), then LLM chips, then heuristics.
+            // mergeChips already de-dups by 4-char substring.
+            const enriched = mergeChips(
+                mergeChips(memoryChips, llmChips),
+                heuristicChips,
+            );
+            predictiveChips = enriched;
+        } catch (e) {
+            // Silent: heuristics already on screen. Don't alert the user.
+            console.warn('[smart-chips] enrichment failed:', e);
+        } finally {
+            _smartChipsInflight.delete(tabId);
         }
     }
 
@@ -604,6 +778,12 @@ import { listen } from '@tauri-apps/api/event';
         const t = getTab(activeTabId);
         if (!t) return;
         recordChipClick(chip.id);
+        // ── Layer-3 click logging ────────────────────────────────────
+        // Persist this click + its turn signature to chip_click_log so
+        // the memory chip retriever can surface it in future similar
+        // contexts. Fire-and-forget — we don't care if the row actually
+        // landed before the chip action runs.
+        logChipEventBackend(chip, _lastChipSignature, 'click');
         try {
             if (chip.action.kind === 'fill_input') {
                 t.inputValue = chip.action.text;
@@ -1107,6 +1287,17 @@ import { listen } from '@tauri-apps/api/event';
     async function saveMcpSecret(name, value) { mcpSecrets = await mcpSave(mcpSecrets, name, value); }
     async function deleteMcpSecret(name)      { mcpSecrets = await mcpDelete(mcpSecrets, name); }
 
+    // ── MCP Servers Registry loader (v1.4.2) ──
+    // Pulls the persisted list of MCP servers + cached tools. Called on
+    // mount, after the user saves/deletes a server via the modal, and
+    // after every successful mcp_server_discover so the system prompt
+    // block stays fresh. Errors are swallowed: a missing/empty registry
+    // is a perfectly valid state, not something to surface to the user.
+    async function loadMcpServers() {
+        try { mcpServers = await invoke('mcp_server_list'); }
+        catch (e) { console.warn('[MCP] failed to load servers', e); }
+    }
+
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
@@ -1137,6 +1328,7 @@ import { listen } from '@tauri-apps/api/event';
             }
         } catch(e) {}
         loadMcpSecrets().catch(() => {});
+        loadMcpServers().catch(() => {});
         // Cargar modelos locales (Ollama) — no bloquear si falla
         refreshLocalModels().catch(() => {});
         // Ping periódico al endpoint Ollama (cada 30s) para el indicador de estado
@@ -1364,6 +1556,8 @@ import { listen } from '@tauri-apps/api/event';
                     privacyMode:  safeGetLS('lucy_privacy_mode',  '0') === '1',
                     // Tier B #1 — Economy mode (cost-aware routing bias)
                     economyMode:  safeGetLS('lucy_economy_mode',  '0') === '1',
+                    // Quick-win D — Brief mode: forces "respond in 3 lines max"
+                    briefMode:    safeGetLS('lucy_brief_mode',    '0') === '1',
                     userAvatarUrl: safeGetLS('lucy_user_avatar', ''),
                 };
                 showSetupOverlay = false;
@@ -2478,6 +2672,10 @@ import { listen } from '@tauri-apps/api/event';
         const t=getTab(tabId);
         obj.id=obj.id||(Date.now()+Math.random());
         obj.time=ahora();
+        // Quick-win A — update the per-tab activity timestamp so the
+        // status dot can mark idle (>30 min without activity) tabs as
+        // 'stale' in the strip. Cheap: one number per addMsg call.
+        if (t) t._lastActivityTs = Date.now();
         // SEC-6/7 FIX: Defense-in-depth HTML sanitization. All 50+ call sites
         // construct obj.html via string interpolation — many inject error messages,
         // LLM content, user names, or command output without escaping. By sanitizing
@@ -3409,7 +3607,17 @@ Use ONE of these patterns instead:
 `;
 
             t._cancelled = false; // Reset bandera de cancelación
-            const aiParams = {prompt:raw||"Analiza esto.",context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
+            // Quick-win D — Brief Mode: prepend a terse-output directive to
+            // the prompt when the toggle is on. We modify ONLY the AI-bound
+            // text, never `raw` (which feeds history, tab title, etc.) — so
+            // the user's transcript stays clean and the chip / replay views
+            // show what they actually typed.
+            const _briefPrefix = lucyConfig?.briefMode
+                ? (userLang?.startsWith('es')
+                    ? '[Modo conciso: responde en máx. 3 líneas, sin preámbulos] '
+                    : '[Brief mode: answer in 3 lines max, no preamble] ')
+                : '';
+            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
 
             // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
             const codeGenIntent = /dame\s+(un\s+)?script|escrib[ea]\s+(un\s+)?script|crea\s+(un\s+)?script|genera\s+(un\s+)?script|give\s+me\s+(a\s+)?script|write\s+(a\s+)?script|create\s+(a\s+)?script|generate\s+(a\s+)?script|hazme\s+(un\s+)?script|necesito\s+(un\s+)?script|quiero\s+(un\s+)?script|dame\s+.*c[oó]digo|dame\s+.*powershell|haz\s+.*script/i.test(raw);
@@ -4763,7 +4971,18 @@ Use ONE of these patterns instead:
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>mcp_discover:[^<]+<\/TOOL>/gi, '');
                         const mcpSrv = mdM[1].trim();
-                        readOnlyTasks.push({ label: `[◎ MCP Scanner] ${mcpSrv}`, fn: () => retryWithBackoff(() => invoke('discover_mcp_tools', {serverName: mcpSrv, env: mcpSecrets}), 2, true).then(r => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`) });
+                        // Dual resolution: if the argument matches a registered server NAME,
+                        // call the registry command (caches result + updates status).
+                        // Otherwise fall back to the legacy raw-command path.
+                        const isRegistered = mcpServers.some(s => s.name === mcpSrv);
+                        readOnlyTasks.push({
+                            label: `[◎ MCP Scanner] ${mcpSrv}`,
+                            fn: () => retryWithBackoff(() => isRegistered
+                                ? invoke('mcp_server_discover', { name: mcpSrv, env: mcpSecrets }).then(s => JSON.stringify(s.tools_cache, null, 2))
+                                : invoke('discover_mcp_tools', { serverName: mcpSrv, env: mcpSecrets })
+                            , 2, true).then(r => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`)
+                                .then(r => { if (isRegistered) loadMcpServers().catch(() => {}); return r; })
+                        });
                     }
                     const fetchM = agentResp.match(/<TOOL>fetch:([^<]+)<\/TOOL>/i);
                     if (fetchM) {
@@ -5381,10 +5600,29 @@ Use ONE of these patterns instead:
                     }
 
                     // ── mcp_query: añadir a readOnlyTasks ANTES de construir cards[] ──
+                    // Dual resolution: arg1 may be a REGISTERED server name (registry
+                    // path → backend resolves command + filters env) OR a raw command
+                    // string (legacy path, kept for backwards compat with old prompts).
                     for (const mcpQ of [...agentResp.matchAll(/<TOOL>mcp_query:([^|]+)\|\|\|([\s\S]*?)<\/TOOL>/gi)]) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>mcp_query:[\s\S]*?<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[⊟ MCP] ${mcpQ[1].trim()}`, fn: () => retryWithBackoff(() => invoke('call_mcp_tool', {serverName:mcpQ[1].trim(), query:mcpQ[2].trim(), env: mcpSecrets}), 2, true).then(c => `[MCP ${mcpQ[1].trim()} RESULT]\n`+c) });
+                        const arg1 = mcpQ[1].trim();
+                        const queryStr = mcpQ[2].trim();
+                        const isRegistered = mcpServers.some(s => s.name === arg1);
+                        readOnlyTasks.push({
+                            label: `[⊟ MCP] ${arg1}`,
+                            fn: () => retryWithBackoff(() => {
+                                if (isRegistered) {
+                                    // Registry path: split "tool|||args" — backend reads cmd + env_keys from DB.
+                                    const parts = queryStr.split('|||');
+                                    const toolName = (parts[0] || '').trim();
+                                    const argsJson = (parts[1] || '{}').trim();
+                                    return invoke('mcp_server_call', { name: arg1, toolName, argsJson, env: mcpSecrets });
+                                }
+                                // Legacy path: whole string is the command, queryStr is "tool|||args".
+                                return invoke('call_mcp_tool', { serverName: arg1, query: queryStr, env: mcpSecrets });
+                            }, 2, true).then(c => `[MCP ${arg1} RESULT]\n`+c)
+                        });
                     }
 
                     // Ejecutar todos los read-only tasks en paralelo (con tool cards estilo Antigravity)
@@ -8169,6 +8407,7 @@ if (Test-Path $src) {
               userName={lucyConfig.name}
               userAvatarUrl={lucyConfig.userAvatarUrl || ''}
               on:pinmessage={(e) => { e.detail.msg.pinned = !e.detail.msg.pinned; tabs = tabs; toast(e.detail.msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}
+              on:branchmessage={(e) => { if (e.detail?.msg?.id && activeTabId) { bifurcarTabDesde(activeTabId, e.detail.msg.id); toast(isEN ? 'Branched into a new tab' : 'Bifurcado en una pestaña nueva', 'info'); } }}
               on:buttonaction={(e) => { const btn = e.detail.event.target; btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); e.detail.msg.button.action(e.detail.event); }}
               on:togglereasoning={(e) => { e.detail.msg.collapsed = !e.detail.msg.collapsed; tabs = tabs; }}
               on:codeclick={(e) => invoke('open_vscode', { path: e.detail.path })}
@@ -8176,7 +8415,9 @@ if (Test-Path $src) {
             />
             <!-- U5 — Predictive next-action chips. Only renders when there are chips for the active tab. -->
             {#if activeTabId === tab.id && predictiveChips.length > 0}
-              <PredictiveChipStrip chips={predictiveChips} on:chipaction={onChipAction} />
+              <PredictiveChipStrip chips={predictiveChips}
+                on:chipaction={onChipAction}
+                on:chipdismiss={(e) => logChipEventBackend(e.detail.chip, _lastChipSignature, 'dismiss')} />
             {/if}
             <ChatInput
               {tab} {isEN} {costPrediction} {userChips} {chipsHidden}
@@ -8184,9 +8425,19 @@ if (Test-Path $src) {
               {chatSearchCount} isActiveTab={activeTabId === tab.id}
               cmdPlaceholder={ui.cmdPlaceholder} {getEffectiveModel} {getModelDescription}
               formatTokens={_formatTokens}
+              briefMode={!!lucyConfig.briefMode}
               on:attach={() => attach(tab.id)}
               on:togglemic={() => toggleMic(tab.id)}
               on:clearsession={() => limpiarSesion(tab.id)}
+              on:togglebrief={() => {
+                  const next = !lucyConfig.briefMode;
+                  lucyConfig = { ...lucyConfig, briefMode: next };
+                  try { safeSetLSString('lucy_brief_mode', next ? '1' : '0'); } catch {}
+                  toast(next
+                      ? (isEN ? 'Brief mode ON — Lucy will answer in 3 lines max' : 'Modo conciso ACTIVO — Lucy responderá en 3 líneas máx.')
+                      : (isEN ? 'Brief mode OFF' : 'Modo conciso INACTIVO'),
+                      'info');
+              }}
               on:removefile={(e) => removeFile(e.detail.tabId, e.detail.fileName)}
               on:runchip={(e) => runChipLabel(e.detail.clave)}
               on:addchip={abrirNuevoChip}
@@ -8802,6 +9053,15 @@ if (Test-Path $src) {
   <ProviderConfigModal isOpen={true} {isEN} on:close={() => showProviderConfig=false} />
   {/if}
 
+  <!-- ── MODAL: SERVIDORES MCP (v1.4.2 — first-class registry) ── -->
+  <McpServersModal
+    isOpen={showMcpServersModal}
+    {isEN}
+    {mcpSecrets}
+    on:close={() => showMcpServersModal = false}
+    on:updated={() => loadMcpServers()}
+  />
+
   <!-- ── MODAL: CHIPS EDITABLES ── -->
   {#if $showChipsModal}
   <div class="mb">
@@ -8846,7 +9106,61 @@ if (Test-Path $src) {
         <h3>{isEN ? 'Settings' : 'Configuración'}</h3>
         <button class="mclose" on:click={() => showSettingsModal = false}>✕</button>
       </div>
+      <!-- ── Tabs (v1.4.2 redesign — Tabler icons for visual consistency with Sidebar) ── -->
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab" class:on={activeSettingsTab === 'apariencia'}
+          role="tab" aria-selected={activeSettingsTab === 'apariencia'}
+          on:click={() => activeSettingsTab = 'apariencia'}>
+          <span class="settings-tab-ico"><IconPalette size={16} stroke={1.6} /></span>
+          <span class="settings-tab-lbl">{isEN ? 'Appearance' : 'Apariencia'}</span>
+        </button>
+        <button class="settings-tab" class:on={activeSettingsTab === 'ia'}
+          role="tab" aria-selected={activeSettingsTab === 'ia'}
+          on:click={() => activeSettingsTab = 'ia'}>
+          <span class="settings-tab-ico"><Brain size={16} stroke={1.6} /></span>
+          <span class="settings-tab-lbl">{isEN ? 'AI Behavior' : 'IA'}</span>
+        </button>
+        <button class="settings-tab" class:on={activeSettingsTab === 'mcp'}
+          role="tab" aria-selected={activeSettingsTab === 'mcp'}
+          on:click={() => activeSettingsTab = 'mcp'}>
+          <span class="settings-tab-ico"><IconPlug size={16} stroke={1.6} /></span>
+          <span class="settings-tab-lbl">MCP</span>
+          {#if mcpServers.length > 0}
+            <span class="settings-tab-badge">{mcpServers.length}</span>
+          {/if}
+        </button>
+        <button class="settings-tab" class:on={activeSettingsTab === 'sistema'}
+          role="tab" aria-selected={activeSettingsTab === 'sistema'}
+          on:click={() => activeSettingsTab = 'sistema'}>
+          <span class="settings-tab-ico"><Settings size={16} stroke={1.6} /></span>
+          <span class="settings-tab-lbl">{isEN ? 'System' : 'Sistema'}</span>
+        </button>
+      </div>
       <div class="settings-body">
+
+        {#if activeSettingsTab === 'mcp'}
+                  <!-- Sección: Servidores MCP (v1.4.2 — first-class registry) -->
+          <div class="settings-section">
+            <div class="settings-section-title">{isEN ? 'MCP Servers' : 'Servidores MCP'}</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <p style="color:var(--txt2);font-size:11px;line-height:1.55;margin:0 0 6px;">
+                {isEN
+                  ? 'Register MCP servers (filesystem, github, postgres, brave-search…) once. Lucy calls them by name and caches their tool catalog. Equivalent to claude_desktop_config.json / Cursor / Cline.'
+                  : 'Registra servidores MCP (filesystem, github, postgres, brave-search…) una vez. Lucy los invoca por nombre y cachea su catálogo de tools. Equivalente a claude_desktop_config.json / Cursor / Cline.'}
+              </p>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <button class="settings-btn" on:click={() => showMcpServersModal = true} style="padding:6px 12px;">
+                  🔌 {isEN ? 'Manage MCP Servers' : 'Administrar Servidores MCP'}
+                </button>
+                <span style="color:var(--txt3);font-size:11px;">
+                  {mcpServers.length} {isEN ? 'registered' : 'registrados'}
+                  {#if mcpServers.length > 0}
+                    · {mcpServers.reduce((a, s) => a + (Array.isArray(s.tools_cache) ? s.tools_cache.length : 0), 0)} tools
+                  {/if}
+                </span>
+              </div>
+            </div>
+          </div>
 
                   <!-- Sección: Secretos MCP -->
           <div class="settings-section">
@@ -8881,6 +9195,9 @@ if (Test-Path $src) {
             </div>
           </div>
 
+        {/if}
+
+        {#if activeSettingsTab === 'apariencia'}
           <!-- Sección: Apariencia -->
         <div class="settings-section">
           <div class="settings-section-title">{isEN ? 'Appearance' : 'Apariencia'}</div>
@@ -9055,6 +9372,9 @@ if (Test-Path $src) {
           {/if}
         </div>
 
+        {/if}
+
+        {#if activeSettingsTab === 'ia'}
         <!-- Sección: IA -->
         <div class="settings-section">
           <div class="settings-section-title">{isEN ? 'AI Behavior' : 'Comportamiento IA'}</div>
@@ -9300,6 +9620,9 @@ if (Test-Path $src) {
           </div>
         </div>
 
+        {/if}
+
+        {#if activeSettingsTab === 'sistema'}
         <!-- Sección: Sistema -->
         <div class="settings-section">
           <div class="settings-section-title">{isEN ? 'System' : 'Sistema'}</div>
@@ -9486,6 +9809,7 @@ if (Test-Path $src) {
             </div>
           </div>
         </div>
+        {/if}
 
       </div>
     </div>

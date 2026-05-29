@@ -808,10 +808,27 @@ body.density-compact .chat{gap:2px !important;}
 }
 .msg-error strong{color:var(--sem-crit, #ef4444);}
 .msg-error small{display:inline-block;margin-top:4px;line-height:1.5;}
-/* ── Skeleton streaming ─────────────────────── */
-.skel-block{display:flex;flex-direction:column;gap:7px;padding:4px 0;}
-.skel-line{height:11px;border-radius:4px;background:linear-gradient(90deg,#0f1520 25%,#1e293b 50%,#0f1520 75%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;}
-@keyframes shimmer{to{background-position:-200% 0;}}
+/* ── Skeleton streaming (v1.4.2 — more visible thinking bar) ────────────────
+   Was barely-perceptible 11px lines with dark-grey shimmer that disappeared
+   on most themes (especially the custom-neon-tokyo purple palette). Bumped
+   to 14px with a theme-aware accent-colored highlight pass so the user
+   always sees "Lucy is preparing the response" without ambiguity. */
+.skel-block{display:flex;flex-direction:column;gap:9px;padding:6px 0;}
+.skel-line{
+  height:14px;
+  border-radius:6px;
+  background:
+    linear-gradient(90deg,
+      var(--bg3, #0f1520) 0%,
+      var(--bg4, #1e293b) 30%,
+      color-mix(in srgb, var(--acc, #10b981) 32%, var(--bg4, #1e293b)) 50%,
+      var(--bg4, #1e293b) 70%,
+      var(--bg3, #0f1520) 100%);
+  background-size:220% 100%;
+  animation:shimmer 1.4s ease-in-out infinite;
+  border:1px solid color-mix(in srgb, var(--bdr, #1a2030) 80%, transparent);
+}
+@keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
 .sys-msg{align-self:center;color:#334155;font-size:11px;font-style:italic;}
 .mn{font-size:11px;font-weight:700;margin-bottom:5px;}
 .msg-user .mn{color:var(--blue);}
@@ -2083,13 +2100,103 @@ body[data-state="error"] .igrp{
 .sb-accordion-body{overflow:hidden;animation:accordionIn .15s ease-out;}
 @keyframes accordionIn{from{opacity:0;max-height:0;}to{opacity:1;max-height:200px;}}
 
-/* ── SETTINGS MODAL ─────────────────────────── */
-.settings-modal{width:420px;}
-.settings-body{padding:16px 20px;display:flex;flex-direction:column;gap:20px;}
-.settings-section{display:flex;flex-direction:column;gap:8px;}
-.settings-section-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);font-weight:600;padding-bottom:4px;border-bottom:1px solid var(--bdr);}
-.settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;}
-.settings-label{font-size:12px;color:var(--txt2);white-space:nowrap;}
+/* ── SETTINGS MODAL (v1.4.2 — tabbed + card layout) ─────────────────────────
+   Was 420px — too narrow for label+control without the controls getting
+   smushed to the right edge or wrapping awkwardly. Bumped to 620px with a
+   viewport cap so it still works on small screens. Sections render as
+   distinct cards (background + border + padding) so the eye groups related
+   controls instead of seeing one long flat list. */
+.settings-modal{width:min(640px, 96vw); max-height:88vh; display:flex; flex-direction:column;}
+.settings-body{
+  padding:18px 22px 22px;
+  display:flex; flex-direction:column; gap:16px;
+  overflow-y:auto; flex:1;
+}
+.settings-body::-webkit-scrollbar{width:6px;}
+.settings-body::-webkit-scrollbar-thumb{background:var(--bdr2); border-radius:3px;}
+.settings-section{
+  display:flex; flex-direction:column; gap:12px;
+  background:rgba(255,255,255,.018);
+  border:1px solid var(--bdr);
+  border-radius:10px;
+  padding:14px 16px;
+}
+.settings-section-title{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:1.2px;
+  color:var(--acc);
+  font-weight:700;
+  padding-bottom:8px;
+  margin-bottom:2px;
+  border-bottom:1px solid var(--bdr);
+}
+/* Two-column grid: label fixed-width, control flexes. Prevents the
+   "everything jammed to the right" look from the old flex layout. */
+.settings-row{
+  display:grid;
+  grid-template-columns:minmax(140px, 38%) 1fr;
+  align-items:center;
+  gap:14px;
+  min-height:34px;
+}
+.settings-label{
+  font-size:12px;
+  color:var(--txt2);
+  /* Allow the label to wrap on narrow widths instead of overflowing. */
+  white-space:normal;
+  line-height:1.35;
+}
+
+/* ── Settings tabs ─────────────────────────────────────────────────── */
+.settings-tabs{
+  display:flex;
+  gap:4px;
+  padding:8px 14px 0;
+  border-bottom:1px solid var(--bdr);
+  background:rgba(0,0,0,.12);
+  flex-shrink:0;
+}
+.settings-tab{
+  display:flex; align-items:center; gap:6px;
+  background:transparent;
+  border:none;
+  border-bottom:2px solid transparent;
+  color:var(--txt2);
+  font-size:12px; font-weight:600;
+  font-family:inherit;
+  padding:9px 14px 10px;
+  cursor:pointer;
+  transition:color .15s, border-color .15s, background .15s;
+  margin-bottom:-1px;
+  border-radius:6px 6px 0 0;
+}
+.settings-tab:hover{
+  color:var(--txt);
+  background:rgba(255,255,255,.03);
+}
+.settings-tab.on{
+  color:var(--acc);
+  border-bottom-color:var(--acc);
+}
+.settings-tab-ico{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  line-height:1;
+  color:currentColor;
+}
+.settings-tab-lbl{line-height:1;}
+.settings-tab-badge{
+  background:var(--acc);
+  color:#030b06;
+  font-size:9.5px;
+  font-weight:800;
+  padding:1px 6px;
+  border-radius:8px;
+  line-height:1.3;
+  letter-spacing:.3px;
+}
 .effective-model-hint{font-size:10.5px;color:var(--txt2);opacity:0.85;font-family:var(--mono,ui-monospace,monospace);}
 .effective-model-hint code{background:rgba(99,102,241,0.10);border:1px solid rgba(99,102,241,0.25);color:#a5b4fc;padding:1px 7px;border-radius:4px;font-size:10.5px;}
 .effective-model-hint .warn-dot{color:#fbbf24;margin-right:5px;font-size:11px;}

@@ -17,20 +17,30 @@
     export let chips: PredictiveChip[] = [];
 
     const dispatch = createEventDispatcher<{
-        chipaction: { chip: PredictiveChip };
+        chipaction:  { chip: PredictiveChip };
+        chipdismiss: { chip: PredictiveChip };
     }>();
 
     // Filter out dismissed ones reactively
     $: visibleChips = chips.filter(c => !isDismissed(c.id));
 
+    // Source labels for the provenance badge. Kept here (not in the .ts
+    // module) because they're pure presentation — backend doesn't care.
+    const SRC_BADGE: Record<string, { glyph: string; title: string }> = {
+        heuristic: { glyph: '⚡', title: 'Heuristic — pattern matched on the last turn' },
+        llm:       { glyph: '✦', title: 'AI suggestion — generated from the recent conversation' },
+        memory:    { glyph: '◊', title: 'Learned from your past sessions' },
+    };
+
     function onClick(chip: PredictiveChip) {
         dispatch('chipaction', { chip });
     }
 
-    function onDismiss(ev: Event, id: string) {
+    function onDismiss(ev: Event, chip: PredictiveChip) {
         ev.stopPropagation();
-        dismissChip(id);        // hides for this turn
-        recordChipDismiss(id);  // persists: lowers engagement score long-term
+        dismissChip(chip.id);        // hides for this turn
+        recordChipDismiss(chip.id);  // persists: lowers engagement score long-term
+        dispatch('chipdismiss', { chip }); // let parent log it for Layer-3
         chips = chips; // trigger reactivity
     }
 </script>
@@ -49,11 +59,18 @@
                  out:fade={{ duration: 120 }}>
                 <span class="pchip-icon">{chip.icon}</span>
                 <span class="pchip-label">{chip.label}</span>
+                {#if chip.source && SRC_BADGE[chip.source]}
+                    <span class="pchip-src pchip-src-{chip.source}"
+                          title={SRC_BADGE[chip.source].title}
+                          aria-label={SRC_BADGE[chip.source].title}>
+                        {SRC_BADGE[chip.source].glyph}
+                    </span>
+                {/if}
                 <span class="pchip-x"
                       role="button"
                       tabindex="0"
-                      on:click={(e) => onDismiss(e, chip.id)}
-                      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onDismiss(e, chip.id); } }}
+                      on:click={(e) => onDismiss(e, chip)}
+                      on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onDismiss(e, chip); } }}
                       title="Descartar sugerencia"
                       aria-label="Dismiss">×</span>
             </div>
@@ -102,6 +119,38 @@
         line-height: 1.2;
         white-space: nowrap;
     }
+    /* Provenance badge — tiny glyph distinguishing heuristic / LLM / memory.
+       Sits between label and dismiss, neutral by default with a per-source
+       accent so the eye can scan a strip and tell at a glance which chips
+       come from the AI vs the rules. */
+    .pchip-src {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9.5px;
+        line-height: 1;
+        opacity: 0.75;
+        padding: 1px 4px;
+        border-radius: 4px;
+        margin-left: 4px;
+        background: rgba(255,255,255,0.06);
+        color: var(--txt2, #94a3b8);
+        font-weight: 600;
+    }
+    .pchip:hover .pchip-src { opacity: 1; }
+    .pchip-src-llm {
+        background: rgba(167,139,250,0.14);
+        color: #c4b5fd;
+    }
+    .pchip-src-heuristic {
+        background: rgba(16,185,129,0.10);
+        color: var(--acc, #10b981);
+    }
+    .pchip-src-memory {
+        background: rgba(59,158,255,0.12);
+        color: #3b9eff;
+    }
+
     .pchip-x {
         display: inline-flex;
         align-items: center;

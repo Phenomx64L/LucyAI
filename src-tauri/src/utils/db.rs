@@ -655,6 +655,68 @@ CREATE TABLE IF NOT EXISTS metrics_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_samples_ts   ON metrics_samples(host_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_metrics_samples_hourly ON metrics_samples(is_hourly, ts DESC);
+
+-- ── MCP Servers Registry (v1.4.2) ────────────────────────────────────────
+-- First-class registry of MCP (Model Context Protocol) servers, similar
+-- to claude_desktop_config.json / Cursor / Cline. Persists the spawn
+-- command, which secret keys to inject as env vars, and a CACHE of the
+-- last discovered tools so Lucy can include them in her system prompt
+-- without re-spawning the process each turn.
+--
+-- env_keys is a JSON array of key names that map to entries already
+-- stored in Windows Credential Manager via the existing MCP Secrets
+-- mechanism. Splitting "which secrets exist" (Keyring) from "which
+-- secrets THIS server needs" (env_keys) lets one secret bag serve
+-- many servers without leaking unrelated tokens into every subprocess.
+--
+-- tools_cache is the verbatim JSON array returned by tools/list on the
+-- last successful discover. Lucy embeds a compact form in the system
+-- prompt so the LLM knows what's available without an extra round-trip.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id              TEXT    PRIMARY KEY,
+    name            TEXT    NOT NULL UNIQUE,
+    command         TEXT    NOT NULL,                      -- full shell-style cmd: "npx -y @mcp/server-fs C:/path"
+    env_keys        TEXT    NOT NULL DEFAULT '[]',         -- JSON array of secret key names
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    tools_cache     TEXT    NOT NULL DEFAULT '[]',         -- last tools/list result (JSON array)
+    last_discovered INTEGER,                                -- unix epoch
+    last_status     TEXT    NOT NULL DEFAULT 'pending',    -- 'ok'|'error'|'pending'
+    last_error      TEXT,
+    last_latency_ms INTEGER,
+    created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled, updated_at DESC);
+
+-- ── Chip click memory (v1.4.2, Layer 3 of smart chips) ────────────────────
+-- Logs every user interaction with a predictive chip so that, over time,
+-- Lucy learns what suggestions ACTUALLY get used in each conversation
+-- context. The Layer-3 retriever queries this table at chip-generation
+-- time and surfaces past clicks whose context signature matches the
+-- current turn — those appear in the strip with the ◊ "memory" badge.
+--
+-- Signature columns are stored as JSON arrays so the matcher can do
+-- intersection checks without a separate junction table. Total rows
+-- grow ~O(clicks/day) — for a heavy user that's <100/day, so even
+-- 3 years of history fits in <10 MB. No vacuum schedule needed.
+--
+-- event_kind splits the table into clicks (positive signal) and
+-- dismisses (negative signal) so the scorer can penalize chips the
+-- user explicitly rejected in a similar context.
+CREATE TABLE IF NOT EXISTS chip_click_log (
+    id            TEXT    PRIMARY KEY,
+    label         TEXT    NOT NULL,
+    text          TEXT    NOT NULL,
+    intent        TEXT    NOT NULL DEFAULT 'other',
+    domains       TEXT    NOT NULL DEFAULT '[]',   -- JSON array of domain strings
+    tool_labels   TEXT    NOT NULL DEFAULT '[]',   -- JSON array
+    had_error     INTEGER NOT NULL DEFAULT 0,
+    lang          TEXT    NOT NULL DEFAULT 'es-MX',
+    event_kind    TEXT    NOT NULL DEFAULT 'click', -- 'click' | 'dismiss'
+    occurred_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chip_log_recent ON chip_click_log(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chip_log_kind   ON chip_click_log(event_kind, occurred_at DESC);
 "#;
 
 // ── Audit Trail (P0 Feature 1) ────────────────────────────────────────────

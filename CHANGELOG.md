@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.2] — 2026-05-29
+
+A focused follow-up to 1.4.1. Three themes: **(1)** first-class MCP
+integration matching Claude Desktop / Cursor / Cline; **(2)** smart
+chips with real conversational reasoning, not pattern matching;
+**(3)** UX polish — settings tabs, richer tab headers, branch-from-here.
+**210 Rust tests** (+38 net new) · **117 vitest** · **0 svelte-check warnings**.
+
+### MCP Model Context Protocol — first-class registry
+
+- **`mcp_servers` SQLite table** persists registered servers (name, command,
+  env_keys list, tools cache, status, last latency). UX parity with
+  `claude_desktop_config.json` — register a server by name once and Lucy
+  invokes it as `mcp_query:<name>|||<tool>|||<args>` with the backend
+  resolving the command and filtering env keys from Windows Credential
+  Manager automatically.
+- **6 new Tauri commands**: `mcp_server_list / upsert / delete /
+  discover / test / mcp_server_call`. Discover caches `tools/list`
+  results; subsequent system-prompt builds list available tools without
+  re-spawning the subprocess.
+- **`McpServersModal.svelte`** (~520 LOC) — status pills (ok/error/pending),
+  cached-tool browser, **per-tool invoke panel** with a JSON args editor,
+  6 curated presets (filesystem, github, brave-search, postgres, puppeteer,
+  slack), env-key multi-select bound to the existing Keyring bag with
+  visible chips (green = present, red = missing).
+- **Dual-resolution agent loop**: when the model emits `mcp_query:<arg>`,
+  `<arg>` is first checked against the registered server names. If
+  matched, the registry path is used (named server, filtered env);
+  otherwise the legacy raw-command path runs for backward compatibility
+  with prior prompts and skills.
+- **`McpRegistrySection`** in the system prompt lists active servers
+  with name + command + cached tools. **`inputSchema` injection** —
+  each tool now renders with a compact signature like
+  `search_repositories(query*: string, sort?: "stars"|"forks"|"updated",
+  perPage?: number)`. Eliminated the class of "Validation Failed" errors
+  caused by the LLM guessing argument shapes (e.g. `q:me` on GitHub
+  Search). 9 unit tests cover enum inlining, ellipsis, nullable arrays,
+  union keywords.
+- **Connection pooling** (`mcp.rs::pooled_call`). Each MCP `tools/call`
+  used to spawn `npx` cold-start (200-800ms) + JSON-RPC init handshake
+  + tools/call + kill. **Now the subprocess stays alive between calls**;
+  only the tools/call latency is paid (~50-200ms). Observed: 15 sequential
+  GitHub MCP calls went from ~45s overhead to ~750ms total. Session keyed
+  by `(server_name, command, env_hash)` with a 60s idle TTL and a
+  background reaper that wakes every 30s. On any I/O error the session is
+  evicted and the next call respawns fresh. `mcp_pool_stats` and
+  `mcp_pool_clear` exposed for diagnostics / forced refresh. 5 tests
+  cover key stability across env iteration order, secret isolation,
+  server/command differentiation.
+
+### Smart chips — three layers of reasoning
+
+- **Layer 1 — LLM-generated chips** (`smart_chips.rs`, 9 tests). After
+  each Lucy response, a tiny background call to Gemini Flash (fallback
+  Anthropic Haiku) reads the last 6 turns and proposes 1-3 next-action
+  chips with structured JSON output (`response_mime_type: application/json`).
+  Cost: ~$0.0003/turn. Latency: 400-800ms. The robust parser tolerates
+  markdown fences, leading prose, malformed JSON via bracket-counted
+  `extract_first_json_array`. Skipped when privacy mode is on.
+- **Layer 2 — Heuristic chips** (existing `predictive-chips.ts`). Now
+  carries a `source: 'heuristic'` provenance tag.
+- **Layer 3 — Memory chips** (`chip_memory.rs`, 9 tests + new
+  `chip_click_log` table). Every chip click AND dismiss is persisted
+  with its context signature (domains, tool_labels, had_error, lang).
+  At chip-generation time, past events with overlapping signatures are
+  scored by `clicks × overlap_bonus × recency_decay` (30-day half-life)
+  minus 0.6× dismisses. Filtered above a 0.5 floor, top 2 surface with
+  the ◊ memory badge — Lucy literally learns which suggestions YOU
+  click in which contexts. Pure local SQLite, runs even in privacy mode.
+- **`PredictiveChipStrip.svelte`** renders a provenance badge per chip
+  (⚡ heuristic / ✦ LLM / ◊ memory) with hover tooltip explaining origin.
+  Parent receives `chipdismiss` events alongside `chipaction` so Layer 3
+  trains on negative signal too.
+- **Parallel orchestration** in `recomputePredictiveChips`: heuristics
+  render instantly (<1ms), Layer 1 + Layer 3 fire in `Promise.all`,
+  results merged with priority memory > LLM > heuristic via
+  `mergeChips()` (4-char substring dedup catches paraphrases like
+  "Continue" vs "Continue investigation"). Staleness guard via
+  message-id snapshot — late responses for stale turns are discarded.
+
+### UX & polish
+
+- **Settings modal redesigned with tabs** (`Apariencia` / `IA` / `MCP` /
+  `Sistema`). Modal widened 420 → 640px, sections rendered as cards with
+  rounded borders, two-column grid rows (label fixed-width, control
+  flexible) — no more controls jammed to the right. Tabs use **Tabler
+  icons** (Palette, Brain, Plug-Connected, Settings) matching the
+  sidebar's visual language. MCP tab shows a live badge with the count
+  of registered servers.
+- **Thinking skeleton bar** rebuilt — 11px dark grey → 14px with
+  theme-aware accent-tinted shimmer using `color-mix(in srgb, var(--acc)
+  32%, var(--bg4))`. Visible across all themes including
+  `custom-neon-tokyo` where the old bar disappeared.
+- **Empty-input shortcut overlay**: when the textarea is empty, an
+  unobtrusive ribbon renders `Ctrl+P palette · Tab autocomplete · /
+  commands · @ host · Esc cancel`. Auto-hides on focus or typing.
+- **Brief Mode toggle** (`.brief-btn` in the input bar). When ON,
+  prepends `[Modo conciso: responde en máx. 3 líneas, sin preámbulos]`
+  to the LLM-bound prompt only — history, tab titles and replay show
+  the user's original text unmodified. Persisted in `lucy_brief_mode`.
+- **Branch-from-here** button (`⌥`) on every Lucy message bubble.
+  Clones the conversation up to that message into a new tab via
+  `bifurcarTabDesde`. Previously only reachable via Ctrl+B.
+- **Rich tab header**: status dot color-coded by tab activity
+  (`processing` blue pulsing / `fork` amber / `error` red / `stale`
+  desaturated after 30 min idle / `idle` purple default). 3-letter
+  model shorthand pill on the active tab (`gem` / `son` / `hai` / `gpt`
+  / `oll` / `nvi`). Hover preview popover enriched with model + turn
+  count + token total + accrued cost + state pills.
+- **Tutorial expanded** with a new Configuration section covering each
+  sub-module (Providers, Privacy/Smart-Router/Economy, Themes JSON,
+  Data backup/restore/support bundle, MCP usage, Verifier, Profiles).
+  Welcome menu lists v1.4.1+v1.4.2 highlights and explains MCP usage
+  step-by-step. Skills Manager step removed (module retired in 1.4.1).
+
+### Numbers
+
+- **210 Rust tests** (+38 new: 9 smart_chips, 9 chip_memory, 9
+  signature parsing, 11 mcp pool + base) — all green.
+- **117 vitest** — all green.
+- **0 svelte-check warnings**, **0 cargo warnings**.
+- New SQLite tables: `mcp_servers`, `chip_click_log`.
+- Net LOC added: ~2,400 (backend ~1,200 / frontend ~1,200).
+
+---
+
 ## [1.4.1] — 2026-05-28
 
 The largest release since 1.4.0. Massive expansion in three directions:

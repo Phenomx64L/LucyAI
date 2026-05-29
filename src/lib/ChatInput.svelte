@@ -15,6 +15,8 @@
 
     export let tab: any;
     export let isEN: boolean = false;
+    /** Quick-win D — Brief mode toggle (lucyConfig.briefMode, lifted to parent). */
+    export let briefMode: boolean = false;
     export let costPrediction: any = null;
     export let userChips: any[] = [];
     export let chipsHidden: boolean = false;
@@ -39,6 +41,7 @@
         attach: void;
         togglemic: void;
         clearsession: void;
+        togglebrief: void;
         removefile: { tabId: string; fileName: string };
         runchip: { clave: string };
         addchip: void;
@@ -72,6 +75,17 @@
     // someone tweaks the stylesheet later.
     const CAP_PX = 100;
     const FLOOR_PX = 24;
+
+    // ── Empty-state shortcut hints (quick win C) ──
+    // Shown only when the textarea is empty AND not focused AND not in any
+    // special state. This is the "first 30s discoverability" surface: a
+    // subtle overlay listing the keyboard chords Lucy actually responds to,
+    // so a new user finds Ctrl+P / Tab / Esc without having to read docs.
+    let _ifocused = false;
+    $: _showShortcutHints = !_ifocused
+        && !tab?.inputValue
+        && !tab?.pendingMessage
+        && !tab?.isProcessing;
 
     function autoResize() {
         if (!_textareaEl) return;
@@ -255,12 +269,29 @@
                     : cmdPlaceholder}
             bind:value={tab.inputValue}
             bind:this={_textareaEl}
+            on:focus={() => _ifocused = true}
             on:input={(e) => { autoResize(); refreshFlagSuggestions(); dispatch('inputchange', { event: e }); }}
             on:paste={() => tick().then(autoResize)}
             on:cut={() => tick().then(autoResize)}
             on:keydown={(e) => { if (handleSuggestionKey(e)) return; dispatch('keydown', { event: e }); }}
-            on:blur={() => setTimeout(() => { _flagSuggestions = []; }, 120)}
+            on:blur={() => { _ifocused = false; setTimeout(() => { _flagSuggestions = []; }, 120); }}
             disabled={!!tab.pendingMessage}></textarea>
+
+        <!-- Quick-win C: empty-state shortcut hints. Click-through so it
+             never steals focus. Auto-hidden on focus/typing/processing. -->
+        {#if _showShortcutHints}
+            <div class="ihints" aria-hidden="true">
+                <kbd>Ctrl+P</kbd> <span>{isEN ? 'palette' : 'paleta'}</span>
+                <span class="ihint-sep">·</span>
+                <kbd>Tab</kbd> <span>{isEN ? 'autocomplete' : 'autocompletar'}</span>
+                <span class="ihint-sep">·</span>
+                <kbd>/</kbd> <span>{isEN ? 'commands' : 'comandos'}</span>
+                <span class="ihint-sep">·</span>
+                <kbd>@</kbd> <span>{isEN ? 'host' : 'host'}</span>
+                <span class="ihint-sep">·</span>
+                <kbd>Esc</kbd> <span>{isEN ? 'cancel' : 'cancelar'}</span>
+            </div>
+        {/if}
 
         <!-- Flag autocomplete popover — appears only when caret is on a flag-shaped token of a known command -->
         {#if _flagSuggestions.length > 0}
@@ -291,6 +322,15 @@
             <button class="ia-btn" title={isEN ? 'Clear session (Ctrl+L)' : 'Limpiar sesión (Ctrl+L)'}
                 on:click={() => dispatch('clearsession')} disabled={tab.isProcessing}>
                 <Eraser size={15} stroke={1.8} />
+            </button>
+            <!-- Quick-win D — Brief Mode toggle. When on, prepends a terse-output
+                 directive to every prompt sent. Visible state via .brief-on class. -->
+            <button class="ia-btn brief-btn" class:brief-on={briefMode}
+                title={briefMode
+                    ? (isEN ? 'Brief mode ON — Lucy answers in 3 lines max' : 'Modo conciso ACTIVO — Lucy responde en 3 líneas máx.')
+                    : (isEN ? 'Brief mode OFF — toggle for short answers' : 'Modo conciso INACTIVO — activa para respuestas cortas')}
+                on:click={() => dispatch('togglebrief')}>
+                <span class="brief-glyph" aria-hidden="true">≡</span>
             </button>
             <div class="ia-sep"></div>
 
@@ -483,6 +523,16 @@
     :global(.ia-btn:hover){background:rgba(255,255,255,.07);color:#94a3b8;}
     :global(.ia-btn:disabled){opacity:.25;cursor:not-allowed;}
     :global(.ia-btn.mic-on){color:var(--red);animation:mp 1.5s infinite;}
+    /* Quick-win D — Brief Mode active state. Accent color + subtle ring so
+       the user can tell at a glance whether the next prompt will be cut
+       short. The glyph itself (≡) is just a triple-line "compact" mark. */
+    :global(.ia-btn.brief-btn .brief-glyph){font-family:var(--mono,monospace);font-size:15px;font-weight:700;line-height:1;}
+    :global(.ia-btn.brief-on){
+        color:var(--acc, #10b981);
+        background:rgba(16,185,129,.10);
+        box-shadow:inset 0 0 0 1px rgba(16,185,129,.30);
+    }
+    :global(.ia-btn.brief-on:hover){background:rgba(16,185,129,.16);}
     :global(.ia-sep){width:1px;height:16px;background:var(--bdr);margin:0 2px;}
     :global(.mbdg){display:flex;align-items:center;gap:4px;font-size:11px;color:#475569;padding:3px 8px;border:1px solid var(--bdr);border-radius:5px;cursor:pointer;background:rgba(0,0,0,.2);transition:.15s;min-width:130px;}
     :global(.mbdg:hover){border-color:var(--bdr2);color:var(--txt2);}
@@ -532,4 +582,54 @@
     :global(:root.light .mbdg){color:var(--txt2);background:rgba(0,0,0,.04);}
     :global(:root.light .mbdg option){background:#fff;color:var(--txt);}
     :global(:root.light .mbdg optgroup){background:#f0f4f8;color:var(--txt3);}
+
+    /* ── Quick-win C: empty-state shortcut hints ─────────────────────
+       Absolute-positioned ribbon inside the .igrp wrapper. Sits behind
+       the textarea (z-index 0 + pointer-events:none) so clicks always
+       land on the textarea itself. Fades when the user starts typing
+       — that's gated in the markup via {#if _showShortcutHints}. */
+    .ihints {
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--txt3, #475569);
+        pointer-events: none;
+        z-index: 0;
+        opacity: 0.78;
+        line-height: 1;
+        user-select: none;
+        animation: ihint-fade 240ms ease-out;
+    }
+    .ihints kbd {
+        font-family: var(--mono, monospace);
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--txt2, #94a3b8);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 4px;
+        padding: 1px 5px;
+        line-height: 1.4;
+    }
+    .ihint-sep {
+        opacity: 0.4;
+        margin: 0 2px;
+    }
+    @keyframes ihint-fade {
+        from { opacity: 0; }
+        to   { opacity: 0.78; }
+    }
+    /* On narrow widths drop the last few chips so the row never wraps. */
+    @media (max-width: 720px) {
+        .ihints kbd:nth-of-type(n+4),
+        .ihints span:nth-of-type(n+4),
+        .ihints .ihint-sep:nth-of-type(n+3) { display: none; }
+    }
 </style>

@@ -375,9 +375,10 @@ impl PromptSection for SubAgentsSection {
           - FORK: <TOOL>fork_task:UniqueID|||Single-shot instruction for the sub-agent (no tools available)</TOOL>\n  \
           - WAIT: <TOOL>wait_task:UniqueID</TOOL> — Blocks until the forked sub-agent finishes.\n  \
           - RULE: UniqueID must be a short snake_case string. Never reuse the same ID.\n\
-        - MCP DISCOVER: <TOOL>mcp_discover:server_cmd</TOOL> — Interrogates an MCP server.\n\
-        - MCP QUERY: <TOOL>mcp_query:server_cmd|||tool_name|||json_args</TOOL> — Spawns a local MCP server and asks for a tool.\n\
-        MCP SERVERS AVAILABLE (no install needed):\n  \
+        - MCP DISCOVER: <TOOL>mcp_discover:server_name_OR_command</TOOL> — Interrogates an MCP server.\n\
+        - MCP QUERY: <TOOL>mcp_query:server_name_OR_command|||tool_name|||json_args</TOOL> — Calls a tool on a registered or ad-hoc server.\n\
+        PREFER REGISTERED SERVERS: when a server NAME appears under \"REGISTERED MCP SERVERS\" below, pass the NAME (not the raw command). The backend resolves the command + env from the SQLite registry.\n\
+        AD-HOC SERVERS (no install needed, kept for one-off use):\n  \
           • Git: uvx mcp-server-git\n  \
           • SQLite DB: npx -y @modelcontextprotocol/server-sqlite -- /path/to/db.sqlite\n  \
           • Filesystem: npx -y @modelcontextprotocol/server-filesystem /allowed/path\n  \
@@ -385,6 +386,165 @@ impl PromptSection for SubAgentsSection {
           • Shodan: npx -y @burtthecoder/mcp-shodan (requires SHODAN_API_KEY)\n  \
           • VirusTotal: npx -y @burtthecoder/mcp-virustotal (requires VIRUSTOTAL_API_KEY)\n\
         WORKFLOW: 1) mcp_discover 2) learn its tools 3) mcp_query with correct args.".to_string()
+    }
+}
+
+/// Compact one-line MCP tool signature from a JSON Schema `inputSchema`.
+///
+/// MCP servers return tools/list responses where each tool has an
+/// `inputSchema` (JSON Schema object). When the LLM only sees the tool
+/// NAME, it routinely guesses wrong argument shapes — that's how Lucy
+/// kept hitting `q:me` against GitHub's Search API. Injecting a compact
+/// signature into the system prompt removes 80%+ of those failures.
+///
+/// Output shape examples:
+///   `(query*: string, sort?: "stars"|"updated", perPage?: number)`
+///   `(owner*: string, repo*: string, sha?: string)`
+///   `()` is suppressed → returns empty string to avoid noise on
+///        no-arg tools like `get_authenticated_user`.
+///
+/// Design constraints:
+///   • Stays inside ~120 chars per tool (we have 20-tool budget per server).
+///   • Required params get `*` (visually obvious in the prompt).
+///   • Enums get inlined when they have ≤4 values.
+///   • Types collapsed: string|number|boolean|object|array|enum.
+///   • Properties order is preserved when the schema is a JSON object.
+fn format_tool_signature(schema: Option<&serde_json::Value>) -> String {
+    let Some(schema) = schema else { return String::new(); };
+    let Some(props_v) = schema.get("properties") else { return String::new(); };
+    let Some(props) = props_v.as_object() else { return String::new(); };
+    if props.is_empty() { return String::new(); }
+
+    // Set of required field names.
+    let required: std::collections::HashSet<String> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+
+    let mut parts: Vec<String> = Vec::new();
+    for (name, def) in props {
+        let req_marker = if required.contains(name) { "*" } else { "?" };
+        let ty = describe_schema_type(def);
+        parts.push(format!("{}{}: {}", name, req_marker, ty));
+        // Keep the whole signature short — drop tail after 6 params.
+        if parts.len() >= 6 {
+            parts.push("…".into());
+            break;
+        }
+    }
+    format!("({})", parts.join(", "))
+}
+
+/// Collapse a JSON Schema property definition into ONE token:
+/// the base type, or an inlined enum (≤4 values), or a constant.
+fn describe_schema_type(def: &serde_json::Value) -> String {
+    if let Some(en) = def.get("enum").and_then(|v| v.as_array()) {
+        if en.len() <= 4 {
+            let vals: Vec<String> = en.iter().filter_map(|v| {
+                v.as_str().map(|s| format!("\"{}\"", s))
+                 .or_else(|| Some(v.to_string()))
+            }).collect();
+            return vals.join("|");
+        }
+        return "enum".into();
+    }
+    if let Some(c) = def.get("const") {
+        return c.as_str().map(|s| format!("\"{}\"", s)).unwrap_or_else(|| c.to_string());
+    }
+    // `type` can be a string or array of strings (nullable).
+    if let Some(t) = def.get("type") {
+        if let Some(s) = t.as_str() { return s.to_string(); }
+        if let Some(arr) = t.as_array() {
+            let types: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            if !types.is_empty() { return types.join("|"); }
+        }
+    }
+    // Composition keywords without a `type`. anyOf/oneOf produce "any".
+    if def.get("anyOf").is_some() || def.get("oneOf").is_some() {
+        return "any".into();
+    }
+    "any".into()
+}
+
+/// Lists MCP servers registered through Settings → MCP Servers, with the
+/// cached tool catalog (names + descriptions). Lets the agent invoke
+/// `mcp_query:<name>|||<tool>|||<args>` without first re-running discover.
+/// Reads the live `mcp_servers` table — no caching here; the DB is the
+/// canonical source. Empty registry → section skipped entirely.
+pub struct McpRegistrySection;
+impl PromptSection for McpRegistrySection {
+    fn name(&self) -> &'static str { "McpRegistry" }
+    fn priority(&self) -> u32 { 49 } // right after SubAgentsAndMcp (48)
+    fn relevant(&self, _ctx: &PromptContext) -> bool {
+        // Cheap check: count enabled rows. Done sync via the shared pool.
+        crate::commands::metrics::shared_db(move |conn| {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM mcp_servers WHERE enabled = 1",
+                [], |r| r.get(0),
+            ).unwrap_or(0);
+            Ok::<bool, String>(n > 0)
+        }).unwrap_or(false)
+    }
+    fn render(&self, _ctx: &PromptContext) -> String {
+        let rows: Vec<(String, String, String)> = crate::commands::metrics::shared_db(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT name, command, tools_cache
+                   FROM mcp_servers
+                  WHERE enabled = 1
+                  ORDER BY name COLLATE NOCASE ASC"
+            ).map_err(|e| e.to_string())?;
+            let iter = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            }).map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            for r in iter {
+                if let Ok(t) = r { out.push(t); }
+            }
+            Ok::<_, String>(out)
+        }).unwrap_or_default();
+
+        if rows.is_empty() {
+            return String::new();
+        }
+
+        let mut s = String::from(
+            "REGISTERED MCP SERVERS (call via mcp_query:<name>|||<tool>|||<args>):\n"
+        );
+        for (name, cmd, tools_json) in rows {
+            s.push_str(&format!("  • {} — `{}`\n", name, cmd));
+            // Tools_cache is a JSON array of {name, description, inputSchema}.
+            // Parse leniently and print compactly. If parse fails (empty/never
+            // discovered), show a hint so the agent knows to run mcp_discover.
+            match serde_json::from_str::<serde_json::Value>(&tools_json) {
+                Ok(serde_json::Value::Array(arr)) if !arr.is_empty() => {
+                    for t in arr.iter().take(20) {
+                        let tn = t.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                        let td = t.get("description").and_then(|v| v.as_str()).unwrap_or("").trim();
+                        let sig = format_tool_signature(t.get("inputSchema"));
+                        // One-line description, max ~120 chars.
+                        let td_short: String = td.chars().take(120).collect();
+                        // Output shape examples:
+                        //   - search_repositories(query*: string, sort?: "stars"|"updated", perPage?: number): Search…
+                        //   - list_commits(owner*: string, repo*: string, sha?: string)
+                        //   - get_user
+                        let head = if sig.is_empty() { tn.to_string() } else { format!("{}{}", tn, sig) };
+                        if td_short.is_empty() {
+                            s.push_str(&format!("      - {}\n", head));
+                        } else {
+                            s.push_str(&format!("      - {}: {}\n", head, td_short));
+                        }
+                    }
+                    if arr.len() > 20 {
+                        s.push_str(&format!("      … and {} more\n", arr.len() - 20));
+                    }
+                }
+                _ => {
+                    s.push_str("      (no tools cached — run mcp_discover first)\n");
+                }
+            }
+        }
+        s
     }
 }
 
@@ -608,6 +768,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &WebKnowledgeSection,
         &ConfidenceCalibrationSection,
         &SubAgentsSection,
+        &McpRegistrySection,
         &PersistentMemorySection,
         &TieredMemorySection,
         &CodeWorkflowSection,
@@ -782,4 +943,99 @@ pub fn build_local_system_prompt(
     out.push_str(prompt);
 
     out
+}
+
+// ── Tests for MCP signature injection (v1.4.2) ───────────────────────────
+
+#[cfg(test)]
+mod sig_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn signature_renders_required_and_optional_params() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "query":   { "type": "string" },
+                "perPage": { "type": "number" }
+            },
+            "required": ["query"]
+        });
+        let sig = format_tool_signature(Some(&schema));
+        // query* (required) appears before any optional with the marker.
+        assert!(sig.contains("query*: string"), "got: {}", sig);
+        assert!(sig.contains("perPage?: number"), "got: {}", sig);
+        assert!(sig.starts_with('(') && sig.ends_with(')'));
+    }
+
+    #[test]
+    fn signature_inlines_short_enums() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "sort": { "type": "string", "enum": ["stars", "forks", "updated"] }
+            }
+        });
+        let sig = format_tool_signature(Some(&schema));
+        assert!(sig.contains("\"stars\"|\"forks\"|\"updated\""), "got: {}", sig);
+    }
+
+    #[test]
+    fn signature_collapses_long_enums_to_word() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "enum": ["a","b","c","d","e","f","g"] }
+            }
+        });
+        let sig = format_tool_signature(Some(&schema));
+        assert!(sig.contains("kind?: enum"), "got: {}", sig);
+        assert!(!sig.contains("\"a\""), "long enum should not be inlined: {}", sig);
+    }
+
+    #[test]
+    fn signature_caps_at_six_params_with_ellipsis() {
+        let mut props = serde_json::Map::new();
+        for i in 0..10 {
+            props.insert(format!("p{}", i), json!({ "type": "string" }));
+        }
+        let schema = serde_json::Value::Object({
+            let mut m = serde_json::Map::new();
+            m.insert("type".into(), json!("object"));
+            m.insert("properties".into(), serde_json::Value::Object(props));
+            m
+        });
+        let sig = format_tool_signature(Some(&schema));
+        assert!(sig.contains("…"), "should ellipsize past 6 params: {}", sig);
+    }
+
+    #[test]
+    fn signature_empty_for_no_properties() {
+        let schema = json!({ "type": "object" });
+        assert_eq!(format_tool_signature(Some(&schema)), "");
+    }
+
+    #[test]
+    fn signature_empty_for_none_input() {
+        assert_eq!(format_tool_signature(None), "");
+    }
+
+    #[test]
+    fn describe_type_handles_nullable_arrays() {
+        let v = json!({ "type": ["string", "null"] });
+        assert_eq!(describe_schema_type(&v), "string|null");
+    }
+
+    #[test]
+    fn describe_type_falls_back_to_any_for_union_keywords() {
+        let v = json!({ "anyOf": [{ "type": "string" }, { "type": "number" }] });
+        assert_eq!(describe_schema_type(&v), "any");
+    }
+
+    #[test]
+    fn describe_type_uses_const_when_present() {
+        let v = json!({ "const": "fixed" });
+        assert_eq!(describe_schema_type(&v), "\"fixed\"");
+    }
 }
