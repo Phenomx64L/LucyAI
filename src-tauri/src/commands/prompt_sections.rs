@@ -508,35 +508,37 @@ impl PromptSection for McpRegistrySection {
             return String::new();
         }
 
+        // Budget-aware MCP catalog (v1.4.4 fix): the old version emitted up
+        // to 20 tools per server with full description (~120 chars each) +
+        // inputSchema signature. With GitHub MCP (26 tools) + filesystem
+        // (11 tools) that's ~4-5 KB of system prompt — material output-
+        // budget pressure on Gemini Flash for long agentic tasks.
+        //
+        // Compact form: 10 tools max per server, signature only (no
+        // description), with a "discover for more" footer if truncated.
+        // Lucy still has the FULL catalog cached locally; this is just
+        // what gets pre-injected. She can always re-discover for detail.
         let mut s = String::from(
             "REGISTERED MCP SERVERS (call via mcp_query:<name>|||<tool>|||<args>):\n"
         );
         for (name, cmd, tools_json) in rows {
             s.push_str(&format!("  • {} — `{}`\n", name, cmd));
-            // Tools_cache is a JSON array of {name, description, inputSchema}.
-            // Parse leniently and print compactly. If parse fails (empty/never
-            // discovered), show a hint so the agent knows to run mcp_discover.
             match serde_json::from_str::<serde_json::Value>(&tools_json) {
                 Ok(serde_json::Value::Array(arr)) if !arr.is_empty() => {
-                    for t in arr.iter().take(20) {
-                        let tn = t.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                        let td = t.get("description").and_then(|v| v.as_str()).unwrap_or("").trim();
+                    const PREVIEW: usize = 10;
+                    for t in arr.iter().take(PREVIEW) {
+                        let tn  = t.get("name").and_then(|v| v.as_str()).unwrap_or("?");
                         let sig = format_tool_signature(t.get("inputSchema"));
-                        // One-line description, max ~120 chars.
-                        let td_short: String = td.chars().take(120).collect();
-                        // Output shape examples:
-                        //   - search_repositories(query*: string, sort?: "stars"|"updated", perPage?: number): Search…
-                        //   - list_commits(owner*: string, repo*: string, sha?: string)
-                        //   - get_user
-                        let head = if sig.is_empty() { tn.to_string() } else { format!("{}{}", tn, sig) };
-                        if td_short.is_empty() {
-                            s.push_str(&format!("      - {}\n", head));
-                        } else {
-                            s.push_str(&format!("      - {}: {}\n", head, td_short));
-                        }
+                        // Signature only — description omitted from the
+                        // pre-injection. Lucy can re-discover the server
+                        // for full descriptions if she needs them.
+                        s.push_str(&format!("      - {}{}\n", tn, sig));
                     }
-                    if arr.len() > 20 {
-                        s.push_str(&format!("      … and {} more\n", arr.len() - 20));
+                    if arr.len() > PREVIEW {
+                        s.push_str(&format!(
+                            "      … and {} more (run mcp_discover:{} for full catalog)\n",
+                            arr.len() - PREVIEW, name,
+                        ));
                     }
                 }
                 _ => {

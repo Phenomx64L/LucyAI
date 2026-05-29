@@ -5832,8 +5832,20 @@ Use ONE of these patterns instead:
                         // Different from editCountsByPath (which is for editfile partial patches).
                         // For writefile (full-content rewrite), 3+ rewrites in one task strongly
                         // suggests the model is iterating on tweaks instead of finishing.
-                        const _wfChk = checkToolLoop('writefile', _wPath,
-                            `Ya reescribiste "${_wPath}" varias veces en esta tarea. Detén las iteraciones de polishing y entrega tu respuesta final al usuario con el archivo que ya escribiste — más iteraciones sólo van a introducir bugs.`);
+                        // Bug fix (v1.4.4): the generic checkToolLoop threshold is 3 (blocks on
+                        // the 4th call). For writefile specifically that's too lenient — once a
+                        // generated script has 2 PowerShell parse errors in a row, the rewrites
+                        // are unlikely to converge. We separately count writes to the same path
+                        // here and block on the 3rd attempt with a stronger nudge to split the
+                        // task into smaller scripts.
+                        if (!t._writefileCount) t._writefileCount = new Map();
+                        const _wCount = (t._writefileCount.get(_wPath) || 0) + 1;
+                        t._writefileCount.set(_wPath, _wCount);
+                        const _wfBlocked = _wCount > 2;
+                        const _wfChk = _wfBlocked
+                            ? { blocked: true, msg: `[WRITE LOOP] Has reescrito "${_wPath}" ${_wCount} veces y aún no converge. DETENTE. Causas típicas: (a) el script es demasiado complejo — divídelo en 2-3 scripts más pequeños con responsabilidades claras; (b) hay un literal de hash @{} con llave/comilla desbalanceada — re-escribe el bloque problemático con menos anidamiento; (c) faltan bloques Catch/Finally — agrégalos. Entrega lo que tengas o cambia de estrategia.` }
+                            : checkToolLoop('writefile', _wPath,
+                                `Ya reescribiste "${_wPath}" varias veces en esta tarea. Detén las iteraciones de polishing y entrega tu respuesta final al usuario con el archivo que ya escribiste — más iteraciones sólo van a introducir bugs.`);
                         if (_wfChk.blocked) {
                             toolResults.push(_wfChk.msg);
                             stepsHtml += `[⊗ Write loop bloqueado] ${esc(_wPath.substring(0,40))}...\n`;
@@ -6275,6 +6287,14 @@ Use ONE of these patterns instead:
                     if (totalToolCalls > 0) {
                         let emptyCount = 0;
                         let errorCount = 0;
+                        // v1.4.4: counter for PowerShell-parse-error specifically.
+                        // The script-rewrite loop (multiple writefile retries fixing
+                        // malformed @{} hash literals or missing Catch blocks) often
+                        // means the LLM is trying to fix a script that's too complex.
+                        // Two parse errors in a row → inject a specific hint to
+                        // split into smaller scripts instead of patching.
+                        let psParseErrorCount = 0;
+                        const _PS_PARSE_RE = /El literal de hash estaba incompleto|hash literal was incomplete|Token .* inesperado|Unexpected token|Falta un bloque (Catch|Finally)|Missing (Catch|Finally) block|sintaxis no es válida|is not a valid (script|syntax)/i;
                         for (const r of toolResults) {
                             const raw = String(r || '').trim();
                             // Cheap-path empties: completely blank or trivially short
@@ -6285,7 +6305,39 @@ Use ONE of these patterns instead:
                             const body = _stripFraming(raw);
                             if (!body || body.length < 25) { emptyCount++; continue; }
                             if (_emptyMarkers.some(re => re.test(raw))) { emptyCount++; continue; }
-                            if (_errorMarkers.some(re => re.test(raw))) { errorCount++; continue; }
+                            if (_errorMarkers.some(re => re.test(raw))) {
+                                errorCount++;
+                                if (_PS_PARSE_RE.test(raw)) psParseErrorCount++;
+                                continue;
+                            }
+                        }
+                        // PowerShell parse-error guard: if we've seen 2+ parse errors
+                        // in this iteration's tool results, inject a strong hint to
+                        // stop patching and split the script. Cheap insurance —
+                        // doesn't trigger unless the failure mode is specifically
+                        // "broken @{}/Try/Catch" which is the recurring symptom of
+                        // Flash trying to oneshot a 100+ line audit script.
+                        if (psParseErrorCount >= 2) {
+                            agentCtx += `\n\n[!! POWERSHELL PARSE FAILURES (${psParseErrorCount} in this loop)]
+The script you're generating has structural errors that won't be fixed by another rewrite. Probable causes:
+  • Nested @{} hash literal with an unbalanced } or "
+  • Try block without a matching Catch/Finally
+  • String interpolation breaking across a literal newline
+DO NOT rewrite the same script again. Instead:
+  • Split the audit into 2-3 SMALLER scripts (e.g. one for patches, one for services, one for users) and run them separately.
+  • For each script, keep @{} hash literals SHALLOW (max 1 level of nesting).
+  • Use simple string concatenation, not interpolation with embedded "\${...}".
+  • If a step keeps failing after the split, deliver the partial findings to the user instead of looping further.
+[!! END GUARD]`;
+                            pushTrace({
+                                phase: 'info',
+                                label: `⚠ PS-parse guard fired: ${psParseErrorCount} parse errors → injecting split-script hint`,
+                                step: loop_i + 1,
+                                tabId,
+                            });
+                            logTaskEvent('agent_loop_block', 'ps_parse_errors', null, {
+                                model: _loopModelName, parse_errors: psParseErrorCount, iteration: loop_i + 1,
+                            }, tabId);
                         }
                         if ((emptyCount + errorCount) === totalToolCalls) {
                             const guardMarker =
