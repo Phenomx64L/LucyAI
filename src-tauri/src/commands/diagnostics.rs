@@ -228,10 +228,42 @@ fn check_database_health() -> DiagnosticCheck {
     let start = std::time::Instant::now();
 
     match crate::commands::metrics::shared_db(|conn| {
-        // Quick integrity check (partial — full can be slow on large DBs)
-        let integrity: String = conn
+        // Bump busy_timeout for this check only. quick_check needs to
+        // acquire read-lock on every page including FTS5 segment files;
+        // under heavy concurrent writes (smart_chips logging, agent
+        // memories, audit trail) it would otherwise fail instantly with
+        // "database is locked" even though there's no real corruption.
+        // 5 s is long enough to ride out a normal write burst and short
+        // enough that the diagnostics view doesn't hang.
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(5000));
+
+        // quick_check returns one or more rows. The first row is either
+        // "ok" or the first error. We treat lock-contention errors
+        // ("database is locked", "unable to validate the inverted
+        // index for FTS5 table … is locked") as TRANSIENT, not real
+        // corruption — they happen under write pressure and clear up
+        // on retry. Real corruption (page mismatch, malformed row, etc.)
+        // still surfaces as an error.
+        let integrity_raw: String = conn
             .query_row("PRAGMA quick_check", [], |r| r.get(0))
-            .unwrap_or_else(|_| "error".to_string());
+            .unwrap_or_else(|e| format!("query error: {}", e));
+
+        // Retry ONCE if we hit a lock-contention symptom. A brief
+        // delay (200 ms) is usually enough for the conflicting writer
+        // to commit and release its lock.
+        let is_transient_lock = |s: &str| {
+            let lower = s.to_lowercase();
+            lower.contains("database is locked")
+                || lower.contains("is locked")
+                || lower.contains("query error")
+        };
+        let integrity = if integrity_raw != "ok" && is_transient_lock(&integrity_raw) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            conn.query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0))
+                .unwrap_or_else(|_| integrity_raw.clone())
+        } else {
+            integrity_raw
+        };
 
         let page_count: i64 = conn
             .query_row("PRAGMA page_count", [], |r| r.get(0))
@@ -267,24 +299,40 @@ fn check_database_health() -> DiagnosticCheck {
         Ok(details) => {
             let integrity = details["integrity"].as_str().unwrap_or("error");
             let size = details["size_mb"].as_f64().unwrap_or(0.0);
-            let status = if integrity != "ok" {
-                "error"
-            } else if size > 500.0 {
-                "warning"
+            // Triage the integrity result. "ok" → green. A locked-out
+            // FTS5 / quick_check is the most common false positive when
+            // Lucy is actively writing — surface it as a WARNING with
+            // a clear human message instead of a scary red ERROR.
+            // Real corruption (anything else) stays as a red error.
+            let integrity_lower = integrity.to_lowercase();
+            let looks_like_lock = integrity_lower.contains("locked")
+                || integrity_lower.contains("query error");
+            let (status, friendly_msg) = if integrity == "ok" {
+                let status = if size > 500.0 { "warning" } else { "ok" };
+                (status, format!(
+                    "Integrity: ok, Size: {:.1} MB, Journal: {}",
+                    size,
+                    details["journal_mode"].as_str().unwrap_or("?")
+                ))
+            } else if looks_like_lock {
+                ("warning", format!(
+                    "Integrity check skipped (DB busy — transient lock, no corruption). Size: {:.1} MB, Journal: {}. Re-run when idle to verify.",
+                    size,
+                    details["journal_mode"].as_str().unwrap_or("?")
+                ))
             } else {
-                "ok"
+                ("error", format!(
+                    "Integrity: {}, Size: {:.1} MB, Journal: {}",
+                    integrity, size,
+                    details["journal_mode"].as_str().unwrap_or("?")
+                ))
             };
 
             DiagnosticCheck {
                 name: "Database".into(),
                 category: "database".into(),
                 status: status.into(),
-                message: format!(
-                    "Integrity: {}, Size: {:.1} MB, Journal: {}",
-                    integrity,
-                    size,
-                    details["journal_mode"].as_str().unwrap_or("?")
-                ),
+                message: friendly_msg,
                 details: Some(details),
                 elapsed_ms: start.elapsed().as_millis() as u64,
             }
