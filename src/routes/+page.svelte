@@ -3928,7 +3928,17 @@ Use ONE of these patterns instead:
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
             const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search|principle_set|principle_delete|schedule_create|schedule_list):/i;
             const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|state_diff:|process_lineage:|process_ancestry:|diagnose_spike|healing_find:|threat_scan|obj_query:|runbook_scan|daily_patterns|sandbox_preview:|kg_neighbors:|kg_recent|kg_ext_summary|incident_detective|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
-            if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>/i.test(resp)) {
+            // BUG FIX (v1.4.4): the entry condition used to only recognize
+            // TOOL or THOUGHT tags. When the LLM emitted ONLY <EXECUTE_CMD>
+            // blocks (raw PowerShell, common in audit/diagnostic prompts),
+            // none of the patterns matched → no agent loop → fall-through
+            // to the empty-response detector below, which then stripped the
+            // EXECUTE_CMD block and reported a false-positive "Respuesta
+            // vacía del modelo". The retry usually worked because the LLM
+            // is non-deterministic about which shape to emit (THOUGHT vs
+            // bare EXECUTE). Adding EXECUTE / EXECUTE_CMD / PLAN to the
+            // entry condition makes ANY actionable block trigger the loop.
+            if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>|<EXECUTE_CMD\b|<EXECUTE\b|<PLAN>/i.test(resp)) {
                 // U2 — Lucy mood: executing while agent loop runs tools
                 setLucyMood('executing', { force: true });
                 // ── Recuperar la instrucción ORIGINAL del usuario para anti-amnesia ──
@@ -6394,7 +6404,15 @@ times the SAME way, switch tool kind entirely.
                 .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
                 .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
                 .trim();
-            if (_respClean.length === 0) {
+            // BUG FIX (v1.4.4): suppress the empty-response warning when the
+            // raw response contained ANY actionable block. Tool cards / chapter
+            // view produce visible output downstream, so a missing narrative
+            // is NOT a real "empty response" — just an LLM that chose to
+            // delegate everything to tools without summarizing. False positive
+            // here was triggering "Respuesta vacía del modelo" intermittently
+            // on audit/diagnostic prompts (user-reported regression).
+            const _hadActionableBlock = /<TOOL>|<EXECUTE\b|<EXECUTE_CMD\b|<PLAN>|<REMEMBER\b|<LEARN>/i.test(resp || '');
+            if (_respClean.length === 0 && !_hadActionableBlock) {
                 // ── Provider auto-fallback (May 2026) ───────────────────────
                 // Before giving up, see if we have another configured provider
                 // we can route this through. Empty Gemini response is often
