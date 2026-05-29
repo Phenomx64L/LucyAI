@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.8] — 2026-05-29
+
+Follow-up hotfix to v1.4.7. **0 warnings.**
+
+### Fix — "Phase 1 = write a script" misinterpretation
+
+User-reported: after v1.4.7, the Caso 2 audit prompt ran 4 chapter
+steps (Locate msedge.exe → powershell → Write collect_compliance.ps1
+→ Lectura), then ended with the renderer's generic auto-summary
+("Modifiqué 1 archivo … 3 operaciones de lectura/análisis · ✓
+Operaciones completadas") instead of the PDF + 5-bullet summary the
+user explicitly asked for. Lucy wrote the collection script and
+walked away — she never executed it, never built the HTML, never
+ran Edge to produce the PDF.
+
+**Root cause**: v1.4.7's Rule 2(c) said "split into phases". The LLM
+interpreted "Phase 1" as "write the data-collection script", and
+"Phase 2" as "the user runs everything". That's wrong:
+collect_compliance.ps1 has NO admin-only operations — Lucy could
+have run it herself. The Phase-2 carve-out applies ONLY to the
+truly admin-required slice (Get-WinEvent Security 4625), not to
+the whole pipeline.
+
+**Fix** (`prompt_sections.rs`):
+
+  - **Tightened Rule 2(c)**: explicitly says "Phase 1 is NOT 'write
+    a script and stop'. If you wrote collect.ps1 and it doesn't need
+    admin, RUN IT NOW with EXECUTE_CMD, read the output, then BUILD
+    THE PARTIAL DELIVERABLE (HTML/PDF/markdown table) in the same
+    turn or the next iteration."
+  - **Tightened Rule 2(d)**: "If the user asked for a PDF, the PDF
+    must EXIST on disk by the end of your turn (with whatever data
+    phase 1 produced — even 5 of 7 sections is real progress). 'I
+    wrote a collection script' is NOT delivery."
+  - **NEW Rule 2b — COMPLETION CONTRACT**: "When the user EXPLICITLY
+    asks for one or more deliverables (PDF, CSV, JSON, file, table,
+    list, summary of N bullets, dashboard, etc.), your conversation
+    MUST end with each deliverable VISIBLE to the user — either
+    rendered in the chat or written to disk with the path stated in
+    your final narrative. You MUST attempt every deliverable; you
+    may not silently drop one. NEVER end a multi-deliverable task
+    with only a script written to %TEMP% and no execution — that's
+    failing the user, not 'splitting phases'."
+
+Expected on the Caso 2 prompt: Lucy now (1) writes collect.ps1,
+(2) EXECUTES it, (3) reads its JSON output, (4) builds the HTML
+report, (5) runs Edge headless to produce the PDF on disk, (6)
+writes the 5-bullet executive summary in chat referencing the PDF
+path. Only the failed-logins (Event 4625) admin section gets a
+copy-paste block at the end.
+
+218 Rust tests · 145 vitest · 0 svelte-check warnings.
+
+---
+
 ## [1.4.7] — 2026-05-29
 
 Single-rule hotfix for a recurring Caso 2 failure mode. **0 warnings.**

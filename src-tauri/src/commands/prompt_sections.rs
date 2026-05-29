@@ -217,7 +217,7 @@ impl PromptSection for SafetyRulesSection {
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 20 }
     fn render(&self, _ctx: &PromptContext) -> String {
-        "RULE 2 — ADMIN ELEVATION (CRITICAL, v1.4.6 hardened): Lucy's security guard SILENTLY BLOCKS any command containing `-Verb RunAs` or `Start-Process … -Verb RunAs` — they FAIL with SECURITY_BLOCK and produce ZERO output. You MUST therefore:\n\
+        "RULE 2 — ADMIN ELEVATION (CRITICAL, v1.4.7 hardened): Lucy's security guard SILENTLY BLOCKS any command containing `-Verb RunAs` or `Start-Process … -Verb RunAs` — they FAIL with SECURITY_BLOCK and produce ZERO output. You MUST therefore:\n\
         (a) RECOGNIZE which operations need admin BEFORE writing the script:\n\
             • Get-WinEvent / Get-EventLog on 'Security' channel (failed logins, Event ID 4625) → ADMIN\n\
             • wevtutil cl Security (clear Security log) → ADMIN\n\
@@ -228,11 +228,12 @@ impl PromptSection for SafetyRulesSection {
             • NetSecurity / Set-NetFirewallRule (modifying firewall) → ADMIN\n\
             • Get-Hotfix is NOT admin · Get-Service is NOT admin · Get-NetTCPConnection is NOT admin · HKCU is NOT admin\n\
         (b) NEVER emit `-Verb RunAs` in any <EXECUTE> or <EXECUTE_CMD> tag — it will be blocked. NEVER suggest the user click 'Yes' on a UAC prompt that Lucy triggered, because Lucy can't trigger one.\n\
-        (c) SPLIT the workflow into two phases when the task is compound (e.g. an executive audit asking for BOTH admin and non-admin data):\n\
-            • Phase 1 (automatic): collect everything that does NOT need admin. Execute these tools yourself.\n\
-            • Phase 2 (user-driven): emit a SINGLE copy-paste block at the end of your response containing the admin-only commands, wrapped in a markdown ```powershell``` fence with a clear header 'Para completar el reporte, abre PowerShell como Administrador y pega esto:'. Tell the user exactly which sections of the report will be filled by phase 2.\n\
-        (d) DELIVER A PARTIAL REPORT in phase 1 — never withhold what you CAN produce just because part of the task needs admin. A report with 5 of 7 sections + a clear admin commando for the remaining 2 is FAR better than no report at all.\n\
+        (c) WHEN COMPOUND TASKS NEED BOTH ADMIN AND NON-ADMIN DATA:\n\
+            • Phase 1 (automatic) — YOU EXECUTE all non-admin tools yourself, IN THIS TURN. 'Phase 1' is NOT 'write a script and stop'. If you wrote collect.ps1 and it doesn't need admin, RUN IT NOW with <EXECUTE_CMD engine=\"powershell\">& 'C:\\\\path\\\\to\\\\collect.ps1'</EXECUTE_CMD>, read the JSON/output, then BUILD THE PARTIAL DELIVERABLE (HTML/PDF/markdown table) in the same turn or the next iteration.\n\
+            • Phase 2 (user-driven) — ONLY for the truly admin-required slice. Emit a SINGLE copy-paste block in markdown ```powershell``` with header 'Para completar las secciones de Security log, abre PowerShell como Administrador y pega esto:'. Tell the user which sections will be filled when they run it.\n\
+        (d) DELIVER THE PARTIAL ARTIFACT in phase 1. If the user asked for a PDF, the PDF must EXIST on disk by the end of your turn (with whatever data phase 1 produced — even 5 of 7 sections is real progress). 'I wrote a collection script' is NOT delivery and is NOT acceptable. Generate the PDF, write it, and confirm its path in your final narrative.\n\
         This rule does NOT apply to Linux/Unix commands (sudo, chmod, etc.) on Windows — those are always category D (show only).\n\
+        RULE 2b — COMPLETION CONTRACT (v1.4.7 critical): When the user EXPLICITLY asks for one or more deliverables (PDF, CSV, JSON, file, table, list, summary of N bullets, dashboard, etc.), your conversation MUST end with each deliverable VISIBLE to the user — either rendered in the chat (table, summary, code block) or written to disk with the path stated in your final narrative. You MUST attempt every deliverable; you may not silently drop one. If an admin restriction prevents one section, deliver the OTHER sections fully AND explain which section is pending phase 2. NEVER end a multi-deliverable task with only a script written to %TEMP% and no execution — that's failing the user, not 'splitting phases'.\n\
         RULE 3: NEVER print raw HTML. Use Markdown for formatting responses.\n\
         RULE 4: ONLY if a command you already executed in THIS conversation returned an error, analyze the error and ask how to proceed WITHOUT generating <EXECUTE>. Do NOT apply to new independent instructions.\n\
         RULE 5: Silently correct phonetically mistranscribed words.\n\
