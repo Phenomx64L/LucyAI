@@ -831,6 +831,47 @@ import { listen } from '@tauri-apps/api/event';
         }
     }
 
+    /**
+     * Quick-win H — inline cite-chip click router. Maps the chip kind to
+     * a concrete action:
+     *   • file   → open in VSCode
+     *   • memory → switch to Memory Browser and highlight that id
+     *   • host   → drop "@<host>" into the input so the user can scope
+     *              the next prompt to it
+     *   • url    → open externally (we never auto-fetch arbitrary URLs)
+     */
+    function onCiteClick(kind, value) {
+        if (!kind || !value) return;
+        try {
+            if (kind === 'file') {
+                invoke('open_vscode', { path: value }).catch(e => toast(`Open failed: ${e}`, 'error'));
+            } else if (kind === 'memory') {
+                // Switch to Memorias view with the id sticky-scrolled (see MemoryBrowserView).
+                try { window._lucyJumpToMemoryId = String(value); } catch {}
+                setView('memory');
+            } else if (kind === 'host') {
+                const t = getTab(activeTabId);
+                if (t) {
+                    const cur = t.inputValue || '';
+                    t.inputValue = cur.endsWith(' ') || cur === '' ? `${cur}@${value} ` : `${cur} @${value} `;
+                    tabs = [...tabs];
+                    setTimeout(() => document.querySelector('.chat-wrap.on .ibox')?.focus(), 30);
+                }
+            } else if (kind === 'url') {
+                // No dedicated Tauri command for URLs — use PowerShell's
+                // Start-Process which respects the OS default browser. Safe
+                // because the URL was extracted from already-sanitized HTML
+                // by the cite-chips post-processor.
+                invoke('execute_powershell', {
+                    script: `Start-Process '${value.replace(/'/g, "''")}'`,
+                    forceExecute: false,
+                }).catch(() => window.open(value, '_blank'));
+            }
+        } catch (e) {
+            console.warn('[cite] action failed:', e);
+        }
+    }
+
     function onChipAction(event) {
         const chip = event.detail.chip;
         if (!chip || !activeTabId) return;
@@ -4487,6 +4528,21 @@ Use ONE of these patterns instead:
 
                 for (let loop_i = 0; loop_i < MAX_LOOPS; loop_i++) {
                     if (t._cancelled) break;
+                    // Quick-win F — Pause: between iterations, if the user
+                    // pressed ⏸, spin-wait until they resume OR cancel.
+                    // 200ms poll keeps the wait responsive without busy-looping.
+                    while (t._paused && !t._cancelled) {
+                        await new Promise(r => setTimeout(r, 200));
+                    }
+                    if (t._cancelled) break;
+                    // Quick-win F — Skip-next: if the user pressed ⏭ before
+                    // this iteration, consume the flag and synthesize a
+                    // "user skipped" tool result so the agent moves on.
+                    if (t._skipNextTool) {
+                        t._skipNextTool = false;
+                        agentResp = `Tool execution skipped by user (granular cancel). Please continue without that tool's output, or summarize what you have so far.`;
+                        continue;
+                    }
                     let toolResults = [];
                     let toolUsed = false;
                     let lucyText = agentResp;
@@ -5775,17 +5831,26 @@ Use ONE of these patterns instead:
                         } else {
                         const _writeCard = newToolCard('⊞', `Write ${_wPath}`, 'write');
                         try {
+                            // Quick-win E — read the OLD content before writing so we can
+                            // produce a side-by-side diff in the tool card. Best-effort:
+                            // a missing file just means "fresh-file" (all additions).
+                            let _oldContent = '';
+                            try { _oldContent = String(await invoke('read_file_content', { path: _wPath }) || ''); }
+                            catch { _oldContent = ''; }
                             const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
                             toolResults.push(`[WRITE RESULT] ${r}`);
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
                             // Working memory: remember the new/written file.
                             _updateWM(t, { type: 'file', path: _wPath, op: 'created' });
-                            // ── UX: preserve the actual file content inside the tool card so the
-                            // user can see what was written without opening the file. Without this,
-                            // the streamed code disappears at loop end leaving only "Files Modified"
-                            // (which is confusing — see GitHub issue with screenshots).
-                            const _summary = `✓ ${String(r).trim()}\n\n──── File content (${_fileContent.length} chars) ────\n${_fileContent}`;
+                            // Save old content as the per-file undo buffer so the user
+                            // can revert from the input via `/revert <path>` slash cmd.
+                            try { if (!window._lucyWriteUndo) window._lucyWriteUndo = new Map(); window._lucyWriteUndo.set(_wPath, _oldContent); } catch {}
+                            // Attach a diff payload so renderSingleCardHtml uses its
+                            // built-in line-by-line diff renderer (.tc-d-ad / .tc-d-rm).
+                            // Empty `oldStr` falls back to "all additions" view.
+                            _writeCard.diff = { oldStr: _oldContent, newStr: _fileContent };
+                            const _summary = `✓ ${String(r).trim()}`;
                             finishToolCard(_writeCard, _summary, true);
                         } catch(e) {
                             // On error: still include the content the agent tried to write so the
@@ -6933,6 +6998,10 @@ times the SAME way, switch tool kind entirely.
         }
         // Marcar tab como cancelada para que runAI no procese más
         t._cancelled = true;
+        // Quick-win F — wipe granular flags on hard cancel so a future
+        // turn starts clean (otherwise a leftover _paused would freeze it).
+        t._paused = false;
+        t._skipNextTool = false;
 
         // BUG FIX: Preserve streamed text before fin() removes the streaming msg.
         // Previously, cancelling mid-stream deleted the visible response entirely.
@@ -8483,9 +8552,11 @@ if (Test-Path $src) {
               userAvatarUrl={lucyConfig.userAvatarUrl || ''}
               on:pinmessage={(e) => { e.detail.msg.pinned = !e.detail.msg.pinned; tabs = tabs; toast(e.detail.msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}
               on:branchmessage={(e) => { if (e.detail?.msg?.id && activeTabId) { bifurcarTabDesde(activeTabId, e.detail.msg.id); toast(isEN ? 'Branched into a new tab' : 'Bifurcado en una pestaña nueva', 'info'); } }}
+              on:replaymessage={() => { showReplayBrowser = true; toast(isEN ? '⏪ Replay browser opened — pick the turn to re-run' : '⏪ Replay browser abierto — elige el turno a re-ejecutar', 'info'); }}
               on:buttonaction={(e) => { const btn = e.detail.event.target; btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); e.detail.msg.button.action(e.detail.event); }}
               on:togglereasoning={(e) => { e.detail.msg.collapsed = !e.detail.msg.collapsed; tabs = tabs; }}
               on:codeclick={(e) => invoke('open_vscode', { path: e.detail.path })}
+              on:citeclick={(e) => onCiteClick(e.detail.kind, e.detail.value)}
               on:fixclick={(e) => { if (window._lucyRunFix) window._lucyRunFix(e.detail.key); }}
             />
             <!-- U5 — Predictive next-action chips. Only renders when there are chips for the active tab. -->
@@ -8523,6 +8594,23 @@ if (Test-Path $src) {
               on:clearsecurity={limpiarSecurityBlock}
               on:send={() => process(tab.id)}
               on:stop={() => cancelarEjecucion(tab.id)}
+              on:togglepause={() => {
+                  const _t = getTab(tab.id);
+                  if (!_t) return;
+                  _t._paused = !_t._paused;
+                  refresh();
+                  toast(_t._paused
+                      ? (isEN ? '⏸ Paused after current step' : '⏸ Pausado tras el paso actual')
+                      : (isEN ? '▶ Resumed' : '▶ Reanudado'),
+                      'info');
+              }}
+              on:skipnexttool={() => {
+                  const _t = getTab(tab.id);
+                  if (!_t) return;
+                  _t._skipNextTool = true;
+                  refresh();
+                  toast(isEN ? '⏭ Next tool will be skipped' : '⏭ Se saltará la próxima herramienta', 'info');
+              }}
               on:inputchange={autoResize}
               on:keydown={(e) => onKey(e.detail.event, tab.id)}
               on:cancelpending={() => { const _t = getTab(tab.id); if (_t) { _t.pendingMessage = null; refresh(); } }}

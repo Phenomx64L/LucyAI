@@ -75,9 +75,14 @@ export function safeHtml(input: string, opts?: { allowImages?: boolean; allowPla
             'href', 'title', 'class', 'id', 'target', 'rel', 'colspan', 'rowspan',
             ...(allowPlanCards ? ['style', 'disabled'] : []),
         ],
-        // data-plan-* are specifically whitelisted for plan card interactivity;
-        // all other data-* remain blocked (ALLOW_DATA_ATTR: false).
-        ADD_ATTR: allowPlanCards ? ['data-plan-id', 'data-plan-action', 'data-plan-card-id'] : [],
+        // data-plan-* are whitelisted for plan card interactivity;
+        // data-cite-* are whitelisted for inline cite-chip click routing (v1.4.4);
+        // data-msg-id is whitelisted for pinned-message scroll targets (v1.4.3).
+        // All other data-* remain blocked (ALLOW_DATA_ATTR: false).
+        ADD_ATTR: [
+            'data-cite-kind', 'data-cite-value', 'data-msg-id', 'role', 'tabindex',
+            ...(allowPlanCards ? ['data-plan-id', 'data-plan-action', 'data-plan-card-id'] : []),
+        ],
         ALLOW_DATA_ATTR: false,
         // Block inline event handlers and javascript: URLs explicitly.
         // style= is blocked in the default profile; allowed in the plan-card profile

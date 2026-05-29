@@ -461,6 +461,7 @@ pub fn run() {
             commands::chip_memory::log_chip_event,
             commands::chip_memory::suggest_memory_chips,
             commands::chip_memory::chip_stats_summary,
+            commands::file_diff::compute_text_diff,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

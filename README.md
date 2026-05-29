@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.4.0-7dd3fc" alt="v1.4.0" />
+  <img src="https://img.shields.io/badge/version-1.4.4-7dd3fc" alt="v1.4.4" />
   <img src="https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Svelte-5-orange?logo=svelte" alt="Svelte 5" />
   <img src="https://img.shields.io/badge/Rust-2021-brown?logo=rust" alt="Rust 2021" />
@@ -35,6 +35,75 @@
 Lucy is a desktop AI assistant designed for system administrators. It combines a conversational LLM interface with real infrastructure tooling — remote shell execution, log analysis, CIS compliance scanning, and credential management — all from a single, secure desktop app.
 
 Built with **Tauri 2** (Rust backend) and **SvelteKit 5** (frontend), Lucy runs natively on Windows with minimal resource overhead.
+
+---
+
+## 🔌 MCP (Model Context Protocol) — first-class integration
+
+Lucy is a full **MCP host** with feature parity to Claude Desktop / Cursor / Cline. Register a server once and Lucy invokes it by name with the cached tool catalog embedded in the system prompt.
+
+### Quick start (filesystem MCP, no API keys needed)
+
+1. **Settings (⚙) → MCP tab → Administrar Servidores MCP → + Añadir servidor**
+2. Click the **`filesystem`** preset. It auto-fills:
+   ```
+   Comando: npx -y @modelcontextprotocol/server-filesystem C:/Users/you/Desktop
+   ```
+3. Edit the path to a sandbox folder you control, then **Guardar**.
+4. **Test** verifies spawn + JSON-RPC handshake (~5-30 s first time — `npx` is downloading the package).
+5. **Discover tools** caches the catalog (filesystem ships 11 tools: `read_file`, `write_file`, `list_directory`, `search_files`, …).
+6. In the chat, ask Lucy *"List the files in my sandbox and read hello.txt using the filesystem MCP"*.
+
+Lucy emits internally:
+```
+<TOOL>mcp_query:filesystem|||list_directory|||{"path":"C:/Users/you/Desktop"}</TOOL>
+```
+The backend resolves the registered command, filters env vars to the keys the server declared it needs, and routes the call through a **connection pool** (subprocess stays alive 60 s between calls — 50× faster than spawn-per-call).
+
+### Servers with API keys (GitHub example)
+
+1. Generate a Personal Access Token at https://github.com/settings/tokens (scope: `repo`).
+2. **Settings → MCP tab → "Variables / API Keys para MCP"** → add `GITHUB_PERSONAL_ACCESS_TOKEN = ghp_xxx…`. Stored in **Windows Credential Manager**, never in localStorage.
+3. **Add server** → preset `github` → check `GITHUB_PERSONAL_ACCESS_TOKEN` in the env-keys list → Save.
+4. Ask Lucy *"Search my repos for the auth module using the github MCP"*.
+
+### Curated presets
+
+| Preset | What it does |
+|---|---|
+| `filesystem` | Read/write under a sandboxed root (no key needed) |
+| `github` | Issues, PRs, code search (`GITHUB_PERSONAL_ACCESS_TOKEN`) |
+| `brave-search` | Web search via Brave API (`BRAVE_API_KEY`) |
+| `postgres` | Read-only SQL (URL in command) |
+| `puppeteer` | Headless browser scraping |
+| `slack` | Channel post/read (`SLACK_BOT_TOKEN`, `SLACK_TEAM_ID`) |
+
+Any npm `@modelcontextprotocol/server-*` package works — paste the command verbatim.
+
+### Architecture highlights
+
+- **`mcp_servers` SQLite table** persists `(name, command, env_keys, tools_cache, status, last_latency_ms)` — survives restarts.
+- **Connection pool** (`pooled_call`) keys sessions by `(name, command, env_hash)` with a 60 s idle TTL and a background reaper.
+- **`McpRegistrySection`** in the system prompt injects each registered server with its tool catalog AND **`inputSchema` signatures**:
+  ```
+  github:
+    search_repositories(query*: string, sort?: "stars"|"forks"|"updated", perPage?: number)
+    list_commits(owner*: string, repo*: string, sha?: string, perPage?: number)
+  ```
+  Eliminates the class of "Validation Failed" errors caused by the LLM guessing argument shapes.
+- **Dual-resolution**: if `mcp_query:<arg>` matches a registered name, the registry path runs; otherwise the legacy raw-command path handles ad-hoc invocations.
+- **Per-tool invoke panel** in the modal lets you run any cached tool with a JSON args editor — useful for verifying schemas without going through Lucy.
+- **Permission Rules** apply to every `mcp_query` call exactly as they do for native tools.
+
+### Diagnostic commands
+
+- `/chip-stats` — predictive-chip engagement summary (7-day rolled-up)
+- `/frontier-stats` — Frontier feature usage telemetry
+- `/notebook` — export current tab as `.ipynb`
+- `/revert <path>` — restore the pre-write content of a file Lucy modified
+- Settings → Self-Diagnostics → MCP pool — see live session count + latencies
+
+---
 
 ## What's New in v1.2.1
 

@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.4] — 2026-05-29
+
+The "finish what we started" release. Closes most of the remaining Terminal
+IA quick wins (E inline diff in tool cards, F granular cancel, H inline
+cite-chips), ships MVPs of both Moats (J replay button, K notebook export),
+and cleans up MCP regression testing + README documentation. **223 Rust
+tests + 3 MCP integration tests · 133 vitest · 0 warnings.**
+
+### Terminal IA
+
+- **Inline cite-chips** (`cite-chips.ts`, 16 vitest tests). Lucy's prose
+  is post-processed after Markdown sanitization to wrap recognized
+  entities in clickable spans:
+  - File paths (`C:\…\foo.txt`, `/var/log/x.log`, `./src/foo.ts`) →
+    open in VSCode
+  - Memory IDs (`memoria #42`, `memory #7`, `[mem:128]`) → switch to
+    Memory Browser and highlight the entry
+  - Hosts (`@server-prod`) → drop `@<host>` into the input so the next
+    prompt is scoped to that host
+  - URLs (`https://…`) → open in OS default browser via PowerShell
+  
+  Idempotent (re-running on already-chipped HTML is a no-op), case-
+  insensitive, skip-zone-aware (never wraps inside `<code>`, `<pre>`,
+  `<a>`, or existing chips). Color-coded by kind (green file / violet
+  memory / blue host / amber URL) with subtle baseline and stronger
+  hover/focus states.
+- **Granular cancel** — three buttons replace the single Stop:
+  - ⏸ **Pause** — agent loop spin-waits between iterations until the
+    user resumes or hard-cancels. 200ms poll.
+  - ⏭ **Skip next tool** — synthesizes a "user skipped" stub so the
+    agent continues without that tool's output.
+  - 🛑 **Stop** — the existing kill-everything path. Granular flags are
+    reset on hard cancel so the next turn starts clean.
+- **Inline diff in writefile tool cards**. The agent loop now reads the
+  OLD content before writing, then attaches `{oldStr, newStr}` to the
+  tool card. The existing `renderSingleCardHtml` diff renderer paints a
+  line-by-line side-by-side view (`.tc-d-ad` / `.tc-d-rm` / `.tc-d-eq`
+  classes). Per-file undo buffer is captured so `/revert <path>`
+  restores the pre-write content with one command.
+
+### Moats
+
+- **Replay button per Lucy turn** (`⏪`). Sits in the message-bubble
+  action cluster (left of Branch ⌥, left of Pin ·). Opens the existing
+  ReplayBrowserView pre-scoped to that snapshot. Cyan accent
+  distinguishes it from the amber pin and teal branch.
+- **Notebook export to `.ipynb`** (`notebookToIpynb()` in `notebook.ts`).
+  New `/notebook` slash command — builds a Lucy Notebook from the tab
+  via the existing `buildNotebook()`, converts to nbformat-4 JSON,
+  picks a save path via `rfd::FileDialog`. Cells:
+  - `user` / `lucy` / `thought` → markdown cells with role headers
+  - `command` → code cells with language hint (`powershell` /
+    `shell` / `bash`) and the captured output as `stream:stdout`
+  - `tool` → markdown cells with fenced output blocks
+  
+  The notebook metadata includes `lucy.source_version`, `lucy.model`,
+  `lucy.created_at`, and `lucy.lang` so downstream tools (or future
+  Lucy versions) can re-import it.
+
+### Cleanup
+
+- **MCP regression test with mock JSON-RPC server** (`src-tauri/tests/
+  mcp_mock_server.py` + 3 new `#[ignore]` tokio tests). The Python
+  mock implements `initialize` / `tools/list` / `tools/call`, supports
+  optional response delay (`MCP_MOCK_SLEEP_MS`) and forced-failure mode
+  (`MCP_MOCK_FAIL=1`). Tests exercise the full spawn → handshake →
+  call → close lifecycle AND prove the pool reuses sessions (call
+  counter goes 1 → 2 → 3 across three sequential `pooled_call`s).
+  Marked `#[ignore]` so they run on demand via
+  `cargo test -- --ignored` (needs Python on PATH).
+- **`compute_text_diff` Tauri command** + `file_diff.rs` (5 tests).
+  Backs the inline-diff tool card. Unified-diff format via the `similar`
+  crate, capped at 200 lines with a `[truncated]` footer. Returns
+  `{text, additions, deletions, truncated}`.
+- **README MCP section** — quick-start (filesystem, no key) and
+  GitHub-with-token walk-throughs, curated preset table, architecture
+  highlights, diagnostic commands.
+
+### Numbers
+
+- **223 Rust tests** (+5 net new: 5 file_diff) + **3 MCP integration
+  tests** (run via `--ignored`) — all green.
+- **133 vitest** (+16 net new: cite-chips) — all green.
+- **0 svelte-check warnings**, **0 cargo warnings**.
+- Net LOC: ~1,500 (backend ~700 / frontend ~800).
+
+---
+
 ## [1.4.3] — 2026-05-29
 
 A polish release. Focused on Terminal IA improvements (auto-titled tabs,

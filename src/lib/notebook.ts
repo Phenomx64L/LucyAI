@@ -204,6 +204,112 @@ export function notebookToMarkdown(nb: Notebook): string {
 }
 
 /**
+ * Convert a Lucy Notebook into a Jupyter `.ipynb` JSON string (nbformat 4).
+ *
+ * Quick-win K (v1.4.4): one-click export to .ipynb so a successful Lucy
+ * session can be opened in JupyterLab / VSCode notebook UI / shared with
+ * teammates who don't have Lucy installed. We DO NOT try to be a fully
+ * runnable Jupyter notebook — there's no kernel binding for "Lucy" — but
+ * the cells render correctly:
+ *
+ *   • user / lucy / thought → markdown cells with role headers
+ *   • command               → code cell (language hint = engine) with
+ *                              the captured stdout as a stream output
+ *   • tool                  → markdown cell with a fenced output block
+ *
+ * The result is an EXPORT artifact, not an active notebook. To re-execute
+ * a runbook, use Lucy's own `.lucynote` format (parseNotebook + replay).
+ */
+export function notebookToIpynb(nb: Notebook): string {
+    const cells: any[] = [];
+
+    // Title + metadata as the first markdown cell so the notebook is
+    // self-describing when opened in Jupyter / VSCode.
+    cells.push({
+        cell_type: 'markdown',
+        metadata: {},
+        source: [
+            `# ${nb.title}\n`,
+            `\n`,
+            `*Exported from Lucy v${nb.lucy_version} · model: ${nb.model || 'unknown'} · ${new Date(nb.created_at).toISOString()}*\n`,
+        ],
+    });
+
+    for (const c of nb.cells) {
+        switch (c.type) {
+            case 'user':
+                cells.push({
+                    cell_type: 'markdown', metadata: {},
+                    source: [`### 👤 User\n`, `\n`, ...(c.text || '').split('\n').map(l => l + '\n')],
+                });
+                break;
+            case 'thought':
+                cells.push({
+                    cell_type: 'markdown', metadata: {},
+                    source: [`> 💭 _${(c.text || '').replace(/\n/g, ' ')}_\n`],
+                });
+                break;
+            case 'lucy':
+                cells.push({
+                    cell_type: 'markdown', metadata: {},
+                    source: [`### 🤖 Lucy\n`, `\n`, ...(c.text || '').split('\n').map(l => l + '\n')],
+                });
+                break;
+            case 'command': {
+                const lang = c.engine === 'powershell' ? 'powershell'
+                           : c.engine === 'cmd'        ? 'shell'
+                           : c.engine === 'ssh'        ? 'bash'
+                           : 'shell';
+                const code  = c.cmd || '';
+                const codeSrc = code.split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l);
+                const outputs: any[] = [];
+                if (c.output) {
+                    outputs.push({
+                        output_type: 'stream',
+                        name:        'stdout',
+                        text:        c.output.slice(0, 8000).split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l),
+                    });
+                }
+                cells.push({
+                    cell_type: 'code',
+                    metadata:  { vscode: { languageId: lang } },
+                    execution_count: null,
+                    source: codeSrc,
+                    outputs,
+                });
+                break;
+            }
+            case 'tool':
+                cells.push({
+                    cell_type: 'markdown', metadata: {},
+                    source: [
+                        `**🔧 ${c.text || 'tool'}**\n`,
+                        c.output ? '```\n' + c.output.slice(0, 2000) + '\n```\n' : '',
+                    ].filter(Boolean),
+                });
+                break;
+        }
+    }
+
+    const ipynb = {
+        cells,
+        metadata: {
+            kernelspec:    { display_name: 'Lucy export (no kernel)', language: 'shell', name: 'lucy-export' },
+            language_info: { name: 'shell' },
+            lucy: {
+                source_version: nb.lucy_version,
+                model:          nb.model || null,
+                created_at:     nb.created_at,
+                lang:           nb.lang,
+            },
+        },
+        nbformat:       4,
+        nbformat_minor: 5,
+    };
+    return JSON.stringify(ipynb, null, 1);
+}
+
+/**
  * Validate an arbitrary parsed JSON object as a Notebook.
  * Throws with a precise reason on failure — used by the import flow.
  */

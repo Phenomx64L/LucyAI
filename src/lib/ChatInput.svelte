@@ -42,6 +42,8 @@
         togglemic: void;
         clearsession: void;
         togglebrief: void;
+        togglepause: void;
+        skipnexttool: void;
         removefile: { tabId: string; fileName: string };
         runchip: { clave: string };
         addchip: void;
@@ -391,6 +393,28 @@
 
     <!-- Send / Stop toggle -->
     {#if tab.isProcessing}
+        <!-- Quick-win F — Granular cancel: ⏸ pause between iterations,
+             ⏭ skip the next tool call, 🛑 cancel everything (the existing
+             stop button). The three live in a small inline cluster so the
+             user can downgrade severity instead of going straight to kill. -->
+        <button class="sbtn sbtn-pause" class:on={tab._paused}
+            on:click={() => dispatch('togglepause')}
+            title={tab._paused
+                ? (isEN ? 'Resume' : 'Reanudar')
+                : (isEN ? 'Pause after current step' : 'Pausar tras el paso actual')}>
+            {#if tab._paused}
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M2 1.5v8l7-4z"/></svg>
+            {:else}
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><rect x="2" y="1.5" width="2.5" height="8" rx="1"/><rect x="6.5" y="1.5" width="2.5" height="8" rx="1"/></svg>
+            {/if}
+        </button>
+        <button class="sbtn sbtn-skip"
+            on:click={() => dispatch('skipnexttool')}
+            title={isEN ? 'Skip next tool call' : 'Saltar próxima herramienta'}>
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+                <path d="M2 1.5v8l5-4z"/><rect x="8" y="1.5" width="1.5" height="8" rx="0.5"/>
+            </svg>
+        </button>
         <button class="sbtn sbtn-stop" on:click={() => dispatch('stop')}
             title={isEN ? 'Stop (Escape)' : 'Detener (Escape)'}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
@@ -549,6 +573,13 @@
     :global(.sbtn:disabled){opacity:.35;cursor:not-allowed;}
     :global(.sbtn-stop){background:rgba(239,68,68,.1);color:#ef4444;}
     :global(.sbtn-stop:hover){background:rgba(239,68,68,.22);transform:scale(1.08);}
+    /* Quick-win F — pause + skip variants. Width compressed (28px) so the
+       3-button cluster doesn't push the textarea around. */
+    :global(.sbtn-pause){width:28px;height:36px;background:rgba(251,191,36,.10);color:#fbbf24;}
+    :global(.sbtn-pause:hover){background:rgba(251,191,36,.20);}
+    :global(.sbtn-pause.on){background:rgba(251,191,36,.28);color:#fff;box-shadow:inset 0 0 0 1px rgba(251,191,36,.6);}
+    :global(.sbtn-skip){width:28px;height:36px;background:rgba(59,158,255,.10);color:var(--blue, #3b9eff);}
+    :global(.sbtn-skip:hover){background:rgba(59,158,255,.20);}
     :global(.pending-msg-bar){display:flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(251,191,36,.06);border-bottom:1px solid rgba(251,191,36,.15);border-radius:8px 8px 0 0;font-size:11px;color:#fbbf24;}
     :global(.pending-msg-dot){width:6px;height:6px;border-radius:50%;background:#fbbf24;animation:pulse-pending 1.2s ease-in-out infinite;flex-shrink:0;}
     @keyframes pulse-pending{0%,100%{opacity:1}50%{opacity:.35}}

@@ -689,6 +689,78 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── /notebook — export tab as Jupyter .ipynb (v1.4.4 / Quick-win K) ──
+        case 'notebook': case 'ipynb': case 'export-notebook': {
+            (async () => {
+                try {
+                    const { buildNotebook, notebookToIpynb } = await import('$lib/notebook');
+                    const nb = buildNotebook(t, {
+                        lang:        ctx.isEN ? 'en-US' : 'es-MX',
+                        lucyVersion: '1.4.4',
+                        title:       (t as any).title,
+                    });
+                    if (!nb.cells || nb.cells.length === 0) {
+                        sysMsg(ctx.isEN
+                            ? 'Nothing to export — this tab is empty.'
+                            : 'Nada que exportar — esta pestaña está vacía.', 'var(--amber)');
+                        return;
+                    }
+                    const ipynbStr = notebookToIpynb(nb);
+                    const defaultName = (((t as any).title as string) || 'lucy-session')
+                        .replace(/[^\w\-]+/g, '_').slice(0, 60) + '.ipynb';
+                    // pick_save_path is a Rust command (uses rfd::FileDialog)
+                    const path = await invoke<string>('pick_save_path', {
+                        defaultName, filterName: 'Jupyter Notebook', filterExts: ['ipynb'],
+                    });
+                    if (!path) return; // user cancelled
+                    await invoke('write_file_content', { path, content: ipynbStr, force: true });
+                    sysMsg(ctx.isEN
+                        ? `✓ Exported ${nb.cells.length} cells to <code>${path}</code>`
+                        : `✓ Exportadas ${nb.cells.length} celdas a <code>${path}</code>`,
+                        'var(--acc)');
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
+        // ── /revert — undo the most recent writefile (v1.4.4 / Quick-win E) ──
+        case 'revert': case 'undo-write': {
+            (async () => {
+                try {
+                    const buf = (window as any)._lucyWriteUndo as Map<string, string> | undefined;
+                    if (!buf || buf.size === 0) {
+                        sysMsg(ctx.isEN
+                            ? 'No write to revert. The undo buffer is only populated AFTER Lucy writes a file in this session.'
+                            : 'No hay nada que revertir. El buffer se llena después de que Lucy escribe un archivo en esta sesión.',
+                            'var(--amber)');
+                        return;
+                    }
+                    const argPath = arg.trim();
+                    // No path → revert the most recent one (last inserted).
+                    const targetPath = argPath || Array.from(buf.keys()).pop()!;
+                    if (!buf.has(targetPath)) {
+                        sysMsg(ctx.isEN
+                            ? `No undo buffer for "${targetPath}". Try one of: ${Array.from(buf.keys()).join(', ')}`
+                            : `Sin buffer para "${targetPath}". Disponibles: ${Array.from(buf.keys()).join(', ')}`,
+                            'var(--red)');
+                        return;
+                    }
+                    const restoreTo = buf.get(targetPath) || '';
+                    await invoke('write_file_content', { path: targetPath, content: restoreTo, force: true });
+                    buf.delete(targetPath);
+                    sysMsg(ctx.isEN
+                        ? `✓ Reverted <code>${targetPath}</code> to its pre-write content (${restoreTo.length} chars).`
+                        : `✓ Revertido <code>${targetPath}</code> al contenido previo (${restoreTo.length} chars).`,
+                        'var(--acc)');
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── /chip-stats — predictive-chip engagement summary (v1.4.3) ─────
         case 'chip-stats': case 'chips-stats': {
             (async () => {

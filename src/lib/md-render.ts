@@ -16,6 +16,7 @@
 
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { addCiteChips } from '$lib/cite-chips';
 
 // Tags Lucy emits that the host page renders semantically. Keep this list
 // small — every attr added is a potential XSS vector.
@@ -57,11 +58,15 @@ function _cacheSet(key: string, value: string) {
  */
 export function renderMd(
     md: string | null | undefined,
-    opts: { mode?: 'default' | 'badges' | 'raw' } = {}
+    opts: { mode?: 'default' | 'badges' | 'raw'; chips?: boolean } = {}
 ): string {
     if (!md) return '';
     const mode = opts.mode ?? 'default';
-    const key = `${mode}|${md}`;
+    // chips defaults to TRUE for default/badges modes so Lucy's prose gets
+    // inline clickable file/host/memory chips. Caller can pass {chips:false}
+    // to opt out (e.g. for tooltips where chips would be visually noisy).
+    const chipsOn = opts.chips ?? (mode !== 'raw');
+    const key = `${mode}|${chipsOn ? 'c' : 'n'}|${md}`;
     const cached = _cacheGet(key);
     if (cached !== undefined) return cached;
 
@@ -75,6 +80,9 @@ export function renderMd(
         } else {
             const parsed = marked.parse(md) as string;
             html = DOMPurify.sanitize(parsed);
+        }
+        if (chipsOn) {
+            html = addCiteChips(html);
         }
     } catch (e) {
         // Don't crash chat over malformed markdown — fall back to escaped text

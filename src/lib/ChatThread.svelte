@@ -34,10 +34,12 @@
     const dispatch = createEventDispatcher<{
         pinmessage: { msg: any };
         branchmessage: { msg: any };
+        replaymessage: { msg: any };
         buttonaction: { msg: any; event: MouseEvent };
         togglereasoning: { msg: any };
         codeclick: { path: string };
         fixclick: { key: string };
+        citeclick: { kind: string; value: string };
     }>();
 
     function handleAreaClick(e: MouseEvent) {
@@ -50,6 +52,18 @@
         if (fixBtn) {
             const key = fixBtn.dataset.fixKey;
             if (key) dispatch('fixclick', { key });
+        }
+        // Quick-win H: inline cite-chip click. Dispatches a typed event the
+        // parent (+page.svelte) maps to a domain action (open file, jump to
+        // memory, scope next prompt to host…). Keyboard activation: handled
+        // by tabindex="0" + Enter/Space via the chip's role="button".
+        const chipEl = target.closest('.cite-chip') as HTMLElement | null;
+        if (chipEl?.dataset.citeKind && chipEl?.dataset.citeValue) {
+            e.stopPropagation();
+            dispatch('citeclick', {
+                kind:  chipEl.dataset.citeKind,
+                value: chipEl.dataset.citeValue,
+            });
         }
     }
 
@@ -216,6 +230,14 @@
                                 title={isEN ? 'Branch a new tab from here' : 'Bifurcar en una nueva pestaña desde aquí'}
                                 aria-label={isEN ? 'Branch from this message' : 'Bifurcar desde este mensaje'}
                                 on:click={() => dispatch('branchmessage', { msg })}>⌥</button>
+                            <!-- Quick-win J — Replay: open the ReplayBrowser scoped to
+                                 this turn's snapshot. Lets the operator re-run the SAME
+                                 turn against the same OR a different model and see the
+                                 drift score. Only relevant on Lucy turns. -->
+                            <button class="msg-replay"
+                                title={isEN ? 'Replay this turn (open replay browser)' : 'Reproducir este turno (abrir replay browser)'}
+                                aria-label={isEN ? 'Replay this turn' : 'Reproducir este turno'}
+                                on:click={() => dispatch('replaymessage', { msg })}>⏪</button>
                         {/if}
                     {/if}
                     <!-- U3 — Chapter view for multi-step agent tasks -->
@@ -474,6 +496,49 @@
        fork available without a Tabler icon dependency. */
     .msg-branch{position:absolute;top:6px;right:28px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:13px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;font-weight:700;line-height:1;}
     .msg-branch:hover{opacity:1;background:rgba(16,185,129,.14);color:var(--acc, #10b981);}
+    /* Quick-win J — Replay button: sits to the LEFT of branch (right:50px). Cyan
+       accent distinguishes it from pin (amber) and branch (teal). */
+    .msg-replay{position:absolute;top:6px;right:50px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:13px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;line-height:1;}
+    .msg-replay:hover{opacity:1;background:rgba(59,158,255,.14);color:var(--blue, #3b9eff);}
+
+    /* Quick-win H — Inline cite-chips (file paths, hosts, memories, URLs).
+       Subtle by default so they don't visually overpower prose; light hover
+       reveals interactivity. Per-kind accent matches the source domain. */
+    :global(.cite-chip){
+        display:inline-flex; align-items:baseline; gap:2px;
+        font-family:var(--mono, monospace); font-size:0.92em;
+        padding:0 4px; border-radius:4px;
+        background:rgba(255,255,255,.04);
+        border:1px solid rgba(255,255,255,.06);
+        color:inherit;
+        cursor:pointer;
+        transition:background .12s, border-color .12s;
+        white-space:nowrap;
+        max-width:100%;
+        overflow:hidden; text-overflow:ellipsis;
+    }
+    :global(.cite-chip:hover){background:rgba(255,255,255,.10); border-color:rgba(255,255,255,.18);}
+    :global(.cite-chip:focus-visible){outline:2px solid var(--acc, #10b981); outline-offset:1px;}
+    :global(.cite-chip.cite-file){
+        background:rgba(16,185,129,.07); border-color:rgba(16,185,129,.20);
+        color:var(--acc, #10b981);
+    }
+    :global(.cite-chip.cite-file:hover){background:rgba(16,185,129,.14); border-color:rgba(16,185,129,.40);}
+    :global(.cite-chip.cite-memory){
+        background:rgba(167,139,250,.08); border-color:rgba(167,139,250,.22);
+        color:#c4b5fd;
+    }
+    :global(.cite-chip.cite-memory:hover){background:rgba(167,139,250,.16); border-color:rgba(167,139,250,.45);}
+    :global(.cite-chip.cite-host){
+        background:rgba(59,158,255,.07); border-color:rgba(59,158,255,.22);
+        color:var(--blue, #3b9eff);
+    }
+    :global(.cite-chip.cite-host:hover){background:rgba(59,158,255,.14); border-color:rgba(59,158,255,.42);}
+    :global(.cite-chip.cite-url){
+        background:rgba(251,191,36,.06); border-color:rgba(251,191,36,.18);
+        color:#fcd34d;
+    }
+    :global(.cite-chip.cite-url:hover){background:rgba(251,191,36,.12); border-color:rgba(251,191,36,.38);}
 
     /* Quick-win G — Pinned-message sticky strip + jump-target pulse. */
     .pin-strip{

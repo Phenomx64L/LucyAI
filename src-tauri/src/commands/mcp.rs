@@ -972,6 +972,90 @@ mod tests {
     }
 
     // ── Pool key tests ──
+    // ── Integration tests against the Python mock MCP server ──
+    // These hit the FULL spawn → JSON-RPC → tools/call → close pipeline
+    // using src-tauri/tests/mcp_mock_server.py. Marked #[ignore] because
+    // they need Python on PATH; run via `cargo test -- --ignored`.
+
+    fn detect_python() -> Option<String> {
+        for cmd in &["python", "python3", "py"] {
+            if std::process::Command::new(cmd)
+                .arg("--version")
+                .output()
+                .ok()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return Some(cmd.to_string());
+            }
+        }
+        None
+    }
+
+    fn mock_server_cmd(py: &str) -> String {
+        // src-tauri/tests/mcp_mock_server.py — relative to crate root.
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        format!("{} {}/tests/mcp_mock_server.py", py, manifest)
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mock_server_discover_returns_one_tool() {
+        let Some(py) = detect_python() else {
+            eprintln!("Python not found — skipping mock_server_discover_returns_one_tool");
+            return;
+        };
+        let cmd = mock_server_cmd(&py);
+        let (mut child, mut stdin, mut reader, _stderr) =
+            spawn_and_initialize(&cmd, None).await.expect("spawn ok");
+        let tools = list_tools(&mut stdin, &mut reader).await.expect("list ok");
+        let _ = child.kill().await;
+        let arr = tools.as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "echo");
+        // inputSchema must be present — that's what feeds the system prompt signature.
+        assert!(arr[0]["inputSchema"]["properties"]["message"].is_object());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mock_server_call_echoes_args() {
+        let Some(py) = detect_python() else { return; };
+        let cmd = mock_server_cmd(&py);
+        let (mut child, mut stdin, mut reader, _stderr) =
+            spawn_and_initialize(&cmd, None).await.expect("spawn ok");
+        let res = call_tool(&mut stdin, &mut reader, "echo",
+                            serde_json::json!({ "message": "ping" })).await
+            .expect("call ok");
+        let _ = child.kill().await;
+        assert!(res.contains("ping"), "expected echo, got: {}", res);
+        assert!(res.starts_with("[1]"), "first call counter should be 1: {}", res);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mock_server_pool_reuses_session() {
+        // The whole point of the pool: 3 sequential calls hit ONE process
+        // (call counter should be 1, 2, 3 — proving reuse, not respawn).
+        let Some(py) = detect_python() else { return; };
+        let cmd = mock_server_cmd(&py);
+        let server = "mock-pool-test";
+
+        let r1 = pooled_call(server, &cmd, None, "echo",
+            serde_json::json!({ "message": "a" })).await.expect("r1");
+        let r2 = pooled_call(server, &cmd, None, "echo",
+            serde_json::json!({ "message": "b" })).await.expect("r2");
+        let r3 = pooled_call(server, &cmd, None, "echo",
+            serde_json::json!({ "message": "c" })).await.expect("r3");
+
+        // Cleanup so subsequent runs start fresh.
+        let _ = mcp_pool_clear().await;
+
+        assert!(r1.starts_with("[1]"), "first call had counter != 1: {}", r1);
+        assert!(r2.starts_with("[2]"), "session reused → second call should be 2, got: {}", r2);
+        assert!(r3.starts_with("[3]"), "session reused → third call should be 3, got: {}", r3);
+    }
+
     #[test]
     fn pool_key_is_deterministic_across_env_iter_order() {
         let mut a = HashMap::new();
