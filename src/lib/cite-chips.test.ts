@@ -103,4 +103,23 @@ describe('cite-chips: addCiteChips', () => {
         // Should escape the quote inside data-cite-value
         expect(out).not.toContain('data-cite-value="C:\\with"quote');
     });
+
+    it('does NOT corrupt user prose containing numbers (digit-restore regression)', () => {
+        // Code-review caught: the placeholder/stash scheme used bare digits
+        // as keys and restored via /(\d+)/g, which clobbered numbers in
+        // ordinary prose. The fix is non-collidable \x01 sentinels. This
+        // test passes Lucy text with "port 8080" and "error 42" alongside
+        // a chip-worthy entity and asserts both the digits AND the chip
+        // survive intact.
+        const out = addCiteChips(
+            'Saw error 42 on port 8080 while reading /var/log/syslog.log please.'
+        );
+        // Digits in prose must remain visible verbatim.
+        expect(out).toContain('error 42');
+        expect(out).toContain('port 8080');
+        // The file path must still get wrapped.
+        expect(out).toContain('data-cite-value="/var/log/syslog.log"');
+        // Control-char sentinels must NEVER leak to the user-visible output.
+        expect(out).not.toMatch(/[\x01\x02]/);
+    });
 });

@@ -221,72 +221,68 @@ export function notebookToMarkdown(nb: Notebook): string {
  * a runbook, use Lucy's own `.lucynote` format (parseNotebook + replay).
  */
 export function notebookToIpynb(nb: Notebook): string {
+    // ipynb `source` is a JSON array of lines, each terminated with a
+    // trailing '\n' EXCEPT the last (which may be terminated or not — both
+    // are tolerated). This helper does exactly that for a body string.
+    const splitPreservingTrail = (s: string): string[] =>
+        s.split('\n').map((l, i, a) => (i < a.length - 1 ? l + '\n' : l));
+    // Markdown cells in this exporter all have the same shape: an
+    // optional header line, an optional blank line, then the body lines.
+    // Centralizing keeps the cell-construction loop readable and removes
+    // ~30 LOC of copy-paste across three branches.
+    const mdCell = (header: string | null, body: string, opts: { trailing?: string } = {}) => ({
+        cell_type: 'markdown', metadata: {},
+        source: [
+            ...(header ? [header, `\n`] : []),
+            ...splitPreservingTrail(body || ''),
+            ...(opts.trailing ? [opts.trailing] : []),
+        ],
+    });
+
     const cells: any[] = [];
 
     // Title + metadata as the first markdown cell so the notebook is
     // self-describing when opened in Jupyter / VSCode.
-    cells.push({
-        cell_type: 'markdown',
-        metadata: {},
-        source: [
-            `# ${nb.title}\n`,
-            `\n`,
-            `*Exported from Lucy v${nb.lucy_version} · model: ${nb.model || 'unknown'} · ${new Date(nb.created_at).toISOString()}*\n`,
-        ],
-    });
+    cells.push(mdCell(
+        `# ${nb.title}\n`,
+        `*Exported from Lucy v${nb.lucy_version} · model: ${nb.model || 'unknown'} · ${new Date(nb.created_at).toISOString()}*\n`,
+    ));
 
     for (const c of nb.cells) {
         switch (c.type) {
             case 'user':
-                cells.push({
-                    cell_type: 'markdown', metadata: {},
-                    source: [`### 👤 User\n`, `\n`, ...(c.text || '').split('\n').map(l => l + '\n')],
-                });
+                cells.push(mdCell(`### 👤 User\n`, c.text || ''));
                 break;
             case 'thought':
-                cells.push({
-                    cell_type: 'markdown', metadata: {},
-                    source: [`> 💭 _${(c.text || '').replace(/\n/g, ' ')}_\n`],
-                });
+                // Thoughts collapse onto one blockquote line.
+                cells.push(mdCell(null, `> 💭 _${(c.text || '').replace(/\n/g, ' ')}_\n`));
                 break;
             case 'lucy':
-                cells.push({
-                    cell_type: 'markdown', metadata: {},
-                    source: [`### 🤖 Lucy\n`, `\n`, ...(c.text || '').split('\n').map(l => l + '\n')],
-                });
+                cells.push(mdCell(`### 🤖 Lucy\n`, c.text || ''));
                 break;
             case 'command': {
                 const lang = c.engine === 'powershell' ? 'powershell'
                            : c.engine === 'cmd'        ? 'shell'
                            : c.engine === 'ssh'        ? 'bash'
                            : 'shell';
-                const code  = c.cmd || '';
-                const codeSrc = code.split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l);
-                const outputs: any[] = [];
-                if (c.output) {
-                    outputs.push({
-                        output_type: 'stream',
-                        name:        'stdout',
-                        text:        c.output.slice(0, 8000).split('\n').map((l, i, a) => i < a.length - 1 ? l + '\n' : l),
-                    });
-                }
+                const outputs: any[] = c.output
+                    ? [{ output_type: 'stream', name: 'stdout',
+                         text: splitPreservingTrail(c.output.slice(0, 8000)) }]
+                    : [];
                 cells.push({
                     cell_type: 'code',
                     metadata:  { vscode: { languageId: lang } },
                     execution_count: null,
-                    source: codeSrc,
+                    source: splitPreservingTrail(c.cmd || ''),
                     outputs,
                 });
                 break;
             }
             case 'tool':
-                cells.push({
-                    cell_type: 'markdown', metadata: {},
-                    source: [
-                        `**🔧 ${c.text || 'tool'}**\n`,
-                        c.output ? '```\n' + c.output.slice(0, 2000) + '\n```\n' : '',
-                    ].filter(Boolean),
-                });
+                cells.push(mdCell(
+                    `**🔧 ${c.text || 'tool'}**\n`,
+                    c.output ? '```\n' + c.output.slice(0, 2000) + '\n```' : '',
+                ));
                 break;
         }
     }

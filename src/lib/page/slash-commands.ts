@@ -729,7 +729,10 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'revert': case 'undo-write': {
             (async () => {
                 try {
-                    const buf = (window as any)._lucyWriteUndo as Map<string, string> | undefined;
+                    // Per-tab undo buffer (was window._lucyWriteUndo before code
+                    // review flagged the cross-tab collision). The agent loop
+                    // populates `t._writeUndo` after every writefile.
+                    const buf = (t as any)._writeUndo as Map<string, string> | undefined;
                     if (!buf || buf.size === 0) {
                         sysMsg(ctx.isEN
                             ? 'No write to revert. The undo buffer is only populated AFTER Lucy writes a file in this session.'

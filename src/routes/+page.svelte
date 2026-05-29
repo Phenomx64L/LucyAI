@@ -149,7 +149,6 @@ import { listen } from '@tauri-apps/api/event';
     import SelfDiagnosticsView from '$lib/SelfDiagnosticsView.svelte';
     import MemoryBrowserView from '$lib/MemoryBrowserView.svelte';
     import LiveTracePanel    from '$lib/LiveTracePanel.svelte';
-    import LiveTraceDock     from '$lib/LiveTraceDock.svelte';
     import { pushTrace, traceStart, inferExitCode, extractErrorExcerpt, buildReactMarker } from '$lib/liveTrace';
     import ProfileSwitcher from '$lib/ProfileSwitcher.svelte';
     import StatusOrb        from '$lib/StatusOrb.svelte';
@@ -4529,10 +4528,11 @@ Use ONE of these patterns instead:
                 for (let loop_i = 0; loop_i < MAX_LOOPS; loop_i++) {
                     if (t._cancelled) break;
                     // Quick-win F — Pause: between iterations, if the user
-                    // pressed ⏸, spin-wait until they resume OR cancel.
-                    // 200ms poll keeps the wait responsive without busy-looping.
-                    while (t._paused && !t._cancelled) {
-                        await new Promise(r => setTimeout(r, 200));
+                    // pressed ⏸, await a resume-promise the toggle handler
+                    // resolves. Was a 200ms spin-wait before; code review
+                    // flagged it as wasted ticks + up-to-200ms resume latency.
+                    if (t._paused && !t._cancelled) {
+                        await new Promise((resolve) => { t._resumeWaiters = (t._resumeWaiters || []); t._resumeWaiters.push(resolve); });
                     }
                     if (t._cancelled) break;
                     // Quick-win F — Skip-next: if the user pressed ⏭ before
@@ -5843,9 +5843,12 @@ Use ONE of these patterns instead:
                             filesMod.add(_wPath);
                             // Working memory: remember the new/written file.
                             _updateWM(t, { type: 'file', path: _wPath, op: 'created' });
-                            // Save old content as the per-file undo buffer so the user
-                            // can revert from the input via `/revert <path>` slash cmd.
-                            try { if (!window._lucyWriteUndo) window._lucyWriteUndo = new Map(); window._lucyWriteUndo.set(_wPath, _oldContent); } catch {}
+                            // Per-tab undo buffer — `/revert <path>` reads from here.
+                            // (Was on window._lucyWriteUndo before; code review caught
+                            // that a global Map collides across tabs and leaks across
+                            // reloads. Per-tab scope matches the user mental model.)
+                            if (!t._writeUndo) t._writeUndo = new Map();
+                            t._writeUndo.set(_wPath, _oldContent);
                             // Attach a diff payload so renderSingleCardHtml uses its
                             // built-in line-by-line diff renderer (.tc-d-ad / .tc-d-rm).
                             // Empty `oldStr` falls back to "all additions" view.
@@ -7002,6 +7005,12 @@ times the SAME way, switch tool kind entirely.
         // turn starts clean (otherwise a leftover _paused would freeze it).
         t._paused = false;
         t._skipNextTool = false;
+        // Drain any pending pause-resume waiters so the agent loop unblocks
+        // and reaches its `if (t._cancelled) break;` check immediately.
+        if (Array.isArray(t._resumeWaiters)) {
+            const waiters = t._resumeWaiters; t._resumeWaiters = [];
+            for (const r of waiters) { try { r(); } catch {} }
+        }
 
         // BUG FIX: Preserve streamed text before fin() removes the streaming msg.
         // Previously, cancelling mid-stream deleted the visible response entirely.
@@ -8531,14 +8540,6 @@ if (Test-Path $src) {
 
         {#each tabs as tab (tab.id)}
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
-            <!-- Quick-win L: thin always-visible activity sparkline. Only
-                 mounted for the ACTIVE tab to avoid 60 buckets × N tabs
-                 of reactive churn. Clicking opens the full LiveTracePanel. -->
-            {#if activeTabId === tab.id}
-              <LiveTraceDock {isEN} activeTabId={tab.id}
-                visible={!showLiveTrace}
-                on:click={() => showLiveTrace = true} />
-            {/if}
             {#if activeIncidentId && activeTabId === tab.id}
             <div style="padding:0 12px;">
               <IncidentTimeline incidentId={activeIncidentId} {isEN}
@@ -8598,6 +8599,12 @@ if (Test-Path $src) {
                   const _t = getTab(tab.id);
                   if (!_t) return;
                   _t._paused = !_t._paused;
+                  // Resume: drain the waiters so the agent loop continues
+                  // immediately instead of waiting for the next 200ms tick.
+                  if (!_t._paused && Array.isArray(_t._resumeWaiters)) {
+                      const waiters = _t._resumeWaiters; _t._resumeWaiters = [];
+                      for (const r of waiters) { try { r(); } catch {} }
+                  }
                   refresh();
                   toast(_t._paused
                       ? (isEN ? '⏸ Paused after current step' : '⏸ Pausado tras el paso actual')

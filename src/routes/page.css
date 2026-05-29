@@ -785,7 +785,7 @@ body.density-compact .chat{gap:2px !important;}
 .empty-mail-btn{background:none;border:none;color:#3a6a8a;cursor:pointer;font-size:11px;font-style:italic;font-family:inherit;padding:0;transition:.15s;}
 .empty-mail-btn:hover{color:var(--blue);text-decoration:underline;}
 /* ── CHAT ──────────────────────────────────── */
-.chat-wrap{display:none;flex-direction:column;flex:1;overflow:hidden;max-width:960px;width:100%;margin:0 auto;position:relative;}
+.chat-wrap{display:none;flex-direction:column;flex:1;overflow:hidden;max-width:960px;width:100%;margin:0 auto;}
 .chat-wrap.on{display:flex;}
 .chat-area{flex:1;overflow-y:auto;padding:16px 22px;display:flex;flex-direction:column;gap:10px;min-height:0;}
 /* Punto 11: content-visibility — virtualización nativa del motor Chromium/Tauri  */
