@@ -9,7 +9,7 @@
 // behaviour is covered by manual QA. New code paths get pinned.
 
 import { describe, it, expect } from 'vitest';
-import { routeModel, type RoutingContext } from './smart-router';
+import { routeModel, detectHeavyPrompt, type RoutingContext } from './smart-router';
 
 function ctx(overrides: Partial<RoutingContext> = {}): RoutingContext {
     return {
@@ -100,5 +100,94 @@ describe('routeModel — Tier B #1 savings estimate', () => {
     it('omits savings field when caller did not pass a baseline', () => {
         const d = routeModel(ctx({ prompt: 'hello', contextTokens: 30 }));
         expect(d.estimatedSavingsUsd).toBeUndefined();
+    });
+});
+
+// ── v1.4.5: Spanish/Portuguese keywords + subtask density ────────────────
+describe('routeModel — v1.4.5 multi-language + multi-task heuristics', () => {
+    function ctx(p: Partial<RoutingContext>): RoutingContext {
+        return {
+            prompt: p.prompt ?? '',
+            contextTokens: p.contextTokens ?? 100,
+            ollamaOnline: false,
+            smartRoutingEnabled: true,
+            ...p,
+        };
+    }
+
+    it('routes Spanish "auditoría" prompt to heavy tier', () => {
+        const d = routeModel(ctx({
+            prompt: 'Hazme una auditoría de seguridad del equipo',
+        }));
+        expect(d.tier).toBe(4);
+        expect(d.modelId).toMatch(/sonnet|opus/);
+    });
+
+    it('routes Spanish "informe ejecutivo" prompt to heavy tier', () => {
+        const d = routeModel(ctx({
+            prompt: 'Genera un informe ejecutivo para el CISO',
+        }));
+        expect(d.tier).toBe(4);
+    });
+
+    it('routes Portuguese "auditoria" prompt to heavy tier', () => {
+        const d = routeModel(ctx({
+            prompt: 'Faz uma auditoria de compliance do servidor',
+        }));
+        expect(d.tier).toBe(4);
+    });
+
+    it('routes a 5-subtask enumeration to heavy tier even without heavy keywords', () => {
+        const d = routeModel(ctx({
+            prompt: 'Quiero el estado de parches, software instalado, ' +
+                    'puertos abiertos, servicios anómalos, usuarios con privilegios, ' +
+                    'y un reporte en PDF',
+        }));
+        expect(d.tier).toBe(4);
+        expect(d.reason).toMatch(/subtasks/);
+    });
+
+    it('does NOT promote a single short request to heavy tier', () => {
+        const d = routeModel(ctx({ prompt: 'lista los procesos abiertos' }));
+        expect(d.tier).not.toBe(4);
+    });
+
+    it('economy mode requires 5+ subtasks (not 4) to promote', () => {
+        const fourTasks = 'estado de parches, software instalado, puertos abiertos, servicios anómalos';
+        const d4 = routeModel(ctx({ prompt: fourTasks, economyMode: true }));
+        expect(d4.tier).not.toBe(4);
+        const fiveTasks = fourTasks + ', usuarios con privilegios';
+        const d5 = routeModel(ctx({ prompt: fiveTasks, economyMode: true }));
+        expect(d5.tier).toBe(4);
+    });
+});
+
+describe('detectHeavyPrompt — UI nudge helper', () => {
+    it('returns null for short trivial prompts', () => {
+        expect(detectHeavyPrompt('hello')).toBeNull();
+        expect(detectHeavyPrompt('lista los procesos')).toBeNull();
+    });
+
+    it('flags audit keyword', () => {
+        const r = detectHeavyPrompt('Necesito un informe ejecutivo de auditoría de seguridad para el CISO');
+        expect(r).toMatch(/análisis|informe|audit/i);
+    });
+
+    it('flags multi-subtask prompts', () => {
+        const r = detectHeavyPrompt(
+            'Quiero estado de parches, software instalado, ' +
+            'puertos abiertos, servicios anómalos, usuarios con privilegios'
+        );
+        expect(r).toMatch(/subtareas/);
+    });
+
+    it('flags very large context', () => {
+        const r = detectHeavyPrompt('do the thing please, very long context'.repeat(20), 4000);
+        expect(r).toMatch(/contexto grande/);
+    });
+
+    it('returns null when prompt is generic', () => {
+        const r = detectHeavyPrompt('cómo está el clima hoy y qué hora es', 50);
+        expect(r).toBeNull();
     });
 });

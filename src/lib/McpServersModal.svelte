@@ -215,6 +215,36 @@
     }
   }
 
+  /**
+   * v1.4.5 — Inline enable/disable toggle. Persists via mcp_server_upsert
+   * (no dedicated set-enabled command exists; upsert is idempotent and
+   * already evicts pooled sessions). Optimistic UI: flip the local row
+   * first so the user gets instant feedback, roll back on failure.
+   */
+  async function doToggleEnabled(s) {
+    busyName = s.name;
+    const prev = s.enabled;
+    s.enabled = !prev;
+    servers = [...servers];  // trigger reactivity
+    try {
+      await invoke('mcp_server_upsert', {
+        name: s.name, command: s.command,
+        envKeys: s.env_keys || [], enabled: !prev,
+      });
+      dispatch('updated');
+      flash(s.enabled
+          ? (isEN ? `${s.name}: enabled` : `${s.name}: habilitado`)
+          : (isEN ? `${s.name}: disabled (excluded from system prompt)` : `${s.name}: deshabilitado (excluido del system prompt)`));
+    } catch (e) {
+      // Rollback optimistic UI.
+      s.enabled = prev;
+      servers = [...servers];
+      error = String(e);
+    } finally {
+      busyName = '';
+    }
+  }
+
   async function doTest(s) {
     busyName = s.name;
     error = '';
@@ -360,6 +390,17 @@
               <li class="srv">
                 <div class="srv-head">
                   <div class="srv-name-block">
+                    <!-- v1.4.5: inline enable/disable toggle. Lets the user
+                         silence a noisy MCP catalog from the system prompt
+                         (e.g. github with 26 tools when the current task is
+                         pure Windows audit) without deleting the server. -->
+                    <button class="srv-toggle" class:on={s.enabled}
+                      title={s.enabled
+                          ? (isEN ? 'Enabled — click to disable' : 'Habilitado — clic para deshabilitar')
+                          : (isEN ? 'Disabled — click to enable' : 'Deshabilitado — clic para habilitar')}
+                      on:click={() => doToggleEnabled(s)} disabled={busyName === s.name}>
+                      <span class="srv-toggle-knob"></span>
+                    </button>
                     <span class="srv-name">{s.name}</span>
                     <span class="pill {statusClass(s)}">{statusLabel(s)}</span>
                     {#if !s.enabled}
@@ -581,6 +622,38 @@
   }
   .srv-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
   .srv-name-block { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* v1.4.5 — Inline enabled/disabled toggle switch. iOS-style for instant
+     recognizability; off state is muted grey, on state is accent green. */
+  .srv-toggle {
+    position: relative;
+    width: 28px; height: 16px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid var(--bdr2, #222c3a);
+    border-radius: 9px;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background .18s, border-color .18s;
+  }
+  .srv-toggle:hover:not(:disabled) { border-color: var(--bdr, #1a2030); }
+  .srv-toggle:disabled { opacity: .5; cursor: not-allowed; }
+  .srv-toggle.on {
+    background: rgba(16, 185, 129, 0.45);
+    border-color: rgba(16, 185, 129, 0.65);
+  }
+  .srv-toggle-knob {
+    position: absolute;
+    top: 1px; left: 1px;
+    width: 12px; height: 12px;
+    background: #f1f5f9;
+    border-radius: 50%;
+    transition: transform .18s cubic-bezier(.34, 1.4, .64, 1);
+    box-shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+  .srv-toggle.on .srv-toggle-knob {
+    transform: translateX(12px);
+    background: #fff;
+  }
   .srv-name { font-weight: 700; font-size: 14px; }
   .srv-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 

@@ -264,21 +264,92 @@ function looksLikeShellCommand(prompt: string): boolean {
 // chat to Opus is wasteful but not broken; downgrading complex analysis
 // to Flash is broken because the reasoning quality matters.
 const HEAVY_KEYWORDS = [
-    // security / compliance
-    'audit', 'compliance', 'vulnerability', 'cve', 'cwe', 'cis',
-    'hardening', 'pentest', 'forensic', 'incident',
+    // security / compliance (ES / PT / EN)
+    'audit', 'auditoría', 'auditoria', 'auditar',
+    'compliance', 'cumplimiento', 'conformidade',
+    'vulnerability', 'vulnerabilidad', 'vulnerabilidade',
+    'cve', 'cwe', 'cis', 'hardening', 'pentest', 'forensic', 'forense',
+    'incident', 'incidente',
     // analysis / reasoning
-    'analyze', 'analyse', 'analiza', 'correlate', 'correlaciona',
+    'analyze', 'analyse', 'analiza', 'analizar', 'analise', 'analizá',
+    'correlate', 'correlaciona', 'correlacionar', 'correlacionado',
     'root cause', 'causa raíz', 'causa raiz', 'diagnose', 'diagnostica',
-    'explain why', 'explain how', 'compare', 'compara',
-    'design', 'architecture', 'arquitectura', 'review', 'revisa',
-    // multi-step planning
-    'plan', 'strategy', 'estrategia', 'migrate', 'migra', 'refactor',
+    'diagnostique', 'diagnosticar', 'explain why', 'explica por qué',
+    'explain how', 'explica cómo', 'compare', 'compara', 'comparar',
+    'design', 'architecture', 'arquitectura', 'arquitetura',
+    'review', 'revisa', 'revisar', 'revisão',
+    // multi-step planning + report generation (often the heaviest case)
+    'plan', 'strategy', 'estrategia', 'estratégia', 'migrate', 'migra',
+    'migrar', 'refactor', 'refactoriza', 'refatorar',
+    // Executive reports / PDFs trigger LONG agentic workflows where the
+    // final synthesis matters → must go to a strong reasoner so it doesn't
+    // truncate the closing command. v1.4.5 addition based on Caso 2 bench
+    // where Flash truncated the Edge PDF command.
+    'informe ejecutivo', 'executive report', 'relatório executivo',
+    'genera un informe', 'generate a report', 'gerar um relatório',
+    'reporte ejecutivo', 'informe para', 'reporte para',
+    'ciso', 'cio', 'cto',  // C-suite recipients → always presentation quality
 ];
 const HEAVY_RE = new RegExp(
     '\\b(' + HEAVY_KEYWORDS.map(k => k.replace(/\s/g, '\\s')).join('|') + ')\\b',
     'i'
 );
+
+// ── Multi-task density detector (v1.4.5) ─────────────────────────────────
+//
+// A prompt that enumerates ≥4 distinct subtasks is structurally heavy
+// regardless of whether it uses analysis keywords. Examples:
+//
+//   • "Audita el equipo: estado de parches, software instalado en 7 días,
+//      puertos abiertos, servicios anómalos, usuarios con privilegios,
+//      intentos de login fallidos, y veredicto CIS top-10. Guarda PDF."
+//   • "List my repos, clone the first 3, install deps, run tests, commit
+//      the fix, and push."
+//
+// The detector counts COMMA-separated AND coordinator-separated noun
+// phrases that look like distinct tasks (not adjectives or short
+// modifiers). False positives are cheaper than false negatives here —
+// over-routing to Sonnet on a borderline prompt costs $0.04, under-
+// routing leaves the user with a half-finished audit.
+const SUBTASK_SEPARATORS = /[,;]\s+|\s+(?:y|e|and|plus)\s+|\s+(?:además|también|also)\s+/gi;
+const NOUN_HINT_RE = /\b(estado|software|puertos?|servicios?|usuarios?|intentos?|veredicto|reporte|informe|tabla|csv|pdf|markdown|json|review|análisis|listado|inventario|patch|service|user|port|log|graph|report|hash|crypto|cert|firewall|backup|snapshot|baseline)/i;
+
+/**
+ * Public reasoning indicator — used by ChatInput.svelte to surface an
+ * unobtrusive nudge when the user is on a fast model + smart-routing OFF
+ * + a heavy-looking prompt. The nudge offers a one-click upgrade so the
+ * user doesn't lose 90 s + $0.05 on a Flash-truncated audit before
+ * realising they should have used Sonnet.
+ *
+ * Returns null when no heavy signal is present. Returns a short reason
+ * label otherwise (mirrors the `RoutingDecision.reason` vocabulary).
+ */
+export function detectHeavyPrompt(prompt: string, contextTokens = 0): string | null {
+    if (!prompt || prompt.length < 60) return null;
+    const heavyMatch = HEAVY_RE.exec(prompt);
+    const subtasks = subtaskCount(prompt);
+    if (contextTokens > 3000) return `contexto grande (${contextTokens} tokens)`;
+    if (subtasks >= 4) return `${subtasks} subtareas detectadas`;
+    if (heavyMatch) return `palabra clave de análisis: '${heavyMatch[1].toLowerCase()}'`;
+    if (contextTokens > 800) return `contexto >${800} tokens`;
+    return null;
+}
+
+/** Count subtasks in a prompt; ≥4 ⇒ structurally heavy. */
+function subtaskCount(prompt: string): number {
+    if (!prompt || prompt.length < 60) return 0;
+    // Walk separators, count chunks that contain at least one noun hint
+    // longer than a couple characters. Cheap pass, no allocations beyond
+    // the split.
+    const parts = prompt.split(SUBTASK_SEPARATORS);
+    let count = 0;
+    for (const part of parts) {
+        const t = part.trim();
+        if (t.length < 6) continue;
+        if (NOUN_HINT_RE.test(t)) count++;
+    }
+    return count;
+}
 
 // ── Model selection helpers ──────────────────────────────────────────────
 type LocalNeed = 'fast' | 'reasoning' | 'code' | 'vision';
@@ -599,6 +670,11 @@ function _routeModelCore(ctx: RoutingContext): RoutingDecision {
         ctx.detectedIntent === 'file-attached';
     const heavyMatch = HEAVY_RE.exec(ctx.prompt);
     const veryLargeContext = ctx.contextTokens > 3000;
+    // v1.4.5: structural complexity from enumerated subtasks. ≥4 distinct
+    // task chunks ⇒ heavy regardless of keyword presence. In economy mode
+    // we require ≥5 to keep the threshold strict.
+    const subtasks = subtaskCount(ctx.prompt);
+    const multiTaskHeavy = ctx.economyMode ? subtasks >= 5 : subtasks >= 4;
     // In economy mode a heavy keyword alone is NOT enough — we also require
     // either a sizable context or an unmistakable intent signal. This is the
     // single biggest cost-saver: keyword "audit" in a one-line question
@@ -606,7 +682,7 @@ function _routeModelCore(ctx: RoutingContext): RoutingDecision {
     const heavyKeywordCounts = !ctx.economyMode
         ? !!heavyMatch
         : !!heavyMatch && ctx.contextTokens > 400;
-    if (intentNeedsHeavy || heavyKeywordCounts || veryLargeContext || ctx.contextTokens > heavyCtxThreshold) {
+    if (intentNeedsHeavy || heavyKeywordCounts || veryLargeContext || multiTaskHeavy || ctx.contextTokens > heavyCtxThreshold) {
         const peak = veryLargeContext;
         const heavyId = peak ? HEAVY_MODEL_PEAK : HEAVY_MODEL_DEFAULT;
         if (!isModelBlacklisted(heavyId)) {
@@ -618,7 +694,9 @@ function _routeModelCore(ctx: RoutingContext): RoutingDecision {
                         ? `${ctx.detectedIntent} → analysis tier`
                         : heavyMatch
                             ? `analysis keyword '${heavyMatch[1].toLowerCase()}'`
-                            : `context >${heavyCtxThreshold} tokens`,
+                            : multiTaskHeavy
+                                ? `${subtasks} subtasks detected → multi-step reasoning`
+                                : `context >${heavyCtxThreshold} tokens`,
                 tier: 4,
                 autoSelected: true,
             };

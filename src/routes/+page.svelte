@@ -8643,6 +8643,23 @@ if (Test-Path $src) {
               cmdPlaceholder={ui.cmdPlaceholder} {getEffectiveModel} {getModelDescription}
               formatTokens={_formatTokens}
               briefMode={!!lucyConfig.briefMode}
+              smartRoutingEnabled={!!lucyConfig.smartRouting}
+              on:upgrademodel={() => {
+                  const _t = getTab(tab.id);
+                  if (!_t) return;
+                  // v1.4.5 — Heavy-prompt nudge upgrade action. Swap the
+                  // tab's selected model to a strong reasoner and log the
+                  // event so /loop-stats can correlate this with subsequent
+                  // task quality (telemetry for the routing logic).
+                  const _heavyTarget = 'claude-sonnet-4-6';
+                  _t.selectedModel = _heavyTarget;
+                  tabs = [...tabs];
+                  refresh();
+                  toast(isEN
+                      ? `✦ Switched to ${_heavyTarget} for this turn`
+                      : `✦ Cambiado a ${_heavyTarget} para este turno`,
+                      'info');
+              }}
               on:attach={() => attach(tab.id)}
               on:togglemic={() => toggleMic(tab.id)}
               on:clearsession={() => limpiarSesion(tab.id)}

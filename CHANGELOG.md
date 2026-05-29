@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.6] — 2026-05-29
+
+Two small productivity wins from the Caso 2 benchmark experience.
+**0 svelte-check warnings · 0 cargo warnings · 145 vitest tests (+11).**
+
+### Smart routing — better complexity detection
+
+- **Spanish + Portuguese heavy keywords** added to the analysis-intent
+  detector (`smart-router.ts`). Previously the HEAVY_RE list was mostly
+  English: "auditoría" / "auditoria" / "cumplimiento" / "vulnerabilidad" /
+  "diagnosticar" / "explica por qué" / "informe ejecutivo" / "reporte
+  para CISO" now route to Claude Sonnet automatically when smart-routing
+  is on. Fixes the silent gap where Spanish prompts hitting the same
+  semantic content stayed on Flash.
+- **Subtask density heuristic** — `subtaskCount(prompt)`. Counts comma-
+  /and-separated noun phrases containing SysAdmin nouns (patches,
+  software, ports, services, users, report, PDF, …). ≥4 distinct
+  subtasks → heavy tier (≥5 in economy mode). Catches structurally
+  complex prompts that don't happen to use a heavy keyword.
+- **`detectHeavyPrompt` exported helper** — used by the new UI nudge.
+  Returns a short reason string when a prompt is structurally heavy.
+
+### Heavy-prompt nudge — UI surface
+
+- **Inline nudge above the input** when the user is typing a heavy
+  prompt + has a fast model selected + smart-routing is OFF. Violet
+  banner says *"Prompt complejo detectado · 5 subtareas detectadas"*
+  with an `Upgrade →` button that swaps the tab to `claude-sonnet-4-6`.
+  Dismissible. Wired via the new `upgrademodel` event on ChatInput.
+  Fixes the recurring scenario where users hit Send on a multi-task
+  audit prompt with Flash and lose 90 s + $0.05 on a truncated result.
+
+### MCP inline enable/disable toggle
+
+- **iOS-style toggle on each registered MCP server** in the modal list.
+  Lets the user silence a noisy MCP catalog (e.g. github with 26 tools
+  cached) from the system prompt for a specific task without deleting
+  the server. Persisted via `mcp_server_upsert` (which already evicts
+  pool sessions on update). Optimistic UI — UI flips first, rolls back
+  on backend failure. Saves ~2-3 KB of system-prompt budget when only
+  one of several servers is needed.
+
+### Tests
+
+- 11 new vitest tests (4 multi-language routing, 2 subtask density,
+  5 `detectHeavyPrompt` UI helper).
+- 134 → 145 total.
+
+---
+
 ## [1.4.5] — 2026-05-29
 
 A stabilization release — four targeted fixes for issues surfaced during

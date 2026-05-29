@@ -12,6 +12,7 @@
     const localModels = _localModels as import('svelte/store').Writable<any[]>;
     const nvidiaModels = _nvidiaModels as import('svelte/store').Writable<any[]>;
     import { suggestFlags, applyFlagCompletion, type FlagSuggestion } from '$lib/flag-completions';
+    import { detectHeavyPrompt } from '$lib/smart-router';
 
     export let tab: any;
     export let isEN: boolean = false;
@@ -44,6 +45,7 @@
         togglebrief: void;
         togglepause: void;
         skipnexttool: void;
+        upgrademodel: void;
         removefile: { tabId: string; fileName: string };
         runchip: { clave: string };
         addchip: void;
@@ -88,6 +90,26 @@
         && !tab?.inputValue
         && !tab?.pendingMessage
         && !tab?.isProcessing;
+
+    // ── Heavy-prompt nudge (v1.4.5) ──
+    // When the user is typing a structurally complex prompt (audit,
+    // multi-task enumeration, large context) AND has a fast/cheap model
+    // selected AND smart-routing is OFF, show a non-intrusive suggestion
+    // chip offering to upgrade to a stronger reasoner. This is the bench-
+    // mark fix from Caso 2: users would otherwise hit Send on a long
+    // audit prompt with Flash and end up with a truncated/half-finished
+    // result. The nudge gives them a one-click upgrade BEFORE they pay
+    // the $ + time of a bad run.
+    export let smartRoutingEnabled: boolean = false;
+    $: _isFastModel = !!tab?.selectedModel && /^(gemini.*flash|gemini-3.*lite|claude-haiku|local-)/i.test(tab.selectedModel);
+    $: _heavyReason = (!smartRoutingEnabled && _isFastModel && tab?.inputValue)
+        ? detectHeavyPrompt(String(tab.inputValue), Math.ceil(String(tab.inputValue).length / 3.6))
+        : null;
+    let _nudgeDismissed = false;
+    function _dispatchUpgrade() {
+        dispatch('upgrademodel');
+        _nudgeDismissed = true;
+    }
 
     function autoResize() {
         if (!_textareaEl) return;
@@ -259,6 +281,27 @@
         <span class="pending-msg-text">{isEN ? 'Queued' : 'En espera'}: "{tab.pendingMessage.text.length > 50 ? tab.pendingMessage.text.slice(0, 50) + '…' : tab.pendingMessage.text}"</span>
         <button class="pending-msg-cancel" title={isEN ? 'Cancel queued message' : 'Cancelar mensaje en espera'}
             on:click={() => dispatch('cancelpending')}>✕</button>
+    </div>
+    {/if}
+
+    <!-- v1.4.5 — Heavy-prompt nudge. Surfaces ABOVE the input when the
+         user is on a fast model + smart-routing OFF + a structurally
+         heavy prompt was typed. One-click upgrade dispatched as
+         'upgrademodel' so the parent can swap the tab.selectedModel
+         to Sonnet (or whatever the appropriate heavy tier is). -->
+    {#if _heavyReason && !_nudgeDismissed}
+    <div class="heavy-nudge" role="status">
+        <span class="heavy-nudge-glyph">⚡</span>
+        <span class="heavy-nudge-text">
+            {isEN ? 'Complex prompt detected' : 'Prompt complejo detectado'}
+            <small>· {_heavyReason}</small>
+        </span>
+        <button class="heavy-nudge-act" on:click={_dispatchUpgrade}
+            title={isEN ? 'Switch to Claude Sonnet for better synthesis' : 'Cambiar a Claude Sonnet para mejor síntesis'}>
+            {isEN ? 'Upgrade →' : 'Mejorar →'}
+        </button>
+        <button class="heavy-nudge-x" on:click={() => _nudgeDismissed = true}
+            title={isEN ? 'Dismiss' : 'Descartar'} aria-label="Dismiss">✕</button>
     </div>
     {/if}
 
@@ -581,6 +624,17 @@
     :global(.sbtn-skip){width:28px;height:36px;background:rgba(59,158,255,.10);color:var(--blue, #3b9eff);}
     :global(.sbtn-skip:hover){background:rgba(59,158,255,.20);}
     :global(.pending-msg-bar){display:flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(251,191,36,.06);border-bottom:1px solid rgba(251,191,36,.15);border-radius:8px 8px 0 0;font-size:11px;color:#fbbf24;}
+    /* v1.4.5 — Heavy-prompt nudge. Sits above the input with a violet
+       accent so it doesn't compete with the amber pending-msg-bar. */
+    :global(.heavy-nudge){display:flex;align-items:center;gap:8px;padding:5px 12px;background:rgba(167,139,250,.07);border:1px solid rgba(167,139,250,.25);border-radius:8px 8px 0 0;font-size:11.5px;color:#c4b5fd;animation:hn-pop .22s cubic-bezier(.34,1.4,.64,1);}
+    :global(.heavy-nudge-glyph){font-size:13px;line-height:1;color:#a78bfa;}
+    :global(.heavy-nudge-text){flex:1;line-height:1.3;}
+    :global(.heavy-nudge-text small){opacity:.72;font-size:10.5px;margin-left:4px;}
+    :global(.heavy-nudge-act){background:rgba(167,139,250,.15);border:1px solid rgba(167,139,250,.35);color:#ddd6fe;font-family:inherit;font-size:11px;font-weight:600;padding:3px 9px;border-radius:5px;cursor:pointer;transition:.15s;}
+    :global(.heavy-nudge-act:hover){background:rgba(167,139,250,.28);border-color:rgba(167,139,250,.55);}
+    :global(.heavy-nudge-x){background:transparent;border:none;color:var(--txt3,#475569);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:3px;transition:.15s;}
+    :global(.heavy-nudge-x:hover){color:var(--txt2,#94a3b8);background:rgba(255,255,255,.05);}
+    @keyframes hn-pop{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:translateY(0);}}
     :global(.pending-msg-dot){width:6px;height:6px;border-radius:50%;background:#fbbf24;animation:pulse-pending 1.2s ease-in-out infinite;flex-shrink:0;}
     @keyframes pulse-pending{0%,100%{opacity:1}50%{opacity:.35}}
     :global(.pending-msg-text){flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85;}
