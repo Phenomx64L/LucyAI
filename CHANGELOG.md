@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.7] — 2026-05-29
+
+Single-rule hotfix for a recurring Caso 2 failure mode. **0 warnings.**
+
+### Fix — Lucy now anticipates her own elevation guardrail
+
+User-reported: on the audit prompt asking for `Get-WinEvent Security`
+(failed logins 4625), Lucy wrote a `generate_ciso_report.ps1` script
+and tried to execute it with `Start-Process powershell -ArgumentList
+"…" -Verb RunAs`. Lucy's own UAC-elevation guardrail correctly blocked
+the command (`SECURITY_BLOCK:<token>:-verb runas`) — but the result
+was the user not receiving the report at all, because Lucy didn't
+anticipate the block and had nothing else to fall back to.
+
+**Root cause**: Rule 2 in SafetyRulesSection only said "DO NOT auto-
+generate Start-Process RunAs … ask for confirmation". It didn't tell
+Lucy WHICH operations need admin, didn't warn that her elevation will
+be silently blocked, and didn't give her a recoverable strategy.
+
+**Fix** (`prompt_sections.rs`): rewrote Rule 2 with four operational
+subsections:
+
+  (a) **Recognize admin-only operations** explicitly — Get-WinEvent on
+      Security channel, wevtutil cl Security, Set/New-Service,
+      sc.exe create, HKLM write, %ProgramFiles%/%SystemRoot% write,
+      Get-Process -IncludeUserName, NetSecurity. Also lists what's
+      NOT admin: Get-Hotfix, Get-Service, Get-NetTCPConnection, HKCU.
+
+  (b) **Never emit `-Verb RunAs`** — it WILL be blocked, no UAC prompt
+      surfaces because Lucy isn't running interactively.
+
+  (c) **Split compound tasks into two phases** for audits asking for
+      both admin and non-admin data:
+      - Phase 1 (automatic): collect every non-admin section.
+      - Phase 2 (user-driven): emit ONE markdown ```powershell```
+        block with the admin command, prefixed by 'Para completar el
+        reporte, abre PowerShell como Administrador y pega esto:'.
+
+  (d) **Always deliver a partial report** in phase 1 — never withhold
+      what Lucy can produce. A report with 5 of 7 sections + a clear
+      admin command for the rest beats no report at all.
+
+Expected outcome on the Caso 2 audit prompt: Lucy now collects 5+ of
+7 sections (parches, software, puertos, servicios, sin admin) on the
+first try without hitting the guard, and emits the failed-logins
+command as a final copy-paste block for the user to run elevated.
+
+218 Rust tests · 145 vitest · 0 warnings.
+
+---
+
 ## [1.4.6] — 2026-05-29
 
 Two small productivity wins from the Caso 2 benchmark experience.
