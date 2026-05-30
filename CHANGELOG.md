@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.21] — 2026-05-30
+
+CSS deduplication continues — StatusBar extraction. Item 1 of 5 from
+the v1.4.20 migration backlog.
+
+### Shipped — StatusBar layout consolidated
+
+New `src/lib/styles/status-bar.css` is now the sole owner of every
+bottom-bar layout rule. Imported from `StatusBar.svelte` via
+`import '$lib/styles/status-bar.css'`. Contents:
+
+- `.bbar` container + `view-transition-name: lucy-footer`
+- `.bi` cell + variants (`.bi.r`, `.bi:last-child`)
+- Tier color helpers `.cok` `.cy` `.cr`
+- Model badge `.cm` (+ light-theme color override)
+- Language/engine selects `.lang-sel`, `.eng-sel`
+- Context window track + fill `.ctx-track`, `.ctx-fill`
+- Cost budget bar `.cost-budget-track`, `.cost-budget-fill` + tier bgs
+- v1.4.15 live cost ticker pulse `.cost-num`, `.cost-pulse` + reduced-motion
+- v1.4.16 density-fine slider `.density-fine-wrap` + range + thumbs
+- Per-model rate pill `.rate-pill` and all `.rate-*` children
+
+### Deletions
+
+- `src/routes/page.css` — `/* ── BOTTOM BAR ── */` block (23 selectors)
+  removed, replaced with a placeholder comment warning future devs
+  not to re-add those selectors here.
+- `src/routes/page.css` — orphan `.bbar { view-transition-name }` rule
+  near the view-transition section also removed (now lives next to
+  the rest of `.bbar` in status-bar.css).
+- `src/lib/StatusBar.svelte` `<style>` — emptied of layout rules
+  (only a placeholder comment remains).
+
+### Why this matters
+
+Same trap as tab-strip: every selector above existed in BOTH
+page.css (global) and StatusBar's scoped `<style>` (also global at
+runtime). page.css won the cascade tiebreaker. Any edit to the
+scoped block was silently overridden — e.g. the v1.4.16 cost-pulse
+`text-shadow` animation worked only because page.css didn't yet
+have a `.cost-pulse` rule; the moment someone adds one there, the
+StatusBar copy gets clobbered.
+
+`svelte-check`: 7178 files, 0 errors, 0 warnings.
+`vitest`: 159/159 pass.
+
+### Migration backlog progress
+
+| # | Component | Status |
+|---|---|---|
+| 1 | `StatusBar` → `status-bar.css` | **✅ v1.4.21** |
+| 2 | `NexShellView` → `nexshell.css` (`.bc-*` family) | next |
+| 3 | `ChatInput` → `composer-chips.css` | |
+| 4 | `ChatThread` → `chat-thread.css` | |
+| 5 | `DashboardView` → `dashboard-alerts.css` | |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.20 → 1.4.21)
+M  src-tauri/Cargo.toml                      (1.4.20 → 1.4.21)
+M  src-tauri/tauri.conf.json                 (1.4.20 → 1.4.21)
+A  src/lib/styles/status-bar.css             (NEW — single source of truth)
+M  src/lib/StatusBar.svelte                  (import + scoped <style> emptied)
+M  src/routes/page.css                       (BOTTOM BAR block deleted + view-transition orphan)
+M  src/lib/SetupOverlay.svelte               (1.4.20 → 1.4.21)
+M  src/lib/TutorialOverlay.svelte            (1.4.20 → 1.4.21)
+```
+
+---
+
 ## [1.4.20] — 2026-05-30
 
 Preventive chore release — closes the v1.4.19 lesson loop and audits

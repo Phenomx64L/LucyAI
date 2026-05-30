@@ -6,6 +6,10 @@
     import { densityMode, cycleDensityMode, densityFine, setDensityFine } from '$lib/density-mode';
     // v1.4.17 — LucyTooltip migration (replaces native title=).
     import LucyTooltip from '$lib/LucyTooltip.svelte';
+    // v1.4.21 — StatusBar layout CSS extracted to a single global stylesheet
+    // so the same duplicate-selector trap that bit the tab strip
+    // (v1.4.17 → v1.4.19) doesn't recur here.
+    import '$lib/styles/status-bar.css';
     import { getPricing, pricingLabel } from '$lib/model-pricing';
     import { getModelIcon } from '$lib/models.js';
     import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
@@ -247,86 +251,13 @@
 {/if}
 
 <style>
-    .bbar{display:flex;flex-direction:row;align-items:center;height:22px;background:#0b0d14;border-top:1px solid var(--bdr);padding:0 12px;font-size:10px;color:var(--txt3);flex-shrink:0;}
-    .bi{display:flex;align-items:center;gap:4px;padding-right:10px;margin-right:10px;border-right:1px solid var(--bdr);white-space:nowrap;}
-    .bi:last-child{border-right:none;margin-right:0;}
-    .bi.r{margin-left:auto;}
-    .cok{color:var(--acc);}.cy{color:var(--amber);}.cr{color:var(--red);}
-    .cm{color:#7dd3fc;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.2px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;}
-    :global(:root.light .cm){color:#0369a1;}
-    .cost-budget-track{display:inline-block;width:42px;height:3px;background:var(--bdr);border-radius:2px;margin-left:5px;vertical-align:middle;position:relative;overflow:hidden;}
-    .cost-budget-fill{position:absolute;left:0;top:0;height:100%;border-radius:2px;transition:width .4s ease;}
-    .cost-budget-fill.cok-bg{background:var(--acc);}
-    .cost-budget-fill.cy-bg{background:var(--amber);}
-    .cost-budget-fill.cr-bg{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.45);}
-    /* v1.4.16 — fine density slider. Narrow range input next to the
-       density pill; styled to match Lucy's footer rhythm. */
-    .density-fine-wrap{display:inline-flex;align-items:center;margin-left:4px;height:18px;}
-    .density-fine-range{
-        -webkit-appearance:none; appearance:none;
-        width:48px; height:3px;
-        background:var(--bdr); border-radius:2px;
-        cursor:pointer; outline:none;
-    }
-    .density-fine-range::-webkit-slider-thumb{
-        -webkit-appearance:none; appearance:none;
-        width:10px; height:10px; border-radius:50%;
-        background:var(--acc, #10b981);
-        border:none; cursor:pointer;
-        box-shadow:0 0 4px color-mix(in srgb, var(--acc,#10b981) 50%, transparent);
-    }
-    .density-fine-range::-moz-range-thumb{
-        width:10px; height:10px; border-radius:50%;
-        background:var(--acc, #10b981); border:none; cursor:pointer;
-    }
+    /* v1.4.21 — All static layout for the bottom bar lives in
+       $lib/styles/status-bar.css (imported from <script>). This file
+       is intentionally empty: every former rule here was a duplicate
+       of page.css, and page.css's copy silently won the cascade. The
+       layout file is now the single source of truth.
 
-    /* v1.4.15 — live cost ticker pulse. Tabular-nums so the rolling
-       digits don't reflow neighboring badges as they tween. */
-    .cost-num{font-variant-numeric: tabular-nums; transition: text-shadow .2s;}
-    .cost-pulse{text-shadow: 0 0 8px color-mix(in srgb, var(--acc, #10b981) 70%, transparent);}
-    @media (prefers-reduced-motion: reduce) {
-        .cost-pulse{ text-shadow: none; }
-    }
-    :global(:root:not(.light)) .bbar{border-top:1px solid var(--border-glass, var(--bdr))!important;}
-
-    /* ── Dynamic per-model rate pill ─────────────────────────────────────
-       Sits next to "Modelo:". Reactive — recomputes when the active tab
-       or its selected model changes, including the ::effort suffix. */
-    .rate-pill {
-        cursor: help;
-    }
-    .rate-pill .rate-val {
-        font-variant-numeric: tabular-nums;
-        color: var(--amber, #f59e0b);
-        font-weight: 600;
-    }
-    .rate-pill .rate-sep {
-        opacity: 0.45;
-        margin: 0 1px;
-    }
-    .rate-pill .rate-unit {
-        font-size: 9px;
-        opacity: 0.55;
-        margin-left: 2px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .rate-pill .rate-effort {
-        font-family: var(--font-mono);
-        font-size: 9px;
-        margin-left: 4px;
-        padding: 0 5px;
-        border-radius: 7px;
-        background: rgba(167, 139, 250, 0.10);
-        color: var(--purple, #a78bfa);
-        text-transform: uppercase;
-        letter-spacing: 0.4px;
-    }
-    .rate-pill.rate-free .rate-val {
-        color: var(--acc, #10b981);
-    }
-    .rate-pill .rate-free-tag {
-        font-weight: 600;
-        font-size: 10px;
-    }
+       If a future StatusBar-specific rule needs to be added (something
+       not in status-bar.css and not a duplicate elsewhere), put it
+       here. Otherwise edit status-bar.css. */
 </style>

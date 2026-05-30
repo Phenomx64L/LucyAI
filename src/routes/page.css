@@ -1512,28 +1512,11 @@ body[data-state="error"] .igrp{
 .panic-btn{color:#ef4444 !important;}
 .panic-btn:hover{color:#f87171 !important;background:rgba(239,68,68,.12) !important;}
 /* ── BOTTOM BAR ────────────────────────────── */
-.bbar{display:flex;flex-direction:row;align-items:center;height:22px;background:#0b0d14;border-top:1px solid var(--bdr);padding:0 12px;font-size:10px;color:var(--txt3);flex-shrink:0;}
-.lang-sel{background:transparent;border:none;color:var(--txt3);font-size:10px;font-family:inherit;cursor:pointer;outline:none;padding:0;margin-right:2px;}
-.lang-sel:hover{color:var(--txt2);}
-.lang-sel option{background:var(--bg3);color:var(--txt);font-size:12px;}
-.eng-sel{background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:4px;color:var(--acc);font-size:10px;font-family:var(--mono);cursor:pointer;outline:none;padding:1px 4px;}
-.eng-sel:hover{background:rgba(16,185,129,.12);}
-.eng-sel option{background:var(--bg3);color:var(--txt);}
-.bi{display:flex;align-items:center;gap:4px;padding-right:10px;margin-right:10px;border-right:1px solid var(--bdr);white-space:nowrap;}
-.bi:last-child{border-right:none;margin-right:0;}
-.bi.r{margin-left:auto;}
-.cok{color:var(--acc);}.cy{color:var(--amber);}.cr{color:var(--red);}
-/* Model badge in footer — uses blue accent so it's visually distinct from cost/stream */
-.cm{color:#7dd3fc;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.2px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;}
-:root.light .cm{color:#0369a1;}
-.ctx-track{display:inline-block;width:50px;height:3px;background:var(--bdr);border-radius:2px;margin:0 4px;vertical-align:middle;position:relative;overflow:hidden;}
-.ctx-fill{position:absolute;left:0;top:0;height:100%;background:var(--acc);border-radius:2px;transition:width .3s;}
-/* Budget progress bar inside footer "Cost:" cell */
-.cost-budget-track{display:inline-block;width:42px;height:3px;background:var(--bdr);border-radius:2px;margin-left:5px;vertical-align:middle;position:relative;overflow:hidden;}
-.cost-budget-fill{position:absolute;left:0;top:0;height:100%;border-radius:2px;transition:width .4s ease;}
-.cost-budget-fill.cok-bg{background:var(--acc);}
-.cost-budget-fill.cy-bg{background:var(--amber);}
-.cost-budget-fill.cr-bg{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.45);}
+/* v1.4.21 — extracted to src/lib/styles/status-bar.css, imported from
+   StatusBar.svelte. DO NOT add .bbar / .bi / .cok / .cy / .cr / .cm /
+   .ctx-* / .cost-budget-* / .lang-sel / .eng-sel / .density-fine-* /
+   .rate-pill selectors here — edit status-bar.css instead. Same
+   duplicate-trap rationale as the tab-strip extraction in v1.4.20. */
 /* ── Cost predictor chip (inline next to model badge) ── */
 .cost-predict{
   display:inline-flex;align-items:center;gap:5px;
@@ -2454,7 +2437,8 @@ body[data-state="error"] .igrp{
 /* Tag persistent UI chrome with view-transition-name so it animates independently
    from the main content area (avoids whole-screen flash). */
 .sidebar{view-transition-name: lucy-sidebar;}
-.bbar{view-transition-name: lucy-footer;}
+/* v1.4.21 — .bbar view-transition-name moved to status-bar.css alongside
+   the rest of .bbar's rules (was: .bbar{view-transition-name: lucy-footer;}). */
 .tabs-bar{view-transition-name: lucy-tabs;}
 ::view-transition-old(lucy-sidebar),
 ::view-transition-new(lucy-sidebar),
