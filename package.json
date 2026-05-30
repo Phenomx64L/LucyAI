@@ -1,6 +1,6 @@
 {
   "name": "lucy-svelte",
-  "version": "1.4.11",
+  "version": "1.4.12",
   "description": "Lucy — Autonomous SysAdmin AI Assistant (Tauri + Svelte + Rust)",
   "type": "module",
   "scripts": {
@@ -28,10 +28,10 @@
     "highlight.js": "^11.11.1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
-    "lucide-svelte": "^1.0.1",
     "marked": "^17.0.4",
     "shiki": "^4.1.0",
-    "svelte-sonner": "^1.1.1"
+    "svelte-sonner": "^1.1.1",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",

@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.12] — 2026-05-29
+
+Frontend sprint — Day 3 (parts 1 + 3). **220 Rust · 159 vitest (+14) ·
+0 svelte-check warnings.**
+
+### fzf-style fuzzy matcher for the command palette
+
+- `cmdk-sv@0.0.19` is at an early version and isn't Svelte-5 compatible;
+  the cleaner path was to ship the algorithm wins without the component
+  migration risk.
+- New `$lib/fuzzy-match` exports `fuzzyScore(query, candidate)` and
+  `fuzzyFilter(items, query, getText)`. fzf-inspired heuristics:
+  - **Subsequence-required**: all query chars must appear in order
+    in the candidate; non-matches return `-Infinity` (rejected).
+  - **Boundary bonus** (+20) — matches at start-of-word, after
+    delimiters (`-`, `_`, ` `, `/`, `.`), or at CamelCase boundaries.
+  - **First-char bonus** (+10) — matches at index 0.
+  - **Consecutive bonus** (+15) — adjacent matched chars.
+  - **Gap penalty** (−1 per skipped char) — prefers dense matches.
+  - **Contiguous substring bonus** (+30) — whole query appears as a
+    consecutive run anywhere in the candidate.
+  - **Smart-case** — if the query has any uppercase, matching is
+    case-sensitive (à la rg/fzf); otherwise case-insensitive.
+- `CommandPalette.svelte` swapped the substring filter for
+  `fuzzyFilter` — same visual layout, search now ranks the way Linear
+  / Vercel / Cursor do. Search across `label + cat + hint` joined.
+- 14 unit tests cover all the heuristics + ties / smart-case /
+  CamelCase / subsequence rejection.
+
+### uPlot wrapper component
+
+- New `$lib/UPlotChart.svelte` for fast canvas-based time-series. uPlot
+  renders 100k points at 60fps — leagues beyond the existing SVG
+  sparkline path for big datasets.
+- Designed to coexist: **the existing SVG sparklines in DashboardView
+  stay** because they're better at <60 points (uPlot's canvas overhead
+  doesn't amortize for tiny series). The wrapper is available for
+  future Capacity Planning, Memory Browser stats, replay timelines
+  where the dataset is genuinely large.
+- Props: `data` (uPlot AlignedData), `series`, `width`, `height`,
+  `theme` (`dark` matches Lucy palette, `light` available), `minimal`
+  for axisless presentation. Built-in crosshair + tooltip + shift-drag
+  to zoom x-axis.
+
+### Cleanup — removed unused deps
+
+- **lucide-svelte uninstalled** — was in package.json but had zero
+  references in the codebase. Tabler icons (`@tabler/icons-svelte`)
+  are used consistently everywhere; adding a second icon library was
+  bloat without value.
+- **cmdk-sv uninstalled** — installed and removed in the same session.
+  Early v0.0.19 isn't Svelte 5 compatible. The fuzzy-match module
+  above delivers the search-ranking win that was the goal.
+
+### Frontend Day 2 (bits-ui modal migration) still pending
+
+- Day 2 needs its own session because bits-ui adoption is a multi-file
+  refactor touching 5+ modals. Lucy's modals work and are
+  visually polished — the win from migration is accessibility +
+  keyboard nav + portal correctness, not visual.
+
+---
+
 ## [1.4.11] — 2026-05-29
 
 Frontend sprint — Day 1. Three drop-in upgrades that improve perceived

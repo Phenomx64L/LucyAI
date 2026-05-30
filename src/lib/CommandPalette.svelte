@@ -7,6 +7,10 @@
 <script>
     import { tick } from 'svelte';
     import { focusTrap } from '$lib/actions';
+    // v1.4.12 — fzf-style fuzzy matcher upgrades the substring filter
+    // below. Same look, much better ranking (boundary > mid-word,
+    // contiguous > scattered, consecutive > sparse).
+    import { fuzzyFilter } from '$lib/fuzzy-match';
 
     /**
      * Full unfiltered list of palette items.
@@ -20,14 +24,15 @@
     let query = '';
     let idx   = 0;
 
-    $: filtered = (() => {
-        const q = query.toLowerCase().trim();
-        return q
-            ? allItems.filter(i =>
-                i.label.toLowerCase().includes(q) ||
-                i.cat.toLowerCase().includes(q))
-            : allItems;
-    })();
+    // v1.4.12 — fuzzy match over `label cat hint` joined. The fzf-style
+    // scorer ranks by boundary matches + contiguous runs + consecutive
+    // chars (see fuzzy-match.ts). Empty query returns the full list
+    // unchanged (preserves caller's intended order, e.g. recent first).
+    $: filtered = fuzzyFilter(
+        allItems,
+        query.trim(),
+        (i) => `${i.label} ${i.cat} ${i.hint || ''}`,
+    );
 
     // Reset state and focus the search input each time the palette opens
     $: if (show) {
