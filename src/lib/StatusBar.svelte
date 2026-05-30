@@ -4,6 +4,8 @@
     import StatusOrb from '$lib/StatusOrb.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
     import { densityMode, cycleDensityMode, densityFine, setDensityFine } from '$lib/density-mode';
+    // v1.4.17 — LucyTooltip migration (replaces native title=).
+    import LucyTooltip from '$lib/LucyTooltip.svelte';
     import { getPricing, pricingLabel } from '$lib/model-pricing';
     import { getModelIcon } from '$lib/models.js';
     import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
@@ -110,32 +112,32 @@
     <div class="bi"><span>Host:</span><span style="color:#0f7b5a;">{lucyConfig.name} · {hostName}</span></div>
     {/if}
 
-    <!-- U6 — Density mode pill: click to cycle focus → explore → war-room -->
-    <button class="density-pill"
-            on:click={cycleDensityMode}
-            title={isEN
-                ? `Density: ${$densityMode}. Click to cycle. Ctrl+1=Focus, Ctrl+2=Explore, Ctrl+3=War Room.`
-                : `Densidad: ${$densityMode}. Click para alternar. Ctrl+1=Focus, Ctrl+2=Explore, Ctrl+3=War Room.`}>
-        <span class="density-glyph">
-            {$densityMode === 'focus'    ? '◉' :
-             $densityMode === 'war-room' ? '▦' : '◫'}
-        </span>
-        <span>{$densityMode === 'war-room' ? 'WAR' : $densityMode.toUpperCase()}</span>
-    </button>
+    <!-- U6 — Density mode pill: click to cycle focus → explore → war-room
+         v1.4.17 — wrapped in LucyTooltip (replaces native title=); now
+         shows on keyboard focus too, with a 350ms delay token. -->
+    <LucyTooltip text={isEN
+            ? `Density: ${$densityMode}. Click to cycle. Ctrl+1=Focus, Ctrl+2=Explore, Ctrl+3=War Room.`
+            : `Densidad: ${$densityMode}. Click para alternar. Ctrl+1=Focus, Ctrl+2=Explore, Ctrl+3=War Room.`}>
+        <button class="density-pill" on:click={cycleDensityMode}>
+            <span class="density-glyph">
+                {$densityMode === 'focus'    ? '◉' :
+                 $densityMode === 'war-room' ? '▦' : '◫'}
+            </span>
+            <span>{$densityMode === 'war-room' ? 'WAR' : $densityMode.toUpperCase()}</span>
+        </button>
+    </LucyTooltip>
 
-    <!-- v1.4.16 — fine-grained density slider. Orthogonal to the 3-mode
-         pill: tweaks --density-fine (0..1) globally so the user can dial
-         in just a bit more breathing room inside any mode without losing
-         their preset. Bound to the densityFine store. -->
-    <label class="density-fine-wrap"
-           title={isEN
-               ? 'Fine density (0 = tighter, 1 = roomier). Stacks on top of the mode preset.'
-               : 'Densidad fina (0 = más compacto, 1 = más espacioso). Se suma al modo elegido.'}>
-        <input type="range" min="0" max="1" step="0.05"
-               class="density-fine-range"
-               value={$densityFine}
-               on:input={(e) => setDensityFine(parseFloat(e.currentTarget.value))} />
-    </label>
+    <!-- v1.4.16 — fine-grained density slider. v1.4.17 — LucyTooltip. -->
+    <LucyTooltip text={isEN
+            ? 'Fine density (0 = tighter, 1 = roomier). Stacks on top of the mode preset.'
+            : 'Densidad fina (0 = más compacto, 1 = más espacioso). Se suma al modo elegido.'}>
+        <label class="density-fine-wrap">
+            <input type="range" min="0" max="1" step="0.05"
+                   class="density-fine-range"
+                   value={$densityFine}
+                   on:input={(e) => setDensityFine(parseFloat(e.currentTarget.value))} />
+        </label>
+    </LucyTooltip>
 
     {#if activeTab}
         {@const _model = getEffectiveModel(activeTab)}

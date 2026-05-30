@@ -350,13 +350,25 @@
     .brand{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--acc);letter-spacing:1px;margin-right:8px;flex-shrink:0;cursor:pointer;opacity:1;transition:opacity .15s;-webkit-app-region:no-drag;}
     .brand:hover{opacity:.75;}
     .bdot{width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 6px rgba(16,185,129,0.5);}
-    .tabs-area{display:flex;align-items:flex-end;max-width:480px;min-width:0;height:38px;position:relative;}
-    :global(#tabs-list){display:flex;gap:1px;flex:1;max-width:480px;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
+    /* v1.4.17 — Tab strip width fix. The 480px max-width was an early-Lucy
+       holdover from when the topbar shared space with a huge brand block;
+       today it just squeezes 3 tabs into thumbnail-sized chips even on a
+       1920px screen (user-reported visual bug). We now let .tabs-area
+       flex to fill all available space between the brand on the left and
+       the +/≡ controls on the right. The container still scrolls
+       horizontally when many tabs exceed the viewport. */
+    .tabs-area{display:flex;align-items:flex-end;flex:1 1 auto;min-width:0;height:38px;position:relative;}
+    :global(#tabs-list){display:flex;gap:1px;flex:1 1 auto;width:100%;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
     :global(#tabs-list::-webkit-scrollbar){display:none;}
-    :global(.tab){display:flex;align-items:center;gap:6px;padding:0 12px;height:34px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
+    /* v1.4.17 — Individual tabs grow a bit more (min 120px) so a title
+       like "Necesito un informe ejecutivo…" reads with at least a few
+       words before ellipsis, while still allowing many tabs to coexist. */
+    :global(.tab){display:flex;align-items:center;gap:6px;padding:0 14px;height:34px;min-width:120px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
     :global(.tab:hover){background:rgba(255,255,255,0.03);color:#94a3b8;}
     :global(.tab.active){background:var(--bg2);color:var(--acc);border-color:var(--bdr);border-top:2px solid var(--acc);}
-    :global(.tab-title-txt){max-width:170px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
+    /* v1.4.17 — title cap raised 170 → 240 so common Spanish tab titles
+       like "Necesito un informe ejecutivo…" don't ellipsis after 3 words. */
+    :global(.tab-title-txt){max-width:240px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
     :global(.tab-rename-input){background:rgba(0,0,0,.4);border:1px solid var(--acc-b);border-radius:3px;color:var(--acc);font-size:12px;font-family:inherit;padding:1px 5px;width:110px;outline:none;-webkit-app-region:no-drag;}
     :global(.tdot){width:6px;height:6px;border-radius:50%;background:var(--purple);opacity:.6;flex-shrink:0;transition:background .2s, box-shadow .2s, opacity .2s;}
     /* Quick-win A — Status dot variants. Idle stays purple (default),

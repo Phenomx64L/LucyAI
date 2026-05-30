@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.17] — 2026-05-30
+
+User-reported tab-strip width fix + first LucyTooltip consumers.
+
+### Fix — Tab strip squeezed at 480px
+
+User report (screenshot): with 3 short tabs open at 1920px, each tab
+chip was compressed to ~110px wide showing only "Archivo", "Necesito un
+informe ejecutiv…", "Ayuda" with aggressive ellipsis, and the entire
+strip was clamped to the leftmost ~480px of the topbar — leaving a
+huge empty drag region on the right.
+
+**Root cause**: `TabBar.svelte` had `max-width: 480px` hardcoded on both
+`.tabs-area` and `#tabs-list`. This was a leftover from early Lucy when
+the topbar shared space with a much bigger brand block.
+
+**Fix**:
+- `.tabs-area`: `max-width: 480px` → `flex: 1 1 auto`. Lets the strip
+  grow into all space between the LUCY brand and the +/≡ controls.
+- `#tabs-list`: same `flex: 1 1 auto`, `width: 100%`.
+- `.tab`: `padding: 0 12px` → `0 14px`, added `min-width: 120px` so an
+  individual tab gives titles room to breathe.
+- `.tab-title-txt`: ellipsis cap `170px` → `240px` so Spanish titles
+  like "Necesito un informe ejecutivo…" don't chop after three words.
+
+Horizontal scroll on overflow is preserved — the `overflow-x: auto` +
+hidden scrollbar trick still works when many tabs exceed the viewport.
+
+### Shipped — Tooltip wrapper consumers
+
+- `StatusBar.density-pill` and `density-fine-range` slider now wrapped
+  in `LucyTooltip` (replaces native `title=`). Visible payoff: tooltip
+  shows on **keyboard focus** (native title= is hover-only), respects
+  the 350ms delay token, and renders via Portal so it's never clipped
+  by `.bbar`'s overflow.
+
+### Deferred (intentionally)
+
+- Tab row right-click context menu via LucyDropdown — needs a proper
+  ContextMenu primitive (not DropdownMenu), the row layout isn't a
+  flat `<button>` list which would conflict with `LucyDropdown`'s
+  auto-styling. Punted to v1.4.18 along with a new `LucyContextMenu`
+  wrapper.
+- Model picker → LucyCombobox migration — there's no standalone model
+  picker component to migrate; `/model` is a slash command. The
+  wrapper will land its first consumer when we build the in-chat
+  model switcher chip planned for v1.4.18.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.16 → 1.4.17)
+M  src-tauri/Cargo.toml                      (1.4.16 → 1.4.17)
+M  src-tauri/tauri.conf.json                 (1.4.16 → 1.4.17)
+M  src/lib/TabBar.svelte                     (width fix)
+M  src/lib/StatusBar.svelte                  (LucyTooltip on density pill/slider)
+M  src/lib/SetupOverlay.svelte               (1.4.16 → 1.4.17)
+M  src/lib/TutorialOverlay.svelte            (1.4.16 → 1.4.17)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.4.16] — 2026-05-30
 
 UI/UX mega-release #2 — closes the v1.4.15 deferred list. **0 warnings, 159/159 vitest pass.**
