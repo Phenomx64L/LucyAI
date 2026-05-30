@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.25] — 2026-05-30
+
+CSS dedup migration backlog **CLOSED** — DashboardView alerts extracted.
+5 of 5 high-risk component clusters consolidated.
+
+### Shipped — `.alert-*` family consolidated
+
+New `src/lib/styles/dashboard-alerts.css` owns the dashboard's
+proactive alert system:
+
+- `.alert-bar` — pulsing red header with `box-shadow` glow + the
+  `alert-glow` `@keyframes`
+- `.alert-item` + `.alert-item-ico` — per-row layout
+- `.alert-dismiss` — × button with light-theme color override
+- `.alert-badge-btn` — compact red-circle counter for collapsed icons
+
+Imported from `DashboardView.svelte` via
+`import '$lib/styles/dashboard-alerts.css'`.
+
+### Drift handled
+
+The two copies had drifted in interesting ways:
+
+- `page.css .alert-bar`: simpler block with `rgba(255,68,68,.07)` and
+  no box-shadow or animation.
+- `DashboardView.svelte .alert-bar`: upgraded v1.3.x version with
+  `rgba(239,68,68,.07)`, pulsing `box-shadow`, and the `alert-glow`
+  keyframe.
+
+Because DashboardView's copy was a plain scoped rule (no `:global(...)`
+wrapper), Svelte added its class-hash suffix → higher specificity than
+page.css's plain rule. So the **fancy glowing version was actually
+rendering** despite page.css's older copy still being there. We
+consolidated using the upgraded values — visual output unchanged.
+
+### Migration backlog — FINAL
+
+| # | Component | Status |
+|---|---|---|
+| 1 | `StatusBar` → `status-bar.css` | ✅ v1.4.21 |
+| 2 | `NexShellView` → `nexshell.css` (`.bc-*`) | ✅ v1.4.22 |
+| 3 | `ChatInput` → `composer.css` | ✅ v1.4.23 |
+| 4 | `ChatThread` → `chat-thread.css` | ✅ v1.4.24 |
+| 5 | `DashboardView` → `dashboard-alerts.css` | ✅ **v1.4.25** |
+
+### Audit re-run
+
+After v1.4.25, `docs/css-duplicates-audit.md` regenerated. Before
+the dedup sprint (pre-v1.4.20):
+
+- 493 selectors in page.css
+- 232 duplicates
+- 220 single-component (high-risk)
+
+After v1.4.25:
+
+- **391 selectors in page.css** (102 removed, -21%)
+- **136 duplicates remaining** (-41% from 232)
+- **124 single-component** (-44% from 220)
+
+The remaining 124 single-component duplicates are smaller surfaces
+(MemoryBrowserView, ReplayBrowserView, AuditTrailView, etc.). These
+are lower-stakes than the five top targets we just closed and will
+be migrated opportunistically in future surface-level work rather
+than as a dedicated sprint. The audit doc lists them by component
+with counts so the next migration step is documented when needed.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.24 → 1.4.25)
+M  src-tauri/Cargo.toml                      (1.4.24 → 1.4.25)
+M  src-tauri/tauri.conf.json                 (1.4.24 → 1.4.25)
+A  src/lib/styles/dashboard-alerts.css       (NEW — 6 selectors + keyframe + light theme)
+M  src/lib/DashboardView.svelte              (import added; .alert-* block trimmed)
+M  src/routes/page.css                       (.alert-* block deleted)
+M  docs/css-duplicates-audit.md              (regenerated with v1.4.25 state)
+M  src/lib/SetupOverlay.svelte               (1.4.24 → 1.4.25)
+M  src/lib/TutorialOverlay.svelte            (1.4.24 → 1.4.25)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+### Lessons from the 5-release sprint
+
+1. **Two CSS sources of truth is one too many.** The split between
+   `page.css` (consolidated global) and component scoped `<style>`
+   blocks let drift accumulate silently for years. Every component
+   we touched had at least one selector where the two copies had
+   diverged.
+2. **page.css wins the cascade tiebreaker** when both copies use
+   the same specificity (plain class selectors). Component scoped
+   blocks win when Svelte's class-hash boosts their specificity.
+   The cascade outcome is therefore not obvious from reading the
+   source.
+3. **A grep before every CSS edit** would have caught the
+   v1.4.17 → v1.4.19 tab-strip fiasco in seconds. Mandatory now.
+4. **Single-import .css modules** beat scoped `<style>` for any
+   layout that's not truly component-private. The wrapper pattern
+   (`import '$lib/styles/<feature>.css'` at the top of `<script>`)
+   is cheap to apply and impossible to "duplicate over" later.
+
+---
+
 ## [1.4.24] — 2026-05-30
 
 CSS dedup continues — ChatThread message bubbles. Item 4 of 5 from

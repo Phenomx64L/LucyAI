@@ -1514,13 +1514,12 @@ body.density-compact .chat{gap:2px !important;}
 /* ── SPARKLINES ──────────────────────────────── */
 .dc-sparkline{opacity:.85;flex-shrink:0;align-self:flex-end;margin-bottom:2px;}
 
-/* ── ALERTAS PROACTIVAS ──────────────────────── */
-.alert-bar{background:rgba(255,68,68,.07);border-bottom:1px solid rgba(255,68,68,.18);padding:6px 14px;flex-shrink:0;}
-.alert-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt2);padding:3px 0;}
-.alert-item-ico{flex-shrink:0;}
-.alert-dismiss{background:none;border:none;color:#3a2a2a;cursor:pointer;font-size:13px;margin-left:auto;padding:0 4px;line-height:1;flex-shrink:0;}
-.alert-dismiss:hover{color:var(--red);}
-.alert-badge-btn{position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;font-size:9px;font-weight:700;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;line-height:1;}
+/* v1.4.25 — .alert-* family moved to src/lib/styles/dashboard-alerts.css,
+   imported from DashboardView.svelte. The values here were the older
+   simpler ones (rgba(255,68,68,.07), no box-shadow/animation);
+   DashboardView's scoped <style> had the v1.3.x upgrade with pulsing
+   glow which was winning the cascade. Consolidated file uses the
+   upgraded version. */
 
 /* ── TAGS DE HOSTS ───────────────────────────── */
 .sb-tag-chips{display:flex;flex-wrap:wrap;gap:4px;padding:4px 10px 8px;}

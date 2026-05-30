@@ -1,4 +1,7 @@
 <script>
+    // v1.4.25 — alert family extracted to a single global stylesheet.
+    // Closes the v1.4.20 CSS-dedup migration backlog (5/5).
+    import '$lib/styles/dashboard-alerts.css';
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { countUp } from '$lib/actions';
@@ -1094,7 +1097,7 @@
     .proc-table tr:last-child td{border-bottom:none;}
 
     /* ── Alerts ────────────────────────────────────── */
-    .alert-bar{background:rgba(239,68,68,.07);border-bottom:1px solid rgba(239,68,68,.18);padding:6px 14px;flex-shrink:0;box-shadow:0 2px 12px rgba(239,68,68,.06);animation:alert-glow 2s ease-in-out infinite;}
+    /* v1.4.25 — .alert-bar moved to src/lib/styles/dashboard-alerts.css. */
     /* Sprint C D15 — Open incidents banner (amber, less urgent than active alerts) */
     .dc-incidents-banner {
         display: flex; align-items: center; gap: 10px;
@@ -1178,12 +1181,8 @@
         margin-left: 6px; vertical-align: middle;
         cursor: help;
     }
-    @keyframes alert-glow{0%,100%{box-shadow:0 2px 12px rgba(239,68,68,.06);}50%{box-shadow:0 2px 16px rgba(239,68,68,.12);}}
-    .alert-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txt2);padding:3px 0;}
-    .alert-item-ico{flex-shrink:0;}
-    .alert-dismiss{background:none;border:none;color:#3a2a2a;cursor:pointer;font-size:13px;margin-left:auto;padding:0 4px;line-height:1;flex-shrink:0;}
-    .alert-dismiss:hover{color:var(--red);}
-    .alert-badge-btn{position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;font-size:9px;font-weight:700;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;line-height:1;}
+    /* v1.4.25 — @keyframes alert-glow, .alert-item, .alert-item-ico,
+       .alert-dismiss, .alert-badge-btn moved to dashboard-alerts.css. */
 
     /* ── Skeleton loaders ──────────────────────────── */
     @keyframes sk-shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
@@ -1208,7 +1207,7 @@
     :global(:root.light) .ds-title{color:var(--txt2);}
     :global(:root.light) .disk-size{color:var(--txt2);}
     :global(:root.light) .proc-table th{color:var(--txt2);background:var(--bg3);}
-    :global(:root.light) .alert-dismiss{color:var(--red);}
+    /* v1.4.25 — :root.light .alert-dismiss override moved to dashboard-alerts.css. */
 
     /* ── Anomaly detection badge ──────────────────────────────────────── */
     .anomaly-badge {

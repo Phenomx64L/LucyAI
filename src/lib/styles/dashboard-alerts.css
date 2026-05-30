@@ -1,0 +1,87 @@
+/* ── dashboard-alerts.css (v1.4.25) ──────────────────────────────────────
+   Single source of truth for the dashboard's alert system: the proactive
+   alert bar (`.alert-bar` with pulsing glow), per-item rows (`.alert-item`,
+   `.alert-item-ico`, `.alert-dismiss`), and the floating badge counter
+   (`.alert-badge-btn`).
+
+   Extracted from two competing locations in v1.4.25:
+     1. src/routes/page.css lines 1517-1523 — the original simpler block
+        without box-shadow / glow animation
+     2. src/lib/DashboardView.svelte scoped <style> — the v1.3.x
+        upgrade with rgba(239,68,68) (more saturated red), pulsing
+        box-shadow, and the alert-glow keyframe
+
+   Behavioral note: DashboardView's scoped versions used Svelte's
+   class-hash suffix so they had higher specificity than page.css's
+   plain rules, meaning the fancier glowing version was actually
+   rendering when DashboardView mounted. We consolidate using the
+   DashboardView values to preserve that visual.
+
+   Last item from the v1.4.20 CSS-dedup migration backlog. With this
+   file in place, the five high-risk component CSS clusters
+   (tab-strip, status-bar, nexshell, composer, chat-thread,
+   dashboard-alerts) are all owned by single files imported from
+   their respective components.
+   ─────────────────────────────────────────────────────────────────── */
+
+/* Proactive alert bar — pulsing red header that appears above the
+   dashboard when active alerts exist. */
+.alert-bar {
+    background: rgba(239, 68, 68, .07);
+    border-bottom: 1px solid rgba(239, 68, 68, .18);
+    padding: 6px 14px;
+    flex-shrink: 0;
+    box-shadow: 0 2px 12px rgba(239, 68, 68, .06);
+    animation: alert-glow 2s ease-in-out infinite;
+}
+@keyframes alert-glow {
+    0%, 100% { box-shadow: 0 2px 12px rgba(239, 68, 68, .06); }
+    50%      { box-shadow: 0 2px 16px rgba(239, 68, 68, .12); }
+}
+
+/* Per-row alert inside the bar. */
+.alert-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--txt2);
+    padding: 3px 0;
+}
+.alert-item-ico { flex-shrink: 0; }
+
+/* Dismiss button — right-aligned ×. Faint by default, red on hover. */
+.alert-dismiss {
+    background: none;
+    border: none;
+    color: #3a2a2a;
+    cursor: pointer;
+    font-size: 13px;
+    margin-left: auto;
+    padding: 0 4px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.alert-dismiss:hover { color: var(--red); }
+
+/* Light-mode override — without this the .alert-dismiss color is unreadable
+   on a light background. */
+:root.light .alert-dismiss { color: var(--red); }
+
+/* Compact red-circle badge with a count — used on collapsed sidebar
+   icons to show alert pressure at a glance. */
+.alert-badge-btn {
+    position: absolute;
+    top: -4px; right: -4px;
+    background: var(--red);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    border-radius: 50%;
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
