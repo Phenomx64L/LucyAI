@@ -58,7 +58,13 @@ pub fn spawn_background_maintenance() {
     let events_days: i64 = std::env::var("LUCY_DB_RETENTION_EVENTS_DAYS")
         .ok().and_then(|s| s.parse().ok()).unwrap_or(90);
 
-    tokio::spawn(async move {
+    // v1.4.14 fix — use Tauri's async_runtime::spawn instead of tokio::spawn.
+    // `spawn_background_maintenance` is called from inside tauri::Builder
+    // ::setup(), which runs BEFORE the tokio reactor is fully initialized
+    // for direct tokio::spawn use. Tauri's async_runtime::spawn is safe in
+    // that window — it wraps tokio under the hood but uses a runtime
+    // handle that's available throughout the setup phase.
+    tauri::async_runtime::spawn(async move {
         // First run AFTER 5 minutes — let the app finish booting before
         // we touch the DB. Subsequent runs hit the configured interval.
         let mut tick = interval(Duration::from_secs(interval_secs));

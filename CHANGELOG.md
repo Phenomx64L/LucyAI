@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.14] — 2026-05-29
+
+Hotfix — Lucy wouldn't boot in v1.4.10-v1.4.13. **0 warnings.**
+
+### Fix — db_maintenance panicked on app start
+
+User reported the dev build crashing immediately with:
+
+```
+thread 'main' panicked at src\commands\db_maintenance.rs:61:5:
+there is no reactor running, must be called from the context of
+a Tokio 1.x runtime
+```
+
+**Root cause**: `db_maintenance::spawn_background_maintenance()` is
+invoked from inside the `tauri::Builder::setup(|app| { ... })`
+closure (added in v1.4.10). The setup closure runs DURING Tauri's
+initialization, BEFORE the tokio reactor handle that bare
+`tokio::spawn` requires is fully wired into the thread-local
+runtime context.
+
+**Fix**: replaced `tokio::spawn` with `tauri::async_runtime::spawn`,
+which wraps the same tokio runtime but uses a handle Tauri makes
+available throughout the setup phase. The spawned task body
+(`tokio::time::interval` + `tokio::time::sleep` calls inside it) is
+unchanged — those work fine once the task is actually scheduled on
+the runtime, regardless of which spawn helper enqueued it.
+
+No behavior change vs the intended v1.4.10 design: the background
+maintenance task still runs, still delays its first pass by 5
+minutes, still iterates at the configured interval. The bug was
+purely a "couldn't start the task in the first place" panic that
+hit anyone who pulled v1.4.10 or later.
+
+220 Rust tests · 159 vitest · 0 svelte-check warnings.
+
+---
+
 ## [1.4.13] — 2026-05-29
 
 Frontend sprint — Day 2 (proof-of-concept). Two modals migrated to
