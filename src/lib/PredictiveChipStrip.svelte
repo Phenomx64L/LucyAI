@@ -13,6 +13,9 @@
     import { fly, fade } from 'svelte/transition';
     import { dismissChip, isDismissed, recordChipDismiss } from '$lib/predictive-chips';
     import type { PredictiveChip } from '$lib/predictive-chips';
+    // v1.4.11 — auto-animate provides FLIP transitions when chips swap
+    // (LLM layer arrives ~600ms after heuristic, replacing some chips).
+    import { autoAnimate } from '$lib/actions/autoAnimate';
 
     export let chips: PredictiveChip[] = [];
 
@@ -46,7 +49,7 @@
 </script>
 
 {#if visibleChips.length > 0}
-    <div class="chip-strip" role="region" aria-label="Suggested next actions">
+    <div class="chip-strip" role="region" aria-label="Suggested next actions" use:autoAnimate>
         {#each visibleChips as chip, i (chip.id)}
             <!-- Use div+role="button" so we can nest a dismiss control (HTML disallows button-in-button) -->
             <div class="pchip pchip-{chip.severity || 'info'}"

@@ -18,6 +18,7 @@
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
   import { createEventDispatcher, onMount } from 'svelte';
+  import { autoAnimate } from '$lib/actions/autoAnimate';
   import { invoke } from '@tauri-apps/api/core';
   import ConfirmModal from '$lib/ConfirmModal.svelte';
 
@@ -385,7 +386,7 @@
         {:else if servers.length === 0}
           <div class="empty">{T.noServers}</div>
         {:else}
-          <ul class="srv-list">
+          <ul class="srv-list" use:autoAnimate>
             {#each servers as s (s.name)}
               <li class="srv">
                 <div class="srv-head">

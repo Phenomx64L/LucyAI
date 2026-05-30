@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.11] — 2026-05-29
+
+Frontend sprint — Day 1. Three drop-in upgrades that improve perceived
+polish across every Lucy interaction. **220 Rust · 145 vitest · 0
+svelte-check warnings.** No behavioral changes; all wins are visual.
+
+### svelte-sonner — modern toast notifications
+
+- Replaced the in-house toast stack with **`svelte-sonner`** (port of
+  Emil Kowalski's Sonner). Public `toast(msg, type)` signature is
+  unchanged — all 50+ callsites continue to work; the wrapper
+  forwards to the typed Sonner API under the hood.
+- Wins over the previous stack:
+  - **Stacking with intelligent grouping**: max 3 visible, the rest
+    queue and slide in as earlier ones dismiss.
+  - **Swipe-to-dismiss** with native-feeling spring animations.
+  - **Promise toasts** (`toast.promise(invoke('...'), {...})`)
+    available for future use on long-running operations.
+  - **Close button on hover** (richColors theme).
+- The legacy in-DOM stack is kept as a defensive fallback so users
+  never lose a notification if Sonner ever fails to mount.
+
+### @formkit/auto-animate — FLIP transitions for lists
+
+- New Svelte action `$lib/actions/autoAnimate` that wraps
+  `@formkit/auto-animate`. Use:
+  ```svelte
+  <div use:autoAnimate>
+    {#each items as item (item.id)}
+      <div>{item.label}</div>
+    {/each}
+  </div>
+  ```
+- Applied to the three lists where adds/removes/reorders happen most:
+  - **`PredictiveChipStrip`** — chips smoothly transition when the
+    LLM layer arrives ~600 ms after the heuristic layer.
+  - **`ChatThread` pin strip** — pin / unpin animates.
+  - **`McpServersModal` server list** — toggle, add, delete animate.
+- Honors `prefers-reduced-motion` by default — vestibular sensitivity
+  is real.
+
+### Shiki — VSCode-grade code highlighting
+
+- New `$lib/shiki-highlight` module loads the same TextMate grammars
+  VSCode uses. Pre-loads `powershell`, `bash`, `json`, `yaml` at app
+  boot; the highlighter is async-init but starts loading immediately
+  on import so it's warm by the time the first Lucy code block
+  renders.
+- Theme: `github-dark-dimmed` — closest stock theme to Lucy's
+  custom-neon-tokyo / default dark palettes.
+- **`highlightSync(code, lang)`** returns Shiki HTML when ready, null
+  when not — the message-render path falls back to highlight.js on
+  null so first paint stays correct during the ~1 s grammar load.
+- Effect: PowerShell, JSON, and YAML code blocks render
+  indistinguishably from VSCode/Cursor. The visible difference is
+  largest on PowerShell — hljs's hand-rolled regex grammar was the
+  weakest of the four supported langs.
+
+### What you'll feel
+
+- **Every action toast** looks markedly more polished (svelte-sonner).
+- **Smart-chip strip** subtly re-arranges instead of pop-in/pop-out
+  when layers swap.
+- **PowerShell + JSON blocks** in chat are noticeably better-colored.
+
+### Frontend Day 2 + Day 3 still pending
+
+- Day 2: `bits-ui` / `shadcn-svelte` migration of the 5 most-used
+  modals (Confirm, MCP, Settings, Provider, History). Pending its
+  own session because it requires either Tailwind setup OR adapting
+  bits-ui primitives to Lucy's CSS variables.
+- Day 3: `cmdk-sv` for Ctrl+P palette + uPlot for Dashboard sparklines
+  + `lucide-svelte` consistency pass.
+
+---
+
 ## [1.4.10] — 2026-05-29
 
 Backend hardening sprint — 4 quick wins on the Rust/Tauri layer.

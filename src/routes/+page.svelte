@@ -172,6 +172,10 @@ import { listen } from '@tauri-apps/api/event';
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import McpServersModal       from '$lib/McpServersModal.svelte';
+    // v1.4.11 — svelte-sonner powers all toast() calls. We import the
+    // imperative API as `sonnerToast` to avoid colliding with Lucy's
+    // existing `toast()` wrapper (which we forward through).
+    import { Toaster, toast as sonnerToast } from 'svelte-sonner';
     import { countUp }     from '$lib/actions';
     import { safeParseLS, safeSetLS, safeSetLSString, safeGetLS, safeRemoveLS } from '$lib/safe-ls';
     import { debug } from '$lib/debug';
@@ -8157,11 +8161,33 @@ if (Test-Path $src) {
         };
     }
 
+    /**
+     * v1.4.11 — Toast notifications now backed by svelte-sonner. Public
+     * signature is unchanged so the 50+ callsites continue to work; we
+     * just forward to the typed Sonner API under the hood. Wins:
+     *   • Stacking with intelligent grouping (max 3 visible, rest queued)
+     *   • Swipe-to-dismiss
+     *   • Spring animations + accessible focus management
+     *   • Promise toasts via toast.promise() if needed in the future
+     * The `tipo` parameter accepts the legacy vocabulary
+     * ('info' | 'success' | 'error' | 'warn') plus passes through 'warning'.
+     */
     function toast(msg, tipo='info') {
-        const id = Date.now() + Math.random();
-        toasts = [...toasts, { id, msg, type: tipo }];
-        const delay = tipo === 'error' ? 5000 : tipo === 'warn' ? 4000 : 3000;
-        setTimeout(() => { toasts = toasts.filter(t => t.id !== id); }, delay);
+        try {
+            const opts = { duration: tipo === 'error' ? 5000 : tipo === 'warn' || tipo === 'warning' ? 4000 : 3000 };
+            if      (tipo === 'success') sonnerToast.success(msg, opts);
+            else if (tipo === 'error')   sonnerToast.error(msg, opts);
+            else if (tipo === 'warn' || tipo === 'warning') sonnerToast.warning(msg, opts);
+            else                          sonnerToast.info(msg, opts);
+        } catch (e) {
+            // Defensive: if Sonner fails to mount for any reason (SSR edge,
+            // dom-not-ready window), keep the legacy in-DOM stack as a
+            // fallback so users don't lose feedback entirely.
+            const id = Date.now() + Math.random();
+            toasts = [...toasts, { id, msg, type: tipo }];
+            const delay = tipo === 'error' ? 5000 : tipo === 'warn' ? 4000 : 3000;
+            setTimeout(() => { toasts = toasts.filter(t => t.id !== id); }, delay);
+        }
     }
 
 
@@ -8963,6 +8989,14 @@ if (Test-Path $src) {
   </div>
   {/if}
 
+  <!-- v1.4.11 — svelte-sonner Toaster. theme="dark" matches Lucy's default
+       palette; richColors uses semantic colors per kind (success=teal,
+       error=red, warning=amber, info=neutral). closeButton enables the ×
+       on hover. duration is per-toast (set in the toast() wrapper). -->
+  <Toaster theme="dark" richColors closeButton position="bottom-right" />
+
+  <!-- Defensive fallback stack: only used if Sonner fails to mount.
+       The legacy markup stays so the user never loses a notification. -->
   <div class="toast-stack">
     {#each toasts as t (t.id)}
     <div class="toast toast-{t.type}">

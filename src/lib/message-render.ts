@@ -3,6 +3,10 @@
 
 import DOMPurify        from 'dompurify';
 import hljs             from 'highlight.js/lib/core';
+// v1.4.11 — Shiki is the primary highlighter (VSCode-quality grammars).
+// hljs stays as a synchronous fallback for the first ~1 s after page
+// load while Shiki's grammars finish loading. See shiki-highlight.ts.
+import { highlightSync as shikiHighlight, stripPreWrapper } from '$lib/shiki-highlight';
 import hljsPS           from 'highlight.js/lib/languages/powershell';
 import hljsBash         from 'highlight.js/lib/languages/bash';
 import hljsJson         from 'highlight.js/lib/languages/json';
@@ -169,18 +173,31 @@ export async function addCopyBtns(opts: AddCopyBtnsOpts): Promise<void> {
             : isReg ? 'reg' : isVbs ? 'VBScript' : lang === 'código' ? 'salida' : lang;
 
         // Syntax highlighting
+        // v1.4.11 — try Shiki first (VSCode TextMate grammars, much better
+        // PowerShell + JSON coloring). If the highlighter isn't ready yet
+        // — only happens during the first ~1 s of app boot before its
+        // grammars finish loading — fall back to highlight.js so first
+        // paint stays correct.
         if (codeEl) {
-            const hljsLang = isPowershell ? 'powershell'
-                : (isCmd || isNetsh)       ? 'bash'
-                : lang === 'json'          ? 'json'
-                : lang === 'yaml'          ? 'yaml'
+            const langN = isPowershell ? 'powershell'
+                : (isCmd || isNetsh)   ? 'bash'
+                : lang === 'json'      ? 'json'
+                : lang === 'yaml'      ? 'yaml'
                 : null;
-            if (hljsLang) {
-                try {
-                    const result = hljs.highlight(codeEl.innerText || '', { language: hljsLang, ignoreIllegals: true });
-                    codeEl.innerHTML = result.value;
-                    codeEl.classList.add('hljs');
-                } catch (_) { /* degrade silently */ }
+            if (langN) {
+                const shikiOut = shikiHighlight(codeEl.innerText || '', langN);
+                if (shikiOut) {
+                    // Shiki wraps in `<pre class="shiki"><code>…</code></pre>`;
+                    // we already own the pre, so swap only the inner HTML.
+                    codeEl.innerHTML = stripPreWrapper(shikiOut);
+                    codeEl.classList.add('shiki-rendered');
+                } else {
+                    try {
+                        const result = hljs.highlight(codeEl.innerText || '', { language: langN, ignoreIllegals: true });
+                        codeEl.innerHTML = result.value;
+                        codeEl.classList.add('hljs');
+                    } catch (_) { /* degrade silently */ }
+                }
             }
         }
 

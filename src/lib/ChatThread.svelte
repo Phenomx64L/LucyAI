@@ -6,6 +6,7 @@
     // bundle so no network fetch, no path resolution, no cache surprises.
     import { LUCY_AVATAR_DATA_URL as lucyAvatarUrl } from '$lib/assets/lucy-avatar-data';
     import { getTabRevStore } from '$lib/page/tabs-store';
+    import { autoAnimate } from '$lib/actions/autoAnimate';
     import AgentChapterView from '$lib/AgentChapterView.svelte';
 
     export let tab: any;
@@ -132,7 +133,8 @@
      Click → smooth-scrolls to that message in the thread.
      × → unpins by re-dispatching pinmessage (parent toggles). -->
 {#if pinnedSummaries.length > 0}
-    <div class="pin-strip" role="region" aria-label={isEN ? 'Pinned messages' : 'Mensajes fijados'}>
+    <!-- v1.4.11 — auto-animate makes pin/unpin and reorders feel native. -->
+    <div class="pin-strip" role="region" aria-label={isEN ? 'Pinned messages' : 'Mensajes fijados'} use:autoAnimate>
         {#each pinnedSummaries as p (p.id)}
             <button class="pin-chip pin-chip-{p.role}"
                     on:click={() => scrollToMsg(p.id)}
