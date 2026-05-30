@@ -33,6 +33,9 @@
     import { loadSentinels, addSentinel, deleteSentinel, toggleSentinel, BUILTIN_TEMPLATES, opOptions } from '$lib/agentmemory/sentinels';
     import type { SentinelRule } from '$lib/agentmemory/sentinels';
     import { detectPatterns, patternKindLabel, patternKindIcon, confidenceColor } from '$lib/agentmemory/patterns';
+    // v1.4.15 — shimmer placeholders + structured empty states.
+    import Skeleton from '$lib/Skeleton.svelte';
+    import EmptyState from '$lib/EmptyState.svelte';
     import type { DetectedPattern, PatternReport } from '$lib/agentmemory/patterns';
     import { verifyMemories, resolveContradiction, severityLabel, severityColor, resolutionLabel } from '$lib/agentmemory/verify';
     import type { Contradiction, VerifyReport, Resolution } from '$lib/agentmemory/verify';
@@ -791,9 +794,21 @@
             <div class="mv-error"><AlertTriangle size={14}/> {memError}</div>
         {/if}
         {#if memLoading}
-            <div class="mv-loading">{isEN ? 'Loading…' : 'Cargando…'}</div>
+            <!-- v1.4.15 — skeleton rows replace the bare "Loading…" label. -->
+            <div class="mv-loading">
+                <Skeleton variant="card" height="58px" />
+                <Skeleton variant="card" height="58px" />
+                <Skeleton variant="card" height="58px" />
+                <Skeleton variant="card" height="58px" />
+            </div>
         {:else if memorias.length === 0}
-            <div class="mv-empty">{isEN ? 'No memories. Lucy will populate this as she works.' : 'Sin memorias. Lucy las llenará conforme trabajes.'}</div>
+            <!-- v1.4.15 — proper empty state with hint instead of one-line text. -->
+            <EmptyState
+                icon="🧠"
+                title={isEN ? 'No memories yet' : 'Sin memorias aún'}
+                description={isEN
+                    ? 'Lucy populates this as she works. Pin a chat message (·) or run /crystallize after a useful session to seed it manually.'
+                    : 'Lucy las irá creando conforme trabajes. Fija un mensaje (·) o usa /crystallize después de una sesión útil para sembrarlas manualmente.'} />
         {:else}
             <ul class="mv-list">
                 {#each memorias as m (m.id)}

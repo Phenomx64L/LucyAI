@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.15] — 2026-05-30
+
+UI/UX mega-release — 8 shipped features. **0 warnings.**
+
+This release attacks the polish backlog that piled up across v1.3.x and
+v1.4.0-v1.4.14. Each item is small in isolation but together they make
+Lucy feel like a finished product instead of a Tauri app with a chat in it.
+
+### Shipped
+
+1. **Native Mica/Acrylic on Windows 11**
+   `tauri.conf.json` now declares `windowEffects: { effects: ["mica","acrylic"], state:"active", radius:8.0 }` with `transparent:true` and a `#00060a0f` backplate. The window blends into the desktop the way every Win11 first-party app does. Falls back gracefully on Win10 (effects ignored, opaque background).
+
+2. **Keyboard cheatsheet modal (Shift+?)**
+   New `KeyboardCheatsheet.svelte` (bits-ui Dialog). 5 grouped sections (Navigation, In Chat, On a message, Slash commands, System) covering every shortcut Lucy ships with — including the ones the welcome tour only mentions once. Discoverability for ~25 shortcuts that previously lived only in code.
+
+3. **Right-click context menu on chat messages**
+   New `ChatMessageContextMenu.svelte` — single global instance positioned by (x,y), feeds the same handlers as the existing toolbar buttons. Items: Copy as Markdown, Copy plain text, Save as Memory (Layer 1 reinforcement), Pin/Unpin, Branch from here (Lucy turns), Replay turn (Lucy turns), Delete. Auto-repositions if it would overflow the viewport.
+
+4. **toast.promise() on MCP discover/test**
+   `mcp_server_discover` and `mcp_server_test` now run inside `toast.promise()`, so the user sees a single toast that transitions loading→success/error instead of staring at a silent busy spinner. Same UX pattern Vercel/Linear use.
+
+5. **👍/👎 reactions per Lucy message → Layer 3 memory**
+   Two new buttons next to the existing · ⌥ ⏪ toolbar on Lucy bubbles. Click logs a `chip_click_log` event via `log_chip_event` with `event_kind: 'thumbs_up' | 'thumbs_down'`. `normalize_event_kind` (Rust) maps 👎 to `dismiss` so the existing Layer 3 scoring formula (Σ clicks − 0.6·Σ dismisses, exp(−age/30) decay) treats positive reactions as reinforcement and negatives as anti-reinforcement — no schema migration needed.
+
+6. **Reusable Skeleton component**
+   New `Skeleton.svelte` with 5 variants (row, card, chart, avatar, text). Accent-tinted shimmer gradient consistent with the existing chat skeleton. Honors `prefers-reduced-motion`. Applied to MCP Servers Modal (discover loading) and Memory Browser (memorias list loading).
+
+7. **Empty state component + applied to MCP & Memory Browser**
+   New `EmptyState.svelte` with icon/title/description/action-slot. Replaces the bare `<p>No hay X</p>` placeholders in MCP modal (CTA: + add) and Memory Browser (hint about /crystallize and pin). Same component will roll out to MCP Tools, Snapshots, and Replay surfaces in v1.4.16.
+
+8. **Live cost ticker animation in StatusBar**
+   The Cost: badge now tweens via `svelte/motion` (500ms cubicOut) so the value rolls up smoothly during streaming instead of teleporting on every chunk's usage event. Subtle accent text-shadow pulse fires for ~420ms on each increase. Tabular-nums prevent neighbor reflow.
+
+### Deferred to v1.4.16
+
+These were in the original mega-sprint plan but pushed to keep this release contained:
+- bits-ui DropdownMenu/Combobox/Tooltip migration across remaining surfaces
+- Empty states for MCP Tools, Snapshots, Replay
+- toast.promise() on DB backup + large writefile
+- Block-based output for /diff and /detective
+- Density slider (continuous between focus/explore/war-room)
+- Print stylesheet for transcript export
+
+### Files touched
+
+```
+M  src-tauri/tauri.conf.json                 (Mica/Acrylic effects)
+M  src-tauri/src/commands/chip_memory.rs     (normalize 👎 → dismiss)
+M  src-tauri/Cargo.toml                      (1.4.14 → 1.4.15)
+A  src/lib/KeyboardCheatsheet.svelte
+A  src/lib/ChatMessageContextMenu.svelte
+A  src/lib/Skeleton.svelte
+A  src/lib/EmptyState.svelte
+M  src/lib/ChatThread.svelte                 (👍/👎 buttons + contextmenu)
+M  src/lib/McpServersModal.svelte            (toast.promise + Skeleton + EmptyState)
+M  src/lib/MemoryBrowserView.svelte          (Skeleton + EmptyState on memorias)
+M  src/lib/StatusBar.svelte                  (tweened cost + pulse)
+M  src/lib/SetupOverlay.svelte               (1.4.14 → 1.4.15)
+M  src/lib/TutorialOverlay.svelte            (1.4.14 → 1.4.15)
+M  src/routes/+page.svelte                   (wire ctx menu + reactions)
+M  package.json                              (1.4.14 → 1.4.15)
+```
+
+`svelte-check`: 7175 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.4.14] — 2026-05-29
 
 Hotfix — Lucy wouldn't boot in v1.4.10-v1.4.13. **0 warnings.**

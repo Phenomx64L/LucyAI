@@ -7,6 +7,11 @@
     import { getPricing, pricingLabel } from '$lib/model-pricing';
     import { getModelIcon } from '$lib/models.js';
     import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
+    // v1.4.15 — live cost ticker. We tween the displayed cost value so it
+    // rolls upward smoothly during streaming instead of teleporting after
+    // each chunk's usage event. A brief 'pulse' class fires on each update.
+    import { tweened } from 'svelte/motion';
+    import { cubicOut } from 'svelte/easing';
 
     export let hostName: string = '---';
     export let lucyConfig: { name: string } = { name: '' };
@@ -72,6 +77,25 @@
     // when it's `active` (a positive signal worth seeing) or when the
     // user explicitly opted in via `--features ml-guard` but the model
     // isn't loaded yet (actionable: tells them to finish setup).
+    // v1.4.15 — tweened cost ticker. We feed the tweened store from the
+    // raw cost; the displayed number animates over 500ms so token-burst
+    // updates feel continuous. `costPulse` toggles a class for ~400ms
+    // each time the cost increases — purely cosmetic feedback.
+    const tweenedCost = tweened(0, { duration: 500, easing: cubicOut });
+    let _lastCost = 0;
+    let costPulse = false;
+    let _pulseTimer: ReturnType<typeof setTimeout> | null = null;
+    $: {
+        const c = costSummaryMonth?.total_cost ?? 0;
+        tweenedCost.set(c);
+        if (c > _lastCost + 1e-6) {
+            costPulse = true;
+            if (_pulseTimer) clearTimeout(_pulseTimer);
+            _pulseTimer = setTimeout(() => { costPulse = false; }, 420);
+        }
+        _lastCost = c;
+    }
+
     $: mlBadge =
         mlStatus === 'active'           ? { txt: '🧠 ML', cls: 'cok',  tip: isEN ? 'PromptGuard 2 ML active — catches paraphrased prompt injection.' : 'PromptGuard 2 ML activo — detecta prompt injection parafraseado.' }
       : mlStatus === 'model_missing'   ? { txt: '🧠 ?',  cls: 'cy',   tip: isEN ? 'ML feature compiled but PromptGuard model not installed. See PROMPT_GUARD_INSTALL.md.' : 'Feature ML compilado pero modelo PromptGuard no instalado. Ver PROMPT_GUARD_INSTALL.md.' }
@@ -144,7 +168,8 @@
             ? `${isEN ? 'This month' : 'Este mes'}: $${costSummaryMonth.total_cost.toFixed(4)} de $${_budget.toFixed(2)} (${_pct.toFixed(1)}%) · ${costSummaryMonth.total_tokens.toLocaleString()} tokens · ${costSummaryMonth.request_count} ${isEN?'requests':'consultas'}`
             : `${isEN ? 'This month' : 'Este mes'}: $${costSummaryMonth.total_cost.toFixed(4)} · ${costSummaryMonth.total_tokens.toLocaleString()} tokens`}>
             <span>{isEN ? 'Cost:' : 'Costo:'}</span>
-            <span class="{_critical ? 'cr' : _warn ? 'cy' : 'cok'}">${costSummaryMonth.total_cost.toFixed(_budget > 0 && _budget < 1 ? 4 : 3)}</span>
+            <span class="cost-num {_critical ? 'cr' : _warn ? 'cy' : 'cok'}" class:cost-pulse={costPulse}
+                  >${$tweenedCost.toFixed(_budget > 0 && _budget < 1 ? 4 : 3)}</span>
             {#if _budget > 0}
                 <span class="cost-budget-track" title="Budget: ${_budget.toFixed(2)}">
                     <span class="cost-budget-fill {_critical ? 'cr-bg' : _warn ? 'cy-bg' : 'cok-bg'}" style="width:{Math.min(100, _pct).toFixed(1)}%;"></span>
@@ -218,6 +243,13 @@
     .cost-budget-fill.cok-bg{background:var(--acc);}
     .cost-budget-fill.cy-bg{background:var(--amber);}
     .cost-budget-fill.cr-bg{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.45);}
+    /* v1.4.15 — live cost ticker pulse. Tabular-nums so the rolling
+       digits don't reflow neighboring badges as they tween. */
+    .cost-num{font-variant-numeric: tabular-nums; transition: text-shadow .2s;}
+    .cost-pulse{text-shadow: 0 0 8px color-mix(in srgb, var(--acc, #10b981) 70%, transparent);}
+    @media (prefers-reduced-motion: reduce) {
+        .cost-pulse{ text-shadow: none; }
+    }
     :global(:root:not(.light)) .bbar{border-top:1px solid var(--border-glass, var(--bdr))!important;}
 
     /* ── Dynamic per-model rate pill ─────────────────────────────────────

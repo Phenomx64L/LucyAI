@@ -41,6 +41,9 @@
         codeclick: { path: string };
         fixclick: { key: string };
         citeclick: { kind: string; value: string };
+        // v1.4.15 — right-click context menu + 👍/👎 reactions.
+        contextmessage: { msg: any; x: number; y: number };
+        reactmessage: { msg: any; kind: 'up' | 'down' };
     }>();
 
     function handleAreaClick(e: MouseEvent) {
@@ -198,7 +201,9 @@
         {:else}
             <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''} msg-enter"
                 data-msg-id={msg.id}
-                style={msg.style || ''}>
+                style={msg.style || ''}
+                on:contextmenu|preventDefault={(e) => msg.role !== 'system' && dispatch('contextmessage', { msg, x: e.clientX, y: e.clientY })}
+                role="article">
                 {#if msg.role === 'lucy' || msg.role === 'streaming'}
                     <span class="lucy-avatar-wrap" title="Lucy · v1.4.0">
                         <img class="lucy-avatar" src={lucyAvatarUrl} alt="Lucy" />
@@ -240,6 +245,21 @@
                                 title={isEN ? 'Replay this turn (open replay browser)' : 'Reproducir este turno (abrir replay browser)'}
                                 aria-label={isEN ? 'Replay this turn' : 'Reproducir este turno'}
                                 on:click={() => dispatch('replaymessage', { msg })}>⏪</button>
+                            <!-- v1.4.15 — 👍/👎 reactions feed Layer 3 memory training.
+                                 Each click is logged via log_chip_event; positive
+                                 reinforces (counts as click) and negative as dismiss.
+                                 We highlight the active reaction so the user gets
+                                 confirmation but can change their mind. -->
+                            <button class="msg-react msg-react-up"
+                                class:on={msg.reaction === 'up'}
+                                title={isEN ? 'Good answer' : 'Buena respuesta'}
+                                aria-label={isEN ? 'Thumbs up' : 'Me gusta'}
+                                on:click={() => dispatch('reactmessage', { msg, kind: 'up' })}>👍</button>
+                            <button class="msg-react msg-react-down"
+                                class:on={msg.reaction === 'down'}
+                                title={isEN ? 'Needs work' : 'Necesita mejorar'}
+                                aria-label={isEN ? 'Thumbs down' : 'No me gusta'}
+                                on:click={() => dispatch('reactmessage', { msg, kind: 'down' })}>👎</button>
                         {/if}
                     {/if}
                     <!-- U3 — Chapter view for multi-step agent tasks -->
@@ -502,6 +522,23 @@
        accent distinguishes it from pin (amber) and branch (teal). */
     .msg-replay{position:absolute;top:6px;right:50px;background:transparent;border:none;color:var(--txt3);opacity:.35;cursor:pointer;font-size:13px;padding:2px 4px;border-radius:3px;transition:.15s;z-index:2;line-height:1;}
     .msg-replay:hover{opacity:1;background:rgba(59,158,255,.14);color:var(--blue, #3b9eff);}
+
+    /* v1.4.15 — 👍/👎 reactions. Right-side of the toolbar at fixed offsets
+       so they don't collide with the existing pin/branch/replay chevrons.
+       Active state uses a soft accent fill, never a solid background, so
+       glance reading the bubble isn't disturbed. */
+    .msg-react{
+        position:absolute; top:6px; background:transparent; border:none;
+        opacity:.32; cursor:pointer; font-size:12px;
+        padding:1px 3px; border-radius:4px;
+        transition:.15s; z-index:2; line-height:1;
+        filter:grayscale(.6);
+    }
+    .msg-react:hover{ opacity:1; filter:grayscale(0); background:rgba(255,255,255,.05); }
+    .msg-react.on{ opacity:1; filter:grayscale(0); background:rgba(16,185,129,.16); }
+    .msg-react-up{   right:74px; }
+    .msg-react-down{ right:96px; }
+    .msg-react-down.on{ background:rgba(248,113,113,.16); }
 
     /* Quick-win H — Inline cite-chips (file paths, hosts, memories, URLs).
        Subtle by default so they don't visually overpower prose; light hover

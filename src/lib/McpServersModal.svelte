@@ -24,6 +24,12 @@
   // through the dialog stack, aria-modal/labelledby all wired by
   // the primitive. Visual identity (modal-card styles) is preserved.
   import { Dialog } from 'bits-ui';
+  // v1.4.15 — loading skeletons + empty-state component.
+  import Skeleton from '$lib/Skeleton.svelte';
+  import EmptyState from '$lib/EmptyState.svelte';
+  // v1.4.15 — toast.promise for long ops (discover/test). Aliased so it
+  // doesn't shadow the existing inline `toast` banner variable below.
+  import { toast as sonnerToast } from 'svelte-sonner';
   import { invoke } from '@tauri-apps/api/core';
   import ConfirmModal from '$lib/ConfirmModal.svelte';
 
@@ -252,15 +258,25 @@
   }
 
   async function doTest(s) {
+    // v1.4.15 — `toast.promise` shows a single toast that auto-transitions
+    // loading→success/error. Replaces the silent busy spinner that left
+    // users wondering whether the ping was still in flight.
     busyName = s.name;
     error = '';
+    const p = invoke('mcp_server_test', { name: s.name, env: mcpSecrets });
+    sonnerToast.promise(p, {
+      loading: isEN ? `Pinging ${s.name}…` : `Probando ${s.name}…`,
+      success: (r) => r.ok
+          ? (isEN
+              ? `${s.name} OK · ${r.tools_count} tools · ${r.latency_ms} ms`
+              : `${s.name} OK · ${r.tools_count} tools · ${r.latency_ms} ms`)
+          : (isEN ? `${s.name} failed` : `${s.name} falló`),
+      error: (e) => `${s.name}: ${String(e)}`,
+    });
     try {
-      const r = await invoke('mcp_server_test', { name: s.name, env: mcpSecrets });
-      if (r.ok) {
-        flash(`${s.name}: ${r.tools_count} ${isEN ? 'tools' : 'tools'} · ${r.latency_ms} ms`);
-      } else {
-        error = `${s.name}: ${r.error || (isEN ? 'failed' : 'falló')}`;
-      }
+      const r = await p;
+      if (r.ok) flash(`${s.name}: ${r.tools_count} tools · ${r.latency_ms} ms`);
+      else      error = `${s.name}: ${r.error || (isEN ? 'failed' : 'falló')}`;
     } catch (e) {
       error = String(e);
     } finally {
@@ -271,8 +287,19 @@
   async function doDiscover(s) {
     busyName = s.name;
     error = '';
+    const p = invoke('mcp_server_discover', { name: s.name, env: mcpSecrets });
+    sonnerToast.promise(p, {
+      loading: isEN ? `Discovering tools on ${s.name}…` : `Descubriendo tools en ${s.name}…`,
+      success: (updated) => {
+        const count = Array.isArray(updated.tools_cache) ? updated.tools_cache.length : 0;
+        return isEN
+            ? `${s.name}: ${count} tools cached · ${updated.last_latency_ms} ms`
+            : `${s.name}: ${count} tools cacheadas · ${updated.last_latency_ms} ms`;
+      },
+      error: (e) => `${s.name}: ${String(e)}`,
+    });
     try {
-      const updated = await invoke('mcp_server_discover', { name: s.name, env: mcpSecrets });
+      const updated = await p;
       // Splice updated row into the local list (avoid a full reload flicker).
       servers = servers.map(x => x.name === updated.name ? updated : x);
       expandedName = updated.name;
@@ -392,9 +419,22 @@
         </div>
 
         {#if loading}
-          <div class="empty">…</div>
+          <!-- v1.4.15 — shimmer skeletons replace the bare ellipsis. -->
+          <div class="srv-list">
+            <Skeleton variant="card" height="76px" />
+            <Skeleton variant="card" height="76px" />
+            <Skeleton variant="card" height="76px" />
+          </div>
         {:else if servers.length === 0}
-          <div class="empty">{T.noServers}</div>
+          <!-- v1.4.15 — proper empty state with CTA via the action slot. -->
+          <EmptyState
+            icon="🔌"
+            title={T.noServers}
+            description={isEN
+                ? 'Register your first MCP server to extend Lucy with external tools (filesystem, github, postgres, brave-search…).'
+                : 'Registra tu primer servidor MCP para extender Lucy con herramientas externas (filesystem, github, postgres, brave-search…).'}>
+            <button slot="action" class="btn pri" on:click={openAdd}>{T.add}</button>
+          </EmptyState>
         {:else}
           <ul class="srv-list" use:autoAnimate>
             {#each servers as s (s.name)}

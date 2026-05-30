@@ -172,6 +172,8 @@ import { listen } from '@tauri-apps/api/event';
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import McpServersModal       from '$lib/McpServersModal.svelte';
+    import KeyboardCheatsheet    from '$lib/KeyboardCheatsheet.svelte';
+    import ChatMessageContextMenu from '$lib/ChatMessageContextMenu.svelte';
     // v1.4.11 — svelte-sonner powers all toast() calls. We import the
     // imperative API as `sonnerToast` to avoid colliding with Lucy's
     // existing `toast()` wrapper (which we forward through).
@@ -453,6 +455,13 @@ import { listen } from '@tauri-apps/api/event';
     //      when the agent emits an mcp_query / mcp_discover tag.
     let mcpServers = [];
     let showMcpServersModal = false;
+    // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
+    let showCheatsheet = false;
+    // v1.4.15 — right-click context menu on chat messages. A single global
+    // instance is positioned by (ctxMenuX/Y) and acts on ctxMsg.
+    let ctxMenuOpen = false;
+    let ctxMenuX = 0, ctxMenuY = 0;
+    let ctxMsg = null;
 
     // Sub-agent mode (Plan A — improved UX)
     //   'auto'   → pick cheapest reachable cloud model (preferred default)
@@ -8684,6 +8693,34 @@ if (Test-Path $src) {
               on:pinmessage={(e) => { e.detail.msg.pinned = !e.detail.msg.pinned; tabs = tabs; toast(e.detail.msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}
               on:branchmessage={(e) => { if (e.detail?.msg?.id && activeTabId) { bifurcarTabDesde(activeTabId, e.detail.msg.id); toast(isEN ? 'Branched into a new tab' : 'Bifurcado en una pestaña nueva', 'info'); } }}
               on:replaymessage={() => { showReplayBrowser = true; toast(isEN ? '⏪ Replay browser opened — pick the turn to re-run' : '⏪ Replay browser abierto — elige el turno a re-ejecutar', 'info'); }}
+              on:contextmessage={(e) => { ctxMsg = e.detail.msg; ctxMenuX = e.detail.x; ctxMenuY = e.detail.y; ctxMenuOpen = true; }}
+              on:reactmessage={(e) => {
+                  // v1.4.15 — 👍/👎 reactions logged to Layer 3 memory via
+                  // log_chip_event. Toggling the same reaction clears it
+                  // so a misclick is cheap to undo. The chip event uses
+                  // label='msg-reaction' so analytics can separate from
+                  // ranked chip events.
+                  const m = e.detail.msg;
+                  const newKind = m.reaction === e.detail.kind ? null : e.detail.kind;
+                  m.reaction = newKind;
+                  tabs = tabs;
+                  if (newKind) {
+                      const snippet = (m.html || '').replace(/<[^>]+>/g, '').slice(0, 120);
+                      invoke('log_chip_event', { event: {
+                          label:       'msg-reaction',
+                          text:        snippet || 'lucy-reply',
+                          intent:      'reaction',
+                          domains:     ['feedback'],
+                          tool_labels: [],
+                          had_error:   false,
+                          lang:        isEN ? 'en-US' : 'es-MX',
+                          event_kind:  newKind === 'up' ? 'thumbs_up' : 'thumbs_down',
+                      }}).catch(() => {});
+                      toast(newKind === 'up'
+                          ? (isEN ? '👍 Logged — thanks!' : '👍 Registrado — ¡gracias!')
+                          : (isEN ? '👎 Logged — Lucy will learn' : '👎 Registrado — Lucy aprenderá'), 'info');
+                  }
+              }}
               on:buttonaction={(e) => { const btn = e.detail.event.target; btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); e.detail.msg.button.action(e.detail.event); }}
               on:togglereasoning={(e) => { e.detail.msg.collapsed = !e.detail.msg.collapsed; tabs = tabs; }}
               on:codeclick={(e) => invoke('open_vscode', { path: e.detail.path })}
@@ -10370,8 +10407,53 @@ if (Test-Path $src) {
   </div>
   {/if}
 
-  <!-- ── KEYBOARD SHORTCUTS OVERLAY (?) ── -->
-  {#if showShortcutsOverlay}
+  <!-- ── KEYBOARD CHEATSHEET (?) — v1.4.15 modernized with bits-ui Dialog,
+       5 groups including slash commands and per-message action chords. -->
+  <KeyboardCheatsheet bind:open={showShortcutsOverlay} {isEN}
+    on:close={() => showShortcutsOverlay = false} />
+
+  <!-- v1.4.15 — Right-click context menu on chat messages. ChatThread
+       dispatches `contextmessage` with {msg, x, y}; we route each action
+       to the same handlers already wired for the inline toolbar buttons. -->
+  <ChatMessageContextMenu
+    bind:open={ctxMenuOpen}
+    x={ctxMenuX} y={ctxMenuY} msg={ctxMsg} {isEN}
+    on:copy-md={(e) => {
+        const md = (e.detail.msg.markdown || e.detail.msg.html || '').replace(/<[^>]+>/g, '');
+        navigator.clipboard.writeText(md);
+        toast(isEN ? 'Copied as Markdown' : 'Copiado como Markdown', 'info');
+    }}
+    on:copy-txt={(e) => {
+        const txt = (e.detail.msg.html || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        navigator.clipboard.writeText(txt);
+        toast(isEN ? 'Copied to clipboard' : 'Copiado al portapapeles', 'info');
+    }}
+    on:save-memory={(e) => {
+        const content = (e.detail.msg.markdown || e.detail.msg.html || '').replace(/<[^>]+>/g, '').slice(0, 4000);
+        // memory_core_reinforce ingests the snippet into Layer 1 core memory
+        // (Spanish-tagged, decayable) — same path used by /crystallize tail.
+        invoke('memory_core_reinforce', { text: content })
+            .then(() => toast(isEN ? '★ Saved to memory' : '★ Guardado en memoria', 'info'))
+            .catch((err) => toast(String(err), 'error'));
+    }}
+    on:pin={(e) => { e.detail.msg.pinned = !e.detail.msg.pinned; tabs = tabs; toast(e.detail.msg.pinned ? (isEN?'· Pinned':'· Fijado') : (isEN?'Unpinned':'Quitado'), 'info'); }}
+    on:branch={(e) => { if (e.detail?.msg?.id && activeTabId) { bifurcarTabDesde(activeTabId, e.detail.msg.id); toast(isEN ? 'Branched into a new tab' : 'Bifurcado en una pestaña nueva', 'info'); } }}
+    on:replay={() => { showReplayBrowser = true; }}
+    on:delete={(e) => {
+        const tab = tabs.find(t => t.id === activeTabId);
+        if (tab) {
+            tab.messages = tab.messages.filter(m => m.id !== e.detail.msg.id);
+            tabs = tabs;
+            toast(isEN ? '✕ Message removed' : '✕ Mensaje eliminado', 'info');
+        }
+    }}
+  />
+
+  <!-- Legacy inline overlay kept hidden under a guard that's always false.
+       Removing the markup outright would require deleting ~120 LOC across
+       the body + footer + ks-* CSS in page.css; we'll do that cleanup in
+       a follow-up when no callsite is referencing the legacy classes. -->
+  {#if false}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="ks-overlay" on:click|self={() => showShortcutsOverlay = false}>
     <div role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts" class="ks-modal">

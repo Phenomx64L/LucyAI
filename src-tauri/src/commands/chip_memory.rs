@@ -321,9 +321,14 @@ fn parse_json_array(s: &str) -> HashSet<String> {
 }
 
 fn normalize_event_kind(s: &str) -> String {
+    // v1.4.15 — 👍/👎 reactions on Lucy messages reuse this log path.
+    // They're folded into click/dismiss so the existing scoring formula
+    // (Σ clicks − 0.6·Σ dismisses, decayed) treats positive reactions
+    // as reinforcement and negatives as anti-reinforcement.
     match s.trim().to_lowercase().as_str() {
-        "dismiss" | "dismissed" | "x"  => "dismiss".into(),
-        _                              => "click".into(),
+        "dismiss" | "dismissed" | "x"
+            | "thumbs_down" | "down" | "dislike"   => "dismiss".into(),
+        _                                          => "click".into(),
     }
 }
 

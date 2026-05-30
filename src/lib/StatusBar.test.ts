@@ -12,6 +12,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, cleanup } from '@testing-library/svelte';
+// v1.4.15 — vitest.setup.ts polyfills window.matchMedia BEFORE any
+// hoisted import runs, which is required because StatusBar.svelte
+// pulls svelte/motion (constructs MediaQuery at module load).
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 // The Tauri `invoke` shape: StatusBar calls it for prompt_guard_status AND

@@ -34,5 +34,10 @@ export default defineConfig({
         environment: 'node',
         isolate: true,
         reporters: ['default'],
+        // v1.4.15 — polyfills window.matchMedia for jsdom suites that
+        // load components using svelte/motion (tweened, spring). Must
+        // run before ES import hoisting so module-load-time MediaQuery
+        // construction inside StatusBar.svelte doesn't blow up.
+        setupFiles: ['./vitest.setup.ts'],
     },
 });
