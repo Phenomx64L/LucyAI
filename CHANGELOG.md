@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.23] — 2026-05-30
+
+CSS dedup continues — the big one. ChatInput composer consolidated.
+Item 3 of 5 from the v1.4.20 migration backlog.
+
+### Shipped — composer layout consolidated
+
+New `src/lib/styles/composer.css` is now the sole owner of the entire
+bottom-composer surface. Imported from `ChatInput.svelte` via
+`import '$lib/styles/composer.css'`. Contents (~50 selectors across
+~360 LOC):
+
+- Input bar container: `.ibar` (+ `.drag-over`)
+- State-aware input group `.igrp` (+ idle/thinking/executing/error glow)
+  with the `body[data-state="…"]` reactive border + `@supports` fallback
+- Textarea `.ibox` (+ placeholder), action cluster `.iside`
+- Action buttons: `.ia-btn` (+ `.mic-on`, `.brief-btn`, `.brief-on`),
+  `.ia-sep`
+- Model badge: `.mbdg` (+ `select`/`option`/`optgroup`),
+  `.nvidia-custom-input`
+- Runtime status dot: `.ollama-dot` (+ `.on` glowing pulse variant)
+- Send + variants: `.sbtn`, `.sbtn-stop`, `.sbtn-pause`, `.sbtn-skip`
+- Staged-file pills: `.staged`, `.sf-bdg`, `.sf-rm`
+- Predictive chip row: `.chips` (+ `.chips-collapsed`, `.chips-toggle`,
+  `.chips-count`, `.chips-chevron`, `.chips-lucy-label` + light theme)
+- Individual chips: `.chip` (+ `:hover`, `:disabled`, `.chip-user`,
+  `.chip-add`, `.chip-wrap`, `.chip-actions`, `.chip-act`, `.chip-del`)
+- Security banner: `.sec-banner` family (8 selectors)
+- Pending-msg bar: `.pending-msg-bar/.dot/.text/.cancel`
+- Heavy-prompt nudge: `.heavy-nudge` family
+- Chat search: `.chat-search-bar`, `.cs-ico/.inp/.count/.close`
+- Cost predictor pill: `.cost-predict` (+ tier variants ok/warn/high/free
+  + light theme overrides)
+- Composer-wide `:root.light` overrides
+
+### Drift handled
+
+Several selectors had drifted between the two copies; page.css was
+winning the cascade so its values were what rendered:
+
+- `.ollama-dot`: page.css `7px red OFF / green ON pulsing`; component
+  `6px gray OFF / acc-green ON`. page.css's red-pulsing version was
+  rendering — that's preserved.
+- `.cs-inp`: page.css had full inline styling (background,
+  border-radius, padding); component had a stripped transparent
+  version. page.css's full styling kept.
+- Minor `.chip:hover` color tweaks.
+
+Consolidation uses page.css values throughout → visual output
+unchanged. Theme-variable refinements in the component-side copy
+documented in the new file's header for future light-theme passes.
+
+### Deletions
+
+- `src/routes/page.css`:
+  - Line 533: `.ibar.drag-over`
+  - Lines 638-639: `.ollama-dot` family
+  - Lines 649-657: `.sec-banner*` (9 selectors)
+  - Lines 1312-1486: STAGED + CHIPS + INPUT (the megablock, ~170 lines)
+  - Lines 1496-1529: `.cost-predict*` family
+  - Lines 1762-1769: `.chat-search-bar` + `.cs-*`
+- `src/lib/ChatInput.svelte` `<style>`: 138 lines of `:global(...)`
+  rules deleted, replaced with a placeholder comment listing what
+  moved out
+
+### Migration backlog progress
+
+| # | Component | Status |
+|---|---|---|
+| 1 | `StatusBar` → `status-bar.css` | ✅ v1.4.21 |
+| 2 | `NexShellView` → `nexshell.css` (`.bc-*`) | ✅ v1.4.22 |
+| 3 | `ChatInput` → `composer.css` | **✅ v1.4.23** |
+| 4 | `ChatThread` → `chat-thread.css` | next |
+| 5 | `DashboardView` → `dashboard-alerts.css` | |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.22 → 1.4.23)
+M  src-tauri/Cargo.toml                      (1.4.22 → 1.4.23)
+M  src-tauri/tauri.conf.json                 (1.4.22 → 1.4.23)
+A  src/lib/styles/composer.css               (NEW — ~360 LOC, ~50 selectors)
+M  src/lib/ChatInput.svelte                  (import + scoped <style> trimmed)
+M  src/routes/page.css                       (6 deletion regions)
+M  src/lib/SetupOverlay.svelte               (1.4.22 → 1.4.23)
+M  src/lib/TutorialOverlay.svelte            (1.4.22 → 1.4.23)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.4.22] — 2026-05-30
 
 CSS dedup continues — NexShellView broadcast results UI. Item 2 of 5

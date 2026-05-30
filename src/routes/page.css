@@ -530,7 +530,8 @@ html.app-hidden *::after{
 .sdot.r{background:var(--red);}
 /* ── U3: exec timer + cancel btn ── */
 .exec-timer{font-family:var(--mono);font-size:10px;color:var(--amber);background:rgba(255,170,0,.1);border-radius:3px;padding:1px 5px;margin-left:4px;}
-.ibar.drag-over{outline:2px dashed var(--acc);outline-offset:-4px;background:rgba(99,102,241,.06);}
+/* v1.4.23 — .ibar.drag-over moved to src/lib/styles/composer.css with the
+   rest of the composer rules. */
 .tc-refs{margin-top:10px;padding-top:8px;border-top:1px dashed rgba(255,255,255,.06);font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .tc-refs-label{color:var(--txt3);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;}
 .tc-ref{color:#a78bfa;text-decoration:none;font-family:var(--mono);font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid rgba(167,139,250,.25);background:rgba(167,139,250,.06);transition:.15s;}
@@ -635,8 +636,7 @@ html.app-hidden *::after{
 .tc-d-ad{color:#86efac;background:rgba(34,197,94,.1);}
 .tool-card.tc-flash{animation:tc-flash 1.4s ease;}
 @keyframes tc-flash{0%,100%{box-shadow:0 0 0 0 rgba(167,139,250,0);}30%{box-shadow:0 0 0 4px rgba(167,139,250,.4);}}
-.ollama-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;margin-right:6px;box-shadow:0 0 6px rgba(239,68,68,.5);transition:.2s;}
-.ollama-dot.on{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.6);animation:ollama-pulse 2.4s ease-in-out infinite;}
+/* v1.4.23 — .ollama-dot moved to src/lib/styles/composer.css. */
 @keyframes ollama-pulse{0%,100%{opacity:1;}50%{opacity:.55;}}
 body.density-compact .msg{padding:6px 10px !important;margin:3px 0 !important;}
 body.density-compact .agent-tool-card{margin:4px 0 !important;}
@@ -646,15 +646,7 @@ body.density-compact .chat{gap:2px !important;}
 /* ── U4: truncation hint ── */
 .trunc-hint{font-style:italic;color:#475569;font-size:10px;}
 /* ── U5: security block banner ── */
-.sec-banner{background:rgba(255,170,0,.05);border:1px solid rgba(255,170,0,.25);border-radius:8px;padding:12px 14px;margin:0 14px 8px;display:flex;flex-direction:column;gap:8px;flex-shrink:0;}
-.sec-banner-hdr{display:flex;align-items:flex-start;gap:10px;}
-.sec-banner-ico{font-size:18px;flex-shrink:0;line-height:1;}
-.sec-banner-info{display:flex;flex-direction:column;gap:2px;}
-.sec-banner-title{font-size:12px;font-weight:700;color:var(--amber);}
-.sec-banner-rule{font-size:11px;color:var(--txt2);}
-.sec-banner-rule code{color:var(--amber);background:rgba(255,170,0,.1);padding:1px 5px;border-radius:3px;}
-.sec-banner-cmd{display:block;font-family:var(--mono);font-size:11px;color:#94a3b8;background:rgba(0,0,0,.3);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;white-space:pre-wrap;word-break:break-all;max-height:80px;overflow-y:auto;}
-.sec-banner-actions{display:flex;gap:8px;justify-content:flex-end;}
+/* v1.4.23 — .sec-banner* family moved to src/lib/styles/composer.css. */
 /* ── WORKSPACES ────────────────────────────── */
 .ws{flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;}
 /* ── EMPTY STATE ───────────────────────────── */
@@ -1316,182 +1308,11 @@ body.density-compact .chat{gap:2px !important;}
 .sb-rm-btn:hover{background:rgba(255,68,68,.16);}
 .sb-action-item:hover .sb-shell-btn,
 .sb-action-item:hover .sb-rm-btn{opacity:1;}
-/* ── STAGED ────────────────────────────────── */
-.staged{padding:4px 14px;display:flex;flex-wrap:wrap;gap:4px;}
-.sf-bdg{display:inline-flex;align-items:center;gap:6px;background:var(--acc-d);border:1px solid var(--acc-b);color:var(--acc);padding:3px 10px;border-radius:20px;font-size:12px;}
-.sf-rm{background:none;border:none;color:var(--red);cursor:pointer;font-weight:bold;padding:0 3px;font-size:12px;line-height:1;}
-/* ── CHIPS ─────────────────────────────────── */
-.chips{display:flex;align-items:center;gap:5px;padding:2px 14px;overflow-x:auto;border-top:1px solid #131825;flex-shrink:0;}
-.chips.chips-collapsed{padding:3px 14px;}
-.chips-lucy-label{flex-shrink:0;font-size:10px;font-weight:700;color:rgba(16,185,129,.4);letter-spacing:.5px;padding:2px 6px 2px 0;white-space:nowrap;user-select:none;}
-.chips:not(.chips-collapsed) .chips-lucy-label{border-right:1px solid rgba(16,185,129,.1);margin-right:3px;}
-.chips::-webkit-scrollbar{display:none;}
-/* Toggle button that opens/closes the chips bar */
-.chips-toggle{
-  display:inline-flex;align-items:center;gap:5px;
-  background:transparent;border:none;cursor:pointer;
-  padding:0;flex-shrink:0;
-  transition:opacity .15s;
-}
-.chips-toggle:hover{opacity:.85;}
-.chips-toggle:hover .chips-lucy-label{color:rgba(16,185,129,.7);}
-.chips-count{
-  display:inline-block;font-family:var(--mono);font-size:10px;font-weight:700;
-  color:rgba(16,185,129,.55);background:rgba(16,185,129,.08);
-  padding:1px 6px;border-radius:8px;letter-spacing:.2px;
-}
-.chips-chevron{
-  font-size:9px;color:rgba(16,185,129,.45);
-  transition:transform .15s;user-select:none;
-  width:10px;text-align:center;
-}
-/* Light theme overrides */
-:root.light .chips{border-top-color:rgba(0,0,0,.08);}
-:root.light .chips-lucy-label{color:rgba(15,123,90,.7);}
-:root.light .chips:not(.chips-collapsed) .chips-lucy-label{border-right-color:rgba(15,123,90,.18);}
-:root.light .chips-count{color:#0f7b5a;background:rgba(15,123,90,.10);}
-:root.light .chips-chevron{color:rgba(15,123,90,.55);}
-:root.light .chips-toggle:hover .chips-lucy-label{color:#0f7b5a;}
-.chip{display:flex;align-items:center;gap:4px;white-space:nowrap;background:rgba(16,185,129,.04);border:1px solid rgba(16,185,129,.09);color:#0d9668;border-radius:12px;padding:3px 10px;font-size:11px;cursor:pointer;transition:.15s;flex-shrink:0;font-family:inherit;}
-.chip:hover{background:rgba(16,185,129,.09);border-color:rgba(16,185,129,.2);}
-.chip-user{background:rgba(59,130,246,.06);border-color:rgba(59,130,246,.15);color:#4a7aaa;}
-.chip-user:hover{background:rgba(59,130,246,.12);}
-.chip-add{background:transparent;border-color:rgba(255,255,255,.08);color:#475569;padding:3px 8px;}
-.chip-add:hover{border-color:var(--acc-b);color:var(--acc);}
-.chip-wrap{position:relative;display:flex;align-items:center;flex-shrink:0;}
-.chip-actions{display:none;position:absolute;right:-2px;top:-6px;gap:2px;background:var(--bg3);border:1px solid var(--bdr2);border-radius:6px;padding:2px 3px;}
-.chip-wrap:hover .chip-actions{display:flex;}
-.chip-act{background:none;border:none;cursor:pointer;font-size:10px;color:var(--txt2);padding:1px 3px;border-radius:3px;line-height:1;transition:.1s;}
-.chip-act:hover{background:var(--bdr2);color:var(--txt);}
-.chip-del:hover{color:var(--red)!important;}
-.chip:hover{background:rgba(16,185,129,.1);color:#0d9668;border-color:rgba(16,185,129,.22);}
-.chip:disabled{opacity:.3;cursor:not-allowed;}
-/* ── INPUT ─────────────────────────────────── */
-.ibar{display:flex;flex-direction:row;align-items:flex-end;gap:8px;padding:10px 14px;background:#12141e;border-top:1px solid var(--bdr);flex-shrink:0;position:relative;}
-/* ── State-aware input border + glow (Cursor-style) ─────────────────────
-   The .igrp wrapper picks up the global --state-color set by <body>'s
-   data-state attribute. When Lucy is thinking the input glows blue,
-   executing → amber, error → red, idle → green. The transition is fast
-   enough to feel responsive but slow enough to read as a deliberate
-   state change, not a flicker.
-
-   LAYOUT: stacked vertically (column). The textarea now spans the full
-   width and the icon row sits below it. The previous row layout
-   squeezed the textarea into ~50% because .iside (cost predictor +
-   model picker + send) is a wide cluster with flex-shrink:0. */
-.igrp{
-    display:flex;
-    flex-direction:column;
-    align-items:stretch;
-    gap:3px;
-    background:rgba(255,255,255,.025);
-    border:1px solid rgba(255,255,255,.07);
-    /* .ibar is the row-direction PARENT (textarea group + send button).
-       In a row parent, flex:1 grows HORIZONTALLY — that's what gives the
-       bar its full width. Vertical sizing happens INSIDE .igrp via the
-       column children (chips + textarea + icons), each at its natural
-       compact height. The textarea controls bar height via JS-set inline
-       height bounded by .ibox min-height:24 / max-height:100.
-       Compact paddings: 5px vertical (was 8px). */
-    border-radius:10px;flex:1 1 auto;padding:5px 10px;
-    transition: border-color var(--motion-base) var(--ease-out),
-                box-shadow   var(--motion-base) var(--ease-out),
-                background   var(--motion-base) var(--ease-out);
-}
-/* Idle / inactive: neutral border. */
-body[data-state="idle"] .igrp:focus-within{
-    border-color: color-mix(in srgb, var(--state-color, var(--accent)) 45%, transparent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-color, var(--accent)) 8%, transparent),
-                0 0 14px color-mix(in srgb, var(--state-color, var(--accent)) 18%, transparent);
-}
-/* Active states: glow even WITHOUT focus, so the user always knows.
-   Toned down vs. Tier 1: 22px outer glow → 12px, 4% bg tint → 2.5%.
-   Still readable as a state change without dominating the layout. */
-body[data-state="thinking"] .igrp,
-body[data-state="executing"] .igrp,
-body[data-state="error"] .igrp{
-    border-color: color-mix(in srgb, var(--state-color) 45%, transparent);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--state-color) 14%, transparent),
-                0 0 12px color-mix(in srgb, var(--state-color) 14%, transparent);
-    background: color-mix(in srgb, var(--state-color) 2.5%, rgba(255,255,255,.025));
-}
-/* Tight focus-within fallback for older browsers without color-mix. */
-@supports not (color: color-mix(in srgb, red 50%, blue)) {
-    .igrp:focus-within{border-color: var(--state-color, rgba(16,185,129,.4));}
-}
-/* User-feedback driven sizing: the input area used to feel cramped at
-   22px min-height. Bumping the minimum to 90px gives ~5 readable lines
-   of room before the textarea has to scroll, and the maximum to 320px
-   lets longer prompts breathe before forcing the user to scroll. The
-   icons row (.iside) below stays anchored to the .igrp's flex-end so
-   it always hugs the bottom of the input, not the bottom of a fixed
-   22px stub. */
-.ibox{
-    /* NO flex:1 here — flex-grow in a column container expands the
-       textarea vertically and overrides our inline height. We want the
-       textarea to be PRECISELY the height our JS computes from scrollHeight
-       (capped between min/max). width:100% keeps it horizontally filling
-       the .igrp column. */
-    width:100%;
-    background:transparent;border:none;
-    color:white;font-family:inherit;font-size:13px;
-    outline:none;resize:none;
-    /* Auto-grow: textarea starts at ONE row and ChatInput.svelte's
-       autoResize() bumps the inline `height` up to 160 px max as the
-       user types. The min-height here MUST stay tiny — anything ≥ 90 px
-       (the old value) makes the box fixed-tall and breaks auto-grow. */
-    min-height:24px;
-    /* Cap reduced from 160 → 100 px (≈ 5 rows). Past that the box stops
-       growing and an internal scrollbar appears. Keeps the bar a small
-       sliver of the screen even when the user pastes a wall of text. */
-    max-height:100px;
-    overflow-y:hidden;
-    line-height:1.5;
-    padding:2px 0;
-    box-sizing:border-box;
-}
-.ibox::placeholder{color:#334155;}
-/* Icons row sits BELOW the textarea inside the .igrp column.
-   justify-content:flex-end keeps the cluster (paperclip, mic, eraser,
-   cost predictor, model picker, send button) right-aligned, leaving
-   the visual weight balanced even when the textarea is empty.
-   border-top adds a faint separator between the typing area and the
-   controls — Cursor / Linear-style. */
-.iside{
-    display:flex;
-    align-items:center;
-    gap:3px;
-    flex-shrink:0;
-    justify-content:flex-end;
-    padding-top:3px;
-    border-top:1px solid rgba(255,255,255,.04);
-}
-.ia-btn{background:none;border:none;color:#475569;cursor:pointer;padding:5px 7px;border-radius:6px;font-size:14px;transition:.15s;line-height:1;display:flex;align-items:center;justify-content:center;}
-.ia-btn:hover{background:rgba(255,255,255,.07);color:#94a3b8;}
-.ia-btn:disabled{opacity:.25;cursor:not-allowed;}
-.ia-btn.mic-on{color:var(--red);animation:mp 1.5s infinite;}
-.ia-sep{width:1px;height:16px;background:var(--bdr);margin:0 2px;}
-.mbdg{display:flex;align-items:center;gap:4px;font-size:11px;color:#475569;padding:3px 8px;border:1px solid var(--bdr);border-radius:5px;cursor:pointer;background:rgba(0,0,0,.2);transition:.15s;min-width:130px;}
-.mbdg:hover{border-color:var(--bdr2);color:var(--txt2);}
-.mbdg select{background:none;border:none;outline:none;color:inherit;font:inherit;cursor:pointer;appearance:none;padding:0;width:100%;}
-.nvidia-custom-input{background:none;border:none;border-left:1px solid var(--bdr);outline:none;color:var(--acc);font:inherit;font-size:11px;padding:0 0 0 6px;min-width:220px;width:auto;cursor:text;}
-.nvidia-custom-input::placeholder{color:#476;font-style:italic;}
-.nvidia-custom-input:focus{color:var(--txt);}
-.mbdg option{background:#131825;color:var(--txt);}
-.mbdg optgroup{background:#060a0f;color:#475569;font-size:10px;font-weight:700;letter-spacing:.3px;}
-.sbtn{width:36px;height:36px;border-radius:8px;border:none;cursor:pointer;background:rgba(16,185,129,.12);color:var(--acc);display:flex;align-items:center;justify-content:center;font-size:13px;transition:.15s;flex-shrink:0;}
-.sbtn:hover{background:rgba(16,185,129,.22);}
-.sbtn:disabled{opacity:.35;cursor:not-allowed;}
-/* Stop button — filled square like Gemini/Claude */
-.sbtn-stop{background:rgba(239,68,68,.1);color:#ef4444;}
-.sbtn-stop:hover{background:rgba(239,68,68,.22);transform:scale(1.08);}
-/* Pending message bar */
-.pending-msg-bar{display:flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(251,191,36,.06);border-bottom:1px solid rgba(251,191,36,.15);border-radius:8px 8px 0 0;font-size:11px;color:#fbbf24;}
-.pending-msg-dot{width:6px;height:6px;border-radius:50%;background:#fbbf24;animation:pulse-pending 1.2s ease-in-out infinite;flex-shrink:0;}
-@keyframes pulse-pending{0%,100%{opacity:1}50%{opacity:.35}}
-.pending-msg-text{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85;}
-.pending-msg-cancel{background:none;border:none;color:#fbbf24;cursor:pointer;opacity:.6;font-size:11px;padding:1px 4px;border-radius:3px;transition:.12s;flex-shrink:0;}
-.pending-msg-cancel:hover{opacity:1;background:rgba(251,191,36,.12);}
+/* v1.4.23 — STAGED / CHIPS / INPUT / PENDING-MSG blocks all moved to
+   src/lib/styles/composer.css, imported from ChatInput.svelte. DO NOT
+   add .staged / .sf-* / .chips* / .chip* / .ibar / .igrp / .ibox /
+   .iside / .ia-* / .mbdg / .nvidia-custom-input / .ollama-dot / .sbtn* /
+   .pending-msg-* selectors here — edit composer.css instead. */
 /* Panic button — modern icon style */
 .panic-btn{color:#ef4444 !important;}
 .panic-btn:hover{color:#f87171 !important;background:rgba(239,68,68,.12) !important;}
@@ -1501,40 +1322,7 @@ body[data-state="error"] .igrp{
    .ctx-* / .cost-budget-* / .lang-sel / .eng-sel / .density-fine-* /
    .rate-pill selectors here — edit status-bar.css instead. Same
    duplicate-trap rationale as the tab-strip extraction in v1.4.20. */
-/* ── Cost predictor chip (inline next to model badge) ── */
-.cost-predict{
-  display:inline-flex;align-items:center;gap:5px;
-  font-family:var(--mono);font-size:10px;font-weight:600;
-  padding:3px 8px;border-radius:9px;letter-spacing:.2px;
-  cursor:help;user-select:none;
-  transition:.18s ease;
-  animation:cp-fade .25s ease;
-  white-space:nowrap;
-}
-@keyframes cp-fade{from{opacity:0;transform:translateY(-2px);}to{opacity:1;transform:none;}}
-.cost-predict .cp-icon{opacity:.7;font-size:10px;}
-.cost-predict .cp-tokens{opacity:.85;}
-.cost-predict .cp-cost{font-weight:700;letter-spacing:.1px;}
-.cost-predict-ok{
-  color:#a78bfa;background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.20);
-}
-.cost-predict-warn{
-  color:#fbbf24;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.30);
-}
-.cost-predict-high{
-  color:#ef4444;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);
-  box-shadow:0 0 8px rgba(239,68,68,.25);
-}
-.cost-predict-free{
-  color:var(--acc);background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);
-}
-.cost-predict-free .cp-icon{color:var(--acc);animation:cp-pulse 2s ease-in-out infinite;}
-@keyframes cp-pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
-/* Light theme */
-:root.light .cost-predict-ok{color:#6366f1;background:rgba(99,102,241,.08);border-color:rgba(99,102,241,.25);}
-:root.light .cost-predict-warn{color:#92400e;background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.35);}
-:root.light .cost-predict-high{color:#991b1b;background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.45);}
-:root.light .cost-predict-free{color:#0f7b5a;background:rgba(15,123,90,.10);border-color:rgba(15,123,90,.30);}
+/* v1.4.23 — .cost-predict* family moved to src/lib/styles/composer.css. */
 
 /* ── Quick-look popover for tool-card refs ── */
 .ql-popover{
@@ -1971,14 +1759,7 @@ body[data-state="error"] .igrp{
 .run-inline-btn:hover{background:rgba(16,185,129,.18);border-color:rgba(16,185,129,.4);}
 
 /* ── UX: CHAT SEARCH BAR ────────────────────── */
-.chat-search-bar{display:flex;align-items:center;gap:8px;padding:6px 14px;background:rgba(14,21,32,.9);border-top:1px solid var(--bdr);flex-shrink:0;}
-.cs-ico{font-size:13px;flex-shrink:0;}
-.cs-inp{flex:1;background:rgba(255,255,255,.06);border:1px solid var(--bdr2);border-radius:6px;color:var(--txt);font-size:12px;font-family:inherit;padding:4px 9px;outline:none;transition:border-color .2s;}
-.cs-inp:focus{border-color:var(--acc-b);}
-.cs-inp::placeholder{color:var(--txt3);}
-.cs-count{font-size:11px;color:var(--txt3);white-space:nowrap;flex-shrink:0;}
-.cs-close{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:12px;padding:2px 5px;border-radius:4px;transition:.15s;}
-.cs-close:hover{color:var(--txt);background:rgba(255,255,255,.07);}
+/* v1.4.23 — .chat-search-bar + .cs-* moved to src/lib/styles/composer.css. */
 
 /* ── UX: BREADCRUMB PILL ─────────────────────── */
 .breadcrumb-pill{font-size:11px;color:var(--txt3);background:rgba(255,255,255,.03);border:1px solid var(--bdr);border-radius:10px;padding:1px 9px !important;margin-left:6px;font-family:var(--mono);}
