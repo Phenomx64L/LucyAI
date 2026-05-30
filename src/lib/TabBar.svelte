@@ -357,7 +357,10 @@
        flex to fill all available space between the brand on the left and
        the +/≡ controls on the right. The container still scrolls
        horizontally when many tabs exceed the viewport. */
-    .tabs-area{display:flex;align-items:flex-end;flex:1 1 auto;min-width:0;height:38px;position:relative;}
+    /* v1.4.18 — flex:100 1 auto means the tab strip gets 100× more leftover
+       space than .drag-sp (flex:1 0 48px). Effectively all stretch goes
+       to tabs; drag-sp settles at its min ~48px residual. */
+    .tabs-area{display:flex;align-items:flex-end;flex:100 1 auto;min-width:0;height:38px;position:relative;}
     :global(#tabs-list){display:flex;gap:1px;flex:1 1 auto;width:100%;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
     :global(#tabs-list::-webkit-scrollbar){display:none;}
     /* v1.4.17 — Individual tabs grow a bit more (min 120px) so a title
@@ -421,8 +424,18 @@
     .tpi-close:hover{color:var(--red)!important;background:rgba(255,68,68,.1);}
     .btn-new{background:var(--bg4);border:1px solid var(--bdr);color:var(--acc);border-radius:5px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;transition:.15s;}
     .btn-new:hover{background:var(--bdr);color:white;}
-    .tb-btns{display:flex;align-items:center;gap:6px;padding:0 8px;}
-    .drag-sp{flex-grow:1;height:38px;}
+    .tb-btns{display:flex;align-items:center;gap:6px;padding:0 8px;flex-shrink:0;}
+    /* v1.4.18 — Tab strip width fix #2 (follow-up to v1.4.17 user report).
+       Previously .drag-sp had flex-grow:1, which was the REAL reason tabs
+       were compressed — even after removing the max-width:480px cap in
+       v1.4.17, drag-sp claimed all leftover space as a drag region,
+       leaving the tab strip with only its content-min width.
+
+       New rule: tabs-area absorbs leftover space with grow:100, drag-sp
+       keeps a residual 48px so the user can still drag the window from
+       the rightmost slice of the topbar. The window controls (panic /
+       focus / min / max / close) on the far right remain unaffected. */
+    .drag-sp{flex:1 0 48px;min-width:48px;max-width:120px;height:38px;}
     .win-controls{display:flex;height:38px;}
     .win-btn{width:46px;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt2);transition:.15s;}
     .win-btn:hover{background:rgba(255,255,255,.07);color:white;}

@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.18] — 2026-05-30
+
+Tab-strip width fix #2 — finishes the v1.4.17 fix that didn't go far enough.
+
+### Fix — Tab strip STILL squeezed after v1.4.17
+
+User reported a second screenshot showing the tab area still ending at
+roughly the screen midpoint, with the +/≡ controls and then a huge
+empty drag region eating the remaining ~50% of topbar width.
+
+**Real root cause (missed in v1.4.17)**: `.drag-sp` had `flex-grow: 1`.
+This is the explicit drag region between `.tb-btns` (the `+` button)
+and `.win-controls` (panic / focus / min / max / close). With `grow:1`
+on a flex sibling, it claimed all leftover space — so even after
+removing the `max-width: 480px` cap on `.tabs-area` in v1.4.17, the
+tab strip only got its content-min width and drag-sp ate the rest.
+
+**Fix**:
+- `.tabs-area`: `flex: 1 1 auto` → `flex: 100 1 auto`. Grow factor 100×
+  bigger than drag-sp's, so all stretch goes to tabs.
+- `.drag-sp`: `flex-grow: 1` → `flex: 1 0 48px; min-width: 48px;
+  max-width: 120px`. Keeps a residual 48–120px drag handle on the right
+  side so the user can still drag the window from the topbar.
+- `.tb-btns`: added `flex-shrink: 0` to prevent the `+` button from
+  being squeezed when many tabs are open.
+
+Net effect: an empty topbar with 1 tab open now shows the tab spanning
+nearly the full width between LUCY brand and the +/≡ controls; opening
+more tabs distributes the space evenly with `min-width: 120px` per tab
+as the floor; horizontal scroll kicks in only when tabs genuinely don't
+fit (≥ ~10 tabs at common screen widths).
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.17 → 1.4.18)
+M  src-tauri/Cargo.toml                      (1.4.17 → 1.4.18)
+M  src-tauri/tauri.conf.json                 (1.4.17 → 1.4.18)
+M  src/lib/TabBar.svelte                     (flex weights on tabs-area/drag-sp/tb-btns)
+M  src/lib/SetupOverlay.svelte               (1.4.17 → 1.4.18)
+M  src/lib/TutorialOverlay.svelte            (1.4.17 → 1.4.18)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.4.17] — 2026-05-30
 
 User-reported tab-strip width fix + first LucyTooltip consumers.
