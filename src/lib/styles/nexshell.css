@@ -1,0 +1,98 @@
+/* ── nexshell.css (v1.4.22) ───────────────────────────────────────────────
+   Single source of truth for the NexShell broadcast results UI:
+   the host-pick list and the per-host result rows.
+
+   Extracted from two competing locations in v1.4.22:
+     1. src/routes/page.css lines 1247-1263 (the global block)
+     2. src/lib/NexShellView.svelte's scoped <style> (~lines 3835-3851)
+
+   The two copies had subtle color drift (component used `var(--bg)` /
+   `var(--bdr)` / `#ff5555` / `#6a8a7a`; page.css hard-coded `#0b0d16` /
+   `#1e293b` / `#ef4444` / `#64887a`). page.css's copy was winning the
+   cascade tiebreaker so the rendered colors were always the page.css
+   values — using those as the consolidated truth here means visual
+   output is unchanged. The slight theme-variable improvements in the
+   component-side copy were never actually applied; they get lost in
+   this consolidation, which is the correct (no-regression) outcome.
+   ─────────────────────────────────────────────────────────────────── */
+
+/* ── Host-pick list (left side of the broadcast modal) ───────────── */
+.bc-host-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 160px;
+    overflow-y: auto;
+    background: #0b0d16;
+    border: 1px solid #1e293b;
+    border-radius: 7px;
+    padding: 8px;
+}
+.bc-host-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: .12s;
+}
+.bc-host-item:hover { background: rgba(255, 255, 255, .04); }
+.bc-host-item input[type=checkbox] {
+    accent-color: var(--acc);
+    width: 14px; height: 14px;
+    cursor: pointer;
+}
+.bc-host-ico  { font-size: 13px; }
+.bc-host-name { font-weight: 600; color: #c0d0e0; flex: 1; }
+.bc-host-addr { font-size: 10px; color: #475569; font-family: var(--mono); }
+
+/* ── Per-host result rows (after broadcast fires) ─────────────────── */
+.bc-results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.bc-result-row {
+    border-radius: 7px;
+    border: 1px solid #1e293b;
+    padding: 8px 10px;
+    font-size: 11px;
+}
+.bc-ok   { border-color: rgba(16, 185, 129, .18); background: rgba(16, 185, 129, .04); }
+.bc-fail { border-color: rgba(255,  68,  68, .18); background: rgba(255,  68,  68, .04); }
+.bc-warn { border-color: rgba(255, 200,   0, .18); background: rgba(255, 200,   0, .04); }
+
+.bc-r-host {
+    font-weight: 700;
+    color: #c0d0e0;
+    font-size: 12px;
+    display: block;
+    margin-bottom: 3px;
+}
+.bc-r-badge {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mono);
+    padding: 1px 7px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    display: inline-block;
+}
+.bc-ok .bc-r-badge   { color: #10b981; background: rgba(16, 185, 129, .10); }
+.bc-fail .bc-r-badge,
+.bc-warn .bc-r-badge { color: #ef4444; background: rgba(255,  68,  68, .10); }
+
+.bc-r-out {
+    font-size: 10px;
+    font-family: var(--mono);
+    color: #64887a;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+    max-height: 60px;
+    overflow-y: auto;
+}

@@ -1,4 +1,7 @@
 <script>
+    // v1.4.22 — Broadcast .bc-* layout extracted to a single global stylesheet
+    // so the duplicate-selector trap (tab-strip v1.4.17 → v1.4.19) doesn't recur.
+    import '$lib/styles/nexshell.css';
     import { invoke } from '@tauri-apps/api/core';
     import { listen } from '@tauri-apps/api/event';
     import { LLM_GROUPS, getModelDescription } from '$lib/models.js';
@@ -3831,24 +3834,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .rs-lucy-send:not(:disabled){border-color:rgba(16,185,129,.2);color:var(--acc);}
     .rs-lucy-send:hover:not(:disabled){background:rgba(16,185,129,.08);}
 
-    /* Broadcast modal */
-    .bc-host-list{display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto;background:var(--bg);border:1px solid var(--bdr);border-radius:7px;padding:8px;}
-    .bc-host-item{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:5px;cursor:pointer;font-size:12px;transition:.12s;}
-    .bc-host-item:hover{background:rgba(255,255,255,.04);}
-    .bc-host-item input[type=checkbox]{accent-color:var(--acc);width:14px;height:14px;cursor:pointer;}
-    .bc-host-ico{font-size:13px;}
-    .bc-host-name{font-weight:600;color:#c0d0e0;flex:1;}
-    .bc-host-addr{font-size:10px;color:#475569;font-family:var(--mono);}
-    .bc-results{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;}
-    .bc-result-row{border-radius:7px;border:1px solid #1a2030;padding:8px 10px;font-size:11px;}
-    .bc-ok{border-color:rgba(16,185,129,.18);background:rgba(16,185,129,.04);}
-    .bc-fail{border-color:rgba(255,68,68,.18);background:rgba(255,68,68,.04);}
-    .bc-warn{border-color:rgba(255,200,0,.18);background:rgba(255,200,0,.04);}
-    .bc-r-host{font-weight:700;color:#c0d0e0;font-size:12px;display:block;margin-bottom:3px;}
-    .bc-r-badge{font-size:10px;font-weight:700;font-family:var(--mono);padding:1px 7px;border-radius:8px;margin-bottom:4px;display:inline-block;}
-    .bc-ok .bc-r-badge{color:#10b981;background:rgba(16,185,129,.1);}
-    .bc-fail .bc-r-badge,.bc-warn .bc-r-badge{color:#ff5555;background:rgba(255,68,68,.1);}
-    .bc-r-out{font-size:10px;font-family:var(--mono);color:#6a8a7a;white-space:pre-wrap;word-break:break-all;margin:0;max-height:60px;overflow-y:auto;}
+    /* v1.4.22 — Broadcast modal .bc-* family extracted to
+       $lib/styles/nexshell.css (imported from <script>). The
+       page.css copy that was silently overriding these rules is
+       also deleted. Visual output unchanged (page.css's hex
+       values are the ones that were actually rendering — the
+       theme-variable versions here never reached the DOM). */
 
     /* Playbooks */
     .pb-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:10px 12px;}

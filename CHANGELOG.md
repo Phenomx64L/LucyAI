@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.22] — 2026-05-30
+
+CSS dedup continues — NexShellView broadcast results UI. Item 2 of 5
+from the v1.4.20 migration backlog.
+
+### Shipped — `.bc-*` family consolidated
+
+New `src/lib/styles/nexshell.css` is now the sole owner of the
+broadcast-results UI inside NexShellView. Imported from
+`NexShellView.svelte` via `import '$lib/styles/nexshell.css'`.
+Contents (17 selectors):
+
+- Host pick list: `.bc-host-list`, `.bc-host-item` (+ hover, checkbox),
+  `.bc-host-ico`, `.bc-host-name`, `.bc-host-addr`
+- Result rows: `.bc-results`, `.bc-result-row`
+- Status tiers: `.bc-ok`, `.bc-fail`, `.bc-warn`
+- Per-row details: `.bc-r-host`, `.bc-r-badge` (+ tier-specific colors),
+  `.bc-r-out`
+
+### Subtle behavior note
+
+The two duplicate copies had drifted: NexShellView's scoped block
+used theme variables (`var(--bg)`, `var(--bdr)`) and slightly
+different hex colors (`#ff5555`, `#6a8a7a`), while page.css used
+hard-coded hex (`#0b0d16`, `#1e293b`, `#ef4444`, `#64887a`).
+
+Since page.css was winning the cascade tiebreaker, the rendered
+colors were ALWAYS the page.css ones. The theme-variable
+improvements in the component-side copy never actually applied.
+
+We consolidated using page.css's values — visual output is
+unchanged. The theme-variable refinement could be re-introduced
+later if/when light theme support gets a deliberate pass over
+the broadcast modal; documented in the consolidated file's
+header comment so it doesn't get lost.
+
+### Migration backlog progress
+
+| # | Component | Status |
+|---|---|---|
+| 1 | `StatusBar` → `status-bar.css` | ✅ v1.4.21 |
+| 2 | `NexShellView` → `nexshell.css` (`.bc-*` family) | **✅ v1.4.22** |
+| 3 | `ChatInput` → `composer-chips.css` | next |
+| 4 | `ChatThread` → `chat-thread.css` | |
+| 5 | `DashboardView` → `dashboard-alerts.css` | |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.21 → 1.4.22)
+M  src-tauri/Cargo.toml                      (1.4.21 → 1.4.22)
+M  src-tauri/tauri.conf.json                 (1.4.21 → 1.4.22)
+A  src/lib/styles/nexshell.css               (NEW — single source of truth)
+M  src/lib/NexShellView.svelte               (import + scoped block trimmed)
+M  src/routes/page.css                       (.bc-* block removed)
+M  src/lib/SetupOverlay.svelte               (1.4.21 → 1.4.22)
+M  src/lib/TutorialOverlay.svelte            (1.4.21 → 1.4.22)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.4.21] — 2026-05-30
 
 CSS deduplication continues — StatusBar extraction. Item 1 of 5 from
