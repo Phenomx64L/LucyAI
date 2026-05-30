@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.24] — 2026-05-30
+
+CSS dedup continues — ChatThread message bubbles. Item 4 of 5 from
+the v1.4.20 migration backlog.
+
+### Shipped — `.chat-*` / `.msg-*` / reasoning / streaming consolidated
+
+New `src/lib/styles/chat-thread.css` owns the chat thread surface:
+
+- Wrapper + scroll: `.chat-wrap` (+ `.on`), `.chat-area`
+- Native virtualization: `content-visibility` rule for bubble selectors
+- Bubbles: `.msg-user`, `.msg-lucy`, `.sys-msg`, `.msg-pinned`,
+  `.msg-error` (+ guardrail-blocked variant)
+- Labels: `.mn` (+ user/lucy color overrides), `.msg-time`
+- Inline action button: `.msg-btn` (+ hover, disabled)
+- Skeleton: `.skel-block`, `.skel-line` (+ shimmer keyframe, light theme)
+- Markdown content inside `.msg-lucy`: p / pre / code / table / th / td /
+  ul / ol / li / h1 / h2 / h3 / strong (full typography)
+- Pin button: `.msg-pin` (+ hover, on state)
+- Thinking indicator: `.msg-thinking`, `.thinking-dots`, `.thinking-label`,
+  `@keyframes td`
+- Live reasoning panel: `.msg-reasoning` (+ `.reasoning-active` triple-layer
+  shimmer, `.reasoning-done`), `.reasoning-header`, `.reasoning-icon`,
+  `.reasoning-title`, `.reasoning-timer`, `.reasoning-chevron`,
+  `.reasoning-body` (+ all keyframes: reasonShimmer, reasonScan,
+  reasonGlow, reasonPulse, reasonTextShine, reasonFadeIn) + light theme
+- Streaming animation: `.streaming-active` (+ ::before edge shimmer,
+  child reveal animations, `@keyframes` streamEdgeShimmer / stream-blink /
+  streamReveal), `.td` streaming dots
+
+### What stayed in ChatThread.svelte's scoped block
+
+The component's scoped `<style>` keeps the refined versions of bubble
+rules — gradient backgrounds and inset shadows for `.msg-user` and
+`.msg-lucy`, plus rules for `.lucy-avatar-wrap` / `.lucy-avatar` /
+`.lucy-status` (presence dot), `.msg-img-gallery` (attachment gallery),
+`.chap-flip-back` (chapter-view toggle), and `.msg-react*` buttons.
+Those aren't duplicated in page.css and stay component-local.
+
+The scoped versions of `.msg-user` / `.msg-lucy` use linear gradients
+plus inset shadows; the chat-thread.css versions are flat. The scoped
+copies override the global ones because Svelte component styles
+inject later in the cascade than CSS module imports — so the gradient
+versions render. No visual change vs. v1.4.23.
+
+### Build-system fix
+
+Initial commit attempt failed: a comment I wrote in ChatThread.svelte
+contained the literal token `<style>` ("This component's scoped
+`<style>` below…"). Svelte's preprocessor tag-balance check
+interpreted that as the opening of a real style element inside
+`<script>`, causing `error: <script> was left open`. Rewrote the
+comment to say "scoped style block" instead. This is a Svelte parser
+quirk — JS comments containing HTML tag tokens aren't safe.
+
+### Deletions in `page.css`
+
+- Lines 628-632: `.msg-pin`, `.msg-user/msg-lucy position`, `.msg-pinned`
+- Lines 738-789: chat wrap/area + content-visibility + bubbles + skel
+  + sys-msg + mn + msg-time + msg-btn + `.msg-error` (52 lines)
+- Lines 791-837 partial: `.msg-lucy` markdown typography (12 selectors)
+- Lines 807-814: thinking indicator + `@keyframes td`
+- Lines 816-912: live reasoning panel + all keyframes + light theme
+  (97 lines, the largest single block)
+- Lines 1411-1432: `.streaming-active` + `.td` streaming dots
+- Line 1927: `:root.light .skel-line` light-theme override
+
+Total ~190 lines removed from page.css, ~340 lines added to
+chat-thread.css (formatted vs. minified one-liners).
+
+### Migration backlog progress
+
+| # | Component | Status |
+|---|---|---|
+| 1 | `StatusBar` → `status-bar.css` | ✅ v1.4.21 |
+| 2 | `NexShellView` → `nexshell.css` (`.bc-*`) | ✅ v1.4.22 |
+| 3 | `ChatInput` → `composer.css` | ✅ v1.4.23 |
+| 4 | `ChatThread` → `chat-thread.css` | **✅ v1.4.24** |
+| 5 | `DashboardView` → `dashboard-alerts.css` | next (last one) |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.23 → 1.4.24)
+M  src-tauri/Cargo.toml                      (1.4.23 → 1.4.24)
+M  src-tauri/tauri.conf.json                 (1.4.23 → 1.4.24)
+A  src/lib/styles/chat-thread.css            (NEW — ~340 LOC, ~50 selectors)
+M  src/lib/ChatThread.svelte                 (import added; scoped block kept for gradients/avatar/img-gallery)
+M  src/routes/page.css                       (6 deletion regions, ~190 lines)
+M  src/lib/SetupOverlay.svelte               (1.4.23 → 1.4.24)
+M  src/lib/TutorialOverlay.svelte            (1.4.23 → 1.4.24)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.4.23] — 2026-05-30
 
 CSS dedup continues — the big one. ChatInput composer consolidated.

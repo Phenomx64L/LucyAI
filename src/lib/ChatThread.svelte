@@ -1,4 +1,14 @@
 <script lang="ts">
+    // v1.4.24 — page.css's chat-thread block (.chat-wrap, .chat-area, .msg-*,
+    // .skel-*, .mn, .thinking-*, .msg-reasoning + .reasoning-*, .streaming-*)
+    // extracted to a single global stylesheet to close the v1.4.20 audit
+    // backlog (4/5). This component's scoped style block below is
+    // INTENTIONALLY preserved: it carries the refined gradient/glow versions
+    // of .msg-user and .msg-lucy plus avatar/status/img-gallery rules that
+    // aren't in page.css. Those override chat-thread.css's flat versions at
+    // runtime because Svelte component styles inject later in the cascade
+    // than CSS module imports.
+    import '$lib/styles/chat-thread.css';
     import { createEventDispatcher } from 'svelte';
     // Inlined base64 data URL — bypasses Tauri 2.x webview path resolution
     // edge cases on Windows (`https://tauri.localhost` scheme + Vite-hashed
