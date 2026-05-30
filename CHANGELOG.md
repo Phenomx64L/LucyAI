@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.16] — 2026-05-30
+
+UI/UX mega-release #2 — closes the v1.4.15 deferred list. **0 warnings, 159/159 vitest pass.**
+
+Where v1.4.15 polished the chat surface, v1.4.16 finishes the workspace
+chrome and lays primitive wrappers that future UI work can lean on
+instead of rolling its own dropdowns and tooltips.
+
+### Shipped
+
+1. **Print stylesheet for transcript export**
+   `@media print` block in `app.css` hides chrome (sidebar, status bar,
+   tab strip, composer, modals, action chevrons) and reflows the active
+   chat thread as a single white-paper column. Forces a light palette
+   regardless of theme, prints URLs after link text so the export is
+   self-contained, and adds a "Lucy Assistant — exported transcript"
+   running footer. Ctrl+P now produces a clean forensic record without
+   copy/paste gymnastics.
+
+2. **toast.promise() on DB backup + restore + large writefile**
+   `db_backup_create`, `db_backup_restore`, and `write_file_content`
+   (when content > 32 KB) now run through `toast.promise()`. Backup gets
+   the standard loading→success transition; restore explicitly tells the
+   user to restart on success; writefile is gated by size so the agent
+   loop's many small writes don't spam the corner.
+
+3. **Empty states for Snapshots and Replay surfaces**
+   `ReplayBrowserView.svelte` now uses `Skeleton` (during initial load),
+   `EmptyState` with icon "⌕" (no snapshots yet — explains capture is
+   automatic), and `EmptyState` with icon "←" (no snapshot selected —
+   nudges the user to pick from the left list).
+
+4. **Density slider (continuous fine-tune)**
+   New `densityFine` store (0..1) layered on top of the 3-mode pill.
+   StatusBar renders an accent-thumb range input next to the density
+   pill; value drives `--density-fine` on `:root`. CSS in `app.css`
+   computes a `-0.6em..+0.6em` tweak that adds/removes vertical
+   breathing room around chat bubbles. Persists to localStorage.
+   Orthogonal to the mode preset — war-room user can still dial in
+   more space without losing their dashboard layout.
+
+5. **LucyTooltip wrapper around bits-ui Tooltip**
+   New `LucyTooltip.svelte`. Replaces native `title=""` (hover-only,
+   no keyboard, no positioning control) with a delayed, focus-aware,
+   portal-rendered tooltip. Drop-in for any action button:
+   `<LucyTooltip text="…"><button>·</button></LucyTooltip>`. Visual
+   identity matches the modal/dropdown family.
+
+6. **LucyDropdown wrapper around bits-ui DropdownMenu**
+   New `LucyDropdown.svelte`. Replaces hand-rolled `<div class="popover">`
+   overflow menus that lacked focus trap, arrow-key navigation, and
+   Escape handling. Auto-styles any direct `<button>` child for visual
+   consistency. Future migration target for the model overflow, tab
+   action menu, and snapshot row actions.
+
+7. **LucyCombobox wrapper around bits-ui Combobox**
+   New `LucyCombobox.svelte`. Fuzzy-filterable picker for surfaces that
+   today are hand-rolled `<input>+<ul>`. Items shape:
+   `{ value, label, hint? }`. Case-insensitive substring filter built
+   in; fzf swap-in trivial later. Keyboard nav (↑↓ Enter Esc Home End)
+   and aria-activedescendant come from the bits-ui primitive.
+
+### Test infra
+
+`StatusBar.test.ts` mock for `$lib/density-mode` extended to include
+the new `densityFine` store + `setDensityFine` — without these the
+test would fail at module load with "No 'densityFine' export is defined
+on the mock". Documented in the mock block.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  src-tauri/Cargo.toml                      (1.4.15 → 1.4.16)
+M  src-tauri/tauri.conf.json                 (1.4.15 → 1.4.16)
+M  src/app.css                               (print stylesheet + --density-fine)
+M  src/lib/density-mode.ts                   (densityFine store + setter)
+M  src/lib/StatusBar.svelte                  (fine slider + range styles)
+M  src/lib/StatusBar.test.ts                 (mock densityFine)
+M  src/lib/ReplayBrowserView.svelte          (Skeleton + EmptyState)
+M  src/lib/SetupOverlay.svelte               (1.4.15 → 1.4.16)
+M  src/lib/TutorialOverlay.svelte            (1.4.15 → 1.4.16)
+M  src/routes/+page.svelte                   (toast.promise on backup/restore/write)
+A  src/lib/LucyTooltip.svelte
+A  src/lib/LucyDropdown.svelte
+A  src/lib/LucyCombobox.svelte
+M  package.json                              (1.4.15 → 1.4.16)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+### Migration targets for v1.4.17
+
+The three wrappers (`LucyTooltip`, `LucyDropdown`, `LucyCombobox`) ship
+without consumers in this release on purpose — replacing every
+hand-rolled overflow menu in one PR would have blown the test surface.
+v1.4.17 will fold the existing model picker → LucyCombobox, the tab
+row's right-click → LucyDropdown, and key toolbar chevrons → LucyTooltip.
+
+---
+
 ## [1.4.15] — 2026-05-30
 
 UI/UX mega-release — 8 shipped features. **0 warnings.**

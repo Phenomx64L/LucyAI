@@ -3,7 +3,7 @@
     import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
-    import { densityMode, cycleDensityMode } from '$lib/density-mode';
+    import { densityMode, cycleDensityMode, densityFine, setDensityFine } from '$lib/density-mode';
     import { getPricing, pricingLabel } from '$lib/model-pricing';
     import { getModelIcon } from '$lib/models.js';
     import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
@@ -122,6 +122,20 @@
         </span>
         <span>{$densityMode === 'war-room' ? 'WAR' : $densityMode.toUpperCase()}</span>
     </button>
+
+    <!-- v1.4.16 — fine-grained density slider. Orthogonal to the 3-mode
+         pill: tweaks --density-fine (0..1) globally so the user can dial
+         in just a bit more breathing room inside any mode without losing
+         their preset. Bound to the densityFine store. -->
+    <label class="density-fine-wrap"
+           title={isEN
+               ? 'Fine density (0 = tighter, 1 = roomier). Stacks on top of the mode preset.'
+               : 'Densidad fina (0 = más compacto, 1 = más espacioso). Se suma al modo elegido.'}>
+        <input type="range" min="0" max="1" step="0.05"
+               class="density-fine-range"
+               value={$densityFine}
+               on:input={(e) => setDensityFine(parseFloat(e.currentTarget.value))} />
+    </label>
 
     {#if activeTab}
         {@const _model = getEffectiveModel(activeTab)}
@@ -243,6 +257,27 @@
     .cost-budget-fill.cok-bg{background:var(--acc);}
     .cost-budget-fill.cy-bg{background:var(--amber);}
     .cost-budget-fill.cr-bg{background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.45);}
+    /* v1.4.16 — fine density slider. Narrow range input next to the
+       density pill; styled to match Lucy's footer rhythm. */
+    .density-fine-wrap{display:inline-flex;align-items:center;margin-left:4px;height:18px;}
+    .density-fine-range{
+        -webkit-appearance:none; appearance:none;
+        width:48px; height:3px;
+        background:var(--bdr); border-radius:2px;
+        cursor:pointer; outline:none;
+    }
+    .density-fine-range::-webkit-slider-thumb{
+        -webkit-appearance:none; appearance:none;
+        width:10px; height:10px; border-radius:50%;
+        background:var(--acc, #10b981);
+        border:none; cursor:pointer;
+        box-shadow:0 0 4px color-mix(in srgb, var(--acc,#10b981) 50%, transparent);
+    }
+    .density-fine-range::-moz-range-thumb{
+        width:10px; height:10px; border-radius:50%;
+        background:var(--acc, #10b981); border:none; cursor:pointer;
+    }
+
     /* v1.4.15 — live cost ticker pulse. Tabular-nums so the rolling
        digits don't reflow neighboring badges as they tween. */
     .cost-num{font-variant-numeric: tabular-nums; transition: text-shadow .2s;}

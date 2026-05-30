@@ -1403,3 +1403,135 @@ textarea:focus-visible,
 @media (prefers-reduced-motion: reduce) {
   .lucy-shimmer { animation: none; background: color-mix(in srgb, var(--state-color, var(--accent)) 6%, transparent); }
 }
+
+/* ── v1.4.16 — Print stylesheet for transcript export ─────────────────────
+   Goal: Ctrl+P on Lucy yields a clean, readable transcript of the active
+   tab. We hide chrome (sidebar, status bar, tab strip, toolbars, modals)
+   and let the chat thread reflow as a single column on white paper.
+
+   Why this is worth shipping: Lucy conversations are often forensic
+   evidence (security audits, sysadmin incidents). Until now the user had
+   to copy/paste into Word. Native print = one keystroke.
+   ─────────────────────────────────────────────────────────────────────── */
+@media print {
+    /* Force light-on-white regardless of theme. Bonus: avoids burning
+       toner on dark backgrounds and keeps code blocks readable. */
+    :root, :root.light, :root:not(.light) {
+        --bg:  #ffffff !important;
+        --bg2: #ffffff !important;
+        --bg3: #f6f7f9 !important;
+        --bg4: #eef0f3 !important;
+        --txt:  #111418 !important;
+        --txt2: #3b4452 !important;
+        --txt3: #5b6573 !important;
+        --bdr:  #d6dae0 !important;
+        --bdr2: #c7ccd4 !important;
+    }
+    html, body {
+        background: #ffffff !important;
+        color: #111418 !important;
+    }
+
+    /* Hide everything that's not the conversation. */
+    .sidebar, .topbar, .tabstrip, .bbar, .density-pill,
+    .composer, .composer-wrap, .composer-toolbar,
+    .modal-backdrop, .modal-card, .toast-host,
+    .predictive-strip, .chip-strip, .pinned-bar,
+    .lucy-status, .msg-pin, .msg-branch, .msg-replay, .msg-react,
+    .kb-overlay, .kb-wrap, .ctx-menu, .ctx-backdrop,
+    .ks-overlay, .ks-card, .legacy-shortcuts-overlay {
+        display: none !important;
+    }
+
+    /* The chat thread becomes the whole page. */
+    .app-main, .tab-pane, .chat-thread, .chat-scroll {
+        position: static !important;
+        overflow: visible !important;
+        max-height: none !important;
+        height: auto !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        background: #ffffff !important;
+    }
+
+    /* Each bubble: flat, bordered, page-break-friendly. */
+    .msg-user, .msg-lucy, .sys-msg {
+        background: #ffffff !important;
+        color: #111418 !important;
+        border: 1px solid #d6dae0 !important;
+        border-radius: 6px !important;
+        margin: 0 0 10pt 0 !important;
+        padding: 8pt 10pt !important;
+        box-shadow: none !important;
+        page-break-inside: avoid;
+        max-width: none !important;
+    }
+    .msg-user::before, .msg-lucy::before { content: none !important; }
+
+    .lucy-avatar-wrap, .user-avatar {
+        display: none !important;
+    }
+
+    /* Code blocks: monochrome, preserve linebreaks. */
+    pre, code, .codeblock {
+        background: #f3f4f6 !important;
+        color: #111418 !important;
+        border: 1px solid #d6dae0 !important;
+        white-space: pre-wrap !important;
+        word-break: break-word !important;
+        page-break-inside: avoid;
+    }
+
+    /* Links — show the URL after the link text so the printout is
+       self-contained. Skip cite-chips (already short). */
+    a[href]:not(.cite-chip)::after {
+        content: " (" attr(href) ")";
+        font-size: 8pt;
+        color: #5b6573;
+    }
+
+    /* Headings and lists keep some breathing room. */
+    h1, h2, h3 { page-break-after: avoid; }
+    p, li      { orphans: 3; widows: 3; }
+
+    /* Page metadata footer — printed once per page via running header.
+       Keeps the export traceable (date + Lucy version) without us
+       generating a PDF wrapper. */
+    @page {
+        margin: 18mm 16mm 20mm 16mm;
+    }
+    body::after {
+        content: "Lucy Assistant — exported transcript";
+        position: fixed;
+        bottom: 6mm; left: 0; right: 0;
+        text-align: center;
+        font-size: 8pt;
+        color: #5b6573;
+    }
+}
+
+/* ── v1.4.16 — Fine density tweak ─────────────────────────────────────────
+   `--density-fine` is a 0..1 var driven by the StatusBar slider. 0.5 is
+   the default ("no change"). We compute a tweak factor — negative shrinks
+   spacing, positive expands — and apply it to chat bubble + message-list
+   gaps. Other surfaces inherit naturally if they use these tokens.
+   ─────────────────────────────────────────────────────────────────────── */
+:root {
+    --density-fine: 0.5;
+    /* Map 0..1 → -0.6 .. +0.6 (em scale) */
+    --density-fine-scale: calc((var(--density-fine) - 0.5) * 1.2);
+}
+.chat-thread, .chat-scroll, .msg-list, .tab-pane {
+    --bubble-pad-extra: calc(var(--density-fine-scale) * 0.35em);
+    --bubble-gap-extra: calc(var(--density-fine-scale) * 0.4em);
+}
+.msg-user, .msg-lucy {
+    /* Adds/removes a small slice on top of whatever the bubble already has. */
+    padding-top:    calc(var(--bubble-pad-extra, 0px) + 0.55em) !important;
+    padding-bottom: calc(var(--bubble-pad-extra, 0px) + 0.55em) !important;
+    margin-bottom:  calc(var(--bubble-gap-extra, 0px) + 8px) !important;
+    transition: padding .18s ease, margin-bottom .18s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg-user, .msg-lucy { transition: none; }
+}

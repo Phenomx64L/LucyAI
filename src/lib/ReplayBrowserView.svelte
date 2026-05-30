@@ -17,6 +17,9 @@
 <script lang="ts">
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.4.16 — shared empty-state + skeleton primitives.
+    import Skeleton   from '$lib/Skeleton.svelte';
+    import EmptyState from '$lib/EmptyState.svelte';
 
     export let isEN: boolean = false;
     /** Optional — when present, only snapshots from this tab show by default */
@@ -233,16 +236,21 @@
         <!-- LEFT — list of snapshots -->
         <aside class="rp-list-pane">
             {#if loading && snapshots.length === 0}
-                <div class="rp-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+                <!-- v1.4.16 — skeleton placeholders during initial load. -->
+                <div class="rp-empty">
+                    <Skeleton variant="row" height="36px" count={6} />
+                </div>
             {:else if error}
                 <div class="rp-empty rp-err">{error}</div>
             {:else if snapshots.length === 0}
-                <div class="rp-empty">
-                    <div style="font-size:14px;margin-bottom:6px;">⌕</div>
-                    {isEN
-                        ? 'No snapshots yet. As you chat, every turn is captured automatically.'
-                        : 'Sin snapshots todavía. A medida que conversas, cada turno se captura automáticamente.'}
-                </div>
+                <!-- v1.4.16 — structured empty state. -->
+                <EmptyState
+                    icon="⌕"
+                    title={isEN ? 'No snapshots yet' : 'Sin snapshots todavía'}
+                    description={isEN
+                        ? 'As you chat with Lucy, every turn is captured automatically. Snapshots let you replay a turn against a different model and see the drift.'
+                        : 'A medida que conversas con Lucy, cada turno se captura automáticamente. Los snapshots permiten re-ejecutar un turno contra otro modelo y ver la divergencia.'}
+                    compact={true} />
             {:else}
                 <ul class="rp-list">
                     {#each snapshots as m (m.id)}
@@ -277,11 +285,14 @@
         <!-- RIGHT — detail + replay panel -->
         <section class="rp-detail-pane">
             {#if !selected}
-                <div class="rp-empty">
-                    {isEN
-                        ? 'Select a snapshot on the left to inspect or replay it.'
-                        : 'Selecciona un snapshot a la izquierda para inspeccionar o re-ejecutar.'}
-                </div>
+                <!-- v1.4.16 — structured empty state with the action hint
+                     baked in (the user already sees the list on the left). -->
+                <EmptyState
+                    icon="←"
+                    title={isEN ? 'Pick a snapshot' : 'Elige un snapshot'}
+                    description={isEN
+                        ? 'Select one on the left to inspect the turn or re-run it against a different model / effort.'
+                        : 'Selecciona uno a la izquierda para inspeccionar el turno o re-ejecutarlo contra otro modelo / esfuerzo.'} />
             {:else}
                 {@const s = selected}
                 <header class="rp-detail-hdr">

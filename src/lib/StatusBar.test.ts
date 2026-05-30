@@ -31,6 +31,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('$lib/density-mode', () => ({
     densityMode: { subscribe: (fn: (v: string) => void) => { fn('focus'); return () => {}; } },
     cycleDensityMode: () => {},
+    // v1.4.16 — StatusBar now also reads the fine slider store.
+    densityFine: { subscribe: (fn: (v: number) => void) => { fn(0.5); return () => {}; } },
+    setDensityFine: () => {},
 }));
 
 // Import AFTER the mocks are registered. `default` because StatusBar is a

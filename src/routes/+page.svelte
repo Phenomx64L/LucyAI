@@ -306,7 +306,17 @@ import { listen } from '@tauri-apps/api/event';
                 extensions: ['db', 'sqlite', 'bak'],
             });
             if (!target) { _dbBusy = false; return; }
-            const sizeBytes = await invoke('db_backup_create', { targetPath: target });
+            // v1.4.16 — toast.promise mirrors the same loading→success/error
+            // UX we ship for MCP discover/test. The async result is still
+            // awaited below for the inline status banner; the toast just
+            // gives the user feedback in case they navigated elsewhere.
+            const _p = invoke('db_backup_create', { targetPath: target });
+            sonnerToast.promise(_p, {
+                loading: isEN ? 'Backing up database…' : 'Respaldando base de datos…',
+                success: (b) => (isEN ? 'Backup saved · ' : 'Backup guardado · ') + _fmtBytes(b),
+                error:   (e) => (isEN ? 'Backup failed: ' : 'Backup falló: ') + String(e),
+            });
+            const sizeBytes = await _p;
             _dbMsg = (isEN ? 'Backup saved: ' : 'Backup guardado: ')
                 + _fmtBytes(sizeBytes) + ' → ' + target;
             setTimeout(() => { _dbMsg = ''; }, 6000);
@@ -328,7 +338,17 @@ import { listen } from '@tauri-apps/api/event';
                 extensions: ['db', 'sqlite', 'bak'],
             });
             if (!source) { _dbBusy = false; return; }
-            const r = await invoke('db_backup_restore', { sourcePath: source });
+            // v1.4.16 — toast.promise on restore. Higher stakes than backup
+            // so the success copy explicitly tells the user to restart.
+            const _rp = invoke('db_backup_restore', { sourcePath: source });
+            sonnerToast.promise(_rp, {
+                loading: isEN ? 'Restoring database…' : 'Restaurando base de datos…',
+                success: (r) => (isEN
+                    ? `Restored ${r.source_rows} rows — restart Lucy now`
+                    : `Restauradas ${r.source_rows} filas — reinicia Lucy ahora`),
+                error:   (e) => (isEN ? 'Restore failed: ' : 'Restauración falló: ') + String(e),
+            });
+            const r = await _rp;
             _dbMsg = (isEN
                 ? `Restored ${r.source_rows} memories. RESTART Lucy now. Safety copy at: `
                 : `Restauradas ${r.source_rows} memorias. REINICIA Lucy ahora. Copia de seguridad en: `)
@@ -5872,7 +5892,19 @@ Use ONE of these patterns instead:
                             let _oldContent = '';
                             try { _oldContent = String(await invoke('read_file_content', { path: _wPath }) || ''); }
                             catch { _oldContent = ''; }
-                            const r = await retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
+                            // v1.4.16 — toast.promise only for LARGE writes
+                            // (>32 KB). Small ones happen many times per agent
+                            // turn and would spam the corner of the screen.
+                            const _wPromise = retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
+                            if ((_fileContent?.length || 0) > 32_768) {
+                                const _wShort = _wPath.split(/[\\/]/).pop() || _wPath;
+                                sonnerToast.promise(_wPromise, {
+                                    loading: isEN ? `Writing ${_wShort}…` : `Escribiendo ${_wShort}…`,
+                                    success: ()  => isEN ? `✓ Wrote ${_wShort}` : `✓ Escrito ${_wShort}`,
+                                    error:   (e) => `${_wShort}: ${String(e)}`,
+                                });
+                            }
+                            const r = await _wPromise;
                             toolResults.push(`[WRITE RESULT] ${r}`);
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);

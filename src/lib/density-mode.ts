@@ -22,6 +22,26 @@ const LS_KEY = 'lucy_density_mode';
 /** Reactive store, primarily for the StatusBar pill. */
 export const densityMode = writable<DensityMode>('explore');
 
+// ── v1.4.16 — Fine-grained density slider ─────────────────────────────────
+// On top of the three intent modes, we expose a 0..1 fine-tune that the CSS
+// reads via `--density-fine`. 0 = ultra-tight (war-room-ish padding),
+// 1 = ultra-spacious (focus-ish padding). It's orthogonal to the mode:
+// a war-room user can still pump the slider to give themselves more
+// breathing room without losing their dashboard layout.
+const LS_FINE_KEY = 'lucy_density_fine';
+export const densityFine = writable<number>(0.5);
+function applyFine(v: number): void {
+    try {
+        const clamped = Math.max(0, Math.min(1, v));
+        document.documentElement.style.setProperty('--density-fine', clamped.toFixed(3));
+        safeSetLSString(LS_FINE_KEY, String(clamped));
+    } catch {}
+}
+export function setDensityFine(v: number): void {
+    densityFine.set(v);
+    applyFine(v);
+}
+
 /** Apply a mode to the DOM. Idempotent. */
 function applyMode(mode: DensityMode): void {
     try {
@@ -53,6 +73,9 @@ export function startDensityMode(): () => void {
     const saved = safeGetLS(LS_KEY, 'explore') as DensityMode;
     const valid: DensityMode = (['focus', 'explore', 'war-room'] as const).includes(saved as DensityMode) ? saved : 'explore';
     setDensityMode(valid);
+    // v1.4.16 — restore fine slider.
+    const savedFine = parseFloat(safeGetLS(LS_FINE_KEY, '0.5'));
+    setDensityFine(Number.isFinite(savedFine) ? savedFine : 0.5);
 
     const keyHandler = (e: KeyboardEvent) => {
         // Ctrl+1/2/3 — works EVERYWHERE including the chat input.
