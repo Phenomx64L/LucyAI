@@ -19,6 +19,11 @@
 <script>
   import { createEventDispatcher, onMount } from 'svelte';
   import { autoAnimate } from '$lib/actions/autoAnimate';
+  // v1.4.13 — Dialog primitives from bits-ui replace the hand-rolled
+  // backdrop + onKey listener. Focus trap, portal, Escape-route
+  // through the dialog stack, aria-modal/labelledby all wired by
+  // the primitive. Visual identity (modal-card styles) is preserved.
+  import { Dialog } from 'bits-ui';
   import { invoke } from '@tauri-apps/api/core';
   import ConfirmModal from '$lib/ConfirmModal.svelte';
 
@@ -347,18 +352,23 @@
   }
 
   function close() { dispatch('close'); }
-  function onKey(e) { if (e.key === 'Escape') close(); }
 
-  onMount(() => {
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  });
+  // v1.4.13 — Dialog.Root drives the open state via bind:open. When
+  // bits-ui closes the dialog (Escape, outside-click), we forward the
+  // 'close' event so the parent component (+page.svelte) clears its
+  // showMcpServersModal flag, matching the legacy behavior.
+  function onOpenChange(v) {
+    if (isOpen && !v) dispatch('close');
+  }
+  // onMount cleanup of the legacy document keydown listener is no
+  // longer needed — Dialog primitive owns key routing.
 </script>
 
-{#if isOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-  <div class="modal-backdrop" on:click|self={close} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="modal-card">
+<Dialog.Root open={isOpen} onOpenChange={onOpenChange}>
+  <Dialog.Portal>
+    <Dialog.Overlay class="modal-backdrop" />
+    <Dialog.Content class="modal-card-wrap">
+      <div class="modal-card">
       <header class="hdr">
         <div>
           <h2>🔌 {T.title}</h2>
@@ -558,33 +568,48 @@
           </div>
         </div>
       {/if}
-    </div>
-  </div>
+      </div>
+    </Dialog.Content>
+  </Dialog.Portal>
+</Dialog.Root>
 
-  <!-- Confirm delete -->
-  <ConfirmModal
-    open={!!confirmDelete}
-    title={T.delete}
-    message={T.confirmDel}
-    detail={confirmDelete ? confirmDelete.name : ''}
-    confirmLabel={T.delete}
-    cancelLabel={T.cancel}
-    variant="danger"
-    on:confirm={() => confirmDelete && doDelete(confirmDelete.name)}
-    on:cancel={() => confirmDelete = null}
-  />
-{/if}
+<!-- Confirm delete — sits outside the parent Dialog so it can layer
+     above it without being torn down on close. -->
+<ConfirmModal
+  open={!!confirmDelete}
+  title={T.delete}
+  message={T.confirmDel}
+  detail={confirmDelete ? confirmDelete.name : ''}
+  confirmLabel={T.delete}
+  cancelLabel={T.cancel}
+  variant="danger"
+  on:confirm={() => confirmDelete && doDelete(confirmDelete.name)}
+  on:cancel={() => confirmDelete = null}
+/>
 
 <style>
-  .modal-backdrop {
+  /* v1.4.13 — bits-ui portals the overlay + content outside this scope,
+     so all positioning rules are :global. Visual identity unchanged. */
+  :global(.modal-backdrop) {
     position: fixed; inset: 0;
     background: rgba(2, 6, 12, 0.78);
     backdrop-filter: blur(4px);
     z-index: 5000;
+  }
+  /* Dialog.Content wraps the actual card and provides the focus trap.
+     We use it as the centering flex parent so the card stays middle-
+     aligned even when its content is tall (overflow on the inner card). */
+  :global(.modal-card-wrap) {
+    position: fixed; inset: 0;
+    z-index: 5001;
     display: flex; align-items: center; justify-content: center;
     padding: 24px;
+    /* Pointer events pass through the wrap edges so outside-click
+       (handled by the overlay below) still dismisses. */
+    pointer-events: none;
   }
-  .modal-card {
+  :global(.modal-card-wrap > .modal-card) { pointer-events: auto; }
+  :global(.modal-card) {
     background: var(--bg2, #0b0e14);
     border: 1px solid var(--bdr, #1a2030);
     border-radius: 14px;

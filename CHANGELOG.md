@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.13] — 2026-05-29
+
+Frontend sprint — Day 2 (proof-of-concept). Two modals migrated to
+bits-ui primitives + a full migration guide for the rest.
+**220 Rust · 159 vitest · 0 svelte-check warnings.**
+
+### bits-ui modal migration — 2 of ~8 modals
+
+**ConfirmModal** rebuilt on top of `AlertDialog`:
+- Public API IDENTICAL to v1.4.12 — props, events, slot semantics
+  unchanged. Every callsite (`+page.svelte`, `McpServersModal.svelte`,
+  host management) keeps working.
+- Wins:
+  - **Focus trap with proper history restore** on close
+  - **Real Escape handling** routed through the dialog stack (nested
+    dialogs no longer collide)
+  - **Portal rendering** (no more z-index battles with sibling overlays)
+  - **aria-modal, aria-labelledby, aria-describedby** wired
+    automatically
+- Visual identity preserved 1:1: same gradient header per variant
+  (danger / warn / info), same animations, same colors.
+
+**McpServersModal** wrapped in `Dialog`:
+- Removed the legacy `document.addEventListener('keydown', onKey)`
+  Escape handler and `on:click|self` backdrop dismissal — bits-ui
+  owns key routing and outside-click now.
+- The nested `ConfirmModal` (delete confirmation) was moved OUT of
+  the parent Dialog tree so it can layer above without being torn
+  down on close.
+
+### Migration guide for the team
+
+- **`src/lib/DIALOG_MIGRATION.md`** documents the 5-step pattern,
+  AlertDialog-vs-Dialog choice, CSS adjustments (`:global()` for
+  portal-rendered nodes), pointer-events trick for outside-click,
+  and a tracking table for the 6 remaining modals (Settings,
+  ProviderConfigModal, HistoryModal, ProfileModal, PromptModal,
+  KeyringModal, ShellRecordingPlayer).
+- Reading time: ~5 min. Per-modal migration: ~20-40 min once the
+  pattern is internalized.
+
+### What changes for the user
+
+- **Tab cycles correctly** through interactive elements inside ANY
+  migrated modal (was sometimes broken in nested cases before).
+- **Escape always closes**, even when focus is on a non-cancel button.
+- **Focus returns** to the trigger button on close (was lost before).
+- **Outside click** dismisses Dialog (not AlertDialog — by design).
+
+### What changes visually
+
+Nothing. The migration is API-internal. Same colors, gradients,
+animations, button styles. Compare ConfirmModal before/after side-by-
+side and you can't tell.
+
+### Frontend sprint scoreboard after Day 2
+
+```
+Day 1 — svelte-sonner + auto-animate + Shiki         ✅ v1.4.11
+Day 2 — bits-ui modal migration                       🔄 v1.4.13 (2 of 8 done + guide)
+Day 3 — fzf fuzzy match + uPlot wrapper + cleanup    ✅ v1.4.12
+```
+
+The remaining 6 modals (Settings tabs, ProviderConfig, History, Profile,
+Prompt, Keyring, ShellRecording) follow the same documented pattern.
+Migrating them is independent work — can land one per future session
+without blocking anything else.
+
+---
+
 ## [1.4.12] — 2026-05-29
 
 Frontend sprint — Day 3 (parts 1 + 3). **220 Rust · 159 vitest (+14) ·
