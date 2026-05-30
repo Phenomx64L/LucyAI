@@ -357,11 +357,28 @@
        flex to fill all available space between the brand on the left and
        the +/≡ controls on the right. The container still scrolls
        horizontally when many tabs exceed the viewport. */
-    /* v1.4.18 — flex:100 1 auto means the tab strip gets 100× more leftover
-       space than .drag-sp (flex:1 0 48px). Effectively all stretch goes
-       to tabs; drag-sp settles at its min ~48px residual. */
-    .tabs-area{display:flex;align-items:flex-end;flex:100 1 auto;min-width:0;height:38px;position:relative;}
-    :global(#tabs-list){display:flex;gap:1px;flex:1 1 auto;width:100%;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
+    /* v1.4.19 — Tab strip width fix #3 (definitive).
+       v1.4.18 used flex:100 1 auto on .tabs-area + flex:1 0 48px on
+       .drag-sp, but the user reported the win-controls moved to the
+       middle and tabs were still squeezed. Root causes this round:
+         (a) `width:100%` on #tabs-list conflicted with its parent's
+             flex sizing — the inner list defaulted to its content
+             intrinsic width instead of growing.
+         (b) flex-basis `auto` on .tabs-area used overflow content as
+             the basis, so the grow calculation never kicked in.
+         (c) .drag-sp still claimed visible width that pushed
+             win-controls inward.
+       Fix:
+         - .tabs-area: flex:1 1 0 (basis 0 → pure grow from nothing).
+         - #tabs-list: drop width:100%, keep flex:1 1 0 — inherits
+           parent width through flex layout only.
+         - .drag-sp: flex:0 0 12px — a 12px visual gap, no grow.
+       Net effect: tabs-area fills ALL leftover space between brand
+       and the + button cluster; the +/≡/win-controls cluster sticks
+       to the right edge. Window drag still works via the topbar
+       header itself (data-tauri-drag-region on <header class="tb">). */
+    .tabs-area{display:flex;align-items:flex-end;flex:1 1 0;min-width:0;height:38px;position:relative;}
+    :global(#tabs-list){display:flex;gap:1px;flex:1 1 0;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
     :global(#tabs-list::-webkit-scrollbar){display:none;}
     /* v1.4.17 — Individual tabs grow a bit more (min 120px) so a title
        like "Necesito un informe ejecutivo…" reads with at least a few
@@ -425,17 +442,16 @@
     .btn-new{background:var(--bg4);border:1px solid var(--bdr);color:var(--acc);border-radius:5px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;transition:.15s;}
     .btn-new:hover{background:var(--bdr);color:white;}
     .tb-btns{display:flex;align-items:center;gap:6px;padding:0 8px;flex-shrink:0;}
-    /* v1.4.18 — Tab strip width fix #2 (follow-up to v1.4.17 user report).
-       Previously .drag-sp had flex-grow:1, which was the REAL reason tabs
-       were compressed — even after removing the max-width:480px cap in
-       v1.4.17, drag-sp claimed all leftover space as a drag region,
-       leaving the tab strip with only its content-min width.
-
-       New rule: tabs-area absorbs leftover space with grow:100, drag-sp
-       keeps a residual 48px so the user can still drag the window from
-       the rightmost slice of the topbar. The window controls (panic /
-       focus / min / max / close) on the far right remain unaffected. */
-    .drag-sp{flex:1 0 48px;min-width:48px;max-width:120px;height:38px;}
+    /* v1.4.19 — drag-sp becomes a fixed 12px visual gap. No flex-grow
+       (that was what pushed win-controls toward the middle in v1.4.18
+       — even with max-width:120px, the tabs+drag-sp basis math left
+       a chunk of empty space between the + and the win-controls).
+       Window drag continues to work via <header class="tb"> itself,
+       which still has data-tauri-drag-region. Inside .tabs-area we
+       set app-region:no-drag because tabs are clickable, but the
+       small slivers of empty topbar (e.g. above the tabs) remain
+       draggable from the header. */
+    .drag-sp{flex:0 0 12px;height:38px;}
     .win-controls{display:flex;height:38px;}
     .win-btn{width:46px;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt2);transition:.15s;}
     .win-btn:hover{background:rgba(255,255,255,.07);color:white;}

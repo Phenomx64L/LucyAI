@@ -403,13 +403,30 @@ html.app-hidden *::after{
 .brand:hover{opacity:.75;}
 .bdot{width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 6px rgba(16,185,129,0.5);}
 /* ── TABS AREA ─────────────────────────────── */
-.tabs-area{display:flex;align-items:flex-end;max-width:480px;min-width:0;height:38px;position:relative;}
-#tabs-list{display:flex;gap:1px;flex:1;max-width:480px;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
+/* v1.4.19 — Tab strip width fix #3 (the real one).
+   v1.4.17 + v1.4.18 edited TabBar.svelte's scoped <style>, but THIS
+   block in page.css has the same selectors as global rules and was
+   silently overriding everything. That's why neither prior release
+   actually changed the rendered width. Now the global block is the
+   single source of truth and the scoped block in TabBar.svelte just
+   defers to it.
+
+   New flex weights:
+     .tabs-area   flex:1 1 0  — basis 0 + grow 1 = absorbs ALL leftover
+                                space between brand and +/≡ cluster.
+     #tabs-list   flex:1 1 0  — same, no width:100% which previously
+                                conflicted with flex sizing.
+     .tab         min-width:120px, padding:0 14px — readable chips.
+     .tab-title   max-width:240px — Spanish titles like
+                                "Necesito un informe ejecutivo…" don't
+                                ellipsis after three words. */
+.tabs-area{display:flex;align-items:flex-end;flex:1 1 0;min-width:0;height:38px;position:relative;}
+#tabs-list{display:flex;gap:1px;flex:1 1 0;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
 #tabs-list::-webkit-scrollbar{display:none;}
-.tab{display:flex;align-items:center;gap:6px;padding:0 12px;height:34px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
+.tab{display:flex;align-items:center;gap:6px;padding:0 14px;height:34px;min-width:120px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
 .tab:hover{background:rgba(255,255,255,0.03);color:#94a3b8;}
 .tab.active{background:var(--bg2);color:var(--acc);border-color:var(--bdr);border-top:2px solid var(--acc);}
-.tab-title-txt{max-width:170px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
+.tab-title-txt{max-width:240px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
 .tab-rename-input{background:rgba(0,0,0,.4);border:1px solid var(--acc-b);border-radius:3px;color:var(--acc);font-size:12px;font-family:inherit;padding:1px 5px;width:110px;outline:none;-webkit-app-region:no-drag;}
 .tdot{width:6px;height:6px;border-radius:50%;background:var(--purple);opacity:.6;flex-shrink:0;}
 .tx{font-size:10px;color:transparent;padding:1px 3px;border-radius:3px;flex-shrink:0;}
@@ -442,7 +459,13 @@ html.app-hidden *::after{
 .tb-btns{display:flex;align-items:center;gap:6px;padding:0 8px;}
 .btn-brain{background:var(--bg3);border:1px solid var(--bdr);border-radius:5px;color:var(--purple);cursor:pointer;font-size:13px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;transition:.15s;}
 .btn-brain:hover{background:var(--bdr2);}
-.drag-sp{flex-grow:1;height:38px;}
+/* v1.4.19 — drag-sp shrunk to a 12px visual gap, no flex-grow.
+   The previous flex-grow:1 was what pushed win-controls inward and
+   stole space from the tab strip. Window drag still works because
+   <header class="tb"> itself has data-tauri-drag-region; the tiny
+   empty bands above tabs and around win-controls remain draggable. */
+.drag-sp{flex:0 0 12px;height:38px;}
+.tb-btns{flex-shrink:0;}
 .win-controls{display:flex;height:38px;}
 .win-btn{width:46px;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt2);transition:.15s;}
 .win-btn:hover{background:rgba(255,255,255,.07);color:white;}

@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.19] — 2026-05-30
+
+Tab-strip width fix #3 — the real one. Closes the v1.4.17 → v1.4.18
+saga where the tabs kept getting "fixed" without actually changing.
+
+### Fix — Why v1.4.17 and v1.4.18 didn't work
+
+User reported a third screenshot: tabs still squeezed, AND now the
+window controls (panic / focus / minimize / maximize / close) appeared
+shifted toward the middle of the topbar with a large empty gap before
+them.
+
+**Real root cause (finally)**: `src/routes/page.css` contained a
+COMPLETE DUPLICATE of the tab-strip CSS block (lines 400-445) with
+the original v1.4.0 values:
+
+```
+.tabs-area { max-width: 480px; }
+#tabs-list { flex: 1; max-width: 480px; }
+.tab       { padding: 0 12px; /* no min-width */ }
+.tab-title-txt { max-width: 170px; }
+.drag-sp   { flex-grow: 1; }
+```
+
+These global non-scoped rules in `page.css` were silently overriding
+the `:global(...)` selectors inside `TabBar.svelte`'s `<style>` block,
+because both ended up as global rules at runtime and CSS source-order
+(page.css loads later via `+layout`) won the cascade tiebreaker.
+
+So every "fix" I applied to TabBar.svelte from v1.4.17 onward had
+zero visible effect. The browser was reading `max-width: 480px` from
+`page.css` while I was admiring my newer values in TabBar.svelte.
+
+**Fix** — update the authoritative copy in `page.css`:
+
+| Selector | v1.4.0 | v1.4.19 |
+|----------|--------|---------|
+| `.tabs-area` | `max-width: 480px` | `flex: 1 1 0` |
+| `#tabs-list` | `flex: 1; max-width: 480px` | `flex: 1 1 0` |
+| `.tab` | `padding: 0 12px` | `padding: 0 14px; min-width: 120px` |
+| `.tab-title-txt` | `max-width: 170px` | `max-width: 240px` |
+| `.drag-sp` | `flex-grow: 1` | `flex: 0 0 12px` |
+| `.tb-btns` | (no shrink rule) | `flex-shrink: 0` |
+
+`.drag-sp` dropping from `flex-grow:1` to a 12px fixed gap is what
+moves the window controls back to the right edge — previously it
+claimed all leftover space, pushing the +/≡/panic/min/max/close
+cluster toward the middle. Window drag still works because
+`<header class="tb">` itself has `data-tauri-drag-region`; the
+small bands above and around the tabs remain draggable.
+
+`.tabs-area`'s `flex: 1 1 0` (basis 0 + grow 1) absorbs every pixel
+between the LUCY brand and the +/≡ cluster. With one tab open it
+spans nearly the full topbar width; with many, they distribute
+evenly with a 120px floor per tab.
+
+The duplicate block in TabBar.svelte's scoped `<style>` was also
+updated to the same values so the source of truth is consistent — if
+the page.css copy ever gets removed, the scoped one matches.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.18 → 1.4.19)
+M  src-tauri/Cargo.toml                      (1.4.18 → 1.4.19)
+M  src-tauri/tauri.conf.json                 (1.4.18 → 1.4.19)
+M  src/routes/page.css                       (authoritative tab CSS)
+M  src/lib/TabBar.svelte                     (mirror scoped copy)
+M  src/lib/SetupOverlay.svelte               (1.4.18 → 1.4.19)
+M  src/lib/TutorialOverlay.svelte            (1.4.18 → 1.4.19)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+
+### Lesson learned
+
+When a CSS change doesn't appear in the browser, grep the entire
+src tree for the selector before editing more. Lucy has a legacy
+split between Svelte scoped styles and the consolidated page.css —
+this is the second time a duplicate has bitten a sprint (the first
+was the chat skel-line shimmer in v1.3.7). Adding a follow-up
+chore: extract tab CSS to a single file (`tab-strip.css`) imported
+by TabBar.svelte to prevent recurrence.
+
+---
+
 ## [1.4.18] — 2026-05-30
 
 Tab-strip width fix #2 — finishes the v1.4.17 fix that didn't go far enough.
