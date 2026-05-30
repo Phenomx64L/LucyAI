@@ -54,3 +54,4 @@ pub mod dashboard_integrations;
 pub mod hash_chain;
 pub mod smart_chips;
 pub mod chip_memory;
+pub mod db_maintenance;

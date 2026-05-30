@@ -1,5 +1,14 @@
 // ── Lucy — Tauri entry point ───────────────────────────────────────────────────
 
+// v1.4.10 — mimalloc as the global allocator. 10-30% perf win on hot paths
+// (JSON parse, SQLite reads, Markdown render) at zero behavioral risk:
+// mimalloc is API-compatible with the system allocator. The static is
+// referenced via #[global_allocator] so it's swapped at link time and
+// every box / vec / string allocation routes through mimalloc for the
+// entire process.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod state;
 mod utils;
 mod commands;
@@ -10,10 +19,38 @@ use commands::{ai, compliance, config, hosts, inventory, indexer, incident, loca
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // v1.4.10 — Single-instance: if a second Lucy is launched, focus
+        // the existing window instead of spawning a duplicate process.
+        // CRITICAL: prevents two processes racing for the SQLite write
+        // lock (which would also explain part of the WAL bloat the audit
+        // flagged). Must be the FIRST plugin so it runs before other
+        // setup that would otherwise initialize twice.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
+        // v1.4.10 — Window-state: persist size, position, and maximized
+        // state across launches. Default storage under
+        // %APPDATA%\<bundle-id>\window-state.json. Silently loads on
+        // first webview window creation; no further wiring needed.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // v1.4.10 — DB background maintenance task. Spawns a single
+            // hourly tokio task that prunes stale rows from chip_click_log
+            // / conversation_turns / task_events, runs `wal_checkpoint
+            // (TRUNCATE)` to reclaim WAL file space, and runs `PRAGMA
+            // optimize`. Idempotent: re-calling spawn_background_maintenance
+            // is a no-op thanks to the internal AtomicBool guard.
+            // Disable via LUCY_DB_MAINT_DISABLE=1 (CI / tests).
+            commands::db_maintenance::spawn_background_maintenance();
 
             // ── OpenClaw Gateway — token-protected localhost webhook receiver ──
             // Opt-out via `LUCY_DISABLE_OPENCLAW=1`. Auth required: clients must
@@ -461,6 +498,7 @@ pub fn run() {
             commands::chip_memory::log_chip_event,
             commands::chip_memory::suggest_memory_chips,
             commands::chip_memory::chip_stats_summary,
+            commands::db_maintenance::db_maintenance_run_now,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

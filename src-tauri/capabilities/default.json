@@ -12,6 +12,7 @@
     "core:window:allow-set-title",
     "core:window:allow-close",
     "sql:default",
-    "notification:default"
+    "notification:default",
+    "window-state:default"
   ]
 }
