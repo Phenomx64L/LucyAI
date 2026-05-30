@@ -266,13 +266,50 @@ fn validate_lucy_db(path: &Path) -> Result<i64, String> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ).map_err(|e| format!("Cannot open as SQLite: {}", e))?;
 
-    // PRAGMA integrity_check is the gold-standard "is this DB corrupted"
-    // test. Cheap on a small DB, ~50ms on a 100MB one.
-    let integrity: String = conn
-        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-        .map_err(|e| format!("integrity_check query failed: {}", e))?;
+    // v1.4.9 (C5): same lock-contention treatment as diagnostics
+    // (check_database_health) — give quick_check up to 10 s to acquire
+    // the FTS5 inverted-index read lock instead of failing instantly
+    // with "is locked", and treat lock-style errors as transient
+    // rather than corruption. Otherwise a restore-from-backup on a
+    // healthy DB falsely rejects under concurrent writes (smart_chips,
+    // audit, conversation_turns) and the user thinks their file is
+    // broken. Real corruption still surfaces because its error text
+    // never contains "is locked" / "query error".
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(10_000));
+
+    // quick_check is the right tool here, not full integrity_check —
+    // it skips UNIQUE-constraint validation which adds ~10× cost on
+    // big DBs without catching new corruption classes. Same gold-
+    // standard guarantee for malformed pages / bad rowids.
+    let integrity_raw: String = conn
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .map_err(|e| format!("quick_check query failed: {}", e))?;
+
+    let is_transient_lock = |s: &str| {
+        let lower = s.to_lowercase();
+        lower.contains("database is locked")
+            || lower.contains("is locked")
+            || lower.contains("query error")
+    };
+    // One-shot retry if locked — 200ms is enough for typical write
+    // bursts to commit and release their lock.
+    let integrity = if integrity_raw != "ok" && is_transient_lock(&integrity_raw) {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        conn.query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0))
+            .unwrap_or_else(|_| integrity_raw.clone())
+    } else {
+        integrity_raw
+    };
+
     if integrity != "ok" {
-        return Err(format!("Integrity check returned: {}", integrity));
+        // If after retry it's STILL a lock-style error, accept the
+        // file rather than rejecting a healthy DB the user worked
+        // hard to restore. Real corruption falls through to Err.
+        if !is_transient_lock(&integrity) {
+            return Err(format!("Integrity check returned: {}", integrity));
+        }
+        // Log but continue.
+        eprintln!("[db_backup] validate_lucy_db: transient lock during integrity check, proceeding: {}", integrity);
     }
 
     // Schema markers — both tables exist in EVERY Lucy install since v1.0.

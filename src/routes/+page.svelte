@@ -6030,8 +6030,8 @@ Use ONE of these patterns instead:
                                 if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false});
                                 else if (execType==='wmic')     out=await invoke('execute_wmic',   {query:cmd});
                                 else if (execType==='netsh')    out=await invoke('execute_netsh',  {args:cmd});
-                                else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false});
-                                else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false});
+                                else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false,bypassToken:null});
+                                else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false,bypassToken:null});
                                 else if (execType==='execute_powershell') out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
                                 else                            out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
 
@@ -6065,6 +6065,36 @@ Use ONE of these patterns instead:
                                 }
                                 finishToolCard(_execCard, safeOut, true);
                             } catch(e) {
+                                // v1.4.9 fix (C1): SECURITY_BLOCK from inside the agent loop
+                                // used to be folded into toolResults as a generic
+                                // [EXECUTION ERROR], so the LLM "reasoned about it" and
+                                // retried 3× (often hitting budget), and the user never saw
+                                // the pendingSecurityBlock authorization panel. This was the
+                                // wider root cause of v1.4.7 RunAs incident — affects ALL
+                                // execTypes (cmd/cscript/reg/wmic/netsh/powershell), not
+                                // just RunAs. We now break out of the loop and surface the
+                                // approval panel so the user can authorize a single retry.
+                                const errStr = typeof e === 'string' ? e : String(e);
+                                if (errStr.startsWith('SECURITY_BLOCK:')) {
+                                    auditAlerts++;
+                                    const parts = errStr.split(':');
+                                    const token = parts[1] || '';
+                                    const bw    = parts.slice(2).join(':') || parts[1] || 'restricted';
+                                    const sc    = cmd.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                    pendingSecurityBlock = { tabId, cmd, ctx: '', doSpeak, blockWord: bw, displayCmd: sc, execType, token };
+                                    addMsg(tabId, {
+                                        role: 'lucy',
+                                        html: `<div class="mn" style="color:#fbbf24;">⬡ Lucy (Seguridad)</div>Instrucción restringida durante el agent loop [${{powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS'}]: <code>${bw.slice(0,80)}</code>. Revisa el panel de autorización debajo.`,
+                                        style: 'border-left-color:#fbbf24;background:rgba(251,191,36,0.04);',
+                                    });
+                                    finishToolCard(_execCard, `SECURITY_BLOCK · esperando autorización`, false);
+                                    pushTrace({ phase: 'info', label: `⬡ Security block (step ${loop_i + 1}) — awaiting user authorization`, detail: bw, step: loop_i + 1, tabId });
+                                    if (doSpeak) speak('Pausado por seguridad.');
+                                    // Hard exit: stop the agent loop, let pendingSecurityBlock UI take over.
+                                    t._cancelled = true;
+                                    fin(tabId);
+                                    return;
+                                }
                                 agentWarps.push(warpBlock(cmd, String(e), false, 0, 'ERR'));
                                 const errDedup = checkErrorRepeat(String(e));
                                 _lt.end(false, String(e), 2);
@@ -6847,8 +6877,8 @@ times the SAME way, switch tool kind entirely.
                     if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false});
                     else if (execType==='wmic')     out=await invoke('execute_wmic',   {query:cmd});
                     else if (execType==='netsh')    out=await invoke('execute_netsh',  {args:cmd});
-                    else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false});
-                    else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false});
+                    else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false,bypassToken:null});
+                    else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false,bypassToken:null});
                     else                            out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
                     const elapsed=Date.now()-t0;
                     _updateWM(t, { type:'exec', cmd, target:'local', ok:true, ms:elapsed });
@@ -7002,9 +7032,13 @@ times the SAME way, switch tool kind entirely.
         try{
             let out;
             // SEC-8 FIX: CMD now uses the same cryptographic bypass token as PowerShell.
+            // v1.4.9 (C3): execute_reg and execute_cscript now also accept bypassToken.
+            // forceWrite/forceExecute retained for a one-release deprecation window so
+            // users on a stale build don't suddenly lose the approval path entirely;
+            // when a real token is supplied, the boolean is ignored server-side.
             if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false,bypassToken:token});
-            else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:true});
-            else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:true});
+            else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false,bypassToken:token});
+            else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false,bypassToken:token});
             else                            out=await invoke('execute_powershell',{script:cmd,bypassToken:token});
             const elapsed=Date.now()-t0;
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});

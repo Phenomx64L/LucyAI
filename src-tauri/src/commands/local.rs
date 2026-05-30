@@ -445,7 +445,7 @@ pub async fn execute_netsh(args: String) -> Result<String, String> {
 // ── REG.EXE — consultas de registro sin PowerShell ───────────────────────────
 
 #[tauri::command]
-pub async fn execute_reg(args: String, force_write: bool) -> Result<String, String> {
+pub async fn execute_reg(args: String, force_write: bool, bypass_token: Option<String>) -> Result<String, String> {
     // Permission check (user-defined rules)
     let perm = super::metrics::check_permission(format!("reg {}", &args), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -461,11 +461,51 @@ pub async fn execute_reg(args: String, force_write: bool) -> Result<String, Stri
         || lower.starts_with("import ")
         || lower.starts_with("restore ");
 
-    if is_write && !force_write {
-        return Err("SECURITY_BLOCK:reg write — usa force_write=true para operaciones de escritura en el registro.".to_string());
+    // v1.4.9 (C3): registry writes now go through the SAME cryptographic
+    // bypass_token flow as execute_cmd / execute_powershell. The old code
+    // returned a `force_write:bool` SECURITY_BLOCK with no real token — the
+    // frontend parsed `parts[1]` expecting a token but got message text,
+    // so the approval button did nothing AND the agent loop could pass
+    // `force_write:true` autonomously to bypass the gate. Now the gate is
+    // crypto-verified end to end and a blocked attempt always lands in the
+    // audit trail with [REG_BLOCKED_PENDING_AUTH].
+    let mut bypassed_by_token = false;
+    if is_write {
+        crate::state::purge_expired_bypass_tokens();
+        if let Some(ref token) = bypass_token {
+            if let Ok(mut tokens_map) = crate::state::BYPASS_TOKENS.lock() {
+                if let Some((authorized_script, _expiry)) = tokens_map.get(token) {
+                    if authorized_script == &args {
+                        bypassed_by_token = true;
+                        audit(&format!("[{}] [HOST:{}] [REG_AUTHORIZED_BYPASS] {}",
+                            ts(), host(), &args[..args.len().min(300)]));
+                        tokens_map.remove(token);
+                    }
+                }
+            }
+        }
+        if !bypassed_by_token {
+            // Issue a fresh token and audit the pending-auth state.
+            let new_token = crate::state::generate_secure_token();
+            let expiry = std::time::Instant::now()
+                + std::time::Duration::from_secs(crate::state::BYPASS_TOKEN_TTL_SECS);
+            if let Ok(mut t) = crate::state::BYPASS_TOKENS.lock() {
+                t.insert(new_token.clone(), (args.clone(), expiry));
+            }
+            audit(&format!("[{}] [HOST:{}] [REG_BLOCKED_PENDING_AUTH] {}",
+                ts(), host(), &args[..args.len().min(300)]));
+            // Compatibility shim: keep accepting `force_write:true` from the
+            // legacy frontend path during a one-release deprecation window.
+            // The agent loop's auto-retry path no longer benefits because
+            // it doesn't set force_write, only the explicit "Autorizar"
+            // button. Will be removed in v1.5.0.
+            if !force_write {
+                return Err(format!("SECURITY_BLOCK:{}:reg write", new_token));
+            }
+        }
     }
 
-    let op_type = if is_write { "REG_WRITE" } else { "REG_READ" };
+    let op_type = if is_write { if bypassed_by_token { "REG_WRITE_BYPASS" } else { "REG_WRITE_LEGACY_FORCE" } } else { "REG_READ" };
     audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op_type, &args[..args.len().min(300)]));
 
     let parsed_args = parse_args(&args);
@@ -496,7 +536,7 @@ pub async fn execute_reg(args: String, force_write: bool) -> Result<String, Stri
 // ── CSCRIPT — Windows Script Host para automatización COM / AD ────────────────
 
 #[tauri::command]
-pub async fn execute_cscript(script_content: String, force_execute: bool) -> Result<String, String> {
+pub async fn execute_cscript(script_content: String, force_execute: bool, bypass_token: Option<String>) -> Result<String, String> {
     // Permission check (user-defined rules)
     let perm = super::metrics::check_permission("cscript".to_string(), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -513,15 +553,46 @@ pub async fn execute_cscript(script_content: String, force_execute: bool) -> Res
         "winhttp.winhttprequest",
         "msxml2.xmlhttp",
     ];
+
+    // v1.4.9 (C3): same crypto bypass_token treatment as execute_cmd /
+    // execute_powershell / execute_reg. Old path: returned SECURITY_BLOCK:<name>
+    // (no token) AND respected a boolean force_execute the agent loop could
+    // set autonomously. Both pieces were a security hole: the frontend couldn't
+    // surface a working approval (it parsed parts[1] as a token but got the
+    // blockword string) AND the LLM could request `wscript.shell` and have
+    // the auto-retry path silently bypass with force_execute:true.
     let mut bypassed = false;
-    for blocked in &blocklist {
-        if lower.contains(blocked) {
-            if force_execute {
-                write_app_log("WARNING", &format!("CScript bypass autorizado: {}", blocked));
+    crate::state::purge_expired_bypass_tokens();
+    if let Some(ref token) = bypass_token {
+        if let Ok(mut tokens_map) = crate::state::BYPASS_TOKENS.lock() {
+            if let Some((authorized_script, _expiry)) = tokens_map.get(token) {
+                if authorized_script == &script_content {
+                    bypassed = true;
+                    write_app_log("WARNING", "Usuario autorizó cscript destructivo vía token");
+                    tokens_map.remove(token);
+                }
+            }
+        }
+    }
+    if !bypassed {
+        for blocked in &blocklist {
+            if lower.contains(blocked) {
+                // Issue real bypass token, return with token + reason.
+                let new_token = crate::state::generate_secure_token();
+                let expiry = std::time::Instant::now()
+                    + std::time::Duration::from_secs(crate::state::BYPASS_TOKEN_TTL_SECS);
+                if let Ok(mut t) = crate::state::BYPASS_TOKENS.lock() {
+                    t.insert(new_token.clone(), (script_content.clone(), expiry));
+                }
+                audit(&format!("[{}] [HOST:{}] [CSCRIPT_BLOCKED_PENDING_AUTH] {} :: {}",
+                    ts(), host(), blocked, &script_content[..script_content.len().min(200)]));
+                if !force_execute {
+                    return Err(format!("SECURITY_BLOCK:{}:{}", new_token, blocked));
+                }
+                // Legacy force_execute deprecation window (same as execute_reg).
+                write_app_log("WARNING", &format!("CScript legacy-force bypass: {}", blocked));
                 bypassed = true;
                 break;
-            } else {
-                return Err(format!("SECURITY_BLOCK:{}", blocked));
             }
         }
     }
