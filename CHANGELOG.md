@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.20] — 2026-05-30
+
+Preventive chore release — closes the v1.4.19 lesson loop and audits
+the rest of the CSS layer for the same trap.
+
+### Shipped
+
+1. **Extracted tab/topbar CSS to a single file**
+   New `src/lib/styles/tab-strip.css` is now the only source of truth
+   for `.tb`, `.tabs-area`, `#tabs-list`, `.tab*`, `.brand`, `.bdot`,
+   `.tab-picker-*`, `.tpi-*`, `.btn-new`, `.tb-btns`, `.drag-sp`, and
+   `.win-controls` / `.win-btn`. Imported from `TabBar.svelte` via
+   `import '$lib/styles/tab-strip.css'`. The duplicate block in
+   `src/routes/page.css` (lines 399-472) was deleted; a placeholder
+   comment in its place reads "DO NOT add tab-strip selectors here.
+   Edit tab-strip.css instead." TabBar's scoped `<style>` now keeps
+   only the dynamic component-specific rules (status-dot colors,
+   model pill, hover preview popover, theme glass overrides) — none
+   of which are duplicated elsewhere.
+
+2. **Audited the rest of page.css for the same trap**
+   New `docs/css-duplicates-audit.md`. An offline script:
+   - Extracts every top-level class/id selector from `page.css`.
+   - Scans every `*.svelte` `<style>` block for the same selector
+     (as `:global(.foo)` or scoped `.foo {}`).
+
+   Findings:
+
+   | Bucket | Count |
+   |---|---|
+   | Total selectors in page.css | 493 |
+   | Selectors that ALSO live in a component scoped style | **232** |
+   | High-risk single-component duplicates (latent override bombs) | **220** |
+   | Multi-component shared utilities (likely intentional) | 12 |
+
+   Top culprits by component:
+   - `NexShellView.svelte` — 9 `.bc-*` duplicates (broadcast results UI)
+   - `DashboardView.svelte` — 5 `.alert-*` duplicates
+   - `StatusBar.svelte` — `.bbar`, `.bi`, `.cost-budget-*`
+   - `ChatInput.svelte` — full chip family `.chip*`, `.iside`, `.sbtn`
+   - `ChatThread.svelte` — `.chat-area`, `.chat-wrap`, msg-* helpers
+
+   Each one is a v1.4.19-style trap waiting to happen. The doc
+   recommends per-feature `src/lib/styles/<feature>.css` extraction
+   following the tab-strip playbook; this release ships the audit
+   itself, the extractions will roll out incrementally so we don't
+   collapse 220 selectors in a single PR.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.19 → 1.4.20)
+M  src-tauri/Cargo.toml                      (1.4.19 → 1.4.20)
+M  src-tauri/tauri.conf.json                 (1.4.19 → 1.4.20)
+A  src/lib/styles/tab-strip.css              (NEW — single source of truth)
+M  src/lib/TabBar.svelte                     (import tab-strip.css, scoped block trimmed to component-specific bits)
+M  src/routes/page.css                       (tab-strip block removed, placeholder comment)
+M  src/lib/SetupOverlay.svelte               (1.4.19 → 1.4.20)
+M  src/lib/TutorialOverlay.svelte            (1.4.19 → 1.4.20)
+A  docs/css-duplicates-audit.md              (NEW — 232 duplicates catalogued)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+
+### Migration backlog for v1.4.21+
+
+Priority order (high-risk first, by visual prominence and recent
+churn):
+
+1. `StatusBar.svelte`: extract `.bbar`, `.bi`, cost-* and rate-pill
+   styles to `status-bar.css`.
+2. `NexShellView.svelte`: extract all `.bc-*` to `nexshell.css`.
+3. `ChatInput.svelte`: extract chip family to `composer-chips.css`.
+4. `ChatThread.svelte`: extract message-bubble layout to `chat-thread.css`.
+5. `DashboardView.svelte`: extract `.alert-*` to `dashboard-alerts.css`.
+
+Each extraction is a single self-contained PR following the
+v1.4.20 tab-strip playbook.
+
+---
+
 ## [1.4.19] — 2026-05-30
 
 Tab-strip width fix #3 — the real one. Closes the v1.4.17 → v1.4.18

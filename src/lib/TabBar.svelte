@@ -1,6 +1,10 @@
 <script lang="ts">
     import { createEventDispatcher, tick } from 'svelte';
     import OctagonX from '@tabler/icons-svelte/icons/octagon-minus';
+    // v1.4.20 — Topbar / tabs / win-controls layout extracted to a single
+    // global stylesheet so we never repeat the duplicate-selector trap
+    // that caused the v1.4.17 → v1.4.19 tab-strip width saga.
+    import '$lib/styles/tab-strip.css';
     export let tabs: any[] = [];
     export let activeTabId: string | null = null;
     export let canScrollLeft: boolean = false;
@@ -345,60 +349,23 @@
 {/if}
 
 <style>
-    .tb{display:flex;align-items:center;height:38px;background:#0b0d14;border-bottom:1px solid var(--bdr);padding:0 0 0 14px;user-select:none;-webkit-app-region:drag;flex-shrink:0;}
-    :global(#tabs-list,.win-btn,.btn-new,.tb-btns,.tabs-area){-webkit-app-region:no-drag;}
-    .brand{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--acc);letter-spacing:1px;margin-right:8px;flex-shrink:0;cursor:pointer;opacity:1;transition:opacity .15s;-webkit-app-region:no-drag;}
-    .brand:hover{opacity:.75;}
-    .bdot{width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 6px rgba(16,185,129,0.5);}
-    /* v1.4.17 — Tab strip width fix. The 480px max-width was an early-Lucy
-       holdover from when the topbar shared space with a huge brand block;
-       today it just squeezes 3 tabs into thumbnail-sized chips even on a
-       1920px screen (user-reported visual bug). We now let .tabs-area
-       flex to fill all available space between the brand on the left and
-       the +/≡ controls on the right. The container still scrolls
-       horizontally when many tabs exceed the viewport. */
-    /* v1.4.19 — Tab strip width fix #3 (definitive).
-       v1.4.18 used flex:100 1 auto on .tabs-area + flex:1 0 48px on
-       .drag-sp, but the user reported the win-controls moved to the
-       middle and tabs were still squeezed. Root causes this round:
-         (a) `width:100%` on #tabs-list conflicted with its parent's
-             flex sizing — the inner list defaulted to its content
-             intrinsic width instead of growing.
-         (b) flex-basis `auto` on .tabs-area used overflow content as
-             the basis, so the grow calculation never kicked in.
-         (c) .drag-sp still claimed visible width that pushed
-             win-controls inward.
-       Fix:
-         - .tabs-area: flex:1 1 0 (basis 0 → pure grow from nothing).
-         - #tabs-list: drop width:100%, keep flex:1 1 0 — inherits
-           parent width through flex layout only.
-         - .drag-sp: flex:0 0 12px — a 12px visual gap, no grow.
-       Net effect: tabs-area fills ALL leftover space between brand
-       and the + button cluster; the +/≡/win-controls cluster sticks
-       to the right edge. Window drag still works via the topbar
-       header itself (data-tauri-drag-region on <header class="tb">). */
-    .tabs-area{display:flex;align-items:flex-end;flex:1 1 0;min-width:0;height:38px;position:relative;}
-    :global(#tabs-list){display:flex;gap:1px;flex:1 1 0;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
-    :global(#tabs-list::-webkit-scrollbar){display:none;}
-    /* v1.4.17 — Individual tabs grow a bit more (min 120px) so a title
-       like "Necesito un informe ejecutivo…" reads with at least a few
-       words before ellipsis, while still allowing many tabs to coexist. */
-    :global(.tab){display:flex;align-items:center;gap:6px;padding:0 14px;height:34px;min-width:120px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
-    :global(.tab:hover){background:rgba(255,255,255,0.03);color:#94a3b8;}
-    :global(.tab.active){background:var(--bg2);color:var(--acc);border-color:var(--bdr);border-top:2px solid var(--acc);}
-    /* v1.4.17 — title cap raised 170 → 240 so common Spanish tab titles
-       like "Necesito un informe ejecutivo…" don't ellipsis after 3 words. */
-    :global(.tab-title-txt){max-width:240px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
-    :global(.tab-rename-input){background:rgba(0,0,0,.4);border:1px solid var(--acc-b);border-radius:3px;color:var(--acc);font-size:12px;font-family:inherit;padding:1px 5px;width:110px;outline:none;-webkit-app-region:no-drag;}
-    :global(.tdot){width:6px;height:6px;border-radius:50%;background:var(--purple);opacity:.6;flex-shrink:0;transition:background .2s, box-shadow .2s, opacity .2s;}
-    /* Quick-win A — Status dot variants. Idle stays purple (default),
-       others get themed colors with a gentle glow so the user spots
-       active tabs without reading anything. */
+    /* v1.4.20 — All static topbar / tabs / win-controls layout lives in
+       $lib/styles/tab-strip.css (imported from <script>). This avoids
+       the duplicate-selector trap that caused the v1.4.17 → v1.4.19
+       three-release saga.
+       What stays HERE: only the component-specific dynamic bits —
+       status-dot color variants, model pill, hover preview popover,
+       theme glass overrides — that weren't part of the layout block
+       and don't conflict with global rules elsewhere. */
+
+    /* ── Status dot color variants (data-driven) ───────────────────── */
+    :global(.tdot){transition:background .2s, box-shadow .2s, opacity .2s;}
     :global(.tdot-processing){background:var(--blue, #3b9eff)!important;opacity:1!important;box-shadow:0 0 6px rgba(59,158,255,.55);animation:tdot-pulse 1.2s ease-in-out infinite;}
     :global(.tdot-fork){background:#f59e0b!important;opacity:1!important;box-shadow:0 0 6px rgba(245,158,11,.5);}
     :global(.tdot-error){background:#ef4444!important;opacity:1!important;box-shadow:0 0 6px rgba(239,68,68,.6);}
     :global(.tdot-stale){background:var(--txt3, #475569)!important;opacity:.4!important;box-shadow:none;}
     @keyframes tdot-pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.35);}}
+
     /* Model shorthand pill — only on the active tab to avoid clutter. */
     :global(.tab-model-pill){
         font-family:var(--mono, monospace);
@@ -416,50 +383,15 @@
         opacity:.85;
     }
     :global(.tab.active .tab-model-pill){opacity:1;}
-    :global(.tx){font-size:10px;color:transparent;padding:1px 3px;border-radius:3px;flex-shrink:0;}
-    :global(.tab:hover .tx){color:var(--txt2);}
-    :global(.tx:hover){color:var(--red)!important;background:rgba(255,68,68,.1);}
-    .tab-scroll-btn{background:rgba(10,15,20,0.9);border:none;border-bottom:none;color:var(--txt2);cursor:pointer;font-size:16px;width:22px;height:34px;display:flex;align-items:center;justify-content:center;transition:.15s;flex-shrink:0;align-self:flex-end;border-radius:4px 4px 0 0;}
-    .tab-scroll-btn:hover{background:rgba(16,185,129,0.08);color:var(--acc);}
-    .tab-picker-wrap{position:relative;align-self:flex-end;flex-shrink:0;}
-    .tab-picker-btn{background:rgba(10,15,20,0.9);border:1px solid var(--bdr);border-bottom:none;border-radius:5px 5px 0 0;color:var(--txt2);cursor:pointer;height:30px;min-width:28px;display:flex;align-items:center;justify-content:center;gap:4px;padding:0 7px;font-size:11px;transition:.15s;align-self:flex-end;margin-bottom:0;}
-    .tab-picker-btn:hover{background:rgba(16,185,129,0.07);color:var(--acc);border-color:var(--acc-b);}
-    .tab-count{font-size:10px;font-weight:700;color:var(--acc);background:rgba(16,185,129,0.12);padding:1px 5px;border-radius:8px;line-height:1.4;}
-    .tab-picker-backdrop{position:fixed;inset:0;z-index:var(--z-tab-pick);}
-    .tab-picker-menu{position:absolute;top:calc(100% + 2px);right:0;background:rgba(12,18,28,0.98);border:1px solid var(--bdr2);border-radius:8px;min-width:220px;z-index:calc(var(--z-tab-pick) + 1);box-shadow:0 8px 32px rgba(0,0,0,0.6);overflow:hidden;}
-    .tab-picker-header{font-size:10px;color:#334155;letter-spacing:1px;text-transform:uppercase;font-weight:700;padding:8px 12px 6px;border-bottom:1px solid var(--bdr);}
-    .tab-picker-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12px;color:var(--txt2);transition:.12s;border-bottom:1px solid rgba(26,32,48,0.4);}
-    .tab-picker-item:last-child{border-bottom:none;}
-    .tab-picker-item:hover{background:rgba(16,185,129,0.05);color:var(--txt);}
-    .tab-picker-item.tpi-active{background:rgba(16,185,129,0.07);color:var(--acc);}
-    .tpi-dot{width:5px;height:5px;border-radius:50%;background:var(--bdr2);flex-shrink:0;}
-    .tpi-dot.tpi-dot-active{background:var(--acc);box-shadow:0 0 4px rgba(16,185,129,0.4);}
-    .tpi-num{font-size:10px;color:#334155;min-width:14px;text-align:center;flex-shrink:0;}
-    .tpi-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .tpi-close{background:none;border:none;color:transparent;cursor:pointer;font-size:10px;padding:1px 4px;border-radius:3px;transition:.12s;flex-shrink:0;}
-    .tab-picker-item:hover .tpi-close{color:var(--txt2);}
-    .tpi-close:hover{color:var(--red)!important;background:rgba(255,68,68,.1);}
-    .btn-new{background:var(--bg4);border:1px solid var(--bdr);color:var(--acc);border-radius:5px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;transition:.15s;}
-    .btn-new:hover{background:var(--bdr);color:white;}
-    .tb-btns{display:flex;align-items:center;gap:6px;padding:0 8px;flex-shrink:0;}
-    /* v1.4.19 — drag-sp becomes a fixed 12px visual gap. No flex-grow
-       (that was what pushed win-controls toward the middle in v1.4.18
-       — even with max-width:120px, the tabs+drag-sp basis math left
-       a chunk of empty space between the + and the win-controls).
-       Window drag continues to work via <header class="tb"> itself,
-       which still has data-tauri-drag-region. Inside .tabs-area we
-       set app-region:no-drag because tabs are clickable, but the
-       small slivers of empty topbar (e.g. above the tabs) remain
-       draggable from the header. */
-    .drag-sp{flex:0 0 12px;height:38px;}
-    .win-controls{display:flex;height:38px;}
-    .win-btn{width:46px;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt2);transition:.15s;}
-    .win-btn:hover{background:rgba(255,255,255,.07);color:white;}
-    .wc:hover{background:#e81123!important;color:white!important;}
+
+    /* Panic and additional icon-only controls (extend .win-btn from
+       tab-strip.css but with their own color). */
     .win-btn-icon{background:transparent;border:none;width:46px;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt2);transition:.15s;}
     .win-btn-icon:hover{background:rgba(255,255,255,.07);color:white;}
     :global(.panic-btn){color:#ef4444 !important;}
     :global(.panic-btn:hover){color:#f87171 !important;background:rgba(239,68,68,.12) !important;}
+
+    /* Dark-theme glass override — only applies when not in light mode. */
     :global(:root:not(.light)) .tb{background:transparent !important;border-bottom:1px solid var(--border-glass, var(--bdr)) !important;}
     :global(:root:not(.light)) :global(.tab.active){background:var(--sidebar-overlay, var(--bg2)) !important;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-color:var(--border-glass, var(--bdr)) !important;}
 

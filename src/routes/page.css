@@ -396,80 +396,15 @@ html.app-hidden *::after{
 /* Sprint A — Warn variant for "irreversible but not destructive" actions (DB restore) */
 .settings-btn-warn{color:#f59e0b;border-color:rgba(245,158,11,.25);}
 .settings-btn-warn:hover:not(:disabled){background:rgba(245,158,11,.10);}
-/* ── TITLEBAR ──────────────────────────────── */
-.tb{display:flex;align-items:center;height:38px;background:#0b0d14;border-bottom:1px solid var(--bdr);padding:0 0 0 14px;user-select:none;-webkit-app-region:drag;flex-shrink:0;}
-#tabs-list,.win-btn,.btn-new,.tb-btns,.tabs-area{-webkit-app-region:no-drag;}
-.brand{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--acc);letter-spacing:1px;margin-right:8px;flex-shrink:0;cursor:pointer;opacity:1;transition:opacity .15s;-webkit-app-region:no-drag;}
-.brand:hover{opacity:.75;}
-.bdot{width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 6px rgba(16,185,129,0.5);}
-/* ── TABS AREA ─────────────────────────────── */
-/* v1.4.19 — Tab strip width fix #3 (the real one).
-   v1.4.17 + v1.4.18 edited TabBar.svelte's scoped <style>, but THIS
-   block in page.css has the same selectors as global rules and was
-   silently overriding everything. That's why neither prior release
-   actually changed the rendered width. Now the global block is the
-   single source of truth and the scoped block in TabBar.svelte just
-   defers to it.
+/* ── TITLEBAR / TABS / WIN-CONTROLS ──────────────────────────────────
+   v1.4.20 — extracted to src/lib/styles/tab-strip.css, imported from
+   TabBar.svelte. The legacy duplicate that lived here (lines 399-472)
+   was the reason v1.4.17 and v1.4.18 tab-strip "fixes" had no visible
+   effect: edits to TabBar.svelte's scoped <style> were silently
+   overridden by this block. See CHANGELOG v1.4.19 for the post-mortem.
 
-   New flex weights:
-     .tabs-area   flex:1 1 0  — basis 0 + grow 1 = absorbs ALL leftover
-                                space between brand and +/≡ cluster.
-     #tabs-list   flex:1 1 0  — same, no width:100% which previously
-                                conflicted with flex sizing.
-     .tab         min-width:120px, padding:0 14px — readable chips.
-     .tab-title   max-width:240px — Spanish titles like
-                                "Necesito un informe ejecutivo…" don't
-                                ellipsis after three words. */
-.tabs-area{display:flex;align-items:flex-end;flex:1 1 0;min-width:0;height:38px;position:relative;}
-#tabs-list{display:flex;gap:1px;flex:1 1 0;height:38px;align-items:flex-end;overflow-x:auto;scroll-behavior:smooth;min-width:0;}
-#tabs-list::-webkit-scrollbar{display:none;}
-.tab{display:flex;align-items:center;gap:6px;padding:0 14px;height:34px;min-width:120px;font-size:12px;color:var(--txt2);cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;margin-top:4px;transition:0.15s;white-space:nowrap;flex-shrink:0;}
-.tab:hover{background:rgba(255,255,255,0.03);color:#94a3b8;}
-.tab.active{background:var(--bg2);color:var(--acc);border-color:var(--bdr);border-top:2px solid var(--acc);}
-.tab-title-txt{max-width:240px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;white-space:nowrap;}
-.tab-rename-input{background:rgba(0,0,0,.4);border:1px solid var(--acc-b);border-radius:3px;color:var(--acc);font-size:12px;font-family:inherit;padding:1px 5px;width:110px;outline:none;-webkit-app-region:no-drag;}
-.tdot{width:6px;height:6px;border-radius:50%;background:var(--purple);opacity:.6;flex-shrink:0;}
-.tx{font-size:10px;color:transparent;padding:1px 3px;border-radius:3px;flex-shrink:0;}
-.tab:hover .tx{color:var(--txt2);}
-.tx:hover{color:var(--red)!important;background:rgba(255,68,68,.1);}
-/* Botones scroll */
-.tab-scroll-btn{background:rgba(10,15,20,0.9);border:none;border-bottom:none;color:var(--txt2);cursor:pointer;font-size:16px;width:22px;height:34px;display:flex;align-items:center;justify-content:center;transition:.15s;flex-shrink:0;align-self:flex-end;border-radius:4px 4px 0 0;}
-.tab-scroll-btn:hover{background:rgba(16,185,129,0.08);color:var(--acc);}
-/* Tab picker */
-.tab-picker-wrap{position:relative;align-self:flex-end;flex-shrink:0;}
-.tab-picker-btn{background:rgba(10,15,20,0.9);border:1px solid var(--bdr);border-bottom:none;border-radius:5px 5px 0 0;color:var(--txt2);cursor:pointer;height:30px;min-width:28px;display:flex;align-items:center;justify-content:center;gap:4px;padding:0 7px;font-size:11px;transition:.15s;align-self:flex-end;margin-bottom:0;}
-.tab-picker-btn:hover{background:rgba(16,185,129,0.07);color:var(--acc);border-color:var(--acc-b);}
-.tab-count{font-size:10px;font-weight:700;color:var(--acc);background:rgba(16,185,129,0.12);padding:1px 5px;border-radius:8px;line-height:1.4;}
-.tab-picker-backdrop{position:fixed;inset:0;z-index:var(--z-tab-pick);}
-.tab-picker-menu{position:absolute;top:calc(100% + 2px);right:0;background:rgba(12,18,28,0.98);border:1px solid var(--bdr2);border-radius:8px;min-width:220px;z-index:calc(var(--z-tab-pick) + 1);box-shadow:0 8px 32px rgba(0,0,0,0.6);overflow:hidden;}
-.tab-picker-header{font-size:10px;color:#334155;letter-spacing:1px;text-transform:uppercase;font-weight:700;padding:8px 12px 6px;border-bottom:1px solid var(--bdr);}
-.tab-picker-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12px;color:var(--txt2);transition:.12s;border-bottom:1px solid rgba(26,32,48,0.4);}
-.tab-picker-item:last-child{border-bottom:none;}
-.tab-picker-item:hover{background:rgba(16,185,129,0.05);color:var(--txt);}
-.tab-picker-item.tpi-active{background:rgba(16,185,129,0.07);color:var(--acc);}
-.tpi-dot{width:5px;height:5px;border-radius:50%;background:var(--bdr2);flex-shrink:0;}
-.tpi-dot.tpi-dot-active{background:var(--acc);box-shadow:0 0 4px rgba(16,185,129,0.4);}
-.tpi-num{font-size:10px;color:#334155;min-width:14px;text-align:center;flex-shrink:0;}
-.tpi-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.tpi-close{background:none;border:none;color:transparent;cursor:pointer;font-size:10px;padding:1px 4px;border-radius:3px;transition:.12s;flex-shrink:0;}
-.tab-picker-item:hover .tpi-close{color:var(--txt2);}
-.tpi-close:hover{color:var(--red)!important;background:rgba(255,68,68,.1);}
-.btn-new{background:var(--bg4);border:1px solid var(--bdr);color:var(--acc);border-radius:5px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;transition:.15s;}
-.btn-new:hover{background:var(--bdr);color:white;}
-.tb-btns{display:flex;align-items:center;gap:6px;padding:0 8px;}
-.btn-brain{background:var(--bg3);border:1px solid var(--bdr);border-radius:5px;color:var(--purple);cursor:pointer;font-size:13px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;transition:.15s;}
-.btn-brain:hover{background:var(--bdr2);}
-/* v1.4.19 — drag-sp shrunk to a 12px visual gap, no flex-grow.
-   The previous flex-grow:1 was what pushed win-controls inward and
-   stole space from the tab strip. Window drag still works because
-   <header class="tb"> itself has data-tauri-drag-region; the tiny
-   empty bands above tabs and around win-controls remain draggable. */
-.drag-sp{flex:0 0 12px;height:38px;}
-.tb-btns{flex-shrink:0;}
-.win-controls{display:flex;height:38px;}
-.win-btn{width:46px;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt2);transition:.15s;}
-.win-btn:hover{background:rgba(255,255,255,.07);color:white;}
-.wc:hover{background:#e81123!important;color:white!important;}
+   DO NOT add tab-strip selectors here. Edit tab-strip.css instead.
+   ─────────────────────────────────────────────────────────────────── */
 /* ── BODY ──────────────────────────────────── */
 .body{display:flex;flex-direction:row;flex:1;overflow:hidden;min-height:0;}
 /* ── SIDEBAR ───────────────────────────────── */
