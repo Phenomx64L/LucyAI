@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.8] — 2026-05-31
+
+Hotfix #3 for v1.7.4/5: skill-active turn drifted into a wild
+agent loop. User asked "cómo investigo un phishing report",
+Lucy started explaining the workflow, then ran
+`Get-Content -Path 'C:\Ruta\Al\Correo\sospechoso.eml' -Raw` (a
+placeholder path from the skill body), got `PathNotFound`,
+entered auto-correction mode (intento 1/3), and from there the
+agent loop drifted into reading random files in `C:\Rust_Proj…`,
+running `security_collector.ps1` (an unrelated scratch script),
+and producing a Security Audit Report PDF/HTML/JSON — none of
+which the user asked for.
+
+Three coordinated fixes:
+
+### 1. Auto-correction disabled when a security skill is active
+
+`+page.svelte` agent loop early-exits BEFORE the
+"Autocorrigiendo... Intento 1/3" path when `peekActiveSecuritySkill()`
+returns non-null:
+
+> ⚠ Skill activa — auto-corrección desactivada
+> Un comando del workflow del skill `<id>` falló: `<error>`
+> Esto suele significar que el comando usa una ruta o valor
+> placeholder del ejemplo de documentación, o falta un
+> prerequisito. Lucy NO va a intentar inventar valores. Pásame
+> los datos reales o ejecuta `/preset clear` para salir del
+> modo skill.
+
+The retry hop is the root cause of the drift — without it,
+the LLM has to actually face the failure instead of papering
+over it.
+
+### 2. Stronger placeholder framing
+
+`renderSecuritySkillForPrompt` now contains an explicit
+"CRITICAL — PLACEHOLDER DETECTION" section listing common
+placeholder patterns (`C:\Ruta\Al\…`, `tu-usuario@dominio.com`,
+`<TENANT_ID>`, `$emlPath`, `Purga_Phishing_Incident_01`) with
+hard-rule "NEVER substitute these with plausible-sounding
+guesses." Plus a "SCOPE DISCIPLINE" rule: "The user asked a
+specific question. Stay on it. Do NOT pivot to unrelated tasks."
+
+### 3. Failure handling rule
+
+Added to the framing: "IF A COMMAND FROM THIS SKILL FAILS, the
+failure is EXPECTED evidence that prerequisites are missing or
+paths are placeholders. Do NOT enter auto-correction mode. Do
+NOT try variations. STOP and report the failure to the user so
+they can decide."
+
+This is belt-and-suspenders on top of fix 1 — even if the
+agent loop somehow re-enters, the system prompt now tells the
+LLM to stop and report.
+
+### After installing
+
+Restart Lucy. Ask the same prompt ("cómo investigo un phishing
+report") and observe:
+- Auto-route loads the skill (chip behaviour unchanged).
+- Lucy explains all 5 phases with example commands.
+- She does NOT execute `Get-Content` on the placeholder path.
+- If she somehow does and it fails, the new amber "Skill
+  activa — auto-corrección desactivada" banner appears
+  instead of the purple "Autocorrigiendo..." retry banner.
+- No drift into unrelated tasks.
+
+If Lucy still drifts:
+```
+/sec-skill auto off    # disable auto-routing entirely
+/preset clear          # clear any active skill
+```
+
+---
+
 ## [1.7.7] — 2026-05-31
 
 Hotfix #2 for v1.7.4/5/6: `TypeError: Cannot read properties of

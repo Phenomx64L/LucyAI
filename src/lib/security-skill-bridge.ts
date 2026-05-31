@@ -111,46 +111,75 @@ export function renderSecuritySkillForPrompt(s: SecuritySkillFull): string {
 Description: ${description}
 Domain: ${domain}${subdomain ? ` / ${subdomain}` : ''}
 ${codes ? `Frameworks: ${codes}\n` : ''}
-═══ HOW TO USE THIS SKILL — READ CAREFULLY ═══
+═══ HOW TO USE THIS SKILL — READ THIS BEFORE EMITTING ANY <EXECUTE> ═══
 
-This skill is a DOCUMENTED REFERENCE PROCEDURE. The code blocks
-below are EXAMPLE COMMANDS that illustrate the workflow — they
-are NOT instructions to execute immediately.
+This skill is a DOCUMENTED REFERENCE PROCEDURE from an analyst
+runbook library. The code blocks below contain ILLUSTRATIVE
+EXAMPLES with PLACEHOLDER VALUES — they are NOT runnable
+commands until the user provides real values.
 
-Hard rules for this turn:
+═══ CRITICAL — PLACEHOLDER DETECTION ═══
 
-1. PRESENT the workflow as guidance. Explain each phase, cite the
-   relevant commands, but DO NOT auto-run any of them unless the
-   user explicitly asks "run this" / "ejecuta esto" / "do step N".
+Skill code blocks routinely contain placeholder strings such as:
+  • C:\\Ruta\\Al\\Correo\\sospechoso.eml
+  • C:\\Path\\To\\Evidence
+  • /path/to/file
+  • tu-usuario@dominio.com / user@example.com / admin@tenant.onmicrosoft.com
+  • <TENANT_ID> / [INSERT_DOMAIN] / YOUR-API-KEY
+  • $emlPath, $caseId (PowerShell variables with no assignment)
+  • Purga_Phishing_Incident_01 (example campaign names)
 
-2. CHECK PREREQUISITES before proposing any command:
-   - Required modules installed? (ExchangeOnlineManagement,
-     ActiveDirectory, Az.Accounts, etc.) Test with
-     \`Get-Module -ListAvailable\` if you're unsure.
-   - Required remote session connected? (Connect-IPPSSession,
-     Connect-AzAccount, kubectl context, ssh tunnel, …)
-   - Required role / permission? (Global Admin, Domain Admin,
-     audit role …)
+NEVER emit a <EXECUTE> block that contains any of these values.
+NEVER substitute them with plausible-sounding guesses. NEVER use
+"sample" or "example" data and pretend it's real.
 
-3. If a prerequisite is MISSING, mention it instead of running
-   the command. Example: "This workflow uses Exchange Online's
-   New-ComplianceSearch. You don't have ExchangeOnlineManagement
-   loaded in this session — connect with Connect-IPPSSession
-   first, then I can run the search."
+If a workflow step contains placeholders, you must:
+  1. EXPLAIN the step in prose, showing the example as
+     illustration only.
+  2. ASK the user for the real value before any execution:
+     "Para el paso 2, necesito la ruta real del .eml. ¿Lo
+     tienes guardado en algún lado?"
+  3. Wait for the user's reply BEFORE emitting <EXECUTE>.
 
-4. If the workflow targets a system the user hasn't mentioned
-   (Splunk, Sentinel, CrowdStrike Falcon, …), ASK whether they
-   have access, don't assume.
+═══ HARD RULES FOR THIS TURN ═══
 
-5. Cite framework codes (MITRE ATT&CK / NIST CSF) when they
+1. DEFAULT MODE = EXPLAIN, NOT EXECUTE. Walk through the
+   workflow, cite specific commands, explain what each does.
+   Only emit <EXECUTE> if the user has explicitly said "run
+   this", "ejecuta esto", "do step N", or has supplied concrete
+   values that match the step's parameters.
+
+2. CHECK PREREQUISITES before proposing execution:
+   - Modules installed? (ExchangeOnlineManagement, Az.Accounts,
+     ActiveDirectory). If unsure, suggest \`Get-Module -ListAvailable\`.
+   - Remote session connected? (Connect-IPPSSession,
+     Connect-AzAccount, kubectl context, ssh tunnel)
+   - Role / permission? (Global Admin, Domain Admin, audit role)
+   If a prerequisite is missing, SAY SO. Do not try to install
+   modules silently. Do not run substitute commands hoping they
+   exist.
+
+3. IF A COMMAND FROM THIS SKILL FAILS, the failure is EXPECTED
+   evidence that prerequisites are missing or paths are
+   placeholders. Do NOT enter auto-correction mode. Do NOT try
+   variations. STOP and report the failure to the user so they
+   can decide.
+
+4. ADAPT TO THE USER'S STACK. The skill is generic. If the user
+   is on Windows but the example uses bash, translate (don't
+   blindly copy). If the user hasn't mentioned a SIEM (Splunk,
+   Sentinel, CrowdStrike), ASK before assuming.
+
+5. CITE framework codes (MITRE ATT&CK / NIST CSF) when they
    clarify intent, not as filler.
 
-6. The skill describes a GENERAL procedure. Adapt the steps to
-   the user's actual stack — don't copy-paste a SIEM query into
-   a PowerShell prompt.
+6. SCOPE DISCIPLINE. The user asked a specific question. Stay
+   on it. Do NOT pivot to unrelated tasks (e.g. "while we're
+   here, let me also run a full security audit"). If the
+   workflow exhausts what the user asked, summarize and STOP.
 
-The full skill body follows below. Treat it as a senior analyst's
-runbook you're consulting, not a script to execute.
+The full skill body follows below. Treat it as documentation
+you're explaining, not a script to perform.
 
 ════════════════════════════════════════════════════════════════════════
 `;

@@ -7029,6 +7029,43 @@ times the SAME way, switch tool kind entirely.
                         const wb=warpBlock(cmd,String(err),false,elapsed);
                         
                         // --- AGENT LOOP LOGIC ---
+                        // v1.7.8: when a security skill is active, the
+                        // failed command almost certainly hit a placeholder
+                        // path (e.g. C:\Ruta\Al\Correo\sospechoso.eml) or
+                        // a missing prerequisite (Exchange Online module
+                        // not loaded, no Connect-IPPSSession). Auto-retry
+                        // is harmful here — the LLM "fixes" the error by
+                        // inventing real paths or by drifting into the
+                        // agent loop, which is exactly the failure mode
+                        // the user reported (Lucy scanned files and
+                        // generated an unrelated security audit report).
+                        // Skip auto-correct when a skill is active and
+                        // emit a clear message instead.
+                        const _skillActive = peekActiveSecuritySkill();
+                        if (_skillActive && retryCount === 0) {
+                            const errSnip = String(err).substring(0, 400);
+                            addMsg(tabId, {
+                                role: 'lucy',
+                                html: `<div class="mn" style="color:#fbbf24;display:flex;align-items:center;gap:6px;">
+                                         <span>⚠</span>
+                                         <span>Skill activa — auto-corrección desactivada</span>
+                                       </div>
+                                       <div style="font-size:11.5px;line-height:1.5;color:rgba(255,255,255,0.78);margin:6px 0;">
+                                         Un comando del workflow del skill <code>${_skillActive.meta?.id || 'security-skill'}</code> falló:
+                                       </div>
+                                       <div style="font-size:11px;color:rgba(255,255,255,0.6);font-family:var(--mono);margin:4px 0;white-space:pre-wrap;"><code>${errSnip}</code></div>
+                                       <div style="font-size:11.5px;line-height:1.5;color:rgba(255,255,255,0.78);margin:6px 0;">
+                                         Esto suele significar que (a) el comando usa una <b>ruta o valor placeholder</b> del ejemplo de documentación (ej. <code>C:\\Ruta\\Al\\…</code>) o (b) falta un <b>prerequisito</b> (módulo, sesión remota, permiso). Lucy NO va a intentar inventar valores. Si quieres ejecutar este paso con datos reales, pásamelos en el siguiente mensaje.
+                                         <br/><br/>
+                                         O ejecuta <code>/preset clear</code> para salir del modo skill y dejar a Lucy responder libremente.
+                                       </div>`,
+                                style: 'border-left-color:#fbbf24;background:rgba(251,191,36,0.05);',
+                                rawRole: 'Sistema',
+                                rawContent: `[SKILL ACTIVE — execution halted]\nA command from the active skill workflow failed. Do NOT retry. Tell the user the skill's example values are placeholders and ask for real ones. Do not invent paths, tenant ids, usernames, or any other concrete values from skill examples.`,
+                            });
+                            if (doSpeak) speak("El comando del skill usaba valores de ejemplo. Espero tus datos reales.");
+                            return;
+                        }
                         if (retryCount < 3) {
                             logTaskEvent('retry', String(retryCount + 1), elapsed, { error: String(err).substring(0,120) }, tabId);
                             const errorSnippet = String(err).substring(0, 500);
