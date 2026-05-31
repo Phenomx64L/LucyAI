@@ -15,6 +15,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.0 — single source of truth for LLM model ids.
+    import { LLM } from '$lib/llm-models';
     import Brain         from '@tabler/icons-svelte/icons/brain';
     import Diamond       from '@tabler/icons-svelte/icons/diamond';
     import Sparkles      from '@tabler/icons-svelte/icons/sparkles';
@@ -320,15 +322,14 @@
                     `Title: ${m.title}\n\nContent:\n${m.content.slice(0, 1500)}` +
                     (existing.length ? `\n\nExisting tags (avoid duplicating): ${existing.join(', ')}` : '');
                 try {
-                    // v1.6.10: was 'gemini-3.5-flash-lite' which is not a
-                    // real Gemini model id, so every call failed silently
-                    // and the catch landed in "no usable tags". Switching
-                    // to the currently-active model (preview) so the user
-                    // sees whatever Lucy is actually using elsewhere.
+                    // v1.7.0: centralised in $lib/llm-models. Tag
+                    // suggestion is a 1-line classification — CHEAP tier
+                    // is enough (was the original intent of v1.6.10 fix
+                    // when it pinned to a phantom 3.5-flash-lite id).
                     const result = await invoke<string>('ask_lucy', {
                         prompt, context: '',
                         userName: '', runbooksDir: null,
-                        model: 'gemini-3-flash-preview',
+                        model: LLM.CHEAP,
                         lang: 'es-MX', hostsJson: null, images: null,
                     });
                     // Gemini often prefixes a preamble. Scan ALL lines and

@@ -5,6 +5,8 @@
     import { invoke } from '@tauri-apps/api/core';
     import { listen } from '@tauri-apps/api/event';
     import { LLM_GROUPS, getModelDescription } from '$lib/models.js';
+    // v1.7.0 — central model catalog (single source of truth).
+    import { LLM } from '$lib/llm-models';
     import Shield from '@tabler/icons-svelte/icons/shield';
 
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
@@ -1652,7 +1654,9 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             const resp = await invoke('ask_lucy', {
                 prompt: `[SHELL AUTOCOMPLETE — one line only]\nHost context: ${ctx}.\nComplete this partial command: \`${partial}\`\nRules: respond with ONLY the completed command. No explanation, no markdown, no backticks. Single line.`,
                 context: '', userName: lucyConfig?.name || 'admin',
-                model: 'gemini-2.5-flash',
+                // v1.7.0: shell autocomplete is throwaway, single-line —
+                // CHEAP tier saves money without hurting quality.
+                model: LLM.CHEAP,
                 images: null, lang: 'en', hostsJson: null
             });
             const completion = resp.trim().replace(/^`+|`+$/g, '').split('\n')[0].trim();

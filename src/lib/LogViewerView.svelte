@@ -3,6 +3,8 @@
     // following the same pattern as the v1.4.21 → v1.5.4 dedup wave.
     import '$lib/styles/log-viewer.css';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.0 — central LLM model catalog.
+    import { LLM } from '$lib/llm-models';
     import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
     import Search from '@tabler/icons-svelte/icons/search';
 
@@ -145,14 +147,9 @@
             const result = await invoke('ask_lucy', {
                 prompt, context: '',
                 userName: '', runbooksDir: null,
-                // v1.6.16: was 'gemini-3.5-flash-lite' which is NOT a
-                // real Gemini model id. Every ask_lucy call rejected
-                // silently and the catch on line 167 fell through to
-                // substring-filter mode without telling the user the
-                // LLM never ran. Same root cause as v1.6.10 fix in
-                // MemoryBrowserView. Aligned with the model Lucy
-                // actually exposes (gemini-3-flash-preview).
-                model: 'gemini-3-flash-preview',
+                // v1.7.0: routed through the central llm-models catalog.
+                // Regex distillation is a 1-line task → CHEAP tier.
+                model: LLM.CHEAP,
                 lang: 'es-MX', hostsJson: null, images: null,
             });
             const raw = String(result || '').trim();

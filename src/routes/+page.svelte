@@ -136,6 +136,8 @@ import { listen } from '@tauri-apps/api/event';
     // v1.6.1 — ECC-adapted skill preset system (system-prompt framing).
     import SkillPresetPicker from '$lib/SkillPresetPicker.svelte';
     import { renderPresetForPrompt } from '$lib/skill-presets';
+    // v1.7.0 — central LLM model catalog.
+    import { LLM } from '$lib/llm-models';
     import {
         activeSkillPreset,
         peekActivePreset,
@@ -1662,7 +1664,8 @@ import { listen } from '@tauri-apps/api/event';
                             prompt: `[SCHEDULED TASK: ${task.name}]\n\n${task.prompt}`,
                             context: '',
                             userName: lucyConfig.name || 'scheduler',
-                            model: 'gemini-2.5-flash',
+                            // v1.7.0: scheduled-task fire-and-forget — FAST tier.
+                            model: LLM.FAST,
                             images: null,
                             lang: userLang,
                             hostsJson: JSON.stringify($hosts),
@@ -7735,7 +7738,9 @@ if (Test-Path $src) {
                 prompt: summaryPrompt,
                 context: '',
                 userName: lucyConfig.name || 'user',
-                model: 'gemini-2.5-flash',   // pinned to the cheap/fast tier
+                // v1.7.0: turn summarization — CHEAP tier is enough for
+                // condensing ~600 tokens of prior chat into a paragraph.
+                model: LLM.CHEAP,
                 images: null,
                 lang: userLang,
                 hostsJson: '[]',

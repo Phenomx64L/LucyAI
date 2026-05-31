@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.0] — 2026-05-31
+
+Centralised LLM model catalog. Eliminates the class of bugs that
+caused v1.6.10 (`gemini-3.5-flash-lite` phantom in Memory Browser
+Auto-tag) and v1.6.16 (same id in LogViewer Smart-Filter). The
+audit pass in v1.6.16 identified this as the highest-priority
+preventive refactor in the codebase.
+
+### `src/lib/llm-models.ts` (NEW)
+
+Single source of truth for Gemini model ids on the frontend.
+Mirrors the canonical backend whitelist in
+`src-tauri/src/state.rs::ALLOWED_MODELS`.
+
+```ts
+import { LLM } from '$lib/llm-models';
+invoke('ask_lucy', { ..., model: LLM.CHEAP });
+```
+
+Tiers exposed:
+
+- `LLM.FAST` → `gemini-3.5-flash` — default chat, frontier-class
+  at lower cost. Use this 95% of the time.
+- `LLM.CHEAP` → `gemini-3.1-flash-lite-preview` — 1-line tasks
+  (tag suggestion, autocomplete, intent extraction). ~3x cheaper.
+- `LLM.REASONING` → `gemini-3.1-pro-preview::high` — multi-step
+  reasoning, root-cause analysis, agent planning.
+- `LLM.VISION` → unified with FAST (Gemini multimodal).
+- `LLM.LEGACY` → `gemini-3-flash-preview` — backend alias to FAST
+  for restoring old saved chats.
+
+Helper: `resolveModelOrFallback(raw)` validates a runtime string
+against `KNOWN_GEMINI_IDS` and falls back to FAST with a
+`console.warn` instead of letting the call silently fail at the
+backend boundary. Use at any seam where untrusted model ids
+enter the system (settings, restored chat, URL param).
+
+### Migrated callsites (5 / 5)
+
+| File | Before | After | Tier rationale |
+|---|---|---|---|
+| `MemoryBrowserView.svelte:331` | `gemini-3-flash-preview` | `LLM.CHEAP` | tag suggestion is 1-line |
+| `LogViewerView.svelte:148` | `gemini-3-flash-preview` | `LLM.CHEAP` | regex distillation is 1-line |
+| `NexShellView.svelte:1655` | `gemini-2.5-flash` | `LLM.CHEAP` | shell autocomplete, throwaway |
+| `+page.svelte:1665` | `gemini-2.5-flash` | `LLM.FAST` | scheduled-task agent loop |
+| `+page.svelte:7738` | `gemini-2.5-flash` | `LLM.CHEAP` | turn summarisation, ~600 tok |
+
+After this release, any `model: 'gemini-...'` string literal in
+the frontend is a code smell that the next audit will flag.
+
+### Cost impact (estimate)
+
+- Memory Browser Auto-tag: $0.00030 → $0.00010 per call (3x cheaper)
+- LogViewer Smart-Filter: same 3x
+- NexShell autocomplete: was already cheap-tier-equivalent (2.5
+  Flash priced at $0.00030, 3.1 Flash-Lite at $0.00010). 3x
+  cheaper. NexShell is the highest-frequency surface, so this
+  is the biggest single win.
+- Turn summarisation: same 3x. Runs every N turns.
+
+### Backend untouched
+
+`state.rs::ALLOWED_MODELS` and `ai.rs::resolve_gemini_model`
+already had the canonical catalog + the legacy alias resolver.
+This release is pure frontend hygiene — no schema migration, no
+API changes, no behaviour drift for any chat in flight.
+
+### Why not put a constant on the backend instead
+
+We considered exposing the catalog from Rust via a
+`#[tauri::command] get_model_catalog()`. Decided against:
+
+1. The frontend would still need to invoke and await it at boot,
+   adding a startup race for any code path that uses LLMs.
+2. Constants are well-known at compile time on both sides. The
+   mirror is a 10-line file with one comment pointing at the
+   Rust source. Adding a new id is one entry in each.
+3. Tauri command roundtrips for static config are an anti-pattern.
+
+If the catalog ever becomes dynamic (per-tenant, A/B tested),
+this will graduate to a command. For now, mirroring is simpler.
+
+### Follow-up surfaced for v1.7.1
+
+- Light health-check at app boot: `ask_lucy("ping", model)` for
+  each tier, store the result in a writable store, render in the
+  StatusBar so the user sees "FAST OK · CHEAP OK · REASONING OK"
+  at a glance. Catches future phantom-id regressions before the
+  user does.
+- Cost dashboard: now that every tier is tagged, the cost
+  ticker can attribute spend per tier. Already infrastructure
+  in `utils/db.rs::model_prices`.
+
+---
+
 ## [1.6.16] — 2026-05-31
 
 ### Codebase audit pass
