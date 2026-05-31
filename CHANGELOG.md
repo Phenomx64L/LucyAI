@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.13] — 2026-05-31
+
+Hotfix: Verify tab resolution buttons (Mantener más reciente / antigua,
+Fusionar, Mantener ambas, Ignorar) appeared to do nothing.
+
+Three compounding bugs:
+
+- `get_recent_memories` did not filter `superseded_by`. After a
+  successful `keep_newer`/`keep_older` the next loadVerify scan
+  re-fetched the just-superseded row and re-detected the same
+  conflict — UI looked unchanged. Fixed at the SQL: added
+  `WHERE superseded_by IS NULL OR superseded_by = ''`.
+- `resolveContradiction` wrapped every branch in
+  `try { ... } catch { return false }`, silently swallowing every
+  Tauri rejection. Failures looked like successes. The catch is
+  now removed; errors propagate to the caller which surfaces them
+  in the `verifyError` slot.
+- `merge` created the merged memory but never superseded the two
+  originals against it. After the next scan the same pair was
+  flagged again. Now both originals get `supersede_memory` against
+  the merged row.
+
+Also: `keep_both` and `dismiss` are pure client-side resolutions
+(no backend action). Re-running loadVerify after them just
+re-detected the same conflict. The caller now drops the conflict
+from the in-memory list for those two cases instead of re-scanning.
+
+After this fix the five resolution buttons all behave as labeled.
+
+---
+
 ## [1.6.12] — 2026-05-31
 
 Hotfix: drop overlay was sticky. Any accidental in-app drag (sidebar

@@ -1634,8 +1634,13 @@ pub fn consolidate_agent_memories(
 pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
     with_db(|conn| {
         let lim = limit.unwrap_or(15).max(1).min(50);
+        // v1.6.13: exclude superseded rows. Before the fix the Verify
+        // tab kept re-detecting conflicts the user had just resolved via
+        // keep_newer/keep_older — supersede_memory marked the row but
+        // this query didn't honor it.
         let sql = "SELECT id, session_id, title, content, tags, files, importance, created_at
                    FROM agent_memories
+                   WHERE superseded_by IS NULL OR superseded_by = ''
                    ORDER BY importance DESC, created_at DESC
                    LIMIT ?1";
         let mut stmt = conn.prepare(sql).map_err(|e| format!("get_recent prepare: {}", e))?;

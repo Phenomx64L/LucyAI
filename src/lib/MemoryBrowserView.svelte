@@ -640,10 +640,26 @@
         finally { verifyLoading = false; }
     }
     async function doResolve(c: Contradiction, res: Resolution) {
+        verifyError = null;
         try {
             await resolveContradiction(c, res);
-            await loadVerify();
-        } catch (e) { verifyError = String(e); }
+            // v1.6.13: for resolutions with no backend mutation
+            // (keep_both, dismiss), re-running loadVerify would just
+            // re-detect the same conflict. Drop it from the visible
+            // list instead.
+            if (res === 'keep_both' || res === 'dismiss') {
+                if (verifyReport) {
+                    verifyReport = {
+                        ...verifyReport,
+                        contradictions: verifyReport.contradictions.filter(x => x.id !== c.id),
+                    };
+                }
+            } else {
+                await loadVerify();
+            }
+        } catch (e) {
+            verifyError = String(e);
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

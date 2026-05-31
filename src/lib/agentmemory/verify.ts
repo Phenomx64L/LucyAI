@@ -113,55 +113,82 @@ export async function verifyMemories(): Promise<VerifyReport> {
 
 /**
  * Resolve a contradiction by applying the chosen resolution.
+ *
+ * v1.6.13: previously wrapped every branch in `try { ... } catch
+ * { return false }` which silently swallowed Tauri rejections. When
+ * supersede_memory or save_agent_memory failed (bad args, missing
+ * id, DB lock), the UI saw "success" + an unchanged list and looked
+ * like the buttons did nothing. Now errors propagate so the caller
+ * can surface them on screen.
+ *
+ * For `merge`, we also supersede BOTH originals against the new
+ * merged row — before the fix, the merged row was created but the
+ * two originals stayed visible, so the next /verify scan kept
+ * flagging the same pair.
  */
 export async function resolveContradiction(
     contradiction: Contradiction,
     resolution: Resolution,
 ): Promise<boolean> {
-    try {
-        switch (resolution) {
-            case 'keep_newer':
-                // Supersede older memory
+    switch (resolution) {
+        case 'keep_newer':
+            // Supersede older memory.
+            await invoke('supersede_memory', {
+                oldId: contradiction.pair.older.id,
+                newId: contradiction.pair.newer.id,
+            });
+            return true;
+
+        case 'keep_older':
+            // Supersede newer memory.
+            await invoke('supersede_memory', {
+                oldId: contradiction.pair.newer.id,
+                newId: contradiction.pair.older.id,
+            });
+            return true;
+
+        case 'keep_both':
+            // No backend action — both stay. The caller is
+            // responsible for hiding this conflict from the
+            // visible list (loadVerify would just re-detect it).
+            return true;
+
+        case 'merge': {
+            // Create merged memory, supersede BOTH originals
+            // against it. v1.6.13: the supersede was missing
+            // before the fix, so the conflict reappeared on the
+            // next scan even after a successful merge.
+            const merged = mergeMemories(contradiction.pair);
+            const result = await invoke<{ id: number; action: string }>('save_agent_memory', {
+                title: merged.title,
+                content: merged.content,
+                tags: JSON.stringify(merged.tags),
+                files: JSON.stringify(merged.files),
+                sessionId: null,
+                importance: Math.max(
+                    contradiction.pair.older.importance,
+                    contradiction.pair.newer.importance,
+                ),
+                ttlDays: null,
+            });
+            const newId = result?.id;
+            if (newId && newId > 0) {
                 await invoke('supersede_memory', {
                     oldId: contradiction.pair.older.id,
-                    newId: contradiction.pair.newer.id,
-                });
-                return true;
-
-            case 'keep_older':
-                // Supersede newer memory
+                    newId,
+                }).catch(() => { /* best effort */ });
                 await invoke('supersede_memory', {
                     oldId: contradiction.pair.newer.id,
-                    newId: contradiction.pair.older.id,
-                });
-                return true;
-
-            case 'keep_both':
-                // No action needed — both stay
-                return true;
-
-            case 'merge': {
-                // Create merged memory, supersede both
-                const merged = mergeMemories(contradiction.pair);
-                await invoke('save_agent_memory', {
-                    title: merged.title,
-                    content: merged.content,
-                    tags: JSON.stringify(merged.tags),
-                    files: JSON.stringify(merged.files),
-                    sessionId: null,
-                    importance: Math.max(
-                        contradiction.pair.older.importance,
-                        contradiction.pair.newer.importance,
-                    ),
-                    ttlDays: null,
-                });
-                return true;
+                    newId,
+                }).catch(() => { /* best effort */ });
             }
-
-            case 'dismiss':
-                return true;  // UI removes from list, no backend action
+            return true;
         }
-    } catch { return false; }
+
+        case 'dismiss':
+            // Pure client-side. Caller hides the row.
+            return true;
+    }
 }
 
 // ── Contradiction Detection ──────────────────────────────────────────────
