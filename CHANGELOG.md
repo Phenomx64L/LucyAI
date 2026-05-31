@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.11] — 2026-05-31
+
+Hotfix #2 for the Auto-tag chain. After v1.6.10 unblocked the LLM
+call, the Accept button now reached a second silent failure: the
+frontend called `invoke('save_agent_memory_full', …)` which was a
+phantom command — never implemented in the backend. Error surfaced
+to user as "Command save_agent_memory_full not found".
+
+- New Tauri command `update_agent_memory_tags(id, tags: Vec<String>)`
+  in `metrics.rs`. Single UPDATE on `agent_memories.tags` with JSON
+  re-encoding. Errors when the id doesn't exist instead of silently
+  no-op'ing.
+- `MemoryBrowserView::acceptAutoTags` now calls the new command
+  with just `{ id, tags: merged }` instead of the bogus full-row
+  payload.
+- Registered in `lib.rs` invoke_handler beside `save_agent_memory`.
+
+After this hotfix the full Auto-tag → /anneal loop is end-to-end
+operational. Workflow:
+
+1. Memory Browser → check 5-30 memorias with poor tags
+2. Click ✦ Sugerir tags (IA) → wait for Gemini
+3. Per row: review proposals, click Aplicar
+4. Run /anneal → real clusters should emerge
+
+---
+
 ## [1.6.10] — 2026-05-31
 
 Hotfix: Memory Browser Auto-tag was silently broken since the

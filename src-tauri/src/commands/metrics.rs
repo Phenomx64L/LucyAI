@@ -3690,3 +3690,34 @@ pub fn delete_session_summary(tab_id: String) -> Result<usize, String> {
         Ok(n)
     })
 }
+
+// ── v1.6.11 — Memory Browser Auto-tag UPDATE path ─────────────────────────
+//
+// MemoryBrowserView's "Accept AI tags" flow was calling
+// `save_agent_memory_full`, a command that never existed. Result: hotfix
+// v1.6.10 unblocked the LLM call but Accept still failed with
+// "Command save_agent_memory_full not found".
+//
+// The actual operation is small — UPDATE one row's tags (JSON-encoded).
+// We could overload save_agent_memory but its INSERT/dedup path is wrong
+// for "replace tags on an existing row". A dedicated command keeps the
+// concerns separate.
+
+#[tauri::command]
+pub async fn update_agent_memory_tags(
+    id:   i64,
+    tags: Vec<String>,
+) -> Result<(), String> {
+    let tags_json = serde_json::to_string(&tags)
+        .map_err(|e| format!("tags JSON encode: {}", e))?;
+    with_db(|conn| {
+        let n = conn.execute(
+            "UPDATE agent_memories SET tags = ?1 WHERE id = ?2",
+            rusqlite::params![tags_json, id],
+        ).map_err(|e| format!("update_agent_memory_tags: {}", e))?;
+        if n == 0 {
+            return Err(format!("no memory found with id={}", id));
+        }
+        Ok(())
+    })
+}

@@ -363,13 +363,11 @@
         if (!m) return;
         const merged = [...new Set([...tagList(m.tags), ...sugg])];
         try {
-            await invoke('save_agent_memory_full', {
-                id, title: m.title, content: m.content,
-                tags: merged,
-                files: tagList(m.files),
-                importance: m.importance,
-                sessionId: m.session_id || '',
-            });
+            // v1.6.11: was 'save_agent_memory_full' which was never
+            // implemented in the backend — every Accept failed silently
+            // until the user saw the error. Use the dedicated tag-update
+            // command shipped in v1.6.11.
+            await invoke('update_agent_memory_tags', { id, tags: merged });
             const next = { ...autoTagSuggestions };
             delete next[id];
             autoTagSuggestions = next;
