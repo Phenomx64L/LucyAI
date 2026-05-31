@@ -925,6 +925,144 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── v1.6.4 — /instinct-status (ECC continuous-learning-v2) ──
+        // Renders Layer 3 chip patterns as confidence-banded instincts.
+        // Compared to /chip-stats (raw counts), this presents the SAME
+        // data through the ECC framing: an "instinct" is a learned
+        // behaviour with sustained signal. Bands:
+        //   instinct   net >= 3.0  AND  clicks >= 3   → kept as memory
+        //   suggestion net 1.0–3.0 OR    clicks >= 2   → on watchlist
+        //   noise      net <= 0    OR    only 1 sample → discard if old
+        case 'instinct-status': case 'instincts': {
+            const days = parseInt(arg, 10) || 14;
+            (async () => {
+                try {
+                    const sum = await invoke<any>('chip_stats_summary', { days });
+                    if (!sum || sum.total_clicks + sum.total_dismisses === 0) {
+                        sysMsg(ctx.isEN
+                            ? `No chip activity in the last ${days} days. Lucy needs interaction signal to learn instincts.`
+                            : `Sin actividad de chips en los últimos ${days} días. Lucy necesita señal de interacción para aprender instintos.`,
+                            'var(--amber)');
+                        return;
+                    }
+                    // Bucket each row by band.
+                    const rows = (sum.top || []) as Array<{ label: string; clicks: number; dismisses: number; net: number; last_at: number }>;
+                    const instincts:   typeof rows = [];
+                    const suggestions: typeof rows = [];
+                    const noise:       typeof rows = [];
+                    for (const r of rows) {
+                        if (r.net >= 3.0 && r.clicks >= 3)            instincts.push(r);
+                        else if (r.net >= 1.0 || r.clicks >= 2)       suggestions.push(r);
+                        else                                          noise.push(r);
+                    }
+                    // Helper: render one row as a chip with confidence pct.
+                    const renderRow = (r: { label: string; clicks: number; dismisses: number; net: number; last_at: number }) => {
+                        const total = r.clicks + r.dismisses;
+                        const pct = total > 0 ? Math.round((r.clicks / total) * 100) : 0;
+                        const ageDays = Math.max(0, Math.floor((Date.now() / 1000 - r.last_at) / 86400));
+                        return `<div class="rb-row">` +
+                            `<span class="rb-k">${escapeHtml(r.label).slice(0, 28)}</span>` +
+                            `<span class="rb-v">${r.clicks}c / ${r.dismisses}d · ${pct}% · ${ageDays}d ago</span>` +
+                        `</div>`;
+                    };
+
+                    const blocks: ResultBlock[] = [];
+                    blocks.push({
+                        title: ctx.isEN ? 'Summary' : 'Resumen',
+                        icon: '◆',
+                        tone: 'info',
+                        defaultOpen: true,
+                        html:
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Total' : 'Total'}</span>` +
+                            `<span class="rb-v">${sum.total_clicks} clicks · ${sum.total_dismisses} dismisses · ${sum.unique_labels} ${ctx.isEN ? 'unique labels' : 'etiquetas únicas'}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Bands' : 'Bandas'}</span>` +
+                            `<span class="rb-v">${instincts.length} instincts · ${suggestions.length} suggestions · ${noise.length} noise</span></div>`,
+                    });
+                    if (instincts.length) {
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Instincts' : 'Instintos'} (${instincts.length})`,
+                            icon: '⚡',
+                            tone: 'ok',
+                            defaultOpen: true,
+                            html: instincts.slice(0, 20).map(renderRow).join(''),
+                        });
+                    }
+                    if (suggestions.length) {
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Suggestions on watchlist' : 'Sugerencias en watchlist'} (${suggestions.length})`,
+                            icon: '◇',
+                            tone: 'warn',
+                            html: suggestions.slice(0, 20).map(renderRow).join(''),
+                        });
+                    }
+                    if (noise.length) {
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Noise (candidates to prune)' : 'Ruido (candidatos a podar)'} (${noise.length})`,
+                            icon: '⊘',
+                            tone: 'crit',
+                            html: noise.slice(0, 12).map(renderRow).join(''),
+                        });
+                    }
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? `⚡ Instinct status · last ${days} days` : `⚡ Estado de instintos · últimos ${days} días`,
+                        blocks));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
+        // ── v1.6.4 — /evolve (ECC continuous-learning-v2 step) ──
+        // Surfaces recurring instincts (clicks >= 4 AND net >= 4) that
+        // are worth promoting to executable skills. Just proposes —
+        // never auto-creates. The user clicks the "Save as skill" hint
+        // (rendered as inline copy text) to act on the suggestion.
+        case 'evolve': case 'instinct-evolve': {
+            const days = parseInt(arg, 10) || 30;
+            (async () => {
+                try {
+                    const sum = await invoke<any>('chip_stats_summary', { days });
+                    const rows = (sum?.top || []) as Array<{ label: string; clicks: number; dismisses: number; net: number; last_at: number }>;
+                    const candidates = rows.filter(r => r.clicks >= 4 && r.net >= 4 && (r.dismisses === 0 || r.clicks / r.dismisses >= 3));
+                    if (candidates.length === 0) {
+                        sysMsg(ctx.isEN
+                            ? `No evolution candidates in the last ${days} days. Looking for: ≥ 4 clicks AND net engagement ≥ 4 AND click/dismiss ratio ≥ 3:1.`
+                            : `Sin candidatos para evolución en los últimos ${days} días. Buscando: ≥ 4 clicks AND engagement neto ≥ 4 AND ratio click/dismiss ≥ 3:1.`,
+                            'var(--amber)');
+                        return;
+                    }
+                    const renderCandidate = (r: typeof candidates[number], i: number) => {
+                        const ratio = r.dismisses === 0 ? '∞' : (r.clicks / r.dismisses).toFixed(1);
+                        return `<details class="rb-block rb-tone-ok">` +
+                            `<summary class="rb-summary">` +
+                            `<span class="rb-ico">${i + 1}</span>` +
+                            `<span class="rb-title">${escapeHtml(r.label).slice(0, 40)}</span>` +
+                            `<span class="rb-chev">▾</span>` +
+                            `</summary>` +
+                            `<div class="rb-body">` +
+                            `<div class="rb-row"><span class="rb-k">Signal</span>` +
+                            `<span class="rb-v">${r.clicks}c / ${r.dismisses}d · ratio ${ratio} · net ${r.net.toFixed(1)}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Proposal' : 'Propuesta'}</span>` +
+                            `<span class="rb-v">${ctx.isEN ? 'Open' : 'Abrir'} <code>/skills</code> ${ctx.isEN ? "and save a script triggered by this label." : 'y guarda un script disparado por esta etiqueta.'}</span></div>` +
+                            `</div></details>`;
+                    };
+                    const headline = ctx.isEN
+                        ? `✦ Evolution candidates · ${candidates.length} pattern(s) ready to consolidate`
+                        : `✦ Candidatos a evolucionar · ${candidates.length} patrón(es) listos para consolidar`;
+                    const intro = `<div class="rb-hdr">${headline}</div>` +
+                        `<div class="rb-block rb-tone-info" open><div class="rb-body">${ctx.isEN
+                            ? 'These chips have crossed the engagement threshold. Each is a candidate to become an executable skill via <code>/skills</code> so it stops needing Layer 3 ranking and becomes a deterministic shortcut.'
+                            : 'Estos chips superaron el umbral de engagement. Cada uno es candidato a convertirse en una skill ejecutable vía <code>/skills</code> para que deje de necesitar ranking Layer 3 y pase a ser un atajo determinístico.'}</div></div>`;
+                    const body = candidates.slice(0, 10).map(renderCandidate).join('');
+                    sysMsg(`<div class="rb-wrap">${intro}${body}</div>`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── /loop-stats — agent-loop blocks by model (May 2026 telemetry) ──
         // Shows which models trigger the safety nets (tool-loop, target-loop,
         // error-repeat, max-loops) most often. Drives model-selection decisions.

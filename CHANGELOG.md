@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.4] — 2026-05-30
+
+ECC continuous-learning surfacing — two new slash commands that frame
+Lucy's existing Layer 3 chip telemetry as "instincts" with confidence
+bands and a promotion path to durable skills.
+
+### Shipped
+
+**`/instinct-status`** (alias `/instincts`, optional `[days]` arg,
+default 14) — renders the v1.4.2 chip-engagement data through the ECC
+`continuous-learning-v2` framing:
+
+- **Instincts** (green) — `net engagement ≥ 3.0 AND clicks ≥ 3`.
+  These are kept as memory; Lucy can rely on them.
+- **Suggestions** (amber) — `net 1.0–3.0 OR clicks ≥ 2`. On the
+  watchlist; need more signal before being trusted.
+- **Noise** (red) — `net ≤ 0 OR only 1 sample`. Candidates to prune.
+
+Per-row info shown: label, click/dismiss ratio, confidence pct
+(`clicks / (clicks + dismisses) × 100`), days since last touch.
+
+Uses the v1.4.29 `renderResultBlocks` helper so each band is a
+collapsible `<details>` block with tone-banded accent.
+
+**`/evolve`** (alias `/instinct-evolve`, optional `[days]` arg,
+default 30) — surfaces patterns that have crossed a stricter threshold
+(`clicks ≥ 4 AND net ≥ 4 AND click/dismiss ratio ≥ 3:1`) and proposes
+promoting them from Layer 3 ranking into durable executable skills.
+
+Each candidate renders with:
+- Signal: clicks/dismisses, ratio, net score
+- Proposal: "Open `/skills` and save a script triggered by this label"
+
+The command **only proposes**. It never auto-creates skills — promotion
+remains a deliberate user action. This mirrors the ECC `evolve` skill's
+explicit-consent design.
+
+### Why these are useful
+
+Lucy already records chip engagement in `chip_click_log` and `chip_stats_summary`
+returns the raw counts. The new commands add the missing **interpretation
+layer**: which patterns are signal vs. noise, and which are ready to
+graduate. Without that layer the data is there but the user has no
+framework to act on it.
+
+### Discoverability
+
+`KeyboardCheatsheet` (`Shift+?`) extended to list `/instinct-status`,
+`/evolve`, and `/preset` (carried over from v1.6.1 — was missing from
+the cheat sheet) alongside the existing slash commands.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.6.3 → 1.6.4)
+M  src-tauri/Cargo.toml                      (1.6.3 → 1.6.4)
+M  src-tauri/tauri.conf.json                 (1.6.3 → 1.6.4)
+M  src/lib/page/slash-commands.ts            (+2 case branches:
+                                              /instinct-status, /evolve)
+M  src/lib/KeyboardCheatsheet.svelte         (+3 cheat-sheet entries)
+M  src/lib/SetupOverlay.svelte               (1.6.3 → 1.6.4)
+M  src/lib/TutorialOverlay.svelte            (1.6.3 → 1.6.4)
+```
+
+svelte-check: 7188 files, 0 errors, 0 warnings.
+vitest:      171/171 pass.
+
+Reference: https://github.com/affaan-m/ECC/tree/main/skills/continuous-learning-v2
+
+---
+
 ## [1.6.3] — 2026-05-30
 
 Tier 2 catalog expansion — 8 new skill presets from the ECC agents/
