@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.6] — 2026-05-31
+
+Hotfix for v1.7.4/5: Lucy auto-executed `New-ComplianceSearch`
+from the phishing skill body against the user's local PowerShell
+session, which doesn't have the ExchangeOnlineManagement module
+loaded. The cmdlet was not found, the agentic loop broke, and
+the conversation ended with a stderr error.
+
+Root cause: the skill body framing in
+`renderSecuritySkillForPrompt` said:
+
+> The user has activated this skill. Follow its workflow when the
+> current request matches its "When to Use" criteria. Cite specific
+> steps from the workflow rather than improvising.
+
+In Lucy's agentic mode, "follow its workflow" + "cite specific
+steps" + code blocks in the body → the LLM interpreted each
+example command as an instruction to execute now. No
+prerequisite check, no system-availability check, no user
+confirmation.
+
+### Fixed framing
+
+The new framing makes the skill explicitly **reference
+documentation, not an action script**:
+
+```
+═══ HOW TO USE THIS SKILL — READ CAREFULLY ═══
+
+This skill is a DOCUMENTED REFERENCE PROCEDURE. The code blocks
+below are EXAMPLE COMMANDS that illustrate the workflow — they
+are NOT instructions to execute immediately.
+
+Hard rules for this turn:
+
+1. PRESENT the workflow as guidance. Do NOT auto-run any
+   commands unless the user explicitly asks.
+2. CHECK PREREQUISITES before proposing any command (modules
+   installed, remote session connected, role assigned).
+3. If a prerequisite is MISSING, mention it instead of running
+   the command.
+4. If the workflow targets a system the user hasn't mentioned
+   (Splunk, Sentinel, …), ASK whether they have access.
+5. Cite framework codes when they clarify intent, not as filler.
+6. Adapt steps to the user's actual stack — don't copy-paste a
+   SIEM query into a PowerShell prompt.
+```
+
+### Behavioural change
+
+Before (v1.7.5): user asks "how do I investigate a phishing
+report" → skill auto-loads → Lucy lays out the playbook AND
+runs `New-ComplianceSearch` → fails because the module isn't
+loaded → stderr error → conversation broken.
+
+After (v1.7.6): same prompt → skill auto-loads → Lucy explains
+the 5 phases as guidance, cites cmdlets and KQL queries, **does
+not execute anything**. If the user wants to actually run a
+step, they say "run step 3" and Lucy first checks
+prerequisites: `"This needs the ExchangeOnlineManagement
+module. Connect with Connect-IPPSSession first?"`.
+
+### Manual escape if Lucy still over-eagerly executes
+
+```
+/sec-skill auto off     # turn off auto-routing entirely
+/preset clear           # clear any active skill / preset
+```
+
+Then ask the question — Lucy answers from generic training
+without any skill injection.
+
+---
+
 ## [1.7.5] — 2026-05-31
 
 Hybrid auto-routing + unified context orchestrator. Lucy now picks
