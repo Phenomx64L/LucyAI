@@ -61,7 +61,7 @@
 // real domains.
 
 use crate::commands::metrics::shared_db;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -330,6 +330,142 @@ pub async fn memory_annealing_report() -> Result<AnnealingReport, String> {
 pub async fn memory_annealing_cluster(tag: String) -> Result<Option<OntologyScore>, String> {
     let report = memory_annealing_report().await?;
     Ok(report.clusters.into_iter().find(|c| c.name == tag))
+}
+
+// ── v1.6.8 — Phase 4 execution: demote with affinity routing ───────────
+//
+// ADR-200 §8 principle: "No deletion, only movement. Concepts never
+// disappear; they relocate."
+//
+// For Lucy's MVP, a "demote" operation re-tags every memory in the
+// dying cluster. For each member memory we compute affinity to every
+// other tag (shared-concept proxy: count of other memories in tag X
+// that share ≥ 1 token with this memory). The dying tag is removed
+// from the memory; the top-affinity surviving tag is added (or
+// "primordial" if affinity is below a floor).
+//
+// This is the "execute" half of the proposal/execute split. The
+// /anneal report proposes; the user approves a specific tag from the
+// UI to trigger this command.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemoteReport {
+    pub tag:              String,
+    pub members_touched:  usize,
+    pub reassigned:       Vec<DemoteReassignment>,
+    /// How many memories landed in the primordial pool (no clear
+    /// affinity to any surviving tag).
+    pub orphaned:         usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemoteReassignment {
+    pub memory_id:   i64,
+    pub target_tag:  String,
+    pub shared:      usize,
+}
+
+/// Primordial pool name — ADR-200 §3 "everything else". When a memory
+/// has no clear affinity to any other tag, it goes here.
+pub const PRIMORDIAL_TAG: &str = "primordial";
+
+fn demote_inner(conn: &Connection, dying: &str) -> Result<DemoteReport, String> {
+    if dying.trim().is_empty() || dying == PRIMORDIAL_TAG {
+        return Err(format!("cannot demote tag '{}'", dying));
+    }
+
+    // Step 1: load every memory and its current tags + token bag.
+    let mut stmt = conn.prepare(
+        "SELECT id, title, content, tags
+         FROM agent_memories
+         WHERE superseded_by IS NULL OR superseded_by = ''"
+    ).map_err(|e| e.to_string())?;
+
+    struct M { id: i64, tags: Vec<String>, bag: HashSet<String> }
+    let mut memories: Vec<M> = Vec::new();
+    let rows = stmt.query_map([], |r| {
+        let id: i64        = r.get(0)?;
+        let title: String  = r.get(1).unwrap_or_default();
+        let content: String= r.get(2).unwrap_or_default();
+        let tags_j: String = r.get(3).unwrap_or_else(|_| "[]".into());
+        Ok((id, title, content, tags_j))
+    }).map_err(|e| e.to_string())?;
+    for row in rows.flatten() {
+        let (id, title, content, tags_j) = row;
+        let tags = parse_tags(&tags_j);
+        let mut bag = tokenize(&title);
+        bag.extend(tokenize(&content.chars().take(200).collect::<String>()));
+        memories.push(M { id, tags, bag });
+    }
+
+    // Step 2: split into dying-set and survivor-set.
+    let (dying_mems, survivors): (Vec<&M>, Vec<&M>) =
+        memories.iter().partition(|m| m.tags.iter().any(|t| t == dying));
+
+    let mut report = DemoteReport {
+        tag: dying.into(),
+        members_touched: 0,
+        reassigned: Vec::new(),
+        orphaned: 0,
+    };
+
+    for m in dying_mems {
+        // Compute affinity to every other tag: sum of Jaccard against
+        // survivor memories carrying that tag. Cheap because we sample
+        // the survivor set to keep cost bounded.
+        let mut tag_score: HashMap<String, f32> = HashMap::new();
+        for s in survivors.iter().take(500) {
+            let j = jaccard(&m.bag, &s.bag);
+            if j < 0.1 { continue; }
+            for t in &s.tags {
+                if t == dying { continue; }
+                *tag_score.entry(t.clone()).or_insert(0.0) += j;
+            }
+        }
+
+        // Pick the top tag; floor it.
+        let target = tag_score.into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let (new_tag, shared_score) = match target {
+            Some((t, s)) if s >= 0.5 => (t, s),
+            _ => {
+                report.orphaned += 1;
+                (PRIMORDIAL_TAG.to_string(), 0.0)
+            }
+        };
+
+        // Mutate the row's tags: drop `dying`, add `new_tag` (if not
+        // already present).
+        let mut new_tags: Vec<String> =
+            m.tags.iter().filter(|t| *t != dying).cloned().collect();
+        if !new_tags.iter().any(|t| t == &new_tag) {
+            new_tags.push(new_tag.clone());
+        }
+        let new_tags_j = serde_json::to_string(&new_tags).unwrap_or_else(|_| "[]".into());
+
+        conn.execute(
+            "UPDATE agent_memories SET tags = ?1 WHERE id = ?2",
+            params![new_tags_j, m.id],
+        ).map_err(|e| format!("demote UPDATE id={}: {}", m.id, e))?;
+
+        report.reassigned.push(DemoteReassignment {
+            memory_id: m.id,
+            target_tag: new_tag,
+            shared: (shared_score * 10.0).round() as usize,
+        });
+        report.members_touched += 1;
+    }
+
+    Ok(report)
+}
+
+/// Execute a demote: re-tag every memory carrying `tag` onto its
+/// highest-affinity surviving tag (or primordial if no good match).
+/// No memories are deleted; only the `tags` array is mutated.
+#[tauri::command]
+pub async fn memory_annealing_demote(tag: String) -> Result<DemoteReport, String> {
+    shared_db(move |c| demote_inner(c, &tag))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────

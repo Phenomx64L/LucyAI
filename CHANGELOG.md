@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.9] — 2026-05-31
+
+Bundled release closing the v1.6.x Kappa Graph integration arc. Three
+interlocking pieces — polarity-driven chip classification, annealing
+execution, and a Memory Browser surface for both — all three are
+intertwined, so they ship as a single tag with three logical
+subsections.
+
+### v1.6.7 — Polarity-powered chip classification
+
+`chip_memory.rs::normalize_event_kind` used to be a fixed string-match
+that funnelled everything outside `{click, dismiss, thumbs_up,
+thumbs_down}` to "click". That broke the moment the LLM proposed a
+novel reaction label like `bookmark`, `pin`, `cringe`, `meh`, or any
+SP variant the table didn't anticipate — those events all collapsed
+into "click" regardless of their real valence.
+
+New flow:
+
+- `normalize_event_kind(s) -> Option<String>` — fast canonical map
+  for known synonyms; returns `None` for anything else.
+- `classify_event_kind(s) -> String` (async) — calls the canonical
+  map first, falls through to `polarity::project_text(s)` from
+  v1.6.5. Positive score → "click" (reinforcement); negative →
+  "dismiss". Failure tolerant: if Ollama isn't reachable we default
+  to "click" rather than dropping the log entry.
+- Process-wide `RwLock<HashMap<String, String>>` cache so a novel
+  string only gets embedded once per session.
+
+`log_chip_event` is the only async caller that changes; the rest of
+the module is untouched. Existing telemetry rows are unaffected
+(they were already canonical).
+
+### v1.6.8 — Annealing Phase 4 execution (demote)
+
+ADR-200 §8: *"No deletion, only movement."* `/anneal` (v1.6.6) was
+read-only. v1.6.8 wires the first execute verb: **demote**.
+
+- `annealing::demote_inner(conn, tag)`:
+  1. Load every active memory + its tag list + token bag.
+  2. Split into `dying` (carries the demoted tag) vs `survivors`.
+  3. For each dying memory, score every other tag by summed Jaccard
+     against a sample of up to 500 survivors carrying that tag.
+  4. Pick the top tag; if the affinity score is below 0.5, route to
+     `PRIMORDIAL_TAG = "primordial"` per ADR-200 §3 "everything else".
+  5. UPDATE `agent_memories.tags` with the dying tag dropped and the
+     target tag added. No row is deleted.
+- New Tauri command `memory_annealing_demote(tag)` returning a
+  `DemoteReport` with per-memory reassignment trail and orphan count.
+- New slash command `/demote-tag <tag>` (alias `/demote`) renders the
+  report with a result-block summary. Refuses empty input and
+  refuses to demote the primordial pool itself (you can't relocate
+  the floor below itself).
+
+This is the first mutation in the annealing pipeline. Promote is
+intentionally NOT shipped here — it needs human-named anchor concepts
+to be useful, and ADR-200's §"Reassignment cost" warns about the
+write-amplification risk on promotion. Demote-with-routing is the
+safe first move.
+
+### v1.6.9 — Memory Browser cluster verdict chip
+
+Mounts a per-row annealing chip in `MemoryBrowserView.svelte` so the
+verdict from `/anneal` is visible at a glance without leaving the
+browser.
+
+- On mount, fires `memory_annealing_report()` and stuffs a
+  `Map<tag, verdict>` into component state.
+- `worstClusterVerdict(tagsJson)` ranks the memory's tags
+  (`demote > watch > promote > no_action`) and returns the worst.
+- Renders a small pill next to `GroundingChip` with verdict-coded
+  tone (red demote, amber watch, green promote). Hidden when no tag
+  carries a non-`no_action` verdict.
+- Failure-tolerant: if the annealing command errors (e.g. on a
+  fresh DB) the chip is simply absent — the rest of the browser is
+  untouched.
+- New CSS class `.mv-anneal` + 3 tone variants, parallel to the
+  existing `.gc-*` palette in GroundingChip.
+
+### Bundled why
+
+The three pieces are tightly coupled: v1.6.7 makes chip telemetry
+robust enough for v1.6.8 to act on, and v1.6.9 surfaces the result
+of both inside the existing Memory Browser. Shipping them as one
+tag avoids three half-painted intermediate states.
+
+### Cheatsheet
+
+`/demote-tag` row added after `/anneal`.
+
+### References
+
+- `docs/research/kappa-graph/adrs/ADR-058-polarity-axis-triangulation.md` (v1.6.7 backbone)
+- `docs/research/kappa-graph/adrs/ADR-200-annealing-ontologies.md` §3, §8, §"Phase 4" (v1.6.8/9)
+
+---
+
 ## [1.6.6] — 2026-05-31
 
 Annealing ontologies MVP (Kappa Graph ADR-200). Scores Lucy's

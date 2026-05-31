@@ -78,6 +78,7 @@
                 { keys: ['/instinct-status'], desc: isEN ? 'Layer 3 patterns banded by confidence' : 'Patrones Layer 3 por bandas de confianza' },
                 { keys: ['/evolve'], desc: isEN ? 'Promote recurring patterns into skills' : 'Promueve patrones recurrentes a skills' },
                 { keys: ['/anneal'], desc: isEN ? 'Ontology cluster scoring (promote/demote)' : 'Scoring de ontologías (promover/democionar)' },
+                { keys: ['/demote-tag'], desc: isEN ? 'Re-tag memories off a failed cluster' : 'Re-etiqueta memorias de un cúmulo fallido' },
                 { keys: ['/preset'], desc: isEN ? 'Open the skill-preset picker' : 'Abre el selector de plantillas de habilidad' },
                 { keys: ['/frontier-stats'], desc: isEN ? 'Frontier feature telemetry' : 'Telemetría Frontier' },
                 { keys: ['/model'], desc: isEN ? 'Switch model (partial match OK)' : 'Cambia modelo (match parcial)' },

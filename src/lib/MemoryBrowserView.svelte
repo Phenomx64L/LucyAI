@@ -38,6 +38,36 @@
     import EmptyState from '$lib/EmptyState.svelte';
     // v1.6.0 — Kappa Graph ADR-044 grounding score per memory.
     import GroundingChip from '$lib/GroundingChip.svelte';
+    // v1.6.9 — Kappa Graph ADR-200 cluster verdict per memory's tags.
+    // Each memory carries its worst-verdict tag as a small chip so users
+    // see at a glance which entries belong to demote/watch-band clusters
+    // identified by /anneal.
+    import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+    let annealVerdictByTag: Map<string, string> = new Map();
+    async function refreshAnnealingVerdicts() {
+        try {
+            const rep = await tauriInvoke<any>('memory_annealing_report');
+            const m = new Map<string, string>();
+            for (const c of (rep?.clusters || [])) m.set(c.name, c.verdict);
+            annealVerdictByTag = m;
+        } catch { /* annealing is opt-in; failure means no chips */ }
+    }
+    // Verdict ordering: demote (worst) > watch > promote > no_action.
+    const VERDICT_RANK: Record<string, number> = { demote: 3, watch: 2, promote: 1, no_action: 0 };
+    function worstClusterVerdict(tagsJson: string): { verdict: string; tag: string } | null {
+        try {
+            const tags = JSON.parse(tagsJson) as string[];
+            let best: { verdict: string; tag: string } | null = null;
+            for (const t of tags) {
+                const v = annealVerdictByTag.get(t);
+                if (!v || v === 'no_action') continue;
+                if (!best || (VERDICT_RANK[v] || 0) > (VERDICT_RANK[best.verdict] || 0)) {
+                    best = { verdict: v, tag: t };
+                }
+            }
+            return best;
+        } catch { return null; }
+    }
     import type { DetectedPattern, PatternReport } from '$lib/agentmemory/patterns';
     import { verifyMemories, resolveContradiction, severityLabel, severityColor, resolutionLabel } from '$lib/agentmemory/verify';
     import type { Contradiction, VerifyReport, Resolution } from '$lib/agentmemory/verify';
@@ -628,7 +658,10 @@
     }
 
     // ── Mount: load default tab ─────────────────────────────────────────
-    onMount(loadMemorias);
+    onMount(async () => {
+        await loadMemorias();
+        refreshAnnealingVerdicts();   // fire-and-forget; chip absence is fine
+    });
 
     // Switch tabs (load on first switch)
     let loadedTabs = new Set<Tab>(['memorias']);
@@ -839,6 +872,25 @@
                                 memoryId={String(m.id)}
                                 {isEN}
                                 compact={true} />
+                            <!-- v1.6.9 — Annealing cluster verdict chip.
+                                 Shows up only when this memory belongs to a
+                                 tag flagged demote/watch/promote by /anneal.
+                                 Color-codes the worst verdict among its tags.
+                                 We use a single-iteration {#each} so we can
+                                 capture the helper result in a local without
+                                 leaning on {@const} (which needs a parent
+                                 block in Svelte 5). -->
+                            {#each (worstClusterVerdict(m.tags) ? [worstClusterVerdict(m.tags)] : []) as _v (m.id)}
+                                {#if _v}
+                                    <span class="mv-anneal mv-anneal-{_v.verdict}"
+                                          title={isEN
+                                              ? `Annealing verdict: ${_v.verdict} (tag '${_v.tag}')`
+                                              : `Veredicto de annealing: ${_v.verdict} (etiqueta '${_v.tag}')`}>
+                                        {_v.verdict === 'demote' ? '↧' : _v.verdict === 'promote' ? '↥' : '◇'}
+                                        {_v.verdict === 'demote' ? (isEN ? 'demote' : 'democ') : _v.verdict === 'promote' ? (isEN ? 'promote' : 'promov') : (isEN ? 'watch' : 'vigilar')}
+                                    </span>
+                                {/if}
+                            {/each}
                             <button class="mv-del" title={isEN ? 'Delete' : 'Borrar'}
                                 on:click={() => deleteMemoria(m.id)}><Trash size={13}/></button>
                         </div>
@@ -1790,6 +1842,18 @@
         transition: .15s;
     }
     .mv-del:hover { background: rgba(239,68,68,.12); color: #f87171; }
+    /* v1.6.9 — annealing cluster verdict pill, parallel to GroundingChip */
+    .mv-anneal {
+        display: inline-flex; align-items: center; gap: 3px;
+        padding: 1px 7px; border-radius: 9px;
+        font-size: 10px; font-weight: 600;
+        font-family: var(--mono, ui-monospace, monospace);
+        line-height: 1.4; border: 1px solid transparent;
+        letter-spacing: .2px;
+    }
+    .mv-anneal-demote  { color: var(--red, #ef4444);  background: rgba(239, 68, 68, .08);  border-color: rgba(239, 68, 68, .30); }
+    .mv-anneal-watch   { color: var(--amber, #f59e0b); background: rgba(245, 158, 11, .08); border-color: rgba(245, 158, 11, .25); }
+    .mv-anneal-promote { color: var(--acc, #10b981);  background: rgba(16, 185, 129, .08); border-color: rgba(16, 185, 129, .25); }
     /* .mv-card-detail retired Sprint E with crystal redesign */
     .mv-confidence {
         display: flex; align-items: center; gap: 8px;

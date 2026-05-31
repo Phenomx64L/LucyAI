@@ -512,6 +512,8 @@ pub fn run() {
             // v1.6.6 — Kappa Graph ADR-200 annealing ontologies (read-only MVP).
             commands::annealing::memory_annealing_report,
             commands::annealing::memory_annealing_cluster,
+            // v1.6.8 — annealing Phase 4 execution (demote with affinity routing).
+            commands::annealing::memory_annealing_demote,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

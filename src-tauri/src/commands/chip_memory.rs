@@ -37,9 +37,42 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::RwLock;
 
 use crate::commands::metrics::shared_db;
 use crate::commands::smart_chips::SmartChip;
+
+// ── v1.6.7 — Polarity-powered event-kind classification ────────────────
+//
+// Before v1.6.7 the event_kind normalizer was a fixed string-match
+// (`thumbs_up → click`, `thumbs_down → dismiss`, everything else →
+// click). That breaks the moment the LLM proposes a novel reaction
+// label like `bookmark`, `pin`, `cringe`, `meh`, or an SP variant the
+// table doesn't anticipate.
+//
+// The new path: try the fast canonical map first; if the string isn't
+// recognised, fall through to polarity::project_text() (v1.6.5). A
+// positive score routes to "click" (reinforcing signal); negative to
+// "dismiss" (anti-reinforcing). Results are cached process-wide so we
+// don't re-embed the same novel string twice in one session.
+//
+// Cache invalidation: the cache persists for the process lifetime
+// alongside the polarity axis itself. Restarting Lucy clears it; the
+// axis is rebuilt on next use anyway.
+
+static EVENT_POLARITY_CACHE: RwLock<Option<HashMap<String, String>>> = RwLock::new(None);
+
+fn cache_lookup(key: &str) -> Option<String> {
+    EVENT_POLARITY_CACHE.read().ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.get(key).cloned()))
+}
+
+fn cache_store(key: String, val: String) {
+    if let Ok(mut g) = EVENT_POLARITY_CACHE.write() {
+        let m = g.get_or_insert_with(HashMap::new);
+        m.insert(key, val);
+    }
+}
 
 // ── Public command payloads ────────────────────────────────────────────
 
@@ -76,7 +109,7 @@ pub async fn log_chip_event(event: ChipEventInput) -> Result<String, String> {
     }
     let intent     = event.intent.unwrap_or_else(|| "other".into());
     let lang       = event.lang.unwrap_or_else(|| "es-MX".into());
-    let kind       = normalize_event_kind(&event.event_kind);
+    let kind       = classify_event_kind(&event.event_kind).await;
     let domains_j  = serde_json::to_string(&event.domains).unwrap_or("[]".into());
     let tools_j    = serde_json::to_string(&event.tool_labels).unwrap_or("[]".into());
     let had_err: i64 = if event.had_error { 1 } else { 0 };
@@ -320,16 +353,45 @@ fn parse_json_array(s: &str) -> HashSet<String> {
         .collect()
 }
 
-fn normalize_event_kind(s: &str) -> String {
+fn normalize_event_kind(s: &str) -> Option<String> {
     // v1.4.15 — 👍/👎 reactions on Lucy messages reuse this log path.
     // They're folded into click/dismiss so the existing scoring formula
     // (Σ clicks − 0.6·Σ dismisses, decayed) treats positive reactions
     // as reinforcement and negatives as anti-reinforcement.
+    //
+    // v1.6.7: returns Some(...) ONLY for canonical kinds. Unknown
+    // strings get classified via polarity (see classify_event_kind).
     match s.trim().to_lowercase().as_str() {
         "dismiss" | "dismissed" | "x"
-            | "thumbs_down" | "down" | "dislike"   => "dismiss".into(),
-        _                                          => "click".into(),
+            | "thumbs_down" | "down" | "dislike"     => Some("dismiss".into()),
+        "click" | "clicked" | "ok"
+            | "thumbs_up"   | "up"   | "like"        => Some("click".into()),
+        _                                            => None,
     }
+}
+
+/// Map a free-form event-kind string to canonical "click" | "dismiss".
+/// Fast path: the canonical map. Slow path: polarity projection (one
+/// embedding call) cached per process. On polarity failure (e.g. no
+/// Ollama) we default to "click" so the log path never breaks.
+async fn classify_event_kind(s: &str) -> String {
+    if let Some(canonical) = normalize_event_kind(s) {
+        return canonical;
+    }
+    let key = s.trim().to_lowercase();
+    if let Some(hit) = cache_lookup(&key) {
+        return hit;
+    }
+    // Polarity lookup. We tolerate failure (no embedder available, no
+    // axis built, etc.) by defaulting to "click" — losing the signal
+    // is preferable to losing the log entry.
+    let kind = match crate::commands::polarity::project_text(&key, None).await {
+        Ok(p) if p.score < 0.0 => "dismiss".to_string(),
+        Ok(_)                  => "click".to_string(),
+        Err(_)                 => "click".to_string(),
+    };
+    cache_store(key, kind.clone());
+    kind
 }
 
 fn rand_suffix() -> String {
@@ -458,13 +520,19 @@ mod tests {
 
     #[test]
     fn normalize_event_kind_canonicalizes() {
-        assert_eq!(normalize_event_kind("click"),     "click");
-        assert_eq!(normalize_event_kind("CLICK"),     "click");
-        assert_eq!(normalize_event_kind("  click  "), "click");
-        assert_eq!(normalize_event_kind("dismiss"),   "dismiss");
-        assert_eq!(normalize_event_kind("Dismissed"), "dismiss");
-        assert_eq!(normalize_event_kind("x"),         "dismiss");
-        assert_eq!(normalize_event_kind("random"),    "click"); // unknown → click
+        // v1.6.7: canonical strings map directly; unknowns return None
+        // so the async polarity path can take over.
+        assert_eq!(normalize_event_kind("click").as_deref(),     Some("click"));
+        assert_eq!(normalize_event_kind("CLICK").as_deref(),     Some("click"));
+        assert_eq!(normalize_event_kind("  click  ").as_deref(), Some("click"));
+        assert_eq!(normalize_event_kind("thumbs_up").as_deref(), Some("click"));
+        assert_eq!(normalize_event_kind("dismiss").as_deref(),   Some("dismiss"));
+        assert_eq!(normalize_event_kind("Dismissed").as_deref(), Some("dismiss"));
+        assert_eq!(normalize_event_kind("x").as_deref(),         Some("dismiss"));
+        // Unknown → None so the caller falls through to polarity.
+        assert_eq!(normalize_event_kind("bookmark"),    None);
+        assert_eq!(normalize_event_kind("cringe"),      None);
+        assert_eq!(normalize_event_kind("random"),      None);
     }
 
     #[test]

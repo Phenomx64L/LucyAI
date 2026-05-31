@@ -1063,6 +1063,54 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── v1.6.8 — /demote-tag <tag> (Phase 4 execution) ──
+        // Re-tags every memory carrying the given tag onto its
+        // highest-affinity surviving tag. No deletion. Use only on
+        // tags /anneal explicitly proposed for demotion.
+        case 'demote-tag': case 'demote': {
+            const tag = arg.trim();
+            if (!tag) {
+                sysMsg(ctx.isEN
+                    ? `Usage: /demote-tag <tag>. Run /anneal first to see which tags are candidates.`
+                    : `Uso: /demote-tag <etiqueta>. Ejecuta /anneal primero para ver candidatos.`,
+                    'var(--amber)');
+                return true;
+            }
+            (async () => {
+                try {
+                    const rep = await invoke<any>('memory_annealing_demote', { tag });
+                    const blocks: ResultBlock[] = [{
+                        title: ctx.isEN ? 'Result' : 'Resultado',
+                        icon: '↧', tone: 'ok', defaultOpen: true,
+                        html:
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Tag demoted' : 'Etiqueta democionada'}</span>` +
+                            `<span class="rb-v">${escapeHtml(rep.tag)}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Memories re-tagged' : 'Memorias re-etiquetadas'}</span>` +
+                            `<span class="rb-v">${rep.members_touched}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Sent to primordial' : 'Enviadas a primordial'}</span>` +
+                            `<span class="rb-v">${rep.orphaned}</span></div>`,
+                    }];
+                    if (rep.reassigned?.length) {
+                        const sample = rep.reassigned.slice(0, 12).map((r: any) =>
+                            `<div class="rb-row"><span class="rb-k">#${r.memory_id}</span>` +
+                            `<span class="rb-v">→ ${escapeHtml(r.target_tag)}</span></div>`
+                        ).join('');
+                        blocks.push({
+                            title: ctx.isEN ? `First ${Math.min(12, rep.reassigned.length)} reassignments` : `Primeras ${Math.min(12, rep.reassigned.length)} reasignaciones`,
+                            icon: '→', tone: 'info',
+                            html: sample,
+                        });
+                    }
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? `↧ Demote complete · ${rep.members_touched} memories moved` : `↧ Democión completa · ${rep.members_touched} memorias movidas`,
+                        blocks));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── v1.6.6 — /anneal (Kappa Graph ADR-200 annealing ontologies) ──
         // Read-only: scores each tag-cluster of agent_memories on mass /
         // coherence / exposure and emits promote/demote/watch verdicts.
