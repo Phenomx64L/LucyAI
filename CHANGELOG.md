@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.3] — 2026-05-30
+
+Long-tail CSS dedup #2 — extended `dashboard-alerts.css` with the full
+dashboard surface.
+
+### Shipped
+
+Moved 4 scattered page.css blocks (~60 LOC, 30 selectors) into
+`src/lib/styles/dashboard-alerts.css`:
+
+- Auto-refresh badge: `.dash-auto-badge`, `.dash-pulse` + `@keyframes
+  dash-pulse-anim`, `.dash-last-update`
+- Main layout: `.dash-scroll`, `.dash-cards`, `.dash-card`, `.dc-label`,
+  `.dc-value`, `.dc-bar`, `.dc-bar-fill` (folded both `transition` rules
+  into one), `.dc-sub`, `.dc-sparkline`, `.dash-section`, `.ds-title`
+- CPU cores grid: `.core-grid`, `.core-item`, `.core-bar-wrap`,
+  `.core-bar-fill`, `.core-label`, `.core-pct` + `@keyframes bar-entry`
+- Disk rows: `.disk-row`, `.disk-name`, `.disk-bar-wrap`,
+  `.disk-bar-fill`, `.disk-pct`, `.disk-size`
+- Process table: `.proc-table`, `.proc-table th`/`td`/`tr:last-child td`
+- Skeleton loaders: `.dash-skeleton`, `.sk-card`, `.sk-lbl`, `.sk-val`,
+  `.sk-bar`, `.sk-sub` (+ `.short`), `.sk-section`, `.sk-row`
+  (+ `.short`) + `@keyframes sk-shimmer`
+
+Same import path (`import '$lib/styles/dashboard-alerts.css'`) already
+wired from DashboardView.svelte in v1.4.25 — no new import needed.
+
+### What stayed
+
+DashboardView.svelte's scoped `<style>` retains its `:global(...)`
+refinements (Sprint C D14/D15/D18 features like
+`.dc-thr-modal`, `.dc-incidents-banner`, `.dc-pid-new-badge` etc.).
+Cascade priority via component-injection load order is preserved —
+visual output unchanged.
+
+### Audit progress
+
+| # | Component | Pre-v1.5.3 | Post-v1.5.3 |
+|---|---|---|---|
+| 1 | DashboardView | 36 | ~0 |
+| 2 | Sidebar | 20 | 20 (next) |
+| 3 | LogViewerView | 12 | 12 |
+| 4 | NexShellView | 10 | 10 |
+| 5 | InventoryView | 8 | 8 |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.2 → 1.5.3)
+M  src-tauri/Cargo.toml                      (1.5.2 → 1.5.3)
+M  src-tauri/tauri.conf.json                 (1.5.2 → 1.5.3)
+M  src/lib/styles/dashboard-alerts.css       (+62 LOC dashboard block)
+M  src/routes/page.css                       (-60 LOC across 4 ranges)
+M  src/lib/SetupOverlay.svelte               (1.5.2 → 1.5.3)
+M  src/lib/TutorialOverlay.svelte            (1.5.2 → 1.5.3)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.5.2] — 2026-05-30
 
 Long-tail CSS dedup #1 — remote-shell panel block extracted to
