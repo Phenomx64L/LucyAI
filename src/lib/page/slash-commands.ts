@@ -378,21 +378,86 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     }
                     const d = await invoke<any>('state_snapshot_diff', { fromId, toId });
                     const span = Math.round((d.to_ts - d.from_ts) / 60);
-                    let html = `<b>${ctx.isEN ? `State diff (${span} min)` : `Diff de estado (${span} min)`}</b><br>`;
-                    html += `CPU: ${d.cpu_delta_pct.toFixed(1)}% Δ &nbsp;·&nbsp; RAM: ${d.ram_delta_mb}MB Δ<br>`;
+
+                    // v1.4.29 — block-based render. Each major axis
+                    // (resources, processes, drives) gets its own
+                    // collapsible section so the user can drill into
+                    // the dimension they care about without scrolling
+                    // a wall of inline HTML.
+                    const blocks: ResultBlock[] = [];
+
+                    // Headline section: resources delta, always open.
+                    const cpuTone = Math.abs(d.cpu_delta_pct) >= 25 ? 'warn' : 'info';
+                    const ramTone = Math.abs(d.ram_delta_mb) >= 1024 ? 'warn' : 'info';
+                    const resourceTone = cpuTone === 'warn' || ramTone === 'warn' ? 'warn' : 'info';
+                    blocks.push({
+                        title: ctx.isEN ? 'Resource delta' : 'Δ de recursos',
+                        icon: '◧',
+                        tone: resourceTone,
+                        defaultOpen: true,
+                        html:
+                            `<div class="rb-row"><span class="rb-k">CPU</span>` +
+                            `<span class="rb-v ${cpuTone === 'warn' ? 'rb-v-warn' : ''}">${d.cpu_delta_pct.toFixed(1)}% Δ</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">RAM</span>` +
+                            `<span class="rb-v ${ramTone === 'warn' ? 'rb-v-warn' : ''}">${d.ram_delta_mb} MB Δ</span></div>`,
+                    });
+
                     if (d.processes_appeared.length > 0) {
-                        html += `<br><span style="color:var(--blue)">${ctx.isEN ? 'Appeared:' : 'Aparecieron:'}</span> ${d.processes_appeared.slice(0, 8).map((p: any) => `<code>${p.name}</code>`).join(' ')}`;
+                        const items = d.processes_appeared.slice(0, 12).map((p: any) =>
+                            `<code class="rb-chip rb-chip-new">${escapeHtml(p.name)}</code>`).join('');
+                        const more = d.processes_appeared.length > 12
+                            ? `<span class="rb-more">+${d.processes_appeared.length - 12} ${ctx.isEN ? 'more' : 'más'}</span>` : '';
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Processes appeared' : 'Procesos aparecidos'} (${d.processes_appeared.length})`,
+                            icon: '⊕',
+                            tone: 'info',
+                            html: `<div class="rb-chips">${items}${more}</div>`,
+                        });
                     }
                     if (d.processes_disappeared.length > 0) {
-                        html += `<br><span style="color:var(--amber)">${ctx.isEN ? 'Disappeared:' : 'Desaparecieron:'}</span> ${d.processes_disappeared.slice(0, 8).map((p: any) => `<code>${p.name}</code>`).join(' ')}`;
+                        const items = d.processes_disappeared.slice(0, 12).map((p: any) =>
+                            `<code class="rb-chip rb-chip-gone">${escapeHtml(p.name)}</code>`).join('');
+                        const more = d.processes_disappeared.length > 12
+                            ? `<span class="rb-more">+${d.processes_disappeared.length - 12} ${ctx.isEN ? 'more' : 'más'}</span>` : '';
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Processes disappeared' : 'Procesos desaparecidos'} (${d.processes_disappeared.length})`,
+                            icon: '⊖',
+                            tone: 'warn',
+                            html: `<div class="rb-chips">${items}${more}</div>`,
+                        });
                     }
                     if (d.drive_changes.length > 0) {
-                        html += `<br><span style="color:var(--purple)">${ctx.isEN ? 'Drives:' : 'Discos:'}</span> ${d.drive_changes.map((c: any) => `${c.mount} ${c.from_pct.toFixed(0)}%→${c.to_pct.toFixed(0)}% (${c.used_delta_gb >= 0 ? '+' : ''}${c.used_delta_gb}GB)`).join(' · ')}`;
+                        const rows = d.drive_changes.map((c: any) => {
+                            const sign = c.used_delta_gb >= 0 ? '+' : '';
+                            const trend = c.to_pct > c.from_pct ? '↑' : '↓';
+                            return `<div class="rb-row"><span class="rb-k">${escapeHtml(c.mount)}</span>` +
+                                   `<span class="rb-v">${c.from_pct.toFixed(0)}% → ${c.to_pct.toFixed(0)}% ${trend} (${sign}${c.used_delta_gb} GB)</span></div>`;
+                        }).join('');
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Drive changes' : 'Cambios de discos'} (${d.drive_changes.length})`,
+                            icon: '◳',
+                            tone: 'info',
+                            html: rows,
+                        });
                     }
-                    if (d.processes_appeared.length === 0 && d.processes_disappeared.length === 0 && d.drive_changes.length === 0) {
-                        html += `<br><i>${ctx.isEN ? 'No significant changes detected.' : 'Sin cambios significativos detectados.'}</i>`;
+
+                    // No-change footer when nothing notable found.
+                    if (blocks.length === 1 &&
+                        d.cpu_delta_pct === 0 && d.ram_delta_mb === 0) {
+                        blocks.push({
+                            title: ctx.isEN ? 'No significant changes detected' : 'Sin cambios significativos detectados',
+                            icon: '◎',
+                            tone: 'ok',
+                            defaultOpen: true,
+                            html: `<div class="rb-row" style="opacity:.7;font-style:italic;">${ctx.isEN
+                                ? 'The system was effectively static during this window.'
+                                : 'El sistema estuvo prácticamente estático durante esta ventana.'}</div>`,
+                        });
                     }
-                    sysMsg(html);
+
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? `State diff · ${span} min` : `Diff de estado · ${span} min`,
+                        blocks));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
                 }
@@ -584,29 +649,69 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 try {
                     const r = await invoke<any>('incident_detective', { symptomTs: null, windowSec });
                     const pct = (r.confidence * 100).toFixed(0);
-                    const bandColor = r.confidence >= 0.55 ? 'var(--red)' : r.confidence >= 0.30 ? 'var(--amber)' : 'var(--acc)';
-                    let html = `<b style="color:${bandColor};">🔎 Detective · ${pct}% confidence</b><br>`;
-                    html += `<div style="margin:6px 0;padding:6px;background:rgba(255,255,255,0.03);border-left:2px solid ${bandColor};font-size:11px;">${r.narrative.replace(/[<>&]/g, (c: string) => (({'<':'&lt;','>':'&gt;','&':'&amp;'} as Record<string, string>)[c] || c))}</div>`;
+                    // Top-level tone bucket → tints the headline color
+                    // and the first (narrative) block's border.
+                    const tone: 'ok' | 'warn' | 'crit' =
+                        r.confidence >= 0.55 ? 'crit' :
+                        r.confidence >= 0.30 ? 'warn' : 'ok';
+
+                    // v1.4.29 — block-based render. Narrative defaults
+                    // OPEN (the "what Lucy thinks happened" summary the
+                    // user came to read); threats/causes/files default
+                    // closed so a clean inbox stays clean.
+                    const blocks: ResultBlock[] = [];
+
+                    blocks.push({
+                        title: ctx.isEN ? 'Narrative' : 'Narrativa',
+                        icon: '🔎',
+                        tone,
+                        defaultOpen: true,
+                        html: `<div class="rb-narrative">${escapeHtml(r.narrative || '')}</div>`,
+                    });
+
                     if (r.threats?.length) {
-                        html += `<div><b>Threats:</b><br>`;
-                        for (const t of r.threats.slice(0, 3)) {
+                        const rows = r.threats.slice(0, 8).map((t: any) => {
                             const tp = (t.score * 100).toFixed(0);
-                            html += `&nbsp;&nbsp;<code style="font-size:10px">[${t.band}] ${t.name} (pid ${t.pid}) — ${tp}%</code><br>`;
-                        }
-                        html += `</div>`;
+                            return `<div class="rb-row">` +
+                                `<code class="rb-chip rb-chip-band-${escapeHtml(String(t.band || 'info'))}">${escapeHtml(t.band || '')}</code>` +
+                                `<span class="rb-k">${escapeHtml(t.name)}</span>` +
+                                `<span class="rb-v">pid ${t.pid} · ${tp}%</span>` +
+                            `</div>`;
+                        }).join('');
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Threats' : 'Amenazas'} (${r.threats.length})`,
+                            icon: '⚠',
+                            tone: r.threats.some((t: any) => t.band === 'crit' || t.score >= 0.7) ? 'crit' : 'warn',
+                            html: rows,
+                        });
                     }
                     if (r.causal?.candidates?.length) {
-                        html += `<div><b>Causal candidates:</b><br>`;
-                        for (const c of r.causal.candidates.slice(0, 3)) {
+                        const rows = r.causal.candidates.slice(0, 8).map((c: any) => {
                             const cp = (c.confidence * 100).toFixed(0);
-                            html += `&nbsp;&nbsp;<code style="font-size:10px">${c.name} (pid ${c.pid}) — ${cp}%</code><br>`;
-                        }
-                        html += `</div>`;
+                            return `<div class="rb-row">` +
+                                `<span class="rb-k">${escapeHtml(c.name)}</span>` +
+                                `<span class="rb-v">pid ${c.pid} · ${cp}%</span>` +
+                            `</div>`;
+                        }).join('');
+                        blocks.push({
+                            title: `${ctx.isEN ? 'Causal candidates' : 'Candidatos causales'} (${r.causal.candidates.length})`,
+                            icon: '⌖',
+                            tone: 'info',
+                            html: rows,
+                        });
                     }
                     if (r.file_changes?.length) {
-                        html += `<div><b>File activity:</b> ${r.touched_cluster_summary}</div>`;
+                        blocks.push({
+                            title: `${ctx.isEN ? 'File activity' : 'Actividad de archivos'} (${r.file_changes.length})`,
+                            icon: '⊞',
+                            tone: 'info',
+                            html: `<div class="rb-row">${escapeHtml(r.touched_cluster_summary || '')}</div>`,
+                        });
                     }
-                    sysMsg(html);
+
+                    sysMsg(renderResultBlocks(
+                        `🔎 ${ctx.isEN ? 'Detective' : 'Detective'} · ${pct}% ${ctx.isEN ? 'confidence' : 'confianza'}`,
+                        blocks));
                 } catch (e) {
                     sysMsg(`Error: ${String(e)}`, 'var(--red)');
                 }
@@ -1136,6 +1241,49 @@ function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, c => ({
         '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;',
     }[c] as string));
+}
+
+/**
+ * v1.4.29 — Block-based output for forensic commands.
+ *
+ * Renders a list of collapsible sections as native <details>/<summary>
+ * markup. Picked native HTML over a Svelte component because slash-cmd
+ * results flow through `sysMsg(html)` → `{@html msg.html}` and adding a
+ * new component-routing path would require touching the message
+ * renderer in ChatThread. <details> gets us free open/close behavior,
+ * accessibility, and survives transcript export (markdown + print).
+ *
+ * `tone` paints the left border + summary icon color:
+ *   ok    → green   (no significant change, succeeded)
+ *   info  → neutral (default, descriptive sections)
+ *   warn  → amber   (notable but not failing)
+ *   crit  → red     (something bad found)
+ *
+ * Use `defaultOpen: true` for the headline section the user always
+ * wants to see (e.g. the executive summary). Detail sections stay
+ * collapsed so the bubble doesn't overwhelm the chat thread.
+ */
+export type ResultBlock = {
+    title: string;
+    icon?: string;
+    tone?: 'ok' | 'info' | 'warn' | 'crit';
+    html?: string;
+    defaultOpen?: boolean;
+};
+export function renderResultBlocks(headline: string, blocks: ResultBlock[]): string {
+    const sections = blocks.map(b => {
+        const tone = b.tone || 'info';
+        const open = b.defaultOpen ? ' open' : '';
+        return `<details class="rb-block rb-tone-${tone}"${open}>` +
+            `<summary class="rb-summary">` +
+            `<span class="rb-ico">${b.icon || '·'}</span>` +
+            `<span class="rb-title">${b.title}</span>` +
+            `<span class="rb-chev">▾</span>` +
+            `</summary>` +
+            `<div class="rb-body">${b.html || ''}</div>` +
+        `</details>`;
+    }).join('');
+    return `<div class="rb-wrap"><div class="rb-hdr">${headline}</div>${sections}</div>`;
 }
 
 /**

@@ -403,3 +403,137 @@
 }
 .td:nth-child(2) { animation-delay: .2s; }
 .td:nth-child(3) { animation-delay: .4s; }
+
+/* ── v1.4.29 — Result blocks (block-based output for forensic cmds) ───
+   `<div class="rb-wrap">` wraps a stack of `<details class="rb-block">`
+   sections produced by renderResultBlocks() in slash-commands.ts.
+   Used today by /diff and /detective; designed so any future
+   forensic command can render with the same vocabulary. */
+.rb-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 2px 0;
+    /* The sysMsg() wrapper around forensic command results paints
+       its child div with mono + a tint color. Reset both so rb-*
+       descendants pick up our deliberate per-element typography. */
+    font-family: inherit;
+    color: var(--txt, #dde3ea);
+    font-style: normal;
+}
+.rb-hdr {
+    font-weight: 700;
+    font-size: 12.5px;
+    color: var(--txt, #dde3ea);
+    margin-bottom: 2px;
+    letter-spacing: .2px;
+}
+
+.rb-block {
+    border-radius: 7px;
+    background: rgba(255, 255, 255, .025);
+    border: 1px solid rgba(255, 255, 255, .06);
+    border-left: 2px solid var(--rb-accent, var(--txt3, #475569));
+    overflow: hidden;
+    transition: background .15s;
+}
+.rb-block[open] { background: rgba(255, 255, 255, .04); }
+/* Tones: paint the left accent (and summary icon) by severity. */
+.rb-tone-info { --rb-accent: var(--blue, #3b9eff); }
+.rb-tone-ok   { --rb-accent: var(--acc, #10b981); }
+.rb-tone-warn { --rb-accent: var(--amber, #f59e0b); }
+.rb-tone-crit { --rb-accent: var(--red, #ef4444); }
+
+.rb-summary {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    color: var(--txt, #dde3ea);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;       /* hide native triangle */
+}
+.rb-summary::-webkit-details-marker { display: none; }
+.rb-summary:hover { background: rgba(255, 255, 255, .03); }
+.rb-ico   {
+    color: var(--rb-accent);
+    font-size: 12px;
+    width: 16px; text-align: center;
+    flex-shrink: 0;
+}
+.rb-title { flex: 1; font-weight: 600; letter-spacing: .1px; }
+.rb-chev  {
+    font-size: 10px;
+    color: var(--txt3, #475569);
+    transition: transform .15s;
+}
+.rb-block[open] .rb-chev { transform: rotate(180deg); }
+
+.rb-body {
+    padding: 4px 12px 10px;
+    font-size: 11.5px;
+    color: var(--txt2, #94a3b8);
+    line-height: 1.5;
+    animation: rb-fade .14s ease;
+}
+@keyframes rb-fade {
+    from { opacity: 0; transform: translateY(-1px); }
+    to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .rb-body { animation: none; }
+}
+
+/* Row helpers used by /diff and /detective renderers. */
+.rb-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 0;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+}
+.rb-k {
+    color: var(--txt3, #475569);
+    min-width: 56px;
+}
+.rb-v {
+    color: var(--txt, #dde3ea);
+    font-weight: 600;
+    flex: 1;
+}
+.rb-v-warn { color: var(--amber, #f59e0b); }
+.rb-narrative {
+    color: var(--txt, #dde3ea);
+    font-size: 11.5px;
+    line-height: 1.55;
+    font-family: inherit;
+    white-space: pre-wrap;
+}
+
+/* Chip family used for process names + threat band badges. */
+.rb-chips {
+    display: flex; flex-wrap: wrap;
+    gap: 4px;
+}
+.rb-chip {
+    display: inline-block;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .06);
+    background: rgba(255, 255, 255, .04);
+    color: var(--txt2, #94a3b8);
+}
+.rb-chip-new  { color: var(--blue,  #3b9eff); border-color: rgba(59, 158, 255, .25); background: rgba(59, 158, 255, .07); }
+.rb-chip-gone { color: var(--amber, #f59e0b); border-color: rgba(245, 158, 11, .28); background: rgba(245, 158, 11, .07); }
+.rb-chip-band-crit { color: var(--red, #ef4444); border-color: rgba(239, 68, 68, .35); background: rgba(239, 68, 68, .10); }
+.rb-chip-band-warn { color: var(--amber, #f59e0b); border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .10); }
+.rb-chip-band-info { color: var(--blue, #3b9eff); border-color: rgba(59, 158, 255, .30); background: rgba(59, 158, 255, .08); }
+.rb-more {
+    font-size: 10px;
+    color: var(--txt3, #475569);
+    align-self: center;
+    margin-left: 4px;
+}

@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.29] — 2026-05-30
+
+Block-based output for forensic slash-commands. Closes the v1.4.15
+original deferred list (the last unshipped item from that backlog).
+
+### Shipped — `renderResultBlocks()` helper + `/diff` and `/detective`
+
+New helper in `src/lib/page/slash-commands.ts`:
+
+```ts
+export function renderResultBlocks(headline: string, blocks: ResultBlock[]): string
+```
+
+Builds native `<details><summary>` markup wrapped in `.rb-wrap`. Each
+block carries a title, icon, severity tone (`ok`/`info`/`warn`/`crit`),
+inner HTML, and an optional `defaultOpen` flag. The native `<details>`
+element gives us:
+
+- Free open/close behavior without bespoke state plumbing
+- Accessibility (`role` + keyboard navigation handled by the browser)
+- Round-trip survival through transcript export and print stylesheet
+  (v1.4.15) without extra rendering logic
+
+### What `/diff` looks like now
+
+Before: a single `sysMsg(html)` blob with `<br>`-separated lines of
+CPU/RAM/processes/drives stacked vertically — readable only by
+scrolling.
+
+After: four collapsible sections:
+
+1. **Resource delta** — CPU and RAM Δ, defaults OPEN (the headline
+   the user always wants to see). Tone bumps to `warn` if either
+   crosses a noise threshold (CPU ±25%, RAM ±1GB).
+2. **Processes appeared** — chip cluster of new process names (cap
+   at 12 + "more" counter). Blue tint.
+3. **Processes disappeared** — same shape, amber tint.
+4. **Drive changes** — per-mount before→after rows with trend arrow.
+5. **No significant changes detected** — fallback when everything's
+   flat. Defaults OPEN, ok tone.
+
+### What `/detective` looks like now
+
+Before: narrative + threats + causal candidates + file activity all
+stacked as raw HTML with inline styles.
+
+After:
+
+1. **Narrative** — defaults OPEN, tone tracks `r.confidence`
+   (`crit` ≥ 55%, `warn` 30-55%, `ok` < 30%).
+2. **Threats** — band chip + name + pid + score per row (cap at 8).
+3. **Causal candidates** — name + pid + confidence per row (cap at 8).
+4. **File activity** — single-line summary.
+
+All except Narrative default closed so the bubble doesn't fill the
+screen on a busy investigation.
+
+### Styling
+
+New `.rb-*` family in `src/lib/styles/chat-thread.css`:
+
+- `.rb-wrap` resets `font-family` and `color` so the `sysMsg()`
+  wrapper's mono+tint doesn't bleed into the blocks.
+- `.rb-block` carries a `--rb-accent` CSS var driven by the tone
+  variant class (`.rb-tone-ok` / `.rb-tone-warn` / `.rb-tone-crit`
+  / `.rb-tone-info`). Left border + summary icon track that var.
+- `<summary>` paints its native triangle hidden; we use a `▾` glyph
+  that rotates `180deg` on `[open]`.
+- `.rb-row`, `.rb-chip`, `.rb-narrative` are reusable inside any
+  block — future forensic commands can adopt the same vocabulary
+  without restyling.
+
+### Why HTML `<details>` and not a Svelte component
+
+Slash command results flow through `sysMsg(html)` → message store →
+`{@html msg.html}` inside `ChatThread`. Adding a Svelte component
+route would require touching the message renderer to special-case
+"this message is a result block". Native HTML keeps the entire
+pipeline unchanged.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.28 → 1.4.29)
+M  src-tauri/Cargo.toml                      (1.4.28 → 1.4.29)
+M  src-tauri/tauri.conf.json                 (1.4.28 → 1.4.29)
+M  src/lib/page/slash-commands.ts            (renderResultBlocks helper; /diff and /detective rewritten)
+M  src/lib/styles/chat-thread.css            (.rb-* family — wrap, block, tone variants, rows, chips)
+M  src/lib/SetupOverlay.svelte               (1.4.28 → 1.4.29)
+M  src/lib/TutorialOverlay.svelte            (1.4.28 → 1.4.29)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+### Feature backlog status
+
+With v1.4.29, every item from the v1.4.15 original deferred list and
+every "high impact" feature from the post-v1.4.19 punch list has now
+shipped:
+
+- ✅ LucyContextMenu wrapper + tab right-click → v1.4.27
+- ✅ In-chat model switcher chip → v1.4.28
+- ✅ Block-based output for /diff and /detective → v1.4.29
+
+Remaining work is the long-tail CSS dedup (124 single-component
+selectors documented in `docs/css-duplicates-audit.md`) plus the
+`force_write`/`force_execute` deprecation removal scheduled for
+v1.5.0.
+
+---
+
 ## [1.4.28] — 2026-05-30
 
 In-chat model switcher chip — replaces slash-command-only model
