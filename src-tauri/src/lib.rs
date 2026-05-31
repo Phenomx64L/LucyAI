@@ -509,6 +509,9 @@ pub fn run() {
             commands::polarity::memory_polarity,
             commands::polarity::memory_polarity_rebuild,
             commands::polarity::memory_polarity_axis,
+            // v1.6.6 — Kappa Graph ADR-200 annealing ontologies (read-only MVP).
+            commands::annealing::memory_annealing_report,
+            commands::annealing::memory_annealing_cluster,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

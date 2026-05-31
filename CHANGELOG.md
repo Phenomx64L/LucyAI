@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.6] — 2026-05-31
+
+Annealing ontologies MVP (Kappa Graph ADR-200). Scores Lucy's
+existing tag-clustered memories on mass / coherence / exposure and
+proposes promotions and demotions. Read-only — the graph
+recommends, the user decides. No schema migration.
+
+### Shipped
+
+**`src-tauri/src/commands/annealing.rs`** (~360 LOC):
+
+- Maps ADR-200 vocabulary onto Lucy's SQLite schema: "ontology" ≡
+  the set of `agent_memories` sharing a tag (`tags` is already a
+  JSON array), "global epoch" ≡ lifetime memory count, "birth
+  epoch" ≡ `MIN(created_at)` of the cluster's members. No new
+  columns — the entire scoring runs off the existing schema.
+- Mass: `sigmoid(4 · (n_members / 15 − 0.5))`. 15 is the
+  hand-calibrated inflection point for "this is starting to look
+  like a domain" at Lucy's scale.
+- Coherence: mean pairwise Jaccard distance over token bags
+  (title + first 200 chars of content), sampled to N=20 per
+  cluster to keep the report snappy. Embedding-based coherence
+  is the natural upgrade for a later release once memory rows
+  carry stored embeddings.
+- Exposure pressure: sigmoid over `(now − birth) / opportunity_scale`
+  where the scale is 200 hours of ingest opportunity.
+- Verdict: `promote` (promotion_score ≥ 0.80), `demote`
+  (protection_score < 0.50), `watch` (mid-band), `no_action`
+  otherwise. Hysteresis band per ADR-200 §7.
+- 3 Tauri commands:
+  - `memory_annealing_report()` → full report
+  - `memory_annealing_cluster(tag)` → drill-down by tag name
+- `OntologyScore` carries anchor_ids (top 3 by importance) so a
+  later promotion phase has the candidates already picked.
+
+### Slash command
+
+`/anneal` (aliases `/ontology`, `/ontologies`) — renders the
+report through `renderResultBlocks` with four bands:
+
+- **Promotion candidates** (green) — high mass × coherence,
+  ready to become first-class organizing frames.
+- **Demotion candidates** (red) — failed clusters: high
+  exposure but low mass or low coherence. ADR-200 calls these
+  buckets that "had ample opportunity and still didn't earn
+  their status."
+- **Watch** (amber) — borderline, mid-band scores.
+- **Stable** (info) — self-sustaining or quiescent.
+
+Each row shows `mass% · coh% · exp% · lifecycle_state`. Lifecycle
+states use the ADR-200 §7 table: `newborn`, `growing`, `stable`,
+`failed`.
+
+### Why read-only first
+
+ADR-200's Phase 3 directive is explicit: "The worker does NOT
+execute proposals in Phase 3. It produces scored recommendations
+for human review." Lucy follows that pattern — the user gets a
+report, decides what's signal vs noise, and the actual cluster
+mutations (re-tagging, merging, deleting) come in a later
+release once the scoring math has been validated against a real
+user's graph.
+
+### Tests
+
+11 unit tests covering:
+
+- Sigmoid midpoint, mass curve below/at/above scale, saturation
+- Tokenization (drops short tokens & punctuation, lowercases)
+- Jaccard identity, disjoint case
+- Coherence on homogeneous vs heterogeneous synthetic clusters
+- `classify()` lifecycle state table (all 4 quadrants)
+- `verdict()` threshold matrix (sub-MIN, promote, demote, watch,
+  no_action)
+- `parse_tags()` malformed-JSON safety
+
+No DB fixture needed — all math is pure functions.
+
+### Keyboard cheatsheet
+
+`/anneal` row added between `/evolve` and `/preset`.
+
+### References
+
+- `docs/research/kappa-graph/adrs/ADR-200-annealing-ontologies.md`
+- `src-tauri/src/commands/grounding.rs` (v1.6.0 prior art for
+  query-time scoring, shared SQLite pool pattern)
+- `src-tauri/src/commands/polarity.rs` (v1.6.5 sibling — the
+  coherence floor here will eventually swap to polarity-axis
+  projection per ADR-200 §"Step 2: Evaluate Coherence via
+  Polarity")
+
+---
+
 ## [1.6.5] — 2026-05-31
 
 Polarity axis triangulation (Kappa Graph ADR-058). Adds a continuous

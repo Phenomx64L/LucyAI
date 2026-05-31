@@ -59,3 +59,5 @@ pub mod db_maintenance;
 pub mod grounding;
 // v1.6.5 — polarity axis triangulation (Kappa Graph ADR-058).
 pub mod polarity;
+// v1.6.6 — annealing ontologies MVP (Kappa Graph ADR-200).
+pub mod annealing;

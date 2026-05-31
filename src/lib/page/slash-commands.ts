@@ -1063,6 +1063,74 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── v1.6.6 — /anneal (Kappa Graph ADR-200 annealing ontologies) ──
+        // Read-only: scores each tag-cluster of agent_memories on mass /
+        // coherence / exposure and emits promote/demote/watch verdicts.
+        // The graph proposes; no mutations happen here. See ADR-200
+        // §"Phase 3 produces proposals, not executions".
+        case 'anneal': case 'ontology': case 'ontologies': {
+            (async () => {
+                try {
+                    const rep = await invoke<any>('memory_annealing_report');
+                    if (!rep || rep.n_clusters === 0) {
+                        sysMsg(ctx.isEN
+                            ? `No tagged memories yet. Annealing needs at least 2 memories sharing a tag to score a cluster.`
+                            : `Aún no hay memorias etiquetadas. El annealing necesita al menos 2 memorias compartiendo una etiqueta.`,
+                            'var(--amber)');
+                        return;
+                    }
+                    type OS = { name: string; members: number; mass: number; coherence: number; exposure: number; promotion_score: number; protection_score: number; lifecycle_state: string; verdict: string };
+                    const all: OS[] = rep.clusters || [];
+                    const promote = all.filter(c => c.verdict === 'promote');
+                    const demote  = all.filter(c => c.verdict === 'demote');
+                    const watch   = all.filter(c => c.verdict === 'watch');
+                    const stable  = all.filter(c => c.verdict === 'no_action');
+                    const pct = (x: number) => `${Math.round(x * 100)}%`;
+                    const renderRow = (c: OS) =>
+                        `<div class="rb-row">` +
+                        `<span class="rb-k">${escapeHtml(c.name).slice(0, 24)} <em style="opacity:.6;font-style:normal;">(${c.members})</em></span>` +
+                        `<span class="rb-v">mass ${pct(c.mass)} · coh ${pct(c.coherence)} · exp ${pct(c.exposure)} · ${c.lifecycle_state}</span>` +
+                        `</div>`;
+                    const blocks: ResultBlock[] = [];
+                    blocks.push({
+                        title: ctx.isEN ? 'Summary' : 'Resumen',
+                        icon: '◆', tone: 'info', defaultOpen: true,
+                        html:
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Global epoch' : 'Época global'}</span>` +
+                            `<span class="rb-v">${rep.global_epoch} ${ctx.isEN ? 'memories ever' : 'memorias totales'}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Clusters' : 'Cúmulos'}</span>` +
+                            `<span class="rb-v">${rep.n_clusters} ${ctx.isEN ? 'scored' : 'evaluados'} · ${promote.length} promote · ${demote.length} demote · ${watch.length} watch · ${stable.length} stable</span></div>`,
+                    });
+                    if (promote.length) blocks.push({
+                        title: `${ctx.isEN ? 'Promotion candidates' : 'Candidatos a promoción'} (${promote.length})`,
+                        icon: '↥', tone: 'ok', defaultOpen: true,
+                        html: promote.slice(0, 10).map(renderRow).join(''),
+                    });
+                    if (demote.length) blocks.push({
+                        title: `${ctx.isEN ? 'Demotion candidates' : 'Candidatos a democión'} (${demote.length})`,
+                        icon: '↧', tone: 'crit',
+                        html: demote.slice(0, 10).map(renderRow).join(''),
+                    });
+                    if (watch.length) blocks.push({
+                        title: `${ctx.isEN ? 'Watch (borderline)' : 'Vigilar (frontera)'} (${watch.length})`,
+                        icon: '◇', tone: 'warn',
+                        html: watch.slice(0, 10).map(renderRow).join(''),
+                    });
+                    if (stable.length) blocks.push({
+                        title: `${ctx.isEN ? 'Stable / no action' : 'Estables / sin acción'} (${stable.length})`,
+                        icon: '◯', tone: 'info',
+                        html: stable.slice(0, 10).map(renderRow).join(''),
+                    });
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? `⌬ Annealing report · ${rep.n_clusters} cluster(s)` : `⌬ Reporte de annealing · ${rep.n_clusters} cúmulo(s)`,
+                        blocks));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── /loop-stats — agent-loop blocks by model (May 2026 telemetry) ──
         // Shows which models trigger the safety nets (tool-loop, target-loop,
         // error-repeat, max-loops) most often. Drives model-selection decisions.
