@@ -594,3 +594,15 @@ body[data-state="error"] .igrp {
 :root.light .mbdg             { color: var(--txt2); background: rgba(0, 0, 0, .04); }
 :root.light .mbdg option      { background: #fff; color: var(--txt); }
 :root.light .mbdg optgroup    { background: #f0f4f8; color: var(--txt3); }
+
+/* v1.4.28 — Inline model switcher chip row. Sits above the .ibar in
+   the composer column, between the predictive-chip strip and the
+   input bar. Left-aligned with subtle bottom margin so the chip
+   doesn't visually merge into the input. */
+.model-switcher-row {
+    display: flex;
+    align-items: center;
+    padding: 2px 14px 4px;
+    flex-shrink: 0;
+}
+:root.light .model-switcher-row { padding-top: 4px; }

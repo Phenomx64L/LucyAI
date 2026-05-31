@@ -133,6 +133,9 @@ import { listen } from '@tauri-apps/api/event';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
     import ChatInput       from '$lib/ChatInput.svelte';
+    // v1.4.28 — inline model picker chip (first consumer of LucyCombobox
+    // family; chip is a self-contained popover internally).
+    import ModelSwitcherChip from '$lib/ModelSwitcherChip.svelte';
     import StatusBar       from '$lib/StatusBar.svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
@@ -8796,6 +8799,17 @@ if (Test-Path $src) {
               <PredictiveChipStrip chips={predictiveChips}
                 on:chipaction={onChipAction}
                 on:chipdismiss={(e) => logChipEventBackend(e.detail.chip, _lastChipSignature, 'dismiss')} />
+            {/if}
+            <!-- v1.4.28 — Inline model switcher chip. Sits just above
+                 ChatInput; lets the user swap models with fuzzy search
+                 without typing /model or hunting the small .mbdg badge
+                 inside the input's icon cluster. -->
+            {#if activeTabId === tab.id}
+              <div class="model-switcher-row">
+                <ModelSwitcherChip
+                  bind:value={tab.selectedModel}
+                  {isEN} />
+              </div>
             {/if}
             <ChatInput
               {tab} {isEN} {costPrediction} {userChips} {chipsHidden}

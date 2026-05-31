@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.28] — 2026-05-30
+
+In-chat model switcher chip — replaces slash-command-only model
+swapping with a clickable, searchable popover.
+
+### Shipped — `ModelSwitcherChip.svelte`
+
+New chip lives in `+page.svelte` just above the `ChatInput`. Compact
+default: `◆ Claude Sonnet 4.6 — Medium ▾`. Click → opens a floating
+popover anchored above the composer with:
+
+- Search input (autofocus on open)
+- Live count of filtered results
+- Per-row provider hint (uppercase mono — `anthropic`, `gemini`,
+  `openai`, `ollama`, `nvidia`)
+- ✓ marker on the currently selected entry
+- ↑ / ↓ navigation, Enter to pick, Esc to dismiss
+- Outside-click + right-click on backdrop both close cleanly
+
+### Why a self-contained popover and not LucyCombobox
+
+`bits-ui` Combobox always renders an `<input>`. A chip should
+collapse to icon + label and only expand the search UI on demand.
+Easier to build that explicitly than to fight the primitive's
+visibility wiring. `LucyCombobox` stays in the library — its
+in-the-flow use case is still valid; this surface just isn't it.
+
+### Why not replace the existing `.mbdg` badge inside the input
+
+The `.mbdg` badge is a native `<select>` inside the `.iside` cluster.
+It works fine for users who already know the model id, but with ~50
+entries today (Anthropic effort variants + Gemini Pro thinking levels
++ Ollama + NVIDIA NIM + OpenAI) the dropdown is unusable without
+search. The new chip is additive — both surfaces stay until the
+v1.5.0 cleanup. Users can pick whichever they prefer; the chip's
+fuzzy filter handles the "type 'haiku' to jump" case the badge can't.
+
+### Fuzzy match
+
+Case-insensitive substring across name + id + provider. Cheap for
+the current ~50 entries. If we cross ~200 (likely never) we can
+swap in the fzf scorer that lives in `$lib/fuzzy-match`.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.27 → 1.4.28)
+M  src-tauri/Cargo.toml                      (1.4.27 → 1.4.28)
+M  src-tauri/tauri.conf.json                 (1.4.27 → 1.4.28)
+A  src/lib/ModelSwitcherChip.svelte          (NEW — chip + popover, ~270 LOC)
+M  src/routes/+page.svelte                   (import + mount above ChatInput)
+M  src/lib/styles/composer.css               (.model-switcher-row layout slot)
+M  src/lib/SetupOverlay.svelte               (1.4.27 → 1.4.28)
+M  src/lib/TutorialOverlay.svelte            (1.4.27 → 1.4.28)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.4.27] — 2026-05-30
 
 Feature work resumes — tab right-click context menu. First consumer of
