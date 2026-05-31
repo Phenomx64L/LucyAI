@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.7] — 2026-05-30
+
+Long-tail CSS dedup #4 — extracted `log-viewer.css`.
+
+### Shipped
+
+New `src/lib/styles/log-viewer.css` (~60 LOC) consolidates the
+`.log-*` family from page.css (lines 1199-1210):
+
+- Toolbar: `.log-toolbar`
+- Scroll container: `.log-lines`
+- Per-line layout: `.log-line` (+ `:hover`), `.log-num`, `.log-txt`
+- Severity tiers: `.log-line.log-error/.log-warn/.log-info/.log-debug`
+  (each tier paints both `.log-txt` color and faint row bg)
+
+Imported from `LogViewerView.svelte`. The component's scoped `<style>`
+is intentionally untouched — same pattern as v1.4.24/v1.5.2/v1.5.4
+extractions.
+
+`.minp` (a generic input class used by multiple views) stays in
+`page.css` as a shared utility — not part of this extraction.
+
+### Audit progress
+
+| # | Component | Pre-v1.5.7 | Post-v1.5.7 |
+|---|---|---|---|
+| 1 | LogViewerView | 12 | ~6 (view-* utilities only) |
+| 2 | NexShellView | 10 | 10 (next) |
+| 3 | InventoryView | 8 | 8 |
+| 4 | ComplianceView | 7 | 7 |
+| 5 | DashboardView | 7 | 7 |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.6 → 1.5.7)
+M  src-tauri/Cargo.toml                      (1.5.6 → 1.5.7)
+M  src-tauri/tauri.conf.json                 (1.5.6 → 1.5.7)
+A  src/lib/styles/log-viewer.css             (NEW — ~60 LOC, 12 selectors)
+M  src/lib/LogViewerView.svelte              (import added)
+M  src/routes/page.css                       (-12 LOC LOG VIEWER block)
+M  src/lib/SetupOverlay.svelte               (1.5.6 → 1.5.7)
+M  src/lib/TutorialOverlay.svelte            (1.5.6 → 1.5.7)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.5.6] — 2026-05-30
 
 Sidebar width — real fix. v1.5.5's CSS-only attempt didn't land.

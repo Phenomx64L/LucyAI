@@ -1196,18 +1196,9 @@ body.density-compact .chat{gap:2px !important;}
    .core-*, .disk-*, .proc-table* selectors here. */
 
 /* ── LOG VIEWER ─────────────────────────────── */
-.log-toolbar{display:flex;align-items:center;gap:8px;padding:6px 12px;background:rgba(2,4,8,.4);border-bottom:1px solid var(--bdr);flex-shrink:0;}
-.log-lines{flex:1;overflow-y:auto;font-family:var(--mono);font-size:11px;background:#0a0c15;}
-.log-line{display:flex;gap:0;align-items:baseline;padding:1px 0;border-bottom:1px solid rgba(26,32,48,.2);line-height:1.5;}
-.log-line:hover{background:rgba(255,255,255,.02);}
-.log-num{min-width:48px;text-align:right;padding-right:12px;color:#1a2a3a;user-select:none;flex-shrink:0;}
-.log-txt{flex:1;color:#64748b;word-break:break-all;padding-right:12px;}
-.log-line.log-error .log-txt{color:var(--red);}
-.log-line.log-error{background:rgba(255,68,68,.04);}
-.log-line.log-warn  .log-txt{color:var(--amber);}
-.log-line.log-warn{background:rgba(255,170,0,.03);}
-.log-line.log-info  .log-txt{color:#4a7a9a;}
-.log-line.log-debug .log-txt{color:#0f7b5a;}
+/* v1.5.7 — LOG VIEWER block moved to src/lib/styles/log-viewer.css
+   (imported from LogViewerView.svelte). DO NOT add .log-* selectors
+   here. */
 
 /* v1.5.3 — .dc-sparkline moved to dashboard-alerts.css. */
 

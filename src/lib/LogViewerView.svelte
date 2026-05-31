@@ -1,4 +1,7 @@
 <script>
+    // v1.5.7 — log viewer surface extracted to a single global stylesheet
+    // following the same pattern as the v1.4.21 → v1.5.4 dedup wave.
+    import '$lib/styles/log-viewer.css';
     import { invoke } from '@tauri-apps/api/core';
     import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
     import Search from '@tabler/icons-svelte/icons/search';
