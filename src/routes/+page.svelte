@@ -8419,6 +8419,38 @@ if (Test-Path $src) {
     on:closeApp={cerrar}
     on:panic={panicKill}
     on:showWelcome={() => { showWelcome = true; }}
+    on:duplicateTab={(e) => {
+        // v1.4.27 — clone the source tab's full message history into a
+        // new tab. Reuses bifurcarTabDesde semantics but slices at the
+        // LAST message so the duplicate is the full thread, not a branch.
+        const src = getTab(e.detail.tabId);
+        if (!src) return;
+        const lastMsg = src.messages[src.messages.length - 1];
+        if (!lastMsg) {
+            // Empty tab — just spawn a fresh one with the same title.
+            crearTab();
+            return;
+        }
+        bifurcarTabDesde(e.detail.tabId, lastMsg.id);
+        toast(isEN ? 'Tab duplicated' : 'Pestaña duplicada', 'info');
+    }}
+    on:closeOthers={(e) => {
+        // Close every other tab. We invoke _ejecutarCierreTab directly so
+        // the per-tab confirmation modal doesn't pop N times — the user
+        // already confirmed by picking the menu item.
+        const keepId = e.detail.tabId;
+        const targets = tabs.filter(t => t.id !== keepId).map(t => t.id);
+        targets.forEach(id => _ejecutarCierreTab(id));
+        if (activeTabId !== keepId) activeTabId = keepId;
+        toast(isEN ? `Closed ${targets.length} other tab(s)` : `Cerradas ${targets.length} pestaña(s)`, 'info');
+    }}
+    on:closeToRight={(e) => {
+        const anchor = tabs.findIndex(t => t.id === e.detail.tabId);
+        if (anchor < 0) return;
+        const targets = tabs.slice(anchor + 1).map(t => t.id);
+        targets.forEach(id => _ejecutarCierreTab(id));
+        toast(isEN ? `Closed ${targets.length} tab(s) to the right` : `Cerradas ${targets.length} pestaña(s) a la derecha`, 'info');
+    }}
   />
 
   <div class="body" class:focus-mode={focusMode}>

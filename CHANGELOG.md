@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.27] — 2026-05-30
+
+Feature work resumes — tab right-click context menu. First consumer of
+the `LucyContextMenu` wrapper.
+
+### Shipped
+
+1. **`LucyContextMenu.svelte` wrapper** — bits-ui ContextMenu primitive
+   wrapped in Lucy's visual identity. Drops in around any element
+   that should respond to right-click instead of the browser default.
+   API mirrors `LucyDropdown`:
+
+   ```svelte
+   <LucyContextMenu>
+       <div slot="trigger">Right-click me</div>
+       <button on:click={…}>Action</button>
+       <hr />
+       <button class="lcm-danger" on:click={…}>Delete</button>
+   </LucyContextMenu>
+   ```
+
+   Direct `<button>` children get the same auto-styling as
+   `LucyDropdown`. `hr` becomes a thin separator between groups.
+   `.lcm-danger` class on a button paints it red.
+
+2. **Tab right-click menu** wired in `TabBar.svelte`. Items follow the
+   Chrome/Firefox/VSCode pattern:
+
+   - Rename (delegates to existing `startRename` event)
+   - Duplicate tab
+   - — separator —
+   - Close other tabs (only when `tabs.length > 1`)
+   - Close tabs to the right (only when this isn't the rightmost)
+   - Close (red, the destructive action)
+
+3. **+page.svelte handlers** for the three new actions:
+
+   - `duplicateTab` — reuses `bifurcarTabDesde` semantics but slices
+     at the LAST message so the duplicate is the full thread, not a
+     partial branch. Empty-tab edge case opens a fresh `crearTab()`
+     instead.
+   - `closeOthers` — bulk closes via `_ejecutarCierreTab` directly,
+     bypassing the per-tab `cerrarTab` confirmation modal because
+     the user already confirmed by picking the menu item.
+   - `closeToRight` — same bypass; closes tabs at indices
+     `> anchorIndex`.
+
+   Each action emits an info toast so the user gets feedback when
+   tabs disappear in bulk.
+
+### Why ContextMenu and not Dropdown
+
+`bits-ui` exposes both `DropdownMenu` (opens from button click,
+positioned relative to the trigger) and `ContextMenu` (opens from
+right-click anywhere on the trigger area, positioned at the cursor).
+Tabs need the right-click variant so the menu pops next to where the
+user clicked, not at a fixed corner. They're siblings in the
+bits-ui family but the two wrappers stay separate because their
+keyboard and pointer semantics differ.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.26 → 1.4.27)
+M  src-tauri/Cargo.toml                      (1.4.26 → 1.4.27)
+M  src-tauri/tauri.conf.json                 (1.4.26 → 1.4.27)
+A  src/lib/LucyContextMenu.svelte            (NEW — bits-ui ContextMenu wrapper)
+M  src/lib/TabBar.svelte                     (LucyContextMenu around each tab + new dispatch types)
+M  src/routes/+page.svelte                   (handlers for duplicateTab/closeOthers/closeToRight)
+M  src/lib/SetupOverlay.svelte               (1.4.26 → 1.4.27)
+M  src/lib/TutorialOverlay.svelte            (1.4.26 → 1.4.27)
+```
+
+svelte-check: 7179 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.4.26] — 2026-05-30
 
 User-requested tab-strip UX — `+` and `≡` now follow the last tab

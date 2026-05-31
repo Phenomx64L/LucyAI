@@ -5,6 +5,8 @@
     // global stylesheet so we never repeat the duplicate-selector trap
     // that caused the v1.4.17 → v1.4.19 tab-strip width saga.
     import '$lib/styles/tab-strip.css';
+    // v1.4.27 — bits-ui ContextMenu wrapper for right-click on a tab.
+    import LucyContextMenu from '$lib/LucyContextMenu.svelte';
     export let tabs: any[] = [];
     export let activeTabId: string | null = null;
     export let canScrollLeft: boolean = false;
@@ -30,6 +32,10 @@
         closeApp: void;
         panic: void;
         showWelcome: void;
+        // v1.4.27 — tab right-click context menu actions.
+        duplicateTab:  { tabId: string };
+        closeOthers:   { tabId: string };
+        closeToRight:  { tabId: string };
     }>();
 
     function onTabClick(tabId: string) {
@@ -175,8 +181,15 @@
         {/if}
 
         <div id="tabs-list" bind:this={tabsListEl}>
-            {#each tabs as tab (tab.id)}
+            {#each tabs as tab, idx (tab.id)}
+                <!-- v1.4.27 — each tab wrapped in LucyContextMenu so a
+                     right-click opens a per-tab action menu. The menu
+                     contents are tab-aware: "Close others" only fires
+                     if there's more than one tab, "Close to the right"
+                     only when this isn't already the rightmost. -->
+                <LucyContextMenu>
                 <div class="tab" class:active={activeTabId === tab.id}
+                     slot="trigger"
                      role="button" tabindex="0"
                      on:click={() => onTabClick(tab.id)}
                      on:keydown
@@ -220,6 +233,30 @@
                           on:click={(e) => onCloseTab(tab.id, e)}
                           on:keydown>✕</span>
                 </div>
+                <!-- Default slot = the menu contents. Order copies common
+                     browser patterns (Chrome / Firefox / VSCode). -->
+                <button on:click={() => dispatch('startRename', { tabId: tab.id })}>
+                    {isEN ? 'Rename' : 'Renombrar'}
+                </button>
+                <button on:click={() => dispatch('duplicateTab', { tabId: tab.id })}>
+                    {isEN ? 'Duplicate tab' : 'Duplicar pestaña'}
+                </button>
+                <hr />
+                {#if tabs.length > 1}
+                <button on:click={() => dispatch('closeOthers', { tabId: tab.id })}>
+                    {isEN ? 'Close other tabs' : 'Cerrar otras pestañas'}
+                </button>
+                {/if}
+                {#if idx < tabs.length - 1}
+                <button on:click={() => dispatch('closeToRight', { tabId: tab.id })}>
+                    {isEN ? 'Close tabs to the right' : 'Cerrar pestañas a la derecha'}
+                </button>
+                {/if}
+                <button class="lcm-danger"
+                        on:click={(e) => onCloseTab(tab.id, e)}>
+                    {isEN ? 'Close' : 'Cerrar'}
+                </button>
+                </LucyContextMenu>
             {/each}
         </div>
 
