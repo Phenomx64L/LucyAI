@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.1] — 2026-05-30
+
+Cleanup release — removes the legacy inline shortcuts overlay that's
+been gated behind `{#if false}` since v1.4.15.
+
+### Shipped
+
+- Deleted the inline `<div class="ks-overlay">` block in
+  `+page.svelte` (~57 LOC of dead JSX). The `KeyboardCheatsheet`
+  component (v1.4.15, bits-ui Dialog primitive) has been the actual
+  rendered surface for five months.
+- Deleted the `.ks-*` family in `page.css` (~83 LOC: `.ks-overlay`,
+  `.ks-modal`, `.ks-hdr`, `.ks-title`, `.ks-close`, `.ks-body`,
+  `.ks-section`, `.ks-row`, `.ks-key`, `.ks-plus`, `.ks-foot`,
+  light-theme variants, plus `@keyframes ks-fade` and `ks-slide`).
+- The `showShortcutsOverlay` boolean and `?` key handler stay —
+  they still drive the new `KeyboardCheatsheet` mount.
+
+### Why now
+
+The placeholder comment from v1.4.15 said the cleanup would happen
+"when no callsite is referencing the legacy classes". A grep across
+the entire `src/` tree confirms zero references remain outside the
+deleted blocks. The deferred chore from the v1.4.15 follow-up is
+now closed.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.0 → 1.5.1)
+M  src-tauri/Cargo.toml                      (1.5.0 → 1.5.1)
+M  src-tauri/tauri.conf.json                 (1.5.0 → 1.5.1)
+M  src/routes/+page.svelte                   (-57 LOC dead JSX)
+M  src/routes/page.css                       (-83 LOC dead .ks-* CSS)
+M  src/lib/SetupOverlay.svelte               (1.5.0 → 1.5.1)
+M  src/lib/TutorialOverlay.svelte            (1.5.0 → 1.5.1)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.5.0] — 2026-05-30  **— MAJOR**
 
 First minor-version bump in 30 patch releases. **Breaking change**:

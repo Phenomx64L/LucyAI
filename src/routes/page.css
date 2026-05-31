@@ -1226,89 +1226,11 @@ body.density-compact .chat{gap:2px !important;}
 :root.light .ql-popover .ql-body{color:#475569;background:rgba(0,0,0,.04);}
 :root.light .ql-popover .ql-foot{background:rgba(241,245,249,.6);}
 
-/* ── Keyboard Shortcuts Overlay (?) ── */
-.ks-overlay{
-  position:fixed;inset:0;z-index:var(--z-modal,8500);
-  background:rgba(2,4,8,.72);backdrop-filter:blur(8px);
-  display:flex;align-items:center;justify-content:center;
-  animation:ks-fade .15s ease;
-  padding:24px;
-}
-@keyframes ks-fade{from{opacity:0}to{opacity:1}}
-@keyframes ks-slide{from{transform:translateY(8px) scale(.985);opacity:0}to{transform:none;opacity:1}}
-.ks-modal{
-  background:linear-gradient(180deg, rgba(15,23,42,.96), rgba(8,12,22,.98));
-  border:1px solid rgba(99,102,241,.30);
-  border-radius:14px;
-  width:min(720px, 96vw);max-height:88vh;
-  display:flex;flex-direction:column;
-  box-shadow:0 24px 64px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04);
-  animation:ks-slide .18s cubic-bezier(0.16,1,0.3,1);
-  overflow:hidden;
-}
-.ks-hdr{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:14px 18px;
-  border-bottom:1px solid rgba(99,102,241,.18);
-  background:rgba(99,102,241,.06);
-}
-.ks-hdr-l{display:flex;align-items:center;gap:10px;color:#a5b4fc;}
-.ks-hdr-icon{display:inline-flex;color:#a5b4fc;}
-.ks-title{font-size:14px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#c7d2fe;margin:0;}
-.ks-close{
-  background:transparent;border:1px solid rgba(255,255,255,.08);color:var(--txt2);
-  width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:13px;
-  transition:.15s;
-}
-.ks-close:hover{background:rgba(239,68,68,.10);color:var(--red);border-color:rgba(239,68,68,.25);}
-.ks-body{
-  padding:14px 18px 8px;overflow-y:auto;
-  display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:18px 24px;
-}
-.ks-section{display:flex;flex-direction:column;gap:6px;}
-.ks-section-title{
-  font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:800;
-  color:var(--acc);
-  padding-bottom:4px;border-bottom:1px solid rgba(16,185,129,.15);
-  margin-bottom:4px;
-}
-.ks-row{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:5px 2px;font-size:12px;color:var(--txt2);
-  gap:10px;
-}
-.ks-row .ks-label{flex:1;}
-.ks-key{
-  display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:600;
-  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
-  border-bottom-width:2px;
-  color:var(--txt);
-  padding:2px 7px;border-radius:5px;
-  min-width:20px;text-align:center;line-height:1.4;
-  box-shadow:0 1px 0 rgba(0,0,0,.35);
-}
-.ks-key-inline{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.32);color:var(--acc);}
-.ks-plus{font-size:9px;color:var(--txt3);margin:0 2px;}
-.ks-foot{
-  padding:10px 18px;border-top:1px solid rgba(255,255,255,.05);
-  font-size:11px;color:var(--txt3);text-align:center;
-  background:rgba(0,0,0,.18);
-}
-/* Light theme variants */
-:root.light .ks-overlay{background:rgba(180,190,210,.55);}
-:root.light .ks-modal{
-  background:linear-gradient(180deg, #ffffff, #f8fafc);
-  border-color:rgba(99,102,241,.35);
-  box-shadow:0 24px 64px rgba(15,23,42,.18);
-}
-:root.light .ks-hdr{background:rgba(99,102,241,.08);border-bottom-color:rgba(99,102,241,.20);}
-:root.light .ks-hdr-l, :root.light .ks-title{color:#4338ca;}
-:root.light .ks-key{
-  background:#f1f5f9;border-color:#cbd5e1;color:#1e293b;
-  box-shadow:0 1px 0 #cbd5e1;
-}
-:root.light .ks-key-inline{background:rgba(15,123,90,.10);border-color:rgba(15,123,90,.32);color:#0f7b5a;}
-:root.light .ks-foot{background:rgba(241,245,249,.6);border-top-color:#e2e8f0;}
+/* v1.5.1 — Removed the .ks-* family that styled the legacy inline
+   "Keyboard Shortcuts (?)" overlay. The overlay itself was deleted from
+   +page.svelte in the same release; KeyboardCheatsheet.svelte
+   (v1.4.15) has been the actual rendered surface since. ~83 LOC of
+   dead CSS plus the ks-fade / ks-slide keyframes gone. */
 
 /* Direct Actions: icon picker grid inside the modal */
 .action-icon-grid{

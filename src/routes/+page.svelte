@@ -10525,64 +10525,11 @@ if (Test-Path $src) {
     }}
   />
 
-  <!-- Legacy inline overlay kept hidden under a guard that's always false.
-       Removing the markup outright would require deleting ~120 LOC across
-       the body + footer + ks-* CSS in page.css; we'll do that cleanup in
-       a follow-up when no callsite is referencing the legacy classes. -->
-  {#if false}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="ks-overlay" on:click|self={() => showShortcutsOverlay = false}>
-    <div role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts" class="ks-modal">
-      <div class="ks-hdr">
-        <div class="ks-hdr-l">
-          <span class="ks-hdr-icon"><Terminal size={16}/></span>
-          <h2 class="ks-title">{isEN ? 'Keyboard Shortcuts' : 'Atajos de Teclado'}</h2>
-        </div>
-        <button class="ks-close" on:click={() => showShortcutsOverlay = false} title="Esc">✕</button>
-      </div>
-      <div class="ks-body">
-        <div class="ks-section">
-          <div class="ks-section-title">{isEN ? 'Tabs & Navigation' : 'Pestañas y navegación'}</div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'New tab' : 'Nueva pestaña'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">T</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Close tab' : 'Cerrar pestaña'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">W</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Switch tab' : 'Cambiar pestaña'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">Tab</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Jump to tab #N' : 'Ir a pestaña N'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">1-9</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Command palette' : 'Paleta de comandos'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">P</kbd></div>
-        </div>
+  <!-- v1.5.1 — the legacy inline shortcuts overlay (gated under
+       `{#if false}` since v1.4.15) was removed. KeyboardCheatsheet
+       above replaces it; the `.ks-*` CSS in page.css is now dead and
+       gets cleaned up later in this release. -->
 
-        <div class="ks-section">
-          <div class="ks-section-title">{isEN ? 'Chat & AI' : 'Chat e IA'}</div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Send message' : 'Enviar mensaje'}</span><kbd class="ks-key">Enter</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Newline in input' : 'Nueva línea'}</span><kbd class="ks-key">Shift</kbd><span class="ks-plus">+</span><kbd class="ks-key">Enter</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Focus input' : 'Enfocar input'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">Shift</kbd><span class="ks-plus">+</span><kbd class="ks-key">K</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Clear current session' : 'Limpiar sesión'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">L</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Search in chat' : 'Buscar en chat'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">F</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Command history' : 'Historial'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">R</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Browse history (input)' : 'Historial (en input)'}</span><kbd class="ks-key">↑</kbd><span class="ks-plus">/</span><kbd class="ks-key">↓</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Paste image (vision)' : 'Pegar imagen (visión)'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">V</kbd></div>
-        </div>
-
-        <div class="ks-section">
-          <div class="ks-section-title">{isEN ? 'View & Display' : 'Vista y display'}</div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Focus mode' : 'Modo focus'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">M</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Zoom in' : 'Zoom +'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">+</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Zoom out' : 'Zoom −'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">−</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Reset zoom' : 'Reset zoom'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">0</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Zoom (mouse)' : 'Zoom (rueda)'}</span><kbd class="ks-key">Ctrl</kbd><span class="ks-plus">+</span><kbd class="ks-key">Wheel</kbd></div>
-        </div>
-
-        <div class="ks-section">
-          <div class="ks-section-title">{isEN ? 'This overlay' : 'Este overlay'}</div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Show / hide shortcuts' : 'Mostrar / ocultar atajos'}</span><kbd class="ks-key">?</kbd></div>
-          <div class="ks-row"><span class="ks-label">{isEN ? 'Close overlay' : 'Cerrar overlay'}</span><kbd class="ks-key">Esc</kbd></div>
-        </div>
-      </div>
-      <div class="ks-foot">
-        <span>{isEN ? 'Press' : 'Presiona'} <kbd class="ks-key ks-key-inline">?</kbd> {isEN ? 'anywhere to toggle this panel' : 'en cualquier lugar para alternar este panel'}</span>
-      </div>
-    </div>
-  </div>
-  {/if}
 
   <!-- ── TUTORIAL OVERLAY (first run + on demand) ── -->
   <TutorialOverlay bind:show={showTutorial} {isEN}
