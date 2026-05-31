@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.15] — 2026-05-31
+
+Hotfix: `/anneal` summary was confusing — labeled "596 memorias
+totales" when the user had 6 live memories.
+
+Root cause: the `global_epoch` field in `AnnealingReport` uses
+`MAX(id)` from `agent_memories` as a proxy for "lifetime ingest
+events" per ADR-200 §"Epoch-Based Exposure". SQLite AUTOINCREMENT
+never reuses IDs, so MAX(id) does grow with every ingest even when
+old rows are deleted — that's the math the annealing protection
+function needs. But the slash command rendered it as "memorias
+totales" / "memories ever", which read as "current row count".
+
+- `AnnealingReport.active_memories: i64` added — count of rows
+  where `superseded_by IS NULL OR superseded_by = ''`. Surfaces
+  the live count separately from the epoch counter.
+- Slash command summary now shows two rows:
+  - "Memorias activas: 6"
+  - "Ingestas históricas: 596 (contador de ID, incluye
+    borradas/superseded)"
+
+Math is unchanged — the protection / promotion scoring still uses
+`global_epoch` as designed. Only the UI label was misleading.
+
+---
+
 ## [1.6.14] — 2026-05-31
 
 Two pendings closed at once: surface polarity validation to the

@@ -105,7 +105,17 @@ pub struct OntologyScore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnnealingReport {
     pub built_at:         i64,
+    /// MAX(id) over agent_memories — proxy for lifetime ingest count
+    /// per ADR-200 §"Epoch-Based Exposure". This counts memories ever
+    /// created (including deleted/superseded), not what's currently
+    /// live, because exposure pressure depends on "opportunities the
+    /// graph has had", not "memories present right now".
     pub global_epoch:     i64,
+    /// v1.6.15: explicit count of currently-live (non-superseded)
+    /// memories so the slash command can distinguish "lifetime" from
+    /// "active" — users were confused when global_epoch=596 vs 6
+    /// rows visible in Memory Browser.
+    pub active_memories:  i64,
     pub n_clusters:       usize,
     pub promotion_count:  usize,
     pub demotion_count:   usize,
@@ -223,6 +233,13 @@ fn score_inner(conn: &Connection) -> Result<AnnealingReport, String> {
     let global_epoch: i64 = conn
         .query_row("SELECT COALESCE(MAX(id), 0) FROM agent_memories", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
+    let active_memories: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_memories
+             WHERE superseded_by IS NULL OR superseded_by = ''",
+            [], |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -309,6 +326,7 @@ fn score_inner(conn: &Connection) -> Result<AnnealingReport, String> {
     Ok(AnnealingReport {
         built_at: chrono::Utc::now().timestamp(),
         global_epoch,
+        active_memories,
         n_clusters: clusters.len(),
         promotion_count,
         demotion_count,

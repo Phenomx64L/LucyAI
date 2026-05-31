@@ -1213,8 +1213,15 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         title: ctx.isEN ? 'Summary' : 'Resumen',
                         icon: '◆', tone: 'info', defaultOpen: true,
                         html:
-                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Global epoch' : 'Época global'}</span>` +
-                            `<span class="rb-v">${rep.global_epoch} ${ctx.isEN ? 'memories ever' : 'memorias totales'}</span></div>` +
+                            // v1.6.15: clarified labels — global_epoch is the
+                            // lifetime ID counter (proxy for "ingest events
+                            // ever"), NOT the count of live memories. The
+                            // active count is shown separately so the user
+                            // doesn't see "596 memorias" when only 6 are live.
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Active memories' : 'Memorias activas'}</span>` +
+                            `<span class="rb-v">${rep.active_memories ?? '?'}</span></div>` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Lifetime ingests' : 'Ingestas históricas'}</span>` +
+                            `<span class="rb-v">${rep.global_epoch} <em style="opacity:.6;">(${ctx.isEN ? 'ID counter, incl. deleted/superseded' : 'contador de ID, incluye borradas/superseded'})</em></span></div>` +
                             `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Clusters' : 'Cúmulos'}</span>` +
                             `<span class="rb-v">${rep.n_clusters} ${ctx.isEN ? 'scored' : 'evaluados'} · ${promote.length} promote · ${demote.length} demote · ${watch.length} watch · ${stable.length} stable</span></div>`,
                     });
