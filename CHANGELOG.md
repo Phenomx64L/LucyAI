@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.5] — 2026-05-31
+
+Hybrid auto-routing + unified context orchestrator. Lucy now picks
+the right cybersecurity skill for each turn automatically and
+co-loads relevant MCP tools alongside memory — all in one
+coordinated, budget-aware pass.
+
+### Hybrid auto-routing pipeline
+
+Single Tauri command `security_skills_auto_route(user_prompt)`
+runs three tiers in increasing cost:
+
+- **Tier 1 — keyword scoring** (existing v1.7.4 search). If top
+  hit score ≥ 50, route immediately. Microseconds.
+- **Tier 2 — embedding cosine similarity**. Lazily builds a
+  per-skill 768-dim embedding cache (~30s the first time with
+  Ollama warm, persisted to
+  `%LOCALAPPDATA%/Lucy/skills-embeddings-v1.bin`). Per-turn cost:
+  one Ollama embed + 213 dot products. Threshold 0.70.
+- **Tier 3 — LLM disambiguation** (frontend). When Tier 2 best
+  cosine falls in [0.55, 0.70), call CHEAP tier with the top-5
+  candidates and ask Gemini to pick. Max 32 output tokens →
+  ~$0.0001 per ambiguous turn.
+
+Falls back gracefully: if Ollama is unavailable, Tier 2/3 skip
+and Tier 1 keyword stands alone. If keyword finds nothing either,
+no skill is injected and Lucy answers normally.
+
+Result type:
+```ts
+{
+  method: 'keyword' | 'embedding' | 'llm' | 'manual' | 'preset' | 'none',
+  skill: SecuritySkillFull | null,
+  score: number,         // 0..1
+  candidates: …,         // top-N considered
+  embeddings_available, elapsed_ms,
+}
+```
+
+### Unified context orchestrator
+
+`src/lib/unified-context.ts` — single `buildUnifiedContext(prompt,
+mcpServers)` entry point invoked once per turn by `+page.svelte`
+before the LLM call. Coordinates:
+
+1. **Auto-route** → activates the matched security skill via
+   `security-skill-bridge`. The existing prompt builder picks it
+   up automatically (no separate injection path).
+2. **MCP tool ranking** → keyword overlap against
+   `tools_cache.description` of every enabled MCP server.
+   Top 8 hits rendered as a compact `AVAILABLE MCP TOOLS` block
+   appended to the memory context, bounded at 3 KB so it never
+   crowds the skill body.
+3. **Memory retrieval** → still managed by the existing
+   `construirContextoMemoria` flow. Future versions can rank
+   memory hits alongside skill/MCP for full budget unification.
+
+### Settings & manual override
+
+- `/sec-skill auto`             — show current state (on/off, last
+                                    route, embedding cache status).
+- `/sec-skill auto on`/`off`    — toggle auto-routing entirely.
+- `/sec-skill auto llm-on`/`llm-off` — toggle Tier 3 LLM
+                                    disambiguation. Useful if you
+                                    want zero LLM overhead for
+                                    auto-routing on a metered plan.
+- `/sec-skill rebuild`          — force a rebuild of the embedding
+                                    cache (after upstream skill
+                                    edits or model swap).
+- `/sec-skill use <id>`         — manual override still wins;
+                                    auto-route respects an active
+                                    manual choice.
+- `/preset clear`               — clears both manual and auto.
+
+Defaults: auto-route **on**, LLM disambiguation **on**.
+
+### Storage
+
+- `lucy_skill_autoroute_enabled` ∈ `'on' | 'off' | ''`
+- `lucy_skill_autoroute_llm_disamb` ∈ `'on' | 'off' | ''`
+- `lucy_skill_last_autoroute_v1` — last route diagnostic for the
+                                   status panel.
+- `%LOCALAPPDATA%/Lucy/skills-embeddings-v1.bin` — persisted
+                                   embedding cache, ~600 KB.
+
+### What changes for the user
+
+Before: ask "we have suspicious lateral movement on a domain
+controller" → Lucy answers from generic training data without
+following any specific IR playbook.
+
+After: same prompt → Tier 2 cosine matches
+`investigating-active-directory-lateral-movement` at 0.78 → the
+skill's 6-step workflow injects as system context → Lucy
+responds following the documented procedure, citing MITRE ATT&CK
+T1021.001 (Remote Desktop Protocol), T1550.002 (Pass the Hash),
+plus the exact KQL queries to run against SecurityEvent.
+Simultaneously, the MCP block surfaces relevant tools
+(`splunk.search`, `azure.activity-logs.query`) if those servers
+are registered.
+
+All without typing `/sec-skill` explicitly.
+
+### Backend test note
+
+`security_skills_auto_route` is currently uncovered by unit tests
+(the embedding tier requires a live Ollama). Tier 1 keyword path
+is exercised by the v1.7.4 scoring tests. Tier 2+3 will get
+synthetic-vector integration tests in v1.7.6.
+
+---
+
 ## [1.7.4] — 2026-05-31
 
 Cybersecurity Skills Library — 213 production-grade skills bundled

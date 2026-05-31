@@ -519,6 +519,10 @@ pub fn run() {
             commands::security_skills::security_skills_search,
             commands::security_skills::security_skills_get,
             commands::security_skills::security_skills_categories,
+            // v1.7.5 — hybrid auto-routing (keyword + embedding + LLM).
+            commands::security_skills::security_skills_auto_route,
+            commands::security_skills::security_skills_rebuild_embeddings,
+            commands::security_skills::security_skills_embed_status,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

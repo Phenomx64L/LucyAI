@@ -1143,6 +1143,57 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             const argTrim = arg.trim();
             (async () => {
                 try {
+                    // Sub-verb: v1.7.5 — `auto on|off|status` toggles auto-routing.
+                    if (argTrim.toLowerCase().startsWith('auto')) {
+                        const { isAutoRouteEnabled, setAutoRouteEnabled,
+                                isLlmDisambEnabled, setLlmDisambEnabled,
+                                peekLastRoute } = await import('$lib/unified-context');
+                        const sub = argTrim.slice(4).trim().toLowerCase();
+                        if (sub === 'on' || sub === 'enable' || sub === 'enabled') {
+                            setAutoRouteEnabled(true);
+                            sysMsg(ctx.isEN ? '✓ Auto-routing enabled.' : '✓ Auto-routing activado.', 'var(--acc)');
+                        } else if (sub === 'off' || sub === 'disable' || sub === 'disabled') {
+                            setAutoRouteEnabled(false);
+                            sysMsg(ctx.isEN ? '✓ Auto-routing disabled.' : '✓ Auto-routing desactivado.', 'var(--acc)');
+                        } else if (sub === 'llm-on' || sub === 'llm on') {
+                            setLlmDisambEnabled(true);
+                            sysMsg(ctx.isEN ? '✓ LLM disambiguation enabled.' : '✓ Desambiguación LLM activada.', 'var(--acc)');
+                        } else if (sub === 'llm-off' || sub === 'llm off') {
+                            setLlmDisambEnabled(false);
+                            sysMsg(ctx.isEN ? '✓ LLM disambiguation disabled.' : '✓ Desambiguación LLM desactivada.', 'var(--acc)');
+                        } else {
+                            // status (default)
+                            const status = await invoke<any>('security_skills_embed_status');
+                            const last   = peekLastRoute();
+                            const lastLine = last
+                                ? `${last.method} · ${last.skill_id || '(none)'} · score ${last.score.toFixed(2)} · ${last.elapsed_ms.toFixed(0)}ms · ${new Date(last.ts).toLocaleTimeString()}`
+                                : (ctx.isEN ? 'no auto-route yet this session' : 'sin auto-route esta sesión');
+                            sysMsg(renderResultBlocks(
+                                ctx.isEN ? '▸ Auto-route status' : '▸ Estado de auto-route',
+                                [{
+                                    title: ctx.isEN ? 'Settings' : 'Configuración',
+                                    icon: '◆', tone: 'info', defaultOpen: true,
+                                    html:
+                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Auto-route' : 'Auto-routing'}</span><span class="rb-v">${isAutoRouteEnabled() ? '✓ on' : '✗ off'}</span></div>` +
+                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'LLM disambiguation (Tier 3)' : 'Desambiguación LLM (Tier 3)'}</span><span class="rb-v">${isLlmDisambEnabled() ? '✓ on' : '✗ off'}</span></div>` +
+                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Embeddings cached' : 'Embeddings cacheados'}</span><span class="rb-v">${status.in_memory} / ${status.skill_total} ${status.on_disk ? '(disk ✓)' : '(disk ✗ - first use will embed)'}</span></div>` +
+                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Last route' : 'Último auto-route'}</span><span class="rb-v">${escapeHtml(lastLine)}</span></div>` +
+                                        `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Toggle' : 'Cambiar'}</span><span class="rb-v"><code>/sec-skill auto on|off|llm-on|llm-off</code></span></div>`,
+                                }]));
+                        }
+                        return;
+                    }
+                    // Sub-verb: `rebuild` rebuilds the embedding cache.
+                    if (argTrim.toLowerCase() === 'rebuild' || argTrim.toLowerCase() === 'reindex') {
+                        sysMsg(ctx.isEN ? '⟳ Rebuilding skill embeddings…' : '⟳ Reconstruyendo embeddings de skills…');
+                        try {
+                            const n = await invoke<number>('security_skills_rebuild_embeddings');
+                            sysMsg(ctx.isEN ? `✓ Embedded ${n} skills.` : `✓ ${n} skills embebidas.`, 'var(--acc)');
+                        } catch (e) {
+                            sysMsg(`Error: ${String(e)} (ollama running?)`, 'var(--red)');
+                        }
+                        return;
+                    }
                     // Sub-verb: `use <id>` activates the skill (preset).
                     if (argTrim.toLowerCase().startsWith('use ')) {
                         const id = argTrim.slice(4).trim();

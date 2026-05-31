@@ -34,6 +34,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use tokio::sync::RwLock as TokioRwLock;
+
+// v1.7.5 — embedding cache disk path. Uses %LOCALAPPDATA%\Lucy on Windows
+// without pulling the `dirs` crate (we get LOCALAPPDATA via env).
+fn local_app_data_dir() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("LOCALAPPDATA") {
+        if !v.is_empty() { return Some(PathBuf::from(v)); }
+    }
+    if let Ok(v) = std::env::var("XDG_DATA_HOME") {
+        if !v.is_empty() { return Some(PathBuf::from(v)); }
+    }
+    if let Ok(h) = std::env::var("HOME") {
+        return Some(PathBuf::from(h).join(".local").join("share"));
+    }
+    None
+}
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -326,6 +342,271 @@ pub async fn security_skills_get(id: String) -> Result<SkillFull, String> {
         } else { raw }
     } else { raw };
     Ok(SkillFull { meta, body })
+}
+
+// ── v1.7.5 — Embedding cache + auto-routing ────────────────────────────
+//
+// We embed each skill's `name + description + tags` once (lazy, on first
+// auto-route call) and cache the resulting 768-dim vectors in memory.
+// The cache is also persisted to `$app_data/skills-embeddings.bin` so
+// reboots don't re-embed 213 skills (~30 sec with Ollama warm).
+//
+// Auto-routing pipeline:
+//   Tier 1: keyword search via `score_skill`. If top score >= 50, return
+//           with method='keyword'. Free, microseconds.
+//   Tier 2: embed user prompt, cosine vs every skill vector. Threshold
+//           0.70 → method='embedding'. ~200ms (one Ollama call).
+//   Tier 3: ambiguous zone (Tier 2 best score in [0.55, 0.70)) — return
+//           top-5 candidates for the frontend to LLM-disambiguate.
+//
+// Cosine similarity is symmetric/normalized. We normalize at insert time
+// so Tier 2 hot path is just dot products.
+
+const EMBED_CACHE_FILE: &str = "skills-embeddings-v1.bin";
+const EMBED_TIER2_THRESHOLD: f32 = 0.70;
+const EMBED_TIER3_FLOOR: f32     = 0.55;
+const KEYWORD_TIER1_THRESHOLD: i32 = 50;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillVector {
+    pub id:     String,
+    /// Unit-length 768-d vector. Cosine similarity = dot product.
+    pub vec:    Vec<f32>,
+    pub model:  String,
+}
+
+/// In-process cache. Loaded lazily on first call to any embedding op.
+static EMBED_CACHE: TokioRwLock<Option<Vec<SkillVector>>> = TokioRwLock::const_new(None);
+
+/// Resolve a writable app-data location for the on-disk cache. Falls
+/// back to a temp dir if we can't determine the app data path — the
+/// next boot will simply re-embed.
+fn cache_path() -> PathBuf {
+    if let Some(dir) = local_app_data_dir() {
+        return dir.join("Lucy").join(EMBED_CACHE_FILE);
+    }
+    std::env::temp_dir().join(EMBED_CACHE_FILE)
+}
+
+fn normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 { for x in &mut v { *x /= norm; } }
+    v
+}
+
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+async fn load_cache_from_disk() -> Option<Vec<SkillVector>> {
+    let path = cache_path();
+    let text = tokio::fs::read_to_string(&path).await.ok()?;
+    serde_json::from_str::<Vec<SkillVector>>(&text).ok()
+}
+
+async fn persist_cache_to_disk(vecs: &[SkillVector]) -> Result<(), String> {
+    let path = cache_path();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let json = serde_json::to_string(vecs)
+        .map_err(|e| format!("json serialize: {}", e))?;
+    tokio::fs::write(&path, json.as_bytes()).await
+        .map_err(|e| format!("write cache: {}", e))?;
+    Ok(())
+}
+
+/// Build the embedding cache from scratch. Calls Ollama once per skill
+/// with concurrency limited to keep the server responsive. Idempotent:
+/// running it twice produces the same cache.
+async fn build_embed_cache() -> Result<Vec<SkillVector>, String> {
+    let index = load_index().clone();
+    let mut out: Vec<SkillVector> = Vec::with_capacity(index.len());
+    for meta in &index {
+        // Compose the text we embed. name+description+top tags is the
+        // sweet spot: enough signal to capture topic, not so much that
+        // off-topic tail content drowns the centroid.
+        let tags = meta.tags.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+        let text = format!("{}. {}. Tags: {}", meta.name, meta.description, tags);
+        match crate::commands::embeddings::embed_via_ollama_pub(&text, None).await {
+            Ok((v, model)) => {
+                out.push(SkillVector {
+                    id: meta.id.clone(),
+                    vec: normalize(v),
+                    model,
+                });
+            }
+            Err(e) => {
+                // Don't fail the whole build — log and continue. Skills
+                // missing from the cache will simply be ignored by Tier
+                // 2 (they remain reachable via keyword Tier 1).
+                eprintln!("[security_skills] embed '{}' failed: {}", meta.id, e);
+            }
+        }
+    }
+    let _ = persist_cache_to_disk(&out).await;
+    Ok(out)
+}
+
+/// Get the cache, building it lazily if absent. Disk → memory → build.
+async fn cache_get_or_build() -> Result<Vec<SkillVector>, String> {
+    {
+        let r = EMBED_CACHE.read().await;
+        if let Some(c) = r.as_ref() { return Ok(c.clone()); }
+    }
+    if let Some(disk) = load_cache_from_disk().await {
+        let mut w = EMBED_CACHE.write().await;
+        *w = Some(disk.clone());
+        return Ok(disk);
+    }
+    let built = build_embed_cache().await?;
+    let mut w = EMBED_CACHE.write().await;
+    *w = Some(built.clone());
+    Ok(built)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoRouteResult {
+    /// `"keyword"` | `"embedding"` | `"ambiguous"` | `"none"`.
+    pub method: String,
+    /// Top hit if method != "none". Otherwise None.
+    pub top: Option<SkillSearchHit>,
+    /// Top-5 candidates when method == "ambiguous" — caller (frontend)
+    /// can ask CHEAP tier to disambiguate.
+    pub candidates: Vec<SkillSearchHit>,
+    /// Diagnostic — was embedding cache ready? Useful for the chip UI
+    /// to say "fallback used" when Ollama is offline.
+    pub embeddings_available: bool,
+}
+
+/// Top-level auto-router. Single Tauri command the frontend invokes
+/// once per turn. Always returns Ok — failure modes are folded into
+/// `method: "none"` so the caller never has to handle errors.
+#[tauri::command]
+pub async fn security_skills_auto_route(user_prompt: String) -> Result<AutoRouteResult, String> {
+    let prompt = user_prompt.trim();
+    if prompt.is_empty() {
+        return Ok(AutoRouteResult {
+            method: "none".into(),
+            top: None,
+            candidates: vec![],
+            embeddings_available: false,
+        });
+    }
+
+    // ── Tier 1 — keyword search ──────────────────────────────────────
+    let kw_hits = {
+        let q  = prompt.to_lowercase();
+        let qt = tokenize(prompt);
+        let mut hits: Vec<SkillSearchHit> = load_index().iter()
+            .filter_map(|m| {
+                let s = score_skill(m, &q, &qt);
+                if s == 0 { return None; }
+                Some(SkillSearchHit { meta: m.clone(), score: s, preview: preview(&m.description, 240) })
+            })
+            .collect();
+        hits.sort_by(|a, b| b.score.cmp(&a.score));
+        hits
+    };
+    if let Some(top) = kw_hits.first() {
+        if top.score >= KEYWORD_TIER1_THRESHOLD {
+            return Ok(AutoRouteResult {
+                method: "keyword".into(),
+                top: Some(top.clone()),
+                candidates: kw_hits.iter().take(5).cloned().collect(),
+                embeddings_available: false,
+            });
+        }
+    }
+
+    // ── Tier 2 — embedding cosine ────────────────────────────────────
+    let cache = cache_get_or_build().await;
+    let (q_vec, embeddings_available) = match cache {
+        Ok(c) if !c.is_empty() => {
+            match crate::commands::embeddings::embed_via_ollama_pub(prompt, None).await {
+                Ok((v, _)) => (Some((normalize(v), c)), true),
+                Err(_) => (None, false),
+            }
+        }
+        _ => (None, false),
+    };
+
+    let mut emb_ranked: Vec<(f32, SkillSearchHit)> = Vec::new();
+    if let Some((qv, cache)) = q_vec {
+        let index = load_index();
+        for sv in &cache {
+            let cos = dot(&qv, &sv.vec);
+            if cos < EMBED_TIER3_FLOOR { continue; }
+            if let Some(meta) = index.iter().find(|m| m.id == sv.id) {
+                emb_ranked.push((cos, SkillSearchHit {
+                    meta: meta.clone(),
+                    score: (cos * 100.0) as i32,
+                    preview: preview(&meta.description, 240),
+                }));
+            }
+        }
+        emb_ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    if let Some((top_cos, top_hit)) = emb_ranked.first() {
+        if *top_cos >= EMBED_TIER2_THRESHOLD {
+            return Ok(AutoRouteResult {
+                method: "embedding".into(),
+                top: Some(top_hit.clone()),
+                candidates: emb_ranked.iter().take(5).map(|(_, h)| h.clone()).collect(),
+                embeddings_available: true,
+            });
+        }
+        // Tier 3 zone — surface candidates for caller-side disambiguation.
+        return Ok(AutoRouteResult {
+            method: "ambiguous".into(),
+            top: None,
+            candidates: emb_ranked.iter().take(5).map(|(_, h)| h.clone()).collect(),
+            embeddings_available: true,
+        });
+    }
+
+    // No clear winner anywhere. Surface the top keyword hits (if any)
+    // as candidates so the caller can still show them.
+    Ok(AutoRouteResult {
+        method: "none".into(),
+        top: None,
+        candidates: kw_hits.into_iter().take(5).collect(),
+        embeddings_available,
+    })
+}
+
+/// Force a rebuild of the embedding cache. Useful after editing skill
+/// frontmatter or switching embedding models. Returns the new vector
+/// count.
+#[tauri::command]
+pub async fn security_skills_rebuild_embeddings() -> Result<usize, String> {
+    // Clear the in-memory cache so subsequent reads pick up the rebuild.
+    {
+        let mut w = EMBED_CACHE.write().await;
+        *w = None;
+    }
+    let built = build_embed_cache().await?;
+    let n = built.len();
+    let mut w = EMBED_CACHE.write().await;
+    *w = Some(built);
+    Ok(n)
+}
+
+/// Diagnostic — return cache state without rebuilding. Used by the
+/// settings panel to show "embeddings: 213 / 213 cached · 768-dim".
+#[tauri::command]
+pub async fn security_skills_embed_status() -> Result<serde_json::Value, String> {
+    let r = EMBED_CACHE.read().await;
+    let in_mem = r.as_ref().map(|c| c.len()).unwrap_or(0);
+    let on_disk = cache_path().exists();
+    let total = load_index().len();
+    Ok(serde_json::json!({
+        "in_memory":    in_mem,
+        "on_disk":      on_disk,
+        "skill_total":  total,
+        "cache_path":   cache_path().to_string_lossy(),
+    }))
 }
 
 /// Distinct subdomain list with counts. Used by the UI's category picker.

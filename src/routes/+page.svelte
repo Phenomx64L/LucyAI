@@ -143,6 +143,8 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.4 — Cybersecurity skill library injection.
     import { peekActiveSecuritySkill, renderSecuritySkillForPrompt,
              clearActiveSecuritySkill } from '$lib/security-skill-bridge';
+    // v1.7.5 — Unified context orchestrator (auto-route + MCP rank).
+    import { buildUnifiedContext, renderMcpToolsBlock } from '$lib/unified-context';
     import {
         activeSkillPreset,
         peekActivePreset,
@@ -3711,6 +3713,18 @@ REGLAS DE FORMATO:
             // so the LLM sees the behavioural framing before the facts.
             // Preset selection lives in $lib/skill-preset-store; the
             // user manages it via the SkillPresetPicker modal.
+            // v1.7.5 — Unified context orchestrator. Runs auto-routing
+            // (Tier 1+2+3) AND ranks MCP tools against the prompt in a
+            // single coordinated pass. If a security skill auto-routes,
+            // it activates via the bridge so the existing injection picks
+            // it up below.
+            let _unifiedPlan = null;
+            try {
+                _unifiedPlan = await buildUnifiedContext(raw, mcpServers || []);
+            } catch (e) {
+                console.warn('[+page] unified context failed:', e);
+            }
+
             // v1.7.4 — security skills take priority over normal presets:
             // they're activated explicitly via /sec-skill use <id> and the
             // user expects the next turn to follow the skill's workflow.
@@ -3722,6 +3736,11 @@ REGLAS DE FORMATO:
                 if (_activePreset) {
                     ctx = renderPresetForPrompt(_activePreset) + '\n\n' + ctx;
                 }
+            }
+            // v1.7.5 — append the ranked MCP tool block so the LLM knows
+            // which servers/tools to call this turn. Bounded at 3 KB.
+            if (_unifiedPlan && _unifiedPlan.mcp_tools.length > 0) {
+                ctx += renderMcpToolsBlock(_unifiedPlan.mcp_tools);
             }
             ctx += construirContextoMemoria(raw, t);
             let imgs=[];
