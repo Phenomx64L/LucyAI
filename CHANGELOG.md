@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.3] — 2026-05-30
+
+Tier 2 catalog expansion — 8 new skill presets from the ECC agents/
+and skills/ directories. Total catalog now 18 presets across 7
+categories.
+
+### What's new
+
+Two new categories:
+
+- **Agent Roles** — system-prompt framings adapted from ECC's
+  `agents/` directory. Use these when Lucy should adopt a specific
+  professional role for the duration of a turn.
+- **Research** — investigation-first patterns. Use these when the
+  answer requires multi-source verification, not gut feel.
+
+### The 8 added presets
+
+| Category | Preset | ECC source |
+|---|---|---|
+| Agent | Architecture Audit | `agents/agent-architecture-audit` |
+| Agent | Agent Eval Harness | `agents/agent-eval` |
+| Agent | Codebase Onboarding | `skills/codebase-onboarding` |
+| Agent | Agent Introspection | `skills/agent-introspection-debugging` |
+| Research | Deep Research | `skills/deep-research` |
+| Research | Eval Harness Skill | `skills/eval-harness` |
+| Cost | Cost Tracking | `skills/cost-tracking` |
+| Engineering | Deployment Patterns | `skills/deployment-patterns` |
+
+Notable: **Cost Tracking** pairs with the v1.6.1 **Cost-Aware LLM
+Pipeline** — the v1.6.1 preset estimates before each call; this one
+adds the post-call ledger. They're meant to be active together when
+the user is in cost-conscious work.
+
+### Full catalog (18 total, 7 categories)
+
+```
+Cost          (2) Cost-Aware LLM Pipeline, Cost Tracking
+Security      (1) Security Review
+Engineering   (4) Error Handling Discipline, Coding Standards,
+                  Architecture Decision Records, Deployment Patterns
+Agent Roles   (4) Architecture Audit, Agent Eval Harness,
+                  Codebase Onboarding, Agent Introspection
+Workflow      (3) Git Workflow Discipline, Documentation Lookup First,
+                  Continuous Learning
+Research      (2) Deep Research, Eval Harness Skill
+Memory        (2) Strategic Compaction, MCP Budget Awareness
+```
+
+### Picker order updated
+
+`groupedPresets()` now orders categories `cost → security →
+engineering → agent → workflow → research → memory` — engineering and
+agent next to each other (both about code), workflow and research
+next to each other (both about process), memory at the end (always
+applies but rarely the primary framing).
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.6.2 → 1.6.3)
+M  src-tauri/Cargo.toml                      (1.6.2 → 1.6.3)
+M  src-tauri/tauri.conf.json                 (1.6.2 → 1.6.3)
+M  src/lib/skill-presets.ts                  (+8 presets, +2 categories,
+                                              groupedPresets order updated,
+                                              CATEGORY_LABELS extended)
+M  src/lib/SetupOverlay.svelte               (1.6.2 → 1.6.3)
+M  src/lib/TutorialOverlay.svelte            (1.6.2 → 1.6.3)
+```
+
+svelte-check: 7188 files, 0 errors, 0 warnings.
+vitest:      171/171 pass.
+
+References:
+- https://github.com/affaan-m/ECC/tree/main/agents
+- https://github.com/affaan-m/ECC/tree/main/skills
+
+---
+
 ## [1.6.2] — 2026-05-30
 
 MCP budget guard — second item from the ECC recommendation. Watches
