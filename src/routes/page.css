@@ -947,16 +947,15 @@ body.density-compact .chat{gap:2px !important;}
    Includes the broadcast modal block from v1.4.22 plus this
    release's extension. */
 /* v1.5.4 — .sb-shell-btn / .sb-rm-btn moved to sidebar.css. */
-.sb-action-item:hover .sb-shell-btn,
-.sb-action-item:hover .sb-rm-btn{opacity:1;}
+/* v1.5.8 — .sb-action-item compound rule moved to sidebar.css. */
 /* v1.4.23 — STAGED / CHIPS / INPUT / PENDING-MSG blocks all moved to
    src/lib/styles/composer.css, imported from ChatInput.svelte. DO NOT
    add .staged / .sf-* / .chips* / .chip* / .ibar / .igrp / .ibox /
    .iside / .ia-* / .mbdg / .nvidia-custom-input / .ollama-dot / .sbtn* /
    .pending-msg-* selectors here — edit composer.css instead. */
 /* Panic button — modern icon style */
-.panic-btn{color:#ef4444 !important;}
-.panic-btn:hover{color:#f87171 !important;background:rgba(239,68,68,.12) !important;}
+/* v1.5.8 — .panic-btn moved to tab-strip.css (already imported from
+   TabBar.svelte where the button renders). */
 /* ── BOTTOM BAR ────────────────────────────── */
 /* v1.4.21 — extracted to src/lib/styles/status-bar.css, imported from
    StatusBar.svelte. DO NOT add .bbar / .bi / .cok / .cy / .cr / .cm /
@@ -1247,8 +1246,7 @@ body.density-compact .chat{gap:2px !important;}
 .body.focus-mode .sidebar,.body.focus-mode~.sb-resize-handle{display:none!important;}
 
 /* ── UX: THEME TOGGLE BUTTONS IN TITLEBAR ──────── */
-.win-btn-icon{background:none;border:none;cursor:pointer;font-size:14px;width:32px;height:100%;display:flex;align-items:center;justify-content:center;color:var(--txt2);transition:color .15s,background .15s;flex-shrink:0;}
-.win-btn-icon:hover{color:var(--txt);background:rgba(255,255,255,.06);border-radius:5px;}
+/* v1.5.8 — .win-btn-icon moved to tab-strip.css. */
 
 /* ── UX: HOST COLOR PICKER ─────────────────────── */
 .host-color-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-left:auto;}

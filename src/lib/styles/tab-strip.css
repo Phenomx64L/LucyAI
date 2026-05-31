@@ -402,3 +402,32 @@
     background: #e81123 !important;
     color: white !important;
 }
+
+/* v1.5.8 — panic + win-btn-icon rules folded in from page.css.
+   They render on .tb (panic button uses the same .win-btn-icon
+   element shape but with a red tint), so they belong with the rest
+   of the topbar surface. */
+.win-btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    width: 32px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--txt2);
+    transition: color .15s, background .15s;
+    flex-shrink: 0;
+}
+.win-btn-icon:hover {
+    color: var(--txt);
+    background: rgba(255, 255, 255, .06);
+    border-radius: 5px;
+}
+.panic-btn        { color: #ef4444 !important; }
+.panic-btn:hover  {
+    color: #f87171 !important;
+    background: rgba(239, 68, 68, .12) !important;
+}

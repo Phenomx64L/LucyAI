@@ -314,3 +314,9 @@
 .sb-resize-handle:hover,
 .sb-resize-handle.resizing { background: rgba(16, 185, 129, .25); }
 .sb-resize-handle.resizing { background: rgba(16, 185, 129, .4); }
+
+/* v1.5.8 — action-row hover reveals (rule was in page.css; .sb-action-item
+   itself already lives in this file). Reveals the shell + rm buttons
+   only when the user mouses over the row. */
+.sb-action-item:hover .sb-shell-btn,
+.sb-action-item:hover .sb-rm-btn { opacity: 1; }
