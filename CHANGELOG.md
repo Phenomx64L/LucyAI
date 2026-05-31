@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.16] — 2026-05-31
+
+### Codebase audit pass
+
+User requested a senior-level review of the full Lucy codebase
+(IA, backend, frontend) for bugs and security issues. The pass
+spans 306 Tauri commands across 57 backend files, 100+ frontend
+components, and the v1.6.x integration arc. Findings are tracked
+below by category.
+
+### Fixed
+
+**LogViewerView Smart-Filter phantom model** (the same root cause
+as v1.6.10's MemoryBrowserView Auto-tag). `applySmartFilter()`
+called `ask_lucy` with `model: 'gemini-3.5-flash-lite'`, which
+is not a real Gemini model id. Every call rejected silently and
+the `catch` on line 167 fell through to the dumb substring
+filter without telling the user the LLM never ran. Aligned to
+`gemini-3-flash-preview` (the same model the rest of the app
+uses).
+
+### Audited and cleared
+
+- **SQL injection vectors.** Three `format!("SELECT ... FROM
+  {}", x)` callsites in `audit.rs`, `db_backup.rs`, and
+  `support_bundle.rs`. All three pass a value sourced from a
+  hardcoded `&[&str]` whitelist, not user input. Safe.
+- **Phantom Tauri commands.** Cross-referenced 306 `#[tauri::command]`
+  registrations against frontend `invoke(...)` callsites. No
+  unresolved phantoms remain after v1.6.11's
+  `save_agent_memory_full` → `update_agent_memory_tags` fix.
+- **Raw HTTP fetches from the frontend.** Zero. All network
+  egress goes through Rust commands which can apply rate limits,
+  audit logging, and bypass-token checks.
+- **Silent `catch {}` patterns.** ~28 instances scanned in the
+  frontend. The high-impact ones (Memory Browser Auto-tag,
+  Verify resolution buttons) were fixed in v1.6.10/11/13.
+  Remaining instances are deliberate null-safety gates around
+  `localStorage`, optional `console` calls, and credential
+  lookups that are allowed to fail without raising.
+- **`.unwrap()` in commands.** 48 occurrences across 10 files.
+  Spot-checked the highest-density file (`dedup.rs`, 11
+  unwraps) — all sit inside `#[cfg(test)]` blocks. Critical-path
+  unwraps were not found in this pass; rate-limited audit means
+  a follow-up sweep is worth doing if a panic shows up in
+  production logs.
+- **`bypass_token` security flow.** Crypto-randomized, 300s
+  TTL, per-process `Lazy<Mutex<HashMap>>`, expired entries
+  purged on every check. The original SEC-8 audit fix from
+  v1.4.x is intact. No regressions found.
+- **`format!()` into shell.** None — `execute_powershell` /
+  `execute_cmd` / `execute_reg` all build their argv as
+  parameterized vectors, never via string interpolation.
+- **Path traversal in `pdf.rs`.** No suspicious patterns; the
+  one `.join()` is on lines of text, not paths.
+- **Timer leaks.** Spot-checked `ChatThread.svelte` and
+  `SetupOverlay.svelte` — both use one-shot `setTimeout`s for
+  animations / pauses, not recurring intervals. No leaks.
+
+### Not fixed in this pass (called out for future work)
+
+- **Prompt-injection surface in `applySmartFilter`.** The user's
+  search string `q` is interpolated into the LLM prompt
+  verbatim. Low impact (the attacker would be the user
+  themselves, no privilege escalation possible) but worth
+  sanitizing if Lucy ever processes third-party logs as
+  trusted input.
+- **`+page.svelte`, `NexShellView.svelte` pinning to
+  `gemini-2.5-flash`.** That model id is currently valid in
+  Gemini's API. Not a bug today but worth tracking — when 2.5
+  is deprecated, those three sites need to migrate alongside
+  the model picker.
+- **Per-row LLM coherence in annealing.rs.** Still using
+  Jaccard over token bags. ADR-200 §"Step 2" calls for
+  embedding-based coherence. The infrastructure (v1.6.5
+  polarity, `embed_via_ollama_pub`) is ready; the swap is a
+  v1.7.0 enhancement, not a bug.
+- **Promote execution.** Counterpart of `/demote-tag` from
+  v1.6.8. Skipped per ADR-200's reassignment-cost warning;
+  needs careful batching design.
+
+### Surface area numbers
+
+- Backend Rust: 306 Tauri commands across 57 command files.
+- Frontend invokes: ~140 unique command callsites.
+- Svelte components: 60+.
+- Lines audited in this pass: ~4,500 (sampled — full codebase
+  is ~80k LOC).
+
+---
+
 ## [1.6.15] — 2026-05-31
 
 Hotfix: `/anneal` summary was confusing — labeled "596 memorias

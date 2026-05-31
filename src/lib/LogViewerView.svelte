@@ -145,7 +145,14 @@
             const result = await invoke('ask_lucy', {
                 prompt, context: '',
                 userName: '', runbooksDir: null,
-                model: 'gemini-3.5-flash-lite',  // cheapest tier — this is a 1-line task
+                // v1.6.16: was 'gemini-3.5-flash-lite' which is NOT a
+                // real Gemini model id. Every ask_lucy call rejected
+                // silently and the catch on line 167 fell through to
+                // substring-filter mode without telling the user the
+                // LLM never ran. Same root cause as v1.6.10 fix in
+                // MemoryBrowserView. Aligned with the model Lucy
+                // actually exposes (gemini-3-flash-preview).
+                model: 'gemini-3-flash-preview',
                 lang: 'es-MX', hostsJson: null, images: null,
             });
             const raw = String(result || '').trim();
