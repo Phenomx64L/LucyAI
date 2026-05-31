@@ -138,6 +138,8 @@ import { listen } from '@tauri-apps/api/event';
     import { renderPresetForPrompt } from '$lib/skill-presets';
     // v1.7.0 — central LLM model catalog.
     import { LLM } from '$lib/llm-models';
+    // v1.7.1 — LLM tier health probe at boot.
+    import { pingAllTiersIfStale } from '$lib/tier-health';
     import {
         activeSkillPreset,
         peekActivePreset,
@@ -1746,6 +1748,11 @@ import { listen } from '@tauri-apps/api/event';
         finally {
             appReady = true;
             if (!darkMode) document.documentElement.classList.add('light');
+            // v1.7.1 — Probe LLM tiers if the localStorage cache is
+            // stale. Fire-and-forget so it never blocks app readiness;
+            // the StatusBar chip will go ◯ → ⟳ → ◉ over the next ~3s.
+            // Cost: 3 × ~$0.0001 per probe cycle, cached 6h.
+            pingAllTiersIfStale().catch(e => console.warn('[tier-health] boot probe failed:', e));
             // Show tutorial on first ever launch (after a brief delay for the UI to settle)
             // Show the tutorial when:
             //   • the user has never completed it (flag is empty), OR

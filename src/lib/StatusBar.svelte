@@ -13,6 +13,9 @@
     import { getPricing, pricingLabel } from '$lib/model-pricing';
     import { getModelIcon } from '$lib/models.js';
     import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
+    // v1.7.1 — LLM tier health chip.
+    import { tierHealth, aggregateStatus, statusGlyph, pingAllTiers,
+             type TierKey, type TierHealth } from '$lib/tier-health';
     // v1.4.15 — live cost ticker. We tween the displayed cost value so it
     // rolls upward smoothly during streaming instead of teleporting after
     // each chunk's usage event. A brief 'pulse' class fires on each update.
@@ -72,6 +75,33 @@
             clearInterval(cacheTimer);
         };
     });
+
+    // ── v1.7.1 — LLM tier health chip ────────────────────────────────────
+    // The chip aggregates 3 tier probes (FAST / CHEAP / REASONING) into
+    // a single glyph + label. Hover → per-tier breakdown via LucyTooltip.
+    // Click → re-probe immediately, bypassing the 6h cache.
+    let tierHealthBusy = false;
+    async function reprobeTiers() {
+        if (tierHealthBusy) return;
+        tierHealthBusy = true;
+        try { await pingAllTiers(); }
+        finally { tierHealthBusy = false; }
+    }
+    $: tierHealthAgg     = aggregateStatus($tierHealth);
+    $: tierHealthGlyph   = statusGlyph(tierHealthAgg);
+    $: tierHealthTooltip = buildTierHealthTooltip($tierHealth, isEN);
+
+    function buildTierHealthTooltip(s: Record<TierKey, TierHealth>, isEnLang: boolean): string {
+        const order: TierKey[] = ['FAST', 'CHEAP', 'REASONING'];
+        const lines = order.map(k => {
+            const e = s[k];
+            const lat = e.latency_ms > 0 ? ` (${e.latency_ms} ms)` : '';
+            const err = e.error ? ` — ${e.error}` : '';
+            return `${k}: ${e.status}${lat}${err}`;
+        });
+        const head = isEnLang ? 'LLM tier health (click to re-probe)' : 'Salud de tiers LLM (clic para re-probar)';
+        return `${head}\n${lines.join('\n')}`;
+    }
 
     // ── UI-7 — Cache hit footer indicator ────────────────────────────────
     // Compute logic lives in $lib/cache-stats-helpers (testable in vitest).
@@ -236,6 +266,16 @@
         </div>
     {/if}
 
+    <!-- v1.7.1 — LLM tier health chip. Aggregates 3 tier probes into
+         one glyph. Hover for breakdown, click to re-probe. -->
+    <div class="bi th-chip" title={tierHealthTooltip}
+         on:click={reprobeTiers} role="button" tabindex="0"
+         on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') reprobeTiers(); }}>
+        <span class="th-glyph th-{tierHealthGlyph.tone}" style="letter-spacing:.3px;">
+            {tierHealthBusy ? '⟳' : tierHealthGlyph.glyph} LLM
+        </span>
+    </div>
+
     <div class="bi r" style="opacity:0.6; font-size:12px;">
         Lucy OS v{appVersion} · {userLang}
     </div>
@@ -257,4 +297,16 @@
        If a future StatusBar-specific rule needs to be added (something
        not in status-bar.css and not a duplicate elsewhere), put it
        here. Otherwise edit status-bar.css. */
+
+    /* v1.7.1 — LLM tier health chip. The chip lives in the footer
+       between GUARD and version. Click to re-probe; hover for per-tier
+       breakdown via the native title= tooltip. */
+    .th-chip { cursor: pointer; user-select: none; transition: opacity .12s; }
+    .th-chip:hover  { opacity: .85; }
+    .th-chip:active { opacity: .65; }
+    .th-glyph { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; font-weight: 600; }
+    .th-ok    { color: var(--acc,   #10b981); }
+    .th-warn  { color: var(--amber, #f59e0b); }
+    .th-crit  { color: var(--red,   #ef4444); }
+    .th-info  { color: var(--txt2,  #94a3b8); opacity: .7; }
 </style>

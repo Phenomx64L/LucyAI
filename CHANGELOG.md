@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.1] — 2026-05-31
+
+LLM tier health check at boot. Catches phantom-id regressions (the
+v1.6.10 / v1.6.16 failure mode) before the user does.
+
+### Shipped
+
+**`src/lib/tier-health.ts`** (NEW, ~200 LOC):
+
+- `pingAllTiers()` — fires a minimal `ask_lucy` call per tier
+  (FAST, CHEAP, REASONING) in parallel. Prompt: `"Respond with
+  the single word: ok"`. `maxTokensOverride: 8` bounds the
+  response so cost ≈ floor.
+- `pingAllTiersIfStale()` — boot helper. Only runs if any tier's
+  cached entry is older than `CACHE_TTL_MS = 6h` or `unknown`.
+  Avoids hammering the API on every reopen.
+- Status mapping:
+  - `ok`   — non-empty response in < 8s
+  - `slow` — non-empty in 8–15s (warn-tone, not failure)
+  - `fail` — rejected, threw, or timed out > 15s
+  - `unknown` — never probed in this session
+- `aggregateStatus()` — worst-tier-wins for the chip indicator.
+- localStorage cache key: `lucy_tier_health_v1`. Bumping the `v1`
+  suffix invalidates every user's cache — useful if we change
+  probe semantics.
+
+**StatusBar chip** (after GUARD, before Lucy OS version):
+
+```
+🛡 GUARD   ◉ LLM   Lucy OS v1.7.1 · es-MX
+```
+
+- `◉ LLM` (green) — all three tiers healthy
+- `◑ LLM` (amber) — at least one tier slow
+- `◯ LLM` (red)   — at least one tier failed
+- `· LLM`  (grey)  — not probed yet (transient at boot)
+- `⟳ LLM`  (spinner) — re-probe in progress
+
+Hover → native tooltip with per-tier breakdown:
+```
+LLM tier health (click to re-probe)
+FAST: ok (412 ms)
+CHEAP: ok (380 ms)
+REASONING: ok (1840 ms)
+```
+
+Click anywhere on the chip → forces a re-probe bypassing the
+6h cache. Useful right after running `/anneal` against a model
+that's been flaky.
+
+### Wired at boot
+
+In `+page.svelte`'s initial-load `finally` block:
+
+```ts
+pingAllTiersIfStale().catch(e => console.warn('[tier-health] boot probe failed:', e));
+```
+
+Fire-and-forget. Never blocks `appReady = true`. The chip
+animates from `·` → `⟳` → `◉` over ~3s.
+
+### Cost analysis
+
+Per boot probe (only when cache stale):
+- 3 tiers × ~8 output tokens × FAST/CHEAP/REASONING prices
+- Worst case: ~$0.0003 per probe cycle
+- At most ~4 cycles/day if user reopens Lucy aggressively
+- $0.0012/day = **$0.43/year per user**
+
+Idle days cost zero (cache hit).
+
+### Failure mode it catches
+
+If Google deprecates a model id between now and the next
+sprint:
+
+- Before v1.7.1: user opens Memory Browser → tries Auto-tag
+  → "no usable tags" → opens GitHub issue → 30-min debugging
+  session to find that the model id no longer exists.
+- After v1.7.1: chip goes `◯ LLM` red within seconds of boot.
+  Hover reveals which tier failed and why. User opens
+  `$lib/llm-models.ts`, updates the id, ships v1.7.x.
+
+### Follow-up surfaced for v1.7.2
+
+- A `/llm-health` slash command that dumps the same per-tier
+  breakdown into chat. Useful when the user is investigating
+  an issue and wants the data without hover.
+- Long-term latency tracking. The current chip discards
+  latency on every re-probe; could keep a 7-day rolling window
+  in localStorage to spot gradual degradation.
+
+---
+
 ## [1.7.0] — 2026-05-31
 
 Centralised LLM model catalog. Eliminates the class of bugs that
