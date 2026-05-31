@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.4] — 2026-05-30
+
+Long-tail CSS dedup #3 — extracted `sidebar.css`. New stylesheet,
+first sidebar import.
+
+### Shipped
+
+New `src/lib/styles/sidebar.css` (~280 LOC) consolidates 6 scattered
+page.css blocks into one file:
+
+- Container + collapse transition: `.sidebar`,
+  `.sidebar .sb-it/.sb-lbl/.sb-div/.sb-txt`, `.sidebar.closed *`,
+  `.sidebar.open` / `.closed` width variants, `view-transition-name`
+- Toggle + label + divider: `.sb-tog`, `.sb-togtxt`, `.sb-lbl`,
+  `.sb-lbl::after`, `.sb-div`, plus light-theme override
+- Items with animated left accent border: `.sb-it`, `.sb-it::before`,
+  `:hover`, `.act`, `.act::before`, `.act svg/i`, `.closed .sb-it*`,
+  `.dim`, `.sb-it-active`
+- Action-row hover buttons: `.sb-action-item`, `.sb-del`, `.sb-edit`
+- Icons + text + badges: `.sb-ico`, `.sb-txt`, `.sb-noai-badge`,
+  `.sb-bdg` + tier variants (`.g`/`.y`/`.b`/`.pronto`), `.sb-ns-badge`
+- Inline shell + rm buttons: `.sb-shell-btn`, `.sb-rm-btn`
+- Accordion sections: `.sb-accordion-hdr`, `.sb-accordion-arrow`,
+  `.sb-accordion-body`, `@keyframes accordionIn`
+- Drag-to-resize handle: `.sb-resize-handle`
+
+Imported from `Sidebar.svelte` via
+`import '$lib/styles/sidebar.css'`.
+
+### Why Sidebar.svelte's scoped block stays
+
+The component carries `:global(...)` refinements for its hosts-tagged
+accordion area and minor light-theme overrides. Same v1.4.24 pattern
+— component-injected `:global` wins via load-order tiebreaker, so
+visual output is preserved.
+
+### Audit progress
+
+| # | Component | Pre-v1.5.4 | Post-v1.5.4 |
+|---|---|---|---|
+| 1 | Sidebar | 20 | ~0 |
+| 2 | LogViewerView | 12 | 12 (next) |
+| 3 | NexShellView | 10 | 10 |
+| 4 | InventoryView | 8 | 8 |
+| 5 | ComplianceView | 7 | 7 |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.3 → 1.5.4)
+M  src-tauri/Cargo.toml                      (1.5.3 → 1.5.4)
+M  src-tauri/tauri.conf.json                 (1.5.3 → 1.5.4)
+A  src/lib/styles/sidebar.css                (NEW — ~280 LOC, ~40 selectors)
+M  src/lib/Sidebar.svelte                    (import added)
+M  src/routes/page.css                       (-110 LOC across 6 ranges)
+M  src/lib/SetupOverlay.svelte               (1.5.3 → 1.5.4)
+M  src/lib/TutorialOverlay.svelte            (1.5.3 → 1.5.4)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.5.3] — 2026-05-30
 
 Long-tail CSS dedup #2 — extended `dashboard-alerts.css` with the full

@@ -1,4 +1,9 @@
 <script lang="ts">
+    // v1.5.4 — full sidebar layout extracted to a single global stylesheet
+    // to close the long-tail dedup loop. NexShellView / DashboardView
+    // pattern reused: Sidebar.svelte's scoped style retains its
+    // :global(...) refinements that override at runtime via load order.
+    import '$lib/styles/sidebar.css';
     import { createEventDispatcher } from 'svelte';
     import LayoutDashboard from '@tabler/icons-svelte/icons/layout-dashboard';
 
