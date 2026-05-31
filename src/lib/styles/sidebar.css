@@ -39,13 +39,15 @@
 }
 .sidebar .sb-txt { transition: opacity .14s ease; }
 .sidebar.closed .sb-txt { opacity: 0; }
-/* v1.5.5 — open width tightened 210 → 178px per user feedback that
-   the bar felt wider than typical sidebar UX (Cursor/Linear sit
-   around 180px). All sb-item labels still fit at this width — the
-   longest ones ("Limpiar portapap." / "Salud del sistema") only run
-   to ~150px so we keep a 28px right-side gutter. Collapsed width
-   unchanged. */
-.sidebar.open   { width: 178px; }
+/* v1.5.6 — Open-state width is now driven by the inline
+   `style="width:${sidebarWidth}px"` set in +page.svelte (defaults to
+   152px, persisted to localStorage). This CSS rule stays as a
+   FALLBACK for the case where the inline style fails to render
+   (e.g. during the first paint before the prop binds), matching the
+   same 152 default so there's no flash from 210 → 152. v1.5.5's
+   178 attempt didn't land because the inline style took precedence.
+   The drag-resize handler in +page.svelte allows 128px → 420px. */
+.sidebar.open   { width: 152px; }
 .sidebar.closed { width: 46px; }
 
 /* Toggle + section label + divider */

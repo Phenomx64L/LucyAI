@@ -47,7 +47,7 @@
     // ── Props ────────────────────────────────────────────────────────────────
     export let activeView: string = 'terminal';
     export let sidebarCollapsed: boolean = false;
-    export let sidebarWidth: number = 210;
+    export let sidebarWidth: number = 152;  // v1.5.6 — was 210
     export let sidebarResizing: boolean = false;
     export let quickActions: any[] = [];
     export let isEN: boolean = false;
@@ -387,8 +387,13 @@
     }
     .sidebar .sb-txt{transition: opacity .14s ease;}
     .sidebar.closed .sb-txt{opacity:0;}
-    .sidebar.open{width:210px;}
-    .sidebar.closed{width:46px;}
+    /* v1.5.6 — width rules removed from this scoped block. They were
+       silently overriding the sidebar.css copy (v1.4.21+ pattern: when
+       Svelte adds class-hash to a plain scoped selector, it wins
+       cascade over a non-hashed copy in a global module). The inline
+       `style="width:${sidebarWidth}px"` on the open state and the
+       sidebar.css `.sidebar.closed{width:46px}` rule now drive sizing
+       end-to-end. */
     .sb-tog{background:none;border:none;color:var(--txt2);cursor:pointer;font-size:12px;padding:4px 10px;margin-bottom:6px;display:flex;align-items:center;gap:5px;border-radius:4px;transition:.15s;width:100%;}
     .sb-tog:hover{background:rgba(255,255,255,.04);color:var(--txt);}
     .sb-togtxt{font-size:11px;white-space:nowrap;}

@@ -556,7 +556,17 @@ import { listen } from '@tauri-apps/api/event';
         currentTheme = t;
         safeSetLSString('lucy_warp_theme', t);
     }
-    let sidebarWidth       = parseInt(safeGetLS('lucy_sb_w', '210')); // ancho del sidebar expandido
+    // v1.5.6 — default reduced 210 → 152 per user feedback (the bar
+    // looked "wider than normal" even after the v1.5.5 178 attempt).
+    // Migration: existing installs with the old 210 default stored
+    // in localStorage get auto-reset on the FIRST boot of v1.5.6, so
+    // the narrower bar lands for every user without anyone having
+    // to manually drag-resize. Anything genuinely customised
+    // (≤ 200) is preserved.
+    let sidebarWidth       = (() => {
+        const stored = parseInt(safeGetLS('lucy_sb_w', '152'));
+        return (Number.isFinite(stored) && stored > 200) ? 152 : stored;
+    })();
     let contextUsed        = 0;
     let auditAlerts        = 0;
     // ── RUNАС CONFIRMATION ────────────────────────────────
@@ -8116,7 +8126,10 @@ if (Test-Path $src) {
         document.body.style.userSelect = 'none';
         const startX = e.clientX, startW = sidebarWidth;
         const onMove = (ev) => {
-            sidebarWidth = Math.max(160, Math.min(420, startW + ev.clientX - startX));
+            // v1.5.6 — drag-resize floor lowered 160 → 128 so the user
+            // can manually shrink even further if they want; ceiling
+            // unchanged.
+            sidebarWidth = Math.max(128, Math.min(420, startW + ev.clientX - startX));
         };
         const onUp = () => {
             sidebarResizing = false;

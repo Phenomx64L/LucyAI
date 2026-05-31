@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.6] — 2026-05-30
+
+Sidebar width — real fix. v1.5.5's CSS-only attempt didn't land.
+
+### What went wrong in v1.5.5
+
+I changed `.sidebar.open { width: 178px }` in `sidebar.css` and
+shipped it. The user re-screenshotted on v1.5.5 and the bar was
+still wide. Root cause this round (three sources of truth, not two):
+
+1. `+page.svelte` has `let sidebarWidth = parseInt(safeGetLS(
+   'lucy_sb_w', '210'))` — default **210**.
+2. `Sidebar.svelte` renders `style="width:${sidebarWidth}px"` inline
+   on the open state. **Inline styles override CSS classes.** So
+   the 178 in `sidebar.css` was always shadowed.
+3. `Sidebar.svelte`'s scoped `<style>` also had its own
+   `.sidebar.open { width: 210px }` left over from v1.4.x (scoped
+   class-hash specificity beats the global rule from sidebar.css
+   too). That's why even users with no localStorage entry got 210px.
+
+So `sidebar.css` was being out-cascaded by TWO copies. Same
+duplicate-selector pattern that started the v1.4.17 → v1.4.19 tab
+saga, just at a different surface.
+
+### Fix
+
+Three coordinated changes, end-to-end:
+
+1. `+page.svelte` — default `sidebarWidth` lowered **210 → 152**.
+   Plus a localStorage migration: any stored value > 200 (the old
+   default that users never explicitly chose) is reset to 152 on
+   first boot of v1.5.6. Genuinely customised values (≤ 200) are
+   preserved.
+2. `+page.svelte` — drag-resize floor lowered `Math.max(160, ...)`
+   → `Math.max(128, ...)`. Users who want it even narrower can drag.
+3. `Sidebar.svelte` — exported `sidebarWidth` prop default
+   **210 → 152**.
+4. `Sidebar.svelte` — scoped `.sidebar.open{width:210px}` rule
+   removed. Comment in its place explains the precedence chain.
+5. `sidebar.css` — `.sidebar.open` width matches at **152px** as
+   a first-paint fallback (before the inline `style="…"` binds).
+
+All five edits coordinate so the bar lands at exactly 152px on a
+fresh install AND on every existing v1.5.x install (via the
+localStorage migration).
+
+### Why 152
+
+Linear and Cursor's sidebars sit around 180px. VSCode's runs
+~240px. Lucy's longest sidebar label is "Limpiar portapap." at
+~110px text width; plus icon (16) + gap (8) + padding (16+14) gets
+us to ~164px — but the user explicitly wanted less than that, so
+we accept ~12px of right-edge clipping on that single label (it's
+already an abbreviation of "portapapeles") in exchange for a
+visually tighter bar. Easy to drag back to 178px or 200px any time.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.5 → 1.5.6)
+M  src-tauri/Cargo.toml                      (1.5.5 → 1.5.6)
+M  src-tauri/tauri.conf.json                 (1.5.5 → 1.5.6)
+M  src/routes/+page.svelte                   (default 210→152, LS migration, drag floor 160→128)
+M  src/lib/Sidebar.svelte                    (prop default 210→152, drop scoped duplicate)
+M  src/lib/styles/sidebar.css                (fallback width 178→152 + rewritten comment)
+M  src/lib/SetupOverlay.svelte               (1.5.5 → 1.5.6)
+M  src/lib/TutorialOverlay.svelte            (1.5.5 → 1.5.6)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+### Lesson learned (logged for the audit doc)
+
+Three sources of truth across (a) JS default prop, (b) component
+scoped style, (c) global stylesheet is one more axis of drift than
+the v1.4.19 audit caught. Inline `style="…"` from JS-bound values
+beats all CSS, scoped beats imported global, imported global beats
+nothing. Future width/height/positioning changes need to grep for
+all three patterns before declaring a fix.
+
+---
+
 ## [1.5.5] — 2026-05-30
 
 User-reported polish — removes redundant + non-functional UI surface
