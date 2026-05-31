@@ -87,14 +87,29 @@ export function peekActiveSecuritySkill(): SecuritySkillFull | null {
  *  The new framing makes the distinction explicit and instructs the
  *  agent loop to confirm BEFORE running anything from the skill body. */
 export function renderSecuritySkillForPrompt(s: SecuritySkillFull): string {
+    // v1.7.6 defensive: meta + every list could be undefined if a stale
+    // localStorage entry or a partial backend payload survives a schema
+    // change. Fall back to empty strings/arrays so we never crash inside
+    // the prompt builder — better to render a slightly less-rich header
+    // than to throw "Cannot read properties of undefined" and break the
+    // user's whole turn.
+    const meta = (s && s.meta) || ({} as SecuritySkillFull['meta']);
+    const safeArr = (a?: string[]): string[] => Array.isArray(a) ? a : [];
+    const attck   = safeArr(meta.mitre_attck);
+    const csf     = safeArr(meta.nist_csf);
+    const d3fend  = safeArr(meta.mitre_d3fend);
     const codes = [
-        s.meta.mitre_attck.length ? `MITRE ATT&CK: ${s.meta.mitre_attck.join(', ')}` : null,
-        s.meta.nist_csf.length    ? `NIST CSF: ${s.meta.nist_csf.join(', ')}`         : null,
-        s.meta.mitre_d3fend.length? `MITRE D3FEND: ${s.meta.mitre_d3fend.join(', ')}` : null,
+        attck.length  ? `MITRE ATT&CK: ${attck.join(', ')}`  : null,
+        csf.length    ? `NIST CSF: ${csf.join(', ')}`        : null,
+        d3fend.length ? `MITRE D3FEND: ${d3fend.join(', ')}` : null,
     ].filter(Boolean).join(' · ');
-    const header = `[ACTIVE CYBERSECURITY SKILL — ${s.meta.name}]
-Description: ${s.meta.description}
-Domain: ${s.meta.domain}${s.meta.subdomain ? ` / ${s.meta.subdomain}` : ''}
+    const name        = meta.name        || 'unnamed-skill';
+    const description = meta.description || '';
+    const domain      = meta.domain      || '';
+    const subdomain   = meta.subdomain   || '';
+    const header = `[ACTIVE CYBERSECURITY SKILL — ${name}]
+Description: ${description}
+Domain: ${domain}${subdomain ? ` / ${subdomain}` : ''}
 ${codes ? `Frameworks: ${codes}\n` : ''}
 ═══ HOW TO USE THIS SKILL — READ CAREFULLY ═══
 
@@ -143,8 +158,9 @@ runbook you're consulting, not a script to execute.
     // skills are typically 6-10 KB; longer ones get tail-truncated with
     // a marker so the LLM knows there's more on disk if it asks.
     const MAX = 8000;
-    const body = s.body.length > MAX
-        ? s.body.slice(0, MAX) + `\n\n[…skill body truncated at ${MAX} chars — full text in docs/security-skills/${s.meta.id}/SKILL.md…]`
-        : s.body;
+    const rawBody = (s && typeof s.body === 'string') ? s.body : '';
+    const body = rawBody.length > MAX
+        ? rawBody.slice(0, MAX) + `\n\n[…skill body truncated at ${MAX} chars — full text in docs/security-skills/${meta.id || name}/SKILL.md…]`
+        : rawBody;
     return header + body;
 }

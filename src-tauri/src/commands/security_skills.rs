@@ -218,7 +218,14 @@ fn parse_frontmatter(id: &str, text: &str) -> Option<SkillMeta> {
             "author"      => author      = raw_val.to_string(),
             "tags"        => { current_list = Some(&mut tags); },
             "nist_csf"    => { current_list = Some(&mut nist_csf); },
-            "mitre_attck" | "mitre_att_ck" | "attck" => { current_list = Some(&mut mitre_attck); },
+            // v1.7.6: upstream SKILL.md files use `mitre_attack` (with
+            // an "a") — the previous parser only matched `mitre_attck`
+            // variants and silently dropped the field, which left
+            // SkillMeta.mitre_attck empty and surfaced as
+            // `Cannot read properties of undefined (reading 'mitre_attck')`
+            // when the frontend serialized through a stale cache.
+            "mitre_attack" | "mitre_attck" | "mitre_att_ck" | "attck" | "attack"
+                => { current_list = Some(&mut mitre_attck); },
             "mitre_atlas" => { current_list = Some(&mut mitre_atlas); },
             "mitre_d3fend"=> { current_list = Some(&mut mitre_d3fend); },
             "ai_rmf" | "nist_ai_rmf" => { current_list = Some(&mut ai_rmf); },

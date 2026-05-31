@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.7] — 2026-05-31
+
+Hotfix #2 for v1.7.4/5/6: `TypeError: Cannot read properties of
+undefined (reading 'mitre_attck')` killed the turn before the
+LLM call.
+
+Two stacked bugs:
+
+1. **Upstream YAML key mismatch.** The Anthropic-Cybersecurity-Skills
+   repo writes the MITRE field as `mitre_attack` (with the second
+   "a"). My v1.7.4 parser only matched `mitre_attck` / `mitre_att_ck`
+   / `attck` so the field was never populated. SkillMeta serialized
+   with the field present-but-empty in some paths and absent in
+   others depending on whether the stale localStorage entry was
+   pre- or post-fix. Parser now also matches `mitre_attack` and
+   `attack`.
+
+2. **`renderSecuritySkillForPrompt` assumed every field exists.**
+   `s.meta.mitre_attck.length` crashes when meta itself or the list
+   is undefined. Now defensively guards meta + every array, falling
+   back to empty strings / arrays so the prompt builder never
+   throws.
+
+### Behavioural effect
+
+Before v1.7.7: user asks "cómo investigo un phishing report" →
+auto-route picks the skill → prompt builder reads
+`mitre_attck.length` on undefined → TypeError → no LLM call →
+chat shows `Error crítico: TypeError: Cannot read properties of
+undefined (reading 'mitre_attck')`.
+
+After v1.7.7: same prompt → auto-route works → header renders
+fully populated (framework codes now correct) → LLM runs the
+skill as guidance per v1.7.6 framing → no crash.
+
+### After installing
+
+Restart Lucy so the lazy in-memory skill index re-parses with the
+fixed YAML keys. The on-disk embedding cache is fine — embeddings
+use name+description+tags, none of which changed.
+
+If you still see the error after restart, your localStorage may
+have a corrupted active-skill entry from before the fix. Clear it
+with:
+
+```
+/preset clear
+```
+
+Then ask again.
+
+---
+
 ## [1.7.6] — 2026-05-31
 
 Hotfix for v1.7.4/5: Lucy auto-executed `New-ComplianceSearch`
