@@ -514,6 +514,11 @@ pub fn run() {
             commands::annealing::memory_annealing_cluster,
             // v1.6.8 — annealing Phase 4 execution (demote with affinity routing).
             commands::annealing::memory_annealing_demote,
+            // v1.7.4 — Anthropic Cybersecurity Skills library.
+            commands::security_skills::security_skills_list,
+            commands::security_skills::security_skills_search,
+            commands::security_skills::security_skills_get,
+            commands::security_skills::security_skills_categories,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

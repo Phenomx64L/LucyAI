@@ -140,6 +140,9 @@ import { listen } from '@tauri-apps/api/event';
     import { LLM } from '$lib/llm-models';
     // v1.7.1 — LLM tier health probe at boot.
     import { pingAllTiersIfStale } from '$lib/tier-health';
+    // v1.7.4 — Cybersecurity skill library injection.
+    import { peekActiveSecuritySkill, renderSecuritySkillForPrompt,
+             clearActiveSecuritySkill } from '$lib/security-skill-bridge';
     import {
         activeSkillPreset,
         peekActivePreset,
@@ -3708,9 +3711,17 @@ REGLAS DE FORMATO:
             // so the LLM sees the behavioural framing before the facts.
             // Preset selection lives in $lib/skill-preset-store; the
             // user manages it via the SkillPresetPicker modal.
-            const _activePreset = peekActivePreset();
-            if (_activePreset) {
-                ctx = renderPresetForPrompt(_activePreset) + '\n\n' + ctx;
+            // v1.7.4 — security skills take priority over normal presets:
+            // they're activated explicitly via /sec-skill use <id> and the
+            // user expects the next turn to follow the skill's workflow.
+            const _activeSecSkill = peekActiveSecuritySkill();
+            if (_activeSecSkill) {
+                ctx = renderSecuritySkillForPrompt(_activeSecSkill) + '\n\n' + ctx;
+            } else {
+                const _activePreset = peekActivePreset();
+                if (_activePreset) {
+                    ctx = renderPresetForPrompt(_activePreset) + '\n\n' + ctx;
+                }
             }
             ctx += construirContextoMemoria(raw, t);
             let imgs=[];

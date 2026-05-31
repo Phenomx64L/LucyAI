@@ -61,3 +61,5 @@ pub mod grounding;
 pub mod polarity;
 // v1.6.6 — annealing ontologies MVP (Kappa Graph ADR-200).
 pub mod annealing;
+// v1.7.4 — Anthropic Cybersecurity Skills library (213 SKILL.md, Apache 2.0).
+pub mod security_skills;

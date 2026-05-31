@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.4] — 2026-05-31
+
+Cybersecurity Skills Library — 213 production-grade skills bundled
+from `Anthropic-Cybersecurity-Skills` (mukul975 / Mahipal Singh,
+Apache 2.0) covering forensics, IR, malware, AD, cloud, Windows,
+network, EDR, threat hunting, and more. Lucy now has the
+documented procedural knowledge of a senior security analyst on
+demand.
+
+### Shipped
+
+**`docs/security-skills/`** (NEW) — 213 SKILL.md files, ~1.94 MB
+total. Bundled into the installer via Tauri 2 `resources` glob.
+Includes `LICENSE` (Apache 2.0) and `ATTRIBUTION.md` documenting
+the upstream source and what was copied.
+
+**`src-tauri/src/commands/security_skills.rs`** (~340 LOC):
+
+- Lazy in-memory index built on first call. Walks the skills dir,
+  parses YAML frontmatter (name, description, domain, subdomain,
+  tags, version, author, NIST CSF, MITRE ATT&CK / ATLAS / D3FEND,
+  AI RMF) using a scoped parser. No `serde_yaml` dependency.
+- 4 Tauri commands:
+  - `security_skills_list()` — full metadata, ~50 KB.
+  - `security_skills_search(query, limit?)` — keyword + framework-code
+    scoring (name 10, tag 5, framework code 8, description 3),
+    returns ranked hits with 240-char preview.
+  - `security_skills_get(id)` — full SKILL.md body with frontmatter
+    stripped. Reads from disk every call so file edits show without
+    restart.
+  - `security_skills_categories()` — subdomain counts for the
+    category picker.
+- 7 unit tests covering frontmatter parsing (minimal, framework
+  lists, missing), scoring (name-over-description, framework code
+  match, zero-no-match), and tokenisation.
+
+**`src/lib/security-skill-bridge.ts`** (NEW): single-slot store
++ localStorage persistence + `renderSecuritySkillForPrompt(s)`
+helper that produces a system-prompt prefix with framework
+mappings header and a body capped at 8 KB.
+
+**Slash command `/sec-skill`** (aliases `/sec`, `/skill`,
+`/secskill`, `/sec-skills`):
+
+- No arg → category listing with counts (subdomain × n).
+- With query → top 10 matches as expandable result blocks
+  showing preview, tags, framework codes, and a copy-paste
+  activation hint.
+- `/sec-skill use <id>` → loads the full SKILL.md body and
+  stashes it in the security-skill bridge. The next chat turn's
+  system prompt prepends the skill so the LLM follows its
+  workflow.
+- Plays nicely with v1.6.1 presets: activating a security skill
+  clears any regular preset, and `/preset clear` clears both
+  kinds atomically (single "active framing" model).
+
+**Prompt injection wiring** (`+page.svelte`):
+
+```ts
+const _activeSecSkill = peekActiveSecuritySkill();
+if (_activeSecSkill) {
+    ctx = renderSecuritySkillForPrompt(_activeSecSkill) + '\n\n' + ctx;
+} else {
+    // …fall back to v1.6.1 preset…
+}
+```
+
+Security skill takes priority — the user explicitly activated it
+and expects the next turn to honor its workflow.
+
+### Resource bundling
+
+`tauri.conf.json` `bundle.resources` glob:
+```
+"../docs/security-skills/**/*"
+```
+
+Tauri 2 copies the entire skills tree into the installer payload.
+At runtime `security_skills.rs::skills_dir()` probes 5 candidate
+paths (dev cwd, src-tauri cwd, exe-relative resources/_up_, etc.)
+and uses the first that exists.
+
+### Cheatsheet
+
+`/sec-skill` row added beside `/llm-health`.
+
+### What this unlocks for users
+
+Before: ask Lucy "how do I image a suspect drive" → improvised
+answer drawing on Gemini's training data, no chain-of-custody
+discipline, no hashes mentioned, no jurisdiction tips.
+
+After: `/sec-skill image drive` → top match
+`acquiring-disk-image-with-dd-and-dcfldd` → activate →
+ask the question → answer follows the 6-step workflow:
+write-blocking, source documentation, dcfldd with SHA-256, hash
+verification, chain-of-custody documentation. With reference to
+NIST CSF RS.AN-01, RS.AN-03, DE.AE-02 for compliance work.
+
+Same pattern for ~213 distinct security workflows: phishing
+investigation, kerberoasting detection, Volatility3 plugin
+selection, EDR rule tuning, Azure activity log triage, Linux
+audit log analysis, …
+
+### Attribution
+
+Full credit to **mukul975 / Mahipal Singh** for the upstream skill
+catalog at https://github.com/mukul975/Anthropic-Cybersecurity-Skills.
+This release bundles only the `SKILL.md` files (1.94 MB);
+per-skill `references/` and `scripts/` subdirs were intentionally
+omitted (Lucy has its own agent loop). License notice and
+attribution preserved in `docs/security-skills/`.
+
+---
+
 ## [1.7.3] — 2026-05-31
 
 Four LLM observability features bundled. All four extend the

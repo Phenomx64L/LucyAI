@@ -79,6 +79,7 @@
                 { keys: ['/evolve'], desc: isEN ? 'Promote recurring patterns into skills' : 'Promueve patrones recurrentes a skills' },
                 { keys: ['/polarity'], desc: isEN ? 'Project text onto SUPPORTS↔CONTRADICTS axis' : 'Proyecta texto al eje APOYA↔CONTRADICE' },
                 { keys: ['/llm-health'], desc: isEN ? 'LLM tier health, latency & breaker state' : 'Salud de capas LLM, latencia y breaker' },
+                { keys: ['/sec-skill'], desc: isEN ? 'Search 213 cybersecurity skills (MITRE / NIST)' : 'Buscar 213 skills de ciberseguridad (MITRE / NIST)' },
                 { keys: ['/anneal'], desc: isEN ? 'Ontology cluster scoring (promote/demote)' : 'Scoring de ontologías (promover/democionar)' },
                 { keys: ['/demote-tag'], desc: isEN ? 'Re-tag memories off a failed cluster' : 'Re-etiqueta memorias de un cúmulo fallido' },
                 { keys: ['/preset'], desc: isEN ? 'Open the skill-preset picker' : 'Abre el selector de plantillas de habilidad' },

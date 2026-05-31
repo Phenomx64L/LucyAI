@@ -755,6 +755,22 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // sets a behavioural framing prepended to the system prompt; it
         // does NOT execute scripts (those are /skills).
         case 'preset': case 'presets': case 'skill-preset': {
+            // v1.7.4: `/preset clear` also clears an activated security
+            // skill from /sec-skill — keeps the "single active framing"
+            // mental model the user has.
+            if (arg.trim().toLowerCase() === 'clear') {
+                (async () => {
+                    const { activeSkillPresetId } = await import('$lib/skill-preset-store');
+                    const { clearActiveSecuritySkill } = await import('$lib/security-skill-bridge');
+                    activeSkillPresetId.set(null);
+                    clearActiveSecuritySkill();
+                    sysMsg(ctx.isEN
+                        ? '✓ Cleared active skill preset / security skill.'
+                        : '✓ Limpieza del preset / skill de seguridad activa.',
+                        'var(--acc)');
+                })();
+                return true;
+            }
             if (ctx.openSkillPresetPicker) {
                 ctx.openSkillPresetPicker();
             } else {
@@ -1116,6 +1132,117 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // coherence / exposure and emits promote/demote/watch verdicts.
         // The graph proposes; no mutations happen here. See ADR-200
         // §"Phase 3 produces proposals, not executions".
+        // ── v1.7.4 — /sec-skill <query> (Cybersecurity Skills Library) ──
+        // Searches the 213 Anthropic-Cybersecurity-Skills loaded from
+        // docs/security-skills/. Aliases: /sec, /skill, /secskill.
+        //   /sec-skill                  → list categories with counts
+        //   /sec-skill phishing         → top 10 matches for "phishing"
+        //   /sec-skill T1071            → match by MITRE ATT&CK code
+        //   /sec-skill use <id>         → activate skill (body → next prompt)
+        case 'sec-skill': case 'sec': case 'skill': case 'secskill': case 'sec-skills': {
+            const argTrim = arg.trim();
+            (async () => {
+                try {
+                    // Sub-verb: `use <id>` activates the skill (preset).
+                    if (argTrim.toLowerCase().startsWith('use ')) {
+                        const id = argTrim.slice(4).trim();
+                        if (!id) {
+                            sysMsg(ctx.isEN ? 'Usage: /sec-skill use <skill-id>' : 'Uso: /sec-skill use <id>', 'var(--amber)');
+                            return;
+                        }
+                        const full = await invoke<any>('security_skills_get', { id });
+                        // v1.7.4: store in the dedicated security-skill
+                        // bridge. The +page.svelte prompt-builder reads
+                        // it BEFORE the normal preset, so this takes
+                        // priority. We don't touch activeSkillPresetId
+                        // so existing presets aren't disturbed.
+                        const { setSecuritySkillAsPreset } = await import('$lib/security-skill-bridge');
+                        const { activeSkillPresetId } = await import('$lib/skill-preset-store');
+                        // Clear any regular preset so the user sees the
+                        // single "active framing" they just chose.
+                        activeSkillPresetId.set(null);
+                        setSecuritySkillAsPreset(full);
+                        sysMsg(renderResultBlocks(
+                            ctx.isEN ? `✦ Security skill activated · ${full.meta.name}` : `✦ Skill de seguridad activada · ${full.meta.name}`,
+                            [{
+                                title: ctx.isEN ? 'Active for the next turn' : 'Activa para el siguiente turno',
+                                icon: '✦', tone: 'ok', defaultOpen: true,
+                                html:
+                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Description' : 'Descripción'}</span>` +
+                                    `<span class="rb-v">${escapeHtml(full.meta.description.slice(0, 200))}</span></div>` +
+                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Tags' : 'Etiquetas'}</span>` +
+                                    `<span class="rb-v">${full.meta.tags.slice(0, 8).map((t: string) => escapeHtml(t)).join(' · ')}</span></div>` +
+                                    (full.meta.mitre_attck?.length ? `<div class="rb-row"><span class="rb-k">MITRE ATT&CK</span><span class="rb-v">${full.meta.mitre_attck.join(' · ')}</span></div>` : '') +
+                                    (full.meta.nist_csf?.length    ? `<div class="rb-row"><span class="rb-k">NIST CSF</span><span class="rb-v">${full.meta.nist_csf.join(' · ')}</span></div>` : '') +
+                                    `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Tip' : 'Tip'}</span><span class="rb-v">${ctx.isEN ? 'Clear with <code>/preset clear</code>.' : 'Limpia con <code>/preset clear</code>.'}</span></div>`,
+                            }]));
+                        return;
+                    }
+                    // No arg → category listing.
+                    if (!argTrim) {
+                        const cats = await invoke<[string, number][]>('security_skills_categories');
+                        if (!cats.length) {
+                            sysMsg(ctx.isEN
+                                ? 'No security skills loaded. Check `docs/security-skills/` is bundled.'
+                                : 'No hay skills de seguridad cargadas. Verifica que `docs/security-skills/` esté incluida.',
+                                'var(--amber)');
+                            return;
+                        }
+                        const rows = cats.slice(0, 24).map(([name, n]) =>
+                            `<div class="rb-row"><span class="rb-k">${escapeHtml(name)}</span>` +
+                            `<span class="rb-v">${n} ${ctx.isEN ? 'skills' : 'skills'}</span></div>`
+                        ).join('');
+                        const total = cats.reduce((s, [, n]) => s + n, 0);
+                        sysMsg(renderResultBlocks(
+                            ctx.isEN ? `⚒ Security skills · ${total} loaded · ${cats.length} categories` : `⚒ Skills de seguridad · ${total} cargadas · ${cats.length} categorías`,
+                            [{
+                                title: ctx.isEN ? 'Categories (by subdomain)' : 'Categorías (por subdominio)',
+                                icon: '◆', tone: 'info', defaultOpen: true,
+                                html: rows +
+                                    `<div class="rb-row" style="opacity:.7;margin-top:8px;"><span class="rb-k">${ctx.isEN ? 'Tip' : 'Tip'}</span><span class="rb-v">${ctx.isEN ? '<code>/sec-skill phishing</code> to search · <code>/sec-skill use &lt;id&gt;</code> to activate' : '<code>/sec-skill phishing</code> para buscar · <code>/sec-skill use &lt;id&gt;</code> para activar'}</span></div>`,
+                            }]));
+                        return;
+                    }
+                    // Search.
+                    const hits = await invoke<any[]>('security_skills_search', { query: argTrim, limit: 10 });
+                    if (!hits.length) {
+                        sysMsg(ctx.isEN
+                            ? `No security skills matched "${argTrim}".`
+                            : `Ninguna skill coincide con "${argTrim}".`,
+                            'var(--amber)');
+                        return;
+                    }
+                    const renderHit = (h: any, i: number) => {
+                        const tags = h.meta.tags.slice(0, 5).map((t: string) => escapeHtml(t)).join(' · ');
+                        const codes = [
+                            ...(h.meta.mitre_attck || []),
+                            ...(h.meta.nist_csf || []),
+                        ].slice(0, 4).join(' · ');
+                        return `<details class="rb-block rb-tone-info">` +
+                            `<summary class="rb-summary">` +
+                            `<span class="rb-ico">${i + 1}</span>` +
+                            `<span class="rb-title">${escapeHtml(h.meta.name)}</span>` +
+                            `<span class="rb-chev">▾</span>` +
+                            `</summary>` +
+                            `<div class="rb-body">` +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Preview' : 'Resumen'}</span><span class="rb-v">${escapeHtml(h.preview)}</span></div>` +
+                            (tags  ? `<div class="rb-row"><span class="rb-k">Tags</span><span class="rb-v">${tags}</span></div>` : '') +
+                            (codes ? `<div class="rb-row"><span class="rb-k">Frameworks</span><span class="rb-v">${codes}</span></div>` : '') +
+                            `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Activate' : 'Activar'}</span><span class="rb-v"><code>/sec-skill use ${escapeHtml(h.meta.id)}</code></span></div>` +
+                            `</div></details>`;
+                    };
+                    const body = hits.map(renderHit).join('');
+                    const head = ctx.isEN
+                        ? `⚒ Security skills · ${hits.length} match(es) for "${escapeHtml(argTrim)}"`
+                        : `⚒ Skills de seguridad · ${hits.length} coincidencia(s) para "${escapeHtml(argTrim)}"`;
+                    sysMsg(`<div class="rb-wrap"><div class="rb-hdr">${head}</div>${body}</div>`);
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── v1.7.3 — /llm-health (LLM tier observability) ──
         // Same data the StatusBar chip surfaces in a tooltip, rendered
         // as a result-block panel in chat. Useful when investigating
