@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.0] — 2026-05-30
+
+**Memory grounding — first implementation of Kappa Graph ADR-044.**
+Live, query-time grounding scores per memory plus a provenance chain
+linking memories back to source text snippets.
+
+### What changed in the data model
+
+Two additive schema migrations land at first boot (idempotent):
+
+```sql
+ALTER TABLE agent_memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;
+ALTER TABLE memory_core    ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;
+```
+
+Plus two new tables:
+
+- `memory_evidence(id, memory_kind, memory_id, kind, weight, source_ref, created_at)`
+  — one row per support/contradict signal. `kind ∈ {'support','contradict'}`,
+  `weight` defaults to 1.0. The denominator of the grounding ratio.
+- `memory_instances(id, memory_kind, memory_id|memory_id_text, quote_text,
+   source_kind, source_ref, offset_start, offset_end, created_at)`
+  — provenance: literal quotes that triggered each memory, with FTS5 over
+  `quote_text` so "where did Lucy learn X" works.
+
+### Grounding score (ADR-044)
+
+```
+grounding_strength = support_weight / (support_weight + contradict_weight)
+```
+
+Computed at **query time, never cached** — the ADR's explicit ban on
+caching edge counts is preserved verbatim in the Rust module's
+comments. Falls back to the row's `confidence` prior when zero evidence
+has been observed yet, so brand-new memories aren't auto-filtered.
+
+The new `GroundingScore` struct also carries `support_count`,
+`contradict_count`, and a `from_prior: bool` flag so the UI can label
+unobserved memories accurately.
+
+### 5 new Tauri commands
+
+| Command | Purpose |
+|---|---|
+| `memory_grounding(memory_kind, memory_id) → GroundingScore` | Live scoring per ADR-044. |
+| `memory_evidence_log(event)` | Append a support/contradict signal. |
+| `memory_instance_save(inst)` | Save a provenance quote linked to a memory. |
+| `memory_instances_for(memory_kind, memory_id, limit)` | List provenance for a memory. |
+| `memory_instances_search(query, limit)` | FTS5 search over all instance quotes. |
+
+### Frontend
+
+- New `src/lib/memory-grounding.ts` — typed wrappers + helper functions
+  (`fmtStrengthPct`, `strengthTone`, the `GROUNDING_DEFAULT_THRESHOLD =
+  0.20` constant per ADR-044).
+- New `src/lib/GroundingChip.svelte` — compact pill `◉ 87%` rendered
+  next to every memory in `MemoryBrowserView`. Four tone bands mirror
+  the ADR-044 thresholds:
+    - `crit` (red, < 20% — default-filtered),
+    - `warn` (amber, 20-55% — contested),
+    - `ok`   (green, ≥ 55% — well-supported),
+    - `info` (blue — score is from the prior, no evidence observed yet).
+  Hover tooltip shows full breakdown (support_count, contradict_count,
+  weighted sums). Click → emits `expand` for the instances popover
+  planned in v1.6.0.1.
+- `MemoryBrowserView` wires the chip on every `agent_memories` row.
+
+### What's NOT in this release
+
+- **Threshold filter in the prompt-injection pipeline** — the chip
+  shows the score but Lucy still injects every memory regardless of
+  grounding. Wiring the 0.20 default into the context-building path
+  in `ai.rs` ships in v1.6.0.1 after one round of dogfood.
+- **The instances popover UI** — clicking the chip emits `expand` but
+  no popover is mounted yet. Coming in v1.6.0.1.
+- **👍/👎 → memory_evidence_log** — chat reactions still only log to
+  `chip_click_log` (Layer 3). The link from a chat message to a
+  derived memory doesn't exist yet; will land when crystallize
+  surfaces `memory_id` on reactions.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.9 → 1.6.0)
+M  src-tauri/Cargo.toml                      (1.5.9 → 1.6.0)
+M  src-tauri/tauri.conf.json                 (1.5.9 → 1.6.0)
+A  src-tauri/src/commands/grounding.rs       (NEW — ~330 LOC: 2 migrations,
+                                              5 Tauri commands, grounding
+                                              math per ADR-044)
+M  src-tauri/src/commands/mod.rs             (mod registration)
+M  src-tauri/src/commands/metrics.rs         (migrate hook in init())
+M  src-tauri/src/lib.rs                      (5 invoke handler entries)
+A  src/lib/memory-grounding.ts               (NEW — typed wrappers + helpers)
+A  src/lib/GroundingChip.svelte              (NEW — UI chip, 4 tone bands)
+M  src/lib/MemoryBrowserView.svelte          (chip mount + import)
+M  src/lib/SetupOverlay.svelte               (1.5.9 → 1.6.0)
+M  src/lib/TutorialOverlay.svelte            (1.5.9 → 1.6.0)
+```
+
+svelte-check: 7182 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+cargo check: clean.
+
+### ADR reference for code review
+
+Anyone reviewing this PR should read:
+
+- `docs/research/kappa-graph/adrs/ADR-044-probabilistic-truth-convergence.md`
+  for the grounding formula, the no-cache rationale, and the 0.20
+  threshold reasoning.
+- `docs/research/kappa-graph/README.md` for how this release maps onto
+  the broader v1.6.x sequence (polarity triangulation in v1.6.1,
+  annealing ontologies in v1.6.2).
+
+---
+
 ## [1.5.9] — 2026-05-30
 
 Research import — Kappa Graph mirror for v1.6.0 memory work.

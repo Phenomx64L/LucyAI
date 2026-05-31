@@ -238,6 +238,14 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         }
     }
 
+    // v1.6.0 — Kappa-Graph-style grounding migrations (ADR-044).
+    // Runs after the main migration block so it can add `confidence`
+    // columns to agent_memories and memory_core, plus the
+    // memory_evidence and memory_instances tables. Failure here is
+    // fatal: grounding columns are referenced by query-time scoring.
+    super::grounding::migrate(&conn)
+        .map_err(|e| format!("grounding migration failed: {}", e))?;
+
     // Release the init connection back to the pool, then publish.
     drop(conn);
     POOL.set(pool)

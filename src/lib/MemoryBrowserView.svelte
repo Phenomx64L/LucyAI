@@ -36,6 +36,8 @@
     // v1.4.15 — shimmer placeholders + structured empty states.
     import Skeleton from '$lib/Skeleton.svelte';
     import EmptyState from '$lib/EmptyState.svelte';
+    // v1.6.0 — Kappa Graph ADR-044 grounding score per memory.
+    import GroundingChip from '$lib/GroundingChip.svelte';
     import type { DetectedPattern, PatternReport } from '$lib/agentmemory/patterns';
     import { verifyMemories, resolveContradiction, severityLabel, severityColor, resolutionLabel } from '$lib/agentmemory/verify';
     import type { Contradiction, VerifyReport, Resolution } from '$lib/agentmemory/verify';
@@ -828,6 +830,15 @@
                             <span class="mv-imp" style="color:{importanceColor(m.importance)};" title="importance">
                                 {'◆'.repeat(m.importance)}{'·'.repeat(3 - m.importance)}
                             </span>
+                            <!-- v1.6.0 — live grounding score (ADR-044).
+                                 Computed query-time by the Rust backend;
+                                 never cached. Click → opens the instances
+                                 popover (TODO: v1.6.0.1). -->
+                            <GroundingChip
+                                memoryKind="agent"
+                                memoryId={String(m.id)}
+                                {isEN}
+                                compact={true} />
                             <button class="mv-del" title={isEN ? 'Delete' : 'Borrar'}
                                 on:click={() => deleteMemoria(m.id)}><Trash size={13}/></button>
                         </div>

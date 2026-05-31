@@ -55,3 +55,5 @@ pub mod hash_chain;
 pub mod smart_chips;
 pub mod chip_memory;
 pub mod db_maintenance;
+// v1.6.0 — probabilistic truth convergence (Kappa Graph ADR-044).
+pub mod grounding;

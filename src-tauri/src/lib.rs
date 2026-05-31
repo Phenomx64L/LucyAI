@@ -499,6 +499,12 @@ pub fn run() {
             commands::chip_memory::suggest_memory_chips,
             commands::chip_memory::chip_stats_summary,
             commands::db_maintenance::db_maintenance_run_now,
+            // v1.6.0 — Kappa Graph ADR-044 grounding scores + provenance.
+            commands::grounding::memory_grounding,
+            commands::grounding::memory_evidence_log,
+            commands::grounding::memory_instance_save,
+            commands::grounding::memory_instances_for,
+            commands::grounding::memory_instances_search,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,
