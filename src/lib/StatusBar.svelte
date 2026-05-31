@@ -15,6 +15,7 @@
     import { computeCacheHitPct, cacheHitTier, type CacheStats } from '$lib/cache-stats-helpers';
     // v1.7.1 — LLM tier health chip.
     import { tierHealth, aggregateStatus, statusGlyph, pingAllTiers,
+             getLatencyStats, tierBreaker,
              type TierKey, type TierHealth } from '$lib/tier-health';
     // v1.4.15 — live cost ticker. We tween the displayed cost value so it
     // rolls upward smoothly during streaming instead of teleporting after
@@ -93,11 +94,17 @@
 
     function buildTierHealthTooltip(s: Record<TierKey, TierHealth>, isEnLang: boolean): string {
         const order: TierKey[] = ['FAST', 'CHEAP', 'REASONING'];
+        const breaker = $tierBreaker;
         const lines = order.map(k => {
             const e = s[k];
             const lat = e.latency_ms > 0 ? ` (${e.latency_ms} ms)` : '';
             const err = e.error ? ` — ${e.error}` : '';
-            return `${k}: ${e.status}${lat}${err}`;
+            const stats = getLatencyStats(k);
+            // v1.7.3: append 7-day p50/p95 when we have samples, plus
+            // breaker indicator when open.
+            const hist  = stats.samples > 0 ? `  [7d p50 ${stats.p50}ms · p95 ${stats.p95}ms · n=${stats.samples}]` : '';
+            const brk   = breaker[k]?.is_open ? '  ⚡BREAKER OPEN' : '';
+            return `${k}: ${e.status}${lat}${err}${hist}${brk}`;
         });
         const head = isEnLang ? 'LLM tier health (click to re-probe)' : 'Salud de tiers LLM (clic para re-probar)';
         return `${head}\n${lines.join('\n')}`;

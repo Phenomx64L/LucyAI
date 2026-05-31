@@ -1116,6 +1116,69 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // coherence / exposure and emits promote/demote/watch verdicts.
         // The graph proposes; no mutations happen here. See ADR-200
         // §"Phase 3 produces proposals, not executions".
+        // ── v1.7.3 — /llm-health (LLM tier observability) ──
+        // Same data the StatusBar chip surfaces in a tooltip, rendered
+        // as a result-block panel in chat. Useful when investigating
+        // an issue and you want the data without hover, or to share
+        // a snapshot of tier state.
+        //
+        // No-arg → uses the cached state (instant).
+        // `/llm-health probe` → forces a re-probe before rendering.
+        case 'llm-health': case 'llm': case 'health': {
+            (async () => {
+                try {
+                    const { tierHealth, tierBreaker, pingAllTiers,
+                            getLatencyStats, statusGlyph } = await import('$lib/tier-health');
+                    const { get } = await import('svelte/store');
+                    if (arg.trim().toLowerCase() === 'probe') {
+                        await pingAllTiers();
+                    }
+                    const state   = get(tierHealth);
+                    const breaker = get(tierBreaker);
+                    type TK = 'FAST' | 'CHEAP' | 'REASONING';
+                    const order: TK[] = ['FAST', 'CHEAP', 'REASONING'];
+                    const renderTier = (k: TK) => {
+                        const e   = state[k];
+                        const b   = breaker[k];
+                        const lat = getLatencyStats(k);
+                        const g   = statusGlyph(e.status);
+                        const probeLine =
+                            e.status === 'unknown'
+                                ? (ctx.isEN ? 'not probed yet' : 'aún sin probar')
+                                : `${e.status} · ${e.latency_ms} ms · ${escapeHtml(e.model_id)}`;
+                        const histLine = lat.samples === 0
+                            ? (ctx.isEN ? 'no history yet' : 'sin historial')
+                            : `n=${lat.samples} · p50 ${lat.p50}ms · p95 ${lat.p95}ms · mean ${lat.mean}ms`;
+                        const breakerLine = b.is_open
+                            ? (ctx.isEN
+                                ? `breaker OPEN (since ${new Date(b.opened_at).toLocaleTimeString()}, ${b.consecutive_fails} fails)`
+                                : `breaker ABIERTO (desde ${new Date(b.opened_at).toLocaleTimeString()}, ${b.consecutive_fails} fallos)`)
+                            : (ctx.isEN ? 'breaker closed' : 'breaker cerrado');
+                        return `<div class="rb-row">` +
+                               `<span class="rb-k">${g.glyph} ${k}</span>` +
+                               `<span class="rb-v">${probeLine}</span></div>` +
+                               `<div class="rb-row" style="opacity:.7;">` +
+                               `<span class="rb-k">↳ 7d latency</span>` +
+                               `<span class="rb-v">${histLine}</span></div>` +
+                               `<div class="rb-row" style="opacity:.7;">` +
+                               `<span class="rb-k">↳ breaker</span>` +
+                               `<span class="rb-v">${breakerLine}${e.error ? ` · ${escapeHtml(e.error)}` : ''}</span></div>`;
+                    };
+                    const blocks: ResultBlock[] = [{
+                        title: ctx.isEN ? 'Tier health' : 'Salud por capa',
+                        icon: '◉', tone: 'info', defaultOpen: true,
+                        html: order.map(renderTier).join(''),
+                    }];
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? '◉ LLM health' : '◉ Salud LLM',
+                        blocks));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── v1.6.14 — /polarity <text> (Kappa Graph ADR-058 dogfood) ──
         // Projects an arbitrary text onto Lucy's polarity axis
         // (SUPPORTS ↔ CONTRADICTS, bilingual SP/EN). Lets the user

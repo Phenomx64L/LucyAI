@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.3] — 2026-05-31
+
+Four LLM observability features bundled. All four extend the
+v1.7.1 tier-health infrastructure without breaking it — purely
+additive.
+
+### 1. `/llm-health` slash command (aliases `/llm`, `/health`)
+
+Dumps the same data the StatusBar chip tooltip shows, but as a
+structured result-block panel in chat. Per-tier:
+
+```
+◉ FAST       ok · 412 ms · gemini-3.5-flash
+  ↳ 7d latency   n=124 · p50 380ms · p95 1240ms · mean 462ms
+  ↳ breaker      breaker closed
+◉ CHEAP      ok · 280 ms · gemini-3.1-flash-lite-preview
+  …
+◑ REASONING  slow · 8200 ms · gemini-3.1-pro-preview::high
+  ↳ 7d latency   n=124 · p50 5400ms · p95 12000ms · mean 6100ms
+  ↳ breaker      breaker closed
+```
+
+`/llm-health probe` forces a re-probe before rendering. Useful
+when investigating an issue and you want fresh numbers rather
+than the 6h-cached state.
+
+### 2. Rolling 7-day latency window
+
+`tier-health.ts` now appends each successful probe's latency to a
+per-tier rolling window in localStorage (`lucy_tier_latency_v1`).
+Older than 7 days → evicted; soft cap of 500 samples per tier.
+
+`getLatencyStats(tier)` returns `{ samples, p50, p95, mean }`.
+Surfaces in:
+- StatusBar tooltip — appends `[7d p50 412ms · p95 1240ms · n=124]`
+- `/llm-health` panel — per-tier `↳ 7d latency` row
+
+Catches gradual degradation that a single probe can't see — e.g.
+the model id is still valid but Google's latency has crept up
+from 400ms p50 to 2.5s over a week.
+
+### 3. Per-tier cost dashboard
+
+`src/lib/cost-by-tier.ts` (NEW): groups the existing
+`CostSummary.per_model` array by tier using the v1.7.0 catalog.
+Models not in the catalog (Claude, Ollama, deprecated Gemini
+ids) end up in `unattributed` rather than being dropped.
+
+Surfaces in `CostDashboardView` as a new "Per LLM Tier" section
+above the per-model table:
+
+```
+FAST        $1.43 · 18.4k tok · 34 req
+CHEAP       $0.27 · 6.0k tok · 88 req
+REASONING   $4.12 · 3.1k tok · 7 req
+```
+
+Backend is unchanged — pure frontend aggregation over the
+already-returned `per_model` data.
+
+### 4. Circuit breaker for REASONING
+
+`tier-health.ts` tracks consecutive failures per tier. When
+REASONING accumulates `BREAKER_OPEN_AFTER = 3` consecutive
+fails, the breaker opens. The half-open window is 10 min, so
+the next probe attempt retests the original tier; another
+failure re-opens.
+
+`resolveTierWithBreaker(rawModel)` is the integration point:
+
+```ts
+import { LLM } from '$lib/llm-models';
+import { resolveTierWithBreaker } from '$lib/tier-health';
+const model = resolveTierWithBreaker(LLM.REASONING);
+await invoke('ask_lucy', { ..., model });
+```
+
+When the breaker is open, REASONING calls re-route to FAST — a
+degraded but usable fallback. FAST and CHEAP are returned
+unchanged (no graceful tier below them; opening their breaker
+would just disable LLM features).
+
+Breaker state shows up in:
+- StatusBar tooltip — `⚡BREAKER OPEN` appended when applicable
+- `/llm-health` panel — per-tier `↳ breaker` row
+
+No callsite uses REASONING yet, so the breaker is currently
+exercised only by the boot probe. As REASONING callsites get
+added, they should adopt `resolveTierWithBreaker`.
+
+### Storage
+
+Three localStorage keys, each independently versioned so we
+can invalidate one without nuking the others:
+
+- `lucy_tier_health_v1` — last probe result per tier
+- `lucy_tier_latency_v1` — 7-day rolling latency window
+- `lucy_tier_breaker_v1` — breaker state per tier
+
+Combined storage footprint: ~12 KB per user at the 500-sample
+cap (mostly the latency window).
+
+### Cheatsheet
+
+`/llm-health` row added beside `/polarity`.
+
+---
+
 ## [1.7.2] — 2026-05-31
 
 Hotfix: Dashboard Network card stuck at `↓ 0.0 Mbps  ↑ 1.0 Mbps`

@@ -10,6 +10,8 @@
 
     import Check from '@tabler/icons-svelte/icons/check';
     import { costSummaryDay, costSummaryMonth, costSummaryAll, tokenBudgetConfig } from '$lib/stores';
+    // v1.7.3 — per-tier cost aggregation.
+    import { costByTier, formatTierCost } from '$lib/cost-by-tier';
     import { countUp } from '$lib/actions';
     import { focusTrap } from '$lib/actions';
 
@@ -378,6 +380,25 @@
             {/if}
         </div>
 
+        <!-- v1.7.3 — Per-tier breakdown (FAST / CHEAP / REASONING etc.) -->
+        {#if currentSummary.per_model && currentSummary.per_model.length > 0}
+            {@const _tierAgg = costByTier(currentSummary.per_model)}
+            {#if _tierAgg.tiers.length > 0}
+                <div class="per-tier-section">
+                    <h3>{isEN ? 'Per LLM Tier' : 'Por capa LLM'}</h3>
+                    <div class="per-tier-list">
+                        {#each _tierAgg.tiers as t (t.tier)}
+                            <div class="per-tier-row"
+                                 title={t.models.join(', ')}>
+                                <span class="per-tier-name">{t.tier}</span>
+                                <span class="per-tier-val">{formatTierCost(t)}</span>
+                            </div>
+                        {/each}
+                    </div>
+                </div>
+            {/if}
+        {/if}
+
         <!-- Per-model breakdown -->
         {#if currentSummary.per_model && currentSummary.per_model.length > 0}
             <div class="per-model-section">
@@ -662,6 +683,33 @@
         color: #666;
         font-size: 1rem;
     }
+
+    /* v1.7.3 — per-tier breakdown panel above the per-model table. */
+    .per-tier-section { margin-top: 2rem; }
+    .per-tier-section h3 {
+        margin: 0 0 .75rem 0;
+        font-size: 1.05rem;
+        color: var(--txt1, #fff);
+        font-weight: 600;
+    }
+    .per-tier-list {
+        display: flex; flex-direction: column; gap: .35rem;
+        padding: .75rem 1rem;
+        border: 1px solid var(--bdr, #1a2030);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, .02);
+    }
+    .per-tier-row {
+        display: flex; justify-content: space-between; align-items: baseline;
+        font-family: var(--mono, ui-monospace, monospace);
+        font-size: 12.5px;
+    }
+    .per-tier-name {
+        color: var(--acc, #10b981);
+        font-weight: 700;
+        letter-spacing: .4px;
+    }
+    .per-tier-val { color: var(--txt2, #94a3b8); }
 
     .per-model-section {
         margin-top: 2rem;

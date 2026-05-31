@@ -45,6 +45,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { LLM } from '$lib/llm-models';
 import { safeGetLS, safeSetLS } from '$lib/safe-ls';
 
+// v1.7.3 additions:
+//   - Rolling 7-day latency window (P50 / P95 surfaced in tooltip & /llm-health)
+//   - Circuit breaker (auto-route REASONING → FAST after N consecutive fails)
+//   - Helpers consumed by /llm-health slash command and cost dashboard.
+
 export type TierStatus = 'ok' | 'slow' | 'fail' | 'unknown';
 export type TierKey    = 'FAST' | 'CHEAP' | 'REASONING';
 
@@ -68,6 +73,23 @@ const PROBE_TIMEOUT_MS = 15_000;
 const SLOW_THRESHOLD_MS = 8_000;
 
 const LS_KEY = 'lucy_tier_health_v1';
+
+// v1.7.3 — latency history.
+const LS_KEY_LATENCY = 'lucy_tier_latency_v1';
+/** 7 days of history. Older samples are evicted on each probe. */
+const LATENCY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Hard cap on samples retained per tier. Even at 1 probe/min that's
+ *  44k samples in 30 days — we want a soft ceiling. */
+const LATENCY_MAX_SAMPLES = 500;
+
+// v1.7.3 — circuit breaker.
+const LS_KEY_BREAKER = 'lucy_tier_breaker_v1';
+/** After this many consecutive fails on REASONING, callers should
+ *  re-route to FAST automatically. 3 strikes is a conservative
+ *  threshold — one transient blip won't open the breaker. */
+const BREAKER_OPEN_AFTER = 3;
+/** How long the breaker stays open before allowing a probe. */
+const BREAKER_HALF_OPEN_AFTER_MS = 10 * 60 * 1000;   // 10 min
 
 // ── Store ──────────────────────────────────────────────────────────────
 
@@ -112,6 +134,177 @@ function persist(state: Record<TierKey, TierHealth>) {
 /** Public store. Subscribed by StatusBar (chip) and any panel that
  *  wants to gate behaviour on tier availability. */
 export const tierHealth: Writable<Record<TierKey, TierHealth>> = writable(loadCached());
+
+// ── v1.7.3 — Latency history store ─────────────────────────────────────
+
+export interface LatencySample {
+    /** ms epoch when the probe completed. */
+    ts: number;
+    /** Round-trip latency in ms. */
+    ms: number;
+}
+
+function loadLatencyHistory(): Record<TierKey, LatencySample[]> {
+    const raw = safeGetLS(LS_KEY_LATENCY, '');
+    const empty: Record<TierKey, LatencySample[]> = { FAST: [], CHEAP: [], REASONING: [] };
+    if (!raw) return empty;
+    try {
+        const parsed = JSON.parse(raw) as Record<TierKey, LatencySample[]>;
+        const cutoff = Date.now() - LATENCY_WINDOW_MS;
+        const out = { ...empty };
+        for (const k of Object.keys(empty) as TierKey[]) {
+            out[k] = (parsed[k] || []).filter(s => s.ts >= cutoff);
+        }
+        return out;
+    } catch { return empty; }
+}
+
+function persistLatency(state: Record<TierKey, LatencySample[]>) {
+    try { safeSetLS(LS_KEY_LATENCY, JSON.stringify(state)); } catch { /* quota */ }
+}
+
+export const tierLatencyHistory: Writable<Record<TierKey, LatencySample[]>> =
+    writable(loadLatencyHistory());
+
+/** Append a new latency sample, evict anything outside the 7-day window,
+ *  cap to MAX_SAMPLES. Called from `pingAllTiers` for every success. */
+function recordLatency(tier: TierKey, ms: number) {
+    tierLatencyHistory.update(s => {
+        const cutoff = Date.now() - LATENCY_WINDOW_MS;
+        const next = { ...s };
+        const fresh = (next[tier] || []).filter(x => x.ts >= cutoff);
+        fresh.push({ ts: Date.now(), ms });
+        // Keep the tail (most recent) when capping.
+        if (fresh.length > LATENCY_MAX_SAMPLES) {
+            fresh.splice(0, fresh.length - LATENCY_MAX_SAMPLES);
+        }
+        next[tier] = fresh;
+        persistLatency(next);
+        return next;
+    });
+}
+
+/** Percentile helper. Returns 0 for empty input — caller decides
+ *  what "no data" means. p in [0, 100]. */
+function percentile(sorted: number[], p: number): number {
+    if (sorted.length === 0) return 0;
+    const idx = (p / 100) * (sorted.length - 1);
+    const lo  = Math.floor(idx);
+    const hi  = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    return Math.round(sorted[lo] * (hi - idx) + sorted[hi] * (idx - lo));
+}
+
+/** P50 / P95 for a tier over the rolling 7-day window. */
+export function getLatencyStats(tier: TierKey): {
+    samples: number; p50: number; p95: number; mean: number;
+} {
+    const hist = get(tierLatencyHistory)[tier] || [];
+    if (hist.length === 0) return { samples: 0, p50: 0, p95: 0, mean: 0 };
+    const sorted = hist.map(s => s.ms).sort((a, b) => a - b);
+    const mean = Math.round(sorted.reduce((acc, x) => acc + x, 0) / sorted.length);
+    return {
+        samples: hist.length,
+        p50:     percentile(sorted, 50),
+        p95:     percentile(sorted, 95),
+        mean,
+    };
+}
+
+// ── v1.7.3 — Circuit breaker ────────────────────────────────────────────
+//
+// Lucy's REASONING tier (Gemini 3.1 Pro) is more prone to transient
+// 503 / overload responses than FAST. We track consecutive failures
+// per tier; when REASONING accumulates BREAKER_OPEN_AFTER, the
+// breaker opens and `resolveTierWithBreaker(LLM.REASONING)` returns
+// `LLM.FAST` instead. The breaker auto-closes after
+// BREAKER_HALF_OPEN_AFTER_MS so we re-test the original tier.
+//
+// Why only REASONING and not all tiers: FAST and CHEAP have no
+// graceful fallback below them, so opening their breaker would
+// just disable LLM features. REASONING → FAST is a degraded but
+// usable mode.
+
+export interface TierBreakerState {
+    /** Consecutive failures since the last success. Resets on success. */
+    consecutive_fails: number;
+    /** True when the breaker is open (callers should re-route). */
+    is_open: boolean;
+    /** ms epoch when the breaker opened, used to compute half-open. */
+    opened_at: number;
+}
+
+function emptyBreakerState(): Record<TierKey, TierBreakerState> {
+    const base: TierBreakerState = { consecutive_fails: 0, is_open: false, opened_at: 0 };
+    return { FAST: { ...base }, CHEAP: { ...base }, REASONING: { ...base } };
+}
+
+function loadBreaker(): Record<TierKey, TierBreakerState> {
+    const raw = safeGetLS(LS_KEY_BREAKER, '');
+    if (!raw) return emptyBreakerState();
+    try {
+        return { ...emptyBreakerState(), ...(JSON.parse(raw) as Record<TierKey, TierBreakerState>) };
+    } catch { return emptyBreakerState(); }
+}
+
+function persistBreaker(state: Record<TierKey, TierBreakerState>) {
+    try { safeSetLS(LS_KEY_BREAKER, JSON.stringify(state)); } catch { /* quota */ }
+}
+
+export const tierBreaker: Writable<Record<TierKey, TierBreakerState>> =
+    writable(loadBreaker());
+
+function recordProbeResult(tier: TierKey, success: boolean) {
+    tierBreaker.update(s => {
+        const next = { ...s };
+        const cur  = { ...next[tier] };
+        if (success) {
+            cur.consecutive_fails = 0;
+            cur.is_open = false;
+            cur.opened_at = 0;
+        } else {
+            cur.consecutive_fails += 1;
+            if (cur.consecutive_fails >= BREAKER_OPEN_AFTER && !cur.is_open) {
+                cur.is_open = true;
+                cur.opened_at = Date.now();
+                // eslint-disable-next-line no-console
+                console.warn(`[tier-health] Circuit breaker OPEN for ${tier} after ${cur.consecutive_fails} consecutive fails`);
+            }
+        }
+        next[tier] = cur;
+        persistBreaker(next);
+        return next;
+    });
+}
+
+/**
+ * Resolve a tier id through the circuit breaker. Use at any callsite
+ * where the model is configurable so degradation is automatic:
+ *
+ *     import { LLM } from '$lib/llm-models';
+ *     import { resolveTierWithBreaker } from '$lib/tier-health';
+ *     const model = resolveTierWithBreaker(LLM.REASONING);
+ *     await invoke('ask_lucy', { ..., model });
+ *
+ * Behaviour:
+ *   - FAST / CHEAP → returned unchanged (no fallback below them).
+ *   - REASONING when breaker closed → returned unchanged.
+ *   - REASONING when breaker open but BREAKER_HALF_OPEN_AFTER_MS
+ *     elapsed since open → returned unchanged (probe attempt).
+ *   - REASONING when breaker open and within cooldown → FAST.
+ */
+export function resolveTierWithBreaker(rawModel: string): string {
+    if (rawModel !== LLM.REASONING) return rawModel;
+    const state = get(tierBreaker).REASONING;
+    if (!state.is_open) return rawModel;
+    const since = Date.now() - state.opened_at;
+    if (since >= BREAKER_HALF_OPEN_AFTER_MS) {
+        // Half-open: let one attempt through. If it fails the breaker
+        // will re-open via recordProbeResult on the next probe cycle.
+        return rawModel;
+    }
+    return LLM.FAST;
+}
 
 // ── Probing ────────────────────────────────────────────────────────────
 
@@ -164,12 +357,25 @@ async function probeOne(tier: TierKey): Promise<TierHealth> {
 }
 
 /** Probe all three tiers in parallel. Returns when ALL have settled
- *  (Promise.all over Promise-wrapped functions that never reject). */
+ *  (Promise.all over Promise-wrapped functions that never reject).
+ *  v1.7.3: also records latency samples + drives circuit breaker. */
 export async function pingAllTiers(): Promise<void> {
     const tiers: TierKey[] = ['FAST', 'CHEAP', 'REASONING'];
     const results = await Promise.all(tiers.map(probeOne));
     const next = emptyHealth();
-    tiers.forEach((t, i) => { next[t] = results[i]; });
+    tiers.forEach((t, i) => {
+        next[t] = results[i];
+        // Record latency for successful (ok/slow) probes only — fails
+        // would skew the rolling distribution with timeout-clamped
+        // values that don't reflect real-API latency.
+        const r = results[i];
+        if (r.status === 'ok' || r.status === 'slow') {
+            recordLatency(t, r.latency_ms);
+            recordProbeResult(t, true);
+        } else {
+            recordProbeResult(t, false);
+        }
+    });
     tierHealth.set(next);
     persist(next);
 }
