@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.4.26] — 2026-05-30
+
+User-requested tab-strip UX — `+` and `≡` now follow the last tab
+(Chrome/Firefox style).
+
+### Fix — Tab controls no longer floating in the right gap
+
+User reported (screenshot): with 2 tabs open, the `≡` (view all
+terminals) and `+` (new terminal) buttons sat in a green-pill cluster
+**far to the right**, separated from the last tab by ~700px of empty
+drag space. Workflow problem: every time you wanted to open a new
+tab, you had to mouse all the way across the strip.
+
+Quoting the user verbatim:
+
+> "necesito que las opciones 'ver todas las terminales' y 'nueva
+> terminal' estén del lado izquierdo en cada pestaña y conforme se
+> vayan abriendo nuevas pestañas, estas opciones se vayan recorriendo
+> a la derecha, para un mejor uso más ágil"
+
+### What changed
+
+The `≡` and `+` cluster is now placed **inside `.tabs-area`,
+immediately right of `#tabs-list`**. With `#tabs-list` switched from
+`flex: 1 1 0` (grow into all space) to `flex: 0 1 auto` (size to
+content), the tabs list collapses to its content width and the
+buttons sit flush against the last tab.
+
+When new tabs open, `#tabs-list` grows wider and the `≡`/`+` cluster
+shifts right with it — matches Chrome/Firefox/VSCode behavior.
+That's the user's "se vayan recorriendo a la derecha" outcome.
+
+### Other changes
+
+- `≡` button now visible even with 1 tab open. Previously gated
+  behind `{#if tabs.length > 1}`, which made the +/≡ cluster
+  mount/unmount on the boundary and feel jumpy. Visible at all times
+  for layout stability; the count badge inside still only shows when
+  `tabs.length > 1`.
+- `.tabs-area` flipped to `-webkit-app-region: drag` with explicit
+  `no-drag` on interactive children (`.tabs-area > *`). The empty
+  trailing space inside `.tabs-area` (after the `+` button) is now a
+  proper window-drag region.
+- `+` button moved out of its old right-side `.tb-btns` parent and
+  into `.tabs-area` (Svelte markup change), so its DOM order matches
+  its new visual position.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.25 → 1.4.26)
+M  src-tauri/Cargo.toml                      (1.4.25 → 1.4.26)
+M  src-tauri/tauri.conf.json                 (1.4.25 → 1.4.26)
+M  src/lib/styles/tab-strip.css              (#tabs-list flex change; .tabs-area drag region; > * no-drag)
+M  src/lib/TabBar.svelte                     (moved tb-btns into tabs-area; dropped tabs.length>1 gate on picker)
+M  src/lib/SetupOverlay.svelte               (1.4.25 → 1.4.26)
+M  src/lib/TutorialOverlay.svelte            (1.4.25 → 1.4.26)
+```
+
+svelte-check: 7178 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.4.25] — 2026-05-30
 
 CSS dedup migration backlog **CLOSED** — DashboardView alerts extracted.

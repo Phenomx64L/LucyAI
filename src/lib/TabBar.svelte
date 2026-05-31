@@ -227,7 +227,15 @@
         <button class="tab-scroll-btn" on:click={() => dispatch('scrollright')} title="Más pestañas">›</button>
         {/if}
 
-        {#if tabs.length > 1}
+        <!-- v1.4.26 — `≡` (tab picker) and `+` (new tab) moved INSIDE
+             .tabs-area, right after #tabs-list. Combined with
+             `#tabs-list { flex: 0 1 auto }` they now stick to the right
+             edge of the LAST tab. As new tabs open they shift to the
+             right with the last tab — Chrome/Firefox-style behavior.
+             User request from the v1.4.25 screenshot. Picker visible
+             even with 1 tab (previous `{#if tabs.length > 1}` gate
+             removed) so the "view all" + "new tab" cluster never moves
+             between mounted/unmounted states. -->
         <div class="tab-picker-wrap">
             <button class="tab-picker-btn" title="Ver todas las terminales ({tabs.length})"
                     on:click={() => showTabPicker = !showTabPicker}>
@@ -260,13 +268,15 @@
             </div>
             {/if}
         </div>
-        {/if}
+
+        <!-- v1.4.26 — `+` button also lives INSIDE .tabs-area now so it
+             always sits immediately right of `≡`, following the last
+             tab on every layout change. -->
+        <div class="tb-btns">
+            <button class="btn-new" title="Nueva terminal (Ctrl+T)" on:click={() => dispatch('newtab')}>+</button>
+        </div>
     </div>
 
-    <!-- Right side controls -->
-    <div class="tb-btns">
-        <button class="btn-new" title="Nueva terminal (Ctrl+T)" on:click={() => dispatch('newtab')}>+</button>
-    </div>
     <div class="drag-sp" data-tauri-drag-region></div>
     <div class="win-controls">
         <button class="win-btn-icon panic-btn" on:click={() => dispatch('panic')}

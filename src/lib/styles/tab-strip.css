@@ -75,6 +75,24 @@
    distribute evenly down to the 120px floor; beyond that,
    overflow-x:auto kicks in (scrollbar hidden via ::-webkit-scrollbar).
    ─────────────────────────────────────────────────────────────────── */
+/* v1.4.26 — Layout update for the ≡/+ buttons that now live INSIDE
+   .tabs-area (right after #tabs-list).
+
+   .tabs-area    flex: 1 1 0   — still absorbs all leftover horizontal
+                                  space between the LUCY brand and the
+                                  drag-sp + win-controls cluster.
+   #tabs-list    flex: 0 1 auto — DO NOT grow. Sizes to its content
+                                  (the visible tabs) so the ≡ and +
+                                  buttons sit immediately right of the
+                                  last tab. When more tabs open they
+                                  push #tabs-list wider and the buttons
+                                  shift right with them — Chrome/Firefox
+                                  behavior, satisfies the user request
+                                  to have these controls "del lado
+                                  izquierdo" and follow the last tab.
+   Empty space inside .tabs-area after the + button serves as a drag
+   region for the window — that's why .tabs-area gets `app-region:drag`
+   and only its interactive children re-enable no-drag. */
 .tabs-area {
     display: flex;
     align-items: flex-end;
@@ -82,11 +100,13 @@
     min-width: 0;
     height: 38px;
     position: relative;
+    -webkit-app-region: drag;
 }
+.tabs-area > * { -webkit-app-region: no-drag; }
 #tabs-list {
     display: flex;
     gap: 1px;
-    flex: 1 1 0;
+    flex: 0 1 auto;
     height: 38px;
     align-items: flex-end;
     overflow-x: auto;
