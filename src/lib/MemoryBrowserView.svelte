@@ -320,19 +320,33 @@
                     `Title: ${m.title}\n\nContent:\n${m.content.slice(0, 1500)}` +
                     (existing.length ? `\n\nExisting tags (avoid duplicating): ${existing.join(', ')}` : '');
                 try {
+                    // v1.6.10: was 'gemini-3.5-flash-lite' which is not a
+                    // real Gemini model id, so every call failed silently
+                    // and the catch landed in "no usable tags". Switching
+                    // to the currently-active model (preview) so the user
+                    // sees whatever Lucy is actually using elsewhere.
                     const result = await invoke<string>('ask_lucy', {
                         prompt, context: '',
                         userName: '', runbooksDir: null,
-                        model: 'gemini-3.5-flash-lite',
+                        model: 'gemini-3-flash-preview',
                         lang: 'es-MX', hostsJson: null, images: null,
                     });
-                    const cleaned = String(result || '')
-                        .split('\n')[0]
+                    // Gemini often prefixes a preamble. Scan ALL lines and
+                    // pick the first comma-separated one, instead of
+                    // assuming line 1 is the answer.
+                    const raw = String(result || '');
+                    const candidateLine =
+                        raw.split('\n').map(l => l.trim()).find(l => l.includes(',')) ||
+                        raw.split('\n')[0] || '';
+                    const cleaned = candidateLine
                         .split(',')
                         .map(s => s.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''))
                         .filter(s => s.length >= 2 && s.length <= 30 && !existing.includes(s));
                     autoTagSuggestions = { ...autoTagSuggestions, [id]: cleaned.slice(0, 5) };
-                } catch {
+                } catch (e) {
+                    // Surface the real error so the user can act on it
+                    // instead of seeing the misleading "no usable tags".
+                    console.warn(`autoTag #${id} failed:`, e);
                     autoTagSuggestions = { ...autoTagSuggestions, [id]: [] };
                 }
             }

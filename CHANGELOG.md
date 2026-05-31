@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.10] — 2026-05-31
+
+Hotfix: Memory Browser Auto-tag was silently broken since the
+feature shipped — every bulk run reported "LLM no devolvió tags
+utilizables" for every selected memory.
+
+Root cause: hard-coded `model: 'gemini-3.5-flash-lite'` in
+`MemoryBrowserView.svelte::autoTagSelected` is not a valid Gemini
+model id. Every `ask_lucy` call rejected from the backend, the
+`catch` swallowed the error, and the panel rendered the empty-list
+"sin tags" branch. Two compounding issues fixed:
+
+- Model id corrected to `gemini-3-flash-preview` (the same model
+  Lucy uses elsewhere).
+- The `.split('\n')[0]` heuristic assumed line 1 was the tag CSV;
+  Gemini frequently emits a preamble. Now we scan all lines and
+  pick the first one containing a comma, falling back to line 1
+  only when no candidate line is found.
+- The catch block now `console.warn`s the real error so the next
+  failure is debuggable instead of mute.
+
+User-visible effect: Auto-tag on selected memories now actually
+returns 3-5 kebab-case tag suggestions, enabling the
+recommended workflow from v1.6.9's CHANGELOG ("retag a batch,
+re-run /anneal, watch real clusters emerge").
+
+---
+
 ## [1.6.9] — 2026-05-31
 
 Bundled release closing the v1.6.x Kappa Graph integration arc. Three
