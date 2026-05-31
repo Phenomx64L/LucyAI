@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.9] — 2026-05-30
+
+Research import — Kappa Graph mirror for v1.6.0 memory work.
+
+### Shipped
+
+User-requested research download of [`aaronsb/knowledge-graph-system`](
+https://github.com/aaronsb/knowledge-graph-system) (Kappa Graph) into
+`docs/research/kappa-graph/`. 30 files, 20,264 lines of schemas, ADRs,
+and reference docs that inform the planned v1.6.0 memory-graph upgrade.
+
+```
+docs/research/kappa-graph/
+├── README.md                  ← integration map for Lucy + per-ADR notes
+├── schema/                    (3 files, 1,193 lines)
+│   ├── init.cypher              178 lines · Neo4j constraints + vector indexes
+│   ├── 00_baseline.sql          996 lines · Apache AGE baseline
+│   └── 11_graph_accel.sql        19 lines · Rust extension hookup
+├── adrs/                      (23 ADRs, 17,609 lines)
+│   ├── ADR-022 → ADR-200        Semantic taxonomy, dynamic vocabulary,
+│                                 grounding scores, polarity triangulation,
+│                                 annealing ontologies, provenance, etc.
+└── reference/                 (4 files, 1,462 lines)
+    ├── README.md                project overview
+    ├── docs_architecture_INDEX.md
+    ├── docs_reference_ARCHITECTURE_OVERVIEW.md
+    └── docs_guides_EPISTEMIC-STATUS-FILTERING.md
+```
+
+The README in that directory is the **integration map** — it sorts every
+mirrored ADR by value-to-Lucy / effort ratio and proposes the v1.6.x
+release sequence.
+
+### Top 4 ADRs for Lucy (Tier 1)
+
+| ADR | What Lucy gains |
+|---|---|
+| ADR-044 — Probabilistic truth convergence | The grounding-score formula `support_w / (support_w + contradict_w)`. Drop-in for `agent_memories` + `memory_core`. |
+| ADR-058 — Polarity axis triangulation | Polarity scoring via embedding triangulation — no LLM call per edge. Replaces hard-coded `event_kind` in `chip_memory.rs`. |
+| ADR-068 — Source text embeddings | Embedding strategy reference. |
+| ADR-070 — Polarity axis analysis | Diagnostics for ADR-058 implementation. |
+
+### Proposed v1.6.x sequence
+
+- **v1.6.0** — "Grounding + provenance": schema migration adding
+  `confidence` column + `memory_evidence` + `memory_instances` tables;
+  `compute_grounding(memory_id)` at query time; threshold filter in
+  Settings → Memory; provenance UI in `MemoryBrowserView`.
+- **v1.6.1** — "Polarity triangulation": 5 SP/EN anchor pairs;
+  boot-time axis computation cached in Rust process memory with epoch
+  invalidation; Layer 3 scoring switches from
+  `Σ clicks − 0.6·Σ dismisses` to `Σ confidence_i · polarity_i`.
+- **v1.6.2** — "Annealing ontologies" (aspirational, ADR-200): nightly
+  job clustering memories into self-named ontologies via energy
+  minimization; renders as colored clusters in `MemoryGraphView`.
+
+### Out of scope for the mirror
+
+The 80+ ADRs about Apache AGE deployment, RBAC, OAuth, CDN deployment,
+scheduled jobs, etc. were skipped — they target a multi-user cloud
+service, which Lucy is not.
+
+### Why this ships as v1.5.9 instead of v1.6.0
+
+Pure research import with zero code changes. v1.6.0 is reserved for
+the first concrete grounding-score implementation. Quality numbers
+unchanged.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.8 → 1.5.9)
+M  src-tauri/Cargo.toml                      (1.5.8 → 1.5.9)
+M  src-tauri/tauri.conf.json                 (1.5.8 → 1.5.9)
+A  docs/research/kappa-graph/README.md       (NEW — integration map)
+A  docs/research/kappa-graph/schema/         (3 files)
+A  docs/research/kappa-graph/adrs/           (23 files)
+A  docs/research/kappa-graph/reference/      (4 files)
+M  src/lib/SetupOverlay.svelte               (1.5.8 → 1.5.9)
+M  src/lib/TutorialOverlay.svelte            (1.5.8 → 1.5.9)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.5.8] — 2026-05-30
 
 **CSS dedup sprint — CLOSE-OUT.** Audit reclassified and remaining
