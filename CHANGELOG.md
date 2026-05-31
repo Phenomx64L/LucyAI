@@ -7,6 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.1] — 2026-05-30
+
+**Skill presets (ECC-adapted system-prompt framing).** First feature from
+the `affaan-m/ECC` recommendation: a curated library of 10 behavioural
+presets that prepend to Lucy's system prompt and shape how she
+approaches the next turn.
+
+### What ships
+
+- **`src/lib/skill-presets.ts`** — TypeScript catalog of 10 presets across
+  5 categories. Each preset has an `id`, localized `name`/`description`,
+  `category`, `source` (ECC repo path), and a `body` (the system-prompt
+  text to prepend, hand-adapted from the ECC originals).
+- **`src/lib/skill-preset-store.ts`** — reactive store + localStorage
+  persistence. `activeSkillPresetId` holds the raw id; the derived
+  `activeSkillPreset` resolves to the full object. `peekActivePreset()`
+  is a synchronous read for the prompt-builder path.
+- **`src/lib/SkillPresetPicker.svelte`** — bits-ui Dialog modal listing
+  every preset grouped by category, with an "ACTIVE" badge on the
+  current selection and a "Deactivate" button in the footer.
+
+### The 10 presets
+
+| Category | Preset | ECC source |
+|---|---|---|
+| Cost | Cost-Aware LLM Pipeline | `skills/cost-aware-llm-pipeline` |
+| Security | Security Review | `skills/security-review` |
+| Engineering | Error Handling Discipline | `skills/error-handling` |
+| Engineering | Coding Standards | `skills/coding-standards` |
+| Engineering | Architecture Decision Records | `skills/architecture-decision-records` |
+| Workflow | Git Workflow Discipline | `skills/git-workflow` |
+| Workflow | Documentation Lookup First | `skills/documentation-lookup` |
+| Workflow | Continuous Learning | `skills/continuous-learning-v2` |
+| Memory | Strategic Compaction | `skills/strategic-compact` |
+| Memory | MCP Budget Awareness | `skills/mcp-budget` |
+
+Each `body` is under ~600 tokens, written in imperative form, and
+**prepended** to the prompt — never replacing existing memory or
+guardrails. The framing is additive: it shapes behaviour, the user's
+core memory + Lucy's persona still apply.
+
+### Prompt injection
+
+In the main chat turn handler (`runAI` in `+page.svelte`), after the
+pinned messages and historial are assembled, the active preset's
+rendered body is prepended via `renderPresetForPrompt(preset)`:
+
+```
+# Active skill preset: <name>
+<body>
+
+--- HISTORIAL ---
+...
+```
+
+If no preset is active, nothing changes — the context built exactly as
+before. This makes the feature **zero-cost when unused**.
+
+### New slash commands
+
+`/preset`, `/presets`, `/skill-preset` — all three open the modal.
+Reuses the existing `slash-commands.ts` plumbing with a new
+`openSkillPresetPicker?: () => void` ctx hook wired from `+page.svelte`.
+
+### Why TypeScript catalog and not `.md` files
+
+The 10 presets together weigh ~6 KB. Bundling them as a typed array
+avoids a runtime parser dependency, gives autocomplete in IDEs, and
+makes the entire catalog greppable. If we cross ~50 presets we can
+revisit the trade-off; today it's not worth a runtime loader.
+
+### What's NOT in this release
+
+- No preset chip in the composer yet — the slash command is the only
+  way to open the picker. Chip lands in v1.6.1.1 once we choose where
+  to fit it (between `+`/`≡` cluster + density pill?).
+- No category filter on the picker — categories render as section
+  headers but you can't collapse them. Fine for 10 entries; revisit at
+  20+.
+- The MCP budget guard + `/instinct-status` + `/evolve` (the other two
+  ECC items recommended in the v1.6.0 review) ship separately as
+  v1.6.2 and v1.6.3.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.6.0 → 1.6.1)
+M  src-tauri/Cargo.toml                      (1.6.0 → 1.6.1)
+M  src-tauri/tauri.conf.json                 (1.6.0 → 1.6.1)
+A  src/lib/skill-presets.ts                  (NEW — catalog of 10 presets)
+A  src/lib/skill-preset-store.ts             (NEW — reactive + LS-persisted)
+A  src/lib/SkillPresetPicker.svelte          (NEW — bits-ui Dialog modal)
+M  src/lib/page/slash-commands.ts            (openSkillPresetPicker ctx +
+                                              /preset / /presets / /skill-preset
+                                              cases)
+M  src/routes/+page.svelte                   (mount picker; prepend preset
+                                              body to ctx; wire ctx callback)
+M  src/lib/SetupOverlay.svelte               (1.6.0 → 1.6.1)
+M  src/lib/TutorialOverlay.svelte            (1.6.0 → 1.6.1)
+```
+
+svelte-check: 7185 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.6.0] — 2026-05-30
 
 **Memory grounding — first implementation of Kappa Graph ADR-044.**

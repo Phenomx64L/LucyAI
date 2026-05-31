@@ -133,6 +133,13 @@ import { listen } from '@tauri-apps/api/event';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
     import ChatInput       from '$lib/ChatInput.svelte';
+    // v1.6.1 — ECC-adapted skill preset system (system-prompt framing).
+    import SkillPresetPicker from '$lib/SkillPresetPicker.svelte';
+    import { renderPresetForPrompt } from '$lib/skill-presets';
+    import {
+        activeSkillPreset,
+        peekActivePreset,
+    } from '$lib/skill-preset-store';
     import StatusBar       from '$lib/StatusBar.svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
@@ -477,6 +484,9 @@ import { listen } from '@tauri-apps/api/event';
     let showMcpServersModal = false;
     // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
     let showCheatsheet = false;
+    // v1.6.1 — ECC-style skill preset picker. Opened via composer chip
+    // and via the new /skill-preset slash command (see slash-commands.ts).
+    let showSkillPresetPicker = false;
     // v1.4.15 — right-click context menu on chat messages. A single global
     // instance is positioned by (ctxMenuX/Y) and acts on ctxMsg.
     let ctxMenuOpen = false;
@@ -3551,6 +3561,9 @@ REGLAS DE FORMATO:
             },
             // Sprint 8 — openers for floating modals
             openSkillPicker: () => { showSkillPicker = true; },
+            // v1.6.1 — ECC skill preset picker (distinct surface from the
+            // legacy executable-script picker above).
+            openSkillPresetPicker: () => { showSkillPresetPicker = true; },
             openKgViewer: (path) => { openKgViewerFor(path); },
         });
     }
@@ -3679,6 +3692,15 @@ REGLAS DE FORMATO:
                 ctx = '--- FIJADOS (siempre presentes) ---\n' +
                     pinned.map(m => `${m.rawRole}: ${m.rawContent || ''}`).join('\n\n') +
                     '\n\n' + ctx;
+            }
+            // v1.6.1 — Active skill preset (ECC-adapted system-prompt
+            // framing). Prepended to the context BEFORE memory injection
+            // so the LLM sees the behavioural framing before the facts.
+            // Preset selection lives in $lib/skill-preset-store; the
+            // user manages it via the SkillPresetPicker modal.
+            const _activePreset = peekActivePreset();
+            if (_activePreset) {
+                ctx = renderPresetForPrompt(_activePreset) + '\n\n' + ctx;
             }
             ctx += construirContextoMemoria(raw, t);
             let imgs=[];
@@ -10491,6 +10513,10 @@ if (Test-Path $src) {
 
   <!-- ── KEYBOARD CHEATSHEET (?) — v1.4.15 modernized with bits-ui Dialog,
        5 groups including slash commands and per-message action chords. -->
+  <!-- v1.6.1 — Skill preset picker (ECC-adapted system-prompt framing). -->
+  <SkillPresetPicker bind:open={showSkillPresetPicker} {isEN}
+    on:close={() => showSkillPresetPicker = false} />
+
   <KeyboardCheatsheet bind:open={showShortcutsOverlay} {isEN}
     on:close={() => showShortcutsOverlay = false} />
 

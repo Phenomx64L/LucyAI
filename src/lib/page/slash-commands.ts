@@ -38,6 +38,10 @@ export interface SlashCtx {
     lucyConfig: { name: string };
     /** Sprint 8 — open the floating skill picker. Wired by the page. */
     openSkillPicker?: () => void;
+    /** v1.6.1 — open the ECC-adapted system-prompt skill preset picker.
+     *  Distinct from openSkillPicker (which lists executable scripts);
+     *  this one selects a behavioural framing prepended to the prompt. */
+    openSkillPresetPicker?: () => void;
     /** Sprint 8 — open the KG mini-viewer for a path. Wired by the page. */
     openKgViewer?: (path: string) => void;
     /** Reactive accessors — passed in as snapshots so the module never
@@ -743,6 +747,18 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 ctx.openSkillPicker();
             } else {
                 sysMsg('Skill picker UI not wired in this context.', 'var(--amber)');
+            }
+            return true;
+        }
+        // ── v1.6.1: ECC-adapted skill preset picker ──────────────────────
+        // /preset, /presets, /skill-preset all open the modal. The picker
+        // sets a behavioural framing prepended to the system prompt; it
+        // does NOT execute scripts (those are /skills).
+        case 'preset': case 'presets': case 'skill-preset': {
+            if (ctx.openSkillPresetPicker) {
+                ctx.openSkillPresetPicker();
+            } else {
+                sysMsg('Skill preset picker UI not wired in this context.', 'var(--amber)');
             }
             return true;
         }
