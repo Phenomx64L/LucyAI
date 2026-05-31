@@ -228,9 +228,20 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
                 if elapsed > 0.05 {
                     let dr = cur_recv.saturating_sub(snap.received_total) as f64;
                     let ds = cur_send.saturating_sub(snap.transmitted_total) as f64;
-                    // Bytes/sec → Mbits/sec  (×8 / 1e6)
-                    ((dr * 8.0 / 1_000_000.0 / elapsed).round() / 1.0,
-                     (ds * 8.0 / 1_000_000.0 / elapsed).round() / 1.0)
+                    // v1.7.2 — previously `.round() / 1.0` truncated
+                    // anything below 0.5 Mbps to 0 and showed bands like
+                    // "↓ 0.0 ↑ 1.0" all day for users on idle browsing
+                    // (typical ~0.1-0.4 Mbps download, ~0.5-1.4 upload).
+                    // Now we keep 2 decimals so the chip actually moves:
+                    // 0.34 Mbps reads as 0.3, not 0.0. The frontend
+                    // already does `.toFixed(1)` for display.
+                    //
+                    // Bytes/sec → Mbits/sec  (×8 / 1e6), then 2 decimals.
+                    let to_mbps = |bytes: f64| -> f64 {
+                        let raw = bytes * 8.0 / 1_000_000.0 / elapsed;
+                        (raw * 100.0).round() / 100.0
+                    };
+                    (to_mbps(dr), to_mbps(ds))
                 } else { (0.0, 0.0) }
             } else { (0.0, 0.0) }
         } else { (0.0, 0.0) };

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.2] — 2026-05-31
+
+Hotfix: Dashboard Network card stuck at `↓ 0.0 Mbps  ↑ 1.0 Mbps`
+all day for idle browsing.
+
+Root cause: `system.rs:232-233` computed Mbps as
+`(bytes * 8.0 / 1_000_000.0 / elapsed).round() / 1.0`. The `.round()`
+truncated to integer Mbps and the `/ 1.0` was a no-op. For typical
+idle browsing — download 0.1-0.4 Mbps, upload 0.5-1.4 Mbps — the
+card always showed `↓ 0.0` and `↑ 1.0` regardless of actual
+traffic. The bug shipped since the D1 Network card was added.
+
+Now rounds to 2 decimals: `(raw * 100.0).round() / 100.0`. The
+frontend `.toFixed(1)` continues to format for display, so a real
+0.34 Mbps now reads as 0.3 instead of 0.0. Network spikes during
+backups, deploys, or large downloads will actually show up.
+
+---
+
 ## [1.7.1] — 2026-05-31
 
 LLM tier health check at boot. Catches phantom-id regressions (the
