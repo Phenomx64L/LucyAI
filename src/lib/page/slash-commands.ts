@@ -1116,6 +1116,75 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // coherence / exposure and emits promote/demote/watch verdicts.
         // The graph proposes; no mutations happen here. See ADR-200
         // §"Phase 3 produces proposals, not executions".
+        // ── v1.6.14 — /polarity <text> (Kappa Graph ADR-058 dogfood) ──
+        // Projects an arbitrary text onto Lucy's polarity axis
+        // (SUPPORTS ↔ CONTRADICTS, bilingual SP/EN). Lets the user
+        // validate the v1.6.5 axis without DevTools access.
+        //
+        //   /polarity esto confirma la teoría    → score ≈ +0.42
+        //   /polarity esto refuta el plan        → score ≈ -0.31
+        //   /polarity el archivo se guardó       → score ≈  0.02 (neutral)
+        //
+        // Without arg: rebuild + show axis diagnostics.
+        case 'polarity': case 'polaridad': {
+            const text = arg.trim();
+            (async () => {
+                try {
+                    if (!text) {
+                        // No arg → rebuild the axis and dump the diagnostic.
+                        const axis = await invoke<any>('memory_polarity_rebuild');
+                        sysMsg(renderResultBlocks(
+                            ctx.isEN ? '⌬ Polarity axis rebuilt' : '⌬ Eje de polaridad reconstruido',
+                            [{
+                                title: ctx.isEN ? 'Axis diagnostics' : 'Diagnóstico del eje',
+                                icon: '◆', tone: 'info', defaultOpen: true,
+                                html:
+                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Anchor pairs' : 'Pares de anclaje'}</span>` +
+                                    `<span class="rb-v">${axis.n_pairs}</span></div>` +
+                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Embedder' : 'Modelo de embeddings'}</span>` +
+                                    `<span class="rb-v">${escapeHtml(axis.model)}</span></div>` +
+                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Raw magnitude' : 'Magnitud cruda'}</span>` +
+                                    `<span class="rb-v">${axis.raw_norm.toFixed(3)} ${axis.raw_norm < 1.0 ? '(low — anchors may disagree)' : ''}</span></div>` +
+                                    `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Dimensions' : 'Dimensiones'}</span>` +
+                                    `<span class="rb-v">${axis.axis?.length || '?'}</span></div>`,
+                            }]));
+                        return;
+                    }
+                    const proj = await invoke<any>('memory_polarity', { text });
+                    const s = proj.score;
+                    const tone = s > 0.10 ? 'ok' : s < -0.10 ? 'crit' : 'warn';
+                    const label = s > 0.10 ? (ctx.isEN ? 'positive (supports)' : 'positiva (apoya)')
+                                : s < -0.10 ? (ctx.isEN ? 'negative (contradicts)' : 'negativa (contradice)')
+                                            : (ctx.isEN ? 'neutral' : 'neutral');
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? `⌬ Polarity · ${s.toFixed(3)}` : `⌬ Polaridad · ${s.toFixed(3)}`,
+                        [{
+                            title: ctx.isEN ? 'Projection' : 'Proyección',
+                            icon: s > 0 ? '↥' : s < 0 ? '↧' : '◇',
+                            tone,
+                            defaultOpen: true,
+                            html:
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Input' : 'Entrada'}</span>` +
+                                `<span class="rb-v">${escapeHtml(text.slice(0, 80))}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Score' : 'Puntaje'}</span>` +
+                                `<span class="rb-v">${s.toFixed(3)} — ${label}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Axis built' : 'Eje construido'}</span>` +
+                                `<span class="rb-v">${new Date(proj.axis_built_at * 1000).toLocaleString()}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Model' : 'Modelo'}</span>` +
+                                `<span class="rb-v">${escapeHtml(proj.axis_model)}</span></div>`,
+                        }]));
+                } catch (e) {
+                    const hint = String(e).toLowerCase().includes('ollama')
+                        ? (ctx.isEN
+                            ? ' (Ollama with nomic-embed-text required — run `ollama pull nomic-embed-text`)'
+                            : ' (Requiere Ollama con nomic-embed-text — corre `ollama pull nomic-embed-text`)')
+                        : '';
+                    sysMsg(`Error: ${String(e)}${hint}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         case 'anneal': case 'ontology': case 'ontologies': {
             (async () => {
                 try {

@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.14] — 2026-05-31
+
+Two pendings closed at once: surface polarity validation to the
+chat (DevTools is blocked in Lucy) and unblock `cargo test --lib`.
+
+### `/polarity <text>` (alias `/polaridad`)
+
+Projects an arbitrary text onto the v1.6.5 polarity axis from chat.
+Validates the axis without needing DevTools.
+
+- Positive score (> 0.10) → green pill, "supports".
+- Negative score (< -0.10) → red pill, "contradicts".
+- Mid-band → amber, "neutral".
+
+Output includes the score, the model that built the axis, and
+when the axis was built (so the user knows if it's stale).
+
+`/polarity` without arg rebuilds the axis and shows diagnostics
+(anchor pair count, embedder model, raw magnitude, dimensions).
+The raw magnitude flags whether the anchor pairs agree on a
+direction — a value under 1.0 means triangulation is weak and the
+pairs may need tuning.
+
+On Ollama-unreachable errors the message hints the user to
+`ollama pull nomic-embed-text`.
+
+Cheatsheet row added above `/anneal`.
+
+### `local.rs:2045` test fix
+
+`cmd_captures_simple_stdout` had passed the deprecated
+`force_execute` bool as arg #2 ever since v1.5.0 removed the
+parameter. That single compile error blocked `cargo test --lib`
+across ~10 releases. The user-visible impact was zero (runtime
+unaffected), but it meant we couldn't run the test suite without
+this one filter. Signature corrected to `(script, bypass_token)`.
+
+`cargo test --lib local::tests::cmd_captures_simple_stdout` now
+passes. Full `cargo test --lib` should also pass aside from the
+two pre-existing flaky shell.rs tests documented in MEMORY.md.
+
+---
+
 ## [1.6.13] — 2026-05-31
 
 Hotfix: Verify tab resolution buttons (Mantener más reciente / antigua,

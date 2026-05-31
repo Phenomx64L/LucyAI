@@ -2042,7 +2042,10 @@ mod tests {
     #[tokio::test]
     async fn cmd_captures_simple_stdout() {
         setup();
-        let out = execute_cmd("echo cmd-sentinel-8h2q".to_string(), false, None)
+        // v1.6.14: execute_cmd signature lost the deprecated `force_execute`
+        // bool in v1.5.0 but this contract test wasn't updated, breaking
+        // `cargo test --lib` for ~10 releases. Now matches `(script, bypass_token)`.
+        let out = execute_cmd("echo cmd-sentinel-8h2q".to_string(), None)
             .await.expect("execute_cmd returned Err");
         assert!(
             out.contains("cmd-sentinel-8h2q"),
