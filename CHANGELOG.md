@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.2] — 2026-05-30
+
+Long-tail CSS dedup #1 — remote-shell panel block extracted to
+`nexshell.css`.
+
+### Shipped
+
+Moved the entire **REMOTE SHELL** section of `page.css` (lines
+1013-1136, ~123 lines, 87 selectors) into `src/lib/styles/nexshell.css`,
+appended after the v1.4.22 broadcast-modal block. Imports via the
+same `import '$lib/styles/nexshell.css'` already wired from
+`NexShellView.svelte` in v1.4.22.
+
+Selector families consolidated:
+
+- Panel chrome: `.rshell-overlay`, `.rshell-panel`, `.rshell-hidden`,
+  `.rshell-ctrl` (+ `@keyframes slideIn`)
+- Minimised mini-bars dock: `.rshell-minibars`, `.minibars-left`,
+  `.rshell-mini-bar`, full `.rmb-*` family (10 selectors)
+- Header / badges / context: `.rshell-hdr`, `.rshell-hdr-left`,
+  `.rshell-ico`, `.rshell-title`, `.rshell-sub`, `.rshell-badge` (+ ok/err),
+  `.rs-ctx-badge`, `.ctx-git/k8s/docker/node/venv/loading`
+  (+ `@keyframes ctx-pulse`), `.rshell-close`
+- Feature buttons: `.rshell-feat-btn`, `.rs-feat-active`, `.rs-feat-sep`,
+  `.rs-suggestion`, `.rs-sugg-ai`, `.rs-ai-spinner` (+ `@keyframes
+  ai-pulse`), `.rs-bg-badge`
+- Playbooks + tail-log presets: `.pb-item`, `.pb-name`, `.pb-cmds`,
+  `.rs-log-preset`
+- Output area: `.rshell-out`, `.rshell-line`, full `.rsl-*` family
+  (24 selectors including time/prompt/cmd/lucy-in/lucy-out/out-txt/
+  err-txt/info-txt/running plus live streaming block, meta row,
+  interactive prompt)
+- Input rows: `.rshell-inputs`, `.rshell-input-wrap`, `.rs-direct`,
+  `.rs-lucy`, `.rshell-input-label`, `.rs-label-ico`, `.rs-hint`,
+  `.rshell-input-row`, `.rsi-prompt`, `.rsi-box`, `.rs-lucy-box`,
+  `.rs-lucy-ta`, `.rsi-send`, `.rs-lucy-send` (and hover/focus/disabled
+  variants)
+- Plus `.lucy-dot` (the green dot prefix used in Lucy's outputs)
+
+### NexShellView scoped block intentionally untouched
+
+`NexShellView.svelte`'s scoped `<style>` still carries `:global(...)`
+versions of many of these selectors as refinements (RDP badge
+variant, search-match highlights, etc.). Same pattern as v1.4.24
+ChatThread: component-injected `:global` rules load AFTER CSS
+module imports, so they retain higher cascade priority and override
+where they differ. Visual output preserved.
+
+### Audit progress
+
+The post-v1.5.2 audit now shows ~85 duplicate selectors removed from
+page.css's surface in this single release. Long-tail dedup priorities
+re-ordered:
+
+| # | Component | Duplicates remaining |
+|---|---|---|
+| 1 | NexShellView | 74 → ~0 (this release) |
+| 2 | DashboardView | 36 |
+| 3 | Sidebar | 20 |
+| 4 | LogViewerView | 12 |
+| 5 | InventoryView | 8 |
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.1 → 1.5.2)
+M  src-tauri/Cargo.toml                      (1.5.1 → 1.5.2)
+M  src-tauri/tauri.conf.json                 (1.5.1 → 1.5.2)
+M  src/lib/styles/nexshell.css               (+167 LOC remote-shell block)
+M  src/routes/page.css                       (-123 LOC REMOTE SHELL section)
+M  src/lib/SetupOverlay.svelte               (1.5.1 → 1.5.2)
+M  src/lib/TutorialOverlay.svelte            (1.5.1 → 1.5.2)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+
+---
+
 ## [1.5.1] — 2026-05-30
 
 Cleanup release — removes the legacy inline shortcuts overlay that's
