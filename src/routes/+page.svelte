@@ -8399,11 +8399,31 @@ if (Test-Path $src) {
 </script>
 
 <svelte:window
-    on:keydown={onGlobalKey}
+    on:keydown={(e) => {
+      // v1.6.12 — Escape always clears the drop overlay, even when no
+      // drag event will fire (dragging an in-app element and pressing
+      // ESC produces no dragleave on window).
+      if (e.key === 'Escape' && showDragOverlay) {
+        showDragOverlay = false;
+      }
+      onGlobalKey(e);
+    }}
     on:wheel={onGlobalWheel}
     on:contextmenu|preventDefault
     on:dragover|preventDefault
     on:dragenter|preventDefault={(e) => {
+      // v1.6.12 — Only show the drop overlay when the drag actually
+      // carries external files. In-app drags (sidebar items, chat
+      // messages, tabs, etc.) put MIME types like 'text/plain' or
+      // 'application/x-svelte-dnd' into dataTransfer.types but never
+      // 'Files', which is the universal signal for "this came from the
+      // OS file picker / explorer". Without this filter ANY accidental
+      // in-app drag stuck the overlay open until the user dropped onto
+      // it (the original bug — Tutorial menu drag locked the UI).
+      const types = (e.dataTransfer && e.dataTransfer.types) ? e.dataTransfer.types : [];
+      let isFileDrag = false;
+      for (let i = 0; i < types.length; i++) { if (types[i] === 'Files') { isFileDrag = true; break; } }
+      if (!isFileDrag) return;
       // Don't show the main drop overlay if the drag is happening over the PDF panel
       if (showPdfPanel && e.target?.closest?.('.pdf-panel-overlay')) {
         showDragOverlay = false;
@@ -8411,7 +8431,18 @@ if (Test-Path $src) {
       }
       showDragOverlay = true;
     }}
-    on:dragleave={(e) => { if(e.target.id==='drag-ov') showDragOverlay = false; }}
+    on:dragleave={(e) => {
+      // v1.6.12 — clear the overlay when the drag leaves the window
+      // entirely (event target/relatedTarget is null) OR leaves the
+      // overlay itself. The narrow old check (target.id === 'drag-ov')
+      // missed many cancellation paths.
+      const rel = e.relatedTarget;
+      const targetId = e.target && e.target.id;
+      if (rel === null || rel === undefined || targetId === 'drag-ov') {
+        showDragOverlay = false;
+      }
+    }}
+    on:dragend={() => { showDragOverlay = false; }}
     on:drop|preventDefault={(e) => {
       // Let the PDF panel handle drops on itself
       if (showPdfPanel && e.target?.closest?.('.pdf-panel-overlay')) {
@@ -9021,11 +9052,15 @@ if (Test-Path $src) {
   </div>
 
   {#if showDragOverlay}
-  <div id="drag-ov" class="drag-ov">
+  <!-- v1.6.12: click-anywhere-to-dismiss as a last-resort escape hatch
+       when the OS swallows dragend/dragleave. The drop handler at the
+       window level still runs first for genuine file drops. -->
+  <div id="drag-ov" class="drag-ov" on:click={() => { showDragOverlay = false; }} role="presentation">
     <div class="drag-box">
       <span class="drag-icon">↓</span>
       <h2>Suelta tu archivo aquí</h2>
       <p>Lucy lo analizará inmediatamente</p>
+      <p style="font-size:11px;opacity:.55;margin-top:8px;">Esc o clic para cancelar</p>
     </div>
   </div>
   {/if}

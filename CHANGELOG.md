@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.12] — 2026-05-31
+
+Hotfix: drop overlay was sticky. Any accidental in-app drag (sidebar
+items, the Tutorial menu, a chat message, a tab) triggered the
+"Suelta tu archivo aquí" overlay and trapped the UI — the only way
+out was to actually drop something onto Lucy's window.
+
+Three compounding causes, all in `+page.svelte` svelte:window handlers:
+
+- `dragenter` triggered on ANY drag without checking
+  `dataTransfer.types`. In-app drags carry types like `text/plain`
+  or component-specific MIME but never `Files`, which is the OS
+  signal for "this came from Explorer / Finder". Now we explicitly
+  test for `Files` and ignore everything else.
+- `dragleave` only cleared the flag when the event target was the
+  overlay element itself. Cancellation paths (ESC, dragging out of
+  the window, releasing over an unrelated element) bypassed it.
+  Broadened: also clears when `relatedTarget` is null (drag left
+  the window entirely).
+- No `dragend`, no Escape handler, no manual escape hatch. Added
+  all three: `on:dragend` clears the flag, ESC clears it from the
+  global keydown handler, and click-anywhere-on-the-overlay clears
+  it as a last resort. Overlay now shows a hint "Esc o clic para
+  cancelar".
+
+Bonus: with the `Files`-only filter, the overlay no longer flashes
+during legitimate intra-app interactions like reordering tabs or
+dragging memory cards.
+
+---
+
 ## [1.6.11] — 2026-05-31
 
 Hotfix #2 for the Auto-tag chain. After v1.6.10 unblocked the LLM
