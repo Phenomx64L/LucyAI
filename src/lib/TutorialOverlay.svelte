@@ -15,7 +15,7 @@
     const dispatch = createEventDispatcher();
 
     // Bumped per release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.6.1';
+    const LUCY_VERSION = '1.6.2';
 
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout

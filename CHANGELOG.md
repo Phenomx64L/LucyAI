@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.2] — 2026-05-30
+
+MCP budget guard — second item from the ECC recommendation. Watches
+how much of the 200k context window is being eaten by enabled MCP
+tool definitions and surfaces a tone-banded chip.
+
+### Shipped
+
+- **`src/lib/mcp-budget.ts`** — pure calculator. `computeBudget(servers)`
+  takes `McpServerLite[]` and returns:
+  - `enabledServers`, `enabledTools`, `estimatedTokens`
+  - per-axis tone (`ok`/`warn`/`crit`) and worst-of overall tone
+  - human-readable `reason` string
+  Token estimation is JSON-length / 4 chars (Anthropic ~3.6, Gemini
+  ~4.2 — middle ground keeps the math fast and the bias conservative).
+
+- **`src/lib/mcp-budget.test.ts`** — 12 vitest specs covering empty
+  input, disabled-server filtering, threshold escalation, the
+  worst-of tone aggregation, `wouldExceedCritical` lookahead.
+
+- **`src/lib/McpBudgetChip.svelte`** — compact pill with 3 tone bands
+  (green/amber/red). Title attribute shows the full breakdown so
+  hovering tells you exactly which axis is degrading.
+
+- **Mount in McpServersModal.svelte** — chip sits on the right of
+  the toolbar next to the `+ Add` / `↻ Refresh` buttons. Always
+  visible while the modal is open.
+
+### Thresholds (mirror ECC `mcp-budget` recommendations)
+
+| Axis | Warn | Crit | Rationale |
+|---|---|---|---|
+| Servers | 8 | 10 | Beyond 10, the ECC skill says "config review needed". |
+| Tools | 60 | 80 | Past 80, context cost outpaces tool usefulness. |
+| Tool-def tokens | 40k | 60k | Past 60k, a 200k window has ~140k left — the "shrinks to ~70k usable" pain point. |
+
+### What the chip looks like
+
+```
+◉ 6/10 srv · 42/80 tools · ~32k tok        → green (ok)
+⚠ 9/10 srv · 70/80 tools · ~50k tok        → amber (warn)
+✕ 10/10 srv · 120/80 tools · ~85k tok      → red (crit)
+```
+
+The full breakdown (the multi-axis form) renders by default; the
+single-line compact form is available via `compact={true}` for
+future tighter spots like the status bar.
+
+### Future use of `wouldExceedCritical`
+
+Exported but not yet wired. The intent: when the user clicks "Add
+server" or "Enable" on a row, that handler can call
+`wouldExceedCritical(currentBudget)` and surface a confirmation if
+the new addition would cross a critical threshold. The chip alone
+is informational; the guard becomes preventive when this hook is
+wired in v1.6.2.1.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.6.1 → 1.6.2)
+M  src-tauri/Cargo.toml                      (1.6.1 → 1.6.2)
+M  src-tauri/tauri.conf.json                 (1.6.1 → 1.6.2)
+A  src/lib/mcp-budget.ts                     (NEW — pure calculator)
+A  src/lib/mcp-budget.test.ts                (NEW — 12 vitest specs)
+A  src/lib/McpBudgetChip.svelte              (NEW — UI chip, 3 tone bands)
+M  src/lib/McpServersModal.svelte            (chip in toolbar)
+M  src/lib/SetupOverlay.svelte               (1.6.1 → 1.6.2)
+M  src/lib/TutorialOverlay.svelte            (1.6.1 → 1.6.2)
+```
+
+svelte-check: 7188 files, 0 errors, 0 warnings.
+vitest:      171/171 pass (was 159 — +12 new mcp-budget specs).
+
+Reference: https://github.com/affaan-m/ECC/tree/main/skills/mcp-budget
+
+---
+
 ## [1.6.1] — 2026-05-30
 
 **Skill presets (ECC-adapted system-prompt framing).** First feature from

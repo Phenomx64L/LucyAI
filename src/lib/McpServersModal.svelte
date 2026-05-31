@@ -27,6 +27,8 @@
   // v1.4.15 — loading skeletons + empty-state component.
   import Skeleton from '$lib/Skeleton.svelte';
   import EmptyState from '$lib/EmptyState.svelte';
+  // v1.6.2 — ECC-adapted MCP budget guard chip.
+  import McpBudgetChip from '$lib/McpBudgetChip.svelte';
   // v1.4.15 — toast.promise for long ops (discover/test). Aliased so it
   // doesn't shadow the existing inline `toast` banner variable below.
   import { toast as sonnerToast } from 'svelte-sonner';
@@ -416,6 +418,13 @@
         <div class="toolbar">
           <button class="btn pri" on:click={openAdd}>{T.add}</button>
           <button class="btn ghost" on:click={reload} disabled={loading}>↻</button>
+          <!-- v1.6.2 — MCP budget guard chip (ECC mcp-budget skill).
+               Live counts of enabled servers / tools / token estimate
+               with tone bands. Reduces the cognitive load of "am I
+               about to blow my context window with one more server". -->
+          <span class="mcp-budget-slot">
+            <McpBudgetChip servers={servers} {isEN} />
+          </span>
         </div>
 
         {#if loading}
@@ -676,7 +685,8 @@
   .banner.err { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.30); color: #ff6b6b; }
   .banner.ok  { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.30); color: var(--acc, #10b981); }
 
-  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+  .mcp-budget-slot { margin-left: auto; }
   .empty { color: var(--txt3, #475569); padding: 24px 0; text-align: center; font-size: 13px; }
 
   /* ── Server list ────────────────────────────────────────────────── */
