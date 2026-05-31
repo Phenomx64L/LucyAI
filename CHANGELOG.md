@@ -7,6 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.0] — 2026-05-30  **— MAJOR**
+
+First minor-version bump in 30 patch releases. **Breaking change**:
+the deprecated `force_write` / `force_execute` boolean parameters
+are gone from every privileged command. `bypass_token` (cryptographic
+one-shot) is now the only supported approval path.
+
+### Breaking — removed legacy guardrail-bypass booleans
+
+Three Tauri commands had their signatures shrunk:
+
+| Before (v1.4.x) | After (v1.5.0) |
+|---|---|
+| `execute_cmd(script, force_execute, bypass_token)` | `execute_cmd(script, bypass_token)` |
+| `execute_reg(args, force_write, bypass_token)` | `execute_reg(args, bypass_token)` |
+| `execute_cscript(script_content, force_execute, bypass_token)` | `execute_cscript(script_content, bypass_token)` |
+
+(`execute_powershell` was already cleaned up before v1.5.0; its
+signature stays at `execute_powershell(script, bypass_token,
+timeout_secs)`.)
+
+### What this fixes
+
+The SEC-8 audit (May 2026) found that the legacy `force_execute:
+true` / `force_write: true` booleans were a real security hole:
+
+- The frontend approval UI surfaced a `SECURITY_BLOCK:<reason>` text
+  that the agent loop could read.
+- The agent loop's auto-retry path then called the same command with
+  `force_execute: true` to silently bypass the gate.
+- No cryptographic verification, no audit trail of who authorised
+  what.
+
+v1.4.x replaced the booleans with `bypass_token` (a random 256-bit
+token, single-use, 30-second TTL, only issued in the same
+`SECURITY_BLOCK:<token>:<reason>` response the user clicks
+"Authorize" on) — but kept the booleans accepted for one release
+as a compatibility shim. v1.5.0 closes that shim.
+
+### Impact
+
+- **Frontend code on this build** is updated: every `invoke()`
+  callsite passing `forceExecute` / `forceWrite` has had those keys
+  dropped or replaced with `bypassToken`. Specifically:
+  - `+page.svelte` — 11 callsites cleaned
+  - `lucy-api.ts` — 4 exported wrappers updated; signatures now take
+    `bypassToken` instead
+  - `NexShellView.svelte` — 2 inline calls
+  - `host-preflight.ts`, `slash-commands.ts`, `SetupOverlay.svelte`
+    — 1 each
+- **Third-party callers** (plugins or scripts that hit Lucy's IPC
+  surface directly) will see those parameters ignored at deserialize
+  — Tauri tolerates unknown fields by default — but their previous
+  approval path will simply not work; they need to migrate to the
+  `bypass_token` flow.
+- **Stored runbooks / skills / chat history** are not affected;
+  none of them carried the booleans.
+
+### Migration cheat-sheet
+
+```ts
+// before
+await invoke('execute_cmd', { script, forceExecute: true });
+
+// after — privileged ops
+const block = await invoke('execute_cmd', { script }).catch(e => String(e));
+if (block.startsWith('SECURITY_BLOCK:')) {
+    const token = block.split(':')[1];
+    // surface UI: "Authorize <reason>?"
+    await invoke('execute_cmd', { script, bypassToken: token });
+}
+
+// after — safe ops (Test-NetConnection, opening a URL, etc.)
+await invoke('execute_cmd', { script });
+```
+
+### Other changes shipped in this version
+
+- README + tutorial copy updated to reflect the v1.5.0 surface.
+- `lucy-api.ts` wrapper docstrings now mention the bypass-token
+  flow explicitly so consumers reading IntelliSense don't reach for
+  the deleted booleans.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.4.29 → 1.5.0)
+M  src-tauri/Cargo.toml                      (1.4.29 → 1.5.0)
+M  src-tauri/tauri.conf.json                 (1.4.29 → 1.5.0)
+M  src-tauri/src/commands/local.rs           (signatures + shim removal)
+M  src/lib/lucy-api.ts                       (wrapper signatures)
+M  src/routes/+page.svelte                   (11 callsites)
+M  src/lib/NexShellView.svelte               (2 callsites)
+M  src/lib/page/host-preflight.ts            (1 callsite)
+M  src/lib/page/slash-commands.ts            (1 callsite)
+M  src/lib/SetupOverlay.svelte               (1 callsite; version bump)
+M  src/lib/TutorialOverlay.svelte            (version bump)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+cargo check: clean (29.88s).
+
+### Quality snapshot at v1.5.0
+
+Across the 31 releases from v1.4.15 to v1.5.0 (May 28-30, 2026):
+
+- 5 CSS extractions consolidating ~170 selectors from page.css into
+  6 dedicated component stylesheets
+- 3 reusable bits-ui wrappers (`LucyTooltip`, `LucyDropdown`,
+  `LucyCombobox`, `LucyContextMenu`)
+- 4 new chat surfaces (`ChatMessageContextMenu`, `KeyboardCheatsheet`,
+  `EmptyState`, `Skeleton`, `ModelSwitcherChip`)
+- 3 user-reported tab-strip fixes (one was a 3-release saga)
+- 1 native print stylesheet
+- 1 density slider continuous control
+- 1 block-based forensic output system (`/diff` and `/detective`)
+- 1 breaking deprecation removal (this release)
+
+Long-tail CSS dedup work and the legacy inline shortcuts overlay
+cleanup remain on the v1.5.x roadmap.
+
+---
+
 ## [1.4.29] — 2026-05-30
 
 Block-based output for forensic slash-commands. Closes the v1.4.15

@@ -193,9 +193,11 @@ fn host() -> String { System::host_name().unwrap_or_else(|| "Local".to_string())
 #[tauri::command]
 pub async fn execute_cmd(
     script: String,
-    #[allow(unused_variables)]
-    force_execute: bool,       // SEC-8 FIX: DEPRECATED — kept for ABI compat, always ignored.
-                               // Use bypass_token (cryptographic one-shot) instead.
+    // v1.5.0: deprecated force_execute parameter removed.
+    // It was kept for one release as an ABI-compat shim after the
+    // SEC-8 audit (May 2026) replaced it with the cryptographic
+    // bypass_token one-shot. Frontend callsites cleaned in the same
+    // release.
     bypass_token: Option<String>,
 ) -> Result<String, String> {
     rotate_audit_log();
@@ -445,7 +447,7 @@ pub async fn execute_netsh(args: String) -> Result<String, String> {
 // ── REG.EXE — consultas de registro sin PowerShell ───────────────────────────
 
 #[tauri::command]
-pub async fn execute_reg(args: String, force_write: bool, bypass_token: Option<String>) -> Result<String, String> {
+pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<String, String> {
     // Permission check (user-defined rules)
     let perm = super::metrics::check_permission(format!("reg {}", &args), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -494,18 +496,13 @@ pub async fn execute_reg(args: String, force_write: bool, bypass_token: Option<S
             }
             audit(&format!("[{}] [HOST:{}] [REG_BLOCKED_PENDING_AUTH] {}",
                 ts(), host(), &args[..args.len().min(300)]));
-            // Compatibility shim: keep accepting `force_write:true` from the
-            // legacy frontend path during a one-release deprecation window.
-            // The agent loop's auto-retry path no longer benefits because
-            // it doesn't set force_write, only the explicit "Autorizar"
-            // button. Will be removed in v1.5.0.
-            if !force_write {
-                return Err(format!("SECURITY_BLOCK:{}:reg write", new_token));
-            }
+            // v1.5.0: removed the legacy `force_write:true` deprecation
+            // shim. Crypto bypass_token is now the ONLY way past this gate.
+            return Err(format!("SECURITY_BLOCK:{}:reg write", new_token));
         }
     }
 
-    let op_type = if is_write { if bypassed_by_token { "REG_WRITE_BYPASS" } else { "REG_WRITE_LEGACY_FORCE" } } else { "REG_READ" };
+    let op_type = if is_write { if bypassed_by_token { "REG_WRITE_BYPASS" } else { "REG_WRITE_UNREACHABLE" } } else { "REG_READ" };
     audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op_type, &args[..args.len().min(300)]));
 
     let parsed_args = parse_args(&args);
@@ -536,7 +533,7 @@ pub async fn execute_reg(args: String, force_write: bool, bypass_token: Option<S
 // ── CSCRIPT — Windows Script Host para automatización COM / AD ────────────────
 
 #[tauri::command]
-pub async fn execute_cscript(script_content: String, force_execute: bool, bypass_token: Option<String>) -> Result<String, String> {
+pub async fn execute_cscript(script_content: String, bypass_token: Option<String>) -> Result<String, String> {
     // Permission check (user-defined rules)
     let perm = super::metrics::check_permission("cscript".to_string(), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -586,13 +583,11 @@ pub async fn execute_cscript(script_content: String, force_execute: bool, bypass
                 }
                 audit(&format!("[{}] [HOST:{}] [CSCRIPT_BLOCKED_PENDING_AUTH] {} :: {}",
                     ts(), host(), blocked, &script_content[..script_content.len().min(200)]));
-                if !force_execute {
-                    return Err(format!("SECURITY_BLOCK:{}:{}", new_token, blocked));
-                }
-                // Legacy force_execute deprecation window (same as execute_reg).
-                write_app_log("WARNING", &format!("CScript legacy-force bypass: {}", blocked));
-                bypassed = true;
-                break;
+                // v1.5.0: removed the legacy `force_execute:true` shim.
+                // Only a valid bypass_token (issued by this very call's
+                // SECURITY_BLOCK response and approved by the user) can
+                // pass the blocklist now.
+                return Err(format!("SECURITY_BLOCK:{}:{}", new_token, blocked));
             }
         }
     }

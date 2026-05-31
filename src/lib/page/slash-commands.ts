@@ -1157,7 +1157,7 @@ function runQuickDiagnose(
             const t0 = Date.now();
             if (hostTarget === 'local') {
                 const promises = commands.map((cmd, i) =>
-                    invoke<string>('execute_powershell', { script: cmd, forceExecute: false })
+                    invoke<string>('execute_powershell', { script: cmd })
                         .then((out) => ({ idx: i, out, error: null as string | null }))
                         .catch((e) => ({ idx: i, out: null as string | null, error: String(e) })),
                 );

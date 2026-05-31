@@ -182,8 +182,11 @@ export const executeShellCmd = (args: {
 
 // ── SHELL LOCAL ───────────────────────────────────────────────────────────────
 
-export const executePowershell = (script: string, forceExecute = false): Promise<string> =>
-    invoke('execute_powershell', { script, forceExecute });
+// v1.5.0 — signatures cleaned up. The legacy forceExecute/forceWrite
+// boolean parameters are gone; use bypassToken (cryptographic one-shot
+// issued by a previous SECURITY_BLOCK response) for the approval path.
+export const executePowershell = (script: string, bypassToken: string | null = null): Promise<string> =>
+    invoke('execute_powershell', { script, bypassToken });
 
 // ── SHELL STREAMING ───────────────────────────────────────────────────────────
 
@@ -224,8 +227,8 @@ export interface TaskEntry {
     memKb: number;
 }
 
-export const executeCmd      = (script: string, forceExecute = false, bypassToken: string | null = null): Promise<string> =>
-    invoke('execute_cmd', { script, forceExecute, bypassToken });
+export const executeCmd      = (script: string, bypassToken: string | null = null): Promise<string> =>
+    invoke('execute_cmd', { script, bypassToken });
 
 export const executeWmic     = (query: string): Promise<string> =>
     invoke('execute_wmic', { query });
@@ -233,11 +236,11 @@ export const executeWmic     = (query: string): Promise<string> =>
 export const executeNetsh    = (args: string): Promise<string> =>
     invoke('execute_netsh', { args });
 
-export const executeReg      = (args: string, forceWrite = false): Promise<string> =>
-    invoke('execute_reg', { args, forceWrite });
+export const executeReg      = (args: string, bypassToken: string | null = null): Promise<string> =>
+    invoke('execute_reg', { args, bypassToken });
 
-export const executeCscript  = (scriptContent: string, forceExecute = false): Promise<string> =>
-    invoke('execute_cscript', { scriptContent, forceExecute });
+export const executeCscript  = (scriptContent: string, bypassToken: string | null = null): Promise<string> =>
+    invoke('execute_cscript', { scriptContent, bypassToken });
 
 export const getNetworkConnections = (): Promise<NetConnection[]> =>
     invoke('get_network_connections');

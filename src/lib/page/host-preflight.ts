@@ -56,7 +56,10 @@ export async function preflightHost(h: PreflightHost): Promise<PreflightResult> 
     const t0 = Date.now();
     let result: PreflightResult;
     try {
-        const out = await invoke<string>('execute_powershell', { script, forceExecute: true });
+        // v1.5.0 — forceExecute parameter removed. Preflight runs a
+        // safe Test-NetConnection script that never hits the guardrail,
+        // so no bypass token is needed.
+        const out = await invoke<string>('execute_powershell', { script });
         const ok = String(out || '').trim().toUpperCase().includes('OK');
         result = ok
             ? { ok: true, err: null, ms: Date.now() - t0 }

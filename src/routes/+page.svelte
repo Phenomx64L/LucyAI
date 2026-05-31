@@ -899,7 +899,6 @@ import { listen } from '@tauri-apps/api/event';
                 // by the cite-chips post-processor.
                 invoke('execute_powershell', {
                     script: `Start-Process '${value.replace(/'/g, "''")}'`,
-                    forceExecute: false,
                 }).catch(() => window.open(value, '_blank'));
             }
         } catch (e) {
@@ -1991,7 +1990,7 @@ import { listen } from '@tauri-apps/api/event';
         t.isProcessing = true; startExecTimer(); refresh(); await scrollChat();
         addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>${accion.icono} ${accion.nombre}`});
         try {
-            const out = await invoke('execute_powershell',{script:accion.script,forceExecute:false});
+            const out = await invoke('execute_powershell',{script:accion.script,});
             const outTrim = out?.trim() ?? '';
             addMsg(tabId,{role:'lucy',html:`<div class="mn">[Quick] Lucy (Rápida)</div>${accion.nombre} ejecutado.${outTrim?`<br><span style="font-size:11px;color:var(--txt2);font-family:var(--mono);white-space:pre-wrap;"><code>${outTrim}</code></span>`:''}`,style:'border-left-color:#10b981;'});
         } catch(err) {
@@ -3030,7 +3029,7 @@ import { listen } from '@tauri-apps/api/event';
     // Runs an arbitrary command against local or remote target. Shared by execute + verify + rollback.
     async function _runPlanStep(target, cmd, engine) {
         if (target === 'local') {
-            return await invoke('execute_powershell', { script: cmd, forceExecute: false });
+            return await invoke('execute_powershell', { script: cmd });
         }
         const hostIdClean = String(target).replace(/^LucyHost_/, '');
         const h = $hosts.find(x => x.id === hostIdClean || x.name === target);
@@ -3220,7 +3219,7 @@ REGLAS DE FORMATO:
         try {
             let out;
             if (target === 'local') {
-                out = await invoke('execute_powershell', { script: actualCmd, forceExecute: false });
+                out = await invoke('execute_powershell', { script: actualCmd });
             } else {
                 const hostIdClean = String(target).replace(/^LucyHost_/, '');
                 const h = $hosts.find(x => x.id === hostIdClean || x.name === target);
@@ -3485,7 +3484,7 @@ REGLAS DE FORMATO:
             // this looked like a hang. Fix: capture the output and append it
             // in a styled <pre> like the other Quick path at line ~1413 does.
             try {
-                const _qOut = await invoke('execute_powershell', { script: found.script, forceExecute: false });
+                const _qOut = await invoke('execute_powershell', { script: found.script });
                 const _qOutTrim = String(_qOut || '').trim();
                 const _outBlock = _qOutTrim
                     ? `<br><span style="font-size:11px;color:var(--txt2);font-family:var(--mono);white-space:pre-wrap;display:block;margin-top:6px;padding:6px 8px;background:rgba(0,0,0,0.25);border-radius:4px;"><code>${_qOutTrim.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></span>`
@@ -6075,13 +6074,13 @@ Use ONE of these patterns instead:
                             try {
                                 const t0 = Date.now();
                                 let out;
-                                if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false});
+                                if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,});
                                 else if (execType==='wmic')     out=await invoke('execute_wmic',   {query:cmd});
                                 else if (execType==='netsh')    out=await invoke('execute_netsh',  {args:cmd});
-                                else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false,bypassToken:null});
-                                else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false,bypassToken:null});
-                                else if (execType==='execute_powershell') out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
-                                else                            out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
+                                else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,bypassToken:null});
+                                else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
+                                else if (execType==='execute_powershell') out=await invoke('execute_powershell',{script:cmd,});
+                                else                            out=await invoke('execute_powershell',{script:cmd,});
 
                                 const elapsed = Date.now() - t0;
                                 const engineLabel = {powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS';
@@ -6759,7 +6758,7 @@ times the SAME way, switch tool kind entirely.
                                     _updateWM(t, { type:'exec', cmd:item.cmd, target:h.name, ok:true, ms:Date.now()-itemT0, host:h });
                                     return { hostName: h.name, output: out, error: null };
                                 } else {
-                                    const out = await invoke('execute_powershell', { script: item.cmd, forceExecute: false });
+                                    const out = await invoke('execute_powershell', { script: item.cmd });
                                     _updateWM(t, { type:'exec', cmd:item.cmd, target:'local', ok:true, ms:Date.now()-itemT0 });
                                     return { hostName: 'Local', output: out, error: null };
                                 }
@@ -6922,12 +6921,12 @@ times the SAME way, switch tool kind entirely.
                 const engineLabel = {powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS';
                 try{
                     let out;
-                    if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false});
+                    if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,});
                     else if (execType==='wmic')     out=await invoke('execute_wmic',   {query:cmd});
                     else if (execType==='netsh')    out=await invoke('execute_netsh',  {args:cmd});
-                    else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false,bypassToken:null});
-                    else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false,bypassToken:null});
-                    else                            out=await invoke('execute_powershell',{script:cmd,forceExecute:false});
+                    else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,bypassToken:null});
+                    else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
+                    else                            out=await invoke('execute_powershell',{script:cmd,});
                     const elapsed=Date.now()-t0;
                     _updateWM(t, { type:'exec', cmd, target:'local', ok:true, ms:elapsed });
                     t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
@@ -7080,13 +7079,12 @@ times the SAME way, switch tool kind entirely.
         try{
             let out;
             // SEC-8 FIX: CMD now uses the same cryptographic bypass token as PowerShell.
-            // v1.4.9 (C3): execute_reg and execute_cscript now also accept bypassToken.
-            // forceWrite/forceExecute retained for a one-release deprecation window so
-            // users on a stale build don't suddenly lose the approval path entirely;
-            // when a real token is supplied, the boolean is ignored server-side.
-            if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,forceExecute:false,bypassToken:token});
-            else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,forceWrite:false,bypassToken:token});
-            else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,forceExecute:false,bypassToken:token});
+            // v1.4.9 (C3): execute_reg and execute_cscript also accept bypassToken.
+            // v1.5.0: legacy forceWrite/forceExecute booleans removed — bypassToken
+            // is the ONLY supported approval path.
+            if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,bypassToken:token});
+            else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,bypassToken:token});
+            else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,bypassToken:token});
             else                            out=await invoke('execute_powershell',{script:cmd,bypassToken:token});
             const elapsed=Date.now()-t0;
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
@@ -7269,7 +7267,7 @@ times the SAME way, switch tool kind entirely.
             process(tabId);
         }
     }
-    function abrirAudit(){invoke('execute_powershell',{script:`Start-Process notepad "$env:APPDATA\\Lucy\\logs\\lucy_audit.log"`,forceExecute:false}).catch(()=>{});}
+    function abrirAudit(){invoke('execute_powershell',{script:`Start-Process notepad "$env:APPDATA\\Lucy\\logs\\lucy_audit.log"`,}).catch(()=>{});}
 
     // ── EXPORTAR AUDIT LOG (#16) ─────────────────────────────────────────────
     async function exportarAuditLog() {
@@ -7782,7 +7780,7 @@ if (Test-Path $src) {
         let logLines = 'No disponible';
         try {
             const lines = await invoke('read_log_tail', {
-                path: `${await invoke('execute_powershell', {script:'$env:APPDATA', forceExecute:false}).then(r=>r.trim())}\\Lucy\\logs\\lucy_app.log`,
+                path: `${await invoke('execute_powershell', {script:'$env:APPDATA', }).then(r=>r.trim())}\\Lucy\\logs\\lucy_app.log`,
                 lines: 20
             });
             logLines = lines.join('\n');
@@ -8294,7 +8292,7 @@ if (Test-Path $src) {
             runbookRunning.results[i].status = 'running';
             runbookRunning = { ...runbookRunning };
             try {
-                const out = await invoke('execute_powershell', { script: rb.steps[i].cmd, forceExecute: false });
+                const out = await invoke('execute_powershell', { script: rb.steps[i].cmd });
                 runbookRunning.results[i].status = 'done';
                 runbookRunning.results[i].output = String(out ?? '').substring(0, 300);
             } catch(e) {

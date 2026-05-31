@@ -1859,14 +1859,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 } else {
                     cmd = `scp -P ${s.host.port||22} ${s.host.username}@${s.host.host}:"${ftRemotePath}" "${ftLocalPath}"`;
                 }
-                const out = await invoke('execute_powershell', { script: cmd, forceExecute: false });
+                const out = await invoke('execute_powershell', { script: cmd });
                 ftResult = `✓ ${ftDirection === 'upload' ? 'Subido' : 'Descargado'} correctamente`;
                 rsLogTo(ftShellId, 'info', `⊞ ${isEN ? 'Transfer complete' : 'Transferencia completada'}: ${ftLocalPath} ↔ ${s.host.host}:${ftRemotePath}`);
             } else {
                 const ps = ftDirection === 'upload'
                     ? `Copy-Item -Path "${ftLocalPath}" -Destination "${ftRemotePath}" -ToSession (New-PSSession -ComputerName ${s.host.host})`
                     : `Copy-Item -Path "${ftRemotePath}" -Destination "${ftLocalPath}" -FromSession (New-PSSession -ComputerName ${s.host.host})`;
-                await invoke('execute_powershell', { script: ps, forceExecute: false });
+                await invoke('execute_powershell', { script: ps });
                 ftResult = `✓ ${isEN ? 'Transfer complete' : 'Transferencia completada'}`;
                 rsLogTo(ftShellId, 'info', `⊞ ${isEN ? 'Transfer complete' : 'Transferencia completada'}`);
             }
