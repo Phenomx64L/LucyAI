@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.6.5] — 2026-05-31
+
+Polarity axis triangulation (Kappa Graph ADR-058). Adds a continuous
+[-1, +1] semantic axis between SUPPORTS and CONTRADICTS so Lucy's chip
+telemetry layer can score arbitrary event vocabulary without
+hard-coded `thumbs_up → click` mappings.
+
+### Shipped
+
+**`src-tauri/src/commands/polarity.rs`** (~270 LOC):
+
+- `DEFAULT_ANCHOR_PAIRS` — 5 bilingual SP/EN opposing pairs
+  (`supports`/`contradicts`, `confirma este hecho`/`contradice este
+  hecho`, etc). SP/EN coverage avoids language drift when the user
+  switches locale; same-language pairs keep the difference vector
+  semantic, not cross-lingual.
+- Axis math: per pair `Δᵢ = E(p⁺) − E(p⁻)`, then
+  `a = (Σ Δᵢ) / ‖Σ Δᵢ‖`. Triangulation across multiple pairs
+  amplifies the true direction per ADR-058 §"Why averaging works".
+- Caching: `tokio::sync::RwLock<Option<PolarityAxis>>` behind a
+  `OnceCell`. Process-lifetime cache, explicit
+  `memory_polarity_rebuild` to invalidate when changing embedding
+  models. Read-heavy after warm-up: project = 1 embed + 1 dot.
+- `raw_norm` diagnostic field flags anchor pair disagreement —
+  near-zero magnitude means the pairs cancel and the axis is
+  unreliable (worth alerting on in the UI later).
+- Tauri commands wired in `lib.rs`:
+  - `memory_polarity(text, model?)` → `{ score, axis_built_at,
+    axis_model }`
+  - `memory_polarity_rebuild(model?)` → fresh axis snapshot
+  - `memory_polarity_axis()` → cached snapshot, no rebuild
+
+Uses the v1.6.0 `embed_via_ollama_pub` API (Ollama
+`nomic-embed-text`, 768-dim, Gemini `text-embedding-004` fallback).
+
+### Why
+
+Today `chip_memory.rs` classifies engagement with a fixed string
+match: novel event kinds (`hover_long`, `bookmark`, `pin_to_top`, …)
+fall through and get lost. With polarity scoring, ANY string projects
+onto the axis and gets a continuous valence — the LLM can propose new
+chip kinds and they auto-classify.
+
+### Tests
+
+6 unit tests covering vector math (norm of unit vector, normalize
+zero, dot orthogonal/aligned/opposite) plus two integration-style
+synthetic tests:
+
+- `axis_construction_from_synthetic_pairs` — 3 +x-pointing
+  synthetic pairs produce an axis with `axis[0] > 0.99`; positive
+  inputs project to ≥ 0.99, negative to ≤ -0.99.
+- `cancelling_pairs_yield_small_raw_norm` — intentionally opposing
+  pairs produce `‖Σ Δ‖ < 1e-6`, confirming the `raw_norm`
+  diagnostic catches the failure mode.
+
+No external Ollama dependency in the test suite — the math is
+verified with hand-crafted vectors.
+
+### References
+
+- `docs/research/kappa-graph/adrs/ADR-058-polarity-axis-triangulation.md`
+- `src-tauri/src/commands/embeddings.rs::embed_via_ollama_pub`
+
+---
+
 ## [1.6.4] — 2026-05-30
 
 ECC continuous-learning surfacing — two new slash commands that frame

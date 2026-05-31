@@ -505,6 +505,10 @@ pub fn run() {
             commands::grounding::memory_instance_save,
             commands::grounding::memory_instances_for,
             commands::grounding::memory_instances_search,
+            // v1.6.5 — Kappa Graph ADR-058 polarity axis triangulation.
+            commands::polarity::memory_polarity,
+            commands::polarity::memory_polarity_rebuild,
+            commands::polarity::memory_polarity_axis,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

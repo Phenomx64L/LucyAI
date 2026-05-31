@@ -57,3 +57,5 @@ pub mod chip_memory;
 pub mod db_maintenance;
 // v1.6.0 — probabilistic truth convergence (Kappa Graph ADR-044).
 pub mod grounding;
+// v1.6.5 — polarity axis triangulation (Kappa Graph ADR-058).
+pub mod polarity;
