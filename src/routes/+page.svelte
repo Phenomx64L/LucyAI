@@ -133,9 +133,6 @@ import { listen } from '@tauri-apps/api/event';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
     import ChatInput       from '$lib/ChatInput.svelte';
-    // v1.4.28 — inline model picker chip (first consumer of LucyCombobox
-    // family; chip is a self-contained popover internally).
-    import ModelSwitcherChip from '$lib/ModelSwitcherChip.svelte';
     import StatusBar       from '$lib/StatusBar.svelte';
     import HostModal       from '$lib/HostModal.svelte';
     import CommandPalette  from '$lib/CommandPalette.svelte';
@@ -8798,17 +8795,13 @@ if (Test-Path $src) {
                 on:chipaction={onChipAction}
                 on:chipdismiss={(e) => logChipEventBackend(e.detail.chip, _lastChipSignature, 'dismiss')} />
             {/if}
-            <!-- v1.4.28 — Inline model switcher chip. Sits just above
-                 ChatInput; lets the user swap models with fuzzy search
-                 without typing /model or hunting the small .mbdg badge
-                 inside the input's icon cluster. -->
-            {#if activeTabId === tab.id}
-              <div class="model-switcher-row">
-                <ModelSwitcherChip
-                  bind:value={tab.selectedModel}
-                  {isEN} />
-              </div>
-            {/if}
+            <!-- v1.5.5 — ModelSwitcherChip mount removed per user
+                 feedback: the existing .mbdg badge inside .iside (the
+                 input's right-side cluster) already does the same job
+                 and the duplicate chip just added visual noise above
+                 the composer. ModelSwitcherChip.svelte stays in the
+                 library for future reuse (or to be wired into the
+                 command palette). -->
             <ChatInput
               {tab} {isEN} {costPrediction} {userChips} {chipsHidden}
               {pendingSecurityBlock} {LLM_GROUPS} {showChatSearch} bind:chatSearch

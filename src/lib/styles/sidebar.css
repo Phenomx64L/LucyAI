@@ -39,7 +39,13 @@
 }
 .sidebar .sb-txt { transition: opacity .14s ease; }
 .sidebar.closed .sb-txt { opacity: 0; }
-.sidebar.open   { width: 210px; }
+/* v1.5.5 — open width tightened 210 → 178px per user feedback that
+   the bar felt wider than typical sidebar UX (Cursor/Linear sit
+   around 180px). All sb-item labels still fit at this width — the
+   longest ones ("Limpiar portapap." / "Salud del sistema") only run
+   to ~150px so we keep a 28px right-side gutter. Collapsed width
+   unchanged. */
+.sidebar.open   { width: 178px; }
 .sidebar.closed { width: 46px; }
 
 /* Toggle + section label + divider */

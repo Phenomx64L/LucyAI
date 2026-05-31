@@ -328,9 +328,18 @@
             on:blur={() => { _ifocused = false; setTimeout(() => { _flagSuggestions = []; }, 120); }}
             disabled={!!tab.pendingMessage}></textarea>
 
-        <!-- Quick-win C: empty-state shortcut hints. Click-through so it
-             never steals focus. Auto-hidden on focus/typing/processing. -->
-        {#if _showShortcutHints}
+        <!-- v1.5.5 — Empty-state shortcut hints row hidden per user
+             feedback: Ctrl+P / Tab / @ / Esc are advertised here as
+             "available" but several don't actually route to anything
+             yet (Ctrl+P palette only opens in the Settings modal route,
+             @ host has no autocompleter, Esc only cancels active
+             agent runs not the composer). Advertising broken
+             shortcuts is worse than not advertising any. The
+             KeyboardCheatsheet (Shift+?) remains the single source of
+             truth for what actually works. Guarded with `{#if false}`
+             so the markup stays in place for a future re-enable once
+             the underlying handlers are wired. -->
+        {#if false}
             <div class="ihints" aria-hidden="true">
                 <kbd>Ctrl+P</kbd> <span>{isEN ? 'palette' : 'paleta'}</span>
                 <span class="ihint-sep">·</span>

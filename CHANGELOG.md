@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.5.5] — 2026-05-30
+
+User-reported polish — removes redundant + non-functional UI surface
+across the composer, status bar and sidebar.
+
+### Quoting the user verbatim
+
+> "la barra lateral izquierda de herramientas es más ancha de lo
+> normal, y actualmente Lucy ya cuenta con un selector de modelo
+> (mismo que está dentro de la barra de conversación) no veo
+> necesario que tenga otro selector y que causa ruido visual.
+>
+> La barra que está a la derecha de Focus para qué es?
+>
+> los botones que está en la barra de conversación (paleta,
+> autocompletar, comandos y cancelar) no funcionan en Lucy.
+> deshabilita esa vista"
+
+Four targeted fixes addressing all three points:
+
+### 1. Removed duplicate model switcher chip
+
+The `ModelSwitcherChip.svelte` mount above the composer (added in
+v1.4.28) is gone. The existing `.mbdg` badge inside `.iside` (the
+input's right-side cluster) has been the working model selector all
+along — adding the chip on top was visual noise without delivering
+new affordance. The component file stays in `$lib/` for future
+re-use (most likely target: command palette).
+
+### 2. Removed density-fine slider
+
+The 0..1 range input in `StatusBar` (added in v1.4.16) sat next to
+the `FOCUS` density pill and visually read as a meter the user
+couldn't interpret. The 3-mode density pill (Focus / Explore /
+War-room) already covers the gross-grained spacing users actually
+use. The `densityFine` store + `setDensityFine` function stay in
+`$lib/density-mode` for any future surface (Settings modal Density
+section is the natural home).
+
+### 3. Hid the empty-state shortcut hints row
+
+The `Ctrl+P palette · Tab autocomplete · / commands · @ host ·
+Esc cancel` strip inside the composer (added in v1.4.x as a
+"Quick-win") advertised shortcuts that don't fully route yet:
+
+- `Ctrl+P palette` — only opens inside the Settings modal route,
+  not from the chat.
+- `Tab autocomplete` — only triggers inside the flag-suggestion
+  popover, not for command names.
+- `@ host` — no host autocompleter wired yet.
+- `Esc cancel` — cancels active agent runs, not the composer itself.
+
+Only `/` (slash commands) works as advertised. Showing 4 broken hints
+next to 1 working one is worse than showing none. `KeyboardCheatsheet`
+(Shift+?) stays the single source of truth for what actually works.
+
+The markup is preserved under `{#if false}` so the row can be
+re-enabled in one line once the underlying handlers are wired.
+
+### 4. Narrowed sidebar open width
+
+`.sidebar.open` width tightened **210px → 178px**. Cursor / Linear /
+VSCode all sit around 180px. All `sb-item` labels still fit at this
+width — the longest ones ("Limpiar portapap." / "Salud del sistema")
+only run to ~150px so we keep a 28px right-side gutter.
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  package.json                              (1.5.4 → 1.5.5)
+M  src-tauri/Cargo.toml                      (1.5.4 → 1.5.5)
+M  src-tauri/tauri.conf.json                 (1.5.4 → 1.5.5)
+M  src/routes/+page.svelte                   (drop ModelSwitcherChip mount + import)
+M  src/lib/StatusBar.svelte                  (drop density-fine range + drop densityFine import)
+M  src/lib/StatusBar.test.ts                 (trim density-mode mock)
+M  src/lib/ChatInput.svelte                  (gate .ihints behind {#if false})
+M  src/lib/styles/sidebar.css                (.sidebar.open width 210 → 178)
+M  src/lib/SetupOverlay.svelte               (1.5.4 → 1.5.5)
+M  src/lib/TutorialOverlay.svelte            (1.5.4 → 1.5.5)
+```
+
+svelte-check: 7180 files, 0 errors, 0 warnings.
+vitest:      159/159 pass.
+
+---
+
 ## [1.5.4] — 2026-05-30
 
 Long-tail CSS dedup #3 — extracted `sidebar.css`. New stylesheet,

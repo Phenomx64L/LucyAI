@@ -3,7 +3,7 @@
     import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
-    import { densityMode, cycleDensityMode, densityFine, setDensityFine } from '$lib/density-mode';
+    import { densityMode, cycleDensityMode } from '$lib/density-mode';
     // v1.4.17 — LucyTooltip migration (replaces native title=).
     import LucyTooltip from '$lib/LucyTooltip.svelte';
     // v1.4.21 — StatusBar layout CSS extracted to a single global stylesheet
@@ -131,17 +131,14 @@
         </button>
     </LucyTooltip>
 
-    <!-- v1.4.16 — fine-grained density slider. v1.4.17 — LucyTooltip. -->
-    <LucyTooltip text={isEN
-            ? 'Fine density (0 = tighter, 1 = roomier). Stacks on top of the mode preset.'
-            : 'Densidad fina (0 = más compacto, 1 = más espacioso). Se suma al modo elegido.'}>
-        <label class="density-fine-wrap">
-            <input type="range" min="0" max="1" step="0.05"
-                   class="density-fine-range"
-                   value={$densityFine}
-                   on:input={(e) => setDensityFine(parseFloat(e.currentTarget.value))} />
-        </label>
-    </LucyTooltip>
+    <!-- v1.5.5 — density-fine range slider removed per user feedback.
+         The 3-mode density pill above (Focus / Explore / War-room)
+         already gives the user the gross-grained control they actually
+         use; the 0..1 fine-tune added in v1.4.16 was visual noise next
+         to the FOCUS pill without delivering proportional value. The
+         densityFine store + setDensityFine function stay in
+         $lib/density-mode for any future surface that wants to expose
+         it (Settings modal, density section there). -->
 
     {#if activeTab}
         {@const _model = getEffectiveModel(activeTab)}
