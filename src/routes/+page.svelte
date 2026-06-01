@@ -148,6 +148,7 @@ import { listen } from '@tauri-apps/api/event';
     import {
         activeSkillPreset,
         peekActivePreset,
+        activeSkillPresetId,
     } from '$lib/skill-preset-store';
     import StatusBar       from '$lib/StatusBar.svelte';
     import HostModal       from '$lib/HostModal.svelte';
@@ -1603,6 +1604,26 @@ import { listen } from '@tauri-apps/api/event';
         document.addEventListener('click', _clickHandler);
         // Plan card buttons (opus-4-7 #3 Plan/Act/Verify)
         document.addEventListener('click', handlePlanButtonClick);
+        // v1.7.11 — Auto-route chip click → deactivate the current
+        // skill/preset and remove the chip from view. Delegated so
+        // we don't have to wire onclick on every chip instance.
+        document.addEventListener('click', (e) => {
+            const chip = e.target.closest('.ar-chip[data-clear]');
+            if (!chip) return;
+            e.preventDefault();
+            // Both the security-skill bridge and the regular preset
+            // slot — whichever is active gets cleared. Same semantics
+            // as `/preset clear`.
+            try { clearActiveSecuritySkill(); } catch {}
+            try { activeSkillPresetId.set(null); } catch {}
+            // Fade out the chip in place.
+            chip.style.opacity = '.35';
+            chip.style.pointerEvents = 'none';
+            const closer = chip.querySelector('.ar-close');
+            if (closer) closer.textContent = '✓';
+            const skillSpan = chip.querySelector('.ar-skill');
+            if (skillSpan) skillSpan.textContent = 'deactivated for next turn';
+        });
 
         // ── Quick-look popover for tool-card refs — see $lib/page/ql-popover.ts ──
         _qlHandle = attachQlPopover({ isEN });
@@ -3723,6 +3744,73 @@ REGLAS DE FORMATO:
                 _unifiedPlan = await buildUnifiedContext(raw, mcpServers || []);
             } catch (e) {
                 console.warn('[+page] unified context failed:', e);
+            }
+
+            // v1.7.11 — Auto-route chip. Closes the v1.7.5 UX gap: the
+            // user can now SEE which skill was loaded for this turn, by
+            // which method, and with what confidence. Renders between
+            // the user's message and Lucy's streaming response so it
+            // never interrupts content. Click-to-clear lets the user
+            // back out instantly if the routing was wrong.
+            if (_unifiedPlan && _unifiedPlan.route) {
+                const _r = _unifiedPlan.route;
+                if (_r.method !== 'none' && (_r.skill || _r.method === 'preset')) {
+                    const _methodLabel = (() => {
+                        switch (_r.method) {
+                            case 'keyword':   return 'auto · keyword';
+                            case 'embedding': return 'auto · embedding';
+                            case 'llm':       return 'auto · LLM';
+                            case 'manual':    return 'manual';
+                            case 'preset':    return 'preset';
+                            default:          return _r.method;
+                        }
+                    })();
+                    const _toneCls = (() => {
+                        switch (_r.method) {
+                            case 'keyword':
+                            case 'embedding':
+                            case 'llm':    return 'ar-auto';
+                            case 'manual': return 'ar-manual';
+                            case 'preset': return 'ar-preset';
+                            default:       return 'ar-info';
+                        }
+                    })();
+                    const _skillId = _r.skill?.meta?.id || _r.skill?.meta?.name || '(active preset)';
+                    const _skillDisplay = (_r.skill?.meta?.name || _skillId).slice(0, 48);
+                    const _scorePct = Math.round((_r.score || 0) * 100);
+                    const _elapsed  = _r.elapsed_ms ? `${Math.round(_r.elapsed_ms)}ms` : '';
+                    const _candList = (_r.candidates || []).slice(0, 4)
+                        .map((c) => `${c.name || c.id} (${c.score})`).join('\\n  ');
+                    const _tooltip =
+                        `Skill: ${_skillId}\\n` +
+                        `Method: ${_methodLabel}\\n` +
+                        `Confidence: ${_scorePct}%\\n` +
+                        (_elapsed ? `Routing time: ${_elapsed}\\n` : '') +
+                        (_candList ? `\\nCandidates considered:\\n  ${_candList}` : '') +
+                        `\\n\\nClick to deactivate.`;
+                    const _mcpCount = _unifiedPlan.mcp_tools?.length || 0;
+                    const _mcpHint = _mcpCount > 0
+                        ? `<span class="ar-mcp" title="${_mcpCount} MCP tool(s) also surfaced for this turn">+${_mcpCount} MCP</span>`
+                        : '';
+                    addMsg(tabId, {
+                        role: 'lucy',
+                        rawRole: 'Sistema',
+                        rawContent: '',     // not part of LLM conversation history
+                        ephemeral: true,    // don't persist across reloads
+                        html:
+                            `<div class="ar-chip ${_toneCls}" title="${_tooltip.replace(/"/g, '&quot;')}" ` +
+                            `data-clear="1" role="button" tabindex="0">` +
+                              `<span class="ar-arrow">▸</span> ` +
+                              `<span class="ar-method">${escapeHtml(_methodLabel)}</span>` +
+                              `<span class="ar-sep">·</span>` +
+                              `<span class="ar-skill">${escapeHtml(_skillDisplay)}</span>` +
+                              (_scorePct > 0 ? `<span class="ar-score">${_scorePct}%</span>` : '') +
+                              _mcpHint +
+                              `<span class="ar-close" title="Deactivate">✕</span>` +
+                            `</div>`,
+                        style: 'background:transparent;border:none;padding:0;margin:4px 0 8px;',
+                    });
+                }
             }
 
             // v1.7.4 — security skills take priority over normal presets:
@@ -10482,6 +10570,67 @@ if (Test-Path $src) {
     </div>
 
     <style>
+      /* v1.7.11 — Auto-route chip rendered between user message and
+         Lucy's response when a skill is loaded for the turn. Click
+         anywhere on the chip to deactivate. Keeps the chat visually
+         clean: small, monospace, single-line, color-coded by routing
+         method. */
+      :global(.ar-chip) {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-family: var(--mono, ui-monospace, monospace);
+        font-size: 10.5px; line-height: 1.2;
+        padding: 4px 9px 4px 8px;
+        border-radius: 12px;
+        border: 1px solid transparent;
+        cursor: pointer;
+        user-select: none;
+        max-width: 100%;
+        transition: opacity .12s, transform .12s;
+      }
+      :global(.ar-chip:hover)  { opacity: .85; }
+      :global(.ar-chip:active) { transform: scale(.97); }
+      :global(.ar-chip .ar-arrow)  { font-size: 9px; opacity: .8; }
+      :global(.ar-chip .ar-method) { font-weight: 600; letter-spacing: .25px; opacity: .85; }
+      :global(.ar-chip .ar-sep)    { opacity: .35; }
+      :global(.ar-chip .ar-skill)  { font-weight: 500; }
+      :global(.ar-chip .ar-score)  {
+        font-weight: 600; padding: 1px 5px; border-radius: 6px;
+        background: rgba(255,255,255,.06);
+        opacity: .9;
+      }
+      :global(.ar-chip .ar-mcp)    {
+        font-size: 9.5px; font-weight: 600; padding: 1px 5px;
+        border-radius: 6px; background: rgba(59,158,255,.10);
+        color: var(--blue, #3b9eff);
+        margin-left: 2px;
+      }
+      :global(.ar-chip .ar-close)  {
+        font-size: 9px; opacity: .55; margin-left: 4px;
+        padding: 0 2px; border-radius: 4px;
+      }
+      :global(.ar-chip:hover .ar-close) { opacity: 1; background: rgba(255,255,255,.08); }
+      /* Tone variants — auto-routed (green), manual (amber), preset (purple) */
+      :global(.ar-auto) {
+        color: var(--acc, #10b981);
+        background: rgba(16, 185, 129, .06);
+        border-color: rgba(16, 185, 129, .22);
+      }
+      :global(.ar-manual) {
+        color: var(--amber, #f59e0b);
+        background: rgba(245, 158, 11, .06);
+        border-color: rgba(245, 158, 11, .22);
+      }
+      :global(.ar-preset) {
+        color: #a78bfa;
+        background: rgba(167, 139, 250, .06);
+        border-color: rgba(167, 139, 250, .22);
+      }
+      :global(.ar-info) {
+        color: var(--txt2, #94a3b8);
+        background: rgba(255,255,255,.03);
+        border-color: rgba(255,255,255,.08);
+      }
+
       .sf-overlay {
         position: fixed; inset: 0; z-index: 8500;
         background: rgba(2, 6, 12, 0.62);

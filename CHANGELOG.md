@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.11] — 2026-05-31
+
+Closes the v1.7.5 UX gap: auto-route chip in chat. After the
+unified orchestrator routes a security skill, an inline chip
+renders between the user's message and Lucy's streaming
+response so the user can see exactly which skill loaded, by
+which method, and with what confidence — no need to run
+`/sec-skill auto status` after the fact.
+
+### Chip anatomy
+
+```
+▸ auto · embedding · conducting-phishing-incident-response  78%   +3 MCP   ✕
+```
+
+- **`▸`** — visual indicator the chip is interactive.
+- **Method** — color-coded by routing tier:
+  - `auto · keyword` / `auto · embedding` / `auto · LLM` → green
+    (auto-routed)
+  - `manual` → amber (user activated via `/sec-skill use <id>`)
+  - `preset` → purple (regular v1.6.1 preset active)
+- **Skill name** — truncated at 48 chars.
+- **Score pill** — confidence percentage. Keyword scores are
+  normalized by 100, embedding/LLM scores already in [0,1].
+- **`+N MCP`** — blue badge when the orchestrator also ranked
+  N MCP server tools as relevant for this turn.
+- **`✕`** — close glyph. Click anywhere on the chip to
+  deactivate the skill/preset; equivalent to `/preset clear`.
+
+### Hover tooltip
+
+Native `title=` shows the full diagnostic:
+
+```
+Skill: conducting-phishing-incident-response
+Method: auto · embedding
+Confidence: 78%
+Routing time: 850ms
+
+Candidates considered:
+  conducting-phishing-incident-response (78)
+  analyzing-email-headers-for-phishing-investigation (62)
+  analyzing-certificate-transparency-for-phishing (54)
+  detecting-phishing-credential-harvesting-attempts (49)
+
+Click to deactivate.
+```
+
+### Click behaviour
+
+Single click anywhere on the chip:
+1. Calls `clearActiveSecuritySkill()` and
+   `activeSkillPresetId.set(null)` — both are idempotent so
+   whichever was active gets cleared.
+2. Chip fades to 35% opacity, `✕` becomes `✓`, skill name
+   replaced with "deactivated for next turn".
+
+The next turn fires Lucy without any skill framing, even if
+auto-routing is still globally enabled — until the user types
+a prompt that matches another skill.
+
+### Ephemeral by design
+
+The chip carries `ephemeral: true` in its message metadata so
+it isn't persisted to LLM conversation history. The LLM sees
+the skill body in the system prompt, not the chip — keeping
+the conversation context clean.
+
+### Why this matters
+
+Before v1.7.11: the user typed a question, got a structured
+response, but had no way to know whether the structure came
+from auto-routing or from Gemini's training data. After
+v1.7.11: every skill activation is visible and reversible
+inline.
+
+---
+
 ## [1.7.10] — 2026-05-31
 
 Hotfix #5 for the skill-active turn break: even with v1.7.9's
