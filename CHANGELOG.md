@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.13] — 2026-05-31
+
+Hotfix v1.7.11/12: the auto-route chip was tied to
+`_unifiedPlan.route`, which is null when `buildUnifiedContext`
+throws. The previous code only logged a `console.warn` on
+failure, so the chip silently no-op'd while the skill still
+got injected through the separate
+`peekActiveSecuritySkill()` fallback path in the prompt
+builder — producing the exact symptom the user reported:
+"Lucy responds with skill structure but no chip shows up".
+
+Diagnosis came from `/sec-skill auto status`:
+
+```
+Embeddings cacheados   0 / 213 (disk ✓)
+Último auto-route       manual · conducting-phishing-incident-response · 1.00 · 0ms · 10:31:45
+```
+
+The `Último auto-route` timestamp was 24 minutes stale even
+though Lucy had just answered a phishing question. That's the
+fingerprint of `buildUnifiedContext` failing silently.
+
+### Hardened chip derivation
+
+The chip now derives from the **state that actually affects the
+turn**, not from the orchestrator's optional return value:
+
+```js
+const activeSec = peekActiveSecuritySkill();
+const activeP   = !activeSec ? peekActivePreset() : null;
+if (!activeSec && !activeP) return;
+
+// Use unified plan's method/score IF available, otherwise fall
+// back to 'manual' (skill) or 'preset' (preset) at score 1.0.
+const method = _unifiedPlan?.route?.method && _unifiedPlan.route.method !== 'none'
+    ? _unifiedPlan.route.method
+    : (activeSec ? 'manual' : 'preset');
+```
+
+Result: any turn where a skill or preset shapes Lucy's
+response now shows a chip, regardless of whether the
+orchestrator threw. The chip falls back to displaying
+"manual" or "preset" with full confidence when no auto-route
+diagnostic data is available.
+
+### Side effect
+
+The chip is now also visible for **previously-activated skills
+that survive across boots** — if the user activated
+`conducting-phishing-IR` last session and the bridge restored
+it from localStorage on boot, every subsequent turn shows the
+amber `manual` chip until the user clicks `✕` or runs
+`/preset clear`. This is intentional: invisible long-lived
+state was the original v1.7.5 UX complaint.
+
+---
+
 ## [1.7.12] — 2026-05-31
 
 Hotfix v1.7.11: the auto-route chip was rendering invisible

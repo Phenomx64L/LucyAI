@@ -3749,76 +3749,88 @@ REGLAS DE FORMATO:
                 console.warn('[+page] unified context failed:', e);
             }
 
-            // v1.7.11 — Auto-route chip. Closes the v1.7.5 UX gap: the
-            // user can now SEE which skill was loaded for this turn, by
-            // which method, and with what confidence. Renders between
-            // the user's message and Lucy's streaming response so it
-            // never interrupts content. Click-to-clear lets the user
-            // back out instantly if the routing was wrong.
+            // v1.7.13 — Auto-route chip, hardened. Earlier versions
+            // depended on `_unifiedPlan.route` being non-null, which
+            // failed silently if `buildUnifiedContext()` threw (and
+            // its catch only console.warns). The new strategy: derive
+            // the chip from the STATE that actually affects this turn:
             //
-            // v1.7.11 fix: safeHtml() sanitizes every addMsg payload —
-            // strips inline `style=` and any `data-*` attribute not on
-            // the explicit allowlist. We use `role: 'system'` so there's
-            // no Lucy avatar bubble around the chip, and selection
-            // delegates to the `.ar-chip` class instead of a data
-            // attribute. Tooltip stays in `title=` which IS allowed.
-            if (_unifiedPlan && _unifiedPlan.route) {
-                const _r = _unifiedPlan.route;
-                if (_r.method !== 'none' && (_r.skill || _r.method === 'preset')) {
-                    const _methodLabel = (() => {
-                        switch (_r.method) {
-                            case 'keyword':   return 'auto · keyword';
-                            case 'embedding': return 'auto · embedding';
-                            case 'llm':       return 'auto · LLM';
-                            case 'manual':    return 'manual';
-                            case 'preset':    return 'preset';
-                            default:          return _r.method;
-                        }
-                    })();
-                    const _toneCls = (() => {
-                        switch (_r.method) {
-                            case 'keyword':
-                            case 'embedding':
-                            case 'llm':    return 'ar-auto';
-                            case 'manual': return 'ar-manual';
-                            case 'preset': return 'ar-preset';
-                            default:       return 'ar-info';
-                        }
-                    })();
-                    const _skillId = _r.skill?.meta?.id || _r.skill?.meta?.name || '(active preset)';
-                    const _skillDisplay = (_r.skill?.meta?.name || _skillId).slice(0, 48);
-                    const _scorePct = Math.round((_r.score || 0) * 100);
-                    const _elapsed  = _r.elapsed_ms ? `${Math.round(_r.elapsed_ms)}ms` : '';
-                    const _candList = (_r.candidates || []).slice(0, 4)
-                        .map((c) => `${c.name || c.id} (${c.score})`).join('\n  ');
-                    const _tooltip =
-                        `Skill: ${_skillId}\n` +
-                        `Method: ${_methodLabel}\n` +
-                        `Confidence: ${_scorePct}%\n` +
-                        (_elapsed ? `Routing time: ${_elapsed}\n` : '') +
-                        (_candList ? `\nCandidates considered:\n  ${_candList}` : '') +
-                        `\n\nClick to deactivate.`;
-                    const _mcpCount = _unifiedPlan.mcp_tools?.length || 0;
-                    const _mcpHint = _mcpCount > 0
-                        ? `<span class="ar-mcp" title="${_mcpCount} MCP tool(s) also surfaced for this turn">+${_mcpCount} MCP</span>`
-                        : '';
-                    addMsg(tabId, {
-                        role: 'system',                       // no Lucy bubble / avatar
-                        rawRole: 'Sistema',
-                        rawContent: '',                       // not part of LLM conversation history
-                        html:
-                            `<div class="ar-chip ${_toneCls}" title="${_tooltip.replace(/"/g, '&quot;')}" role="button" tabindex="0">` +
-                              `<span class="ar-arrow">▸</span>` +
-                              `<span class="ar-method">${escapeHtml(_methodLabel)}</span>` +
-                              `<span class="ar-sep">·</span>` +
-                              `<span class="ar-skill">${escapeHtml(_skillDisplay)}</span>` +
-                              (_scorePct > 0 ? `<span class="ar-score">${_scorePct}%</span>` : '') +
-                              _mcpHint +
-                              `<span class="ar-close" title="Deactivate">✕</span>` +
-                            `</div>`,
-                    });
-                }
-            }
+            //   peekActiveSecuritySkill()   ← injected as security skill
+            //   peekActivePreset()          ← v1.6.1 preset
+            //   _unifiedPlan.route          ← gives method (auto vs manual)
+            //                                 if it ran successfully
+            //
+            // This way, even when buildUnifiedContext silently breaks,
+            // the user still sees a chip whenever a skill or preset
+            // shaped the turn — the lying-by-omission case is gone.
+            (() => {
+                const _activeSec  = peekActiveSecuritySkill();
+                const _activeP    = !_activeSec ? peekActivePreset() : null;
+                if (!_activeSec && !_activeP) return;
+                const _r        = _unifiedPlan?.route || null;
+                const _method   = _r?.method && _r.method !== 'none'
+                    ? _r.method
+                    : (_activeSec ? 'manual' : 'preset');
+                const _methodLabel = (() => {
+                    switch (_method) {
+                        case 'keyword':   return 'auto · keyword';
+                        case 'embedding': return 'auto · embedding';
+                        case 'llm':       return 'auto · LLM';
+                        case 'manual':    return 'manual';
+                        case 'preset':    return 'preset';
+                        default:          return String(_method);
+                    }
+                })();
+                const _toneCls = (() => {
+                    switch (_method) {
+                        case 'keyword':
+                        case 'embedding':
+                        case 'llm':    return 'ar-auto';
+                        case 'manual': return 'ar-manual';
+                        case 'preset': return 'ar-preset';
+                        default:       return 'ar-info';
+                    }
+                })();
+                const _skillId = _activeSec?.meta?.id
+                    || _activeSec?.meta?.name
+                    || _activeP?.id
+                    || '(active framing)';
+                const _skillName = _activeSec?.meta?.name
+                    || _activeP?.name?.es
+                    || _activeP?.name?.en
+                    || _skillId;
+                const _skillDisplay = String(_skillName).slice(0, 48);
+                const _scorePct = Math.round(((_r?.score) || 1.0) * 100);
+                const _elapsed  = _r?.elapsed_ms ? `${Math.round(_r.elapsed_ms)}ms` : '';
+                const _candList = (_r?.candidates || []).slice(0, 4)
+                    .map((c) => `${c.name || c.id} (${c.score})`).join('\n  ');
+                const _tooltip =
+                    `Skill: ${_skillId}\n` +
+                    `Method: ${_methodLabel}\n` +
+                    `Confidence: ${_scorePct}%\n` +
+                    (_elapsed ? `Routing time: ${_elapsed}\n` : '') +
+                    (_candList ? `\nCandidates considered:\n  ${_candList}` : '') +
+                    `\n\nClick to deactivate.`;
+                const _mcpCount = _unifiedPlan?.mcp_tools?.length || 0;
+                const _mcpHint = _mcpCount > 0
+                    ? `<span class="ar-mcp" title="${_mcpCount} MCP tool(s) also surfaced for this turn">+${_mcpCount} MCP</span>`
+                    : '';
+                addMsg(tabId, {
+                    role: 'system',                   // no Lucy bubble / avatar
+                    rawRole: 'Sistema',
+                    rawContent: '',                   // not part of LLM conversation history
+                    html:
+                        `<div class="ar-chip ${_toneCls}" title="${_tooltip.replace(/"/g, '&quot;')}" role="button" tabindex="0">` +
+                          `<span class="ar-arrow">▸</span>` +
+                          `<span class="ar-method">${escapeHtml(_methodLabel)}</span>` +
+                          `<span class="ar-sep">·</span>` +
+                          `<span class="ar-skill">${escapeHtml(_skillDisplay)}</span>` +
+                          (_scorePct > 0 ? `<span class="ar-score">${_scorePct}%</span>` : '') +
+                          _mcpHint +
+                          `<span class="ar-close" title="Deactivate">✕</span>` +
+                        `</div>`,
+                });
+            })();
 
             // v1.7.4 — security skills take priority over normal presets:
             // they're activated explicitly via /sec-skill use <id> and the
