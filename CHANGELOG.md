@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.18] — 2026-06-01
+
+User feedback on v1.7.17 design: the close-tab modal still
+used the old stand-alone styling. Migrated it to the DialogHost
+so it matches the rest of the v1.7.17 dialogs visually.
+
+### Migrated
+
+`cerrarTab(id, e)` now `await`s `lucyConfirm` with `tone:
+'warning'` and concrete labels in both languages:
+
+```ts
+const ok = await lucyConfirm(
+    isEN ? `Close "${t.title}"?` : `¿Cerrar "${t.title}"?`,
+    { tone: 'warning',
+      description: isEN
+          ? 'This terminal has an active conversation. Closing it will discard the history.'
+          : 'Esta terminal tiene conversación activa. Al cerrarla se perderá el historial.',
+      confirmLabel: isEN ? 'Close terminal' : 'Cerrar terminal',
+      cancelLabel:  isEN ? 'Cancel' : 'Cancelar' });
+if (!ok) return;
+```
+
+### Removed (dead code)
+
+- `<div class="mb">…¿Cerrar...</div>` stand-alone markup (~17 lines)
+- `confirmarCierreTab()` handler
+- `cancelarCierreTab()` handler
+- Local `pendingCloseTabId` variable
+- `showCloseTabModal` import from stores
+- Esc handler branch for `$showCloseTabModal` (DialogHost owns Esc)
+
+`stores.ts` still exports the store (kept for any third-party
+extension that might subscribe to it during HMR — safe to
+remove entirely in a future cleanup release).
+
+### Other stand-alone modals NOT migrated
+
+The audit also surfaced 8 other stand-alone modals using the
+`.mbox` styling: `showNewActionModal`, `showLearnConfirm`,
+`showMemoryModal`, `showRunAsModal`, `showHistoryModal`,
+`showAlertsModal`, `showRunbookModal`, runbook execution panel.
+
+These are **feature modals** (multi-field forms, embedded
+panels, complex layouts) — not simple yes/no confirms. They
+stay as-is because porting them to the Promise-based dialog
+service would lose their interactive functionality. Their
+visual identity could be unified in a future polishing sprint
+without changing semantics.
+
+---
+
 ## [1.7.17] — 2026-06-01
 
 User reported seeing browser-native `localhost:1420 dice…`

@@ -222,7 +222,7 @@ import { listen } from '@tauri-apps/api/event';
              showAlertsModal, showRunbookModal, showMultiHostModal,
              showAboutModal, showChangeKeyModal, showNewActionModal,
              showMemoryModal, showChipsModal, showLearnConfirm,
-             showRunAsModal, showHistoryModal, showCloseTabModal,
+             showRunAsModal, showHistoryModal,
              multiHostSelected, multiHostCmd, multiHostResults, multiHostRunning,
              activeProfileHosts,
              costSummaryMonth, tokenBudgetConfig,
@@ -483,8 +483,11 @@ import { listen } from '@tauri-apps/api/event';
         copied: isEN ? 'Copied to clipboard' : 'Copiado al portapapeles',
     };
     let showDragOverlay    = false;
-    // showMemoryModal, showLearnConfirm, showCloseTabModal → stores.ts
-    let pendingCloseTabId  = null;
+    // showMemoryModal, showLearnConfirm → stores.ts
+    // v1.7.18: pendingCloseTabId / showCloseTabModal removed — cerrarTab
+    // now uses await lucyConfirm directly. Kept the store export in
+    // stores.ts (other code may still reference it during HMR refresh
+    // until next full restart).
     let learnedCommands    = [];
     let pendingLearn       = null;
     let pendingLearnTab    = null;
@@ -2526,16 +2529,26 @@ import { listen } from '@tauri-apps/api/event';
         return newId;
     }
 
-    function cerrarTab(id, e) {
+    async function cerrarTab(id, e) {
         e.stopPropagation();
         const t = getTab(id);
         if (!t) return;
         const msgsReales = t.messages.filter(m => m.role !== 'system' && m.role !== 'hidden').length;
         if (msgsReales > 3) {
-            // Abrir modal de confirmación en lugar de window.confirm()
-            pendingCloseTabId = id;
-            $showCloseTabModal = true;
-            return;
+            // v1.7.18 — unificado con el DialogHost de v1.7.17 en lugar de
+            // un modal stand-alone con su propio styling. El componente,
+            // la store showCloseTabModal y los helpers confirmar/cancelar
+            // se eliminaron porque el queue de dialog-service ya cubre
+            // todos los casos.
+            const ok = await lucyConfirm(
+                isEN ? `Close "${t.title}"?` : `¿Cerrar "${t.title}"?`,
+                { tone: 'warning',
+                  description: isEN
+                      ? 'This terminal has an active conversation. Closing it will discard the history.'
+                      : 'Esta terminal tiene conversación activa. Al cerrarla se perderá el historial.',
+                  confirmLabel: isEN ? 'Close terminal' : 'Cerrar terminal',
+                  cancelLabel:  isEN ? 'Cancel' : 'Cancelar' });
+            if (!ok) return;
         }
         _ejecutarCierreTab(id);
     }
@@ -2593,17 +2606,9 @@ import { listen } from '@tauri-apps/api/event';
         persistir();
     }
 
-    function confirmarCierreTab() {
-        if (pendingCloseTabId) _ejecutarCierreTab(pendingCloseTabId);
-        $showCloseTabModal = false;
-        pendingCloseTabId = null;
-        if (tabs.length <= 1) showTabPicker = false;
-    }
-
-    function cancelarCierreTab() {
-        $showCloseTabModal = false;
-        pendingCloseTabId = null;
-    }
+    // v1.7.18: confirmarCierreTab / cancelarCierreTab / pendingCloseTabId
+    // removed. cerrarTab now awaits lucyConfirm directly and falls
+    // through to _ejecutarCierreTab on accept.
 
     const getTab=(id)=>tabs.find(t=>t.id===id);
     const refresh=()=>tabs=[...tabs];
@@ -2798,7 +2803,7 @@ import { listen } from '@tauri-apps/api/event';
                 if ($showHistoryModal)   { $showHistoryModal = false; break; }
                 if ($showRunAsModal)     { cancelarRunAs(); break; }
                 if (pendingSecurityBlock) { pendingSecurityBlock = null; break; }
-                if ($showCloseTabModal)  { pendingCloseTabId = null; $showCloseTabModal = false; break; }
+                // v1.7.18 — close-tab modal moved to lucyConfirm; DialogHost handles its own ESC.
                 if ($showLearnConfirm)   { $showLearnConfirm = false; break; }
                 if (showHostModal)      { showHostModal = false; break; }
                 if ($showAlertsModal)    { $showAlertsModal = false; break; }
@@ -9781,23 +9786,9 @@ if (Test-Path $src) {
   </div>
   {/if}
 
-  {#if $showCloseTabModal}
-  <div class="mb">
-    <div role="dialog" use:focusTrap class="mbox sm" style="text-align:center;">
-      <div style="font-size:28px;margin-bottom:12px;">⊞</div>
-      <h2 style="color:white;margin:0 0 8px;font-size:16px;font-weight:600;">
-        ¿Cerrar "{tabs.find(t=>t.id===pendingCloseTabId)?.title ?? 'esta terminal'}"?
-      </h2>
-      <p style="color:var(--txt2);font-size:13px;margin-bottom:24px;line-height:1.5;">
-        Esta terminal tiene conversación activa.<br>Al cerrarla se perderá el historial.
-      </p>
-      <div style="display:flex;gap:10px;justify-content:center;">
-        <button class="mbtn ghost" on:click={cancelarCierreTab}>Cancelar</button>
-        <button class="mbtn warn" on:click={confirmarCierreTab}>Cerrar terminal</button>
-      </div>
-    </div>
-  </div>
-  {/if}
+  <!-- v1.7.18 — close-tab confirmation is now handled by lucyConfirm
+       via the DialogHost (see cerrarTab above). The stand-alone modal
+       and the showCloseTabModal store were removed for consistency. -->
 
   <!-- ── MODAL: ACERCA DE ── -->
   {#if $showAboutModal}
