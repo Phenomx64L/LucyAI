@@ -3845,6 +3845,21 @@ Use ONE of these patterns instead:
                 /solo\s+(qu[eé]|dame|dime|mu[eé]strame)\s/i.test(raw)
             );
 
+            // ── v1.7.10 — SKILL-ACTIVE INTENT ───────────────────────────
+            // When a security skill is active, every <EXECUTE> the LLM
+            // emits is treated as INFORMATIONAL (rendered as a code
+            // block, not run), regardless of what the user actually
+            // typed. The skill body is reference documentation; we
+            // never want it executed without explicit user values.
+            //
+            // This is the UX fix on top of v1.7.9's backend guard:
+            // before, Lucy's streaming response was interrupted when
+            // her placeholder EXECUTE tried to run. Now the EXECUTE
+            // block is silently downgraded to a ```powershell fence
+            // and the explanation flows uninterrupted.
+            const _skillActiveForExec = peekActiveSecuritySkill();
+            const skillInfoIntent = !!_skillActiveForExec;
+
             // ── LINUX-ON-WINDOWS GUARD: detect Linux-specific syntax in <EXECUTE> on Windows ──
             // Applied post-response to catch cases where the LLM ignores OS Guard prompt rule.
             const _isLinuxCmd = (cmd) =>
@@ -3857,7 +3872,7 @@ Use ONE of these patterns instead:
             let _drainTimer = null;
             const DRAIN_MS = 40;    // ms entre revelados — 40ms reduce flicker vs 30ms
 
-            const cleanStreamDisplay = (text) => (codeGenIntent || infoIntent
+            const cleanStreamDisplay = (text) => (codeGenIntent || infoIntent || skillInfoIntent
                 ? text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, c) => '\n```powershell\n'+c.trim()+'\n```\n')
                        .replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, c) => '\n```cmd\n'+c.trim()+'\n```\n')
                 : text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (m, c) =>
@@ -6039,7 +6054,7 @@ Use ONE of these patterns instead:
                     // Guard: never execute if user only asked for the command (infoIntent)
                     //        or if Lucy emitted a Linux command while running on Windows.
                     const _agentCmd = (execM && execM[1] ? execM[1] : '').trim();
-                    if (execM && !infoIntent && !_isLinuxCmd(_agentCmd)) {
+                    if (execM && !infoIntent && !skillInfoIntent && !_isLinuxCmd(_agentCmd)) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
                                            .replace(/<EXECUTE>[\s\S]*?(?:<\/EXECUTE>|$)/gi, '')
@@ -6597,7 +6612,7 @@ times the SAME way, switch tool kind entirely.
                 .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
                 .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
                 .replace(/<EXECUTE[^>]*>([\s\S]*?)<\/EXECUTE[^>]*>/gi,
-                    (_m, inner) => (infoIntent || codeGenIntent) ? String(inner || '') : '')
+                    (_m, inner) => (infoIntent || codeGenIntent || skillInfoIntent) ? String(inner || '') : '')
                 .replace(/<PLAN>[\s\S]*?<\/PLAN>/gi, '')
                 .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
                 .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
@@ -6687,7 +6702,7 @@ times the SAME way, switch tool kind entirely.
             let safeResp = resp;
             // Telemetry: log confidence badges emitted by Lucy (once per response)
             logConfidenceFromText(safeResp, tabId);
-            if (codeGenIntent || infoIntent) {
+            if (codeGenIntent || infoIntent || skillInfoIntent) {
                 // Convert any <EXECUTE> tags to code blocks so they display as text, not execute
                 safeResp = safeResp.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, code) => '\n```powershell\n' + code.trim() + '\n```\n');
                 safeResp = safeResp.replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, code) => '\n```cmd\n' + code.trim() + '\n```\n');
@@ -6705,7 +6720,7 @@ times the SAME way, switch tool kind entirely.
             // wait for user click (Execute / Dry-Run / Cancel). Strip raw EXECUTE tags
             // if a PLAN is present (they'd be duplicates).
             const plans = parsePlanTags(safeResp);
-            if (plans.length && !codeGenIntent && !infoIntent) {
+            if (plans.length && !codeGenIntent && !infoIntent && !skillInfoIntent) {
                 let cardHtml = '';
                 for (const plan of plans) {
                     const planId = 'plan-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
@@ -6884,7 +6899,7 @@ times the SAME way, switch tool kind entirely.
             // ── EXECUTE_REMOTE (single): execute against a configured remote host ────
             // Fallback for single <EXECUTE_REMOTE> tags (if no batch above)
             const execRemoteM = safeResp.match(/<EXECUTE_REMOTE\s+target=["']?([^"'>]+)["']?>([\s\S]*?)<\/EXECUTE_REMOTE>/i);
-            if (execRemoteM && !codeGenIntent && !infoIntent) {
+            if (execRemoteM && !codeGenIntent && !infoIntent && !skillInfoIntent) {
                 const hostId = execRemoteM[1].trim();
                 const cmd = execRemoteM[2].trim();
                 const hostIdClean = hostId.replace(/^LucyHost_/, '');
@@ -6970,7 +6985,7 @@ times the SAME way, switch tool kind entirely.
             // Si el tab está en modo PowerShell, <EXECUTE_CMD> también corre por PS (PS ejecuta cmds nativos)
             const execType = (execCmdM && t.execEngine !== 'powershell') ? 'cmd' : execWmicM ? 'wmic' : execNetshM ? 'netsh' : execRegM ? 'reg' : execVbsM ? 'cscript' : 'powershell';
             const _postCmd = (execM && execM[1] ? execM[1] : '').trim();
-            if(execM && !infoIntent && !_isLinuxCmd(_postCmd)){
+            if(execM && !infoIntent && !skillInfoIntent && !_isLinuxCmd(_postCmd)){
                 const cmd=execM[1].trim();
                 // ── Destructive command detection (shared with agent loop) ──
                 if (isDestructiveCmd(cmd)) {

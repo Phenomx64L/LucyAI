@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.10] — 2026-05-31
+
+Hotfix #5 for the skill-active turn break: even with v1.7.9's
+backend placeholder guard, the user's chat showed Lucy's
+explanation getting truncated and a placeholder-guard error
+banner replacing it. The guard worked correctly (refused to
+run `Get-Content -Path 'C:\Ruta\Al\…'`) — but the LLM stream
+was already being parsed for `<EXECUTE>` blocks, and emitting
+one mid-response interrupted the stream.
+
+### The mental model that makes this clean
+
+When a security skill is active, the WHOLE TURN is documentation
+mode. Every `<EXECUTE>` block the LLM emits during that turn is
+treated like the user only asked for the command (the existing
+`infoIntent` mode): rendered as a code fence, never executed.
+
+This already worked when the user typed "dame el comando" or
+"cómo se hace" — `infoIntent` detection caught those phrasings
+and stripped EXECUTE to ```powershell fences. v1.7.10 just
+extends the same mechanism: if a security skill is active,
+`skillInfoIntent` is true regardless of how the user phrased
+their question.
+
+### What changed
+
+`+page.svelte` — new `const skillInfoIntent = !!peekActiveSecuritySkill()`
+wired into the 5 existing gates that decide between "render as
+code" vs "execute":
+
+- `cleanStreamDisplay` — converts `<EXECUTE>` to ```powershell
+  during the streaming reveal so Lucy's words flow uninterrupted.
+- Agent loop execution guard (`execM && !infoIntent`) — adds
+  `&& !skillInfoIntent` so EXECUTE never reaches `runCmd`.
+- Final post-stream EXECUTE check (`execM && !infoIntent`) — same.
+- PLAN/EXECUTE_REMOTE gates — same.
+- The unified strip pass — adds `skillInfoIntent` so EXECUTE
+  inner contents preserve into the message body.
+
+### Three-layer outcome
+
+After all five fixes (v1.7.6 framing, v1.7.8 disabled
+auto-correct, v1.7.9 backend placeholder guard, v1.7.10
+skill-info intent):
+
+| Layer | Role |
+|-------|------|
+| Framing | Tells LLM not to emit `<EXECUTE>` with placeholders |
+| skill-info intent | If LLM emits anyway, frontend renders as fence |
+| Placeholder guard | If frontend somehow runs, backend refuses |
+| Auto-correct disable | If error reaches agent loop, no retry |
+
+The user-visible effect: skill-active turns now produce a
+single, complete, uninterrupted explanation with PowerShell
+code samples rendered as syntax-highlighted blocks. No
+"Skill activa" amber banner because no command ever tried
+to run.
+
+### Escape unchanged
+
+```
+/sec-skill auto off
+/preset clear
+```
+
+---
+
 ## [1.7.9] — 2026-05-31
 
 Hotfix #4 for v1.7.4/5: even with v1.7.6/7/8 prompt framing
