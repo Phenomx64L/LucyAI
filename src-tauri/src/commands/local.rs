@@ -202,6 +202,19 @@ pub async fn execute_cmd(
 ) -> Result<String, String> {
     rotate_audit_log();
 
+    // v1.7.9 — Placeholder guard. Refuse to execute when the script
+    // contains literal example values from a documentation skill body
+    // (C:\Ruta\Al\…, tu-usuario@dominio.com, <TENANT_ID>, etc). This
+    // is defense-in-depth on top of the v1.7.6/7/8 prompt framing —
+    // when the LLM ignores the framing, the guard catches it.
+    if let Some(evidence) = crate::utils::placeholder_guard::detect_placeholders(&script) {
+        audit(&format!(
+            "[{}] [HOST:{}] [PLACEHOLDER_GUARD] {} :: {}",
+            ts(), host(), evidence, &script[..script.len().min(200)]
+        ));
+        return Err(crate::utils::placeholder_guard::refusal_message(&evidence));
+    }
+
     // Permission check (user-defined rules)
     let perm = super::metrics::check_permission(script.clone(), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -448,6 +461,11 @@ pub async fn execute_netsh(args: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<String, String> {
+    // v1.7.9 — placeholder guard. Reg keys with bracket placeholders
+    // like HKLM\Software\<YOUR_VENDOR> or [INSERT_KEY] should not run.
+    if let Some(evidence) = crate::utils::placeholder_guard::detect_placeholders(&args) {
+        return Err(crate::utils::placeholder_guard::refusal_message(&evidence));
+    }
     // Permission check (user-defined rules)
     let perm = super::metrics::check_permission(format!("reg {}", &args), "command".to_string()).await?;
     match perm.action.as_str() {

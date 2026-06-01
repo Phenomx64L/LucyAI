@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.9] — 2026-05-31
+
+Hotfix #4 for v1.7.4/5: even with v1.7.6/7/8 prompt framing
++ disabled auto-correct, Gemini Flash still emitted
+`Get-Content -Path 'C:\Ruta\Al\Adjunto\sospechoso.zip'` (a
+literal placeholder from the skill body) and tried to execute
+it. The v1.7.8 amber banner caught the drift but the user
+still saw the message break mid-explanation.
+
+The root cause is that **the LLM can't be fully relied on to
+respect the framing rules**. The next defense has to be at the
+boundary where commands actually run.
+
+### Backend placeholder guard
+
+New `src-tauri/src/utils/placeholder_guard.rs`:
+
+- `detect_placeholders(script)` — regex scan of every command
+  for placeholder patterns. Returns the matching text as
+  evidence.
+- `refusal_message(evidence)` — crafts a friendly-but-firm
+  error string telling the LLM to STOP, explain to the user,
+  and ASK for real values rather than retry.
+
+Patterns covered:
+
+| Category | Examples |
+|----------|----------|
+| Spanish skill paths | `C:\Ruta\Al\…`, `C:\Ruta\Del\…` |
+| English skill paths | `C:\Path\To\…`, `/path/to/…` |
+| Placeholder usernames | `tu-usuario@dominio.com`, `your-user@example.com`, `admin@tudominio.com`, `*@empresa.com` |
+| Bracketed tokens | `<TENANT_ID>`, `[INSERT_DOMAIN]`, `<YOUR-API-KEY>`, `YOUR-SUBSCRIPTION` |
+| Skill example IDs | `Purga_Phishing_Incident`, `sospechoso.zip`, `suspicious.exe`, `case-2024-001` |
+
+8 unit tests covering true positives, true negatives (real
+commands like `Get-Process`, `Get-EventLog`, `git clone`,
+`ssh user@10.0.0.5`), and the friendly-error contract.
+
+### Wired into 3 entry points
+
+`execute_powershell`, `execute_cmd`, and `execute_reg` now scan
+their input BEFORE running the permission check. On detection:
+
+- Audit log line: `[PLACEHOLDER_GUARD] <evidence> :: <script>`
+- Return `Err(refusal_message)` — propagates back to the
+  agent loop as a normal command failure.
+- v1.7.8's "Skill activa — auto-corrección desactivada" banner
+  catches the refusal, stopping the conversation cleanly.
+
+### Three-layer defense in depth
+
+After this release:
+
+1. **Prompt framing** (v1.7.6/7/8) — tells the LLM not to
+   emit `<EXECUTE>` with placeholder values. Works for
+   well-instructed models, frequently slips for Flash-tier.
+2. **Auto-correct disable** (v1.7.8) — even if a placeholder
+   command runs and fails, the agent loop doesn't retry.
+3. **Placeholder guard** (v1.7.9) — refuses the command at the
+   shell boundary so it never runs in the first place.
+
+If all three are bypassed, the user can always:
+```
+/sec-skill auto off
+/preset clear
+```
+
+### False-positive mitigation
+
+Skill activation is opt-in. The guard fires on commands like
+`ssh tu-usuario@host` even when no skill is active — that's
+intentional. A legit user-typed command with the placeholder
+shape can override via the existing bypass-token flow (the
+SECURITY_BLOCK / cryptographic one-shot from v1.4.9). We
+intentionally do NOT add a "skill is active" gate because
+that would invite skill-body content to leak into non-skill
+turns when the bridge cache is stale.
+
+---
+
 ## [1.7.8] — 2026-05-31
 
 Hotfix #3 for v1.7.4/5: skill-active turn drifted into a wild

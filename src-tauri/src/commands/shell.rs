@@ -31,6 +31,24 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
 
     rotate_audit_log();
 
+    // v1.7.9 — Placeholder guard. See utils/placeholder_guard.rs.
+    // Refuses to run example values from a documentation skill body
+    // before they hit PowerShell and trigger the autocorrect / agent
+    // loop. The error message is tuned to make the LLM stop and ask
+    // the user for real values, not retry.
+    if let Some(evidence) = crate::utils::placeholder_guard::detect_placeholders(&script) {
+        let line = format!(
+            "[{}] [USR:{}] [PLACEHOLDER_GUARD] {} :: {}",
+            timestamp, user, evidence, &script[..script.len().min(200)]
+        );
+        let _ = OpenOptions::new().create(true).append(true).open(&audit_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{}", line)
+            });
+        return Err(crate::utils::placeholder_guard::refusal_message(&evidence));
+    }
+
     let mut log_file = OpenOptions::new().create(true).append(true).open(&audit_path)
         .map_err(|e| { write_app_log("ERROR", &format!("No se pudo abrir audit log: {}", e)); format!("Error audit log: {}", e) })?;
 
