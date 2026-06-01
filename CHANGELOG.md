@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.14] — 2026-05-31
+
+UX hotfix on the v1.6.1 SkillPresetPicker: clicking a tile
+updated the `activeSkillPresetId` store silently and closed
+the modal "eventually", with no toast, no visible chip until
+the next turn, and (per user report) sometimes the modal
+appeared stuck open. The user couldn't tell anything had
+happened.
+
+Two fixes layered:
+
+1. **Toast on activate/deactivate.** `svelte-sonner` confirmation:
+   - On activate: `✦ Plantilla activada: <name>` + description
+     "Moldeará la próxima respuesta de Lucy. Verás un chip
+     morado en el chat."
+   - On deactivate: `✓ Plantilla desactivada` + description
+     "Lucy responderá con comportamiento por defecto desde el
+     siguiente turno."
+   3.5s duration on activate, 2.5s on deactivate.
+2. **Explicit `dispatch('close')` after activation.** Previously
+   we just set `open = false` and relied on the dialog's
+   bidirectional bind to fire `onOpenChange`. Now we dispatch
+   directly so the parent unmounts the modal immediately, no
+   matter how `bits-ui` Dialog handles the internal state
+   transition.
+
+Also: activating a preset now clears any active security skill
+from the `/sec-skill use` path. The v1.7.5 single-active-framing
+invariant the chip system assumes only holds when one of the
+two slots is occupied at a time.
+
+### How to invoke
+
+Slash commands (any of the three works):
+```
+/preset
+/presets
+/skill-preset
+```
+
+`/preset clear` clears both kinds of framing in one shot.
+
+---
+
 ## [1.7.13] — 2026-05-31
 
 Hotfix v1.7.11/12: the auto-route chip was tied to

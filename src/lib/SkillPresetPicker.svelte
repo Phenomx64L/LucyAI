@@ -17,6 +17,15 @@
     import {
         activeSkillPresetId, setActivePresetId,
     } from '$lib/skill-preset-store';
+    // v1.7.14 — Toast confirmation + cross-bridge clear. Selecting a
+    // preset used to update the store silently and close the modal,
+    // but the modal sometimes "stuck" visually and the user had no
+    // explicit signal that activation happened. The toast removes the
+    // ambiguity. We also clear any active security skill (from
+    // /sec-skill use) so the single-active-framing invariant the
+    // v1.7.5 chip system assumes holds.
+    import { toast as sonnerToast } from 'svelte-sonner';
+    import { clearActiveSecuritySkill } from '$lib/security-skill-bridge';
 
     export let open = false;
     export let isEN = false;
@@ -29,12 +38,35 @@
     }
 
     function activate(p: SkillPreset) {
+        // Clear any active security skill — the chip system enforces
+        // single-active-framing per turn.
+        try { clearActiveSecuritySkill(); } catch { /* ignore */ }
         setActivePresetId(p.id);
+        const nm = isEN ? p.name.en : p.name.es;
+        sonnerToast.success(
+            isEN ? `✦ Preset activated: ${nm}` : `✦ Plantilla activada: ${nm}`,
+            { description: isEN
+                ? 'Will shape Lucy\'s next response. A purple chip will appear in chat.'
+                : 'Moldeará la próxima respuesta de Lucy. Verás un chip morado en el chat.',
+              duration: 3500,
+            },
+        );
         open = false;
+        dispatch('close');
     }
     function deactivate() {
+        try { clearActiveSecuritySkill(); } catch { /* ignore */ }
         setActivePresetId(null);
+        sonnerToast.success(
+            isEN ? '✓ Preset deactivated' : '✓ Plantilla desactivada',
+            { description: isEN
+                ? 'Lucy will respond with default behaviour from the next turn.'
+                : 'Lucy responderá con comportamiento por defecto desde el siguiente turno.',
+              duration: 2500,
+            },
+        );
         open = false;
+        dispatch('close');
     }
 
     $: groups = groupedPresets();
