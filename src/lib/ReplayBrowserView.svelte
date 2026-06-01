@@ -144,10 +144,10 @@
     }
 
     async function relabel(meta: ReplayMeta): Promise<void> {
-        const next = prompt(
-            isEN ? 'New label for this snapshot:' : 'Nueva etiqueta:',
-            meta.label
-        );
+        const { lucyPrompt } = await import('$lib/dialog-service');
+        const next = await lucyPrompt(
+            isEN ? 'New label for this snapshot' : 'Nueva etiqueta del snapshot',
+            { defaultValue: meta.label });
         if (next == null) return;
         try {
             await invoke('replay_relabel', { id: meta.id, label: next });
@@ -157,9 +157,12 @@
     }
 
     async function deleteSnapshot(meta: ReplayMeta): Promise<void> {
-        if (!confirm(isEN
-            ? `Delete snapshot #${meta.id}? This cannot be undone.`
-            : `¿Borrar snapshot #${meta.id}? Esta acción es irreversible.`)) return;
+        const { lucyConfirm } = await import('$lib/dialog-service');
+        if (!await lucyConfirm(
+            isEN ? `Delete snapshot #${meta.id}?` : `¿Borrar snapshot #${meta.id}?`,
+            { tone: 'danger',
+              description: isEN ? 'This cannot be undone.' : 'No se puede deshacer.',
+              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             await invoke('replay_delete', { id: meta.id });
             if (selected?.id === meta.id) selected = null;
@@ -168,9 +171,10 @@
     }
 
     async function pruneOld(): Promise<void> {
-        if (!confirm(isEN
-            ? 'Delete snapshots older than 30 days?'
-            : '¿Borrar snapshots con más de 30 días?')) return;
+        const { lucyConfirm } = await import('$lib/dialog-service');
+        if (!await lucyConfirm(
+            isEN ? 'Delete snapshots older than 30 days?' : '¿Borrar snapshots con más de 30 días?',
+            { tone: 'warning', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             const n = await invoke<number>('replay_clear_old', { days: 30 });
             error = (isEN ? 'Deleted ' : 'Borrados: ') + n;

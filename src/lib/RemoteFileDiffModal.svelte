@@ -107,12 +107,14 @@
         saving = false;
     }
 
-    function close() {
+    async function close() {
         if (saving) return;
         if (originalContent !== editedContent) {
-            const ok = confirm(isEN
-                ? 'You have unsaved changes. Discard them?'
-                : 'Tienes cambios sin guardar. ¿Descartar?');
+            const { lucyConfirm } = await import('$lib/dialog-service');
+            const ok = await lucyConfirm(
+                isEN ? 'Discard unsaved changes?' : '¿Descartar cambios sin guardar?',
+                { tone: 'warning',
+                  confirmLabel: isEN ? 'Discard' : 'Descartar' });
             if (!ok) return;
         }
         open = false;

@@ -120,9 +120,12 @@
     }
 
     async function deleteRecording(rec: ShellRecording): Promise<void> {
-        if (!confirm(isEN
-            ? `Delete recording #${rec.id}? Cannot be undone.`
-            : `¿Borrar grabación #${rec.id}? Acción irreversible.`)) return;
+        const { lucyConfirm } = await import('$lib/dialog-service');
+        if (!await lucyConfirm(
+            isEN ? `Delete recording #${rec.id}?` : `¿Borrar grabación #${rec.id}?`,
+            { tone: 'danger',
+              description: isEN ? 'Cannot be undone.' : 'No se puede deshacer.',
+              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             await invoke('shell_recording_delete', { recordingId: rec.id });
             if (selected?.id === rec.id) closeRecording();
@@ -131,7 +134,9 @@
     }
 
     async function renameRecording(rec: ShellRecording): Promise<void> {
-        const next = prompt(isEN ? 'New title:' : 'Nuevo título:', rec.title);
+        const { lucyPrompt } = await import('$lib/dialog-service');
+        const next = await lucyPrompt(isEN ? 'New title' : 'Nuevo título',
+            { defaultValue: rec.title });
         if (next == null) return;
         try {
             await invoke('shell_recording_rename', {

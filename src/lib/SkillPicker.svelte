@@ -82,15 +82,19 @@
     }
 
     async function deleteSkill(s: SkillRow) {
-        const ok = confirm(isEN
-            ? `Delete skill "${s.name}"? This can't be undone.`
-            : `¿Eliminar skill "${s.name}"? No se puede deshacer.`);
+        const { lucyConfirm, lucyAlert } = await import('$lib/dialog-service');
+        const ok = await lucyConfirm(
+            isEN ? `Delete skill "${s.name}"?` : `¿Eliminar skill "${s.name}"?`,
+            { tone: 'danger',
+              description: isEN ? 'This cannot be undone.' : 'No se puede deshacer.',
+              confirmLabel: isEN ? 'Delete' : 'Eliminar' });
         if (!ok) return;
         try {
             await invoke('delete_skill', { id: s.id });
             await loadSkills();
         } catch (e) {
-            alert(`Error: ${String(e)}`);
+            await lucyAlert(isEN ? 'Delete failed' : 'Falló la eliminación',
+                { tone: 'danger', description: String(e) });
         }
     }
 

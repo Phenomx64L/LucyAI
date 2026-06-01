@@ -191,6 +191,9 @@ import { listen } from '@tauri-apps/api/event';
     import KeyringModal         from '$lib/KeyringModal.svelte';
     import ProviderConfigModal  from '$lib/ProviderConfigModal.svelte';
     import McpServersModal       from '$lib/McpServersModal.svelte';
+    // v1.7.17 — In-app Dialog host (replaces native confirm/alert/prompt).
+    import DialogHost             from '$lib/DialogHost.svelte';
+    import { lucyConfirm, lucyAlert, lucyPrompt } from '$lib/dialog-service';
     import KeyboardCheatsheet    from '$lib/KeyboardCheatsheet.svelte';
     import ChatMessageContextMenu from '$lib/ChatMessageContextMenu.svelte';
     // v1.4.11 — svelte-sonner powers all toast() calls. We import the
@@ -266,7 +269,8 @@ import { listen } from '@tauri-apps/api/event';
         const v = _tavilyKeyDraft.trim();
         // Empty input + existing key = "delete the key" (UX confirm first).
         if (!v && _tavilyKeySet) {
-            if (!confirm(isEN ? 'Remove the Tavily API key?' : '¿Borrar la clave de Tavily?')) {
+            if (!await lucyConfirm(isEN ? 'Remove the Tavily API key?' : '¿Borrar la clave de Tavily?',
+                { tone: 'danger', confirmLabel: isEN ? 'Remove' : 'Borrar' })) {
                 _tavilyKeyBusy = false; return;
             }
         }
@@ -348,9 +352,13 @@ import { listen } from '@tauri-apps/api/event';
     }
 
     async function restoreDbBackup() {
-        if (!confirm(isEN
-            ? 'Restore will REPLACE your current database. A safety copy of the current DB will be kept. Lucy must restart after. Continue?'
-            : 'Restaurar REEMPLAZARÁ tu DB actual. Se guardará una copia de seguridad de la DB actual. Lucy debe reiniciar después. ¿Continuar?')) return;
+        if (!await lucyConfirm(
+            isEN ? 'Restore database from backup?' : '¿Restaurar base de datos desde backup?',
+            { tone: 'danger',
+              description: isEN
+                ? 'This REPLACES your current database. A safety copy of the current DB is kept first. Lucy must restart after.'
+                : 'REEMPLAZA tu DB actual. Se guarda una copia de seguridad primero. Lucy debe reiniciar después.',
+              confirmLabel: isEN ? 'Restore' : 'Restaurar' })) return;
         _dbBusy = true; _dbError = ''; _dbMsg = '';
         try {
             const source = await invoke('pick_file_with_filter', {
@@ -446,11 +454,12 @@ import { listen } from '@tauri-apps/api/event';
             _showCustomThemeEditor = true;
         }
     }
-    function _deleteActiveCustomTheme() {
+    async function _deleteActiveCustomTheme() {
         const id = currentTheme.startsWith('custom-')
             ? currentTheme.slice('custom-'.length) : null;
         if (!id) return;
-        if (!confirm(isEN ? `Delete custom theme "${id}"?` : `¿Borrar tema personalizado "${id}"?`)) return;
+        if (!await lucyConfirm(isEN ? `Delete custom theme "${id}"?` : `¿Borrar tema personalizado "${id}"?`,
+            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         _customThemes = deleteCustomTheme(id);
         setWarpTheme('default');
     }
@@ -9346,6 +9355,9 @@ if (Test-Path $src) {
     </div>
   </div>
   {/if}
+
+  <!-- v1.7.17 — Single instance of the in-app dialog host. -->
+  <DialogHost />
 
   {#if showSetupOverlay}
     <SetupOverlay {LANGS} initialLang={userLang}

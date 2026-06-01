@@ -15,6 +15,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.17 — In-app dialogs (no native browser confirm/prompt).
+    import { lucyConfirm, lucyPrompt } from '$lib/dialog-service';
     // v1.7.0 — single source of truth for LLM model ids.
     import { LLM } from '$lib/llm-models';
     import Brain         from '@tabler/icons-svelte/icons/brain';
@@ -178,7 +180,8 @@
     }
 
     async function deleteMemoria(id: number) {
-        if (!confirm(isEN ? `Delete memory #${id}?` : `¿Borrar memoria #${id}?`)) return;
+        if (!await lucyConfirm(isEN ? `Delete memory #${id}?` : `¿Borrar memoria #${id}?`,
+            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             await invoke('delete_agent_memory', { id });
             await loadMemorias();
@@ -226,9 +229,11 @@
     }
     async function bulkDelete() {
         if (bulkSelected.size === 0) return;
-        if (!confirm(isEN
-            ? `Delete ${bulkSelected.size} selected memories? Cannot be undone.`
-            : `¿Borrar ${bulkSelected.size} memorias seleccionadas? Irreversible.`)) return;
+        if (!await lucyConfirm(
+            isEN ? `Delete ${bulkSelected.size} selected memories?` : `¿Borrar ${bulkSelected.size} memorias seleccionadas?`,
+            { tone: 'danger',
+              description: isEN ? 'Cannot be undone.' : 'No se puede deshacer.',
+              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         bulkBusy = true;
         try {
             // Run sequentially — DB pool is single-conn aware and the UI
@@ -270,9 +275,9 @@
     }
     async function bulkAddTag() {
         if (bulkSelected.size === 0) return;
-        const t = prompt(isEN
-            ? `Add tag to ${bulkSelected.size} memories:`
-            : `Añadir tag a ${bulkSelected.size} memorias:`);
+        const t = await lucyPrompt(
+            isEN ? `Add tag to ${bulkSelected.size} memories` : `Añadir tag a ${bulkSelected.size} memorias`,
+            { placeholder: 'kebab-case', confirmLabel: isEN ? 'Add' : 'Añadir' });
         const tagClean = (t || '').trim().toLowerCase();
         if (!tagClean) return;
         bulkBusy = true;
@@ -406,7 +411,8 @@
     }
 
     async function deleteCrystal(id: number) {
-        if (!confirm(isEN ? `Delete crystal #${id}?` : `¿Borrar crystal #${id}?`)) return;
+        if (!await lucyConfirm(isEN ? `Delete crystal #${id}?` : `¿Borrar crystal #${id}?`,
+            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             await invoke('delete_crystal', { id });
             await loadCrystals();
@@ -440,7 +446,8 @@
     }
 
     async function deleteInsight(id: number) {
-        if (!confirm(isEN ? `Delete insight #${id}?` : `¿Borrar insight #${id}?`)) return;
+        if (!await lucyConfirm(isEN ? `Delete insight #${id}?` : `¿Borrar insight #${id}?`,
+            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             await invoke('delete_insight', { id });
             await loadInsights();
@@ -518,7 +525,10 @@
         finally { adminBusy = false; }
     }
     async function runAutoForget() {
-        if (!confirm(isEN ? 'Run auto-forget for real?' : '¿Ejecutar auto-forget en serio?')) return;
+        if (!await lucyConfirm(
+            isEN ? 'Run auto-forget for real?' : '¿Ejecutar auto-forget en serio?',
+            { tone: 'warning',
+              description: isEN ? 'Memories below the threshold will be evicted.' : 'Las memorias bajo el umbral serán removidas.' })) return;
         adminBusy = true; adminMsg = '';
         try {
             const r = await invoke<any>('auto_forget_run', { dryRun: false });
@@ -570,7 +580,8 @@
         try { await promoteLesson(l); await loadLessons(); } catch (e) { lessonsError = String(e); }
     }
     async function doDismissLesson(l: Lesson) {
-        if (!confirm(isEN ? `Dismiss lesson?` : `¿Descartar lección?`)) return;
+        if (!await lucyConfirm(isEN ? `Dismiss lesson?` : `¿Descartar lección?`,
+            { tone: 'warning' })) return;
         try { await dismissLesson(l); await loadLessons(); } catch (e) { lessonsError = String(e); }
     }
 
@@ -584,8 +595,9 @@
     let newSentinelCooldown = 15;
 
     function refreshSentinels() { sentinelRules = loadSentinels(); }
-    function doDeleteSentinel(id: string) {
-        if (!confirm(isEN ? 'Delete this sentinel?' : '¿Borrar este sentinel?')) return;
+    async function doDeleteSentinel(id: string) {
+        if (!await lucyConfirm(isEN ? 'Delete this sentinel?' : '¿Borrar este sentinel?',
+            { tone: 'danger', confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         deleteSentinel(id); refreshSentinels();
     }
     function doToggleSentinel(id: string) { toggleSentinel(id); refreshSentinels(); }

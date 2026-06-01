@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.17] — 2026-06-01
+
+User reported seeing browser-native `localhost:1420 dice…`
+confirm dialogs when deleting memories — leaking the dev URL,
+breaking Lucy's visual identity, and ignoring the dark theme.
+Audit found **23 native `confirm()` / `alert()` / `prompt()`
+call sites** across 8 files, all bypassing the existing in-app
+modal primitives (DangerConfirmModal, PromptModal).
+
+### Unified replacement API
+
+New `$lib/dialog-service.ts` exposes a Promise-based API that
+mirrors `window.confirm/alert/prompt` ergonomics:
+
+```ts
+import { lucyConfirm, lucyAlert, lucyPrompt } from '$lib/dialog-service';
+
+if (!await lucyConfirm('¿Borrar memoria #2?',
+        { tone: 'danger', confirmLabel: 'Borrar' })) return;
+
+await lucyAlert('Operación completada', { tone: 'success' });
+
+const name = await lucyPrompt('Nombre del preset',
+        { defaultValue: 'mi-preset', placeholder: 'kebab-case' });
+if (name === null) return;  // user cancelled
+```
+
+Internally, calls queue into a single store (`activeDialog`) so
+that two simultaneous requests serialise (the second waits for
+the first to settle) — matches the spirit of native modal
+blocking without freezing the UI.
+
+### Renderer: `$lib/DialogHost.svelte`
+
+Single component mounted near the root of `+page.svelte`.
+Subscribes to `activeDialog` and renders the current request
+with Lucy's visual identity:
+
+- 4 tone variants: `default` / `danger` / `warning` / `success` / `info`,
+  each with its own glyph (◆ / ✕ / ⚠ / ✓ / ℹ) and accent colour
+- Backdrop blur, slide-up animation
+- ESC = cancel, Enter = confirm (Ctrl+Enter for multiline prompts)
+- Disabled-state confirm button for empty prompts (`required` by default)
+- Hint line at the bottom showing keyboard shortcuts
+
+### Migrated callsites (23 / 23)
+
+| File | Type | Sites |
+|------|------|-------|
+| `+page.svelte` | confirm × 3 | Tavily key delete, DB restore, custom theme delete |
+| `MemoryBrowserView.svelte` | confirm × 7, prompt × 1 | delete memoria/crystal/insight/sentinel/lesson, bulk delete, auto-forget, bulk add tag |
+| `InventoryView.svelte` | confirm × 1, prompt × 1 | baseline label, baseline delete |
+| `ReplayBrowserView.svelte` | confirm × 2, prompt × 1 | relabel, delete snapshot, prune old |
+| `ShellRecordingPlayer.svelte` | confirm × 1, prompt × 1 | delete recording, rename |
+| `SkillPicker.svelte` | confirm × 1, alert × 1 | delete skill, delete-failed alert |
+| `PrinciplesModal.svelte` | confirm × 1 | delete principle |
+| `ScheduledTasksModal.svelte` | confirm × 1 | delete scheduled task |
+| `RemoteFileDiffModal.svelte` | confirm × 1 | discard unsaved changes |
+
+Migration pattern uniform: `if (!confirm(X))` →
+`if (!await lucyConfirm(X, opts))`. Async wrapper added where
+the enclosing function was sync. Verified by grep: zero
+remaining `window.confirm` / `window.alert` / `window.prompt`
+or bare equivalents in the codebase.
+
+### Internal `confirm()` is fine
+
+`DangerConfirmModal.svelte` defines an internal Svelte function
+named `confirm()` for its own button handler — not the global.
+Left as-is (no functional collision).
+
+---
+
 ## [1.7.16] — 2026-06-01
 
 Pre-delivery script syntax verification with auto-fix loop. When

@@ -149,7 +149,10 @@
     }
 
     async function remove(p) {
-        if (!window.confirm(t.confirmDel + '\n\n  ' + p.name)) return;
+        // v1.7.17 — in-app dialog replaces native window.confirm.
+        const { lucyConfirm } = await import('$lib/dialog-service');
+        if (!await lucyConfirm(t.confirmDel,
+            { tone: 'danger', description: p.name, confirmLabel: 'Delete' })) return;
         try {
             await invoke('delete_principle', { id: p.id });
             toast(t.deleted, 'ok');

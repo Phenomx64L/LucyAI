@@ -1,6 +1,8 @@
 <script>
     import { onMount, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.17 — In-app dialogs.
+    import { lucyConfirm, lucyPrompt } from '$lib/dialog-service';
     import ScanSearch from '@tabler/icons-svelte/icons/scan';
 
     import FileText from '@tabler/icons-svelte/icons/file-text';
@@ -91,10 +93,10 @@
             toast(isEN ? 'Run a scan first.' : 'Escanea primero.', 'warn');
             return;
         }
-        const label = prompt(
-            isEN ? 'Label for this baseline (optional):' : 'Etiqueta para este baseline (opcional):',
-            new Date().toISOString().slice(0, 10),
-        );
+        const label = await lucyPrompt(
+            isEN ? 'Label for this baseline (optional)' : 'Etiqueta para este baseline (opcional)',
+            { defaultValue: new Date().toISOString().slice(0, 10),
+              placeholder: 'YYYY-MM-DD' });
         if (label === null) return;
         try {
             await invoke('inventory_set_baseline', {
@@ -155,9 +157,11 @@
     }
 
     async function deleteBaseline() {
-        if (!confirm(isEN
-            ? 'Delete the baseline for this host? This cannot be undone.'
-            : '¿Borrar el baseline de este host? Es irreversible.')) return;
+        if (!await lucyConfirm(
+            isEN ? 'Delete the baseline for this host?' : '¿Borrar el baseline de este host?',
+            { tone: 'danger',
+              description: isEN ? 'This cannot be undone.' : 'No se puede deshacer.',
+              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
         try {
             await invoke('inventory_delete_baseline', { hostId: selectedHost });
             baseline = null;
