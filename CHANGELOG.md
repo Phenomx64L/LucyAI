@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.12] — 2026-05-31
+
+Hotfix v1.7.11: the auto-route chip was rendering invisible
+because the message-pipeline sanitizer was eating it.
+
+Three stacked issues, all in how the v1.7.11 chip-injection
+interacted with the existing `addMsg → safeHtml → ChatThread`
+pipeline:
+
+1. **`role: 'lucy'` wrapped the chip in a Lucy avatar bubble.**
+   Instead of a tiny floating chip the user would have seen
+   either a tiny weird Lucy message OR nothing at all when
+   the chip's inline styles got stripped. Switched to
+   `role: 'system'` which renders inside a `.sys-msg` div —
+   centered, no avatar.
+2. **`safeHtml` strips `style=` and any `data-*` not on the
+   allowlist.** My chip used inline styles for the message
+   wrapper and `data-clear="1"` to mark itself clickable.
+   Both got removed silently. Removed all inline styles
+   (the `.ar-chip` global CSS already had everything) and
+   moved click detection to the `.ar-chip` class — no
+   data attribute needed.
+3. **`.sys-msg` has `font-style: italic`** which would have
+   applied to the chip's monospace text. Added an explicit
+   `font-style: normal` to `.ar-chip` to override.
+
+Click behaviour now uses an `ar-cleared` CSS class instead of
+setting `el.style.opacity` directly — the sanitizer would
+strip the inline style anyway, but the class is preserved
+through DOMPurify's allowlist.
+
+### After install
+
+Restart Lucy and ask anything matching a skill ("cómo
+investigo un phishing report"). You should now see, between
+your message and Lucy's response, a small green pill like:
+
+```
+▸ auto · embedding · conducting-phishing-incident-response  78%  +3 MCP  ✕
+```
+
+Click anywhere on it to deactivate the skill for the next
+turn.
+
+---
+
 ## [1.7.11] — 2026-05-31
 
 Closes the v1.7.5 UX gap: auto-route chip in chat. After the

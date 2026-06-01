@@ -1608,17 +1608,20 @@ import { listen } from '@tauri-apps/api/event';
         // skill/preset and remove the chip from view. Delegated so
         // we don't have to wire onclick on every chip instance.
         document.addEventListener('click', (e) => {
-            const chip = e.target.closest('.ar-chip[data-clear]');
-            if (!chip) return;
+            // v1.7.11 fix: safeHtml strips data-* attrs not on the
+            // allowlist, so we identify chips by their class instead.
+            const chip = e.target.closest('.ar-chip');
+            if (!chip || chip.classList.contains('ar-cleared')) return;
             e.preventDefault();
             // Both the security-skill bridge and the regular preset
             // slot — whichever is active gets cleared. Same semantics
             // as `/preset clear`.
             try { clearActiveSecuritySkill(); } catch {}
             try { activeSkillPresetId.set(null); } catch {}
-            // Fade out the chip in place.
-            chip.style.opacity = '.35';
-            chip.style.pointerEvents = 'none';
+            // Mark as cleared and update labels. We don't set inline
+            // styles because the page sanitizer strips them post-render;
+            // CSS for .ar-cleared handles the visual state instead.
+            chip.classList.add('ar-cleared');
             const closer = chip.querySelector('.ar-close');
             if (closer) closer.textContent = '✓';
             const skillSpan = chip.querySelector('.ar-skill');
@@ -3752,6 +3755,13 @@ REGLAS DE FORMATO:
             // the user's message and Lucy's streaming response so it
             // never interrupts content. Click-to-clear lets the user
             // back out instantly if the routing was wrong.
+            //
+            // v1.7.11 fix: safeHtml() sanitizes every addMsg payload —
+            // strips inline `style=` and any `data-*` attribute not on
+            // the explicit allowlist. We use `role: 'system'` so there's
+            // no Lucy avatar bubble around the chip, and selection
+            // delegates to the `.ar-chip` class instead of a data
+            // attribute. Tooltip stays in `title=` which IS allowed.
             if (_unifiedPlan && _unifiedPlan.route) {
                 const _r = _unifiedPlan.route;
                 if (_r.method !== 'none' && (_r.skill || _r.method === 'preset')) {
@@ -3780,27 +3790,25 @@ REGLAS DE FORMATO:
                     const _scorePct = Math.round((_r.score || 0) * 100);
                     const _elapsed  = _r.elapsed_ms ? `${Math.round(_r.elapsed_ms)}ms` : '';
                     const _candList = (_r.candidates || []).slice(0, 4)
-                        .map((c) => `${c.name || c.id} (${c.score})`).join('\\n  ');
+                        .map((c) => `${c.name || c.id} (${c.score})`).join('\n  ');
                     const _tooltip =
-                        `Skill: ${_skillId}\\n` +
-                        `Method: ${_methodLabel}\\n` +
-                        `Confidence: ${_scorePct}%\\n` +
-                        (_elapsed ? `Routing time: ${_elapsed}\\n` : '') +
-                        (_candList ? `\\nCandidates considered:\\n  ${_candList}` : '') +
-                        `\\n\\nClick to deactivate.`;
+                        `Skill: ${_skillId}\n` +
+                        `Method: ${_methodLabel}\n` +
+                        `Confidence: ${_scorePct}%\n` +
+                        (_elapsed ? `Routing time: ${_elapsed}\n` : '') +
+                        (_candList ? `\nCandidates considered:\n  ${_candList}` : '') +
+                        `\n\nClick to deactivate.`;
                     const _mcpCount = _unifiedPlan.mcp_tools?.length || 0;
                     const _mcpHint = _mcpCount > 0
                         ? `<span class="ar-mcp" title="${_mcpCount} MCP tool(s) also surfaced for this turn">+${_mcpCount} MCP</span>`
                         : '';
                     addMsg(tabId, {
-                        role: 'lucy',
+                        role: 'system',                       // no Lucy bubble / avatar
                         rawRole: 'Sistema',
-                        rawContent: '',     // not part of LLM conversation history
-                        ephemeral: true,    // don't persist across reloads
+                        rawContent: '',                       // not part of LLM conversation history
                         html:
-                            `<div class="ar-chip ${_toneCls}" title="${_tooltip.replace(/"/g, '&quot;')}" ` +
-                            `data-clear="1" role="button" tabindex="0">` +
-                              `<span class="ar-arrow">▸</span> ` +
+                            `<div class="ar-chip ${_toneCls}" title="${_tooltip.replace(/"/g, '&quot;')}" role="button" tabindex="0">` +
+                              `<span class="ar-arrow">▸</span>` +
                               `<span class="ar-method">${escapeHtml(_methodLabel)}</span>` +
                               `<span class="ar-sep">·</span>` +
                               `<span class="ar-skill">${escapeHtml(_skillDisplay)}</span>` +
@@ -3808,7 +3816,6 @@ REGLAS DE FORMATO:
                               _mcpHint +
                               `<span class="ar-close" title="Deactivate">✕</span>` +
                             `</div>`,
-                        style: 'background:transparent;border:none;padding:0;margin:4px 0 8px;',
                     });
                 }
             }
@@ -10579,6 +10586,7 @@ if (Test-Path $src) {
         display: inline-flex; align-items: center; gap: 6px;
         font-family: var(--mono, ui-monospace, monospace);
         font-size: 10.5px; line-height: 1.2;
+        font-style: normal;                  /* override .sys-msg italic */
         padding: 4px 9px 4px 8px;
         border-radius: 12px;
         border: 1px solid transparent;
@@ -10629,6 +10637,11 @@ if (Test-Path $src) {
         color: var(--txt2, #94a3b8);
         background: rgba(255,255,255,.03);
         border-color: rgba(255,255,255,.08);
+      }
+      /* Deactivated state — applied after click via JS adding `ar-cleared`. */
+      :global(.ar-cleared) {
+        opacity: .4;
+        pointer-events: none;
       }
 
       .sf-overlay {
