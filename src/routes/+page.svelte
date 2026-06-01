@@ -2824,12 +2824,66 @@ import { listen } from '@tauri-apps/api/event';
     // U7 — Universal drop: classify before delegating. Files keep going to
     // the existing file-drop handler; URLs/text/images get routed to the
     // input box with a sensible default prompt.
+    // v1.7.15 — Skill-install drop handler. Intercepts .md files that
+    // start with YAML frontmatter containing `name:` — those look like
+    // Anthropic-style SKILL.md files, so we offer to install them into
+    // the user skills directory instead of attaching them as a normal
+    // file. Non-skill .md and all other files fall through to the
+    // standard file-drop pipeline.
+    async function maybeInstallSkillFromDrop(e) {
+        const files = e?.dataTransfer?.files;
+        if (!files || files.length !== 1) return false;
+        const f = files[0];
+        if (!f || !f.name || !f.name.toLowerCase().endsWith('.md')) return false;
+        let content = '';
+        try { content = await f.text(); } catch { return false; }
+        // Quick heuristic: starts with --- and has name: in the frontmatter.
+        if (!content.trimStart().startsWith('---')) return false;
+        const fmEnd = content.indexOf('\n---', 3);
+        if (fmEnd < 0) return false;
+        const fm = content.slice(0, fmEnd);
+        if (!/^[\t ]*name\s*:/m.test(fm)) return false;
+        // Looks like a skill. Install it.
+        try {
+            const result = await invoke('security_skills_install', {
+                req: { content, id_override: null },
+            });
+            toast(isEN
+                ? `✦ Skill "${result.id}" ${result.action} (${result.n_skills_total} total)`
+                : `✦ Skill "${result.id}" ${result.action === 'installed' ? 'instalada' : 'actualizada'} (${result.n_skills_total} total)`,
+                'success');
+            // Offer to activate immediately via /sec-skill use <id>.
+            if (activeTabId) {
+                const t = getTab(activeTabId);
+                if (t) {
+                    t.inputValue = `/sec-skill use ${result.id}`;
+                    tabs = [...tabs];
+                    setTimeout(() => {
+                        const el = document.querySelector('.chat-wrap.on .ibox');
+                        if (el instanceof HTMLElement) el.focus();
+                    }, 30);
+                }
+            }
+            return true;
+        } catch (err) {
+            toast(isEN
+                ? `Skill install failed: ${String(err)}`
+                : `Falló instalación de skill: ${String(err)}`,
+                'error');
+            return false;
+        }
+    }
+
     const onDrop = (e) => {
         try {
             const dropped = classifyDrop(e.dataTransfer);
             if (dropped.kind === 'files') {
-                // Preserve existing behavior — let the file-drop handler do its thing
-                return _onDrop(e, _fileOpts());
+                // v1.7.15 — intercept SKILL.md files. If it's not a
+                // skill, fall through to the normal file-drop handler.
+                maybeInstallSkillFromDrop(e).then(handled => {
+                    if (!handled) _onDrop(e, _fileOpts());
+                });
+                return;
             }
             if (dropped.kind === 'url' || dropped.kind === 'image_uri' || dropped.kind === 'text') {
                 const prompt = defaultPromptForKind(dropped.kind, dropped, isEN);

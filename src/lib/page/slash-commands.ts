@@ -1183,6 +1183,67 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                         }
                         return;
                     }
+                    // ── v1.7.15 — user skills directory ──────────────
+                    // /sec-skill folder    → opens %LOCALAPPDATA%\Lucy\security-skills
+                    // /sec-skill reload    → re-scans dir, invalidates embed cache
+                    // /sec-skill new <id>  → returns template the user can copy/edit
+                    const _argLc = argTrim.toLowerCase();
+                    if (_argLc === 'folder' || _argLc === 'dir' || _argLc === 'open') {
+                        try {
+                            const info = await invoke<any>('security_skills_user_dir');
+                            await invoke('execute_powershell', {
+                                script: `Start-Process "${info.path.replace(/"/g, '`"')}"`,
+                                bypassToken: null,
+                            }).catch(() => {});
+                            sysMsg(ctx.isEN
+                                ? `✓ Opened user skills folder: <code>${escapeHtml(info.path)}</code> (${info.n_skills} skills)`
+                                : `✓ Carpeta de skills abierta: <code>${escapeHtml(info.path)}</code> (${info.n_skills} skills)`,
+                                'var(--acc)');
+                        } catch (e) {
+                            sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                        }
+                        return;
+                    }
+                    if (_argLc === 'reload' || _argLc === 'refresh') {
+                        try {
+                            const n = await invoke<number>('security_skills_reload');
+                            sysMsg(ctx.isEN
+                                ? `✓ Reloaded skill index — ${n} skills now available`
+                                : `✓ Índice de skills recargado — ${n} skills disponibles`,
+                                'var(--acc)');
+                        } catch (e) {
+                            sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                        }
+                        return;
+                    }
+                    if (_argLc.startsWith('new ')) {
+                        const newId = argTrim.slice(4).trim();
+                        if (!newId) {
+                            sysMsg(ctx.isEN ? 'Usage: /sec-skill new <kebab-case-id>' : 'Uso: /sec-skill new <id-kebab-case>', 'var(--amber)');
+                            return;
+                        }
+                        try {
+                            const template = await invoke<string>('security_skills_template', { id: newId });
+                            const info = await invoke<any>('security_skills_user_dir');
+                            sysMsg(renderResultBlocks(
+                                ctx.isEN ? `✦ Skill template ready — ${newId}` : `✦ Plantilla lista — ${newId}`,
+                                [{
+                                    title: ctx.isEN ? 'Save this content as:' : 'Guarda este contenido como:',
+                                    icon: '◆', tone: 'info', defaultOpen: true,
+                                    html:
+                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Path' : 'Ruta'}</span>` +
+                                        `<span class="rb-v"><code>${escapeHtml(info.path)}\\${escapeHtml(newId)}\\SKILL.md</code></span></div>` +
+                                        `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'After saving' : 'Después de guardar'}</span>` +
+                                        `<span class="rb-v"><code>/sec-skill reload</code></span></div>` +
+                                        `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'Shortcut' : 'Atajo'}</span>` +
+                                        `<span class="rb-v">${ctx.isEN ? 'Drag the saved <code>.md</code> into chat → Lucy installs automatically.' : 'Arrastra el <code>.md</code> guardado al chat → Lucy lo instala automáticamente.'}</span></div>` +
+                                        `<pre style="margin-top:8px;font-size:11px;max-height:420px;overflow:auto;background:rgba(255,255,255,.04);padding:10px;border-radius:6px;"><code>${escapeHtml(template)}</code></pre>`,
+                                }]));
+                        } catch (e) {
+                            sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                        }
+                        return;
+                    }
                     // Sub-verb: `rebuild` rebuilds the embedding cache.
                     if (argTrim.toLowerCase() === 'rebuild' || argTrim.toLowerCase() === 'reindex') {
                         sysMsg(ctx.isEN ? '⟳ Rebuilding skill embeddings…' : '⟳ Reconstruyendo embeddings de skills…');

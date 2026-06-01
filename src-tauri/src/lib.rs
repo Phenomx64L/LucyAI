@@ -523,6 +523,11 @@ pub fn run() {
             commands::security_skills::security_skills_auto_route,
             commands::security_skills::security_skills_rebuild_embeddings,
             commands::security_skills::security_skills_embed_status,
+            // v1.7.15 — user skills directory + drag-drop install.
+            commands::security_skills::security_skills_user_dir,
+            commands::security_skills::security_skills_reload,
+            commands::security_skills::security_skills_template,
+            commands::security_skills::security_skills_install,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

@@ -72,7 +72,16 @@ pub struct SkillMeta {
     pub mitre_atlas: Vec<String>,
     pub mitre_d3fend:Vec<String>,
     pub ai_rmf:      Vec<String>,
+    /// v1.7.15 — origin of the skill: `"bundled"` for the 213
+    /// Anthropic-Cybersecurity-Skills shipped with Lucy, `"user"` for
+    /// anything dropped into the user skills directory at runtime.
+    /// Allows the UI to badge them and the user-skills folder to
+    /// override bundled ids when both exist.
+    #[serde(default = "default_skill_source")]
+    pub source: String,
 }
+
+fn default_skill_source() -> String { "bundled".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillSearchHit {
@@ -91,16 +100,28 @@ pub struct SkillFull {
 }
 
 // ── Index ──────────────────────────────────────────────────────────────
+//
+// v1.7.15 — changed from OnceLock to a std::sync::RwLock so the
+// frontend can call `security_skills_reload()` after a user drops a
+// new SKILL.md file. The first read populates the cache lazily; reads
+// hold a shared lock, reload takes the write lock and rebuilds.
+//
+// We deliberately use std::sync (not tokio) because every load step is
+// blocking IO (`std::fs::read_dir`) and parsing is CPU-bound. The
+// index is only touched at search/get time, never in tight loops.
 
-static INDEX: OnceLock<Vec<SkillMeta>> = OnceLock::new();
+static INDEX: std::sync::RwLock<Option<Vec<SkillMeta>>> = std::sync::RwLock::new(None);
 
-/// Resolve the bundled skills directory across the three runtimes:
+#[allow(dead_code)]
+static _ONCE_LOCK_UNUSED: OnceLock<()> = OnceLock::new();
+
+/// Resolve the BUNDLED skills directory across the three runtimes:
 ///   1. `npm run tauri dev` — cwd is the workspace root → `docs/security-skills`
 ///   2. `cargo run` from `src-tauri/` — cwd is src-tauri → `../docs/security-skills`
 ///   3. Installed binary (nsis/msi) — Tauri's resource bundler drops
 ///      `../docs/security-skills/` relative to the .exe location.
 /// We probe all three and return the first that exists.
-fn skills_dir() -> PathBuf {
+fn bundled_skills_dir() -> PathBuf {
     let candidates: Vec<PathBuf> = {
         let mut v = Vec::new();
         if let Ok(cwd) = std::env::current_dir() {
@@ -127,30 +148,86 @@ fn skills_dir() -> PathBuf {
     candidates.into_iter().next().unwrap_or_else(|| PathBuf::from("docs/security-skills"))
 }
 
-/// Walk the skills directory and parse every `*/SKILL.md`. Cached in
-/// `INDEX` after first call.
-fn load_index() -> &'static Vec<SkillMeta> {
-    INDEX.get_or_init(|| {
-        let root = skills_dir();
-        let mut out: Vec<SkillMeta> = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            // No directory — return empty index. Front-end shows
-            // "no skills loaded" rather than crashing.
-            return out;
-        };
+/// v1.7.15 — User skills directory.
+///   - Windows:  `%LOCALAPPDATA%\Lucy\security-skills`
+///   - Linux:    `$XDG_DATA_HOME/Lucy/security-skills` (or `$HOME/.local/share/Lucy/...`)
+/// Auto-created on first access. Users drop `<skill-id>/SKILL.md` files
+/// here at runtime — no recompile needed. User skills take precedence
+/// over bundled when ids collide.
+fn user_skills_dir_path() -> PathBuf {
+    let base = local_app_data_dir().unwrap_or_else(std::env::temp_dir);
+    base.join("Lucy").join("security-skills")
+}
+
+fn ensure_user_skills_dir() -> std::io::Result<PathBuf> {
+    let p = user_skills_dir_path();
+    std::fs::create_dir_all(&p)?;
+    Ok(p)
+}
+
+/// Return BOTH directories in priority order. `load_index()` iterates
+/// these in REVERSE order so the user dir is parsed AFTER bundled and
+/// any colliding id overrides bundled in the index map.
+fn skills_dirs() -> Vec<(PathBuf, &'static str)> {
+    vec![
+        (bundled_skills_dir(), "bundled"),
+        (user_skills_dir_path(), "user"),
+    ]
+}
+
+/// Back-compat shim — `cache_path()` and a couple of other call sites
+/// still expect a `skills_dir()` returning the bundled location for
+/// disk operations. Keep returning that.
+fn skills_dir() -> PathBuf { bundled_skills_dir() }
+
+/// Walk every skills directory and parse every `*/SKILL.md`. Returned
+/// list is sorted by id, with user-dir skills overriding bundled ones
+/// when ids collide. Cached lazily; `reload()` clears the cache.
+fn load_index() -> Vec<SkillMeta> {
+    // Hot path: already cached.
+    if let Ok(r) = INDEX.read() {
+        if let Some(cached) = r.as_ref() {
+            return cached.clone();
+        }
+    }
+    // Cold path: build the index.
+    let dirs = skills_dirs();
+    let mut by_id: std::collections::HashMap<String, SkillMeta> =
+        std::collections::HashMap::new();
+    for (root, source_label) in &dirs {
+        let Ok(entries) = std::fs::read_dir(root) else { continue; };
         for entry in entries.flatten() {
             if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
             let skill_md = entry.path().join("SKILL.md");
             if !skill_md.exists() { continue; }
             let Ok(text) = std::fs::read_to_string(&skill_md) else { continue; };
             let id = entry.file_name().to_string_lossy().to_string();
-            if let Some(meta) = parse_frontmatter(&id, &text) {
-                out.push(meta);
+            if let Some(mut meta) = parse_frontmatter(&id, &text) {
+                meta.source = (*source_label).to_string();
+                // Insert overwrites — `skills_dirs()` lists bundled first,
+                // user second, so user wins on collision.
+                by_id.insert(id, meta);
             }
         }
-        out.sort_by(|a, b| a.id.cmp(&b.id));
-        out
-    })
+    }
+    let mut out: Vec<SkillMeta> = by_id.into_values().collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    // Publish to cache.
+    if let Ok(mut w) = INDEX.write() {
+        *w = Some(out.clone());
+    }
+    out
+}
+
+/// Resolve the path to a skill's SKILL.md file. Honors the same
+/// bundled-first / user-overrides-bundled precedence as `load_index`.
+fn resolve_skill_md_path(id: &str) -> Option<PathBuf> {
+    // User dir wins.
+    let user = user_skills_dir_path().join(id).join("SKILL.md");
+    if user.exists() { return Some(user); }
+    let bundled = bundled_skills_dir().join(id).join("SKILL.md");
+    if bundled.exists() { return Some(bundled); }
+    None
 }
 
 /// Tiny YAML frontmatter parser scoped to the SKILL.md schema. We don't
@@ -247,6 +324,9 @@ fn parse_frontmatter(id: &str, text: &str) -> Option<SkillMeta> {
         mitre_atlas,
         mitre_d3fend,
         ai_rmf,
+        // Default; `load_index` overwrites with "bundled" / "user"
+        // based on which directory the file was found in.
+        source: "bundled".to_string(),
     })
 }
 
@@ -339,7 +419,12 @@ pub async fn security_skills_search(
 pub async fn security_skills_get(id: String) -> Result<SkillFull, String> {
     let meta = load_index().iter().find(|m| m.id == id).cloned()
         .ok_or_else(|| format!("security_skills_get: unknown id '{}'", id))?;
-    let path = skills_dir().join(&id).join("SKILL.md");
+    // v1.7.15 — honor user-skills-override-bundled by resolving against
+    // BOTH directories. The old code only read from the bundled path,
+    // which silently served the bundled body even when the user had
+    // installed a custom one with the same id.
+    let path = resolve_skill_md_path(&id)
+        .ok_or_else(|| format!("security_skills_get: SKILL.md missing on disk for id '{}'", id))?;
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| format!("read SKILL.md: {}", e))?;
     // Strip frontmatter so the body is ready to inject as a prompt prefix.
@@ -629,6 +714,243 @@ pub async fn security_skills_categories() -> Result<Vec<(String, usize)>, String
     Ok(out)
 }
 
+// ── v1.7.15 — User skills directory ────────────────────────────────────
+//
+// `%LOCALAPPDATA%\Lucy\security-skills\` (Windows) or
+// `$XDG_DATA_HOME/Lucy/security-skills` (Linux). Users drop
+// `<skill-id>/SKILL.md` files here at runtime, no recompile.
+// Commands here drive the slash-command and drag-drop UIs.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSkillsDirInfo {
+    pub path:      String,
+    /// Whether the directory existed before this call (vs created now).
+    pub created:   bool,
+    /// Count of `<id>/SKILL.md` entries under it.
+    pub n_skills:  usize,
+}
+
+/// Return the resolved user skills directory, creating it if needed.
+/// Frontend uses this for the "Open folder" button and for the drag-
+/// drop installer to know where to write the file.
+#[tauri::command]
+pub async fn security_skills_user_dir() -> Result<UserSkillsDirInfo, String> {
+    let p = user_skills_dir_path();
+    let existed = p.exists();
+    if !existed {
+        std::fs::create_dir_all(&p)
+            .map_err(|e| format!("create user skills dir: {}", e))?;
+    }
+    let n_skills = std::fs::read_dir(&p)
+        .map(|it| it.flatten()
+                     .filter(|e| e.path().join("SKILL.md").exists())
+                     .count())
+        .unwrap_or(0);
+    Ok(UserSkillsDirInfo {
+        path: p.to_string_lossy().to_string(),
+        created: !existed,
+        n_skills,
+    })
+}
+
+/// Drop the cached index AND the embedding cache so the next read
+/// re-walks both skill directories. Returns the new total count.
+/// Triggered by `/sec-skill reload` and the drag-drop installer
+/// after writing a new SKILL.md.
+#[tauri::command]
+pub async fn security_skills_reload() -> Result<usize, String> {
+    if let Ok(mut w) = INDEX.write() {
+        *w = None;
+    }
+    {
+        let mut w = EMBED_CACHE.write().await;
+        *w = None;
+    }
+    // Best-effort delete the on-disk embedding cache so the next probe
+    // rebuilds against the new skill set. Without this, projections
+    // would silently use stale embeddings for renamed/deleted skills.
+    let _ = tokio::fs::remove_file(cache_path()).await;
+    let n = load_index().len();
+    Ok(n)
+}
+
+/// Return a starter SKILL.md template the user can edit. Pre-fills the
+/// frontmatter with sensible defaults derived from the requested id.
+/// The template demonstrates ALL the fields the parser recognises so
+/// users learn the schema by example.
+#[tauri::command]
+pub async fn security_skills_template(id: String) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("template id must not be empty".into());
+    }
+    // Permissive id check: kebab-case, no slashes, no weird chars.
+    if id.chars().any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+        return Err(format!(
+            "id '{}' contains invalid chars (use kebab-case: my-skill-name)", id
+        ));
+    }
+    Ok(format!(
+r#"---
+name: {id}
+description: 'One-line summary of when this skill applies. Activates for requests
+  involving <keywords matching the situation>.'
+domain: cybersecurity
+subdomain: incident-response
+tags:
+  - your-tag-1
+  - your-tag-2
+mitre_attack:
+  - T1071
+nist_csf:
+  - RS.AN-01
+version: 1.0.0
+author: ivan
+license: Apache-2.0
+---
+
+# {id}
+
+## When to Use
+
+- List 3-5 concrete trigger phrases / situations where this skill is the right
+  reference. Lucy's auto-router scores the user prompt against these (plus the
+  description and tags) when deciding whether to load this skill.
+
+## Prerequisites
+
+- Modules / sessions / roles needed BEFORE any command in this workflow runs.
+- Be explicit; Lucy refuses to execute when a prerequisite is missing.
+
+## Workflow
+
+### Step 1: <descriptive step name>
+
+Plain-prose explanation of what this step accomplishes. Example commands go
+below as code fences — they're treated as REFERENCE, not auto-run. Use
+placeholders that look like placeholders so Lucy's guard catches them.
+
+```powershell
+Get-EventLog -LogName Security -Newest 100 | Where-Object {{ $_.EventID -eq 4625 }}
+```
+
+### Step 2: <next step>
+
+Explanation.
+
+```powershell
+# Example with explicit placeholder values
+Connect-ExchangeOnline -UserPrincipalName admin@tudominio.com
+```
+
+## Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| ... | ... |
+
+## Tools & Systems
+
+| Tool | Purpose |
+|------|---------|
+| ... | ... |
+
+## Common Scenarios
+
+**Scenario 1: <name>**
+Brief walkthrough.
+
+## Output Format
+
+```
+What the deliverable looks like when this workflow completes.
+```
+"#))
+}
+
+/// Install a SKILL.md file into the user dir. Returns the resulting
+/// skill id (parsed from the frontmatter `name:` field) so the caller
+/// can immediately activate / search for it.
+///
+/// Validations:
+///   - The file must start with `---` frontmatter.
+///   - The frontmatter must contain `name:` matching the id rules.
+///   - The id can be overridden by the caller, but falls back to the
+///     frontmatter `name:` field.
+///   - The file is written to `<user_dir>/<id>/SKILL.md`, overwriting
+///     a previous version with the same id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillInstallRequest {
+    /// Raw SKILL.md content including frontmatter.
+    pub content:     String,
+    /// Optional override of the id. When omitted, we use the `name:`
+    /// from the frontmatter.
+    pub id_override: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillInstallResult {
+    pub id:      String,
+    /// Final on-disk path of the SKILL.md file.
+    pub path:    String,
+    /// `"installed"` for a fresh skill, `"updated"` when overwriting an
+    /// existing user-dir file with the same id.
+    pub action:  String,
+    pub n_skills_total: usize,
+}
+
+#[tauri::command]
+pub async fn security_skills_install(req: SkillInstallRequest) -> Result<SkillInstallResult, String> {
+    let trimmed = req.content.trim_start();
+    if !trimmed.starts_with("---") {
+        return Err("SKILL.md must start with YAML frontmatter (`---`)".into());
+    }
+    // Parse to extract metadata + sanity-check the schema.
+    let meta = parse_frontmatter("(pending)", trimmed)
+        .ok_or_else(|| "SKILL.md frontmatter could not be parsed".to_string())?;
+
+    let id = req.id_override
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| meta.name.trim().to_string());
+    if id.is_empty() {
+        return Err("could not derive an id (frontmatter `name:` empty and no id_override)".into());
+    }
+    if id.chars().any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+        return Err(format!(
+            "id '{}' contains invalid chars (use kebab-case)", id
+        ));
+    }
+
+    // Write to disk.
+    let dir = ensure_user_skills_dir()
+        .map_err(|e| format!("ensure user dir: {}", e))?
+        .join(&id);
+    let existed = dir.join("SKILL.md").exists();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create skill dir: {}", e))?;
+    let path = dir.join("SKILL.md");
+    std::fs::write(&path, &req.content)
+        .map_err(|e| format!("write SKILL.md: {}", e))?;
+
+    // Invalidate the in-memory and embedding caches so the new skill
+    // shows up on the next search/route call without restart.
+    if let Ok(mut w) = INDEX.write() { *w = None; }
+    {
+        let mut w = EMBED_CACHE.write().await;
+        *w = None;
+    }
+    let _ = tokio::fs::remove_file(cache_path()).await;
+    let n = load_index().len();
+
+    Ok(SkillInstallResult {
+        id,
+        path: path.to_string_lossy().to_string(),
+        action: if existed { "updated".into() } else { "installed".into() },
+        n_skills_total: n,
+    })
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -668,6 +990,7 @@ mod tests {
             tags: vec![], version: "1.0".into(), author: "".into(),
             nist_csf: vec![], mitre_attck: vec![], mitre_atlas: vec![],
             mitre_d3fend: vec![], ai_rmf: vec![],
+            source: "test".into(),
         };
         let q  = "volatility";
         let qt = tokenize(q);
@@ -684,6 +1007,7 @@ mod tests {
             nist_csf: vec![],
             mitre_attck: vec!["T1071".into(), "T1059".into()],
             mitre_atlas: vec![], mitre_d3fend: vec![], ai_rmf: vec![],
+            source: "test".into(),
         };
         let q  = "T1071";
         let qt = tokenize(q);
@@ -700,6 +1024,7 @@ mod tests {
             version: "1.0".into(), author: "".into(),
             nist_csf: vec![], mitre_attck: vec![], mitre_atlas: vec![],
             mitre_d3fend: vec![], ai_rmf: vec![],
+            source: "test".into(),
         };
         let q  = "phishing";
         let qt = tokenize(q);

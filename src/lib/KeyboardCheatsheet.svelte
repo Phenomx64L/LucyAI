@@ -81,6 +81,8 @@
                 { keys: ['/llm-health'], desc: isEN ? 'LLM tier health, latency & breaker state' : 'Salud de capas LLM, latencia y breaker' },
                 { keys: ['/sec-skill'], desc: isEN ? 'Search 213 cybersecurity skills (MITRE / NIST)' : 'Buscar 213 skills de ciberseguridad (MITRE / NIST)' },
                 { keys: ['/sec-skill auto'], desc: isEN ? 'Auto-routing status & toggles' : 'Estado y toggles de auto-routing' },
+                { keys: ['/sec-skill folder'], desc: isEN ? 'Open user skills folder' : 'Abre la carpeta de skills del usuario' },
+                { keys: ['/sec-skill new <id>'], desc: isEN ? 'Generate a starter SKILL.md template' : 'Genera plantilla starter SKILL.md' },
                 { keys: ['/anneal'], desc: isEN ? 'Ontology cluster scoring (promote/demote)' : 'Scoring de ontologías (promover/democionar)' },
                 { keys: ['/demote-tag'], desc: isEN ? 'Re-tag memories off a failed cluster' : 'Re-etiqueta memorias de un cúmulo fallido' },
                 { keys: ['/preset'], desc: isEN ? 'Open the skill-preset picker' : 'Abre el selector de plantillas de habilidad' },

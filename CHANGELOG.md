@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.15] — 2026-05-31
+
+User skills directory + drag-and-drop install. Users can now
+extend Lucy's security skill library without touching the
+codebase or recompiling.
+
+### What changed
+
+The skill loader walks two directories instead of one:
+
+1. **Bundled** — the 213 Anthropic-Cybersecurity-Skills shipped
+   inside `docs/security-skills/`. Read-only at runtime.
+2. **User** — `%LOCALAPPDATA%\Lucy\security-skills\` (Windows)
+   or `$XDG_DATA_HOME/Lucy/security-skills` (Linux). Created on
+   first boot. Drop any `<id>/SKILL.md` here.
+
+User skills take precedence over bundled when ids collide, so a
+user can override an Anthropic skill with their own version.
+
+Each `SkillMeta` now carries a `source: "bundled" | "user"` tag,
+so the UI can badge them differently in future panels.
+
+### Path 1 — slash commands
+
+```
+/sec-skill folder           # open user dir in Explorer
+/sec-skill reload           # re-scan dir, drop embedding cache
+/sec-skill new <id>         # generate a SKILL.md template you copy/edit
+```
+
+The template shows ALL recognised frontmatter fields with
+example values so the user learns the schema by writing the
+file. After saving, `/sec-skill reload` makes it searchable
+and auto-routable immediately.
+
+### Path 2 — drag and drop
+
+Drag any `.md` file into Lucy's chat. If the file:
+
+- Starts with `---` YAML frontmatter, AND
+- The frontmatter contains a `name:` field
+
+Lucy auto-detects it as a skill and installs it directly into
+the user dir. A toast confirms:
+
+```
+✦ Skill "investigar-incidente-acme" installed (214 total)
+```
+
+The composer is auto-prefilled with `/sec-skill use <id>` so
+the user can activate it on the next send.
+
+If the .md is NOT a skill, it falls through to the normal
+file-attach pipeline (so existing flows aren't broken).
+
+### Backend (`src-tauri/src/commands/security_skills.rs`)
+
+- `INDEX` switched from `OnceLock<Vec<...>>` to
+  `RwLock<Option<Vec<...>>>` so it can be invalidated on reload.
+- `bundled_skills_dir()` (renamed from `skills_dir`) and new
+  `user_skills_dir_path()` + `ensure_user_skills_dir()`.
+- `load_index()` walks both dirs, user wins on id collision.
+- `resolve_skill_md_path(id)` honors the precedence for the
+  `security_skills_get` body read.
+- 4 new Tauri commands:
+  - `security_skills_user_dir()` — path + auto-create + count
+  - `security_skills_reload()` — invalidate INDEX + embeddings
+  - `security_skills_template(id)` — starter SKILL.md content
+  - `security_skills_install({ content, id_override })` —
+    validates frontmatter, writes file, invalidates caches,
+    returns final id + path + action ("installed"/"updated")
+
+### Frontend (`+page.svelte` + `slash-commands.ts`)
+
+- `maybeInstallSkillFromDrop(e)` — pre-filter on the universal
+  drop handler. Checks file is `.md`, content starts with
+  `---`, frontmatter has `name:`. If yes, calls
+  `security_skills_install` and shows toast; if no, falls
+  through.
+- Slash sub-verbs `folder`, `reload`, `new <id>` wired into the
+  existing `/sec-skill` command.
+- Cheatsheet rows added for the two new sub-verbs.
+
+### Tests
+
+All 7 existing security_skills tests still pass. The new
+commands have integration-style validation via the
+frontmatter parser they share.
+
+### Migration note
+
+The `SkillMeta` struct gained a `source` field. The
+`#[serde(default)]` attribute means old localStorage / cache
+entries deserialize fine — the field defaults to `"bundled"`.
+Embedding cache is invalidated on first install/reload so
+projections don't use stale skills.
+
+---
+
 ## [1.7.14] — 2026-05-31
 
 UX hotfix on the v1.6.1 SkillPresetPicker: clicking a tile
