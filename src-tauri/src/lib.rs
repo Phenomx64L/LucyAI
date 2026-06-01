@@ -528,6 +528,8 @@ pub fn run() {
             commands::security_skills::security_skills_reload,
             commands::security_skills::security_skills_template,
             commands::security_skills::security_skills_install,
+            // v1.7.16 — pre-delivery script syntax verification.
+            commands::script_verify::verify_script,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

@@ -63,3 +63,5 @@ pub mod polarity;
 pub mod annealing;
 // v1.7.4 — Anthropic Cybersecurity Skills library (213 SKILL.md, Apache 2.0).
 pub mod security_skills;
+// v1.7.16 — Pre-delivery script syntax verification.
+pub mod script_verify;

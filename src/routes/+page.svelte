@@ -145,6 +145,8 @@ import { listen } from '@tauri-apps/api/event';
              clearActiveSecuritySkill } from '$lib/security-skill-bridge';
     // v1.7.5 — Unified context orchestrator (auto-route + MCP rank).
     import { buildUnifiedContext, renderMcpToolsBlock } from '$lib/unified-context';
+    // v1.7.16 — Pre-delivery script verifier (post-stream auto-fix).
+    import { verifyAndAnnotateMarkdown, isVerifyEnabled } from '$lib/script-verifier';
     import {
         activeSkillPreset,
         peekActivePreset,
@@ -7294,6 +7296,31 @@ times the SAME way, switch tool kind entirely.
                 } else {
                     addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
                 }
+                // v1.7.16 — Post-stream script verification.
+                // Fire-and-forget: re-renders the message HTML 1-2s
+                // later with `✓ Verified` / `✓ Auto-fixed` / `⚠ Unverified`
+                // badges prepended to each code block. We always pass
+                // the original markdown; the verifier short-circuits
+                // (returns input unchanged) when the setting is off or
+                // no supported languages are present.
+                if (isVerifyEnabled() && /```[a-zA-Z0-9]+/.test(clean)) {
+                    const _msgIdForVerify = (existingStreamMsg && existingStreamMsg.id) || null;
+                    verifyAndAnnotateMarkdown(clean)
+                        .then(annotated => {
+                            if (annotated === clean) return;
+                            const _t = getTab(tabId);
+                            if (!_t) return;
+                            const _msg = _msgIdForVerify
+                                ? _t.messages.find(m => m.id === _msgIdForVerify)
+                                : _t.messages.slice().reverse().find(m => m.role === 'lucy' && m.rawContent === clean);
+                            if (!_msg) return;
+                            _msg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(annotated)}`;
+                            _msg.rawContent = annotated;
+                            _msg.tokens = Math.ceil(annotated.length / 4);
+                            refresh();
+                        })
+                        .catch(e => console.warn('[script-verifier] post-stream verify failed:', e));
+                }
                 if (_rgBadge) t._reflectionBadge = null; // limpiar badge usado
                 if(doSpeak)speak(clean);
             }
@@ -10709,6 +10736,26 @@ if (Test-Path $src) {
         opacity: .4;
         pointer-events: none;
       }
+
+      /* v1.7.16 — Script verifier badges. Render as small inline pills
+         immediately before a code block. Tone color-codes the outcome:
+         green=verified, blue=auto-fixed, amber=unverified, grey=skipped. */
+      :global(.sv-badge) {
+        display: inline-flex; align-items: center; gap: 4px;
+        font-family: var(--mono, ui-monospace, monospace);
+        font-size: 10.5px; font-weight: 600;
+        font-style: normal;
+        padding: 2px 8px; border-radius: 8px;
+        border: 1px solid transparent;
+        letter-spacing: .2px;
+        margin: 6px 0 -2px 0;
+        cursor: help;
+        vertical-align: middle;
+      }
+      :global(.sv-ok)   { color: var(--acc, #10b981);  background: rgba(16, 185, 129, .08);  border-color: rgba(16, 185, 129, .25); }
+      :global(.sv-fix)  { color: var(--blue, #3b9eff); background: rgba(59, 158, 255, .08);  border-color: rgba(59, 158, 255, .25); }
+      :global(.sv-warn) { color: var(--amber, #f59e0b); background: rgba(245, 158, 11, .08); border-color: rgba(245, 158, 11, .25); }
+      :global(.sv-skip) { color: var(--txt2, #94a3b8); background: rgba(255, 255, 255, .03); border-color: rgba(255, 255, 255, .08); }
 
       .sf-overlay {
         position: fixed; inset: 0; z-index: 8500;

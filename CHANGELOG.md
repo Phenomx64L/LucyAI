@@ -7,6 +7,129 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.16] — 2026-06-01
+
+Pre-delivery script syntax verification with auto-fix loop. When
+Lucy emits a code block in a supported language, the backend
+syntax-checks it before the user reads it. Failed checks trigger
+a single CHEAP-tier auto-fix; clean code gets a `✓ Verified`
+badge, fixed code gets `✓ Auto-fixed`, persistent failures get
+`⚠ Unverified` with the error in the tooltip.
+
+### Why
+
+When you watch what an assistant actually does when its own
+output fails to compile, you see the pattern: read the error,
+identify the offending line, patch surgically, re-run. Lucy's
+existing autocorrect loop applies this *reactively* — only
+after the user has already pasted a broken command into their
+shell. v1.7.16 applies the same idea *proactively* at the
+markdown render step. Catches the same error class (typos,
+missing brackets, unbalanced quotes, missing imports) at zero
+side-effect cost.
+
+### Languages supported
+
+| Language | Checker | Notes |
+|----------|---------|-------|
+| PowerShell | pwsh / powershell `Parser::ParseInput` | extracts line numbers; falls back from pwsh to Windows PowerShell |
+| JavaScript / Node | `node --check` | requires node on PATH |
+| Python | `python -m py_compile` | requires python on PATH |
+| Bash | `bash -n` | skipped on Windows without Git-Bash / WSL |
+| JSON | `serde_json::from_str` (in-process) | always available, microseconds |
+
+All external processes spawn with a 5-second hard timeout.
+Unsupported languages are skipped (no badge rendered, no
+telemetry counted toward "unverified").
+
+### Backend
+
+`src-tauri/src/commands/script_verify.rs` (~330 LOC):
+
+- `verify_script(language, content)` Tauri command, returns
+  `VerifyResult { ok, language, error, line, elapsed_ms,
+  skipped, skip_reason }`.
+- Per-language `verify_powershell/javascript/python/bash/json`
+  workers wrapped in `tokio::task::spawn_blocking`.
+- `which(cmd)` PATH probe so missing interpreters surface as
+  "skipped" instead of "verify failed".
+- `parse_line_from(msg)` extracts line numbers from common
+  error formats: `LINE N:`, `file:N:`, `line N`.
+- 8 unit tests covering JSON happy path, JSON parse failure
+  with line extraction, language normalisation, line-number
+  regex, truncation.
+
+### Frontend
+
+`src/lib/script-verifier.ts` (~250 LOC):
+
+- `verifyOrFix(language, content)` — single block, one auto-fix
+  attempt via CHEAP tier with `maxTokensOverride: 1024`.
+- `verifyAndAnnotateMarkdown(md)` — scans up to 10 code blocks
+  per response, verifies in parallel, stitches back with the
+  badge HTML prepended.
+- `renderBadge(outcome)` — small inline pill with tooltip
+  containing the full error message and line number.
+- Telemetry persisted to `lucy_verify_stats_v1` localStorage,
+  exposed via `peekVerifyStats()`.
+
+### Post-stream hook in `+page.svelte`
+
+Fire-and-forget invocation after Lucy's response is committed:
+
+```ts
+if (isVerifyEnabled() && /```[a-zA-Z0-9]+/.test(clean)) {
+    verifyAndAnnotateMarkdown(clean).then(annotated => {
+        if (annotated === clean) return;
+        // re-render the message with badges
+    });
+}
+```
+
+User sees the response immediately (streaming UX unchanged);
+within 1-2s the badges appear and any auto-fix is applied in
+place.
+
+### Badges
+
+| State | Tone | Tooltip |
+|-------|------|---------|
+| `✓ Verified` | green | `Syntax check passed (<N>ms)` |
+| `✓ Auto-fixed` | blue | `Syntax error caught and auto-fixed in 1 attempt` |
+| `⚠ Unverified` | amber | `Syntax error: <message> (line N)` |
+| `· Not checked` | grey | `Verifier not available for this language` |
+
+CSS lives in `+page.svelte` global styles; HTML uses only
+`<span class title>` which DOMPurify's allowlist already
+preserves (no sanitizer adjustments needed).
+
+### Slash command
+
+```
+/verify              # status panel: scanned/clean/fixed/unverified counts + by-language
+/verify on | off     # toggle (default ON)
+/verify reset        # clear telemetry counters
+```
+
+### Settings & telemetry
+
+- `lucy_verify_scripts_v1` ∈ `'on' | 'off' | ''` (default on).
+- `lucy_verify_stats_v1` — `{ total_scanned, clean_first,
+  auto_fixed, unverified, skipped, by_language }`.
+
+### Cost analysis
+
+- Clean syntax check: ~50-200ms, $0 (local process).
+- Auto-fix: 1 CHEAP call, ~$0.0002 worst case.
+- Average user emitting ~10 scripts/day with ~10% needing fix
+  ≈ $0.06/year.
+
+### Cheatsheet
+
+`/verify` row added beside `/llm-health`.
+
+---
+
 ## [1.7.15] — 2026-05-31
 
 User skills directory + drag-and-drop install. Users can now

@@ -1355,6 +1355,59 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── v1.7.16 — /verify (script syntax verifier) ──
+        // /verify              → status summary
+        // /verify on | off     → toggle the post-stream verifier
+        // /verify reset        → clear telemetry counters
+        case 'verify': case 'verifier': case 'verify-scripts': {
+            (async () => {
+                try {
+                    const { isVerifyEnabled, setVerifyEnabled, peekVerifyStats,
+                            resetVerifyStats } = await import('$lib/script-verifier');
+                    const sub = arg.trim().toLowerCase();
+                    if (sub === 'on' || sub === 'enable' || sub === 'enabled') {
+                        setVerifyEnabled(true);
+                        sysMsg(ctx.isEN ? '✓ Script verification enabled.' : '✓ Verificación de scripts activada.', 'var(--acc)');
+                        return;
+                    }
+                    if (sub === 'off' || sub === 'disable' || sub === 'disabled') {
+                        setVerifyEnabled(false);
+                        sysMsg(ctx.isEN ? '✓ Script verification disabled.' : '✓ Verificación de scripts desactivada.', 'var(--acc)');
+                        return;
+                    }
+                    if (sub === 'reset' || sub === 'clear') {
+                        resetVerifyStats();
+                        sysMsg(ctx.isEN ? '✓ Verifier stats reset.' : '✓ Estadísticas del verificador reiniciadas.', 'var(--acc)');
+                        return;
+                    }
+                    const stats = peekVerifyStats();
+                    const enabled = isVerifyEnabled();
+                    const byLang = Object.entries(stats.by_language)
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 6)
+                        .map(([k, v]) => `${k} ${v}`).join(' · ') || (ctx.isEN ? 'none yet' : 'aún ninguno');
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? '✓ Script verifier' : '✓ Verificador de scripts',
+                        [{
+                            title: ctx.isEN ? 'Status' : 'Estado',
+                            icon: '◆', tone: 'info', defaultOpen: true,
+                            html:
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Enabled' : 'Activado'}</span><span class="rb-v">${enabled ? '✓ on' : '✗ off'}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Code blocks scanned' : 'Bloques escaneados'}</span><span class="rb-v">${stats.total_scanned}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Clean on first check' : 'Limpios al primer check'}</span><span class="rb-v">${stats.clean_first}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Auto-fixed by CHEAP tier' : 'Auto-fixed por CHEAP'}</span><span class="rb-v">${stats.auto_fixed}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Unverified (manual review)' : 'No verificados (revisar)'}</span><span class="rb-v">${stats.unverified}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Skipped (no checker)' : 'Saltados (sin checker)'}</span><span class="rb-v">${stats.skipped}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'By language' : 'Por lenguaje'}</span><span class="rb-v">${escapeHtml(byLang)}</span></div>` +
+                                `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'Toggle' : 'Cambiar'}</span><span class="rb-v"><code>/verify on|off|reset</code></span></div>`,
+                        }]));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── v1.7.3 — /llm-health (LLM tier observability) ──
         // Same data the StatusBar chip surfaces in a tooltip, rendered
         // as a result-block panel in chat. Useful when investigating

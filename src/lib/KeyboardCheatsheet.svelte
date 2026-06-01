@@ -79,6 +79,7 @@
                 { keys: ['/evolve'], desc: isEN ? 'Promote recurring patterns into skills' : 'Promueve patrones recurrentes a skills' },
                 { keys: ['/polarity'], desc: isEN ? 'Project text onto SUPPORTS↔CONTRADICTS axis' : 'Proyecta texto al eje APOYA↔CONTRADICE' },
                 { keys: ['/llm-health'], desc: isEN ? 'LLM tier health, latency & breaker state' : 'Salud de capas LLM, latencia y breaker' },
+                { keys: ['/verify'], desc: isEN ? 'Script syntax verifier status & toggles' : 'Estado y toggles del verificador de scripts' },
                 { keys: ['/sec-skill'], desc: isEN ? 'Search 213 cybersecurity skills (MITRE / NIST)' : 'Buscar 213 skills de ciberseguridad (MITRE / NIST)' },
                 { keys: ['/sec-skill auto'], desc: isEN ? 'Auto-routing status & toggles' : 'Estado y toggles de auto-routing' },
                 { keys: ['/sec-skill folder'], desc: isEN ? 'Open user skills folder' : 'Abre la carpeta de skills del usuario' },
