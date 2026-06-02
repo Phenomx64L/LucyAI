@@ -8920,6 +8920,21 @@ if (Test-Path $src) {
 
     <div class="panel">
 
+      <!-- v1.7.23 — Context Strip moved out of `.chat-wrap` (which had
+           `overflow:hidden` and `display:none` when inactive, clipping
+           it). Now lives at the panel root so it's always reachable.
+           Hidden via `{#if !showWelcome}` so the Welcome screen stays
+           clean. The strip itself decides whether to render based on
+           the snapshot store. -->
+      {#if !showWelcome && !showSetupOverlay}
+      <ContextStrip
+        on:clickMemories={() => setView('memory')}
+        on:clickSkill={() => showSkillPicker = true}
+        on:clickPreset={() => showSkillPresetPicker = true}
+        on:clickMcp={() => showMcpServersModal = true}
+        on:clickTokens={() => setView('diagnostico')} />
+      {/if}
+
       <!-- PostureStrip: always-on host status bar (reconnected v1.4.0) -->
       {#if $hosts.length > 0 && !showSetupOverlay}
       <PostureStrip
@@ -9158,17 +9173,13 @@ if (Test-Path $src) {
 
         {#each tabs as tab (tab.id)}
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
-            {#if activeTabId === tab.id}
-              <!-- v1.7.22 — Context Strip: live cockpit of memorias /
-                   skill / preset / MCP / tokens. Sticky above the
-                   thread so it persists while scrolling history. -->
-              <ContextStrip
-                on:clickMemories={() => setView('memory')}
-                on:clickSkill={() => showSkillPicker = true}
-                on:clickPreset={() => showSkillPresetPicker = true}
-                on:clickMcp={() => showMcpServersModal = true}
-                on:clickTokens={() => setView('diagnostico')} />
-            {/if}
+            <!-- v1.7.22 — Context Strip was here in v1.7.22 but the
+                 `.chat-wrap` parent has `overflow:hidden` which clipped
+                 the sticky positioning AND, in some boot states, the
+                 strip wasn't reaching the rendered DOM at all because
+                 the chat-wrap toggles `display:none` based on
+                 `class:on`. v1.7.23 moves the mount out to a sibling
+                 of the chat panel so it's always reachable. -->
             {#if activeIncidentId && activeTabId === tab.id}
             <div style="padding:0 12px;">
               <IncidentTimeline incidentId={activeIncidentId} {isEN}

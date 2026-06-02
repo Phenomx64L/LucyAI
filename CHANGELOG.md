@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.23] — 2026-06-01
+
+Three user-visible fixes from the v1.7.22 screenshot triage.
+
+### 1. Context Strip now actually mounts where it can be seen
+
+v1.7.22 mounted the strip INSIDE `.chat-wrap`. That parent has
+`overflow:hidden` plus a `display:none` ↔ `display:flex` toggle
+keyed off the active tab — both effects clipped or hid the
+strip before it could paint. v1.7.23 moves the mount to the
+`.panel` root next to `<PostureStrip>`, where it's a sibling
+of (not nested in) the scroll container. It also respects
+`{#if !showWelcome && !showSetupOverlay}` so it doesn't appear
+on the Welcome / first-run screens.
+
+### 2. `kind="url">…` HTML fragments leaking into prose
+
+The `<CITE>` regex in `renderConfidenceTags` required attributes
+in the order `src` THEN `kind`. When the LLM emitted
+`<CITE kind="url" src="…">label</CITE>` (kind first), the regex
+failed, the raw tag fell through to marked, marked emitted it
+verbatim as inline HTML, and DOMPurify stripped just the tag
+name — leaving fragments like
+`https://…announcing-fedora-44" kind="url">Red Hat Announcement.`
+in the rendered text.
+
+Two-pass fix:
+- Attribute-order-agnostic capture (pulls `src` and `kind`
+  from anywhere inside the opening tag).
+- Safety net that strips any orphan `<CITE …>` / `</CITE>`
+  remaining so nothing tag-shaped ever reaches marked.
+
+### 3. Strikethrough fantasma around bracketed phrases
+
+User screenshot showed `[modelos de Inteligencia Artificial]`
+and `[prescindir del soporte heredado de 32 bits]` rendered
+with a strikethrough line, making it look like Lucy had
+retracted facts she'd just stated. Trace: the LLM occasionally
+wraps emphasized phrases in `~~…~~`, marked's GFM tokenizer
+turns that into `<del>…</del>`.
+
+Lucy's prose spec has never included strikethrough — there is
+no case where she's intentionally retracting text. Disabled the
+`del` tokenizer at the marked level via
+`marked.use({ tokenizer: { del: () => undefined } })` so the
+`~~` characters survive as literal text instead of activating
+the strikethrough renderer.
+
+### Notes
+
+- The Context Strip placement in v1.7.22 (inside `.chat-wrap`)
+  was conceptually right — it lived "per tab" — but the CSS
+  trapped it. v1.7.23 trades per-tab nesting for global
+  visibility. The snapshot store is still per-call, so the
+  chips reflect the active tab's last build.
+
+- The `cite-chips.ts` placeholder restoration code was
+  audited as part of this triage. Earlier analysis suspected
+  a `(\d+)` regex would eat real numbers like "Fedora 44".
+  The file actually uses `\x01` control bytes as sentinels
+  (the Read tool was stripping them from display). No bug
+  there — left a clarifying comment so future audits don't
+  raise the same false alarm.
+
+---
+
 ## [1.7.22] — 2026-06-01
 
 ### Context Strip — Lucy's identity moment

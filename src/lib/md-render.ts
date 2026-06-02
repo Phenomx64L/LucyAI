@@ -18,6 +18,36 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { addCiteChips } from '$lib/cite-chips';
 
+// v1.7.23 — Disable GFM strikethrough.
+//
+// Lucy's prose spec doesn't include strikethrough — the only place
+// `~~text~~` appeared in the rendered chat came from the LLM emitting
+// it accidentally around emphasized phrases (often around bracketed
+// labels like `~~[modelos de IA]~~`), which marked happily turned into
+// `<del>[modelos de IA]</del>`. That looks like text was retracted, not
+// emphasized. We disable the tokenizer entirely; if a future surface
+// genuinely needs strikethrough we can re-enable it for that surface.
+let _markedConfigured = false;
+function _configureMarked() {
+    if (_markedConfigured) return;
+    _markedConfigured = true;
+    try {
+        // The cast is needed because marked's TS types don't expose the
+        // tokenizer override shape cleanly. The runtime contract is:
+        // returning `undefined` makes marked fall through and treat the
+        // matched substring as plain text.
+        (marked as any).use({
+            tokenizer: {
+                del(_src: string) { return undefined; },
+            },
+        });
+    } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[md-render] could not disable strikethrough:', e);
+    }
+}
+_configureMarked();
+
 // Tags Lucy emits that the host page renders semantically. Keep this list
 // small — every attr added is a potential XSS vector.
 const ADD_ATTR_BASE = ['style'];

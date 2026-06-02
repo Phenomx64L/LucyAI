@@ -99,16 +99,38 @@ export function renderConfidenceTags(text: string): string {
     // Points back to where Lucy got the info: a memory id, file path,
     // tool result, or URL. Rendered as a small clickable chip.
     if (out.includes('<CITE')) {
-        out = out.replace(/<CITE\s+src=["']([^"']+)["'](?:\s+kind=["']([^"']+)["'])?\s*>([\s\S]*?)<\/CITE>/gi,
-            (_, src, kind, label) => {
-                const safeSrc = String(src).replace(/"/g, '&quot;');
-                const safeLabel = escapeHtmlMini(String(label).trim());
-                const ico = kind === 'memory' ? '⌬' :
-                            kind === 'file'   ? '⌸' :
-                            kind === 'url'    ? '◈' :
-                            kind === 'tool'   ? '⚯' : '※';
-                return `<a class="cite-chip" data-cite-src="${safeSrc}" data-cite-kind="${kind || 'ref'}" title="${safeSrc}">${ico} ${safeLabel}</a>`;
-            });
+        // v1.7.23 — Two-pass CITE handling:
+        //   (1) Attribute-order-agnostic: pull `src` and `kind` from
+        //       anywhere inside the opening tag. The old strict regex
+        //       required `src` BEFORE `kind` — when the LLM swapped
+        //       order, the regex didn't match, the raw <CITE> tag fell
+        //       through to marked, marked passed the inline HTML to
+        //       DOMPurify, DOMPurify stripped the unknown tag but left
+        //       fragments like `kind="url">Red Hat Announcement` in
+        //       the rendered prose.
+        //   (2) Safety net: any <CITE> that STILL survives gets reduced
+        //       to its label text. We never want a `<CITE>` reaching
+        //       marked / DOMPurify.
+        out = out.replace(/<CITE\b([^>]*)>([\s\S]*?)<\/CITE>/gi, (_, attrs, label) => {
+            const srcMatch  = attrs.match(/\bsrc\s*=\s*["']([^"']+)["']/i);
+            const kindMatch = attrs.match(/\bkind\s*=\s*["']([^"']+)["']/i);
+            if (!srcMatch) {
+                return escapeHtmlMini(String(label).trim());   // safety net (1)
+            }
+            const src  = srcMatch[1];
+            const kind = kindMatch?.[1] || 'ref';
+            const safeSrc   = String(src).replace(/"/g, '&quot;');
+            const safeLabel = escapeHtmlMini(String(label).trim());
+            const ico = kind === 'memory' ? '⌬' :
+                        kind === 'file'   ? '⌸' :
+                        kind === 'url'    ? '◈' :
+                        kind === 'tool'   ? '⚯' : '※';
+            return `<a class="cite-chip" data-cite-src="${safeSrc}" data-cite-kind="${kind}" title="${safeSrc}">${ico} ${safeLabel}</a>`;
+        });
+        // Safety net (2): any unterminated `<CITE …>` (no closing tag)
+        // — strip the opening tag, keep nothing else around it.
+        out = out.replace(/<CITE\b[^>]*>/gi, '');
+        out = out.replace(/<\/CITE\s*>/gi, '');
     }
 
     return out;
