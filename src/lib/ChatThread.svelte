@@ -215,10 +215,21 @@
                 on:contextmenu|preventDefault={(e) => msg.role !== 'system' && dispatch('contextmessage', { msg, x: e.clientX, y: e.clientY })}
                 role="article">
                 {#if msg.role === 'lucy' || msg.role === 'streaming'}
-                    <span class="lucy-avatar-wrap" title="Lucy · v1.4.0">
+                    <!-- v1.7.25 — Living Avatar. The state attribute
+                         drives the CSS animation; states cascade in
+                         priority order so multiple flags resolve
+                         deterministically. -->
+                    {@const _lstate =
+                          tab?._lucyAwaitingAuth                            ? 'awaiting'
+                        : tab?._lucyLastError && (Date.now() - tab._lucyLastError < 3000) ? 'error'
+                        : tab?.isExecuting                                  ? 'executing'
+                        : tab?.isProcessing && msg.role === 'streaming'     ? 'processing'
+                        : 'idle'}
+                    <span class="lucy-avatar-wrap" title="Lucy · {_lstate}"
+                          data-lucy-state={_lstate}>
                         <img class="lucy-avatar" src={lucyAvatarUrl} alt="Lucy" />
-                        <span class="lucy-status {tab?.isProcessing && msg.role === 'streaming' ? 'processing' : 'active'}"
-                              aria-label={tab?.isProcessing && msg.role === 'streaming' ? 'Procesando' : 'Activo'}></span>
+                        <span class="lucy-status {_lstate === 'processing' ? 'processing' : 'active'}"
+                              aria-label={_lstate}></span>
                     </span>
                 {/if}
                 {#if msg.role === 'user'}
@@ -415,6 +426,85 @@
     @keyframes lucyAvatarPulse{
         0%,100%{box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 14px -2px rgba(16,185,129,.25);}
         50%    {box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 22px 1px rgba(16,185,129,.55);}
+    }
+
+    /* ── v1.7.25 — Living Avatar: state-driven Lucy presence ─────────────
+       The avatar now reacts to Lucy's internal state instead of being a
+       static SVG. Five states drive five distinct visual moods:
+
+       idle       breathing scale 1→1.04→1 (3.4s)
+       processing fast cyan pulse on status dot (existing)
+       executing  gold glow ring expanding outward
+       error      brief amber pulse + freeze
+       awaiting   red ring slowly pulsing (waiting for user authorisation)
+
+       The state is set on the .lucy-avatar-wrap as a data attribute by
+       the host, so the styling cascades to both <img> and <span.status>.
+       No JS — pure CSS state machine. */
+
+    /* Idle breathing — always on unless another state overrides. */
+    :global(.lucy-avatar-wrap[data-lucy-state="idle"]) :global(.lucy-avatar),
+    :global(.lucy-avatar-wrap:not([data-lucy-state])) :global(.lucy-avatar) {
+        animation: lucyBreathe 3.4s ease-in-out infinite;
+    }
+    @keyframes lucyBreathe {
+        0%,100% { transform: scale(1);    box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 14px -2px rgba(16,185,129,.32); }
+        50%     { transform: scale(1.04); box-shadow:0 0 0 1px rgba(0,0,0,.35),0 0 18px -1px rgba(16,185,129,.55); }
+    }
+
+    /* Executing — Lucy is running commands on the host. Gold pulse
+       ring that radiates outward, suggesting motion / activity. */
+    :global(.lucy-avatar-wrap[data-lucy-state="executing"]) :global(.lucy-avatar) {
+        animation: lucyExecuting 1.4s ease-out infinite;
+        border-color: rgba(245, 158, 11, .55);
+    }
+    @keyframes lucyExecuting {
+        0%   { box-shadow: 0 0 0 0   rgba(245,158,11,.45),
+                            0 0 14px -2px rgba(245,158,11,.45); }
+        100% { box-shadow: 0 0 0 12px rgba(245,158,11,0),
+                            0 0 28px 4px  rgba(245,158,11,0); }
+    }
+    :global(.lucy-avatar-wrap[data-lucy-state="executing"]) :global(.lucy-status) {
+        background:#f59e0b;
+        box-shadow:0 0 8px rgba(245,158,11,.7);
+    }
+
+    /* Error — brief amber+red double pulse then freeze. The fade keyframe
+       is short (2.4s total) and runs once via JS toggling the class. */
+    :global(.lucy-avatar-wrap[data-lucy-state="error"]) :global(.lucy-avatar) {
+        animation: lucyError 2.4s ease-in-out 1;
+        border-color: rgba(239,68,68,.6);
+    }
+    @keyframes lucyError {
+        0%   { transform: scale(1);     box-shadow: 0 0 0 0  rgba(239,68,68,.55), 0 0 14px -2px rgba(239,68,68,.45); }
+        25%  { transform: scale(1.08);  box-shadow: 0 0 0 10px rgba(239,68,68,0),  0 0 24px 4px  rgba(239,68,68,.55); }
+        50%  { transform: scale(1);     box-shadow: 0 0 0 0  rgba(239,68,68,.4),  0 0 18px 0    rgba(239,68,68,.35); }
+        75%  { transform: scale(1.04);  box-shadow: 0 0 0 6px  rgba(239,68,68,0),  0 0 20px 2px  rgba(239,68,68,.4); }
+        100% { transform: scale(1);     box-shadow: 0 0 0 1px rgba(0,0,0,.35),    0 0 14px -2px rgba(239,68,68,.25); }
+    }
+    :global(.lucy-avatar-wrap[data-lucy-state="error"]) :global(.lucy-status) {
+        background:#ef4444;
+        box-shadow:0 0 8px rgba(239,68,68,.7);
+    }
+
+    /* Awaiting authorisation — a SECURITY_BLOCK happened and Lucy is
+       waiting for the user to click Approve / Deny on the bypass token
+       modal. Red breathing ring around the avatar — gentler than error
+       (slower cadence) so it reads as "patient" not "alarmed". */
+    :global(.lucy-avatar-wrap[data-lucy-state="awaiting"]) :global(.lucy-avatar) {
+        animation: lucyAwaiting 2.6s ease-in-out infinite;
+        border-color: rgba(239,68,68,.5);
+    }
+    @keyframes lucyAwaiting {
+        0%,100% { box-shadow: 0 0 0 0  rgba(239,68,68,.35), 0 0 14px -2px rgba(239,68,68,.3); }
+        50%     { box-shadow: 0 0 0 8px rgba(239,68,68,0),  0 0 22px 2px  rgba(239,68,68,.55); }
+    }
+
+    /* Reduced-motion — kill all animations cleanly. Users on low-end
+       machines or with the OS preference set get a static avatar. */
+    @media (prefers-reduced-motion: reduce) {
+        :global(.lucy-avatar) { animation: none !important; }
+        :global(.lucy-status) { animation: none !important; }
     }
     /* Hover effect — applied to the wrap so the status dot scales together */
     :global(.lucy-avatar-wrap:hover) :global(.lucy-avatar){

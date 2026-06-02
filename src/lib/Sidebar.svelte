@@ -120,12 +120,17 @@
     </div>
     {#if sistemaOpen || sidebarCollapsed}
     <div class="sb-accordion-body">
-    <div class="sb-it" class:act={activeView==='dashboard'} role="button" tabindex="0"
+    <!-- v1.7.25 — data-concept attributes wire the sidebar items into
+         Lucy's 5-concept color palette (memory cyan, security amber,
+         ai teal, infra blue, automation violet). Only the items that
+         carry semantic weight in Lucy's mental model are tagged; the
+         rest stay default. -->
+    <div class="sb-it" class:act={activeView==='dashboard'} data-concept="infra" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'dashboard' })} on:keydown
          title="Dashboard — métricas del sistema">
         <span class="sb-ico"><LayoutDashboard size={20} /></span><span class="sb-txt">Dashboard</span>
     </div>
-    <div class="sb-it" class:act={activeView==='terminal'} role="button" tabindex="0"
+    <div class="sb-it" class:act={activeView==='terminal'} data-concept="ai" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'terminal' })} on:keydown
          title="Terminal IA — chat con Lucy">
         <span class="sb-ico"><Sparkles size={20} /></span><span class="sb-txt">Terminal IA</span>
@@ -149,27 +154,27 @@
          title={isEN ? 'Infrastructure Inventory' : 'Inventario — puertos, servicios, software, certificados'}>
         <span class="sb-ico"><Network size={20} /></span><span class="sb-txt">{isEN ? 'Inventory' : 'Inventario'}</span>
     </div>
-    <div class="sb-it" class:act={activeView==='compliance'} role="button" tabindex="0"
+    <div class="sb-it" class:act={activeView==='compliance'} data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'compliance' })} on:keydown
          title={isEN ? 'Compliance — CIS Benchmark audits' : 'Compliance — auditorías CIS Benchmark'}>
         <span class="sb-ico"><ShieldCheck size={20} /></span><span class="sb-txt">Compliance</span>
     </div>
-    <div class="sb-it" class:act={activeView==='audittrail'} role="button" tabindex="0"
+    <div class="sb-it" class:act={activeView==='audittrail'} data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'audittrail' })} on:keydown
          title={isEN ? 'Audit Trail — command history' : 'Auditoría — historial y seguimiento de comandos'}>
         <span class="sb-ico"><ClipboardList size={20} /></span><span class="sb-txt">{isEN ? 'Audit Trail' : 'Auditoría'}</span>
     </div>
-    <div class="sb-it" class:act={activeView==='memory'} role="button" tabindex="0"
+    <div class="sb-it" class:act={activeView==='memory'} data-concept="memory" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'memory' })} on:keydown
          title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
         <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
     </div>
-    <div class="sb-it" class:act={activeView==='capacity'} role="button" tabindex="0"
+    <div class="sb-it" class:act={activeView==='capacity'} data-concept="infra" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'capacity' })} on:keydown
          title={isEN ? 'Capacity Planning — historical trends & projections' : 'Capacidad — tendencias históricas y proyecciones'}>
         <span class="sb-ico"><TrendingUp size={20} /></span><span class="sb-txt">{isEN ? 'Capacity' : 'Capacidad'}</span>
     </div>
-    <div class="sb-it" class:act={activeView==='diagnostics'} role="button" tabindex="0"
+    <div class="sb-it" class:act={activeView==='diagnostics'} data-concept="infra" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'diagnostics' })} on:keydown
          title={isEN ? 'Self-Diagnostics — unified health checks' : 'Auto-Diagnóstico — chequeos de salud unificados'}>
         <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{isEN ? 'Diagnostics' : 'Diagnóstico'}</span>

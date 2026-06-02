@@ -38,6 +38,60 @@
         transform .28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .sidebar .sb-txt { transition: opacity .14s ease; }
+
+/* ── v1.7.25 — Concept colour system ──────────────────────────────────────
+   Items tagged with `data-concept="…"` get a coloured glyph + a 2px left
+   border on hover and a glowing left rail when active. The five concepts
+   map to Lucy's identity palette and propagate to other surfaces
+   (Context Strip chips, future Knowledge view, etc.).
+
+   memory   → cyan    #06b6d4
+   security → amber   #f59e0b
+   ai       → teal    var(--accent, #10b981)
+   infra    → blue    #3b9eff
+   automation→ violet  #a78bfa
+
+   Default items keep the existing teal active state — no regression. */
+.sidebar .sb-it { position: relative; }
+.sidebar .sb-it[data-concept]::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 2px;
+    background: currentColor;
+    opacity: 0;
+    border-radius: 0 2px 2px 0;
+    transition: opacity .15s ease, width .15s ease;
+}
+.sidebar .sb-it[data-concept]:hover::before { opacity: .45; }
+.sidebar .sb-it[data-concept].act::before { opacity: 1; width: 3px; box-shadow: 0 0 8px currentColor; }
+
+.sidebar .sb-it[data-concept="memory"]   { color: #67e8f9; }
+.sidebar .sb-it[data-concept="memory"] :global(.sb-ico)   { color: #67e8f9; filter: drop-shadow(0 0 4px rgba(103,232,249,.35)); }
+.sidebar .sb-it[data-concept="memory"].act { background: color-mix(in srgb, #06b6d4 12%, transparent); }
+
+.sidebar .sb-it[data-concept="security"] { color: #fcd34d; }
+.sidebar .sb-it[data-concept="security"] :global(.sb-ico) { color: #fcd34d; filter: drop-shadow(0 0 4px rgba(252,211,77,.35)); }
+.sidebar .sb-it[data-concept="security"].act { background: color-mix(in srgb, #f59e0b 12%, transparent); }
+
+.sidebar .sb-it[data-concept="ai"]       { color: var(--accent, #10b981); }
+.sidebar .sb-it[data-concept="ai"] :global(.sb-ico)       { color: var(--accent, #10b981); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent, #10b981) 35%, transparent)); }
+.sidebar .sb-it[data-concept="ai"].act { background: color-mix(in srgb, var(--accent, #10b981) 12%, transparent); }
+
+.sidebar .sb-it[data-concept="infra"]    { color: #93c5fd; }
+.sidebar .sb-it[data-concept="infra"] :global(.sb-ico)    { color: #93c5fd; filter: drop-shadow(0 0 4px rgba(147,197,253,.35)); }
+.sidebar .sb-it[data-concept="infra"].act { background: color-mix(in srgb, #3b9eff 12%, transparent); }
+
+.sidebar .sb-it[data-concept="automation"]{ color: #c4b5fd; }
+.sidebar .sb-it[data-concept="automation"] :global(.sb-ico){ color: #c4b5fd; filter: drop-shadow(0 0 4px rgba(196,181,253,.35)); }
+.sidebar .sb-it[data-concept="automation"].act { background: color-mix(in srgb, #a78bfa 12%, transparent); }
+
+/* Collapsed sidebar — the coloured rail still shows, but the text
+   labels are clipped (existing behaviour). The icons keep their tint
+   so the user can still scan by colour even at collapsed width. */
+@media (prefers-reduced-motion: reduce) {
+    .sidebar .sb-it[data-concept]::before { transition: none !important; }
+}
 .sidebar.closed .sb-txt { opacity: 0; }
 /* v1.5.6 — Open-state width is now driven by the inline
    `style="width:${sidebarWidth}px"` set in +page.svelte (defaults to

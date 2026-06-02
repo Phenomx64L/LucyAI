@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.25] — 2026-06-01
+
+UI sprint — three visual upgrades that move Lucy from "another
+chat with a sidebar" toward a flight-panel cockpit feel.
+
+### 1. Living Avatar — state-driven Lucy presence
+
+The avatar used to be a static SVG with a presence dot. v1.7.25
+turns it into a five-state machine driven by a single
+`data-lucy-state` attribute on the wrap:
+
+| State | Visual cue | When |
+|-------|-----------|------|
+| `idle` | Subtle 3.4s breathing scale (1.00 → 1.04 → 1.00) | Default, between messages |
+| `processing` | Cyan pulse on the status dot (existing) | LLM responding |
+| `executing` | Outward-radiating gold ring | Lucy running commands on the host |
+| `error` | One-shot amber+red double pulse over 2.4s | Last turn surfaced an error |
+| `awaiting` | Slow red breathing ring (2.6s) | Bypass-token approval pending |
+
+All pure CSS, zero JS animation loops. Respects
+`prefers-reduced-motion`.
+
+### 2. StatusBar — GUARD LEDs + per-tier LLM rings
+
+GUARD chip:
+- Was: `🛡 GUARD` text.
+- Now: shield glyph + 5 mini LEDs, one per audit layer (S1, S2,
+  S5, S8, S10). Solid LEDs = active; amber LEDs = degraded; red
+  LEDs pulse on breach.
+
+LLM chip:
+- Was: single aggregate glyph + "LLM".
+- Now: aggregate glyph + 3 open mini-rings, one per tier (FAST,
+  CHEAP, REASONING). Border colour = per-tier status (green ok,
+  amber slow, red crit, grey idle).
+
+Rings are deliberately *open circles* and LEDs are *solid dots*
+so the eye separates the two systems without cognitive overlap.
+Both new patterns honour reduced-motion.
+
+### 3. Sidebar — concept colour system
+
+Items now carry a `data-concept` attribute mapping them to the
+five-colour identity palette introduced for the Context Strip:
+
+| Concept | Items |
+|---------|-------|
+| memory (cyan) | Memoria |
+| security (amber) | Auditoría, Compliance |
+| ai (teal) | Terminal IA |
+| infra (blue) | Dashboard, Capacidad, Diagnóstico |
+| automation (violet) | (reserved for runbooks / scheduled) |
+
+Visual treatment per item:
+- Coloured glyph with subtle drop-shadow.
+- 2 px left rail that brightens on hover, glows when active.
+- Active row gets a tinted background (12% mix of the concept
+  hue with the surface) so you can scan the sidebar by colour at
+  a glance.
+
+Untagged items keep the existing teal active state — zero
+regression for everything else. Restructure of the sidebar
+(grouping accordions into 6 sections) is staged for a later
+sprint; this one is the visual layer only.
+
+### Why this matters
+
+Cursor / Claude Code / ChatGPT desktop all look like a chat with
+a sidebar. v1.7.25 starts pulling Lucy toward an operator cockpit
+identity: the avatar communicates Lucy's *state*, the footer
+reads like a flight panel, and the sidebar tells you at a glance
+*what kind* of action a given view falls under. None of that
+exists in any competitor.
+
+---
+
 ## [1.7.24] — 2026-06-01
 
 User reported v1.7.23 didn't fix the visible bugs. Triage

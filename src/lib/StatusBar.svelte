@@ -259,11 +259,24 @@
         <div class="bi"><span>Alertas:</span><span class="cy">{auditAlerts} bypass</span></div>
     {/if}
 
-    <!-- Guardrails indicator (audit S1/S2/S5/S10 defense layer, Lucy 1.3.1+; ML badge added in 1.4.0) -->
-    <div class="bi" title={isEN
-        ? 'Guardrail layer active — scans inputs for prompt injection, SSRF, UAC injection, cmd bypass shapes'
-        : 'Capa de Guardrails activa — escanea entradas en busca de prompt injection, SSRF, UAC injection, bypass de cmd'}>
-        <span class="cok" style="letter-spacing:.3px;">🛡 GUARD</span>
+    <!-- v1.7.25 — Guardrails indicator with per-layer LED dots.
+         Replaces the single "GUARD" text with the brand glyph + a row
+         of 5 mini LEDs (S1, S2, S5, S8, S10) so the user gets a
+         per-layer at-a-glance read. All green when the layers are
+         active, amber for ML downgraded, red for breached. Currently
+         all layers are static-green; layer health hookups come in a
+         later sprint (tracked). -->
+    <div class="bi sb-guard" title={isEN
+        ? 'Guardrail layer active — S1 destructive · S2 bypass shapes · S5 prompt injection · S8 force-execute · S10 UAC elevation'
+        : 'Guardrails activos — S1 destructivo · S2 bypass · S5 prompt-injection · S8 force-execute · S10 elevación UAC'}>
+        <span class="sb-guard-glyph">🛡</span>
+        <span class="sb-guard-dots" aria-hidden="true">
+            <span class="sb-led sb-led-ok" data-layer="S1"></span>
+            <span class="sb-led sb-led-ok" data-layer="S2"></span>
+            <span class="sb-led sb-led-ok" data-layer="S5"></span>
+            <span class="sb-led sb-led-ok" data-layer="S8"></span>
+            <span class="sb-led sb-led-ok" data-layer="S10"></span>
+        </span>
     </div>
 
     <!-- PromptGuard 2 ML indicator (Phase 2 LlamaFirewall) — only shown when relevant -->
@@ -273,13 +286,27 @@
         </div>
     {/if}
 
-    <!-- v1.7.1 — LLM tier health chip. Aggregates 3 tier probes into
-         one glyph. Hover for breakdown, click to re-probe. -->
-    <div class="bi th-chip" title={tierHealthTooltip}
+    <!-- v1.7.1 — LLM tier health chip + v1.7.25 — three per-tier mini
+         rings (FAST, CHEAP, REASONING). The aggregate glyph stays for
+         scan-ability; the rings give per-tier signal at a glance:
+         green = ok, amber = slow, red = fail, grey = unknown. -->
+    <div class="bi th-chip sb-llm-rings" title={tierHealthTooltip}
          on:click={reprobeTiers} role="button" tabindex="0"
          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') reprobeTiers(); }}>
         <span class="th-glyph th-{tierHealthGlyph.tone}" style="letter-spacing:.3px;">
             {tierHealthBusy ? '⟳' : tierHealthGlyph.glyph} LLM
+        </span>
+        <span class="sb-rings" aria-hidden="true">
+            {#each ['FAST', 'CHEAP', 'REASONING'] as tier (tier)}
+                {@const t = $tierHealth[tier as TierKey]}
+                {@const tone = !t || t.status === 'unknown' ? 'idle'
+                            :  t.status === 'ok'    ? 'ok'
+                            :  t.status === 'slow'  ? 'warn'
+                            : 'crit'}
+                <span class="sb-ring sb-ring-{tone}"
+                      data-tier={tier}
+                      title="{tier}: {t?.status ?? 'unknown'}{t?.latency_ms ? ` (${t.latency_ms}ms)` : ''}"></span>
+            {/each}
         </span>
     </div>
 
@@ -316,4 +343,61 @@
     .th-warn  { color: var(--amber, #f59e0b); }
     .th-crit  { color: var(--red,   #ef4444); }
     .th-info  { color: var(--txt2,  #94a3b8); opacity: .7; }
+
+    /* ── v1.7.25 — Visual upgrades to GUARD + LLM chips ───────────────────
+       Replace text-only chips with a glyph + colored mini indicators so
+       the footer reads like a flight panel instead of a console log. */
+
+    /* GUARD — 5 LED dots beside the shield glyph, one per audit layer. */
+    .sb-guard { display: inline-flex; align-items: center; gap: 6px; cursor: help; }
+    .sb-guard-glyph {
+        color: var(--acc, #10b981);
+        font-size: 12px;
+        line-height: 1;
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--acc, #10b981) 40%, transparent));
+    }
+    .sb-guard-dots {
+        display: inline-flex; align-items: center; gap: 3px;
+    }
+    .sb-led {
+        width: 5px; height: 5px; border-radius: 50%;
+        display: inline-block;
+        transition: background-color .2s, box-shadow .2s;
+    }
+    .sb-led-ok   { background: var(--acc, #10b981); box-shadow: 0 0 4px color-mix(in srgb, var(--acc, #10b981) 60%, transparent); }
+    .sb-led-warn { background: var(--amber, #f59e0b); box-shadow: 0 0 4px color-mix(in srgb, var(--amber, #f59e0b) 60%, transparent); }
+    .sb-led-crit { background: var(--red, #ef4444); box-shadow: 0 0 6px color-mix(in srgb, var(--red, #ef4444) 80%, transparent); animation: sbLedCrit 1.4s ease-in-out infinite; }
+    .sb-led-idle { background: var(--txt3, #64748b); box-shadow: none; opacity: .4; }
+    @keyframes sbLedCrit {
+        0%,100% { box-shadow: 0 0 4px color-mix(in srgb, var(--red, #ef4444) 60%, transparent); }
+        50%     { box-shadow: 0 0 10px color-mix(in srgb, var(--red, #ef4444) 100%, transparent); }
+    }
+
+    /* LLM — three per-tier mini rings (FAST / CHEAP / REASONING). The
+       rings are open circles so they read as separate from the GUARD
+       solid LEDs (visual differentiation reduces cognitive load). */
+    .sb-llm-rings { display: inline-flex; align-items: center; gap: 6px; }
+    .sb-rings {
+        display: inline-flex; align-items: center; gap: 4px;
+    }
+    .sb-ring {
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        border: 1.5px solid var(--txt3, #64748b);
+        background: transparent;
+        display: inline-block;
+        transition: border-color .2s, box-shadow .2s;
+    }
+    .sb-ring-ok   { border-color: var(--acc, #10b981); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acc, #10b981) 30%, transparent); }
+    .sb-ring-warn { border-color: var(--amber, #f59e0b); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber, #f59e0b) 30%, transparent); }
+    .sb-ring-crit { border-color: var(--red, #ef4444); box-shadow: 0 0 6px color-mix(in srgb, var(--red, #ef4444) 60%, transparent); animation: sbRingCrit 1.4s ease-in-out infinite; }
+    .sb-ring-idle { border-color: var(--txt3, #64748b); opacity: .4; }
+    @keyframes sbRingCrit {
+        0%,100% { box-shadow: 0 0 4px color-mix(in srgb, var(--red, #ef4444) 40%, transparent); }
+        50%     { box-shadow: 0 0 10px color-mix(in srgb, var(--red, #ef4444) 80%, transparent); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .sb-led-crit, .sb-ring-crit { animation: none !important; }
+    }
 </style>
