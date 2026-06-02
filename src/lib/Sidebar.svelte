@@ -22,6 +22,9 @@
     import Brain from '@tabler/icons-svelte/icons/brain';
     // v1.7.27 — Memory feed widget (recent memories ticker).
     import MemoryFeed from '$lib/MemoryFeed.svelte';
+    // v1.7.29 — Knowledge Graph icon (Share3 = three connected nodes,
+    // matches the icon used in the Memory Browser graph tab).
+    import Share3 from '@tabler/icons-svelte/icons/share-3';
 
     import TrendingUp from '@tabler/icons-svelte/icons/trending-up';
 
@@ -95,6 +98,8 @@
         exportarlog: void;
         toggleforks: void;
         togglepdf: void;
+        // v1.7.29 — Open the global Knowledge Graph overlay.
+        openkggraph: void;
     }>();
 </script>
 
@@ -170,6 +175,15 @@
          on:click={() => dispatch('setview', { view: 'memory' })} on:keydown
          title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
         <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
+    </div>
+    <!-- v1.7.29 — Knowledge Graph as a first-class entry. The graph
+         component lives at the panel root (opened via `openkggraph`
+         dispatched up to +page.svelte) so its overlay can blanket
+         the whole window cleanly. -->
+    <div class="sb-it" data-concept="memory" role="button" tabindex="0"
+         on:click={() => dispatch('openkggraph')} on:keydown
+         title={isEN ? 'Knowledge Graph — force-directed view of memory + relationships' : 'Grafo de conocimiento — vista force-directed de memoria + relaciones'}>
+        <span class="sb-ico"><Share3 size={20} /></span><span class="sb-txt">{isEN ? 'Knowledge Graph' : 'Grafo'}</span>
     </div>
     <div class="sb-it" class:act={activeView==='capacity'} data-concept="infra" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'capacity' })} on:keydown

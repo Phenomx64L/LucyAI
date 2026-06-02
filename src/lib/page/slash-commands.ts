@@ -44,6 +44,9 @@ export interface SlashCtx {
     openSkillPresetPicker?: () => void;
     /** Sprint 8 — open the KG mini-viewer for a path. Wired by the page. */
     openKgViewer?: (path: string) => void;
+    /** v1.7.29 — open the global Knowledge Graph overlay (force-directed
+     *  memory graph). Used by /graph, /kg, /knowledge slash commands. */
+    openKnowledgeGraph?: () => void;
     /** Reactive accessors — passed in as snapshots so the module never
      *  reaches into Svelte stores directly (those are the page's
      *  responsibility to subscribe to). */
@@ -201,10 +204,25 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'rebuild-graph':
             runGraphRebuild(sysMsg);
             return true;
-        case 'graph':
-            if (!arg) { sysMsg('Uso: <code>/graph &lt;memory-id&gt; [hops=2]</code> — explora memorias relacionadas vía BFS.'); return true; }
+        case 'graph': case 'kg': case 'knowledge': {
+            // v1.7.29 — Two-shape command:
+            //   /graph                 → open the visual force-directed overlay
+            //   /graph <id> [hops=2]   → BFS over related memories (legacy)
+            //   /kg, /knowledge         → aliases for the overlay form
+            if (!arg || cmd === 'kg' || cmd === 'knowledge') {
+                if (ctx.openKnowledgeGraph) {
+                    ctx.openKnowledgeGraph();
+                    sysMsg(ctx.isEN
+                        ? '✦ Opening knowledge graph…'
+                        : '✦ Abriendo grafo de conocimiento…', 'var(--acc)');
+                } else {
+                    sysMsg('Knowledge graph opener not wired into context.', 'var(--red)');
+                }
+                return true;
+            }
             runGraphNeighbors(arg.trim(), ctx, sysMsg);
             return true;
+        }
 
         // ── Smart-router + privacy mode (restored from orphaned smart-router.ts) ──
         case 'smart-router':

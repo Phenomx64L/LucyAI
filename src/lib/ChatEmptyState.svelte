@@ -42,15 +42,15 @@
     // distinctive surfaces (skills, memory, runbooks) rather than the
     // generic "help me with X".
     $: defaultSuggestions = isEN ? [
-        { glyph: '🧠', label: 'Open Memoria',   prompt: '/memory' },
-        { glyph: '⚡', label: 'Browse skills',   prompt: '/sec-skill' },
-        { glyph: '📜', label: 'Last runbook',    prompt: '/runbooks' },
-        { glyph: '◆',  label: 'CPU SIMD info',   prompt: '/cpu' },
+        { glyph: '🧠', label: 'Open Memoria',     prompt: '/memory' },
+        { glyph: '⌬', label: 'Knowledge graph',  prompt: '/kg' },
+        { glyph: '⚡', label: 'Browse skills',     prompt: '/sec-skill' },
+        { glyph: '◆',  label: 'CPU SIMD info',     prompt: '/cpu' },
     ] : [
-        { glyph: '🧠', label: 'Abrir Memoria',   prompt: '/memory' },
-        { glyph: '⚡', label: 'Ver skills',       prompt: '/sec-skill' },
-        { glyph: '📜', label: 'Último runbook',  prompt: '/runbooks' },
-        { glyph: '◆',  label: 'Info CPU SIMD',   prompt: '/cpu' },
+        { glyph: '🧠', label: 'Abrir Memoria',    prompt: '/memory' },
+        { glyph: '⌬', label: 'Grafo de conocimiento', prompt: '/kg' },
+        { glyph: '⚡', label: 'Ver skills',         prompt: '/sec-skill' },
+        { glyph: '◆',  label: 'Info CPU SIMD',     prompt: '/cpu' },
     ];
 
     $: rendered = suggestions.length > 0 ? suggestions : defaultSuggestions;

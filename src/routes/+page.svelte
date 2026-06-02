@@ -196,6 +196,10 @@ import { listen } from '@tauri-apps/api/event';
     import { lucyConfirm, lucyAlert, lucyPrompt } from '$lib/dialog-service';
     // v1.7.27 — Circadian accent: subtly cools/warms --accent through the day.
     import { start as startCircadian } from '$lib/circadian';
+    // v1.7.29 — Knowledge Graph as a first-class surface (was buried under
+    // MemoryBrowser → Grafo → Visual). Mounted at root so sidebar items,
+    // slash commands, palette and the empty-state hero can all open it.
+    import MemoryGraphView from '$lib/MemoryGraphView.svelte';
     // v1.7.22 — Context Strip: live cockpit above chat showing
     // memorias / skill / preset / MCP / tokens injected this turn.
     import ContextStrip           from '$lib/ContextStrip.svelte';
@@ -1018,6 +1022,10 @@ import { listen } from '@tauri-apps/api/event';
     let depStatus          = null;
     // ── COMMAND PALETTE ───────────────────────────
     let showPalette        = false;
+    // v1.7.29 — Knowledge Graph overlay (force-directed memory graph).
+    // Opened from sidebar, /graph and /kg slash commands, the Ctrl+K
+    // palette, and the empty-state hero starter.
+    let showKnowledgeGraph = false;
     /** Tier S #1 — Deterministic Replay Mode browser overlay */
     let showReplayBrowser  = false;
     let uiDensity          = safeGetLS('lucy_density', 'comfortable');
@@ -1290,6 +1298,10 @@ import { listen } from '@tauri-apps/api/event';
         { icon:'⬡', label:'Compliance',              cat:'Vista',       action:()=>{setView('compliance');showPalette=false;} },
         { icon:'≡', label:'Audit Trail',              cat:'Vista',       action:()=>{setView('audittrail');showPalette=false;} },
         { icon:'◊', label: isEN ? 'Memory Browser' : 'Explorador de Memoria', cat:'Vista', action:()=>{setView('memory');showPalette=false;} },
+        // v1.7.29 — Knowledge Graph as a palette-discoverable surface.
+        { icon:'⌬', label: isEN ? 'Knowledge Graph (force-directed)' : 'Grafo de conocimiento (force-directed)',
+          cat:'Vista', hint: '/kg',
+          action: () => { showKnowledgeGraph = true; showPalette = false; } },
         { icon:'⚙', label:'Configuración',             cat:'Config',      action:()=>{showSettingsModal=true;showPalette=false;} },
         { icon:'◈', label:'Manage Profiles',           cat:'Config',      action:()=>{showProfileModal=true;showPalette=false;} },
         // Terminales
@@ -3738,6 +3750,8 @@ REGLAS DE FORMATO:
             // legacy executable-script picker above).
             openSkillPresetPicker: () => { showSkillPresetPicker = true; },
             openKgViewer: (path) => { openKgViewerFor(path); },
+            // v1.7.29 — Knowledge Graph overlay opener.
+            openKnowledgeGraph: () => { showKnowledgeGraph = true; },
         });
     }
 
@@ -8968,6 +8982,7 @@ if (Test-Path $src) {
       customCmdCount={customCmdCount} {auditAlerts} {runbookRunning}
       {showForksMonitor} {showPdfPanel} {ICON_MAP}
       on:setview={(e) => setView(e.detail.view)}
+      on:openkggraph={() => { showKnowledgeGraph = true; }}
       on:openmodal={(e) => {
         const m = e.detail.modal;
         if (m === 'newrunbook') abrirNuevoRunbook();
@@ -9542,6 +9557,25 @@ if (Test-Path $src) {
 
   <!-- v1.7.17 — Single instance of the in-app dialog host. -->
   <DialogHost />
+
+  <!-- v1.7.29 — Knowledge Graph overlay at root level. Opened by
+       sidebar/slash/palette/empty-hero. Closes itself or dispatches
+       `openmemoria` to jump to a specific memory row. -->
+  {#if showKnowledgeGraph}
+    <MemoryGraphView {isEN}
+      on:close={() => showKnowledgeGraph = false}
+      on:openmemoria={(e) => {
+          showKnowledgeGraph = false;
+          setView('memory');
+          // Memory Browser handles its own jumpToMemory; we just need
+          // it visible. The id ends up on the URL hash-style state
+          // via the existing _memoryJumpId pattern.
+          window.setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('lucy:memoryJump',
+                  { detail: { id: e.detail.memoryId } }));
+          }, 50);
+      }} />
+  {/if}
 
   {#if showSetupOverlay}
     <SetupOverlay {LANGS} initialLang={userLang}

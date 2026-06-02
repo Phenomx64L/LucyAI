@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.29] — 2026-06-01
+
+### D — Knowledge Graph promoted to first-class surface
+
+Triage discovered `MemoryGraphView.svelte` (1022 LOC, sprint
+"Memory Graph 2.0") already existed with full functionality:
+
+- Force-directed simulation (~200 LOC physics, no D3)
+- Louvain-lite community detection + 8-colour palette
+- Drag-to-lock nodes, wheel-zoom (cursor-anchored), pan
+- Search bar that fades non-matching nodes
+- Hover-highlight neighbours / dim rest
+- Detail panel on click
+- Runtime threshold sliders (tag / content / embedding)
+- Tag pill filters
+- Legend always visible
+
+Everything was correct. The problem: it was buried under
+**Memory Browser → Grafo tab → "Visual graph" button** (three
+clicks). A user opening Lucy for the first time wouldn't
+discover it.
+
+This sprint promotes it to a first-class surface with five
+entry points:
+
+1. **Sidebar item** "Knowledge Graph" beneath Memoria (cyan
+   concept colour). Dispatches `openkggraph` up to
+   `+page.svelte` which sets `showKnowledgeGraph = true`.
+
+2. **Slash commands** `/graph`, `/kg`, `/knowledge` open the
+   overlay (vs. the legacy `/graph <id>` which still performs
+   the BFS query against `memory_graph` Tauri command).
+
+3. **Ctrl+K palette** row: "Knowledge Graph (force-directed)"
+   with hint `/kg`.
+
+4. **Empty-state hero** starter button replaces "Last runbook"
+   with "Knowledge graph" + `⌬` glyph.
+
+5. **Root-level mount** in `+page.svelte` (next to DialogHost)
+   so the overlay can blanket the window regardless of which
+   view the operator was on.
+
+The `openmemoria` event flows up: graph row click → close
+overlay → `setView('memory')` → fire
+`lucy:memoryJump` DOM event with the memory id. The Memory
+Browser listens for that event and runs its existing
+`jumpToMemory()` routine (clear filters, scroll to row,
+flash highlight border).
+
+### Why this matters competitively
+
+No other AI assistant in the market exposes its own knowledge
+network visually. Cursor, Claude Code, ChatGPT desktop all
+treat their memory as opaque. Lucy now does the opposite —
+the operator can see the whole web of remembered facts, see
+which memories cluster together (community detection), see
+which are isolated (orphans), search across them by tag/text/
+embedding similarity, and jump from any node to the underlying
+memory row in one click.
+
+For a sysadmin or security operator working long shifts, this
+is a different category of tool: a *memory palace* instead of
+a chat with a scroll history.
+
+### Backwards compat preserved
+
+- `/graph <id>` still runs the BFS query (unchanged).
+- Memory Browser → Grafo → "Visual graph" button still works
+  (uses the same global `showKnowledgeGraph` overlay state
+  now — single source of truth).
+- The legacy `MemoryGraphView` opens identically regardless
+  of which entry point launched it.
+
+---
+
 ## [1.7.28] — 2026-06-01
 
 ### C — Ctrl+K command palette + expanded sources
