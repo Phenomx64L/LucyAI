@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.27] — 2026-06-01
+
+Ambient-cockpit sprint. Four of the seven items from the v1.7.26
+follow-up list shipped together; C/D/F deferred to dedicated
+sprints.
+
+### G — Circadian accent (`circadian.ts`)
+
+`--accent` (and its dim/border/glow variants) now drift through
+six HSL bands across the day:
+
+  05–08  early morning   hsl(158 64% 40%)
+  08–12  morning         hsl(160 70% 42%)  ← brand default
+  12–17  afternoon       hsl(154 72% 44%)
+  17–20  evening         hsl(170 64% 41%)
+  20–23  night           hsl(180 60% 40%)
+  23–05  late night      hsl(186 56% 38%)
+
+Max shift is 28° hue / 16% saturation / 6% lightness — perceptible
+but never strident. Recomputed every 10 minutes. The current band
+label is exposed as `data-circadian="<band>"` on `<html>` so any
+surface that wants to react can.
+
+### A — Memory Feed sidebar widget (`MemoryFeed.svelte`)
+
+A compact ticker beneath the SISTEMA section showing the 3
+most-recent agent_memories. Polls `get_recent_memories(limit:3)`
+on mount and every 60s. Each row shows the summary truncated to
+2 lines, time-ago in monospace (`now / Nm / Nh / Nd / Nw`), and
+a tiny amber dot for high-importance entries.
+
+Hover tints cyan (matching the `memory` concept colour). Click
+opens Memory Browser. Hidden when the sidebar is collapsed —
+no horizontal budget for the layout.
+
+Effect: Lucy now feels like a system with memory that grows.
+Static sidebars are the norm in competitor tools; this is the
+first sidebar item that updates without user action.
+
+### E — Stream sparkline (`Sparkline.svelte` + StatusBar wire)
+
+New generic `Sparkline.svelte` component: pure inline SVG, no
+deps, takes `values: number[]`, renders as `line` or `bar`.
+Auto-scales to the local min/max so the line always uses the
+full vertical box.
+
+Wired to the StatusBar "Stream" chip: while Lucy streams a
+response, the chip now renders the t/s number AND a 42×12
+sparkline of the last ~30 samples. Visual proof of how fast
+Lucy is generating, not just the current rate.
+
+Data ringbuffer lives on the tab as `_streamTpsHistory`,
+capped to 30 entries (~30s at 1Hz rebel cadence).
+
+### B — Context Strip polish
+
+Switch tab → Context Strip now re-pushes a minimum snapshot
+(skill / preset / model / last memory count) so the chips
+reflect the NOW-visible tab rather than the previous one. The
+per-prompt fields (tokens / MCP / route) still wait for the
+next build.
+
+### Deferred to follow-up sprints
+
+- **C — Command palette (Ctrl+K)** → v1.7.28 dedicated. ~4h.
+- **D — Knowledge graph view** → v1.7.29+ sprint. 1-2 days.
+- **F — Tab hover preview** → v1.7.28 alongside C. ~2h.
+- **Cost sparkline (E real version)** → needs a backend
+  `get_cost_by_day(30)` command first; queued.
+
+---
+
 ## [1.7.26] — 2026-06-01
 
 UI sprint continuation. Three changes that make the chat surface

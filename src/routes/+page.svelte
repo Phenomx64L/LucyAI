@@ -194,6 +194,8 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.17 — In-app Dialog host (replaces native confirm/alert/prompt).
     import DialogHost             from '$lib/DialogHost.svelte';
     import { lucyConfirm, lucyAlert, lucyPrompt } from '$lib/dialog-service';
+    // v1.7.27 — Circadian accent: subtly cools/warms --accent through the day.
+    import { start as startCircadian } from '$lib/circadian';
     // v1.7.22 — Context Strip: live cockpit above chat showing
     // memorias / skill / preset / MCP / tokens injected this turn.
     import ContextStrip           from '$lib/ContextStrip.svelte';
@@ -1480,6 +1482,9 @@ import { listen } from '@tauri-apps/api/event';
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // v1.7.27 — Start circadian accent loop (cools/warms --accent
+        // through the day in 6 bands). 10-min recompute interval.
+        startCircadian();
         // Tier B #3 — Inject any user-defined custom themes into the DOM
         // so `data-theme="custom-<id>"` selectors work from app start.
         bootCustomThemes();
@@ -7737,7 +7742,17 @@ if (Test-Path $src) {
             }
             if (tabId) {
                 const tt = getTab(tabId);
-                if (tt) { tt._streamTTFT = Math.round(ttft); tt._streamTPS = _cachedTps; refresh(); }
+                if (tt) {
+                    tt._streamTTFT = Math.round(ttft);
+                    tt._streamTPS  = _cachedTps;
+                    // v1.7.27 — Rolling sparkline history for the
+                    // StatusBar stream chip. Bounded ringbuffer (~30
+                    // samples ≈ last 30s at the 1s rebel cadence).
+                    if (!Array.isArray(tt._streamTpsHistory)) tt._streamTpsHistory = [];
+                    tt._streamTpsHistory.push(_cachedTps);
+                    if (tt._streamTpsHistory.length > 30) tt._streamTpsHistory.shift();
+                    refresh();
+                }
             }
             onChunk(accumulated);
         };
@@ -8827,7 +8842,27 @@ if (Test-Path $src) {
     {renamingTabId} {renameValue} {focusMode} {isEN}
     bind:tabsListEl
     on:newtab={() => crearTab()}
-    on:selecttab={(e) => { activeTabId = e.detail.tabId; showWelcome = false; scrollToActiveTab(); tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); }); }}
+    on:selecttab={(e) => {
+        activeTabId = e.detail.tabId;
+        showWelcome = false;
+        scrollToActiveTab();
+        // v1.7.27 — Re-push the Context Strip snapshot whenever the
+        // active tab changes so the chips reflect the now-visible tab,
+        // not the previous one. We push a minimum (preset + skill)
+        // because most other fields are per-prompt-build.
+        try {
+            const _swTab = getTab(activeTabId);
+            const _swSkill = peekActiveSecuritySkill();
+            const _swPreset = !_swSkill ? peekActivePreset() : null;
+            setContextSnapshot({
+                skillId:   _swSkill?.id ?? null,
+                presetId:  _swPreset?.id ?? null,
+                modelId:   _swTab?.selectedModel || _swTab?.model || null,
+                memoriesCount: _swTab?._lastMemoryHitsCount ?? 0,
+            });
+        } catch (e) { console.warn('[+page] tab-switch snapshot failed:', e); }
+        tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); });
+    }}
     on:closetab={(e) => cerrarTab(e.detail.tabId, e.detail.event)}
     on:scrollleft={scrollTabsLeft}
     on:scrollright={scrollTabsRight}

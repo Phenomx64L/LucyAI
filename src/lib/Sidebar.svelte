@@ -20,6 +20,8 @@
     import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
 
     import Brain from '@tabler/icons-svelte/icons/brain';
+    // v1.7.27 — Memory feed widget (recent memories ticker).
+    import MemoryFeed from '$lib/MemoryFeed.svelte';
 
     import TrendingUp from '@tabler/icons-svelte/icons/trending-up';
 
@@ -179,6 +181,12 @@
          title={isEN ? 'Self-Diagnostics — unified health checks' : 'Auto-Diagnóstico — chequeos de salud unificados'}>
         <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{isEN ? 'Diagnostics' : 'Diagnóstico'}</span>
     </div>
+
+    <!-- v1.7.27 — Recent memory ticker. Renders below the Sistema
+         items so the operator gets ambient "Lucy is remembering"
+         signal at the bottom of the visible Sistema block. -->
+    <MemoryFeed {isEN} {sidebarCollapsed}
+        on:open={(e) => dispatch('setview', { view: 'memory' })} />
     </div>
     {/if}
     <div class="sb-div"></div>

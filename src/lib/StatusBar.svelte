@@ -6,6 +6,8 @@
     import { densityMode, cycleDensityMode } from '$lib/density-mode';
     // v1.4.17 — LucyTooltip migration (replaces native title=).
     import LucyTooltip from '$lib/LucyTooltip.svelte';
+    // v1.7.27 — Inline sparkline for the stream-t/s chip.
+    import Sparkline from '$lib/Sparkline.svelte';
     // v1.4.21 — StatusBar layout CSS extracted to a single global stylesheet
     // so the same duplicate-selector trap that bit the tab strip
     // (v1.4.17 → v1.4.19) doesn't recur here.
@@ -233,8 +235,20 @@
     {/if}
 
     {#if activeTab?._streamTPS && activeTab._streamTPS > 0}
-        <div class="bi" title={`${isEN ? 'Tokens per second' : 'Tokens por segundo'}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
-            <span>{isEN ? 'Stream:' : 'Stream:'}</span><span class="cok">~{activeTab._streamTPS} t/s</span>
+        <div class="bi sb-stream"
+             title={`${isEN ? 'Tokens per second (last 30s)' : 'Tokens por segundo (últimos 30s)'}${activeTab._streamTTFT ? ` · TTFT ${activeTab._streamTTFT}ms` : ''}`}>
+            <span>{isEN ? 'Stream:' : 'Stream:'}</span>
+            <span class="cok">~{activeTab._streamTPS}</span>
+            {#if Array.isArray(activeTab._streamTpsHistory) && activeTab._streamTpsHistory.length > 1}
+                <span class="sb-stream-spark">
+                    <Sparkline values={activeTab._streamTpsHistory}
+                               width={42} height={12}
+                               kind="line"
+                               stroke="var(--acc, #10b981)"
+                               fill="var(--acc, #10b981)" />
+                </span>
+            {/if}
+            <span class="sb-stream-unit">t/s</span>
         </div>
     {/if}
 
@@ -400,4 +414,9 @@
     @media (prefers-reduced-motion: reduce) {
         .sb-led-crit, .sb-ring-crit { animation: none !important; }
     }
+
+    /* v1.7.27 — Stream-tps chip layout with inline sparkline. */
+    .sb-stream { display: inline-flex; align-items: center; gap: 5px; }
+    .sb-stream-spark { display: inline-flex; align-items: center; }
+    .sb-stream-unit  { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; }
 </style>
