@@ -3839,13 +3839,15 @@ REGLAS DE FORMATO:
                     _unifiedPlan?.route?.method === 'manual' ? 'manual'
                   : _unifiedPlan?.route?.method && _unifiedPlan.route.method !== 'none' ? 'auto'
                   : (_csActiveSkill ? 'manual' : null);
-                // Memory count: derived later by construirContextoMemoria.
-                // We don't have direct access here yet — wire-up
-                // tracked in v1.7.23. Use the tab's last-known value
-                // if buildUnifiedContext exposes it, else 0.
                 const _csMemCount = (_unifiedPlan && typeof _unifiedPlan.memory_hits_count === 'number')
                     ? _unifiedPlan.memory_hits_count
                     : (t._lastMemoryHitsCount ?? 0);
+                // v1.7.26 — bug fix: referenced an undefined `activeModel`
+                // variable. The reference threw a silent ReferenceError that
+                // the catch swallowed, so the snapshot never updated — the
+                // Context Strip stayed stuck on "cockpit idle" forever.
+                // The correct property is `selectedModel` on the tab; we
+                // also accept `t.model` for resilience against legacy tabs.
                 setContextSnapshot({
                     memoriesCount:  _csMemCount,
                     skillId:        _csActiveSkill?.id ?? null,
@@ -3853,11 +3855,8 @@ REGLAS DE FORMATO:
                     presetId:       _csActivePreset?.id ?? null,
                     mcpToolsCount:  _unifiedPlan?.mcp_tools?.length ?? 0,
                     estTokens:      _unifiedPlan?.est_tokens ?? Math.ceil((raw || '').length / 4),
-                    // maxTokens is 0 until the model catalog exposes
-                    // a context_window field — the chip handles that
-                    // by rendering as a neutral "idle" tone.
-                    maxTokens:      0,
-                    modelId:        t.model || activeModel || null,
+                    maxTokens:      0,   // wire-up: v1.7.27 (per-model context_window)
+                    modelId:        (t?.selectedModel || t?.model || null),
                 });
             } catch (e) {
                 console.warn('[+page] context snapshot push failed:', e);
@@ -9202,6 +9201,16 @@ if (Test-Path $src) {
               on:branchmessage={(e) => { if (e.detail?.msg?.id && activeTabId) { bifurcarTabDesde(activeTabId, e.detail.msg.id); toast(isEN ? 'Branched into a new tab' : 'Bifurcado en una pestaña nueva', 'info'); } }}
               on:replaymessage={() => { showReplayBrowser = true; toast(isEN ? '⏪ Replay browser opened — pick the turn to re-run' : '⏪ Replay browser abierto — elige el turno a re-ejecutar', 'info'); }}
               on:contextmessage={(e) => { ctxMsg = e.detail.msg; ctxMenuX = e.detail.x; ctxMenuY = e.detail.y; ctxMenuOpen = true; }}
+              on:emptySuggest={(e) => {
+                  // v1.7.26 — click on an Empty State suggestion. We
+                  // pre-fill the composer instead of submitting so the
+                  // user can edit before sending — important for
+                  // discovery: they SEE the slash command syntax.
+                  const _t = getTab(activeTabId); if (!_t) return;
+                  _t.inputValue = e.detail.prompt;
+                  refresh();
+                  tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+              }}
               on:reactmessage={(e) => {
                   // v1.4.15 — 👍/👎 reactions logged to Layer 3 memory via
                   // log_chip_event. Toggling the same reaction clears it

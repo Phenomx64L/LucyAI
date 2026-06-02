@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.26] — 2026-06-01
+
+UI sprint continuation. Three changes that make the chat surface
+feel less like "another LLM textbox" and one Context Strip fix.
+
+### 1. Tab states colour-coded
+
+The strip had a coloured `.tdot` per-tab but the dot was so small
+the user couldn't scan the bar to find which tab was busy. Every
+non-active tab now also tints its top border in the state colour
+so the tab itself communicates the state:
+
+| State | Dot | Tab top border |
+|-------|-----|----------------|
+| idle | green static | (none) |
+| processing | cyan pulsing | cyan tint |
+| fork | violet | violet tint |
+| error | red pulsing | red tint |
+| stale (>30 min) | dim grey | grey tint |
+
+Active tabs keep their accent border. Reduced-motion respected.
+
+### 2. Context Strip silent-failure FIX
+
+User reported `cockpit idle` persisting across multiple turns.
+Triage found the snapshot push code referenced an undefined
+`activeModel` variable. The reference threw a silent
+ReferenceError; the try/catch swallowed it; the snapshot store
+never updated. The Context Strip rendered idle forever.
+
+Fix: removed the bad reference, use `t.selectedModel || t.model`
+which both resolve cleanly.
+
+Now after the first prompt you should see real chips:
+`◇ preset · 🔌 N MCP tools · ◆ ~Nk tokens` etc.
+
+### 3. Empty state hero (`ChatEmptyState.svelte`)
+
+Replaces the bare empty chat-area with a centred hero:
+
+- ✦ breathing accent mark
+- "Lucy" wordmark
+- Time-of-day greeting personalised with the user's name
+- "Type below — or use / to discover commands" hint with a
+  styled `<kbd>/</kbd>` cue
+- 4 starter buttons (memory, skills, runbooks, /cpu) that
+  pre-fill the composer (NOT auto-submit) so the user sees the
+  slash syntax and can edit before pressing Enter
+
+The starters are intentionally heterogeneous — one navigation,
+one capability, one workflow, one introspection — to communicate
+range without overwhelming. Default suggestions only show when
+the host doesn't pass a personalised list (next sprint will plug
+real recent-memory suggestions in).
+
+Renders when `tab.messages` has no user/lucy/streaming entries,
+so a tab with just system toasts still shows the hero.
+
+`prefers-reduced-motion` respected throughout.
+
+---
+
 ## [1.7.25] — 2026-06-01
 
 UI sprint — three visual upgrades that move Lucy from "another

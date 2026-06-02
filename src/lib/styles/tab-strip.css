@@ -171,6 +171,36 @@
     background: var(--purple);
     opacity: .6;
     flex-shrink: 0;
+    transition: background .2s, box-shadow .2s, opacity .2s;
+}
+
+/* ── v1.7.26 — Tab state colour-coding ────────────────────────────────────
+   At a glance the user should be able to see which tabs are busy / errored
+   / stale across the whole strip. Each state colours the .tdot AND adds a
+   thin coloured top border to the tab when it's not active (active tabs
+   keep their accent border so the active state always reads first).      */
+
+.tdot-idle       { background: var(--acc, #10b981); opacity: .55; }
+.tdot-processing { background: #3b9eff; opacity: 1; box-shadow: 0 0 6px rgba(59,158,255,.7);
+                   animation: tabDotPulse 1.2s ease-in-out infinite; }
+.tdot-fork       { background: #a78bfa; opacity: .95; box-shadow: 0 0 5px rgba(167,139,250,.55); }
+.tdot-error      { background: var(--red, #ef4444); opacity: 1; box-shadow: 0 0 6px rgba(239,68,68,.7);
+                   animation: tabDotPulseRed 1.4s ease-in-out infinite; }
+.tdot-stale      { background: #64748b; opacity: .35; box-shadow: none; }
+
+@keyframes tabDotPulse    { 0%,100%{transform:scale(1);} 50%{transform:scale(1.35);} }
+@keyframes tabDotPulseRed { 0%,100%{box-shadow:0 0 4px rgba(239,68,68,.5);} 50%{box-shadow:0 0 10px rgba(239,68,68,.9);} }
+
+/* Subtle top-border tint on non-active tabs that aren't idle, so the tab
+   itself communicates the state — not just the small dot. Active tabs
+   keep their accent border (specificity wins via .tab.active rule). */
+.tab:has(.tdot-processing):not(.active) { border-top: 1px solid color-mix(in srgb, #3b9eff      55%, transparent); }
+.tab:has(.tdot-fork):not(.active)       { border-top: 1px solid color-mix(in srgb, #a78bfa      55%, transparent); }
+.tab:has(.tdot-error):not(.active)      { border-top: 1px solid color-mix(in srgb, var(--red, #ef4444) 65%, transparent); }
+.tab:has(.tdot-stale):not(.active)      { border-top: 1px solid color-mix(in srgb, #64748b      30%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+    .tdot-processing, .tdot-error { animation: none !important; }
 }
 .tx {
     font-size: 10px;

@@ -18,6 +18,8 @@
     import { getTabRevStore } from '$lib/page/tabs-store';
     import { autoAnimate } from '$lib/actions/autoAnimate';
     import AgentChapterView from '$lib/AgentChapterView.svelte';
+    // v1.7.26 — Empty state hero rendered when a tab has no real messages.
+    import ChatEmptyState from '$lib/ChatEmptyState.svelte';
 
     export let tab: any;
     export let isEN: boolean = false;
@@ -54,6 +56,8 @@
         // v1.4.15 — right-click context menu + 👍/👎 reactions.
         contextmessage: { msg: any; x: number; y: number };
         reactmessage: { msg: any; kind: 'up' | 'down' };
+        // v1.7.26 — empty state hero suggestion click.
+        emptySuggest: { prompt: string };
     }>();
 
     function handleAreaClick(e: MouseEvent) {
@@ -167,6 +171,15 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="chat-area" on:click={handleAreaClick}>
+    <!-- v1.7.26 — Empty state hero. Renders when the tab has no real
+         turns (filters out system/hidden/thinking helpers so a tab with
+         only a "Welcome" toast still counts as empty). -->
+    {#if visibleMessages(tab.messages).filter(m => m.role === 'user' || m.role === 'lucy' || m.role === 'streaming').length === 0}
+        <ChatEmptyState
+            userName={userName}
+            isEN={isEN}
+            on:suggest={(e) => dispatch('emptySuggest', { prompt: e.detail })} />
+    {/if}
     {#each (void tabRev, visibleMessages(tab.messages)) as msg (msg.id)}
         {#if msg.role === 'thinking'}
             <div class="msg-thinking">
