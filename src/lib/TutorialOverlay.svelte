@@ -15,7 +15,13 @@
     const dispatch = createEventDispatcher();
 
     // Bumped per release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.6.4';
+    // v1.7.21 — was a hardcoded '1.6.4'. Every patch bump invalidated
+    // the saved flag (TutorialOverlay wrote '1.6.4' on close, +page.svelte
+    // compared against tauri.conf.json's appVersion '1.7.x', never matched
+    // → the tutorial opened on every launch). Now received as prop so the
+    // host always passes the real running version.
+    export let currentVersion = '1.7.0';
+    $: LUCY_VERSION = currentVersion;
 
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout

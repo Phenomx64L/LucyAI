@@ -541,6 +541,8 @@ pub fn run() {
             commands::script_verify::verify_script,
             // v1.7.19 — SIMD backend introspection (cosine hot path).
             utils::simd_cosine::simd_info,
+            // v1.7.21 — Cross-backend cosine benchmark for /bench-simd.
+            utils::simd_cosine::bench_cosine,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

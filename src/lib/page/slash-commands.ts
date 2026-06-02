@@ -1355,6 +1355,56 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── v1.7.21 — /bench-simd (cosine throughput across backends) ──
+        case 'bench-simd': case 'bench': case 'simd-bench': {
+            (async () => {
+                const m = arg.match(/(\d+)/);
+                const iters = m ? Math.max(1000, Math.min(500000, parseInt(m[1], 10))) : 50000;
+                sysMsg(ctx.isEN
+                    ? `Running SIMD benchmark — ${iters.toLocaleString()} iters × 768-dim...`
+                    : `Ejecutando benchmark SIMD — ${iters.toLocaleString()} iters × 768-dim...`,
+                    'var(--txt2)');
+                try {
+                    type Entry = { backend: string; available: boolean;
+                        ms_total: number; ms_per_op: number; ops_per_s: number;
+                        speedup_vs_scalar: number; };
+                    const rep = await invoke<{ iters: number; dim: number;
+                        entries: Entry[]; host_backend: string; }>('bench_cosine',
+                        { iters, dim: 768 });
+                    const fmt = (n: number, d=2) => n.toLocaleString(undefined, {
+                        minimumFractionDigits: d, maximumFractionDigits: d });
+                    const row = (e: Entry) => {
+                        if (!e.available) {
+                            return `<div class="rb-row"><span class="rb-k">${e.backend}</span><span class="rb-v" style="opacity:.5;">${ctx.isEN ? 'not on this CPU' : 'no disponible'}</span></div>`;
+                        }
+                        const pill = e.speedup_vs_scalar >= 2.5
+                            ? `<span style="color:var(--acc);font-weight:600;">${fmt(e.speedup_vs_scalar)}×</span>`
+                            : e.speedup_vs_scalar >= 1.5
+                            ? `<span style="color:var(--blue);font-weight:600;">${fmt(e.speedup_vs_scalar)}×</span>`
+                            : `<span style="color:var(--txt2);">${fmt(e.speedup_vs_scalar)}×</span>`;
+                        return `<div class="rb-row"><span class="rb-k">${e.backend}</span><span class="rb-v"><code>${fmt(e.ms_total, 1)}ms total · ${fmt(e.ms_per_op*1000, 1)}µs/op · ${fmt(e.ops_per_s/1e6, 2)} Mop/s</code> ${pill}</span></div>`;
+                    };
+                    const winner = rep.entries.filter(e => e.available)
+                        .reduce((b, e) => e.ops_per_s > b.ops_per_s ? e : b);
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? '◆ SIMD cosine benchmark' : '◆ Benchmark SIMD de cosine',
+                        [{
+                            title: ctx.isEN
+                                ? `Throughput per backend · ${rep.iters.toLocaleString()} × ${rep.dim}-dim`
+                                : `Rendimiento por backend · ${rep.iters.toLocaleString()} × ${rep.dim}-dim`,
+                            icon: '◆', tone: 'info', defaultOpen: true,
+                            html: rep.entries.map(row).join('') +
+                                `<div class="rb-row" style="margin-top:8px;opacity:.85;"><span class="rb-k">${ctx.isEN ? 'Winner' : 'Ganador'}</span><span class="rb-v"><b style="color:var(--acc);">${winner.backend}</b> — ${fmt(winner.speedup_vs_scalar)}× ${ctx.isEN ? 'vs scalar baseline' : 'sobre scalar'}</span></div>` +
+                                `<div class="rb-row" style="opacity:.6;"><span class="rb-k">${ctx.isEN ? 'Active at runtime' : 'Activo en runtime'}</span><span class="rb-v">${rep.host_backend}</span></div>` +
+                                `<div class="rb-row" style="opacity:.6;font-size:11px;"><span class="rb-k"></span><span class="rb-v">${ctx.isEN ? 'Use /bench-simd 100000 for a longer run' : 'Usa /bench-simd 100000 para una corrida más larga'}</span></div>`,
+                        }]));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── v1.7.19 — /cpu (SIMD backend introspection) ──
         // Shows which cosine-similarity backend Lucy picked at boot for
         // the skills auto-routing Tier 2 + memory grounding hot path.

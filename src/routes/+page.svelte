@@ -1797,14 +1797,18 @@ import { listen } from '@tauri-apps/api/event';
             // Cost: 3 × ~$0.0001 per probe cycle, cached 6h.
             pingAllTiersIfStale().catch(e => console.warn('[tier-health] boot probe failed:', e));
             // Show tutorial on first ever launch (after a brief delay for the UI to settle)
-            // Show the tutorial when:
-            //   • the user has never completed it (flag is empty), OR
-            //   • the stored flag is from an older Lucy version → we want
-            //     them to see the new what's-new step + new feature spots.
-            // The flag stores the version that completed it; appVersion is
-            // the current build (semver from tauri.conf).
+            // v1.7.21 — Tutorial trigger fixed.
+            // Previously the flag stored the full version (e.g. "1.7.18")
+            // and EVERY patch bump invalidated it, so the tutorial opened
+            // on every release. Now we compare only the MAJOR.MINOR pair
+            // ("1.7"), so patch updates within the same minor do not
+            // re-trigger. To force a re-tour we bump the minor (1.8.x).
+            // Legacy "1" flag (early users) is still treated as completed.
             const _tutFlag = safeGetLS('lucy_tutorial_done', '');
-            const _tutNeedsRerun = !_tutFlag || (_tutFlag !== '1' && _tutFlag !== appVersion);
+            const _minor   = (v) => String(v || '').split('.').slice(0, 2).join('.');
+            const _currentMinor = _minor(appVersion || '');
+            const _seenMinor    = _tutFlag === '1' ? _currentMinor : _minor(_tutFlag);
+            const _tutNeedsRerun = !_tutFlag || _seenMinor !== _currentMinor;
             if (_tutNeedsRerun && !showSetupOverlay) {
                 setTimeout(() => { showTutorial = true; }, 1200);
             }
@@ -10971,7 +10975,7 @@ if (Test-Path $src) {
 
 
   <!-- ── TUTORIAL OVERLAY (first run + on demand) ── -->
-  <TutorialOverlay bind:show={showTutorial} {isEN}
+  <TutorialOverlay bind:show={showTutorial} {isEN} currentVersion={appVersion}
     on:done={() => showTutorial = false}
     on:navigate={e => { if (e.detail !== activeView) setView(e.detail); }} />
 

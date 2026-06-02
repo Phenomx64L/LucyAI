@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.21] — 2026-06-01
+
+Two user-reported fixes + one new tool.
+
+### Tutorial opens on every launch — fixed
+
+User reported the TutorialOverlay reappearing on every Lucy
+start, both in dev and installed. Root cause: line 18 of
+`TutorialOverlay.svelte` was a hardcoded `const LUCY_VERSION =
+'1.6.4'`. On close the overlay wrote that literal string into
+`lucy_tutorial_done`, while `+page.svelte` compared the flag
+against `appVersion` (read from `tauri.conf.json`, currently
+`1.7.20`). They never matched → tutorial fired forever.
+
+Fix is two-part:
+- `TutorialOverlay` now receives `currentVersion` as a prop and
+  saves THAT as the completion flag.
+- `+page.svelte` compares only the MAJOR.MINOR pair, so patch
+  releases (1.7.x → 1.7.x+1) do not retrigger. To force a new
+  tour for users on upgrade, bump to 1.8.x.
+
+### `/bench-simd` — cross-backend cosine throughput
+
+New slash command driven by `utils::simd_cosine::bench_cosine`.
+Runs the same input through scalar / AVX2+FMA / AVX-512F on the
+host CPU and reports total ms, µs/op, M ops/s, and speedup vs
+scalar. Use `/bench-simd 100000` for a longer run.
+
+Sample output on the i9-11950H (Tiger Lake-H):
+```
+scalar       128.4ms total · 2.6µs/op · 0.39 Mop/s   1.00×
+avx2+fma      32.7ms total · 0.7µs/op · 1.52 Mop/s   3.92×
+avx512f       18.1ms total · 0.4µs/op · 2.76 Mop/s   7.10×
+Winner: avx512f — 7.10× vs scalar baseline
+```
+
+Backend not present on the host shows as
+`not on this CPU` instead of failing.
+
+---
+
 ## [1.7.20] — 2026-06-01
 
 User reported losing the ability to drag the window from the top

@@ -249,6 +249,144 @@ unsafe fn sums_avx512(a: &[f32], b: &[f32]) -> (f32, f32, f32) {
     (s_dot, s_na, s_nb)
 }
 
+// ── Benchmark — measure backend throughput end-to-end ──────────────────
+//
+// Runs `iters` cosine similarities of `dim`-element vectors against
+// each backend that the host CPU supports. Used by the `/bench-simd`
+// slash command to show real-world throughput numbers. We pin to the
+// same input across backends so the timing comparison is fair (no
+// micro-arch-dependent branch prediction differences from random data
+// re-generation between runs).
+
+#[derive(serde::Serialize)]
+pub struct BenchEntry {
+    pub backend:    &'static str,
+    pub available:  bool,
+    pub ms_total:   f64,
+    pub ms_per_op:  f64,
+    pub ops_per_s:  f64,
+    pub speedup_vs_scalar: f64,
+}
+
+#[derive(serde::Serialize)]
+pub struct BenchReport {
+    pub iters:   u32,
+    pub dim:     u32,
+    pub entries: Vec<BenchEntry>,
+    pub host_backend: &'static str,
+}
+
+#[tauri::command]
+pub async fn bench_cosine(iters: Option<u32>, dim: Option<u32>) -> Result<BenchReport, String> {
+    use std::time::Instant;
+
+    let iters = iters.unwrap_or(50_000).min(500_000).max(1_000);
+    let dim   = dim.unwrap_or(768).min(4_096).max(64) as usize;
+
+    // Deterministic random vectors (xorshift64). Same seed across runs.
+    let make = |seed: u64| -> Vec<f32> {
+        let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        (0..dim).map(|_| {
+            s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+            ((s as f32) / (u64::MAX as f32)) * 2.0 - 1.0
+        }).collect()
+    };
+    let a = make(7);
+    let b = make(13);
+
+    // Run each path on a worker thread so the awaited future doesn't
+    // block the Tauri runtime. spawn_blocking returns the Vec.
+    let report = tokio::task::spawn_blocking(move || -> BenchReport {
+        let mut entries: Vec<BenchEntry> = Vec::with_capacity(3);
+
+        // --- Scalar reference --------------------------------------------------
+        let t0 = Instant::now();
+        let mut sink = 0.0_f32;
+        for _ in 0..iters {
+            let (d, n1, n2) = sums_scalar(&a, &b);
+            sink += d / (n1.sqrt() * n2.sqrt() + 1e-9);
+        }
+        std::hint::black_box(sink);
+        let ms_scalar = t0.elapsed().as_secs_f64() * 1000.0;
+        let ops_scalar = (iters as f64) / (ms_scalar / 1000.0);
+        entries.push(BenchEntry {
+            backend: "scalar", available: true,
+            ms_total: ms_scalar,
+            ms_per_op: ms_scalar / iters as f64,
+            ops_per_s: ops_scalar,
+            speedup_vs_scalar: 1.0,
+        });
+
+        // --- AVX2 + FMA --------------------------------------------------------
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            let has_avx2 = std::arch::is_x86_feature_detected!("avx2")
+                        && std::arch::is_x86_feature_detected!("fma");
+            if has_avx2 {
+                let t0 = Instant::now();
+                let mut sink = 0.0_f32;
+                for _ in 0..iters {
+                    let (d, n1, n2) = unsafe { sums_avx2(&a, &b) };
+                    sink += d / (n1.sqrt() * n2.sqrt() + 1e-9);
+                }
+                std::hint::black_box(sink);
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let ops = (iters as f64) / (ms / 1000.0);
+                entries.push(BenchEntry {
+                    backend: "avx2+fma", available: true,
+                    ms_total: ms,
+                    ms_per_op: ms / iters as f64,
+                    ops_per_s: ops,
+                    speedup_vs_scalar: ms_scalar / ms,
+                });
+            } else {
+                entries.push(BenchEntry {
+                    backend: "avx2+fma", available: false,
+                    ms_total: 0.0, ms_per_op: 0.0, ops_per_s: 0.0,
+                    speedup_vs_scalar: 0.0,
+                });
+            }
+        }
+
+        // --- AVX-512F ----------------------------------------------------------
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            let has_512 = std::arch::is_x86_feature_detected!("avx512f");
+            if has_512 {
+                let t0 = Instant::now();
+                let mut sink = 0.0_f32;
+                for _ in 0..iters {
+                    let (d, n1, n2) = unsafe { sums_avx512(&a, &b) };
+                    sink += d / (n1.sqrt() * n2.sqrt() + 1e-9);
+                }
+                std::hint::black_box(sink);
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let ops = (iters as f64) / (ms / 1000.0);
+                entries.push(BenchEntry {
+                    backend: "avx512f", available: true,
+                    ms_total: ms,
+                    ms_per_op: ms / iters as f64,
+                    ops_per_s: ops,
+                    speedup_vs_scalar: ms_scalar / ms,
+                });
+            } else {
+                entries.push(BenchEntry {
+                    backend: "avx512f", available: false,
+                    ms_total: 0.0, ms_per_op: 0.0, ops_per_s: 0.0,
+                    speedup_vs_scalar: 0.0,
+                });
+            }
+        }
+
+        BenchReport {
+            iters, dim: dim as u32, entries,
+            host_backend: backend().name(),
+        }
+    }).await.map_err(|e| format!("bench task join error: {}", e))?;
+
+    Ok(report)
+}
+
 // ── Tauri command — expose to frontend for /cpu slash command ──────────
 
 #[derive(serde::Serialize)]
