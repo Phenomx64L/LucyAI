@@ -168,14 +168,24 @@
 <header class="tb" data-tauri-drag-region>
     <!-- Brand / welcome toggle -->
     <div class="brand" role="button" tabindex="0"
+         data-tauri-drag-region="false"
          title="Ver capacidades de Lucy"
          on:click={() => dispatch('showWelcome')}
          on:keydown={(e) => e.key === 'Enter' && dispatch('showWelcome')}>
         <div class="bdot"></div>LUCY
     </div>
 
-    <!-- Tab strip -->
-    <div class="tabs-area" style="-webkit-app-region: no-drag;">
+    <!-- Tab strip
+         v1.7.20 — the inline `style="-webkit-app-region: no-drag"` was
+         silently overriding the header's `data-tauri-drag-region`,
+         killing both window drag and double-click maximize in Tauri 2 +
+         WebView2. The Electron-era `-webkit-app-region` CSS is no longer
+         enough — Tauri 2 needs the explicit `data-tauri-drag-region`
+         attribute. We mark the wrapper itself draggable so the empty
+         space between tabs and the + button keeps dragging the window,
+         and rely on `data-tauri-drag-region="false"` on the interactive
+         children (tabs, buttons, scroll arrows) so clicks still work. -->
+    <div class="tabs-area" data-tauri-drag-region>
         {#if canScrollLeft}
         <button class="tab-scroll-btn" on:click={() => dispatch('scrollleft')} title="Pestañas anteriores">‹</button>
         {/if}
@@ -191,6 +201,7 @@
                 <div class="tab" class:active={activeTabId === tab.id}
                      slot="trigger"
                      role="button" tabindex="0"
+                     data-tauri-drag-region="false"
                      on:click={() => onTabClick(tab.id)}
                      on:keydown
                      on:mouseenter={(e) => onTabEnter(e, tab)}
@@ -325,14 +336,17 @@
             {focusMode ? '⊞' : '⊟'}
         </button>
         <div class="win-btn" role="button" tabindex="0" title="Minimizar"
+             data-tauri-drag-region="false"
              on:click={() => dispatch('minimize')} on:keydown>
             <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M11 5H0V6H11V5Z"/></svg>
         </div>
         <div class="win-btn" role="button" tabindex="0" title="Maximizar"
+             data-tauri-drag-region="false"
              on:click={() => dispatch('maximize')} on:keydown>
             <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M10 1H1V10H10V1ZM11 0V11H0V0H11Z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
         </div>
         <div class="win-btn wc" role="button" tabindex="0" title="Cerrar"
+             data-tauri-drag-region="false"
              on:click={() => dispatch('closeApp')} on:keydown>
             <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><path d="M10.854 1.146L9.854 0.146L5.5 4.5L1.146 0.146L0.146 1.146L4.5 5.5L0.146 9.854L1.146 10.854L5.5 6.5L9.854 10.854L10.854 9.854L6.5 5.5L10.854 1.146Z"/></svg>
         </div>

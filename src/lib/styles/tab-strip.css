@@ -93,6 +93,11 @@
    Empty space inside .tabs-area after the + button serves as a drag
    region for the window — that's why .tabs-area gets `app-region:drag`
    and only its interactive children re-enable no-drag. */
+/* v1.7.20 — drag behavior is now controlled by `data-tauri-drag-region`
+   attributes on .tabs-area (drag) and its interactive children (false).
+   The legacy `-webkit-app-region` CSS rule no longer works reliably in
+   Tauri 2 + WebView2 and was silently broken by an inline override on
+   .tabs-area. Kept the class for layout only. */
 .tabs-area {
     display: flex;
     align-items: flex-end;
@@ -100,9 +105,7 @@
     min-width: 0;
     height: 38px;
     position: relative;
-    -webkit-app-region: drag;
 }
-.tabs-area > * { -webkit-app-region: no-drag; }
 #tabs-list {
     display: flex;
     gap: 1px;

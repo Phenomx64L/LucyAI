@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.20] — 2026-06-01
+
+User reported losing the ability to drag the window from the top
+bar and to maximize via double-click after recent TabBar
+modifications. Investigation traced both behaviors to a single
+inline override.
+
+### Root cause
+
+`TabBar.svelte` line 178 had:
+
+```html
+<div class="tabs-area" style="-webkit-app-region: no-drag;">
+```
+
+The Electron-era `-webkit-app-region` CSS property used to be a
+compatibility shim in Tauri 1 + WebView2 but is unreliable in
+Tauri 2 — the canonical mechanism is the `data-tauri-drag-region`
+HTML attribute. The header element already had
+`data-tauri-drag-region` correctly, but the inline `no-drag` on
+`.tabs-area` (covering ~80% of the bar's width) was silently
+disabling both drag-to-move AND double-click maximize across the
+entire visible top bar.
+
+### Fix
+
+Switched `.tabs-area` to the attribute-based mechanism:
+
+```html
+<div class="tabs-area" data-tauri-drag-region>
+```
+
+Marked the div-based interactive children as
+`data-tauri-drag-region="false"` so their click handlers keep
+firing (native `<button>` elements are auto-detected by Tauri and
+do not need the override):
+
+- `.brand` (LUCY logo, `role="button"`)
+- `.tab` divs inside `#tabs-list` (`role="button"`)
+- The three `.win-btn` divs (minimize / maximize / close,
+  `role="button"`)
+
+The two native `<button>` elements in `.win-controls` (panic and
+focus toggle) were left untouched — Tauri 2 already excludes
+native interactive elements from inherited drag regions.
+
+### Cleanup
+
+Removed the now-dead `-webkit-app-region` CSS rule from
+`tab-strip.css`. The class is still used for layout (flex, height,
+positioning) — only the drag styling came off.
+
+### Result
+
+- Single-click + drag on any empty space in the top bar moves
+  the window
+- Double-click on empty space in the top bar
+  maximizes / restores
+- Clicks on tabs, brand, and window controls still trigger their
+  handlers
+- Right-click context menu on tabs still works
+
+---
+
 ## [1.7.19] — 2026-06-01
 
 SIMD-dispatched cosine similarity for the skills auto-routing
