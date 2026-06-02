@@ -194,6 +194,10 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.17 — In-app Dialog host (replaces native confirm/alert/prompt).
     import DialogHost             from '$lib/DialogHost.svelte';
     import { lucyConfirm, lucyAlert, lucyPrompt } from '$lib/dialog-service';
+    // v1.7.22 — Context Strip: live cockpit above chat showing
+    // memorias / skill / preset / MCP / tokens injected this turn.
+    import ContextStrip           from '$lib/ContextStrip.svelte';
+    import { setContextSnapshot } from '$lib/context-snapshot';
     import KeyboardCheatsheet    from '$lib/KeyboardCheatsheet.svelte';
     import ChatMessageContextMenu from '$lib/ChatMessageContextMenu.svelte';
     // v1.4.11 — svelte-sonner powers all toast() calls. We import the
@@ -3823,6 +3827,42 @@ REGLAS DE FORMATO:
                 console.warn('[+page] unified context failed:', e);
             }
 
+            // v1.7.22 — Push a Context Strip snapshot. The strip is the
+            // user-facing cockpit that shows what Lucy has in her LLM
+            // context RIGHT NOW. We update it once per prompt build so
+            // the chips reflect the FINAL plan that actually went to the
+            // LLM (not an in-flight mid-stream state).
+            try {
+                const _csActiveSkill = peekActiveSecuritySkill();
+                const _csActivePreset = !_csActiveSkill ? peekActivePreset() : null;
+                const _csSkillSource =
+                    _unifiedPlan?.route?.method === 'manual' ? 'manual'
+                  : _unifiedPlan?.route?.method && _unifiedPlan.route.method !== 'none' ? 'auto'
+                  : (_csActiveSkill ? 'manual' : null);
+                // Memory count: derived later by construirContextoMemoria.
+                // We don't have direct access here yet — wire-up
+                // tracked in v1.7.23. Use the tab's last-known value
+                // if buildUnifiedContext exposes it, else 0.
+                const _csMemCount = (_unifiedPlan && typeof _unifiedPlan.memory_hits_count === 'number')
+                    ? _unifiedPlan.memory_hits_count
+                    : (t._lastMemoryHitsCount ?? 0);
+                setContextSnapshot({
+                    memoriesCount:  _csMemCount,
+                    skillId:        _csActiveSkill?.id ?? null,
+                    skillSource:    _csSkillSource,
+                    presetId:       _csActivePreset?.id ?? null,
+                    mcpToolsCount:  _unifiedPlan?.mcp_tools?.length ?? 0,
+                    estTokens:      _unifiedPlan?.est_tokens ?? Math.ceil((raw || '').length / 4),
+                    // maxTokens is 0 until the model catalog exposes
+                    // a context_window field — the chip handles that
+                    // by rendering as a neutral "idle" tone.
+                    maxTokens:      0,
+                    modelId:        t.model || activeModel || null,
+                });
+            } catch (e) {
+                console.warn('[+page] context snapshot push failed:', e);
+            }
+
             // v1.7.13 — Auto-route chip, hardened. Earlier versions
             // depended on `_unifiedPlan.route` being non-null, which
             // failed silently if `buildUnifiedContext()` threw (and
@@ -3923,7 +3963,18 @@ REGLAS DE FORMATO:
             if (_unifiedPlan && _unifiedPlan.mcp_tools.length > 0) {
                 ctx += renderMcpToolsBlock(_unifiedPlan.mcp_tools);
             }
-            ctx += construirContextoMemoria(raw, t);
+            const _memCtx = construirContextoMemoria(raw, t);
+            ctx += _memCtx;
+            // v1.7.22 — Count memory entries actually inyected so the
+            // Context Strip shows the real number. We parse the block
+            // markers from the constructed string. Cheap heuristic:
+            // each "[Memoria #" line is one injected agent_memory.
+            try {
+                const _mc = (_memCtx.match(/\[Memoria #\d+\]/g) || []).length
+                          + (_memCtx.match(/\[Crystal #\d+\]/g) || []).length;
+                t._lastMemoryHitsCount = _mc;
+                setContextSnapshot({ memoriesCount: _mc });
+            } catch {}
             let imgs=[];
             if(t.attachedFiles.length){const txts=t.attachedFiles.filter(f=>f.type==='text');const pix=t.attachedFiles.filter(f=>f.type==='image');if(txts.length)ctx+='\n\n--- ARCHIVOS ---\n'+txts.map(f=>`[${f.name}]\n${f.content}`).join('\n---\n');if(pix.length)pix.forEach(img=>imgs.push({mimeType:img.mimeType,data:img.content}));}
             t.attachedFiles=[]; refresh();
@@ -9107,6 +9158,17 @@ if (Test-Path $src) {
 
         {#each tabs as tab (tab.id)}
           <div class="chat-wrap" class:on={activeTabId === tab.id && !showWelcome}>
+            {#if activeTabId === tab.id}
+              <!-- v1.7.22 — Context Strip: live cockpit of memorias /
+                   skill / preset / MCP / tokens. Sticky above the
+                   thread so it persists while scrolling history. -->
+              <ContextStrip
+                on:clickMemories={() => setView('memory')}
+                on:clickSkill={() => showSkillPicker = true}
+                on:clickPreset={() => showSkillPresetPicker = true}
+                on:clickMcp={() => showMcpServersModal = true}
+                on:clickTokens={() => setView('diagnostico')} />
+            {/if}
             {#if activeIncidentId && activeTabId === tab.id}
             <div style="padding:0 12px;">
               <IncidentTimeline incidentId={activeIncidentId} {isEN}

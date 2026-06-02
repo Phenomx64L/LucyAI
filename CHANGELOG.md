@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.22] — 2026-06-01
+
+### Context Strip — Lucy's identity moment
+
+A horizontal strip that sits between the tab bar and the chat
+viewport, showing the user **what Lucy has in her LLM prompt
+right now**. Sticky so it persists while scrolling history. Five
+color-coded chips, each clickable to open the relevant modal:
+
+| Chip | Color | Source | Opens on click |
+|------|-------|--------|----------------|
+| 🧠 N memorias | cyan | `[Memoria #…]` + `[Crystal #…]` markers in injected memory block | Memory Browser |
+| ⚡ skill: `<id>` | magenta | `peekActiveSecuritySkill()` (amber ring when manual) | SkillPicker |
+| ◇ preset: `<name>` | accent teal | `peekActivePreset()` | SkillPresetPicker |
+| 🔌 N MCP tools | violet | `_unifiedPlan.mcp_tools.length` | MCP Servers Modal |
+| ◆ `<used>/<max>` tokens | banded green/amber/red | `_unifiedPlan.est_tokens` | Diagnostico view |
+
+Chip is hidden when its value is zero/null. Strip is hidden
+entirely when no chip would render (cold start, no skill, no
+preset, no MCP, no tokens) so a fresh tab doesn't waste vertical
+space.
+
+### Why this matters competitively
+
+Cursor, Claude Code, ChatGPT desktop and every other AI assistant
+treats their internal context as a black box. They tell you
+*what they said*, never *what they had in their head*. For a
+sysadmin or security operator, knowing what shaped a response is
+the difference between trusting it and second-guessing it.
+
+The Context Strip is Lucy's flight panel: at a glance you know
+which memorias she pulled, which skill is framing her behavior,
+which MCP tools she ranked into context, and how much of the
+context budget you've spent. This is something no other assistant
+in the market exposes.
+
+### Implementation
+
+- `$lib/context-snapshot.ts` — writable store with the live
+  snapshot. `setContextSnapshot(patch)` for partial updates.
+- `$lib/ContextStrip.svelte` — pure presentational component;
+  ~165 LOC including CSS. Each chip is a `<button>` with an
+  `aria-label` and an event dispatch.
+- Wired in `+page.svelte` at the prompt-build hot path:
+  - Once after `buildUnifiedContext` (skill / preset / MCP / tokens).
+  - Once after `construirContextoMemoria` with the real memory
+    hit count (counted by parsing `[Memoria #…]` / `[Crystal #…]`
+    markers in the injected block).
+- Mounted in the chat-wrap, sticky to the top.
+
+### Color palette (the design proposal from v1.7.21)
+
+The strip is the first place Lucy applies the five-concept color
+system:
+
+- **Memoria** — cyan (#06b6d4 base)
+- **Skill** — magenta (#d946ef base), amber ring when manual
+- **Preset** — accent teal (the brand)
+- **MCP** — violet (#a78bfa base)
+- **Tokens** — green → amber → red as % of budget rises
+
+These are the colors we'll propagate to the sidebar items, modals
+and other surfaces in future sprints.
+
+### Caveats / follow-up
+
+- `maxTokens` is 0 until `llm-models.ts` exposes a
+  `context_window` field per model. The token chip renders in
+  neutral grey ("idle" tone) when max is unknown — no value
+  shown after the slash. Sprint v1.7.23 will add the field.
+- Click handlers on `clickTokens` open the Diagnostico view as a
+  placeholder. A dedicated Token Budget panel is queued.
+
+---
+
 ## [1.7.21] — 2026-06-01
 
 Two user-reported fixes + one new tool.
