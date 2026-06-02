@@ -3702,7 +3702,7 @@ REGLAS DE FORMATO:
         }));
         const cols = models.map((model, i) => {
             const v = results[i].value || { ok:false, text:'(no result)', ms:0 };
-            const bodyHtml = v.ok ? renderMd(v.text || '') : `<span style="color:#f87171">${escapeHtml(v.text)}</span>`;
+            const bodyHtml = v.ok ? renderLucyMarkdown(v.text || '') : `<span style="color:#f87171">${escapeHtml(v.text)}</span>`;
             return `<div class="cmp-col" data-model="${model}">
                 <div class="cmp-head">${model}${v.ok ? '' : ' ✕'}</div>
                 <div class="cmp-body">${bodyHtml}</div>
@@ -4688,7 +4688,7 @@ Use ONE of these patterns instead:
                     if (extraChunk) reasoningMsg.content += extraChunk;
                     reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
                     reasoningMsg.html = reasoningMsg.content
-                        ? renderMd(reasoningMsg.content)
+                        ? renderLucyMarkdown(reasoningMsg.content)
                         : '';
                     t.messages = [...t.messages];
                     refresh();
@@ -4819,7 +4819,7 @@ Use ONE of these patterns instead:
                         ${stepsBlock}
                         ${filesHtml}
                         ${agentWarps.join('')}
-                        ${displayText ? renderMd(displayText) : ''}
+                        ${displayText ? renderLucyMarkdown(displayText) : ''}
                         ${citationsHtml}
                     `;
                     agentMsg.rawContent = displayText; // for search
@@ -4866,7 +4866,14 @@ Use ONE of these patterns instead:
                                 objective: originalUserGoal && originalUserGoal !== raw ? originalUserGoal.slice(0, 280) : '',
                                 elapsedMs: Date.now() - (t._procStart || Date.now()),
                                 steps,
-                                finalHtml: displayText ? renderMd(displayText) : '',
+                                // v1.7.24 — use the full renderLucyMarkdown pipeline
+                                // (confidence-tag + CITE handlers + cite-chips)
+                                // so the chapter prose gets the same treatment
+                                // as a normal chat message. Direct renderMd()
+                                // skipped both, which is why `[!text!]` and
+                                // `<CITE>` tags leaked raw into Agent Chapter
+                                // outputs.
+                                finalHtml: displayText ? renderLucyMarkdown(displayText) : '',
                             };
                             agentMsg.viewMode = 'chapter'; // default to chapter view for long tasks
                         } catch (chapErr) {

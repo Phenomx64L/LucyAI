@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.24] — 2026-06-01
+
+User reported v1.7.23 didn't fix the visible bugs. Triage
+found two root causes neither version had touched:
+
+### `renderMd` vs `renderLucyMarkdown` mismatch (the real markdown bug)
+
+The v1.7.23 fixes lived in `renderLucyMarkdown` (which calls
+`renderConfidenceTags` first → handles `[!text!]`, `<CITE>`,
+etc., THEN calls `renderMd`).
+
+But the chat surfaces were calling `renderMd` DIRECTLY in four
+places, skipping the confidence/CITE handlers:
+
+| Site | Surface |
+|------|---------|
+| `+page.svelte:4869` | Agent Chapter View final prose |
+| `+page.svelte:4822` | Default agent message HTML |
+| `+page.svelte:3705` | `/compare` cross-model verify bodies |
+| `+page.svelte:4691` | Streaming reasoning panel |
+
+All four now call `renderLucyMarkdown`. The `<CITE>` and
+strikethrough fixes from v1.7.23 finally reach these surfaces.
+
+### Context Strip — visible idle state
+
+The strip's `{#if hasAny}` gate meant if the snapshot store
+never received a push (cold start, or a bug in the push path),
+the strip rendered NOTHING — indistinguishable from "the mount
+broke". v1.7.24 always renders the strip; when there's no data
+yet it shows a single italicised `◌ cockpit idle` chip with a
+slowly-rotating glyph, so the user can immediately verify:
+
+- If `◌ cockpit idle` shows → the strip mounted, store is just
+  empty. Fixing is a matter of finding why
+  `setContextSnapshot()` isn't firing.
+- If the strip is still completely absent → the mount itself
+  is broken (different CSS / component issue).
+
+This gives us actionable signal even without devtools.
+
+---
+
 ## [1.7.23] — 2026-06-01
 
 Three user-visible fixes from the v1.7.22 screenshot triage.

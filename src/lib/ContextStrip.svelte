@@ -39,6 +39,11 @@
         snap.mcpToolsCount   > 0 ||
         snap.estTokens       > 0
     );
+    // v1.7.24 — Idle marker. When no snapshot data has arrived yet
+    // (cold start or store not pushed), we still render the strip with
+    // a single neutral chip so the user can verify it mounted and is
+    // listening. The chip disappears the moment a real prompt lands.
+    $: isIdle = !hasAny;
 
     /** Format a skill id like "conducting-phishing-incident-response"
      *  → "phishing-incident-response" (drop common prefix) and clamp
@@ -71,8 +76,13 @@
     }
 </script>
 
-{#if hasAny}
 <div class="cs-strip" role="toolbar" aria-label="Lucy context snapshot">
+    {#if isIdle}
+        <span class="cs-chip cs-idle" title="Lucy aún no ha procesado un mensaje en esta sesión — el cockpit se llenará cuando mandes el primer prompt.">
+            <span class="cs-glyph">◌</span>
+            <span class="cs-lbl">cockpit idle</span>
+        </span>
+    {/if}
     {#if snap.memoriesCount > 0}
         <button class="cs-chip cs-mem" type="button"
                 on:click={() => dispatch('clickMemories')}
@@ -127,7 +137,6 @@
         </button>
     {/if}
 </div>
-{/if}
 
 <style>
     .cs-strip {
@@ -163,6 +172,18 @@
     .cs-glyph { font-size: 12px; line-height: 1; opacity: .9; }
     .cs-val   { font-weight: 600; color: var(--txt1, #f1f5f9); font-variant-numeric: tabular-nums; }
     .cs-lbl   { opacity: .7; }
+
+    /* ── Idle placeholder (only shown when snapshot empty) ── */
+    .cs-idle {
+        color: var(--txt3, #64748b);
+        border-color: color-mix(in srgb, var(--bdr, #334155) 50%, transparent);
+        background: rgba(255, 255, 255, 0.02);
+        font-style: italic;
+        cursor: default;
+    }
+    .cs-idle:hover { background: rgba(255, 255, 255, 0.02); transform: none; }
+    .cs-idle .cs-glyph { animation: cs-idle-spin 3.6s linear infinite; }
+    @keyframes cs-idle-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
     /* ── Memory (cyan) ── */
     .cs-mem {
