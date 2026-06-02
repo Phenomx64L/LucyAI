@@ -1348,11 +1348,54 @@ import { listen } from '@tauri-apps/api/event';
         // Comandos aprendidos
         ...safeParseLS('lucy_custom_commands', []).map(c => ({ icon:'◈', label:c.claves?.[0]||'', cat:'Aprendido',
             action:()=>{if(activeTabId){const t=getTab(activeTabId);if(t){t.inputValue=c.claves[0];refresh();}}showPalette=false;} })),
+
+        // v1.7.28 — Recent slash commands (v1.7.x sprint additions).
+        // These were discoverable only by typing the command. Surfacing
+        // them in the palette so a power-user can run them from Ctrl+K
+        // without remembering the exact syntax. The action sets the
+        // composer input to the slash command — the user presses Enter
+        // to submit, matching the empty-state-hero pattern (learn by
+        // seeing the syntax once).
+        ...[
+            { cmd: '/cpu',        icon: '◆', label: isEN ? 'CPU SIMD info'              : 'Info CPU SIMD' },
+            { cmd: '/bench-simd', icon: '◆', label: isEN ? 'SIMD cosine benchmark'      : 'Benchmark SIMD cosine' },
+            { cmd: '/verify',     icon: '✓', label: isEN ? 'Script verifier status'    : 'Estado del verificador de scripts' },
+            { cmd: '/sec-skill',  icon: '⚡', label: isEN ? 'Browse cybersec skills'    : 'Ver skills cybersec' },
+            { cmd: '/preset',     icon: '◇', label: isEN ? 'Preset picker (ECC)'        : 'Selector de preset (ECC)' },
+            { cmd: '/llm-health', icon: '◉', label: isEN ? 'LLM tier health'            : 'Salud de capas LLM' },
+            { cmd: '/anneal',     icon: '⌬', label: isEN ? 'Annealing ontology report' : 'Reporte de ontologías (annealing)' },
+            { cmd: '/polarity',   icon: '↔', label: isEN ? 'Polarity axis (SUPPORTS↔CONTRADICTS)' : 'Eje de polaridad' },
+            { cmd: '/reflect',    icon: '⌬', label: isEN ? 'Generate Insights'         : 'Generar Insights' },
+            { cmd: '/recall',     icon: '⌕', label: isEN ? 'Recall from memory (FTS5)' : 'Recuperar de memoria (FTS5)', hint: 'pass a query' },
+            { cmd: '/cost',       icon: '$', label: isEN ? 'Cost summary'               : 'Resumen de costo' },
+        ].map(s => ({
+            icon: s.icon,
+            label: s.label,
+            cat: isEN ? 'Slash command' : 'Comando slash',
+            hint: s.cmd,
+            action: () => {
+                if (activeTabId) {
+                    const t = getTab(activeTabId);
+                    if (t) { t.inputValue = s.cmd + ' '; refresh(); }
+                }
+                showPalette = false;
+                tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+            },
+        })),
+
+        // v1.7.28 — Toggles: surface common state toggles so the user
+        // can flip them from Ctrl+K (focus mode, sidebar, language…).
+        { icon: '⊞', label: focusMode ? (isEN ? 'Exit focus mode' : 'Salir de focus') : (isEN ? 'Enter focus mode' : 'Entrar a focus'),
+          cat: isEN ? 'Toggle' : 'Toggle', hint: 'Ctrl+M',
+          action: () => { focusMode = !focusMode; showPalette = false; } },
+        { icon: '◧', label: sidebarCollapsed ? (isEN ? 'Expand sidebar' : 'Expandir sidebar') : (isEN ? 'Collapse sidebar' : 'Colapsar sidebar'),
+          cat: isEN ? 'Toggle' : 'Toggle',
+          action: () => { sidebarCollapsed = !sidebarCollapsed; showPalette = false; } },
     ];
     // ── DAILY TIPS — rota uno por día del mes (índice = día % total) ───────────
     $: DAILY_TIPS = [
         { icon: '≡', text: isEN ? 'The <b>Audit Log</b> tracks every command with timestamp and host. Open it from <b>Audit Log</b> on the left panel for full traceability.' : 'El <b>Audit Log</b> registra cada comando con timestamp y host. Ábrelo desde <b>Audit Log</b> en el panel izquierdo para tener trazabilidad completa de todas las acciones.' },
-        { icon: '⌨', text: isEN ? 'Use <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+P</kbd> to access any view, action or host without leaving the keyboard. The palette filters in real time.' : 'Usa <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+P</kbd> para acceder a cualquier vista, acción o host sin soltar el teclado. La paleta filtra en tiempo real.' },
+        { icon: '⌨', text: isEN ? 'Use <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+K</kbd> or <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+P</kbd> to access any view, action, host, slash command or recent memory without leaving the keyboard.' : 'Usa <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+K</kbd> o <kbd style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:1px 6px;font-size:11px;">Ctrl+P</kbd> para acceder a cualquier vista, acción, host, slash command o memoria reciente sin soltar el teclado.' },
         { icon: '⊡', text: isEN ? 'With the <b>⚡</b> button in the hosts bar you can run the same command on <b>multiple servers at once</b> and compare results.' : 'Con el botón <b>⚡</b> en la barra de hosts puedes ejecutar el mismo comando en <b>múltiples servidores a la vez</b> y comparar resultados.' },
         { icon: '≡', text: isEN ? '<b>Runbooks</b> are script sequences that execute in order with one click. Create them from the Runbooks section on the left.' : 'Los <b>Runbooks</b> son secuencias de scripts que se ejecutan en orden con un solo clic. Créalos desde la sección Runbooks en el panel izquierdo.' },
         { icon: '◈', text: isEN ? 'The <b>Interactive Remote Shell</b> opens a persistent SSH/WinRM channel — send consecutive commands without reconnecting and with real-time output.' : 'La <b>Shell Remota Interactiva</b> abre un canal persistente SSH/WinRM — envía comandos consecutivos sin reconexión y con output en tiempo real.' },
@@ -2749,6 +2792,14 @@ import { listen } from '@tauri-apps/api/event';
                 }
                 break;
             case 'p': case 'P':
+                e.preventDefault();
+                showPalette = !showPalette;
+                break;
+            case 'k': case 'K':
+                // v1.7.28 — Ctrl+K is the modern industry-standard shortcut
+                // for command palettes (VS Code, Linear, Raycast, Slack…).
+                // Lucy keeps Ctrl+P for muscle memory + adds K alongside so
+                // new users discover the palette via the universal binding.
                 e.preventDefault();
                 showPalette = !showPalette;
                 break;

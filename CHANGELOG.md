@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.28] — 2026-06-01
+
+### C — Ctrl+K command palette + expanded sources
+
+Triage discovered the command palette already existed (Ctrl+P,
+`CommandPalette.svelte`, fzf-style fuzzy matcher landed in
+v1.4.12). What was missing for "modern Spotlight feel":
+
+1. The discoverable shortcut. VS Code / Linear / Raycast /
+   Slack / Notion all use Ctrl+K. New users press it on instinct.
+2. Coverage of the v1.7.x sprint additions — `/cpu`,
+   `/bench-simd`, `/verify`, `/preset`, `/llm-health`,
+   `/anneal`, `/polarity`, `/reflect`, `/recall`, `/cost` —
+   none of which were palette-visible.
+
+Both fixed:
+
+- **Ctrl+K** added alongside Ctrl+P (`+page.svelte` keyboard
+  handler). Old shortcut preserved for muscle memory.
+- 11 new slash-command rows + 2 toggles (focus mode, sidebar)
+  added to `allPaletteItems`. Clicking a slash row pre-fills
+  the composer with the command (with trailing space) and
+  focuses the input — same teach-by-syntax pattern as the
+  empty-state hero.
+- Daily tip updated to mention both shortcuts.
+
+### F — Tab hover preview
+
+Triage: already implemented (`TabBar.svelte:358`
+`.tab-preview-pop`, 500 ms hover delay, shows last messages +
+tab stats). Confirmed working; no code change needed beyond
+verification. The v1.7.26 follow-up listed it as TBD by mistake.
+
+### Deferred to next sprints
+
+- **D — Knowledge graph view** → v1.7.29+. Genuine 1-2 day swing.
+- **Cost sparkline (real)** → needs backend
+  `get_cost_by_day(30)` command + UI wire.
+
+---
+
 ## [1.7.27] — 2026-06-01
 
 Ambient-cockpit sprint. Four of the seven items from the v1.7.26
