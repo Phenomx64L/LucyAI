@@ -6,6 +6,10 @@ pub mod error;
 // v1.7.9 — placeholder pattern detector used by execute_powershell /
 // execute_cmd / execute_reg to refuse skill-body example values.
 pub mod placeholder_guard;
+// v1.7.19 — SIMD-dispatched cosine similarity (AVX-512 / AVX2 / scalar).
+// Consolidates three duplicated implementations into one runtime-
+// dispatched entry point. Boot logs which backend is active.
+pub mod simd_cosine;
 
 /// Safely truncate a string at a char boundary, never panicking.
 /// Returns a slice of at most `max_bytes` bytes, ending at a valid UTF-8 boundary.

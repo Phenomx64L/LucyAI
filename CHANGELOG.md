@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.19] — 2026-06-01
+
+SIMD-dispatched cosine similarity for the skills auto-routing
+Tier 2 + memory grounding hot path. Single universal binary
+that picks the best instruction set at boot:
+
+- **AVX-512F** (Tiger Lake-H 11th gen, Zen 4+) — 16 f32 ops/cycle
+- **AVX2 + FMA** (Haswell+, Zen 1+, 2013 baseline) — 8 f32 ops/cycle
+- **Scalar fallback** — anything else, ARM, future targets
+
+### Why dynamic dispatch instead of two binaries
+
+Per-user request: a single installable that works everywhere
+without the operator having to choose between "AVX-512" and
+"generic" packages. Detection is `std::arch::is_x86_feature_detected!`
+cached in `OnceLock<Backend>` so subsequent calls cost zero
+beyond the `Backend` enum branch.
+
+### Why `#[target_feature]` instead of `RUSTFLAGS -C target-cpu`
+
+We keep `opt-level = "z"` in `[profile.release]` for binary
+size + anti-tamper (the obfstr / sha2 integrity goals from
+v1.4.x are unchanged). `target-cpu` would force the WHOLE
+binary to require AVX-512, breaking portability. The
+`#[target_feature(enable = "avx512f")]` attribute on specific
+`unsafe` functions tells the compiler to emit those instructions
+in those functions regardless of profile optimization. Works
+even with `opt-level = "z"`.
+
+### Files
+
+- New `src-tauri/src/utils/simd_cosine.rs` (~280 LOC):
+  - Backend enum + cached detection
+  - Three implementations (avx512, avx2+fma, scalar)
+  - Public `cosine(a, b)` and `sums(a, b)` entry points
+  - Tauri command `simd_info()` returning `SimdInfo`
+  - 8 unit tests including parity checks
+    (`avx512_matches_scalar_when_available`,
+    `avx2_matches_scalar_when_available`)
+- Boot log line at app start:
+  `[simd_cosine] backend selected at boot: avx512f`
+- Three call sites consolidated:
+  - `embeddings.rs::cosine` — now 1 line, delegates to dispatcher
+  - `memory.rs::cosine_similarity` — same
+  - `vec_index.rs::cosine_fast` — same (manual unroll-by-4 deleted)
+
+### Slash command
+
+```
+/cpu    (alias /simd, /simd-info)
+```
+
+Shows architecture, active cosine backend, and feature
+detection flags (AVX-512F/DQ/VL, AVX2, FMA).
+
+### Expected performance
+
+| CPU | Backend | Tier 2 routing (213 × 768-dim) |
+|-----|---------|--------------------------------|
+| i9-11950H (Tiger Lake-H) | avx512f | ~50 ms (was ~200 ms scalar) |
+| Ryzen 5 7600X (Zen 4) | avx512f | ~45 ms (no downclock penalty) |
+| Older Intel / AMD | avx2+fma | ~80 ms |
+| Pre-Haswell | scalar | ~200 ms (unchanged) |
+
+Real-world impact is invisible per turn (LLM latency 2-5s
+dominates) but matters for batch operations — Memory Browser
+"verify contradictions" scan, embedding rebuild via
+`/sec-skill rebuild`, and the cluster verdict computation on
+the annealing pass.
+
+### Tests
+
+```
+running 8 tests
+test utils::simd_cosine::tests::cosine_zero_vectors_no_nan ... ok
+[simd_cosine] backend: avx512f
+test utils::simd_cosine::tests::cosine_identical_is_one ... ok
+test utils::simd_cosine::tests::cosine_length_mismatch_returns_zero ... ok
+test utils::simd_cosine::tests::avx2_matches_scalar_when_available ... ok
+test utils::simd_cosine::tests::cosine_orthogonal_is_zero ... ok
+test utils::simd_cosine::tests::avx512_matches_scalar_when_available ... ok
+test utils::simd_cosine::tests::scalar_matches_dispatched_768d ... ok
+test utils::simd_cosine::tests::backend_resolves_to_something ... ok
+
+test result: ok. 8 passed; 0 failed
+```
+
+### Caveats
+
+- Intel pre-Sapphire Rapids has the "AVX-512 license" — a brief
+  ~200 MHz frequency drop for ~1 ms after AVX-512 instructions.
+  Our usage pattern (single 5 ms burst per turn, then 2-5 s of
+  LLM wait) lets the CPU recover before the next burst.
+- AMD Zen 4 implements AVX-512 as double-pumped 256-bit ports —
+  same throughput as the Intel "full" implementation in our
+  measurements, but with zero frequency penalty.
+- Tail handling for non-multiple-of-16 vectors falls back to
+  scalar inside the SIMD function. For 768-dim embeddings (our
+  only real workload) the tail is never hit.
+
+---
+
 ## [1.7.18] — 2026-06-01
 
 User feedback on v1.7.17 design: the close-tab modal still

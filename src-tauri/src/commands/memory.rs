@@ -706,18 +706,11 @@ pub async fn memory_consolidate(dry_run: Option<bool>) -> Result<ConsolidationRe
 /// Cosine similarity between two equal-length f32 vectors. Returns 0.0
 /// on length mismatch or zero-magnitude inputs (guards against NaN from
 /// a division by zero norm).
+// v1.7.19 — delegates to SIMD-dispatched implementation. Returns
+// identical results within FP epsilon to the prior scalar loop (verified
+// in simd_cosine::tests::scalar_matches_dispatched_768d).
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() { return 0.0; }
-    let mut dot = 0.0f32;
-    let mut na  = 0.0f32;
-    let mut nb  = 0.0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na  += a[i] * a[i];
-        nb  += b[i] * b[i];
-    }
-    if na <= 0.0 || nb <= 0.0 { return 0.0; }
-    (dot / (na.sqrt() * nb.sqrt())).clamp(-1.0, 1.0)
+    crate::utils::simd_cosine::cosine(a, b)
 }
 
 // ── Memory Graph (Tier S #2) ──────────────────────────────────────────────

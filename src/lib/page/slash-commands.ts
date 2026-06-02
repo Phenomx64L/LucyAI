@@ -1355,6 +1355,44 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             return true;
         }
 
+        // ── v1.7.19 — /cpu (SIMD backend introspection) ──
+        // Shows which cosine-similarity backend Lucy picked at boot for
+        // the skills auto-routing Tier 2 + memory grounding hot path.
+        case 'cpu': case 'simd': case 'simd-info': {
+            (async () => {
+                try {
+                    const info = await invoke<{
+                        backend: string; has_avx512f: boolean;
+                        has_avx512dq: boolean; has_avx512vl: boolean;
+                        has_avx2: boolean; has_fma: boolean; arch: string;
+                    }>('simd_info');
+                    const badge = (ok: boolean, label: string) =>
+                        `<span class="rb-v" style="color:${ok ? 'var(--acc)' : 'var(--txt3)'};">${ok ? '✓' : '·'} ${label}</span>`;
+                    const tone: 'ok'|'info'|'warn' = info.backend === 'avx512f' ? 'ok'
+                              : info.backend === 'avx2+fma' ? 'info'
+                              : 'warn';
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? '◆ CPU SIMD backend' : '◆ Backend SIMD del CPU',
+                        [{
+                            title: ctx.isEN ? 'Active backend' : 'Backend activo',
+                            icon: '◆', tone, defaultOpen: true,
+                            html:
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Architecture' : 'Arquitectura'}</span><span class="rb-v">${info.arch}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Cosine path' : 'Ruta de cosine'}</span><span class="rb-v" style="font-weight:600;color:var(--acc);">${info.backend}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">AVX-512F</span>${badge(info.has_avx512f, info.has_avx512f ? 'detected' : 'not present')}</div>` +
+                                `<div class="rb-row"><span class="rb-k">AVX-512DQ</span>${badge(info.has_avx512dq, info.has_avx512dq ? 'detected' : 'not present')}</div>` +
+                                `<div class="rb-row"><span class="rb-k">AVX-512VL</span>${badge(info.has_avx512vl, info.has_avx512vl ? 'detected' : 'not present')}</div>` +
+                                `<div class="rb-row"><span class="rb-k">AVX2</span>${badge(info.has_avx2, info.has_avx2 ? 'detected' : 'not present')}</div>` +
+                                `<div class="rb-row"><span class="rb-k">FMA</span>${badge(info.has_fma, info.has_fma ? 'detected' : 'not present')}</div>` +
+                                `<div class="rb-row" style="opacity:.7;margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'Hot path' : 'Hot path'}</span><span class="rb-v">${ctx.isEN ? 'skills routing Tier 2, memory grounding' : 'routing de skills Tier 2, grounding de memoria'}</span></div>`,
+                        }]));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // ── v1.7.16 — /verify (script syntax verifier) ──
         // /verify              → status summary
         // /verify on | off     → toggle the post-stream verifier

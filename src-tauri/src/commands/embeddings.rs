@@ -84,21 +84,10 @@ fn blob_to_vec(b: &[u8]) -> Vec<f32> {
 }
 
 /// Cosine similarity. Expects equal-length vectors; returns 0.0 if either
-/// is zero-magnitude (avoids NaN).
+/// is zero-magnitude (avoids NaN). v1.7.19 — delegates to the SIMD
+/// dispatcher (AVX-512 / AVX2 / scalar) instead of the manual loop.
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0_f32;
-    let mut na = 0.0_f32;
-    let mut nb = 0.0_f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    let denom = (na.sqrt()) * (nb.sqrt());
-    if denom == 0.0 { 0.0 } else { dot / denom }
+    crate::utils::simd_cosine::cosine(a, b)
 }
 
 /// Call Ollama's /api/embeddings endpoint for a single text.

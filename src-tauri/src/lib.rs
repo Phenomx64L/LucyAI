@@ -43,6 +43,15 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // v1.7.19 — log SIMD backend chosen for the cosine-similarity
+            // hot path (skills auto-routing Tier 2, memory grounding).
+            // Resolving here primes the OnceLock so the first real call
+            // doesn't pay the CPUID branch.
+            {
+                let b = crate::utils::simd_cosine::backend();
+                eprintln!("[simd_cosine] backend selected at boot: {}", b.name());
+            }
+
             // v1.4.10 — DB background maintenance task. Spawns a single
             // hourly tokio task that prunes stale rows from chip_click_log
             // / conversation_turns / task_events, runs `wal_checkpoint
@@ -530,6 +539,8 @@ pub fn run() {
             commands::security_skills::security_skills_install,
             // v1.7.16 — pre-delivery script syntax verification.
             commands::script_verify::verify_script,
+            // v1.7.19 — SIMD backend introspection (cosine hot path).
+            utils::simd_cosine::simd_info,
             ai::ask_lucy_stream,
             ai::generate_skill_template,
             ai::list_local_models,

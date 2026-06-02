@@ -216,36 +216,16 @@ pub fn search(query: &[f32], limit: usize, min_score: f32) -> Vec<(String, Strin
         .collect()
 }
 
-// ── Fast cosine (SIMD-friendly layout) ──────────────────────────────────────
-
-/// Cosine similarity optimized for same-dimension vectors.
-/// No branching in the hot loop — compiler can auto-vectorize.
+// ── Fast cosine (SIMD-dispatched) ───────────────────────────────────────────
+//
+// v1.7.19 — the hand-unrolled-by-4 loop here was a hint to the auto-
+// vectorizer that worked at opt-level=3 but did nothing at our
+// production `opt-level = "z"`. Replaced with the explicit dispatch
+// module that picks AVX-512 / AVX2 / scalar at runtime regardless of
+// the global optimization profile.
 #[inline]
 fn cosine_fast(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0_f32;
-    let mut na = 0.0_f32;
-    let mut nb = 0.0_f32;
-    // Process in chunks of 4 for auto-vectorization hint
-    let chunks = a.len() / 4;
-    let rem = a.len() % 4;
-
-    for i in 0..chunks {
-        let base = i * 4;
-        dot += a[base] * b[base] + a[base+1] * b[base+1] + a[base+2] * b[base+2] + a[base+3] * b[base+3];
-        na += a[base] * a[base] + a[base+1] * a[base+1] + a[base+2] * a[base+2] + a[base+3] * a[base+3];
-        nb += b[base] * b[base] + b[base+1] * b[base+1] + b[base+2] * b[base+2] + b[base+3] * b[base+3];
-    }
-    for i in (a.len() - rem)..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-
-    let denom = na.sqrt() * nb.sqrt();
-    if denom == 0.0 { 0.0 } else { dot / denom }
+    crate::utils::simd_cosine::cosine(a, b)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
