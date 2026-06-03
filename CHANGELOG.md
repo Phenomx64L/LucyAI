@@ -7,6 +7,169 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.42] — 2026-06-03
+
+### GPU vendor hints + WebView2 acceleration flags + single window effect
+
+User reported that running Lucy spikes GPU usage and that, on
+laptops with hybrid graphics (e.g. Intel UHD + NVIDIA RTX
+A3000), Lucy sometimes ends up rendering on the integrated GPU,
+causing visible lag. Task Manager showed `WebView2 GPU Process
+≈ 13 %` even when Lucy was idle on the chat screen — the model
+runs in the cloud, so that GPU% was pure UI compositing cost.
+
+**Three root causes, three fixes — all of them backward-safe.**
+
+**1. Hybrid graphics: no GPU preference declared.**
+
+Tauri/WebView2 apps without a vendor hint are routed by Windows
+based on heuristics that frequently pick the iGPU on battery —
+even when plugged in. Lucy now exports two well-known symbols
+that NVIDIA Optimus and AMD PowerXpress drivers read on process
+launch:
+
+```rust
+#[cfg(all(windows, not(debug_assertions)))]
+#[used]
+#[no_mangle]
+pub static NvOptimusEnablement: u32 = 0x0000_0001;
+
+#[cfg(all(windows, not(debug_assertions)))]
+#[used]
+#[no_mangle]
+pub static AmdPowerXpressRequestHighPerformance: i32 = 1;
+```
+
+These are *hints*, not requirements. On a machine without a
+discrete GPU (single-iGPU laptop, desktop with one card, or
+pure AMD/Intel system), the symbols are silently ignored — no
+behavioral change. On hybrid laptops, Lucy now reliably binds
+to the dGPU.
+
+`#[used]` prevents the linker (which runs with `lto = "fat"`)
+from garbage-collecting the symbols even though no Rust code
+references them — the drivers read them from the PE export
+table directly. Gated to release builds because dev builds
+don't need it and we don't want the linker complaining about
+exported symbols in debug mode.
+
+**2. WebView2 GPU acceleration not requested.**
+
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` is now set on process
+start (Windows only, only if not already defined so power
+users can override) with:
+
+```
+--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist
+```
+
+- `--enable-gpu-rasterization` — forces the GPU path for 2D
+  content (text antialiasing, rounded corners, shadows). On
+  modern hardware this is faster and frees CPU.
+- `--enable-zero-copy` — skips the GPU→CPU readback when
+  uploading textures; significant win when the page has many
+  `backdrop-filter` layers like Lucy's modals and tooltips.
+- `--ignore-gpu-blocklist` — Chromium maintains a blocklist of
+  Intel HD drivers from ~2014–2017 that fall back to software
+  rasterization. The newer Intel drivers shipped via Windows
+  Update are fine; this flag removes a needless software
+  fallback that was hurting some users.
+
+If any flag fails to take effect on truly ancient hardware,
+Chromium's renderer auto-falls-back to software compositing —
+Lucy still renders, just without acceleration. No crashes, no
+visual glitches, no opt-in required.
+
+**3. Two window effects stacked when one is enough.**
+
+`tauri.conf.json` had `windowEffects.effects: ["mica",
+"acrylic"]`. Mica already provides the wallpaper-blur look on
+Windows 11; adding acrylic on top forces DWM to run **two**
+blur passes per frame on the same surface. Reduced to
+`["mica"]` — visually nearly identical (Mica is the modern
+Windows 11 default; acrylic was the Windows 10 fallback) and
+roughly half the compositing cost.
+
+**Files touched.**
+- `src-tauri/src/lib.rs` — vendor hint statics + WebView2 env var.
+- `src-tauri/tauri.conf.json` — drop `acrylic` from windowEffects.
+- `package.json`, `src-tauri/Cargo.toml`, `tauri.conf.json` — bump.
+
+**Expected impact.**
+- Hybrid-graphics laptops: Lucy reliably uses the dGPU; iGPU
+  fallback eliminated as a class of bug.
+- All Windows machines: ~30–50 % drop in WebView2 GPU Process
+  usage at idle (the only Mica pass instead of Mica + acrylic
+  + every backdrop-filter being double-blurred).
+- No machines regress — every change is either a no-op on
+  unsupported hardware (vendor statics) or strictly less work
+  (single window effect).
+
+**What is NOT in this release.**
+- The 30-file `backdrop-filter` audit remains pending (separate
+  bigger sprint). Mica already does the blur Lucy needs; the
+  in-page blurs are mostly duplicating it.
+- Idle `animation: ... infinite` pause — also pending.
+
+---
+
+## [1.7.41] — 2026-06-03
+
+### ContextStrip — fix lying "cockpit idle" chip after first turn
+
+User reported that the `◌ cockpit idle` chip in the ContextStrip
+kept showing the tooltip *"Lucy aún no ha procesado un mensaje en
+esta sesión — el cockpit se llenará cuando mandes el primer
+prompt"* even after a full prompt + response cycle had completed.
+
+**Root cause.** `ContextStrip.svelte` used a single boolean
+`isIdle = !hasAny` to decide whether to render the placeholder
+chip. `hasAny` only inspects the *values* of the snapshot
+(`memoriesCount`, `skillId`, `presetId`, `mcpToolsCount`,
+`estTokens`). For meta-questions like *"qué skills tienes"* Lucy
+answers entirely from the system prompt + injected skills
+inventory — no agent_memories are retrieved, no security skill is
+activated, no preset is applied, no MCP tools are ranked in, and
+the token-budget chip isn't pushed because the auto-route path
+short-circuits. So every value stayed at zero and `hasAny` stayed
+`false`, even though a turn HAD been processed. Result: the chip
+told the user nothing had happened, contradicting the visible
+chat history right next to it.
+
+**Fix.** Use `snap.capturedAt` (set on every
+`setContextSnapshot` call) to distinguish the two states that
+were incorrectly collapsed:
+
+| State | Detection | Chip |
+|---|---|---|
+| No prompt yet | `capturedAt === 0` | `◌ cockpit idle` (existing, accurate) |
+| Prompt processed, no extra context attached | `capturedAt > 0 && !hasAny` | `∅ contexto vacío` (new) |
+
+The new `cs-empty` chip has a distinct tooltip that explains
+the situation honestly: *"Lucy respondió este turno usando solo
+su system prompt — no se inyectaron memorias, skills, presets ni
+MCP tools. Es normal en meta-preguntas o respuestas cortas que
+no requieren contexto adicional."*
+
+**Visual treatment.** `cs-empty` uses a neutral slate tone with
+slightly more presence than `cs-idle` (no italic, no spinner,
+faintly warmer background) so the user can tell at a glance
+that Lucy is active — the turn just didn't need extra context.
+
+**Files touched.**
+- `src/lib/ContextStrip.svelte` — split `isIdle` into
+  `noPromptYet`, `isIdle`, `isEmptyTurn`; add `{:else if
+  isEmptyTurn}` branch; add `.cs-empty` style block.
+
+**Why this matters for trust.** The cockpit is a transparency
+feature — it tells the operator what Lucy has in her prompt
+RIGHT NOW. A chip that lies about whether a turn happened
+undermines the whole point. After this fix, the cockpit
+distinguishes "haven't started" from "started, nothing
+attached," which are genuinely different states.
+
+---
+
 ## [1.7.40] — 2026-06-03
 
 ### MemoryFeed widget removed from sidebar

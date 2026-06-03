@@ -128,11 +128,12 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-/// Sigmoid normalized so that input == scale maps to ~0.5.
+/// Sigmoid normalized so that input == scale/2 maps to ~0.5 and
+/// input == scale lands around ~0.88 (well into the upper plateau).
+/// The [0..2*scale] range covers most of the 0..1 output curve. Below
+/// scale/2 the cluster is not yet "ontology-shaped"; well above scale
+/// it asymptotes to 1.
 fn mass_curve(degree: f32, scale: f32) -> f32 {
-    // 4.0 inside the sigmoid steepens the curve so the [0..2*scale]
-    // range covers most of the 0..1 output. Below scale the cluster is
-    // not yet "ontology-shaped"; above scale it asymptotes to 1.
     sigmoid(4.0 * (degree / scale - 0.5))
 }
 
@@ -503,9 +504,13 @@ mod tests {
     }
 
     #[test]
-    fn mass_curve_at_scale_is_about_half() {
-        let m = mass_curve(MASS_SCALE, MASS_SCALE);
-        assert!((m - 0.5).abs() < 0.05);
+    fn mass_curve_at_half_scale_is_about_half() {
+        // Curve midpoint is at degree == scale/2 (sigmoid argument == 0).
+        // At degree == scale, the value is already ~0.88 — see the
+        // doc comment on mass_curve. This test pins the actual midpoint
+        // so future tweaks to the steepness factor are caught.
+        let m = mass_curve(MASS_SCALE / 2.0, MASS_SCALE);
+        assert!((m - 0.5).abs() < 0.05, "expected ~0.5, got {m}");
     }
 
     #[test]

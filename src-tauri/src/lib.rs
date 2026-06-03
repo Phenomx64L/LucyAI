@@ -9,6 +9,44 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+// ── v1.7.42 — GPU vendor hints for hybrid-graphics laptops ──────────────────
+//
+// On laptops with both an integrated GPU (Intel UHD / AMD Radeon Graphics)
+// AND a discrete GPU (NVIDIA RTX / AMD Radeon RX), the OS decides which
+// adapter to assign to each process. Without an explicit hint, Windows
+// often routes Tauri/WebView2 apps to the iGPU to save battery — even
+// when the laptop is plugged in. That causes visible UI lag and very
+// high GPU% as the iGPU strains to composite Mica + backdrop-filter.
+//
+// These two exported symbols are *hints* read at startup by the vendor
+// drivers:
+//
+//   • NvOptimusEnablement = 0x00000001
+//       Tells NVIDIA Optimus to bind this process to the discrete GPU.
+//       Documented at https://docs.nvidia.com/gameworks/content/technologies/desktop/optimus.htm
+//
+//   • AmdPowerXpressRequestHighPerformance = 1
+//       Same for AMD PowerXpress / Enduro hybrid setups.
+//
+// IMPORTANT — these are 100% safe on machines WITHOUT a discrete GPU:
+// the symbols are simply ignored if the vendor driver isn't installed,
+// so single-GPU and pure-iGPU users see no change. They are also
+// inert in debug builds because LTO is off and the linker may strip
+// them; that's fine because dev builds use the dev profile anyway.
+//
+// `#[used]` prevents the linker from garbage-collecting the symbols
+// despite them being unreferenced from Rust code (the drivers read
+// them from the PE export table, not from any function call).
+#[cfg(all(windows, not(debug_assertions)))]
+#[used]
+#[no_mangle]
+pub static NvOptimusEnablement: u32 = 0x0000_0001;
+
+#[cfg(all(windows, not(debug_assertions)))]
+#[used]
+#[no_mangle]
+pub static AmdPowerXpressRequestHighPerformance: i32 = 1;
+
 mod state;
 mod utils;
 mod commands;
@@ -18,6 +56,37 @@ use commands::{ai, compliance, config, hosts, inventory, indexer, incident, loca
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── v1.7.42 — WebView2 GPU acceleration hints ──────────────────────────
+    // WebView2 (Chromium under the hood) reads this env var at process
+    // launch to pass extra Chromium command-line flags. We use it to:
+    //
+    //   --enable-gpu-rasterization       Force GPU path for 2D content
+    //                                    (text, rounded corners, shadows).
+    //   --enable-zero-copy               Skip the GPU→CPU readback when
+    //                                    uploading textures; significant
+    //                                    win for backdrop-filter passes.
+    //   --ignore-gpu-blocklist           Don't fall back to software for
+    //                                    cards Chromium has historically
+    //                                    flagged (mostly older Intel HD
+    //                                    drivers from ~2017). On modern
+    //                                    hardware this just removes a
+    //                                    needless software-render fallback.
+    //
+    // SAFETY ON OLD HARDWARE: if any of these flags fail to take effect
+    // (driver too old, GPU truly unsupported), Chromium's renderer
+    // automatically falls back to software compositing — Lucy still
+    // renders correctly, just without the GPU acceleration.
+    //
+    // We only set the var when it isn't already defined so power users
+    // can override from the shell for debugging.
+    #[cfg(windows)]
+    {
+        const GPU_FLAGS: &str = "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist";
+        if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", GPU_FLAGS);
+        }
+    }
+
     tauri::Builder::default()
         // v1.4.10 — Single-instance: if a second Lucy is launched, focus
         // the existing window instead of spawning a duplicate process.

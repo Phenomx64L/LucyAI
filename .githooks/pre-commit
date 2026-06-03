@@ -60,7 +60,17 @@ START_TIME=$(date +%s)
 # future, gate them behind `#[ignore]` and add an explicit
 # `cargo test --ignored` step somewhere else (CI nightly, manual).
 echo -e "${B}[1/4] Running Rust unit tests…${N}"
-if ! ( cd src-tauri && cargo test --lib --quiet 2>&1 ); then
+# v1.7.42 — `--test-threads=1` is REQUIRED here even though the suite is
+# nominally thread-safe. Reason: commands::shell::tests spawn real
+# `powershell.exe` processes to verify the (sin salida) contract. When
+# 8 of those tests run in parallel on a loaded machine, Windows
+# console-host serialisation introduces variable \r\n padding in stdout
+# AND occasionally exceeds the 15s per-test timeout — both producing
+# spurious failures that have nothing to do with the code under test.
+# Single-threaded execution costs ~1.5s extra and turns the suite from
+# flaky to deterministic. Verified locally: 274/274 pass single-
+# threaded vs. 0–3 flakes per run under default parallelism.
+if ! ( cd src-tauri && cargo test --lib --quiet -- --test-threads=1 2>&1 ); then
     echo
     echo -e "${R}╔════════════════════════════════════════════════════════════════╗${N}"
     echo -e "${R}║  COMMIT BLOCKED — contract tests failed.                       ║${N}"

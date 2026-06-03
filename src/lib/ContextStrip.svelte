@@ -52,7 +52,19 @@
     // (cold start or store not pushed), we still render the strip with
     // a single neutral chip so the user can verify it mounted and is
     // listening. The chip disappears the moment a real prompt lands.
-    $: isIdle = !hasAny;
+    //
+    // v1.7.41 — Distinguish two cases that previously collapsed into
+    // a single (incorrect) "cockpit idle" label:
+    //   1. No prompt processed yet         → capturedAt === 0
+    //   2. Prompt processed but no memories/skills/preset/MCP/tokens
+    //      were attached (e.g. a meta-question Lucy answered from the
+    //      system prompt alone) → capturedAt > 0 && !hasAny
+    // Showing "Lucy aún no ha procesado un mensaje" in case (2) was
+    // a lie — the user just had a turn. Now we render a distinct
+    // "contexto vacío" chip with an accurate explanation.
+    $: noPromptYet = snap.capturedAt === 0;
+    $: isIdle      = noPromptYet && !hasAny;
+    $: isEmptyTurn = !noPromptYet && !hasAny;
 
     /** Format a skill id like "conducting-phishing-incident-response"
      *  → "phishing-incident-response" (drop common prefix) and clamp
@@ -90,6 +102,11 @@
         <span class="cs-chip cs-idle" title="Lucy aún no ha procesado un mensaje en esta sesión — el cockpit se llenará cuando mandes el primer prompt.">
             <span class="cs-glyph">◌</span>
             <span class="cs-lbl">cockpit idle</span>
+        </span>
+    {:else if isEmptyTurn}
+        <span class="cs-chip cs-empty" title="Lucy respondió este turno usando solo su system prompt — no se inyectaron memorias, skills, presets ni MCP tools. Es normal en meta-preguntas (p. ej. «qué skills tienes») o en respuestas cortas que no requieren contexto adicional.">
+            <span class="cs-glyph">∅</span>
+            <span class="cs-lbl">contexto vacío</span>
         </span>
     {/if}
     {#if snap.memoriesCount > 0}
@@ -198,6 +215,20 @@
     .cs-idle:hover { background: rgba(255, 255, 255, 0.02); transform: none; }
     .cs-idle .cs-glyph { animation: cs-idle-spin 3.6s linear infinite; }
     @keyframes cs-idle-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+    /* ── Empty-turn marker (v1.7.41) ──
+       Shown when a prompt was processed but no extra context was
+       attached. Visually distinct from `cs-idle` (no spinner, slightly
+       warmer tone) so the user can tell at a glance that Lucy IS
+       active, the turn just didn't need memories/skill/preset/MCP. */
+    .cs-empty {
+        color: var(--txt2, #94a3b8);
+        border-color: color-mix(in srgb, var(--bdr, #334155) 60%, transparent);
+        background: rgba(148, 163, 184, 0.05);
+        cursor: default;
+    }
+    .cs-empty:hover { background: rgba(148, 163, 184, 0.07); transform: none; }
+    .cs-empty .cs-glyph { opacity: .6; }
 
     /* ── Memory (cyan) ── */
     .cs-mem {
