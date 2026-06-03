@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.47] — 2026-06-03
+
+### Fix the v1.7.46 regression: bubble stayed empty during `<THOUGHT>`-led streams
+
+User reported (acting as a Senior Frontend Engineer doing a full
+audit of the streaming pipeline) that the chat bubble *"either
+disappears or stays blocked, and the full text only appears all
+at once when the LLM finishes the 100% of the response."*
+
+Audited the three layers they asked about:
+
+| Layer | Verdict |
+|---|---|
+| Svelte reactivity (`let tabs = []` + `refresh = () => tabs = [...tabs]`) | ✅ correct — shallow re-assign fires `{#each tabs as tab}` reactivity in Svelte 5 legacy mode |
+| Tauri IPC (`listen(...)` vs `invoke(...)`) | ✅ correct — listener registered BEFORE `invoke('ask_lucy_stream', ...)`, no initial chunks lost, rAF throttle inside listener |
+| Conditional rendering in `ChatThread.svelte` | ✅ correct — `{@html msg.html}` renders unconditionally; `isProcessing` only drives the avatar state, not message visibility |
+
+The bug was **self-inflicted in v1.7.46**. That release added
+"truncate the display at the first open Lucy tag" to fix the
+appears-then-vanishes flicker for TOOL/EXECUTE blocks. But it
+broke the much more common case where `gemini-3-flash-preview`
+(and most reasoning models) START their response with a
+`<THOUGHT>` block before any visible prose. With v1.7.46's
+truncation, that response chain played out as:
+
+```
+t=0   buffer = "<THOUGHT>"                       display = ""
+t=1   buffer = "<THOUGHT>el usuario pregunta..." display = ""
+t=N   buffer = "<THOUGHT>...análisis completo"   display = ""
+t=fin buffer = "<THOUGHT>...</THOUGHT>\n\n# Pasos..."  display = "# Pasos..."
+```
+
+Bubble stayed empty through the whole reasoning phase, then the
+full response appeared at the end — exactly the symptom reported.
+
+**Fix.** When an open tag has no matching close yet, REPLACE it
+with a tiny status placeholder instead of hiding it:
+
+| Open tag | Placeholder (ES) | Placeholder (EN) |
+|---|---|---|
+| `<THOUGHT>` | `◌ *Lucy está razonando…*` | `◌ *Lucy is reasoning…*` |
+| `<TOOL>` | `⚙ *Invocando una herramienta…*` | `⚙ *Invoking a tool…*` |
+| `<EXECUTE>` (and variants) | `⚡ *Preparando un comando…*` | `⚡ *Preparing a command…*` |
+| `<LEARN>` | `✎ *Capturando una lección…*` | `✎ *Capturing a lesson…*` |
+| `<REMEMBER>` | `⌬ *Guardando una memoria…*` | `⌬ *Saving a memory…*` |
+| `<FILECONTENT>` | `⌸ *Escribiendo un archivo…*` | `⌸ *Writing a file…*` |
+
+Prose **before** the open tag still renders. The placeholder
+sits as a single italic line below it, picked up by the existing
+markdown render pipeline. When the closing tag finally arrives,
+the closed-tag pass strips the whole `<TAG>…</TAG>` span and the
+placeholder vanishes with it; post-tag prose streams in next to
+the earlier prose without any visible swap.
+
+Net effect: user sees continuous feedback that Lucy is working,
+no `<TOOL>…` raw markup ever reaches the screen, and the
+appears-then-vanishes flicker from before v1.7.46 stays fixed.
+
+**Files touched.**
+- `src/routes/+page.svelte` — `cleanStreamDisplay` step 2 now
+  emits a placeholder map keyed on the tag, picking ES/EN via
+  the surrounding `isEN`.
+
+---
+
 ## [1.7.46] — 2026-06-03
 
 ### Fix mid-stream text "disappears then reappears" on tool / execute responses

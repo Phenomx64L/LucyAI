@@ -4244,29 +4244,36 @@ Use ONE of these patterns instead:
                     .replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')
                     .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
 
-                // STEP 2 — v1.7.46 BUG FIX. Truncate the display at the
-                // first OPEN tag that has no matching close yet.
+                // STEP 2 — v1.7.47 REVISION of v1.7.46.
                 //
-                // Without this, an in-flight `<TOOL>analyze_url\nresult:
-                // malicious` would render verbatim while the user waited
-                // for the closing `</TOOL>` to arrive. The moment it did
-                // arrive, the `<TOOL>…</TOOL>` regex above wiped the whole
-                // block in one step — which the user perceived as text
-                // "suddenly disappearing" mid-response. Same flicker
-                // happened for EXECUTE / EXECUTE_REMOTE / LEARN / etc.
+                // History:
+                //   v1.7.46 introduced "hide everything from the first
+                //   open tag onwards" to fix the appears-then-vanishes
+                //   flicker (user watched <TOOL>…raw markup… stream in,
+                //   then the moment </TOOL> arrived the whole block was
+                //   wiped — perceived as text suddenly disappearing).
                 //
-                // THOUGHT already had this behaviour baked into its regex
-                // (the `|$` alternative). Generalising it for every Lucy-
-                // internal tag means the display only ever shows prose
-                // that's safe to keep on screen — anything tag-shaped is
-                // suppressed until its closing partner arrives. Net effect
-                // for the user: text grows monotonically, never deletes.
+                //   That fix broke the common case where Lucy STARTS her
+                //   response with <THOUGHT>internal reasoning</THOUGHT>
+                //   before any visible prose. With v1.7.46, the bubble
+                //   stayed empty for the whole reasoning phase and the
+                //   full response only appeared at the end — exactly the
+                //   "text only appears when 100% done" bug.
                 //
-                // Implementation: scan for the first opening Lucy tag
-                // whose closing partner is NOT present later in the
-                // buffer. If found, truncate the display at that point.
-                // Cheap: bounded by the small set of tags and runs once
-                // per render (already throttled to one rAF in v1.7.45).
+                // v1.7.47 fix: when an open tag has no matching close
+                // yet, REPLACE it with a tiny status placeholder instead
+                // of hiding it. The user gets immediate visual feedback
+                // that Lucy is doing internal work, prose before the tag
+                // (if any) still renders normally, and we still avoid
+                // showing raw `<TOOL>…` markup. When the close finally
+                // arrives, the placeholder vanishes and post-tag prose
+                // streams in.
+                //
+                // Placeholder format: a single italic line so it sits
+                // unobtrusively in the bubble and gets styled by the
+                // existing markdown rendering pipeline. Distinct from
+                // real prose so the user can read at a glance "Lucy is
+                // working on something internal right now".
                 const OPEN_TAG_RE = /<(THOUGHT|TOOL|EXECUTE|EXECUTE_CMD|EXECUTE_WMIC|EXECUTE_NETSH|EXECUTE_REG|EXECUTE_CSCRIPT|LEARN|EXECUTE_REMOTE|REMEMBER|FILECONTENT)\b[^>]*>/i;
                 const openMatch = s.match(OPEN_TAG_RE);
                 if (openMatch) {
@@ -4274,11 +4281,43 @@ Use ONE of these patterns instead:
                     const afterOpen = s.slice((openMatch.index ?? 0) + openMatch[0].length);
                     const closeRe = new RegExp(`</${tag}\\s*>`, 'i');
                     if (!closeRe.test(afterOpen)) {
-                        // Open tag with no matching close → buffer is mid-
-                        // stream for that block. Hide everything from the
-                        // open tag onwards; it'll come back (or be
-                        // re-stripped) once the close arrives.
-                        s = s.slice(0, openMatch.index ?? 0);
+                        // Open tag with no matching close yet → keep prose
+                        // before the tag and append a status placeholder.
+                        // Localisation: the surrounding code already picks
+                        // ES/EN at the message scope, so we leave both
+                        // strings in a small map and use `isEN`.
+                        const PLACEHOLDERS_ES = {
+                            THOUGHT:     '◌ *Lucy está razonando…*',
+                            TOOL:        '⚙ *Invocando una herramienta…*',
+                            EXECUTE:     '⚡ *Preparando un comando…*',
+                            EXECUTE_CMD: '⚡ *Preparando un comando…*',
+                            EXECUTE_WMIC:    '⚡ *Preparando un comando WMIC…*',
+                            EXECUTE_NETSH:   '⚡ *Preparando un comando netsh…*',
+                            EXECUTE_REG:     '⚡ *Preparando un comando reg…*',
+                            EXECUTE_CSCRIPT: '⚡ *Preparando un comando cscript…*',
+                            EXECUTE_REMOTE:  '⚡ *Preparando un comando remoto…*',
+                            LEARN:       '✎ *Capturando una lección…*',
+                            REMEMBER:    '⌬ *Guardando una memoria…*',
+                            FILECONTENT: '⌸ *Escribiendo un archivo…*',
+                        };
+                        const PLACEHOLDERS_EN = {
+                            THOUGHT:     '◌ *Lucy is reasoning…*',
+                            TOOL:        '⚙ *Invoking a tool…*',
+                            EXECUTE:     '⚡ *Preparing a command…*',
+                            EXECUTE_CMD: '⚡ *Preparing a command…*',
+                            EXECUTE_WMIC:    '⚡ *Preparing a WMIC command…*',
+                            EXECUTE_NETSH:   '⚡ *Preparing a netsh command…*',
+                            EXECUTE_REG:     '⚡ *Preparing a reg command…*',
+                            EXECUTE_CSCRIPT: '⚡ *Preparing a cscript command…*',
+                            EXECUTE_REMOTE:  '⚡ *Preparing a remote command…*',
+                            LEARN:       '✎ *Capturing a lesson…*',
+                            REMEMBER:    '⌬ *Saving a memory…*',
+                            FILECONTENT: '⌸ *Writing a file…*',
+                        };
+                        const placeholder = (isEN ? PLACEHOLDERS_EN : PLACEHOLDERS_ES)[tag]
+                                         ?? (isEN ? '◌ *Lucy is working…*' : '◌ *Lucy está trabajando…*');
+                        const prose = s.slice(0, openMatch.index ?? 0);
+                        s = prose + (prose.trim() ? '\n\n' : '') + placeholder;
                     }
                 }
 
