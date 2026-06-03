@@ -1130,12 +1130,55 @@ body.density-compact .chat{gap:2px !important;}
 :root.light .health-pill.health-err .health-dot{background:#dc2626;}
 /* ── TYPING ────────────────────────────────── */
 .typing{align-self:flex-start;display:inline-flex;align-items:center;gap:5px;padding:8px 14px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,.10);border-left:2px solid var(--acc);border-radius:0 10px 10px 10px;color:var(--txt2);font-style:italic;font-size:12px;}
-.stream-cursor{display:inline-block;width:2.5px;height:14px;background:var(--acc);border-radius:1px;vertical-align:middle;animation:stream-blink .8s ease-in-out infinite;box-shadow:0 0 8px rgba(16,185,129,.55),0 0 14px rgba(16,185,129,.25);margin-left:2px;}
+/* v1.7.45 — Stream cursor as STABLE pseudo-element.
+   The previous implementation injected a `<span class="stream-cursor"/>`
+   into msg.html on every drain tick (~25 times per second). Svelte's
+   `{@html msg.html}` replaces the parent's innerHTML, destroying and
+   recreating that span every 40 ms — which (a) reset the
+   `stream-blink 0.8s` animation to frame 0 before it could finish one
+   cycle, producing visible flicker, and (b) forced the compositor to
+   rebuild a layer with box-shadow + animation every tick.
+
+   New approach: the cursor lives in CSS as a `::after` pseudo on
+   `.stream-body`. The pseudo is owned by the parent (which is itself
+   inside the message bubble that does NOT get its innerHTML wiped),
+   so it survives innerHTML rewrites of the inner stream-body. The
+   blink animation runs uninterrupted for the whole streaming session.
+
+   The legacy `.stream-cursor` selector is kept as a safety net for
+   any old code path that still emits the span — it's now an empty rule
+   so existing markup is invisible (effectively a no-op). Once all
+   call sites are confirmed to use the new pseudo (.stream-body::after),
+   the legacy rule can be deleted in a future cleanup. */
+.stream-cursor{display:none;}
+
 /* ── Stream body — anti-flicker container during progressive reveal ── */
-.stream-body{contain:layout style;will-change:contents;}
+.stream-body{
+  position:relative;
+  contain:layout style;
+  will-change:contents;
+}
+.stream-body::after{
+  /* CSS-owned blinking cursor — never recreated by msg.html rewrites. */
+  content:'';
+  display:inline-block;
+  width:2.5px;height:14px;
+  background:var(--acc);
+  border-radius:1px;
+  vertical-align:middle;
+  margin-left:3px;
+  animation:stream-blink .8s ease-in-out infinite;
+  box-shadow:
+    0 0 8px rgba(16,185,129,.55),
+    0 0 14px rgba(16,185,129,.25);
+}
 .stream-body *{animation-fill-mode:both;}
-/* Settled: promoted from streaming to permanent — smooth cursor fadeout */
+
+/* Settled: promoted from streaming to permanent — smooth cursor fadeout.
+   The pseudo cursor disappears the moment the parent loses .stream-body
+   (or gains .stream-settled), no JS cleanup needed. */
 .stream-settled{contain:none;will-change:auto;transition:opacity .15s ease;}
+.stream-settled::after{display:none;}
 
 /* Sprint 8 — KG viewer modal shell */
 .kgv-backdrop{position:fixed;inset:0;z-index:8700;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;}

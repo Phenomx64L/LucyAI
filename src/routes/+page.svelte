@@ -4240,19 +4240,47 @@ Use ONE of these patterns instead:
                 .replace('__TRUNCATED__', '').trim();
 
             let _lastRenderedLen = 0; // anti-flicker: skip re-render if nothing changed
+            // v1.7.45 — Throttle DOM rewrites to one per animation frame.
+            //
+            // Before: every drain tick (25 Hz, but burstable) called
+            //   msg.html = ...; refresh(); scrollChat();
+            // which triggers Svelte's `{@html}` to replace the bubble's
+            // innerHTML wholesale. That destroys every child node
+            // including the stream-cursor span, code blocks, cite chips,
+            // and (worst) any backdrop-filter layers — forcing the
+            // compositor to re-blur on every tick. The user saw this
+            // as a constant flicker, especially during fast streams.
+            //
+            // Now: we coalesce successive renderRevealed() calls into
+            // one rAF callback. Multiple drain ticks landing in the
+            // same animation frame collapse into a single innerHTML
+            // rewrite, capped at the display refresh rate. The cursor
+            // is no longer in msg.html at all — it's a `::after` pseudo
+            // on `.stream-body` (see page.css) that survives innerHTML
+            // rewrites and keeps blinking smoothly through the whole
+            // stream.
+            let _rafQueued = false;
             const renderRevealed = () => {
-                const t2 = getTab(tabId);
-                const msg = t2?.messages.find(m => m.id === streamMsgId);
-                if (!msg) return;
-                const display = cleanStreamDisplay(_revealed);
-                // Anti-flicker: skip DOM update if display text hasn't grown
-                if (display.length === _lastRenderedLen) return;
-                _lastRenderedLen = display.length;
-                msg.rawContent = display;
-                const withBadges = renderConfidenceTags(display);
-                const parsed = withBadges ? renderMd(withBadges) : '';
-                msg.html = `<div class="mn">Lucy</div><div class="stream-body">${parsed}</div><span class="stream-cursor"></span>`;
-                refresh(); scrollChat();
+                if (_rafQueued) return;
+                _rafQueued = true;
+                requestAnimationFrame(() => {
+                    _rafQueued = false;
+                    const t2 = getTab(tabId);
+                    const msg = t2?.messages.find(m => m.id === streamMsgId);
+                    if (!msg) return;
+                    const display = cleanStreamDisplay(_revealed);
+                    // Anti-flicker: skip DOM update if display text hasn't grown
+                    if (display.length === _lastRenderedLen) return;
+                    _lastRenderedLen = display.length;
+                    msg.rawContent = display;
+                    const withBadges = renderConfidenceTags(display);
+                    const parsed = withBadges ? renderMd(withBadges) : '';
+                    // Cursor no longer injected as a sibling span; it's a
+                    // CSS pseudo on .stream-body that's owned by the
+                    // parent bubble and persists across innerHTML rewrites.
+                    msg.html = `<div class="mn">Lucy</div><div class="stream-body">${parsed}</div>`;
+                    refresh(); scrollChat();
+                });
             };
 
             // Drain loop: revela tokens a ritmo constante y fluido

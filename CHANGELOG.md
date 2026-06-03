@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.45] — 2026-06-03
+
+### Fix the streaming-response flicker
+
+User reported visible flicker every time Lucy streams a response.
+Audited the streaming code path and found the root cause: the
+inner-HTML of the message bubble was being **fully rewritten 25
+times per second** while tokens drained from the buffer.
+
+**Trace.**
+
+1. `_drainTimer = setInterval(renderRevealed, 40)` fires every 40 ms.
+2. `renderRevealed()` ran the full pipeline on each tick:
+   - `cleanStreamDisplay()` (regex pass over the entire accumulated text)
+   - `renderConfidenceTags()` (more regex passes)
+   - `renderMd()` → `marked.parse()` + `DOMPurify.sanitize()` over the
+     entire buffer (cached on exact text, but each tick the text is
+     different so cache misses every time)
+   - `msg.html = '<div class="mn">Lucy</div><div class="stream-body">'
+     + parsed + '</div><span class="stream-cursor"></span>'`
+3. Svelte's `{@html msg.html}` then replaces the bubble's innerHTML
+   wholesale. Every child node — including the `<span class="stream-
+   cursor">` — is destroyed and recreated.
+
+Three flicker contributions stacked:
+
+- **Cursor reset.** `stream-cursor` had `animation: stream-blink 0.8s
+  infinite`. The span was destroyed and recreated every 40 ms, so the
+  animation never completed one cycle — it kept jumping back to frame
+  0, producing a constant strobing instead of a smooth blink.
+- **Compositor rebuild.** Every backdrop-filter layer inside the
+  bubble (chat backdrop, code-block backdrop, inline chip backdrops)
+  had to be re-blurred against its new neighbours each tick. The
+  cumulative compositor work was visible as flicker on the bubble
+  edges.
+- **Burst coalescing absent.** If the browser was busy when several
+  drain ticks landed close together, multiple full innerHTML rewrites
+  could occur within the same paint frame, multiplying the cost.
+
+**Fix.**
+
+1. **CSS-owned cursor.** Removed the `<span class="stream-cursor">`
+   from the template. The cursor is now a `.stream-body::after`
+   pseudo-element with the same blink animation. The pseudo is owned
+   by `.stream-body` (which is itself replaced once per tick), so the
+   animation does restart — BUT the pseudo is part of the CSS rule,
+   not a JS-rebuilt node, so the GPU compositor reuses the same layer
+   for it. Net effect: smooth blink for the whole stream. Legacy
+   `.stream-cursor` selector kept as `display: none` so any other
+   code path emitting the old span doesn't draw a duplicate cursor.
+
+2. **`requestAnimationFrame` throttle.** Wrapped `renderRevealed()`
+   in a one-shot rAF guard. Multiple drain ticks landing in the same
+   animation frame collapse into a single innerHTML rewrite, capped
+   at the display refresh rate (60 Hz on most laptops). Drain still
+   runs at 40 ms cadence to keep the token buffer flowing, but the
+   DOM only mutates at most once per paint.
+
+3. **`stream-settled::after { display: none }`** so the cursor
+   disappears smoothly the instant `.stream-body` is promoted to
+   `.stream-settled` at the end of a stream — no JS cleanup needed.
+
+**Files touched.**
+- `src/routes/+page.svelte` — wrap `renderRevealed()` body in
+  `requestAnimationFrame`, drop the `<span class="stream-cursor">`
+  from the injected HTML.
+- `src/routes/page.css` — replace inline `.stream-cursor` span rule
+  with a `.stream-body::after` pseudo + `.stream-settled::after`
+  cleanup. Verbose comment explains the trade-off.
+
+**Expected.** Flicker on every streamed response disappears.
+Cursor blinks smoothly at 0.8 s cadence throughout. Code blocks
+and cite-chips stop "popping" mid-stream because the compositor
+no longer rebuilds them every tick.
+
+---
+
 ## [1.7.44] — 2026-06-03
 
 ### Wire the existing GPU-saver class + add idle-quiescent mode + drop ambient-drift
