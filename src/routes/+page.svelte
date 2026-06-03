@@ -4039,15 +4039,11 @@ REGLAS DE FORMATO:
             }
             const _memCtx = construirContextoMemoria(raw, t);
             ctx += _memCtx;
-            // v1.7.22 — Count memory entries actually inyected so the
-            // Context Strip shows the real number. We parse the block
-            // markers from the constructed string. Cheap heuristic:
-            // each "[Memoria #" line is one injected agent_memory.
+            // v1.7.31 — construirContextoMemoria now stamps the canonical
+            // injection count on `t._lastMemoryHitsCount`. We just relay
+            // it to the snapshot store. No regex, no marker-parse luck.
             try {
-                const _mc = (_memCtx.match(/\[Memoria #\d+\]/g) || []).length
-                          + (_memCtx.match(/\[Crystal #\d+\]/g) || []).length;
-                t._lastMemoryHitsCount = _mc;
-                setContextSnapshot({ memoriesCount: _mc });
+                setContextSnapshot({ memoriesCount: t._lastMemoryHitsCount ?? 0 });
             } catch {}
             let imgs=[];
             if(t.attachedFiles.length){const txts=t.attachedFiles.filter(f=>f.type==='text');const pix=t.attachedFiles.filter(f=>f.type==='image');if(txts.length)ctx+='\n\n--- ARCHIVOS ---\n'+txts.map(f=>`[${f.name}]\n${f.content}`).join('\n---\n');if(pix.length)pix.forEach(img=>imgs.push({mimeType:img.mimeType,data:img.content}));}
@@ -7818,9 +7814,15 @@ if (Test-Path $src) {
                     // v1.7.27 — Rolling sparkline history for the
                     // StatusBar stream chip. Bounded ringbuffer (~30
                     // samples ≈ last 30s at the 1s rebel cadence).
+                    // v1.7.31 — Also mirrored to workingMemory so the
+                    // pattern survives a tab reload (still a *recent*
+                    // signal, not a long-term archive).
                     if (!Array.isArray(tt._streamTpsHistory)) tt._streamTpsHistory = [];
                     tt._streamTpsHistory.push(_cachedTps);
                     if (tt._streamTpsHistory.length > 30) tt._streamTpsHistory.shift();
+                    if (tt.workingMemory) {
+                        tt.workingMemory._streamTpsHistory = [...tt._streamTpsHistory];
+                    }
                     refresh();
                 }
             }
@@ -7999,6 +8001,12 @@ if (Test-Path $src) {
     function construirContextoMemoria(userInput, tab) {
         const mem = leerMemoriaPersistente();
         let ctx = '';
+        // v1.7.31 — count memory entries injected this call directly,
+        // instead of the v1.7.22 marker-regex parse done by the caller.
+        // The counter is incremented at every site that appends a real
+        // agent_memory row / crystal / insight to ctx so the Context
+        // Strip number reflects truth, not text-pattern luck.
+        let _injectedCount = 0;
         const rel = slotRelevance(userInput);
 
         // [CORE — always] DESIGN.md tokens if available — loaded async by
@@ -8073,6 +8081,14 @@ if (Test-Path $src) {
                     return `[${date}] **${m.title}**: ${m.content.slice(0, excerptLen)}${m.content.length > excerptLen ? '…' : ''}`;
                 }).join('\n') +
                 `\n(Usa <TOOL>memoria_buscar:query</TOOL> para buscar memorias específicas | <TOOL>semantic:query</TOOL> para búsqueda por significado)`;
+            // v1.7.31 — record real injection count for the Context Strip.
+            _injectedCount += top.length;
+        }
+        // v1.7.31 — Stash count on the tab AND return it via a side-channel
+        // property. We can't change the return type without breaking ~12
+        // callers, so we attach to a tab field. Caller reads from there.
+        if (tab && typeof tab === 'object') {
+            tab._lastMemoryHitsCount = _injectedCount;
         }
         return ctx;
     }

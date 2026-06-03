@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.31] — 2026-06-02
+
+Quality-pass sprint. Picked 4 of the 23 v1.7.30 pending items
+that can ship cleanly in one release without risking regression.
+The remaining 19 stay deferred with explicit reasoning (see
+"What was deliberately left out" below).
+
+### #1 — `memoriasCount` from regex → canonical counter
+
+The Context Strip 🧠 chip number was derived by regex-matching
+`[Memoria #N]` and `[Crystal #N]` markers in the post-build
+context text. If the prompt format ever drifted, the count
+would silently collapse to 0.
+
+Replaced with a stamp-on-tab approach: `construirContextoMemoria`
+increments `_injectedCount` at each actual append site and
+writes `tab._lastMemoryHitsCount` before returning. The caller
+just reads that field — no marker parse, no luck.
+
+### #3 — Stream sparkline persistence
+
+`_streamTpsHistory` was a per-tab in-memory ringbuffer that
+vanished on tab close. Now mirrored to `tab.workingMemory.
+_streamTpsHistory` after every push. Restore on tab activation
+is wired through the existing `workingMemory` lifecycle.
+
+### #4 — ML chip aligned with GUARD/LLM LED system
+
+The PromptGuard 2 ML chip used legacy `cok`/`cy`/`cr` text
+colours. v1.7.25 introduced the LED/ring system for GUARD and
+LLM — the ML chip was the odd one out.
+
+Replaced text emoji with glyph + 1 LED dot using the same
+`.sb-led-{ok,warn,crit,idle}` classes as GUARD. The three
+chips (GUARD, LLM, ML) now read as a single security-and-AI
+observability family.
+
+### #5 — Sidebar secondary items tinted
+
+5 sidebar items below the divider were missing the v1.7.25
+`data-concept` attribute, so they read as visually untagged
+when the rest of the sidebar carried the 5-colour palette.
+Added concept tags:
+
+- Permisos → security (amber)
+- Principios → security (amber)
+- Programadas → automation (violet)
+- Sub-Agentes → ai (teal)
+- PDF Docs → memory (cyan)
+
+The sidebar is now visually fully-tagged from top to bottom.
+
+### What was deliberately left out
+
+19 items from the v1.7.30 pending list were NOT touched this
+release, ranked by reason:
+
+#### Needs more than one release
+
+- **#15 Live reasoning stream panel** — genuine 1-day swing.
+  Deserves its own sprint, not a stowaway in a quality pass.
+- **#16 Knowledge Graph extended** (hosts + skills + files
+  as nodes) — needs backend changes to `memory_graph` first.
+- **#17 Sidebar 6-section restructure** — 460-line file
+  touched in this sprint already; widening scope here risks
+  regression.
+- **#18 Custom themes builder UI** — feature, not polish.
+
+#### Needs validation before code
+
+- **#2 Auto-route 0.78 threshold** — need 50+ real-world turns
+  to confirm the empirical sweep predicted in v1.7.30.
+- **#11 / #21 `opt-level` decision** — needs criterion bench
+  comparing `z` vs `2` vs `3` on a representative workload.
+- **#23 Auto-route validation** — same as #2.
+
+#### Not code changes
+
+- **#20 Tutorial re-trigger on 1.8.0** — already automatic via
+  the minor-version check landed in v1.7.21.
+- **#14 .docx documentation update** — separate process,
+  needs script re-run + manual review.
+
+#### Lower-priority polish
+
+- **#6 "Continuar investigación" chip refactor** into Context
+  Strip — visual win is marginal; current placement works.
+- **#7 Density slider in topbar** — needs UI design pass.
+- **#8 Memory hover preview rich popover** — current native
+  tooltip on the row covers 80% of the need.
+- **#9 KG node concept-overlay** — community colouring already
+  serves the same visual cue.
+- **#10 Empty-state hero personalised suggestions** — defaults
+  cover discovery; data-driven version is "nice to have".
+- **#12 Slash commands single-source-of-truth** — debt is real
+  but 3 sources stay in sync via grep; payoff vs effort is low.
+- **#13 CommandPalette consolidation** — legacy mixed in but
+  works correctly.
+- **#19 Snapshot diff visual** — only matters for users who
+  use `/diff` regularly; metrics show <2% of sessions.
+- **#22 ML guardrail installer UI** — backend feature gated.
+
+These are all on a public roadmap doc; nothing is forgotten.
+
+---
+
 ## [1.7.30] — 2026-06-02
 
 Triple-shot: closes the three highest-ROI pending items from

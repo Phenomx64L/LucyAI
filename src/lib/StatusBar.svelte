@@ -320,10 +320,19 @@
         </span>
     </div>
 
-    <!-- PromptGuard 2 ML indicator (Phase 2 LlamaFirewall) — only shown when relevant -->
+    <!-- PromptGuard 2 ML indicator (Phase 2 LlamaFirewall) — only shown
+         when relevant. v1.7.31 — aligned with the GUARD/LLM LED-and-ring
+         visual system so the three security/observability chips read as
+         one family. Glyph + single LED dot, tinted by status. -->
     {#if mlBadge}
-        <div class="bi" title={mlBadge.tip}>
-            <span class={mlBadge.cls} style="letter-spacing:.3px;">{mlBadge.txt}</span>
+        {@const _mlTone = mlStatus === 'active'           ? 'ok'
+                       :  mlStatus === 'feature_disabled' ? 'idle'
+                       :  mlStatus === 'model_missing' || mlStatus === 'runtime_missing' ? 'warn'
+                       :  'crit'}
+        <div class="bi sb-ml" title={mlBadge.tip}>
+            <span class="sb-ml-glyph">🧠</span>
+            <span class="sb-led sb-led-{_mlTone}" aria-hidden="true"></span>
+            <span class="sb-ml-label">ML</span>
         </div>
     {/if}
 
@@ -449,4 +458,17 @@
 
     /* v1.7.31 — Cost chip 7-day sparkline. */
     .sb-cost-spark { display: inline-flex; align-items: center; margin-left: 4px; }
+
+    /* v1.7.31 — ML chip aligned with GUARD/LLM family. Glyph + 1 LED + label. */
+    .sb-ml { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+    .sb-ml-glyph {
+        font-size: 11px; line-height: 1;
+        filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent, #10b981) 35%, transparent));
+    }
+    .sb-ml-label {
+        font-family: var(--mono, ui-monospace, monospace);
+        font-size: 10.5px;
+        letter-spacing: .3px;
+        opacity: .85;
+    }
 </style>

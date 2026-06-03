@@ -346,7 +346,7 @@
          title={isEN ? 'Interactive guided tour' : 'Tour guiado interactivo de Lucy'}>
         <span class="sb-ico"><GraduationCap size={18}/></span><span class="sb-txt">{isEN ? 'Show Tutorial' : 'Ver Tutorial'}</span>
     </div>
-    <div class="sb-it" role="button" tabindex="0"
+    <div class="sb-it" data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'permissions' })} on:keydown
          title={isEN ? 'Manage permission rules' : 'Gestionar reglas de permisos'}>
         <span class="sb-ico"><ShieldCheck size={18}/></span><span class="sb-txt">{isEN ? 'Permissions' : 'Permisos'}</span>
@@ -363,23 +363,23 @@
     </div>
     -->
     {#if false}<Zap size={1}/>{/if}
-    <div class="sb-it" role="button" tabindex="0"
+    <div class="sb-it" data-concept="security" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'principles' })} on:keydown
          title={isEN ? 'Behavioral principles' : 'Principios — reglas que Lucy sigue'}>
         <span class="sb-ico"><Tag size={18}/></span><span class="sb-txt">{isEN ? 'Principles' : 'Principios'}</span>
     </div>
-    <div class="sb-it" role="button" tabindex="0"
+    <div class="sb-it" data-concept="automation" role="button" tabindex="0"
          on:click={() => dispatch('openmodal', { modal: 'schedules' })} on:keydown
          title={isEN ? 'Scheduled tasks' : 'Tareas programadas'}>
         <span class="sb-ico"><Bell size={18}/></span><span class="sb-txt">{isEN ? 'Schedules' : 'Programadas'}</span>
     </div>
-    <div class="sb-it" role="button" tabindex="0"
+    <div class="sb-it" data-concept="ai" role="button" tabindex="0"
          on:click={() => dispatch('toggleforks')} on:keydown
          title={isEN ? 'Sub-Agent Monitor' : 'Monitor de Sub-Agentes'}
          class:sb-it-active={showForksMonitor}>
         <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Sub-Agents' : 'Sub-Agentes'}</span>
     </div>
-    <div class="sb-it" role="button" tabindex="0"
+    <div class="sb-it" data-concept="memory" role="button" tabindex="0"
          on:click={() => dispatch('togglepdf')} on:keydown
          title={isEN ? 'PDF Intelligence — Ingest manuals & docs' : 'PDF Intelligence — Ingresa manuales y docs'}
          class:sb-it-active={showPdfPanel}>
