@@ -648,6 +648,8 @@ pub fn run() {
             metrics::init_metrics_db,
             metrics::log_token_usage,
             metrics::get_cost_summary,
+            // v1.7.31 — cost-by-day for the StatusBar sparkline.
+            metrics::get_cost_by_day,
             metrics::get_token_history,
             metrics::reset_cost_history,
             metrics::check_permission,

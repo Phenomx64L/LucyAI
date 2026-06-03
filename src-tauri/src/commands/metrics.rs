@@ -377,6 +377,57 @@ pub async fn log_token_usage(
     Ok(generate_id())
 }
 
+// ── v1.7.31 — Cost by day (for the StatusBar sparkline) ─────────────────
+//
+// Returns an array of (date, total_cost_usd) entries for the last N days.
+// Days with no spend are explicitly emitted as `0.0` so the frontend
+// sparkline doesn't have to do gap-filling. Keeps the chart visually
+// continuous and removes a class of "sparkline collapses to a single
+// dot" bugs when usage is sporadic.
+
+#[derive(serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../src/lib/types/")]
+pub struct CostDayPoint {
+    pub date: String,   // ISO YYYY-MM-DD
+    pub cost: f64,      // USD, rounded server-side to 6 decimals
+}
+
+#[tauri::command]
+pub async fn get_cost_by_day(days: Option<u32>) -> Result<Vec<CostDayPoint>, String> {
+    let days = days.unwrap_or(7).clamp(1, 90) as i64;
+    // Build the requested date range INCLUSIVE of today, oldest first.
+    // Generating client-side dates AND sql-grouping means even when
+    // `daily_summary` has no rows for some dates we still emit zeros.
+    let today = chrono::Local::now().date_naive();
+    let mut points: Vec<CostDayPoint> = (0..days).rev().map(|offset| {
+        let d = today - chrono::Duration::days(offset);
+        CostDayPoint { date: d.format("%Y-%m-%d").to_string(), cost: 0.0 }
+    }).collect();
+
+    with_db(|conn| {
+        // Pull all rows in the window in a single sweep, then merge into
+        // the pre-allocated vec. Avoids per-day round-trips.
+        let oldest = today - chrono::Duration::days(days - 1);
+        let oldest_str = oldest.format("%Y-%m-%d").to_string();
+        let mut stmt = conn.prepare(
+            "SELECT date, COALESCE(SUM(total_cost), 0) FROM daily_summary
+             WHERE date >= ?1 GROUP BY date"
+        ).map_err(|e| format!("prepare failed: {}", e))?;
+        let rows = stmt.query_map(rusqlite::params![oldest_str], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        }).map_err(|e| format!("query failed: {}", e))?
+          .collect::<Result<Vec<_>, _>>()
+          .map_err(|e| format!("collect failed: {}", e))?;
+        for (date, cost) in rows {
+            if let Some(p) = points.iter_mut().find(|p| p.date == date) {
+                p.cost = (cost * 1_000_000.0).round() / 1_000_000.0;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(points)
+}
+
 /// Get cost summary for a period (day, month, all)
 #[tauri::command]
 pub async fn get_cost_summary(period: String) -> Result<CostSummary, String> {

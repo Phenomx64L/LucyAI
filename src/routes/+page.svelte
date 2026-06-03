@@ -137,7 +137,7 @@ import { listen } from '@tauri-apps/api/event';
     import SkillPresetPicker from '$lib/SkillPresetPicker.svelte';
     import { renderPresetForPrompt } from '$lib/skill-presets';
     // v1.7.0 — central LLM model catalog.
-    import { LLM } from '$lib/llm-models';
+    import { LLM, contextWindowFor } from '$lib/llm-models';
     // v1.7.1 — LLM tier health probe at boot.
     import { pingAllTiersIfStale } from '$lib/tier-health';
     // v1.7.4 — Cybersecurity skill library injection.
@@ -3918,6 +3918,11 @@ REGLAS DE FORMATO:
                 // Context Strip stayed stuck on "cockpit idle" forever.
                 // The correct property is `selectedModel` on the tab; we
                 // also accept `t.model` for resilience against legacy tabs.
+                // v1.7.30 — real per-model context window from llm-models.ts
+                // so the token chip can show `5.2k / 1M` for Gemini, `200k`
+                // for Claude, etc. The chip's `tokenTone()` function bands
+                // by % consumed using THIS value as denominator.
+                const _csModelId = (t?.selectedModel || t?.model || null);
                 setContextSnapshot({
                     memoriesCount:  _csMemCount,
                     skillId:        _csActiveSkill?.id ?? null,
@@ -3925,8 +3930,8 @@ REGLAS DE FORMATO:
                     presetId:       _csActivePreset?.id ?? null,
                     mcpToolsCount:  _unifiedPlan?.mcp_tools?.length ?? 0,
                     estTokens:      _unifiedPlan?.est_tokens ?? Math.ceil((raw || '').length / 4),
-                    maxTokens:      0,   // wire-up: v1.7.27 (per-model context_window)
-                    modelId:        (t?.selectedModel || t?.model || null),
+                    maxTokens:      contextWindowFor(_csModelId),
+                    modelId:        _csModelId,
                 });
             } catch (e) {
                 console.warn('[+page] context snapshot push failed:', e);
@@ -8919,11 +8924,16 @@ if (Test-Path $src) {
             const _swTab = getTab(activeTabId);
             const _swSkill = peekActiveSecuritySkill();
             const _swPreset = !_swSkill ? peekActivePreset() : null;
+            const _swModel = _swTab?.selectedModel || _swTab?.model || null;
             setContextSnapshot({
                 skillId:   _swSkill?.id ?? null,
                 presetId:  _swPreset?.id ?? null,
-                modelId:   _swTab?.selectedModel || _swTab?.model || null,
+                modelId:   _swModel,
                 memoriesCount: _swTab?._lastMemoryHitsCount ?? 0,
+                // v1.7.30 — also propagate maxTokens so the token chip
+                // reflects the new tab's model immediately, not after
+                // the next prompt.
+                maxTokens: contextWindowFor(_swModel),
             });
         } catch (e) { console.warn('[+page] tab-switch snapshot failed:', e); }
         tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); });

@@ -60,22 +60,39 @@
             mlNote = String(e);
         }
     }
+    // v1.7.31 — Cost sparkline data. Pulls last 7 days of total_cost from
+    // `daily_summary` via `get_cost_by_day`. Polled every 60s and after
+    // any focus event so a cross-app workflow re-reads when the user
+    // returns. The shape `[{date, cost}]` is folded into a number[] for
+    // the Sparkline component.
+    let costByDay: { date: string; cost: number }[] = [];
+    $: costSeries = costByDay.map(p => p.cost);
+    async function refreshCostByDay() {
+        try {
+            costByDay = await invoke('get_cost_by_day', { days: 7 });
+        } catch (e) {
+            // Silent — the backend command might not exist in older builds.
+            // The chip just renders without the sparkline in that case.
+        }
+    }
+
     onMount(() => {
         probeMlGuard();
-        const onFocus = () => probeMlGuard();
+        refreshCostByDay();
+        const onFocus = () => { probeMlGuard(); refreshCostByDay(); };
         window.addEventListener('focus', onFocus);
         // Sprint 4, UI-7 — Prompt cache telemetry poll.
-        // Reads the process-wide counters exposed by Rust `get_cache_stats`.
-        // 8s cadence: cheap (one Mutex lock + JSON serialize) and matches the
-        // user's reading pace — they don't need real-time refresh on a footer.
         const refreshCache = async () => {
             try { cacheStats = await invoke('get_cache_stats'); } catch {}
         };
         refreshCache();
         const cacheTimer = setInterval(refreshCache, 8000);
+        // v1.7.31 — cost-by-day refresh every 60s. Cheap (single SQL agg).
+        const costTimer = setInterval(refreshCostByDay, 60_000);
         return () => {
             window.removeEventListener('focus', onFocus);
             clearInterval(cacheTimer);
+            clearInterval(costTimer);
         };
     });
 
@@ -229,6 +246,16 @@
             {#if _budget > 0}
                 <span class="cost-budget-track" title="Budget: ${_budget.toFixed(2)}">
                     <span class="cost-budget-fill {_critical ? 'cr-bg' : _warn ? 'cy-bg' : 'cok-bg'}" style="width:{Math.min(100, _pct).toFixed(1)}%;"></span>
+                </span>
+            {/if}
+            <!-- v1.7.31 — 7-day cost sparkline. Bars (not line) so days
+                 with zero spend remain visible as a baseline. -->
+            {#if costSeries.length > 1 && costSeries.some(v => v > 0)}
+                <span class="sb-cost-spark" title="{isEN ? 'Cost last 7 days' : 'Costo últimos 7 días'}: {costByDay.map(p => `${p.date.slice(5)} $${p.cost.toFixed(3)}`).join(' · ')}">
+                    <Sparkline values={costSeries}
+                               width={36} height={11}
+                               kind="bar"
+                               stroke={_critical ? 'var(--red, #ef4444)' : _warn ? 'var(--amber, #f59e0b)' : 'var(--acc, #10b981)'} />
                 </span>
             {/if}
         </div>
@@ -419,4 +446,7 @@
     .sb-stream { display: inline-flex; align-items: center; gap: 5px; }
     .sb-stream-spark { display: inline-flex; align-items: center; }
     .sb-stream-unit  { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; }
+
+    /* v1.7.31 — Cost chip 7-day sparkline. */
+    .sb-cost-spark { display: inline-flex; align-items: center; margin-left: 4px; }
 </style>

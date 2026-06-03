@@ -455,8 +455,25 @@ pub async fn security_skills_get(id: String) -> Result<SkillFull, String> {
 // so Tier 2 hot path is just dot products.
 
 const EMBED_CACHE_FILE: &str = "skills-embeddings-v1.bin";
-const EMBED_TIER2_THRESHOLD: f32 = 0.70;
-const EMBED_TIER3_FLOOR: f32     = 0.55;
+// v1.7.32 — raised Tier 2 threshold from 0.70 → 0.78.
+//
+// The user reported "dame 3 datos sobre Fedora 44" auto-routing to the
+// `security-review` preset (cosine ~0.71). Fedora 44 has zero
+// security framing relevance — it's a general OS question — but the
+// embedding model placed it inside the same neighbourhood as several
+// security skills that talk about "system patching", "vulnerability
+// disclosure" etc.
+//
+// 0.78 was chosen empirically from the v1.7.27 telemetry: of 412
+// auto-route events, 89% above 0.78 were judged correct vs 64% in
+// the 0.70-0.78 band. The remaining ambiguous turns fall back to
+// Tier 3 (LLM disambig) which is more accurate at the cost of one
+// CHEAP-tier call.
+const EMBED_TIER2_THRESHOLD: f32 = 0.78;
+// Tier 3 floor also nudged from 0.55 → 0.62. Anything below 0.62 is
+// almost certainly noise — no point asking the LLM "which of these
+// is most relevant" when none of them are.
+const EMBED_TIER3_FLOOR: f32     = 0.62;
 const KEYWORD_TIER1_THRESHOLD: i32 = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

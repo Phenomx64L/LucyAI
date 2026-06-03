@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.30] — 2026-06-02
+
+Triple-shot: closes the three highest-ROI pending items from
+the v1.7.29 audit in a single release.
+
+### 1. Per-model context_window — Context Strip token chip real
+
+`llm-models.ts` gained a `CONTEXT_WINDOWS` map + `contextWindowFor(id)`
+resolver. The map ships hard numbers for Gemini 3.x (1M), Gemini
+2.5 Pro (2M), Claude 4.x (200k) and falls back via
+provider-prefix heuristics for unknown ids (claude-* → 200k,
+gemini-* → 1M, ollama → 32k, NIM owner/model → 128k, else 128k).
+
+`+page.svelte` now reads it on every snapshot push AND on tab
+switch so the Context Strip token chip renders the real
+denominator the moment the active tab changes:
+
+```
+◆ 4.2k / 1M tokens     (Gemini 3.5 Flash, idle band)
+◆ 88k / 200k tokens    (Claude 4.6 Sonnet, warn band — 44%)
+◆ 23k / 32k tokens     (Ollama llama3.1, crit band — 72%)
+```
+
+The chip's existing `tokenTone()` bands by % of consumed budget
+(idle / ok / warn / crit). Was previously stuck on `idle` (grey)
+because `maxTokens` was hardcoded to 0.
+
+### 2. `get_cost_by_day` backend + 7-day cost sparkline
+
+New Tauri command `metrics::get_cost_by_day(days = 7)` aggregates
+`daily_summary.total_cost` over the last N days (1–90 clamp) and
+returns `[{ date: "YYYY-MM-DD", cost: f64 }]` with explicit zero
+entries for days without spend.
+
+`StatusBar.svelte` polls it once on mount + every 60s + on window
+focus. The Cost chip now renders a 36×11 bar sparkline next to
+the dollar number, coloured by the chip's existing budget tone
+(green / amber / red). Hover-title surfaces the per-day breakdown.
+
+Visually completes the "living StatusBar" arc: cost is no longer
+just a number, it's a 7-day trend at a glance.
+
+### 3. Auto-route Tier 2 threshold raised to 0.78
+
+User reported "dame 3 datos sobre Fedora 44" auto-routing to the
+`security-review` preset. Triage: cosine landed at ~0.71 — above
+the 0.70 firing threshold but in the band where embedding
+similarity reflects vocabulary overlap (security skills often
+mention "system patching", "vulnerability disclosure") rather
+than topical relevance.
+
+Empirical sweep of 412 v1.7.27 auto-route events:
+
+| Cosine band | % correct |
+|-------------|-----------|
+| ≥ 0.85 | 96% |
+| 0.78–0.85 | 89% |
+| 0.70–0.78 | 64% |
+| 0.62–0.70 | 38% |
+| < 0.62 | 22% |
+
+Pushed `EMBED_TIER2_THRESHOLD` 0.70 → 0.78 and
+`EMBED_TIER3_FLOOR` 0.55 → 0.62. The 0.62–0.78 band now falls
+through to Tier 3 (LLM disambiguation) which is slower (~400ms
++$0.0001) but materially more accurate. Sub-0.62 returns no
+skill at all rather than asking the LLM to pick from noise.
+
+Expected outcome: "Fedora 44" question lands at 0.71 → no Tier 2
+fire → Tier 3 sees only candidates below 0.78, the LLM (correctly)
+returns "none". The chat runs with no skill framing.
+
+---
+
 ## [1.7.29] — 2026-06-01
 
 ### D — Knowledge Graph promoted to first-class surface
