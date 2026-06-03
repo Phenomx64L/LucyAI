@@ -196,6 +196,14 @@ import { listen } from '@tauri-apps/api/event';
     import { lucyConfirm, lucyAlert, lucyPrompt } from '$lib/dialog-service';
     // v1.7.27 — Circadian accent: subtly cools/warms --accent through the day.
     import { start as startCircadian } from '$lib/circadian';
+    // v1.7.44 — Idle / hidden detector. Toggles `html.app-hidden` on
+    // document.visibilitychange and `html.lucy-quiescent` after 8 s of no
+    // pointer / keyboard / wheel input. The matching CSS rule in
+    // `routes/page.css` sets `animation-play-state: paused` on every
+    // element + pseudo-element when either class is present, so the GPU
+    // stops compositing dozens of `@keyframes ... infinite` rules while
+    // the user is reading or away. Resumes instantly on any input.
+    import { startIdleDetector } from '$lib/idle-detector';
     // v1.7.29 — Knowledge Graph as a first-class surface (was buried under
     // MemoryBrowser → Grafo → Visual). Mounted at root so sidebar items,
     // slash commands, palette and the empty-state hero can all open it.
@@ -1539,6 +1547,10 @@ import { listen } from '@tauri-apps/api/event';
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // v1.7.44 — Wire up the idle detector FIRST so the `.app-hidden`
+        // and `.lucy-quiescent` classes start tracking the window/user
+        // state from the very first frame. Idempotent on HMR.
+        startIdleDetector();
         // v1.7.27 — Start circadian accent loop (cools/warms --accent
         // through the day in 6 bands). 10-min recompute interval.
         startCircadian();

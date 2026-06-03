@@ -227,15 +227,31 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
   transition:background .5s ease;
 }
 
-/* ── GPU saver: when the window is hidden/minimized, pause every infinite
- * animation app-wide. The `.app-hidden` class is toggled from
- * onMount via document.visibilitychange. WebView2 keeps the page rendered
- * even when invisible, so without this the GPU stays busy blurring/painting
- * for nothing. With this, GPU drops to ~0% as soon as the window loses
- * visibility. Re-resumes instantly when it becomes visible again. */
+/* ── GPU saver: pause every infinite animation app-wide when either:
+ *    • the window is hidden / minimised / behind another window
+ *      (`.app-hidden` — toggled by `idle-detector.ts` on
+ *      document.visibilitychange).
+ *    • the user has been inactive inside the window for >8 s
+ *      (`.lucy-quiescent` — toggled by `idle-detector.ts` on
+ *      pointermove / keydown / wheel / touchstart inactivity).
+ *
+ * v1.7.43 wired up the `.app-hidden` half; previously the rule existed
+ * but no code ever added the class, so it never fired in practice.
+ * v1.7.44 adds the `.lucy-quiescent` half for the much more common case
+ * of "user reading a long Lucy response with no input for several
+ * seconds" — that's the state that was eating ~22 % GPU non-stop.
+ *
+ * Both classes share the same body so we get free coverage: any future
+ * `@keyframes ... infinite` rule anywhere in the codebase automatically
+ * participates in the pause — no per-component opt-in required.
+ *
+ * Resumes instantly on any input or when the window regains visibility. */
 html.app-hidden *,
 html.app-hidden *::before,
-html.app-hidden *::after{
+html.app-hidden *::after,
+html.lucy-quiescent *,
+html.lucy-quiescent *::before,
+html.lucy-quiescent *::after{
   animation-play-state:paused !important;
   transition:none !important;
 }

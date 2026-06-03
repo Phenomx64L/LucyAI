@@ -1311,17 +1311,18 @@ body::before {
     radial-gradient(at 20% 20%, color-mix(in srgb, var(--state-color, var(--accent)) 3%, transparent) 0%, transparent 45%),
     radial-gradient(at 80% 75%, color-mix(in srgb, var(--blue, #3b9eff) 2%, transparent) 0%, transparent 50%),
     radial-gradient(at 50% 50%, color-mix(in srgb, var(--purple, #a78bfa) 2%, transparent) 0%, transparent 55%);
-  animation: ambient-drift 40s ease-in-out infinite alternate;
+  /* v1.7.44 — Removed the `ambient-drift` 40s transform animation.
+     Even though `transform: translate3d() scale()` is compositor-only
+     (cheap per-frame work), the source layer here is `inset: -10%` →
+     120 % of the viewport, made up of three layered `radial-gradient`s
+     with `color-mix()` blends. The compositor has to keep this whole
+     surface "warm" for the duration of the animation, which by itself
+     prevents the GPU from dropping to its lowest idle power state.
+     Combined with the idle-detector pause introduced in v1.7.44, the
+     compositor can fully quiesce after 8 s without input. The static
+     three-gradient look remains; only the drift is gone. */
   opacity: 0.45;
   transition: background var(--motion-deliberate, 600ms) var(--ease-out, ease-out);
-}
-@keyframes ambient-drift {
-  0%   { transform: translate3d(0,    0,    0) scale(1);    }
-  50%  { transform: translate3d(-2%, -1%, 0) scale(1.03);   }
-  100% { transform: translate3d(2%,   1%,  0) scale(1);     }
-}
-@media (prefers-reduced-motion: reduce) {
-  body::before { animation: none; }
 }
 /* Reduce further on light theme so it doesn't wash out content. */
 :root.light body::before { opacity: 0.20; }

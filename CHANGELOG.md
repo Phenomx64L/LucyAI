@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.44] — 2026-06-03
+
+### Wire the existing GPU-saver class + add idle-quiescent mode + drop ambient-drift
+
+User confirmed v1.7.43 dropped some load but GPU was still ~22 % at
+idle. Audited what's actually running and found three things:
+
+**Discovery 1: the `.app-hidden` GPU saver was never wired up.**
+
+A CSS rule in `src/routes/page.css` set `animation-play-state:
+paused` on every element when `<html>` had the class `app-hidden`.
+The comment above the rule said the class was toggled "from onMount
+via document.visibilitychange". `git grep` proved the comment was
+aspirational — no code ever called `classList.add('app-hidden')`.
+That's why minimising Lucy never dropped GPU to zero either.
+
+**Discovery 2: every Lucy infinite-animation runs the same way at
+idle as during active use.**
+
+ChatThread reasoning shimmer, sidebar shimmer-sweep, brand-pulse on
+the corner LED, ti-pulse on dots, plus a long tail of small spinners
+— each is technically cheap on its own, but stacked under Mica with
+~22 in-page `backdrop-filter` layers, the cumulative per-frame
+compositor work prevents the GPU from dropping to its lowest
+power state. Even with v1.7.43 killing the worst single rule
+(`lucy-living-bg`), the residual herd kept the GPU at ~22 %.
+
+**Discovery 3: `body::before ambient-drift` is small but always-on.**
+
+A 40 s transform-on-translate3d/scale animation on a `body::before`
+sized at `inset: -10 %` (i.e. 120 % of the viewport, ~2.5 Mpx) made
+of three stacked radial-gradients with `color-mix()`. Transform-
+only, so per-frame cost is composite-only (no raster), but the
+compositor still has to keep the layer "warm" the entire 40 s
+cycle — preventing the GPU from quiescing.
+
+**Fix.**
+
+1. **New module `src/lib/idle-detector.ts`.** Two responsibilities:
+   - Listen on `document.visibilitychange` and toggle
+     `html.app-hidden` (finally activating the dormant CSS rule).
+   - Listen on `pointermove`, `pointerdown`, `keydown`, `wheel`,
+     `touchstart` with `{ passive: true, capture: true }`. After
+     8 s without an event, add `html.lucy-quiescent`; remove on any
+     subsequent event. The class never engages while the window is
+     hidden (the visibility path already covers that case).
+
+2. **Extend `routes/page.css`** so both `.app-hidden` and
+   `.lucy-quiescent` share the same body:
+   `animation-play-state: paused !important; transition: none
+   !important;` on `*`, `*::before`, `*::after`. Free coverage —
+   any new `@keyframes ... infinite` rule added in the future is
+   automatically paused at idle with zero per-component opt-in.
+
+3. **Wire it up in `+page.svelte`** — first call in `onMount` so
+   the classes start tracking from the very first frame.
+
+4. **Drop the `ambient-drift` animation** from `body::before` in
+   `src/app.css`. Static three-gradient look kept; only the
+   constant transform keep-alive is gone. (`prefers-reduced-motion`
+   block removed at the same time — no animation, no need to
+   override it.)
+
+**Expected delta.**
+
+After 8 s without input → idle GPU should drop to **near zero**
+(~1–3 %, almost all of which is Mica being drawn by DWM itself,
+not by Lucy).
+
+During active typing or while a Lucy response streams in → no
+change. Animations resume the instant any input lands.
+
+Reading a long Lucy response without touching the mouse → after
+8 s the breathing UI gently freezes. User moves the mouse →
+everything resumes within one frame. This is the same pattern
+Chrome, VSCode, and Discord all use; it is genuinely invisible
+in practice unless you're staring at the screen waiting for it.
+
+**Files touched.**
+- `src/lib/idle-detector.ts` *(new)* — 95 lines, idempotent, with
+  start/stop entry points and a `setIdleThreshold(ms)` knob.
+- `src/routes/+page.svelte` — import + call `startIdleDetector()`
+  as the first line inside the existing `onMount`.
+- `src/routes/page.css` — extend the `.app-hidden` selector to
+  also match `.lucy-quiescent`; verbose comment explains both.
+- `src/app.css` — remove the `ambient-drift` animation +
+  `@keyframes` block + `prefers-reduced-motion` override that
+  guarded it.
+
+**Architecture note for future contributors.** The
+`html.lucy-quiescent` pause is the cheapest possible idle saver
+because it's purely declarative — no per-component JS, no
+animation API calls, no requestAnimationFrame mocks. Any new
+animation you add anywhere in the app participates automatically.
+If you find yourself reaching for a manual "pause my animation
+when idle" hook in a single component, you almost certainly
+don't need it — this class already covers you.
+
+---
+
 ## [1.7.43] — 2026-06-03
 
 ### Kill the worst idle-GPU offenders
