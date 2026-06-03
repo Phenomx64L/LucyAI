@@ -4438,16 +4438,36 @@ Use ONE of these patterns instead:
             // Para TOOL/EXECUTE/THOUGHT responses: preservar texto visible ANTES de
             // procesar herramientas. BUG FIX: antes se eliminaba el streaming msg
             // completo, borrando la explicación que el usuario ya estaba leyendo.
+            //
+            // v1.7.48 — Second-pass fix. The previous "short or empty" branch
+            // (length <= 20 chars after cleanStreamDisplay) deleted the
+            // streaming bubble outright. That deletion painted to the screen
+            // BEFORE the agent loop / native-tool path could add a
+            // replacement message — producing the "text suddenly disappears,
+            // reappears when Lucy finishes" symptom the user reported in
+            // their v1.7.47 retest.
+            //
+            // The intent of the deletion was correct: when Lucy's response is
+            // purely tag invocations (no narrative), the streaming bubble
+            // would otherwise stand as a permanent empty Lucy turn. But
+            // deleting it mid-flow leaves a visible gap. Instead, we now
+            // morph the streaming bubble into a SETTLED "preparing tools"
+            // placeholder that stays on screen until the agent loop (or
+            // native tool path) adds the real reply right after. The user
+            // sees a continuous stream of bubbles: placeholder → tool result.
+            //
+            // If the prose-before-tags portion was substantial (>20 chars),
+            // we still promote it to a permanent Lucy turn unchanged — the
+            // user reads it as Lucy's preamble before the tool output.
             const _hasToolResp = resp.includes('<TOOL>') || resp.includes('<EXECUTE') || /<THOUGHT>/i.test(resp);
             if (_hasToolResp) {
                 const _streamMsg = t.messages.find(m => m.id === streamMsgId);
-                if (_streamMsg?.rawContent?.trim()) {
-                    // Promote: convertir streaming msg en mensaje lucy permanente
-                    // SMOOTH FIX: reusar el HTML del streaming (ya parseado con renderMd)
-                    // en vez de re-renderizar con renderLucyMarkdown que genera HTML distinto
-                    // y produce un "swap" visual abrupto.
-                    const displayText = cleanStreamDisplay(_streamMsg.rawContent);
+                if (_streamMsg) {
+                    const displayText = _streamMsg.rawContent?.trim()
+                        ? cleanStreamDisplay(_streamMsg.rawContent)
+                        : '';
                     if (displayText.trim().length > 20) {
+                        // Promote with substantive prose — same as before.
                         _streamMsg.id = Date.now() + Math.random();
                         _streamMsg.role = 'lucy';
                         _streamMsg.rawRole = 'Lucy';
@@ -4469,10 +4489,25 @@ Use ONE of these patterns instead:
                         }
                         _streamMsg.html = existingHtml;
                     } else {
-                        t.messages = t.messages.filter(m => m.id !== streamMsgId);
+                        // v1.7.48 — Was: t.messages.filter(...). Now we morph
+                        // the bubble into a placeholder that stays visible
+                        // until the agent loop appends the real reply. The
+                        // placeholder is styled so the user can tell at a
+                        // glance Lucy is preparing tools, not generating
+                        // prose. The flag `_isToolPreparePlaceholder` lets
+                        // the agent loop find and remove THIS specific bubble
+                        // when its reply is ready — without it we'd
+                        // accumulate placeholders across multi-tool turns.
+                        _streamMsg.role = 'lucy';
+                        _streamMsg.rawRole = 'Lucy';
+                        _streamMsg.rawContent = '(preparando herramientas…)';
+                        _streamMsg._isToolPreparePlaceholder = true;
+                        const placeholderText = isEN
+                            ? '⚙ <em>Preparing tools…</em>'
+                            : '⚙ <em>Preparando herramientas…</em>';
+                        _streamMsg.html = `<div class="mn">Lucy</div><div class="stream-settled" style="color:var(--txt2,#94a3b8);font-size:13px;">${placeholderText}</div>`;
+                        _streamMsg.tokens = 0;
                     }
-                } else {
-                    t.messages = t.messages.filter(m => m.id !== streamMsgId);
                 }
             }
             // ── Quick native tools: solo para respuestas simples sin plan multi-paso ──
@@ -7819,6 +7854,27 @@ times the SAME way, switch tool kind entirely.
         if (!t) return;
         t.messages=t.messages.filter(m=>m.id!==('thinking-'+tabId));
         t.messages=t.messages.filter(m=>m.id!==('streaming-'+tabId));
+        // v1.7.48 — Sweep any "preparing tools" placeholder bubbles left
+        // behind by the streaming→placeholder morph. These are tagged with
+        // `_isToolPreparePlaceholder = true` and are intended to keep the
+        // bubble visible during the agent loop. By the time fin() runs the
+        // agent loop has appended its real reply messages, so the
+        // placeholders are redundant and should be cleaned up. Only sweep
+        // if at least one real Lucy message exists after the placeholder —
+        // otherwise we'd remove the placeholder and leave the user with no
+        // bubble at all (e.g. if the agent loop errored silently).
+        const placeholders = t.messages.filter(m => m._isToolPreparePlaceholder);
+        if (placeholders.length > 0) {
+            const lastPlaceholderIdx = Math.max(
+                ...placeholders.map(p => t.messages.indexOf(p))
+            );
+            const hasRealReplyAfter = t.messages
+                .slice(lastPlaceholderIdx + 1)
+                .some(m => m.role === 'lucy' && !m._isToolPreparePlaceholder);
+            if (hasRealReplyAfter) {
+                t.messages = t.messages.filter(m => !m._isToolPreparePlaceholder);
+            }
+        }
         t.isProcessing=false;
         t._cancelled = false; // Reset para próxima ejecución
         // ── IncidentTimeline: detect open incidents (fire-and-forget, no blocking) ──

@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.48] — 2026-06-03
+
+### Real fix: stop deleting the streaming bubble mid-flow
+
+User reported the bubble was STILL "disappearing then reappearing"
+after v1.7.47, so I dug deeper into the post-stream path and
+found the actual bug: lines 4441-4477 of `+page.svelte` were
+DELETING the streaming message entirely whenever the response
+contained `<TOOL>` / `<EXECUTE>` / `<THOUGHT>` AND the displayed
+text (after `cleanStreamDisplay`) was 20 chars or shorter.
+
+That branch had been there for a while. When Lucy responded with
+mostly tag invocations (e.g. `<THOUGHT>razono...</THOUGHT>
+<TOOL>get_capabilities</TOOL>`), `cleanStreamDisplay` would strip
+everything and return `""`, the streaming bubble got `filter`-ed
+out of `t.messages`, the browser painted that empty state to the
+screen, the agent loop then added new reply messages
+asynchronously, and the user perceived this as
+"bubble disappeared, came back when Lucy finished."
+
+v1.7.47's placeholder fix made the display visible DURING the
+stream but did nothing to prevent the post-stream deletion — the
+bug was in the next stage of the pipeline.
+
+**Fix.** Stop deleting the bubble. Instead morph it into a
+permanent "preparing tools" placeholder with
+`_isToolPreparePlaceholder = true`:
+
+```js
+_streamMsg.role = 'lucy';
+_streamMsg.rawContent = '(preparando herramientas…)';
+_streamMsg._isToolPreparePlaceholder = true;
+_streamMsg.html = `<div class="mn">Lucy</div>
+  <div class="stream-settled" style="color:var(--txt2);font-size:13px;">
+    ⚙ <em>Preparando herramientas…</em>
+  </div>`;
+```
+
+The bubble stays on screen the whole time the agent loop runs.
+When the agent loop appends its real reply, the placeholder still
+sits above it — visually fine, but cluttered. So `fin()` now
+sweeps any `_isToolPreparePlaceholder` bubbles AFTER the last
+real Lucy reply exists in the conversation. If the agent loop
+errored silently and no real reply was appended, the placeholder
+stays — better than a blank turn.
+
+**Continuous visual flow now:**
+
+```
+user prompt
+  ↓
+streaming bubble grows with prose (and v1.7.47 placeholder while
+                                   tags are open)
+  ↓
+stream completes → bubble settled / morphed into "preparing tools"
+  ↓
+agent loop runs (tool invocation, tool output, etc.)
+  ↓
+agent loop appends real reply
+  ↓
+fin() sweeps the now-redundant placeholder
+```
+
+No more deletions visible to the user. The bubble's content
+changes in place; the bubble itself never blinks out.
+
+**Files touched.**
+- `src/routes/+page.svelte` — replace both delete-on-short-display
+  branches with a morph into placeholder; add cleanup pass in
+  `fin()` guarded by "only sweep if a real reply followed".
+
+**Why this is the right place to fix it.** The earlier patches
+(v1.7.45 rAF throttle, v1.7.46 open-tag detection, v1.7.47
+placeholder during stream) all targeted the streaming phase. The
+real culprit lived in the POST-stream cleanup, which is a
+separate code path with its own assumptions about what a "useful"
+response looks like. The 20-char threshold is fine for deciding
+whether to PROMOTE the bubble's content, but it shouldn't be the
+trigger for DELETING the bubble entirely — that's what produces
+the visible gap.
+
+---
+
 ## [1.7.47] — 2026-06-03
 
 ### Fix the v1.7.46 regression: bubble stayed empty during `<THOUGHT>`-led streams
