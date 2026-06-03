@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.33] — 2026-06-02
+
+### Sidebar concept tints — quiet by default, loud on intent
+
+User reported the v1.7.25 + v1.7.31 sidebar concept colours
+were "molestos a la vista" — the always-on Tailwind-300 tints
+made the sidebar read like a neon arcade. Two compounding
+problems:
+
+1. **Wrong intensity** — Tailwind 300 colours (`#67e8f9`,
+   `#fcd34d`, `#93c5fd`, `#c4b5fd`) are vibrant by design for
+   light backgrounds. On Lucy's `#12141e` they glow.
+2. **Wrong scope** — the tints applied to RESTING items, not
+   just active/hover. Six different concept hues plus the
+   active row's stronger fill = visual cacophony.
+
+Both fixed:
+
+#### Quiet by default
+
+Resting icons stay neutral `--txt2` (#94a3b8) and the
+left-rail is opacity 0. The sidebar reads like a normal tool
+strip until the user interacts.
+
+#### Hover — soft signal
+
+On hover the icon fades to the concept colour at ~70% intensity
+and a 2 px left rail appears at 35% opacity. No drop-shadow at
+this stage — communicates "this row is a memory thing" without
+volume.
+
+#### Active — loud, but not screaming
+
+The active row keeps:
+- Icon at full concept colour
+- 3 px glowing rail
+- 9 % (was 12 %) background fill in the concept hue
+
+But the hues themselves were nudged from Tailwind 300 → 400/500
+so even the loudest state isn't fluorescent:
+
+| Concept | Was (300) | Now (400) |
+|---------|-----------|-----------|
+| memory   | #67e8f9 | #22d3ee |
+| security | #fcd34d | #f59e0b |
+| infra    | #93c5fd | #60a5fa |
+| automation | #c4b5fd | #a78bfa |
+| ai       | accent (unchanged) | accent (unchanged) |
+
+Result: 30 minutes of use without eye fatigue. The colour
+system still serves its purpose — at-a-glance you see which
+ROW belongs to which concept — without being the loudest part
+of the screen.
+
+---
+
 ## [1.7.32] — 2026-06-02
 
 ### Brand identity — Lucy mark + Tabler icons across the chat
