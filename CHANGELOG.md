@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.38] — 2026-06-03
+
+### Sidebar sections default closed (except Sistema)
+
+User requested cleaner first impression: Acciones Directas
+should be collapsible AND all sections except Sistema should
+start closed. Once the user expands a section their choice is
+persisted across reloads.
+
+Triage of the current state:
+
+| Section | Already collapsible? | Previous default |
+|---------|----------------------|------------------|
+| Sistema | yes (`lucy_sb_sistema_open`) | open |
+| Runbooks | yes (`lucy_sb_runbooks_open`) | open |
+| Acciones Directas | yes (`lucy_sb_acciones_open`) | open |
+| Registros | yes (parent state, no persistence) | closed in code, but reset every launch |
+
+So the mechanism existed everywhere — only defaults + persistence
+needed adjustment.
+
+Changes:
+
+- `runbooksOpen` default switched to closed. localStorage key
+  bumped to `lucy_sb_runbooks_open_v2` so existing users with
+  the legacy `'1'` value get the clean closed default on first
+  launch instead of inheriting the old always-open behaviour.
+- Same treatment for `accionesOpen` →
+  `lucy_sb_acciones_open_v2`.
+- `registrosOpen` (lived in `+page.svelte`, in-memory only)
+  now reads + writes `lucy_sb_registros_open_v2` so the
+  preference persists.
+- Sistema unchanged — primary navigation stays default-open.
+
+Before (all four open on first launch):
+```
+SISTEMA ▾   (open by default)
+  …10 items…
+RUNBOOKS ▾   (open by default)
+  …N runbooks…
+ACCIONES DIRECTAS ▾   (open by default)
+  …5 quick actions…
+REGISTROS ▾   (in-memory, lost on reload)
+  …4 items + 24h widget…
+```
+
+After (only Sistema open on first launch):
+```
+SISTEMA ▾   (open)
+  …10 items…
+RUNBOOKS ▸   (closed, click to expand)
+ACCIONES DIRECTAS ▸   (closed)
+REGISTROS ▸   (closed)
+```
+
+Progressive disclosure principle: Sistema is the primary
+navigation, the user expects it. Acciones / Runbooks /
+Registros are secondary tools — hide them until asked.
+
+---
+
 ## [1.7.37] — 2026-06-02
 
 ### MemoryFeed collapsible (default closed)

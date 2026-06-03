@@ -71,13 +71,27 @@
     // preferred layout survives reload. Default to expanded for discoverability.
     // When sidebarCollapsed === true (sidebar collapsed to icons-only), these
     // booleans are ignored — every section renders as a single column of icons.
-    let sistemaOpen: boolean    = safeGetLS('lucy_sb_sistema_open', '1') !== '0';
-    let runbooksOpen: boolean   = safeGetLS('lucy_sb_runbooks_open', '1') !== '0';
-    let accionesOpen: boolean   = safeGetLS('lucy_sb_acciones_open', '1') !== '0';
+    // v1.7.38 — Section default state:
+    //   SISTEMA = open (primary navigation, always-visible items)
+    //   Everything else = CLOSED (cleaner first impression)
+    //
+    // User reported that opening Lucy with every section pre-expanded
+    // made the sidebar feel "loud" — too many rows competing for
+    // attention. Now Runbooks / Acciones / Registros start collapsed
+    // so the eye lands on the primary surface (Sistema) without
+    // distraction. The moment the user expands a section, their choice
+    // is persisted and survives reloads.
+    //
+    // Bumped the localStorage key to *_v2 so existing users with the
+    // legacy '1' value get the new clean default on first launch
+    // instead of inheriting the old always-open behaviour.
+    let sistemaOpen: boolean    = safeGetLS('lucy_sb_sistema_open',     '1') !== '0';
+    let runbooksOpen: boolean   = safeGetLS('lucy_sb_runbooks_open_v2', '0') === '1';
+    let accionesOpen: boolean   = safeGetLS('lucy_sb_acciones_open_v2', '0') === '1';
     function toggleSection(name: 'sistema' | 'runbooks' | 'acciones') {
-        if (name === 'sistema')  { sistemaOpen  = !sistemaOpen;  safeSetLSString('lucy_sb_sistema_open',  sistemaOpen  ? '1' : '0'); }
-        if (name === 'runbooks') { runbooksOpen = !runbooksOpen; safeSetLSString('lucy_sb_runbooks_open', runbooksOpen ? '1' : '0'); }
-        if (name === 'acciones') { accionesOpen = !accionesOpen; safeSetLSString('lucy_sb_acciones_open', accionesOpen ? '1' : '0'); }
+        if (name === 'sistema')  { sistemaOpen  = !sistemaOpen;  safeSetLSString('lucy_sb_sistema_open',     sistemaOpen  ? '1' : '0'); }
+        if (name === 'runbooks') { runbooksOpen = !runbooksOpen; safeSetLSString('lucy_sb_runbooks_open_v2', runbooksOpen ? '1' : '0'); }
+        if (name === 'acciones') { accionesOpen = !accionesOpen; safeSetLSString('lucy_sb_acciones_open_v2', accionesOpen ? '1' : '0'); }
     }
 
     const dispatch = createEventDispatcher<{

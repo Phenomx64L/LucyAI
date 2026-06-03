@@ -586,7 +586,9 @@ import { listen } from '@tauri-apps/api/event';
     let comandosExt        = [];
     let sidebarCollapsed   = false;
     let sidebarResizing    = false;  // drag-to-resize activo
-    let registrosOpen      = false;  // accordion sidebar "Registros"
+    // v1.7.38 — Registros accordion default closed; persists per-user via
+    // localStorage (same family as the Runbooks/Acciones keys in Sidebar.svelte).
+    let registrosOpen      = safeGetLS('lucy_sb_registros_open_v2', '0') === '1';
     let showSettingsModal     = false;  // modal de Configuración/Preferencias
     // ── Settings modal tabbed UX (v1.4.2) ──
     // The modal used to render every section in one tall column, which made
@@ -9076,7 +9078,11 @@ if (Test-Path $src) {
       on:editaction={(e) => abrirEditarAccionRapida(e.detail.index)}
       on:deleteaction={(e) => eliminarAccionRapida(e.detail.index)}
       on:sbresizestart={(e) => sbResizeStart(e.detail.event)}
-      on:toggleregistros={() => registrosOpen = !registrosOpen}
+      on:toggleregistros={() => {
+          // v1.7.38 — persist toggle so user preference survives reloads.
+          registrosOpen = !registrosOpen;
+          try { localStorage.setItem('lucy_sb_registros_open_v2', registrosOpen ? '1' : '0'); } catch {}
+      }}
       on:memoriaabierta={abrirMemoria}
       on:auditabierto={abrirAudit}
       on:exportarlog={exportarAuditLog}
