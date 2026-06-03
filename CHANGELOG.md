@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.37] — 2026-06-02
+
+### MemoryFeed collapsible (default closed)
+
+User reported Grafo de conocimiento was now buried below the
+v1.7.36-relocated MemoryFeed widget. Triage: the widget's three
+rows + header occupied ~130 px vertical, which pushed Grafo,
+Capacidad and Diagnóstico below the visible area.
+
+Fix: the widget is now collapsible. Default = collapsed so it
+occupies ~28 px (just the header with the count badge). User
+clicks the header to expand and see the 3 rows.
+
+State persists per-user via `lucy_memfeed_expanded_v1` in
+localStorage so the preference survives reloads.
+
+Header is the toggle handle (whole row clickable, no separate
+chevron button). Hover tints the row cyan (the memory concept
+colour). Chevron `▸` / `▾` to the right makes the affordance
+obvious without taking a separate button slot.
+
+Before (always expanded, 130 px):
+```
+Memoria
+| MEMORIA RECIENTE  3   ▾   ← always open
+| Memoria 1 …      2d
+| Memoria 2 …      4d
+| Memoria 3 …      5d
+Grafo                       ← below fold
+Capacidad                   ← below fold
+```
+
+After (default collapsed, 28 px):
+```
+Memoria
+| MEMORIA RECIENTE  3   ▸   ← click to expand
+Grafo                       ← visible
+Capacidad                   ← visible
+Diagnóstico                 ← visible
+```
+
+The count badge is the high-frequency information ("am I
+accumulating memory?"); the row content is the low-frequency
+detail ("which exact memories?"). Hiding detail until asked is
+the correct progressive disclosure for a sidebar.
+
+---
+
 ## [1.7.36] — 2026-06-02
 
 ### MemoryFeed widget moved under Memoria item

@@ -25,6 +25,24 @@
     export let isEN = false;
     export let sidebarCollapsed = false;
 
+    // v1.7.37 — Default-collapsed expand toggle. User reported the
+    // widget's 3 rows + header (~130 px) pushed Grafo / Capacidad /
+    // Diagnóstico off-screen. Collapsed by default keeps the count
+    // badge visible (the only piece the user actually scans for at a
+    // glance) while reclaiming the vertical space until they ask for
+    // detail. State persists per-user via localStorage so the choice
+    // sticks across reloads.
+    const LS_KEY = 'lucy_memfeed_expanded_v1';
+    let expanded = false;
+    try {
+        const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LS_KEY) : null;
+        if (raw === '1') expanded = true;
+    } catch { /* localStorage unavailable, default closed */ }
+    function toggleExpanded() {
+        expanded = !expanded;
+        try { localStorage.setItem(LS_KEY, expanded ? '1' : '0'); } catch {}
+    }
+
     interface Memory {
         id:           number;
         summary:      string;
@@ -74,41 +92,51 @@
 </script>
 
 {#if !sidebarCollapsed}
-    <div class="mf-wrap">
-        <div class="mf-header">
+    <div class="mf-wrap" class:mf-collapsed={!expanded}>
+        <!-- The header is the toggle handle so the user doesn't need a
+             separate chevron button — entire row is clickable. -->
+        <button class="mf-header" type="button"
+                on:click={toggleExpanded}
+                aria-expanded={expanded}
+                title={expanded
+                    ? (isEN ? 'Collapse recent memory' : 'Colapsar memoria reciente')
+                    : (isEN ? 'Expand recent memory' : 'Expandir memoria reciente')}>
             <span class="mf-glyph"><Brain size={12} stroke={2}/></span>
             <span class="mf-title">{isEN ? 'Recent memory' : 'Memoria reciente'}</span>
             {#if memories.length > 0}
                 <span class="mf-count">{memories.length}</span>
             {/if}
-        </div>
+            <span class="mf-chev" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+        </button>
 
-        {#if loading}
-            <div class="mf-skel">
-                <div class="mf-skel-line"></div>
-                <div class="mf-skel-line" style="width:62%;"></div>
-                <div class="mf-skel-line" style="width:78%;"></div>
-            </div>
-        {:else if memories.length === 0}
-            <div class="mf-empty">
-                {isEN ? 'No memories yet — Lucy will start remembering as you work.' : 'Sin memorias aún — Lucy empezará a recordar al trabajar.'}
-            </div>
-        {:else}
-            <div class="mf-list">
-                {#each memories as m (m.id)}
-                    <button class="mf-row" type="button"
-                            on:click={() => dispatch('open', { id: m.id })}
-                            title={m.summary}>
-                        <span class="mf-row-text">{truncate(m.summary, 70)}</span>
-                        <span class="mf-row-meta">
-                            <span class="mf-row-time">{timeAgo(m.created_at)}</span>
-                            {#if m.importance >= 0.7}
-                                <span class="mf-row-imp" title="High importance">●</span>
-                            {/if}
-                        </span>
-                    </button>
-                {/each}
-            </div>
+        {#if expanded}
+            {#if loading}
+                <div class="mf-skel">
+                    <div class="mf-skel-line"></div>
+                    <div class="mf-skel-line" style="width:62%;"></div>
+                    <div class="mf-skel-line" style="width:78%;"></div>
+                </div>
+            {:else if memories.length === 0}
+                <div class="mf-empty">
+                    {isEN ? 'No memories yet — Lucy will start remembering as you work.' : 'Sin memorias aún — Lucy empezará a recordar al trabajar.'}
+                </div>
+            {:else}
+                <div class="mf-list">
+                    {#each memories as m (m.id)}
+                        <button class="mf-row" type="button"
+                                on:click={() => dispatch('open', { id: m.id })}
+                                title={m.summary}>
+                            <span class="mf-row-text">{truncate(m.summary, 70)}</span>
+                            <span class="mf-row-meta">
+                                <span class="mf-row-time">{timeAgo(m.created_at)}</span>
+                                {#if m.importance >= 0.7}
+                                    <span class="mf-row-imp" title="High importance">●</span>
+                                {/if}
+                            </span>
+                        </button>
+                    {/each}
+                </div>
+            {/if}
         {/if}
     </div>
 {/if}
@@ -118,7 +146,10 @@
        sb-it (its parent concept), the previous top-border divider made
        it look like a SECTION break, not a CONTINUATION of Memoria. The
        new look is a thin left rail that visually nests the widget
-       under its parent — same pattern as a folder tree node. */
+       under its parent — same pattern as a folder tree node.
+       v1.7.37 — Collapsible: when collapsed the wrap shrinks to just
+       the header (no gap, no bottom padding) so it occupies ~28 px
+       total instead of ~130 px. */
     .mf-wrap {
         display: flex; flex-direction: column;
         gap: 6px;
@@ -128,6 +159,12 @@
         border-radius: 0 0 0 4px;
         background: color-mix(in srgb, #06b6d4 4%, transparent);
         animation: mf-fade-in 200ms ease;
+        transition: padding .15s ease, background .15s ease;
+    }
+    .mf-wrap.mf-collapsed {
+        padding: 4px 12px 4px 24px;
+        gap: 0;
+        background: color-mix(in srgb, #06b6d4 2%, transparent);
     }
 
     .mf-header {
@@ -137,7 +174,25 @@
         color: var(--txt3, #64748b);
         text-transform: uppercase;
         font-weight: 600;
+        /* Button reset — the header acts as the toggle handle. */
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
+        font-family: inherit;
+        text-align: left;
+        width: 100%;
+        transition: color .12s ease;
     }
+    .mf-header:hover { color: #67e8f9; }
+    .mf-chev {
+        margin-left: auto;
+        font-size: 11px;
+        opacity: 0.55;
+        font-family: var(--mono, ui-monospace, monospace);
+    }
+    .mf-header:hover .mf-chev { opacity: 1; }
     .mf-glyph { font-size: 11px; opacity: 0.85; display: inline-flex; align-items: center; color: #67e8f9; }
     .mf-title { flex: 1; }
     .mf-count {
