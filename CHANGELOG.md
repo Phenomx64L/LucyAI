@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.39] — 2026-06-03
+
+### Registros accordion: upside-down expansion fix
+
+User reported Registros behaved anomalously — when expanded its
+header moved UP instead of staying anchored and the body
+opening downward.
+
+Root cause: the `margin-top:auto` flex spacer sat ABOVE the
+Registros section, pinning Registros (and everything below it)
+to the bottom of the sidebar. When the user expanded Registros,
+the auto-margin had to SHRINK to make vertical room for the
+body content, which visually translated to the header sliding
+upward — the opposite of what any user expects from an
+accordion.
+
+Two birds with one move:
+
+- Spacer relocated from BEFORE Registros to AFTER Registros
+  (just before the Utilities block). Registros now sits in
+  line with its peers (Sistema / Runbooks / Acciones) and
+  expands cleanly downward.
+- Conceptually correct too — Registros IS a peer of the other
+  three accordions, not a member of the bottom "Utilidades"
+  cluster.
+
+Only the Utilities (Tutorial / Permisos / Principios / Programadas /
+Sub-Agents / PDF Docs / Configuración) still float at the
+sidebar's bottom edge.
+
+Before:
+```
+SISTEMA ▾
+RUNBOOKS ▸
+ACCIONES DIRECTAS ▸
+─── (margin-top:auto pushes everything below down) ───
+REGISTROS ▸     ← header pinned to bottom, expansion shrinks
+                  the spacer above
+─── Utilidades ───
+Ver Tutorial / Permisos / …
+```
+
+After:
+```
+SISTEMA ▾
+RUNBOOKS ▸
+ACCIONES DIRECTAS ▸
+REGISTROS ▸     ← peer of the others, expands downward normally
+─── (margin-top:auto pushes only utilities to bottom) ───
+Ver Tutorial / Permisos / …
+```
+
+---
+
 ## [1.7.38] — 2026-06-03
 
 ### Sidebar sections default closed (except Sistema)

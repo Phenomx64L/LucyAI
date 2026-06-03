@@ -316,7 +316,21 @@
     </div>
     {/if}
 
-    <div class="sb-div" style="margin-top:auto;"></div>
+    <!-- v1.7.39 — Plain divider between Acciones and Registros. The
+         previous `margin-top:auto` here pinned Registros to the BOTTOM
+         of the sidebar, which had two side-effects:
+           1. Expanding Registros visually moved its HEADER UPWARD
+              because the flex auto-margin had to shrink to make room
+              for the new body content. Felt like upside-down accordion.
+           2. Registros visually belonged with the bottom utilities,
+              not with the other top-level accordions, which is wrong
+              conceptually (Registros is a peer of Sistema / Runbooks /
+              Acciones, not of "Permisos / Principios / Sub-Agentes").
+         Moving the `margin-top:auto` spacer DOWN past Registros (to
+         just before "Utilidades") fixes both: Registros sits in line
+         with its peers, expands cleanly downward, and only the
+         utilities still get pushed to the sidebar's bottom edge. -->
+    <div class="sb-div"></div>
 
     <!-- ── Registros (accordion) ── -->
     <div class="sb-lbl sb-accordion-hdr" role="button" tabindex="0"
@@ -391,7 +405,12 @@
     </div>
     {/if}
 
-    <div class="sb-div"></div>
+    <!-- v1.7.39 — Spacer relocated here from above Registros. Now ONLY
+         the Utilities block (Tutorial / Permisos / Principios / …) gets
+         pushed to the sidebar's bottom edge; the four accordions
+         (Sistema / Runbooks / Acciones / Registros) stack naturally
+         from the top. -->
+    <div class="sb-div" style="margin-top:auto;"></div>
 
     <!-- ── Utilidades ── -->
     <div class="sb-it" role="button" tabindex="0"
