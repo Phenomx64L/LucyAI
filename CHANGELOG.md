@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.35] — 2026-06-02
+
+### Registros section restructure
+
+User reported the four items in the Registros sidebar section
+all worked but were "not used" — not because they were broken,
+because the labels and arrangement didn't communicate purpose.
+Triage:
+
+- "Comandos" ambiguous with the composer ("comandos" = anything
+  the user types in chat).
+- "Audit Log" didn't say it opens in Notepad — looked like an
+  in-app view.
+- The interactive Audit Trail view lived in the Sistema section,
+  one accordion away from the related raw-log entries.
+
+Fix: re-curated Registros into a clean four-item ladder, each
+title a complete sentence so the hover tooltip explains
+unambiguously.
+
+#### Before
+
+```
+REGISTROS ▾
+  [ACTIVIDAD 24H widget]
+  🧠 Comandos                     (ambiguous)
+  📁 Audit Log                    (unclear it opens Notepad)
+  ↓  Exportar Log
+```
+
+Sistema section also carried "Auditoría" (interactive view),
+disconnected from the related items.
+
+#### After
+
+```
+REGISTROS ▾
+  [ACTIVIDAD 24H widget]
+  📋 Auditoría             ← interactive ledger (moved from Sistema)
+  📁 Audit Log (raw)       ← raw file in Notepad
+  ↓  Exportar Log          ← copy to Downloads
+  🧠 Comandos aprendidos   ← AI-learned aliases (renamed)
+```
+
+Each item's `title=` is a full descriptive sentence:
+- "Auditoría — visor interactivo de cada comando ejecutado"
+- "Abrir el archivo de audit log crudo en Notepad
+  (%APPDATA%\Lucy\logs\lucy_audit.log)"
+- "Copiar el audit log a tu carpeta de Descargas para
+  compartirlo"
+- "Frases custom que le enseñaste a Lucy (\"cuando diga
+  reinicia_iis, ejecuta iisreset\")"
+
+The hover-tooltip + visual hierarchy now make the section
+discoverable in 5 seconds vs the previous "4 mystery rows".
+
+### Why "Auditoría" left the Sistema section
+
+Conceptually it's a *registro* (running ledger of past events),
+not a *sistema tool* (interactive surface like Terminal IA or
+Dashboard). Co-locating with the raw audit log and the export
+button completes a coherent "view, inspect, share" workflow.
+
+---
+
 ## [1.7.34] — 2026-06-02
 
 ### Lucy can now count her own skills

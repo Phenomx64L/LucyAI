@@ -166,11 +166,10 @@
          title={isEN ? 'Compliance — CIS Benchmark audits' : 'Compliance — auditorías CIS Benchmark'}>
         <span class="sb-ico"><ShieldCheck size={20} /></span><span class="sb-txt">Compliance</span>
     </div>
-    <div class="sb-it" class:act={activeView==='audittrail'} data-concept="security" role="button" tabindex="0"
-         on:click={() => dispatch('setview', { view: 'audittrail' })} on:keydown
-         title={isEN ? 'Audit Trail — command history' : 'Auditoría — historial y seguimiento de comandos'}>
-        <span class="sb-ico"><ClipboardList size={20} /></span><span class="sb-txt">{isEN ? 'Audit Trail' : 'Auditoría'}</span>
-    </div>
+    <!-- v1.7.35 — Auditoría moved to Registros section below. It is
+         conceptually a *registro* (running ledger of past events), not
+         a *sistema* tool (an interactive surface). Co-locating with the
+         other audit-related entries makes the mental model cleaner. -->
     <div class="sb-it" class:act={activeView==='memory'} data-concept="memory" role="button" tabindex="0"
          on:click={() => dispatch('setview', { view: 'memory' })} on:keydown
          title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
@@ -318,22 +317,57 @@
              desplazaba Memoria/Capacidad/Diagnóstico fuera del viewport. -->
         <ActivityFeedWidget {isEN} {sidebarCollapsed}
             on:navigate={(e) => dispatch('setview', { view: e.detail.view })} />
-        <div class="sb-it" role="button" tabindex="0"
-             on:click={() => dispatch('memoriaabierta')} on:keydown
-             title={isEN ? 'Custom commands learned by Lucy' : 'Comandos aprendidos por Lucy'}>
-            <span class="sb-ico"><Brain size={18}/></span><span class="sb-txt">{isEN ? 'Commands' : 'Comandos'}</span>
-            {#if customCmdCount > 0}<span class="sb-bdg b">{customCmdCount}</span>{/if}
-        </div>
-        <div class="sb-it" role="button" tabindex="0"
-             on:click={() => dispatch('auditabierto')} on:keydown
-             title="Abrir audit log en Notepad">
-            <span class="sb-ico"><FileCode size={18}/></span><span class="sb-txt">Audit Log</span>
+
+        <!-- v1.7.35 — Reordered + relabelled for clarity. The four items
+             are now hierarchically: interactive view first, then raw
+             file, then export, then learned-commands modal. Each title
+             reads as a complete sentence so hover-tooltip explains
+             without ambiguity. -->
+
+        <!-- Interactive Audit Trail (was in Sistema; logically a registro) -->
+        <div class="sb-it" class:act={activeView==='audittrail'} data-concept="security"
+             role="button" tabindex="0"
+             on:click={() => dispatch('setview', { view: 'audittrail' })} on:keydown
+             title={isEN
+                ? 'Audit Trail — interactive ledger of every executed command'
+                : 'Auditoría — visor interactivo de cada comando ejecutado'}>
+            <span class="sb-ico"><ClipboardList size={18}/></span>
+            <span class="sb-txt">{isEN ? 'Audit Trail' : 'Auditoría'}</span>
             {#if auditAlerts > 0}<span class="sb-bdg y">{auditAlerts}</span>{/if}
         </div>
+
+        <!-- Raw file in Notepad — explicit subtitle so the user doesn't
+             confuse it with the interactive view above. -->
+        <div class="sb-it" role="button" tabindex="0"
+             on:click={() => dispatch('auditabierto')} on:keydown
+             title={isEN
+                ? 'Open the raw audit log file in Notepad (%APPDATA%\\Lucy\\logs\\lucy_audit.log)'
+                : 'Abrir el archivo de audit log crudo en Notepad (%APPDATA%\\Lucy\\logs\\lucy_audit.log)'}>
+            <span class="sb-ico"><FileCode size={18}/></span>
+            <span class="sb-txt">{isEN ? 'Audit Log (raw)' : 'Audit Log (raw)'}</span>
+        </div>
+
         <div class="sb-it" role="button" tabindex="0"
              on:click={() => dispatch('exportarlog')} on:keydown
-             title="Exportar audit log a Descargas">
-            <span class="sb-ico"><Download size={18}/></span><span class="sb-txt">Exportar Log</span>
+             title={isEN
+                ? 'Copy the audit log to your Downloads folder for sharing'
+                : 'Copiar el audit log a tu carpeta de Descargas para compartirlo'}>
+            <span class="sb-ico"><Download size={18}/></span>
+            <span class="sb-txt">{isEN ? 'Export Log' : 'Exportar Log'}</span>
+        </div>
+
+        <!-- Custom-command memory modal. Renamed from "Comandos" because
+             the previous label collided in the user's mind with the
+             composer ("comandos" = anything you type). The longer label
+             makes it unambiguous that these are AI-learned aliases. -->
+        <div class="sb-it" role="button" tabindex="0"
+             on:click={() => dispatch('memoriaabierta')} on:keydown
+             title={isEN
+                ? 'Custom phrases you taught Lucy ("when I say restart_iis, run iisreset")'
+                : 'Frases custom que le enseñaste a Lucy ("cuando diga reinicia_iis, ejecuta iisreset")'}>
+            <span class="sb-ico"><Brain size={18}/></span>
+            <span class="sb-txt">{isEN ? 'Learned commands' : 'Comandos aprendidos'}</span>
+            {#if customCmdCount > 0}<span class="sb-bdg b">{customCmdCount}</span>{/if}
         </div>
     </div>
     {/if}
