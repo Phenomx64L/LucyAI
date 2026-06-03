@@ -175,6 +175,16 @@
          title={isEN ? 'Memory Browser — memories, crystals, insights, graph' : 'Explorador de Memoria — memorias, cristales, insights, grafo'}>
         <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
     </div>
+
+    <!-- v1.7.36 — MemoryFeed moved here, IMMEDIATELY under the Memoria
+         item. Previously it lived at the bottom of the Sistema accordion
+         where it was orphaned — visually separated from the concept it
+         belongs to by 3+ unrelated rows. Now it reads as a sub-panel
+         of Memoria: "click the row to open, see what's brewing under
+         it" — same mental model as the Outlook unread-mail preview. -->
+    <MemoryFeed {isEN} {sidebarCollapsed}
+        on:open={(e) => dispatch('setview', { view: 'memory' })} />
+
     <!-- v1.7.29 — Knowledge Graph as a first-class entry. The graph
          component lives at the panel root (opened via `openkggraph`
          dispatched up to +page.svelte) so its overlay can blanket
@@ -195,11 +205,6 @@
         <span class="sb-ico"><Stethoscope size={20} /></span><span class="sb-txt">{isEN ? 'Diagnostics' : 'Diagnóstico'}</span>
     </div>
 
-    <!-- v1.7.27 — Recent memory ticker. Renders below the Sistema
-         items so the operator gets ambient "Lucy is remembering"
-         signal at the bottom of the visible Sistema block. -->
-    <MemoryFeed {isEN} {sidebarCollapsed}
-        on:open={(e) => dispatch('setview', { view: 'memory' })} />
     </div>
     {/if}
     <div class="sb-div"></div>

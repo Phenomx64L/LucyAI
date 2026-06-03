@@ -114,12 +114,19 @@
 {/if}
 
 <style>
+    /* v1.7.36 — When the widget sits IMMEDIATELY under the "Memoria"
+       sb-it (its parent concept), the previous top-border divider made
+       it look like a SECTION break, not a CONTINUATION of Memoria. The
+       new look is a thin left rail that visually nests the widget
+       under its parent — same pattern as a folder tree node. */
     .mf-wrap {
         display: flex; flex-direction: column;
         gap: 6px;
-        padding: 6px 12px 10px;
-        border-top: 1px solid color-mix(in srgb, var(--bdr, #1e293b) 60%, transparent);
-        margin-top: 4px;
+        padding: 6px 12px 10px 24px;   /* extra left padding for nesting */
+        margin: 2px 8px 6px 8px;
+        border-left: 2px solid color-mix(in srgb, #06b6d4 35%, transparent);
+        border-radius: 0 0 0 4px;
+        background: color-mix(in srgb, #06b6d4 4%, transparent);
         animation: mf-fade-in 200ms ease;
     }
 

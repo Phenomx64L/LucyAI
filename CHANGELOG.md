@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.36] — 2026-06-02
+
+### MemoryFeed widget moved under Memoria item
+
+User reported the v1.7.27 MemoryFeed widget (`MEMORIA RECIENTE
+3`) was "casi enterrado" — almost buried in the sidebar.
+Triage: it lived at the BOTTOM of the Sistema accordion body,
+visually separated from the Memoria item by 3 unrelated rows
+(Grafo, Capacidad, Diagnóstico). Looked orphaned.
+
+Two changes:
+
+1. **Placement** — moved the widget to sit immediately under
+   the Memoria sb-it. Now it reads as a sub-panel of Memoria,
+   not a free-floating widget at the bottom of the section.
+
+2. **Visual nesting** — replaced the previous `border-top`
+   divider with a 2 px cyan left rail + faint 4% cyan
+   background tint. The widget now reads as "this is the
+   contents of Memoria" — same folder-tree pattern Windows
+   Explorer / VS Code use for nested children. Also extra
+   left padding (24 px) to make the visual nesting explicit.
+
+Before:
+```
+Sistema:
+  Memoria             ← parent
+  Grafo
+  Capacidad
+  Diagnóstico
+  MEMORIA RECIENTE 3  ← orphaned, no relation to Memoria
+```
+
+After:
+```
+Sistema:
+  Memoria             ← parent
+  │ MEMORIA RECIENTE  ← nested child, cyan rail
+  │ [3 rows]
+  Grafo
+  Capacidad
+  Diagnóstico
+```
+
+---
+
 ## [1.7.35] — 2026-06-02
 
 ### Registros section restructure
