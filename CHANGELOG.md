@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.46] — 2026-06-03
+
+### Fix mid-stream text "disappears then reappears" on tool / execute responses
+
+User reported a second streaming bug, distinct from the v1.7.45
+flicker fix: during responses to security-flavoured prompts (e.g.
+"how do I investigate phishing via a Facebook link"), the text
+they were reading **suddenly vanished mid-stream** and only
+**reappeared once Lucy finished**.
+
+**Trace.** The streaming display goes through `cleanStreamDisplay`
+which strips Lucy's internal tags (TOOL, EXECUTE, THOUGHT,
+REMEMBER, LEARN, FILECONTENT, …) from the buffer before
+rendering. Every regex except one required the **closing** tag
+to be present:
+
+```js
+.replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')                  // needs </TOOL>
+.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, …)            // needs </EXECUTE>
+.replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
+…
+.replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')       // ← only one with |$
+```
+
+What the user saw, step by step:
+
+1. Lucy streams visible prose: "Para investigar phishing…"
+2. Lucy emits `<TOOL>analyze_url\n  args: {…}` — buffer now has
+   an OPEN tag. None of the closed-tag regexes match. The raw
+   `<TOOL>analyze_url\n  args: …` text renders verbatim in the
+   bubble.
+3. Lucy keeps streaming inside the TOOL block — the user watches
+   `<TOOL>` markup grow on screen.
+4. Lucy emits `</TOOL>` — the close arrives, the TOOL regex
+   matches the whole block, and the multi-line `<TOOL>…</TOOL>`
+   span gets wiped in one step. The user reads this as text
+   "abruptly disappearing".
+5. Lucy streams the post-TOOL prose ("1. Verifica el dominio…").
+   The user reads this as text "reappearing when she finishes".
+
+THOUGHT already had this case handled by its `(?:</THOUGHT>|$)`
+alternative — anything from `<THOUGHT>` to end-of-buffer was
+hidden until the close arrived, so users never saw raw thought
+markup. The other six tags were missing the same treatment.
+
+**Fix.** Generalised the "hide while open" behaviour: after the
+existing closed-tag pass, scan for any **opening** Lucy tag whose
+matching close is NOT present later in the buffer; if found,
+truncate the display at that point. The user sees prose grow
+monotonically — no more brief "appears then vanishes". Once the
+close arrives, the closed-tag pass strips the block normally and
+post-tag prose streams in next to the prior prose.
+
+Implementation cost: one regex scan + one slice per render, both
+already throttled to one `requestAnimationFrame` per frame in
+v1.7.45. Bounded by a 12-tag alternation; nothing
+catastrophically backtracking.
+
+**Files touched.**
+- `src/routes/+page.svelte` — `cleanStreamDisplay` extended with
+  the open-tag-truncation step. Verbose inline comments document
+  the bug + the fix so the regex zoo doesn't accidentally regress
+  this in the future.
+
+**Tags covered by the truncation pass.** THOUGHT, TOOL, EXECUTE,
+EXECUTE_CMD, EXECUTE_WMIC, EXECUTE_NETSH, EXECUTE_REG,
+EXECUTE_CSCRIPT, LEARN, EXECUTE_REMOTE, REMEMBER, FILECONTENT.
+Anything new added to the closed-tag list should also be added
+to the OPEN_TAG_RE regex.
+
+---
+
 ## [1.7.45] — 2026-06-03
 
 ### Fix the streaming-response flicker

@@ -4221,23 +4221,69 @@ Use ONE of these patterns instead:
             let _drainTimer = null;
             const DRAIN_MS = 40;    // ms entre revelados — 40ms reduce flicker vs 30ms
 
-            const cleanStreamDisplay = (text) => (codeGenIntent || infoIntent || skillInfoIntent
-                ? text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, c) => '\n```powershell\n'+c.trim()+'\n```\n')
-                       .replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, c) => '\n```cmd\n'+c.trim()+'\n```\n')
-                : text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (m, c) =>
-                        _isLinuxCmd(c) ? '\n```bash\n'+c.trim()+'\n```\n' : '')
-                      .replace(/<EXECUTE_CMD>[\s\S]*?<\/EXECUTE_CMD>/gi, ''))
-                .replace(/<EXECUTE_WMIC>[\s\S]*?<\/EXECUTE_WMIC>/gi, '')
-                .replace(/<EXECUTE_NETSH>[\s\S]*?<\/EXECUTE_NETSH>/gi, '')
-                .replace(/<EXECUTE_REG>[\s\S]*?<\/EXECUTE_REG>/gi, '')
-                .replace(/<EXECUTE_CSCRIPT>[\s\S]*?<\/EXECUTE_CSCRIPT>/gi, '')
-                .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
-                .replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
-                .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
-                .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
-                .replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')
-                .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
-                .replace('__TRUNCATED__', '').trim();
+            const cleanStreamDisplay = (text) => {
+                // STEP 1 — strip the CLOSED forms of every Lucy-internal tag.
+                // All of these have an `[\s\S]*?<\/TAG>` body that requires
+                // the closing tag to be present in the buffer. Tags that
+                // arrive without a close (because the stream hasn't caught
+                // up yet) fall through this step untouched.
+                let s = (codeGenIntent || infoIntent || skillInfoIntent
+                    ? text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, c) => '\n```powershell\n'+c.trim()+'\n```\n')
+                           .replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, c) => '\n```cmd\n'+c.trim()+'\n```\n')
+                    : text.replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (m, c) =>
+                            _isLinuxCmd(c) ? '\n```bash\n'+c.trim()+'\n```\n' : '')
+                          .replace(/<EXECUTE_CMD>[\s\S]*?<\/EXECUTE_CMD>/gi, ''))
+                    .replace(/<EXECUTE_WMIC>[\s\S]*?<\/EXECUTE_WMIC>/gi, '')
+                    .replace(/<EXECUTE_NETSH>[\s\S]*?<\/EXECUTE_NETSH>/gi, '')
+                    .replace(/<EXECUTE_REG>[\s\S]*?<\/EXECUTE_REG>/gi, '')
+                    .replace(/<EXECUTE_CSCRIPT>[\s\S]*?<\/EXECUTE_CSCRIPT>/gi, '')
+                    .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
+                    .replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
+                    .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
+                    .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                    .replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')
+                    .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
+
+                // STEP 2 — v1.7.46 BUG FIX. Truncate the display at the
+                // first OPEN tag that has no matching close yet.
+                //
+                // Without this, an in-flight `<TOOL>analyze_url\nresult:
+                // malicious` would render verbatim while the user waited
+                // for the closing `</TOOL>` to arrive. The moment it did
+                // arrive, the `<TOOL>…</TOOL>` regex above wiped the whole
+                // block in one step — which the user perceived as text
+                // "suddenly disappearing" mid-response. Same flicker
+                // happened for EXECUTE / EXECUTE_REMOTE / LEARN / etc.
+                //
+                // THOUGHT already had this behaviour baked into its regex
+                // (the `|$` alternative). Generalising it for every Lucy-
+                // internal tag means the display only ever shows prose
+                // that's safe to keep on screen — anything tag-shaped is
+                // suppressed until its closing partner arrives. Net effect
+                // for the user: text grows monotonically, never deletes.
+                //
+                // Implementation: scan for the first opening Lucy tag
+                // whose closing partner is NOT present later in the
+                // buffer. If found, truncate the display at that point.
+                // Cheap: bounded by the small set of tags and runs once
+                // per render (already throttled to one rAF in v1.7.45).
+                const OPEN_TAG_RE = /<(THOUGHT|TOOL|EXECUTE|EXECUTE_CMD|EXECUTE_WMIC|EXECUTE_NETSH|EXECUTE_REG|EXECUTE_CSCRIPT|LEARN|EXECUTE_REMOTE|REMEMBER|FILECONTENT)\b[^>]*>/i;
+                const openMatch = s.match(OPEN_TAG_RE);
+                if (openMatch) {
+                    const tag = openMatch[1].toUpperCase();
+                    const afterOpen = s.slice((openMatch.index ?? 0) + openMatch[0].length);
+                    const closeRe = new RegExp(`</${tag}\\s*>`, 'i');
+                    if (!closeRe.test(afterOpen)) {
+                        // Open tag with no matching close → buffer is mid-
+                        // stream for that block. Hide everything from the
+                        // open tag onwards; it'll come back (or be
+                        // re-stripped) once the close arrives.
+                        s = s.slice(0, openMatch.index ?? 0);
+                    }
+                }
+
+                return s.replace('__TRUNCATED__', '').trim();
+            };
 
             let _lastRenderedLen = 0; // anti-flicker: skip re-render if nothing changed
             // v1.7.45 — Throttle DOM rewrites to one per animation frame.
