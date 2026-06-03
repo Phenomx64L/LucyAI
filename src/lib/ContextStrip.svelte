@@ -25,6 +25,15 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
     import { contextSnapshot } from '$lib/context-snapshot';
+    // v1.7.32 — Replace unicode emojis (🧠⚡🔌◆) with Tabler icons. The
+    // emojis rendered inconsistently across Windows / macOS and didn't
+    // match Lucy's icon vocabulary; the strip looked like it came from
+    // a different app than the rest of the UI.
+    import Brain  from '@tabler/icons-svelte/icons/brain';
+    import Bolt   from '@tabler/icons-svelte/icons/bolt';
+    import Plug   from '@tabler/icons-svelte/icons/plug';
+    import Cpu    from '@tabler/icons-svelte/icons/cpu';
+    import Diamond from '@tabler/icons-svelte/icons/diamond';
 
     const dispatch = createEventDispatcher();
 
@@ -87,7 +96,7 @@
         <button class="cs-chip cs-mem" type="button"
                 on:click={() => dispatch('clickMemories')}
                 title="{snap.memoriesCount} memorias en el contexto. Click para ver cuáles.">
-            <span class="cs-glyph">🧠</span>
+            <span class="cs-glyph"><Brain size={13} stroke={2}/></span>
             <span class="cs-val">{snap.memoriesCount}</span>
             {#if !compact}<span class="cs-lbl">memorias</span>{/if}
         </button>
@@ -98,7 +107,7 @@
                 class:cs-manual={snap.skillSource === 'manual'}
                 on:click={() => dispatch('clickSkill')}
                 title="Skill activo: {snap.skillId} ({snap.skillSource ?? 'auto'}). Click para cambiar o desactivar.">
-            <span class="cs-glyph">⚡</span>
+            <span class="cs-glyph"><Bolt size={13} stroke={2}/></span>
             {#if !compact}<span class="cs-lbl">skill</span>{/if}
             <span class="cs-val">{shortSkill(snap.skillId)}</span>
         </button>
@@ -108,7 +117,7 @@
         <button class="cs-chip cs-preset" type="button"
                 on:click={() => dispatch('clickPreset')}
                 title="Preset ECC activo: {snap.presetId}. Click para cambiar o quitar.">
-            <span class="cs-glyph">◇</span>
+            <span class="cs-glyph"><Diamond size={13} stroke={2}/></span>
             {#if !compact}<span class="cs-lbl">preset</span>{/if}
             <span class="cs-val">{shortPreset(snap.presetId)}</span>
         </button>
@@ -118,7 +127,7 @@
         <button class="cs-chip cs-mcp" type="button"
                 on:click={() => dispatch('clickMcp')}
                 title="{snap.mcpToolsCount} MCP tools rankeados en el contexto. Click para abrir MCP Servers.">
-            <span class="cs-glyph">🔌</span>
+            <span class="cs-glyph"><Plug size={13} stroke={2}/></span>
             <span class="cs-val">{snap.mcpToolsCount}</span>
             {#if !compact}<span class="cs-lbl">MCP tools</span>{/if}
         </button>
@@ -129,7 +138,7 @@
                 type="button"
                 on:click={() => dispatch('clickTokens')}
                 title="Tokens estimados inyectados: {snap.estTokens} de {snap.maxTokens || '?'} max. Click para detalles.">
-            <span class="cs-glyph">◆</span>
+            <span class="cs-glyph"><Cpu size={13} stroke={2}/></span>
             <span class="cs-val">
                 {fmtTokens(snap.estTokens)}{snap.maxTokens ? '/' + fmtTokens(snap.maxTokens) : ''}
             </span>
@@ -169,7 +178,12 @@
     .cs-chip:hover  { background: rgba(255,255,255,0.07); transform: translateY(-1px); }
     .cs-chip:active { transform: translateY(0) scale(.97); }
 
-    .cs-glyph { font-size: 12px; line-height: 1; opacity: .9; }
+    .cs-glyph {
+        font-size: 12px; line-height: 1; opacity: .9;
+        display: inline-flex; align-items: center; justify-content: center;
+        /* Tabler icons inherit currentColor — each chip's colour class
+           (cs-mem, cs-skill, etc) tints them automatically. */
+    }
     .cs-val   { font-weight: 600; color: var(--txt1, #f1f5f9); font-variant-numeric: tabular-nums; }
     .cs-lbl   { opacity: .7; }
 

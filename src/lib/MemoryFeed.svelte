@@ -18,6 +18,9 @@
 <script lang="ts">
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.32 — Brain glyph from Tabler instead of the 🧠 emoji
+    // (renders inconsistently per OS, doesn't match Lucy's icon vocabulary).
+    import Brain from '@tabler/icons-svelte/icons/brain';
 
     export let isEN = false;
     export let sidebarCollapsed = false;
@@ -73,7 +76,7 @@
 {#if !sidebarCollapsed}
     <div class="mf-wrap">
         <div class="mf-header">
-            <span class="mf-glyph">🧠</span>
+            <span class="mf-glyph"><Brain size={12} stroke={2}/></span>
             <span class="mf-title">{isEN ? 'Recent memory' : 'Memoria reciente'}</span>
             {#if memories.length > 0}
                 <span class="mf-count">{memories.length}</span>
@@ -128,7 +131,7 @@
         text-transform: uppercase;
         font-weight: 600;
     }
-    .mf-glyph { font-size: 11px; opacity: 0.85; }
+    .mf-glyph { font-size: 11px; opacity: 0.85; display: inline-flex; align-items: center; color: #67e8f9; }
     .mf-title { flex: 1; }
     .mf-count {
         padding: 1px 6px;

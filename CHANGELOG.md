@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.32] — 2026-06-02
+
+### Brand identity — Lucy mark + Tabler icons across the chat
+
+User reported the empty-state hero ✦ was visually too close to
+Google Gemini's brand glyph. Also flagged that the unicode
+emojis (🧠⚡🔌◆) scattered across Context Strip, Memory Feed
+and Empty State Hero "didn't match Lucy's icon vocabulary"
+(Tabler Icons via `@tabler/icons-svelte`).
+
+Both fixed at the same time so the chat surfaces speak one
+visual language.
+
+#### Hero mark — `ChatEmptyState.svelte`
+
+The 36 px unicode ✦ became a 56×56 px rounded-square containing
+the actual Lucy avatar PNG (`LUCY_AVATAR_DATA_URL`, already
+used for every Lucy chat bubble). Same breathing animation,
+same accent glow ring, but the mark is now unambiguously Lucy
+— no overlap with Gemini, ChatGPT, Claude or any other AI brand.
+
+#### Empty-state starter buttons — `ChatEmptyState.svelte`
+
+| Was | Now |
+|-----|-----|
+| 🧠 Abrir Memoria | `<Brain />` Abrir Memoria |
+| ⌬ Grafo de conocimiento | `<Share3 />` Grafo de conocimiento |
+| ⚡ Ver skills | `<Bolt />` Ver skills |
+| ◆ Info CPU SIMD | `<Cpu />` Info CPU SIMD |
+
+Icons inherit `currentColor`, so the v1.7.27 circadian accent
+shift also tints the starters across the day.
+
+#### Memory Feed — `MemoryFeed.svelte`
+
+The 🧠 emoji in the section header replaced with
+`<Brain size={12} stroke={2}/>` tinted cyan (memory concept).
+
+#### Context Strip — `ContextStrip.svelte`
+
+Five chips' glyph slots converted to Tabler icons:
+
+| Chip | Was | Now |
+|------|-----|-----|
+| Memorias | 🧠 | `<Brain />` |
+| Skill | ⚡ | `<Bolt />` |
+| Preset | ◇ | `<Diamond />` |
+| MCP tools | 🔌 | `<Plug />` |
+| Tokens | ◆ | `<Cpu />` |
+
+Each icon inherits `currentColor` so the concept-tinted text
+colour propagates to the icon automatically — no per-icon
+colour override needed.
+
+### Why this matters
+
+Emojis render differently on Windows (Segoe UI Emoji), macOS
+(Apple Color Emoji), Linux (Noto Emoji), and even between
+Windows 10 vs 11 — chips that read "🧠 12 memorias" on the
+developer's laptop look subtly off on the user's machine.
+Tabler icons are SVG, render identically everywhere, and
+inherit text colour so the concept palette (cyan/magenta/
+amber/teal/violet) propagates without per-icon code.
+
+---
+
 ## [1.7.31] — 2026-06-02
 
 Quality-pass sprint. Picked 4 of the 23 v1.7.30 pending items

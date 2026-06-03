@@ -13,12 +13,25 @@
      mix communicates depth without information overload. -->
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
+    // v1.7.32 — Brand mark uses the real Lucy avatar instead of a unicode
+    // ✦ that overlapped visually with Google Gemini's brand glyph.
+    import { LUCY_AVATAR_DATA_URL as lucyAvatarUrl } from '$lib/assets/lucy-avatar-data';
+    // v1.7.32 — Suggestion icons use Tabler (Lucy's existing pack) instead of
+    // unicode emojis (🧠⚡⌬◆) which render inconsistently across OSes and
+    // don't match the rest of the UI vocabulary.
+    import Brain    from '@tabler/icons-svelte/icons/brain';
+    import Share3   from '@tabler/icons-svelte/icons/share-3';
+    import Bolt     from '@tabler/icons-svelte/icons/bolt';
+    import Cpu      from '@tabler/icons-svelte/icons/cpu';
+    import Book     from '@tabler/icons-svelte/icons/book-2';
+    import Sparkles from '@tabler/icons-svelte/icons/sparkles';
 
     export let userName: string = '';
     export let isEN: boolean = false;
-    /** Optional contextual starter suggestions. Each is one short imperative
-     *  phrase that becomes the input value (does NOT submit immediately). */
-    export let suggestions: Array<{ glyph: string; label: string; prompt: string }> = [];
+    /** Optional contextual starter suggestions. Each maps a Tabler icon
+     *  component to a label + prompt. The host can override but the
+     *  defaults below cover the v1.7.32 + v1.7.29 surfaces. */
+    export let suggestions: Array<{ icon: any; label: string; prompt: string }> = [];
 
     const dispatch = createEventDispatcher<{ suggest: string }>();
 
@@ -42,22 +55,28 @@
     // distinctive surfaces (skills, memory, runbooks) rather than the
     // generic "help me with X".
     $: defaultSuggestions = isEN ? [
-        { glyph: '🧠', label: 'Open Memoria',     prompt: '/memory' },
-        { glyph: '⌬', label: 'Knowledge graph',  prompt: '/kg' },
-        { glyph: '⚡', label: 'Browse skills',     prompt: '/sec-skill' },
-        { glyph: '◆',  label: 'CPU SIMD info',     prompt: '/cpu' },
+        { icon: Brain,    label: 'Open Memoria',      prompt: '/memory' },
+        { icon: Share3,   label: 'Knowledge graph',   prompt: '/kg' },
+        { icon: Bolt,     label: 'Browse skills',     prompt: '/sec-skill' },
+        { icon: Cpu,      label: 'CPU SIMD info',     prompt: '/cpu' },
     ] : [
-        { glyph: '🧠', label: 'Abrir Memoria',    prompt: '/memory' },
-        { glyph: '⌬', label: 'Grafo de conocimiento', prompt: '/kg' },
-        { glyph: '⚡', label: 'Ver skills',         prompt: '/sec-skill' },
-        { glyph: '◆',  label: 'Info CPU SIMD',     prompt: '/cpu' },
+        { icon: Brain,    label: 'Abrir Memoria',     prompt: '/memory' },
+        { icon: Share3,   label: 'Grafo de conocimiento', prompt: '/kg' },
+        { icon: Bolt,     label: 'Ver skills',        prompt: '/sec-skill' },
+        { icon: Cpu,      label: 'Info CPU SIMD',     prompt: '/cpu' },
     ];
 
     $: rendered = suggestions.length > 0 ? suggestions : defaultSuggestions;
 </script>
 
 <div class="ces-wrap">
-    <div class="ces-mark">✦</div>
+    <!-- v1.7.32 — Hero mark uses the actual Lucy avatar art (loaded as a
+         base64 PNG from $lib/assets/lucy-avatar-data) instead of the
+         unicode ✦ that resembled Google Gemini's brand glyph. The
+         drop-shadow + breathing animation transfer to the <img>. -->
+    <div class="ces-mark-wrap">
+        <img class="ces-mark-img" src={lucyAvatarUrl} alt="Lucy" draggable="false" />
+    </div>
     <h1 class="ces-title">Lucy</h1>
     <p class="ces-greet">
         {greeting()}{userName ? ', ' : ''}<strong>{userName}</strong>
@@ -78,7 +97,9 @@
             <button class="ces-sug" type="button" role="listitem"
                     title={s.prompt}
                     on:click={() => dispatch('suggest', s.prompt)}>
-                <span class="ces-sug-glyph">{s.glyph}</span>
+                <span class="ces-sug-glyph">
+                    <svelte:component this={s.icon} size={16} stroke={1.8} />
+                </span>
                 <span class="ces-sug-label">{s.label}</span>
                 <span class="ces-sug-cmd">{s.prompt}</span>
             </button>
@@ -97,16 +118,39 @@
         animation: ces-fade-in 280ms ease;
     }
 
-    .ces-mark {
-        font-size: 36px; line-height: 1;
-        color: var(--accent, #10b981);
-        filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent, #10b981) 50%, transparent));
+    /* v1.7.32 — Lucy avatar hero mark. The wrap controls the breathing
+       animation so the <img> doesn't need a re-encode every frame. */
+    .ces-mark-wrap {
+        width: 56px; height: 56px;
+        margin-bottom: 8px;
+        border-radius: 14px;
+        overflow: hidden;
+        background: color-mix(in srgb, var(--accent, #10b981) 8%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent, #10b981) 35%, transparent);
+        box-shadow:
+            0 0 0 1px rgba(0,0,0,.35),
+            0 0 24px -2px color-mix(in srgb, var(--accent, #10b981) 50%, transparent);
         animation: ces-mark-breathe 4s ease-in-out infinite;
-        margin-bottom: 4px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .ces-mark-img {
+        width: 100%; height: 100%;
+        object-fit: cover;
+        display: block;
+        user-select: none;
+        -webkit-user-drag: none;
     }
     @keyframes ces-mark-breathe {
-        0%,100% { transform: scale(1);    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent, #10b981) 40%, transparent)); }
-        50%     { transform: scale(1.08); filter: drop-shadow(0 0 28px color-mix(in srgb, var(--accent, #10b981) 70%, transparent)); }
+        0%,100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 1px rgba(0,0,0,.35),
+                        0 0 22px -2px color-mix(in srgb, var(--accent, #10b981) 45%, transparent);
+        }
+        50%     {
+            transform: scale(1.05);
+            box-shadow: 0 0 0 1px rgba(0,0,0,.35),
+                        0 0 36px 0 color-mix(in srgb, var(--accent, #10b981) 75%, transparent);
+        }
     }
 
     .ces-title {
@@ -177,6 +221,9 @@
     .ces-sug-glyph {
         font-size: 16px; line-height: 1;
         flex-shrink: 0;
+        color: var(--accent, #10b981);
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 18px; height: 18px;
     }
     .ces-sug-label {
         flex: 1;
