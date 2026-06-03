@@ -53,6 +53,11 @@ export interface SlashCtx {
     hosts: Array<{ id: string; name: string; host: string; username: string; type?: 'windows'|'linux'; port?: number; sshKeyPath?: string | null }>;
     tabs: Array<{ id: string; title: string; selectedModel?: string }>;
     LLM_GROUPS: Array<{ label: string; options: Array<{ id: string; icon?: string }> }>;
+    /** v1.7.34 — optional accessors for /capabilities. The page passes
+     *  the current snapshot; if either is absent we degrade gracefully
+     *  to a zero count instead of erroring. */
+    mcpServers?: Array<{ name: string; enabled?: boolean }>;
+    runbooks?: () => Array<{ id: string }>;
 
     /** Config flags the user can toggle via slash commands (restored after
      *  Sprint D regression). Updated in place via setSmartRouting / setPrivacy. */
@@ -1426,6 +1431,65 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         // ── v1.7.19 — /cpu (SIMD backend introspection) ──
         // Shows which cosine-similarity backend Lucy picked at boot for
         // the skills auto-routing Tier 2 + memory grounding hot path.
+        // ── v1.7.34 — /capabilities (self-introspection report) ──
+        // Combines backend skill index + frontend ECC preset count + MCP
+        // servers + runbooks into one "what can Lucy do" answer so the
+        // operator never has to ask the LLM to enumerate itself
+        // (LLM doesn't have introspection — only the host process does).
+        case 'capabilities': case 'capacidades': case 'skills-summary':
+        case 'self': case 'me': case 'inventory': {
+            (async () => {
+                try {
+                    const sec = await invoke<{
+                        cybersec_skills_bundled: number;
+                        cybersec_skills_user: number;
+                        cybersec_domains: number;
+                        cybersec_frameworks: number;
+                        auto_route_enabled: boolean;
+                        embed_cache_ready: boolean;
+                    }>('lucy_capabilities_skills');
+
+                    // ECC preset count — single hard number from v1.6.1
+                    // catalog; the picker imports it from skill-preset-store.
+                    let presetTotal = 18;
+                    try {
+                        const m = await import('$lib/skill-presets');
+                        presetTotal = m.SKILL_PRESETS?.length ?? 18;
+                    } catch { presetTotal = 18; }
+
+                    // MCP servers + runbooks — read from the host
+                    // accessors passed via ctx (no Tauri round-trip).
+                    const mcpCount = ctx.mcpServers?.length ?? 0;
+                    const runbookCount = (() => {
+                        try { return ctx.runbooks?.()?.length ?? 0; } catch { return 0; }
+                    })();
+
+                    const totalSec = sec.cybersec_skills_bundled + sec.cybersec_skills_user;
+                    sysMsg(renderResultBlocks(
+                        ctx.isEN ? '◆ Lucy capabilities' : '◆ Capacidades de Lucy',
+                        [{
+                            title: ctx.isEN ? 'Loaded inventory' : 'Inventario cargado',
+                            icon: '◆', tone: 'info', defaultOpen: true,
+                            html:
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Cybersec skills (total)' : 'Skills cybersec (total)'}</span><span class="rb-v"><b>${totalSec}</b></span></div>` +
+                                `<div class="rb-row" style="opacity:.8;"><span class="rb-k">&nbsp;&nbsp;${ctx.isEN ? 'bundled' : 'bundled'}</span><span class="rb-v">${sec.cybersec_skills_bundled}</span></div>` +
+                                `<div class="rb-row" style="opacity:.8;"><span class="rb-k">&nbsp;&nbsp;${ctx.isEN ? 'user-installed' : 'instaladas por usuario'}</span><span class="rb-v">${sec.cybersec_skills_user}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Domains covered' : 'Dominios cubiertos'}</span><span class="rb-v">${sec.cybersec_domains}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Frameworks mapped' : 'Frameworks mapeados'}</span><span class="rb-v">${sec.cybersec_frameworks}</span></div>` +
+                                `<div class="rb-row" style="margin-top:6px;"><span class="rb-k">${ctx.isEN ? 'ECC presets available' : 'Presets ECC disponibles'}</span><span class="rb-v"><b>${presetTotal}</b></span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'MCP servers registered' : 'MCP servers registrados'}</span><span class="rb-v">${mcpCount}</span></div>` +
+                                `<div class="rb-row"><span class="rb-k">${ctx.isEN ? 'Runbooks saved' : 'Runbooks guardados'}</span><span class="rb-v">${runbookCount}</span></div>` +
+                                `<div class="rb-row" style="margin-top:6px;opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Auto-routing' : 'Auto-routing'}</span><span class="rb-v">${sec.auto_route_enabled ? '✓ on' : '✗ off'}</span></div>` +
+                                `<div class="rb-row" style="opacity:.7;"><span class="rb-k">${ctx.isEN ? 'Embedding cache' : 'Cache de embeddings'}</span><span class="rb-v">${sec.embed_cache_ready ? '✓ ready' : '⚠ rebuild needed'}</span></div>` +
+                                `<div class="rb-row" style="margin-top:8px;font-size:11px;opacity:.6;"><span class="rb-k"></span><span class="rb-v">${ctx.isEN ? 'Use <code>/sec-skill</code> to browse cybersec skills, <code>/preset</code> for ECC presets' : 'Usa <code>/sec-skill</code> para ver skills cybersec, <code>/preset</code> para los ECC'}</span></div>`,
+                        }]));
+                } catch (e) {
+                    sysMsg(`Error: ${String(e)}`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         case 'cpu': case 'simd': case 'simd-info': {
             (async () => {
                 try {

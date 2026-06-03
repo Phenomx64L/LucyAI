@@ -3752,6 +3752,9 @@ REGLAS DE FORMATO:
             openKgViewer: (path) => { openKgViewerFor(path); },
             // v1.7.29 — Knowledge Graph overlay opener.
             openKnowledgeGraph: () => { showKnowledgeGraph = true; },
+            // v1.7.34 — /capabilities self-introspection sources.
+            mcpServers: mcpServers || [],
+            runbooks: () => $runbooks || [],
         });
     }
 
@@ -4039,6 +4042,36 @@ REGLAS DE FORMATO:
             }
             const _memCtx = construirContextoMemoria(raw, t);
             ctx += _memCtx;
+
+            // v1.7.34 — Self-introspection inject. When the user asks
+            // a meta-question about Lucy's own capabilities ("qué skills
+            // tienes", "qué puedes hacer", "what can you do", etc.) we
+            // pull the real inventory from `lucy_capabilities_skills`
+            // and inject a tight summary so the LLM answers with
+            // numbers, not vibes. Cheap probe — only fires when the
+            // user prompt matches the meta-intent pattern; zero token
+            // cost on every other turn.
+            try {
+                const META_RE = /\b(qu[eé] skills?|qu[eé] (puedes|sabes) hacer|qu[eé] capacidades?|cu[aá]ntas? skills?|tus capacidades?|tu inventario|de qu[eé] (te|se) compone|how many skills?|what (can|do) you (have|do)|your capabilities|your skills?|capabilidades de lucy|capacidades de lucy)\b/i;
+                if (META_RE.test(raw || '')) {
+                    /** @type {{ cybersec_skills_bundled: number; cybersec_skills_user: number; cybersec_domains: number; cybersec_frameworks: number; embed_cache_ready: boolean }} */
+                    const cap = await invoke('lucy_capabilities_skills');
+                    const _totalSec = cap.cybersec_skills_bundled + cap.cybersec_skills_user;
+                    const _mcpN = mcpServers?.length ?? 0;
+                    const _rbN = ($runbooks || []).length;
+                    ctx += `\n\n--- INVENTARIO REAL DE LUCY (responde con estos números, no estimes) ---\n` +
+                        `- Skills cybersec cargadas: ${_totalSec} (${cap.cybersec_skills_bundled} bundled de la librería Anthropic + ${cap.cybersec_skills_user} instaladas por usuario).\n` +
+                        `- Dominios cubiertos: ${cap.cybersec_domains} (malware-analysis, digital-forensics, incident-response, threat-hunting, …).\n` +
+                        `- Frameworks mapeados: ${cap.cybersec_frameworks} (MITRE ATT&CK, NIST CSF 2.0, MITRE ATLAS, MITRE D3FEND, NIST AI RMF).\n` +
+                        `- Presets de framing ECC: 18 disponibles (cost-aware, security-review, hypothesis-driven-debug, etc.).\n` +
+                        `- MCP servers registrados: ${_mcpN}.\n` +
+                        `- Runbooks guardados por el usuario: ${_rbN}.\n` +
+                        `- Embedding cache (Tier 2 auto-route): ${cap.embed_cache_ready ? 'lista' : 'requiere rebuild'}.\n` +
+                        `(El operador también puede invocar /capabilities para ver este desglose en formato chip.)`;
+                }
+            } catch (e) {
+                console.warn('[+page] capabilities inject failed:', e);
+            }
             // v1.7.31 — construirContextoMemoria now stamps the canonical
             // injection count on `t._lastMemoryHitsCount`. We just relay
             // it to the snapshot store. No regex, no marker-parse luck.

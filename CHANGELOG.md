@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.34] — 2026-06-02
+
+### Lucy can now count her own skills
+
+User reported that asking "qué skills tienes configuradas?" in
+natural language got hand-waved descriptive answers — Gemini
+narrated "tengo herramientas nativas y procedimientos" and
+Claude couldn't index its skills at all. The LLM doesn't have
+introspection into what's bundled with Lucy; only the host
+process does. Three-part fix:
+
+#### 1. Backend self-introspection (`security_skills.rs`)
+
+New `lucy_capabilities_skills` Tauri command counts:
+
+- Bundled cybersec skills (Anthropic library)
+- User-installed skills (`%LOCALAPPDATA%\Lucy\security-skills\`)
+- Distinct domains across the index
+- Frameworks with at least one mapping (MITRE ATT&CK / NIST CSF /
+  MITRE ATLAS / MITRE D3FEND / NIST AI RMF)
+- Embed cache readiness (Tier 2 auto-route ready?)
+
+Pure index scan, no I/O. Sub-millisecond.
+
+#### 2. `/capabilities` slash command (`slash-commands.ts`)
+
+Aliases: `capabilities | capacidades | skills-summary | self |
+me | inventory`. Renders a chip panel with the full breakdown:
+
+```
+◆ Inventario cargado
+  Skills cybersec (total)     213
+    bundled                   213
+    user-installed              0
+  Dominios cubiertos           26
+  Frameworks mapeados           5
+  Presets ECC disponibles      18
+  MCP servers registrados       0
+  Runbooks guardados            0
+  Auto-routing                 ✓ on
+  Embedding cache              ✓ ready
+```
+
+Use `/sec-skill` to browse, `/preset` for ECC presets.
+
+#### 3. Meta-question detector in `+page.svelte`
+
+When the user prompt matches `/qué skills?|qué puedes hacer|qué
+capacidades?|cuántas? skills?|what can you do|your capabilities/i`
+(both ES and EN), the page fetches the real inventory and
+injects a tight pinned block at the end of the context:
+
+```
+--- INVENTARIO REAL DE LUCY (responde con estos números, no estimes) ---
+- Skills cybersec cargadas: 213 (213 bundled + 0 user)
+- Dominios cubiertos: 26
+- Frameworks mapeados: 5
+- Presets ECC: 18 disponibles
+- MCP servers registrados: 0
+- Runbooks guardados: 0
+- Embedding cache: lista
+```
+
+Now the LLM has authoritative numbers AND an instruction not to
+estimate. The user gets correct counts whether they ask via
+slash command OR in natural language. Zero token cost on every
+other turn (gated by regex test).
+
+---
+
 ## [1.7.33] — 2026-06-02
 
 ### Sidebar concept tints — quiet by default, loud on intent

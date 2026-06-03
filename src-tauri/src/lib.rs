@@ -525,6 +525,8 @@ pub fn run() {
             commands::annealing::memory_annealing_demote,
             // v1.7.4 — Anthropic Cybersecurity Skills library.
             commands::security_skills::security_skills_list,
+            // v1.7.34 — self-introspection for /capabilities surface.
+            commands::security_skills::lucy_capabilities_skills,
             commands::security_skills::security_skills_search,
             commands::security_skills::security_skills_get,
             commands::security_skills::security_skills_categories,

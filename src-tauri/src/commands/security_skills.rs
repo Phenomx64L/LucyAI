@@ -383,6 +383,60 @@ pub async fn security_skills_list() -> Result<Vec<SkillMeta>, String> {
     Ok(load_index().clone())
 }
 
+// ── v1.7.34 — Lucy self-introspection (capabilities report) ─────────────
+//
+// User reported asking Lucy "qué skills tienes configuradas" and getting
+// hand-waved generic answers because the LLM has no introspection into
+// what's actually loaded. This command exposes the real inventory so
+// (a) the frontend can render a /capabilities surface,
+// (b) the system prompt can inject a one-line summary, and
+// (c) the LLM has a single authoritative number when asked.
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CapabilitiesReport {
+    /// Total bundled cybersec skills (Anthropic library + community).
+    pub cybersec_skills_bundled: u32,
+    /// User-defined skills (`%LOCALAPPDATA%\Lucy\security-skills\<id>\SKILL.md`).
+    pub cybersec_skills_user:    u32,
+    /// Domains covered (e.g. malware-analysis, digital-forensics, …).
+    pub cybersec_domains:        u32,
+    /// Frameworks mapped (MITRE ATT&CK, NIST CSF, ATLAS, D3FEND, AI RMF).
+    pub cybersec_frameworks:     u32,
+    /// All `route` candidates considered in Tier 1+2+3 auto-route.
+    pub auto_route_enabled:      bool,
+    /// Whether the embedding cache has been computed (Tier 2 needs it).
+    pub embed_cache_ready:       bool,
+}
+
+#[tauri::command]
+pub async fn lucy_capabilities_skills() -> Result<CapabilitiesReport, String> {
+    let idx = load_index();
+    // Source flag distinguishes bundled vs user skills (added in v1.7.15).
+    let user_count = idx.iter().filter(|m| m.source == "user").count() as u32;
+    let bundled_count = idx.iter().filter(|m| m.source == "bundled").count() as u32;
+    let domains: std::collections::HashSet<&str> = idx.iter()
+        .map(|m| m.domain.as_str())
+        .filter(|d| !d.is_empty())
+        .collect();
+    // Count how many of the 5 cross-framework taxonomies have ANY skill
+    // mapping. (Schema flattened them into separate Vec<String> columns.)
+    let mut framework_count = 0u32;
+    if idx.iter().any(|m| !m.nist_csf.is_empty())     { framework_count += 1; }
+    if idx.iter().any(|m| !m.mitre_attck.is_empty())  { framework_count += 1; }
+    if idx.iter().any(|m| !m.mitre_atlas.is_empty())  { framework_count += 1; }
+    if idx.iter().any(|m| !m.mitre_d3fend.is_empty()) { framework_count += 1; }
+    if idx.iter().any(|m| !m.ai_rmf.is_empty())       { framework_count += 1; }
+    let cache_path_pb = cache_path();
+    Ok(CapabilitiesReport {
+        cybersec_skills_bundled: bundled_count,
+        cybersec_skills_user:    user_count,
+        cybersec_domains:        domains.len()    as u32,
+        cybersec_frameworks:     framework_count,
+        auto_route_enabled:      true,
+        embed_cache_ready:       cache_path_pb.exists(),
+    })
+}
+
 /// Keyword + framework-code search. `limit` defaults to 10, max 30.
 #[tauri::command]
 pub async fn security_skills_search(
