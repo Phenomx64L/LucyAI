@@ -119,38 +119,63 @@
     }
 
     /* v1.7.32 — Lucy avatar hero mark. The wrap controls the breathing
-       animation so the <img> doesn't need a re-encode every frame. */
+       animation so the <img> doesn't need a re-encode every frame.
+
+       v1.7.43 — Split the breathing effect into compositor-friendly
+       layers:
+         • The wrap itself only animates `transform: scale()` — the
+           one transform property the compositor can interpolate on
+           its own thread with zero repaint cost.
+         • The glow lives in a separate `::before` pseudo-element with
+           a STATIC box-shadow; we breathe its `opacity` (also
+           compositor-only) instead of animating `box-shadow` blur
+           radius (which is a per-frame raster pass on a ~128×128
+           area — small but the GPU pays it 60 times a second).
+       Net effect to the eye is identical; GPU cost drops to near zero. */
     .ces-mark-wrap {
+        position: relative;
         width: 56px; height: 56px;
         margin-bottom: 8px;
         border-radius: 14px;
-        overflow: hidden;
+        overflow: visible; /* glow now lives in ::before, needs to escape */
         background: color-mix(in srgb, var(--accent, #10b981) 8%, transparent);
         border: 1px solid color-mix(in srgb, var(--accent, #10b981) 35%, transparent);
-        box-shadow:
-            0 0 0 1px rgba(0,0,0,.35),
-            0 0 24px -2px color-mix(in srgb, var(--accent, #10b981) 50%, transparent);
+        box-shadow: 0 0 0 1px rgba(0,0,0,.35);
         animation: ces-mark-breathe 4s ease-in-out infinite;
         display: flex; align-items: center; justify-content: center;
+        will-change: transform;
+    }
+    .ces-mark-wrap::before {
+        content: '';
+        position: absolute;
+        inset: -2px;
+        border-radius: inherit;
+        pointer-events: none;
+        z-index: -1;
+        box-shadow: 0 0 36px 0 color-mix(in srgb, var(--accent, #10b981) 75%, transparent);
+        animation: ces-mark-glow 4s ease-in-out infinite;
+        will-change: opacity;
     }
     .ces-mark-img {
         width: 100%; height: 100%;
         object-fit: cover;
         display: block;
+        border-radius: inherit; /* clip image now that wrap is overflow:visible */
         user-select: none;
         -webkit-user-drag: none;
     }
     @keyframes ces-mark-breathe {
-        0%,100% {
-            transform: scale(1);
-            box-shadow: 0 0 0 1px rgba(0,0,0,.35),
-                        0 0 22px -2px color-mix(in srgb, var(--accent, #10b981) 45%, transparent);
-        }
-        50%     {
-            transform: scale(1.05);
-            box-shadow: 0 0 0 1px rgba(0,0,0,.35),
-                        0 0 36px 0 color-mix(in srgb, var(--accent, #10b981) 75%, transparent);
-        }
+        0%,100% { transform: scale(1);    }
+        50%     { transform: scale(1.05); }
+    }
+    @keyframes ces-mark-glow {
+        0%,100% { opacity: 0.55; }
+        50%     { opacity: 1;    }
+    }
+    /* Honour reduced-motion preferences. */
+    @media (prefers-reduced-motion: reduce) {
+        .ces-mark-wrap         { animation: none; transform: scale(1.02); }
+        .ces-mark-wrap::before { animation: none; opacity: 0.7; }
     }
 
     .ces-title {

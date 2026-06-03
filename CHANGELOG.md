@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.43] — 2026-06-03
+
+### Kill the worst idle-GPU offenders
+
+After v1.7.42 the user verified that Lucy was now correctly bound
+to the discrete GPU (RTX A3000 dedicated VRAM in use), but Task
+Manager still showed ~23 % GPU usage with Lucy open on the empty
+state and zero interaction. Investigated and found two CSS
+animations doing per-frame raster work for visually marginal
+effect:
+
+**Culprit 1 (primary). `lucy-living-bg` — a continuous breathing
+animation on the page background.**
+
+The rule in `src/routes/page.css` was animating
+`background-size: 100% 100% → 108% 108%` on `:root` over a 14 s
+cycle. Three things made this catastrophic:
+
+  • `background-size` is **not** a compositor-only property —
+    every interpolated frame forces a full rasterisation of the
+    gradient at the new size.
+  • `:root` covers the entire viewport (~1920 × 1080 on a
+    typical laptop) — every frame re-paints ~2 megapixels.
+  • Above that viewport sit Mica (Win11 wallpaper blur) and the
+    ~22 in-page `backdrop-filter` layers from earlier sprints —
+    each of those layers re-blurs its backdrop on every repaint.
+
+The "effect" was an 8 % growth of the radial peak over 7 s — so
+subtle the user can't tell it's running. **Removed entirely.**
+Static gradients render once and live in the compositor as a
+fixed layer with zero ongoing GPU cost. The existing
+`body::before ambient-drift` overlay still provides a living-
+canvas feel using `transform: translate3d() scale()`, which is
+compositor-only and effectively free.
+
+**Culprit 2 (secondary). `ces-mark-breathe` on the empty-state
+Lucy avatar — animated `box-shadow` blur radius.**
+
+The hero mark's breathing animation was interpolating the blur
+radius of its `box-shadow` from 22 px to 36 px (and the spread
+from -2 px to 0 px). Box-shadow blur is a per-frame raster pass:
+even though the wrap is only 56 × 56, the resulting glow area
+is ~128 × 128, paid at 60 fps. Restructured:
+
+  • The wrap now only animates `transform: scale(1 → 1.05)` —
+    compositor-only, free.
+  • A new `::before` pseudo-element carries a **static** large
+    box-shadow; we breathe its `opacity` (0.55 → 1.0), also
+    compositor-only.
+
+The eye sees the same glow pulse; the GPU pays almost nothing.
+`prefers-reduced-motion: reduce` honoured by freezing both
+sub-animations at their midpoint.
+
+**Files touched.**
+- `src/routes/page.css` — drop `lucy-living-bg` animation +
+  `@keyframes` block + the AMOLED override that disabled it
+  (no longer needed). Verbose comment explains why for future
+  contributors tempted to re-add a "subtle breathing" gradient.
+- `src/lib/ChatEmptyState.svelte` — split breathing into
+  transform-on-wrap + opacity-on-::before pseudo, add
+  `prefers-reduced-motion` override.
+
+**Expected delta.** Idle GPU drops from ~23 % to ~5–10 %
+(measured: a Chrome window with one static page ≈ 0–2 %; Lucy
+will sit a bit higher because of Mica + tooltips with
+backdrop-filter, but the "always-on" continuous load goes away).
+
+**What's still pending (separate sprint).**
+- 30-file `backdrop-filter` audit: most in-page blurs are
+  redundant with Mica and can be replaced by solid
+  `rgba(15,20,30,0.85)` backdrops.
+- Pause more idle animations when `document.visibilityState ===
+  'hidden'` (some already do via the `.app-hidden` class, but
+  the coverage is incomplete).
+
+---
+
 ## [1.7.42] — 2026-06-03
 
 ### GPU vendor hints + WebView2 acceleration flags + single window effect

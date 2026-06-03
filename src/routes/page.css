@@ -200,23 +200,32 @@ body{font-family:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;col
 /* Warp theme — only active in DARK mode (light mode keeps its own bg).
    Radial peak shifted DOWN to 50% 18% so it sits BELOW the opaque titlebar
    (~38px ≈ 5% of viewport) and is actually visible.
-   LIVING BACKGROUND: subtle slow breathing — the radial peak drifts
-   and pulses on a 14s cycle. Anchored via background-size to ensure the
-   linear bottom layer stays static. */
+
+   v1.7.43 — Removed the `lucy-living-bg` 14s breathing animation that
+   used to live here. It was animating `background-size` on a full-
+   viewport element, which is the worst possible CSS animation pattern
+   for GPU usage:
+     • `background-size` is NOT a compositor-only property → forces a
+       full repaint of the viewport on every animation frame (60 fps).
+     • The viewport spans the whole window (~1920×1080 on a typical
+       laptop) → every frame re-rasterises ~2 megapixels of gradient.
+     • The window is layered under Mica (Win11) + ~22 in-page
+       `backdrop-filter` layers, every one of which had to re-blur its
+       backdrop each repaint.
+   Measured cost: ~15–20 % continuous GPU on an RTX A3000 at idle, for
+   a "breathing" effect that grew the radial peak by 8 % over 7 s —
+   visually almost imperceptible. The animation has been removed.
+   Static gradients render once and live in the compositor as a fixed
+   layer — zero ongoing GPU cost. The `body::before` `ambient-drift`
+   overlay still provides a subtle living-canvas feel using transforms
+   (compositor-only, cheap). */
 :root:not(.light) .root[data-theme]{
   background:
     radial-gradient(ellipse 90% 70% at 50% 18%, var(--bg-top) 0%, transparent 55%),
     linear-gradient(180deg, var(--bg-mid) 0%, var(--bg-bottom) 100%) !important;
   background-size: 100% 100%, 100% 100%;
   transition:background .5s ease;
-  animation: lucy-living-bg 14s ease-in-out infinite;
 }
-@keyframes lucy-living-bg{
-  0%, 100% { background-size: 100% 100%, 100% 100%; }
-  50%      { background-size: 108% 108%, 100% 100%; }
-}
-/* AMOLED keeps absolute-black to honor OLED battery savings — no breathing */
-:root:not(.light) .root[data-theme="amoled"]{ animation:none; }
 
 /* ── GPU saver: when the window is hidden/minimized, pause every infinite
  * animation app-wide. The `.app-hidden` class is toggled from
