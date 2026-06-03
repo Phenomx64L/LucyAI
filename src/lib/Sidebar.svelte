@@ -20,8 +20,15 @@
     import ClipboardList from '@tabler/icons-svelte/icons/clipboard-list';
 
     import Brain from '@tabler/icons-svelte/icons/brain';
-    // v1.7.27 — Memory feed widget (recent memories ticker).
-    import MemoryFeed from '$lib/MemoryFeed.svelte';
+    // v1.7.40 — MemoryFeed widget removed from the sidebar. User reported
+    // the 3-row ticker (v1.7.27) was actively confusing: clicking any row
+    // gave no visual indication of which memory was newest, and the
+    // 3-row cap meant later memories were never reachable from this
+    // surface anyway. The full ledger lives one click away in the
+    // "Memoria" view (Memory Browser), which is the right place for
+    // browsing N memories with sort/filter/grounding affordances.
+    // The component file `$lib/MemoryFeed.svelte` is kept for now in
+    // case we revisit a slimmer "newest-only" badge in the future.
     // v1.7.29 — Knowledge Graph icon (Share3 = three connected nodes,
     // matches the icon used in the Memory Browser graph tab).
     import Share3 from '@tabler/icons-svelte/icons/share-3';
@@ -190,14 +197,9 @@
         <span class="sb-ico"><Brain size={20} /></span><span class="sb-txt">{isEN ? 'Memory' : 'Memoria'}</span>
     </div>
 
-    <!-- v1.7.36 — MemoryFeed moved here, IMMEDIATELY under the Memoria
-         item. Previously it lived at the bottom of the Sistema accordion
-         where it was orphaned — visually separated from the concept it
-         belongs to by 3+ unrelated rows. Now it reads as a sub-panel
-         of Memoria: "click the row to open, see what's brewing under
-         it" — same mental model as the Outlook unread-mail preview. -->
-    <MemoryFeed {isEN} {sidebarCollapsed}
-        on:open={(e) => dispatch('setview', { view: 'memory' })} />
+    <!-- v1.7.40 — MemoryFeed widget removed. Browsing N memories needs
+         sort/filter/grounding affordances that only the full Memoria
+         view provides. See the import comment above for rationale. -->
 
     <!-- v1.7.29 — Knowledge Graph as a first-class entry. The graph
          component lives at the panel root (opened via `openkggraph`

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.40] — 2026-06-03
+
+### MemoryFeed widget removed from sidebar
+
+User reported the v1.7.27 MemoryFeed (3-row recent-memory
+ticker under the Memoria item) was actively confusing:
+
+1. Clicking any row gave no indication which memory was newest
+   — the rows looked identical except for the time-ago label,
+   and the time stamps started at 2-5 days old in normal use.
+2. The 3-row cap meant later memories were never reachable
+   from this surface anyway.
+3. Browsing N memories needs sort/filter/grounding affordances
+   that only the full Memoria view provides — the sidebar
+   widget was always going to be a worse version of the
+   browser one click away.
+
+Decision: remove the widget cleanly. The full Memoria view
+(opened by clicking the Memoria sb-it) was always the right
+surface for browsing; the ticker pretended to add value but
+was just a smaller mis-prioritised list.
+
+`$lib/MemoryFeed.svelte` kept in tree for now in case we
+revisit a slimmer "newest-only with timestamp" badge embedded
+directly on the Memoria row (single number + delta indicator),
+which would actually answer the high-frequency question "did I
+gain a memory recently?" without pretending to be a browser.
+
+---
+
 ## [1.7.39] — 2026-06-03
 
 ### Registros accordion: upside-down expansion fix
