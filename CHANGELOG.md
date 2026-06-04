@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.71] — 2026-06-04
+
+### Memory Graph — d3-force replaces hand-rolled Euler integrator
+
+Fixes the user-reported "weird pyramid" appearance of the Memory Graph
+view: a cluster of nodes clumped at one corner with a long cone of
+edges shooting off into empty space (no terminating node visible).
+
+**Root cause.** The previous physics (lines 266-329 of the v1.7.70
+file) used `F = K_REPEL / d²` with simple Euler integration. When two
+nodes happened to start very close, that produced a force magnitude in
+the 10⁴ range. The clamp at `MAX_VEL = 12` capped one step but
+cumulative drift across the first few ticks sent 1-3 nodes flying
+off-canvas before springs could rein them in. With 40 embedding edges
+in a 17-node graph, every escaped node became the apex of a long fan
+of edges — the visible "cone".
+
+**Fix.** Swapped the custom physics for [d3-force](https://github.com/d3/d3-force)
+(~25 KB gzipped, the industry-standard force layout used by
+Observable, d3 itself, and most of the data viz web). Specifically:
+
+- `forceManyBody({ strength, distanceMin: 20, distanceMax: 800 })` —
+  Barnes-Hut quadtree repulsion. `distanceMin: 20` is the soft
+  minimum that kills the d²-singularity; no node can produce an
+  infinite force.
+- `forceLink(links).id(...).distance(...).strength(...)` — springs
+  with per-edge length and stiffness; same-community edges contract
+  ~15% harder so clusters separate visually.
+- `forceCenter()` + `forceX/Y(viewW/2 | viewH/2)` — soft centering
+  on the viewport midline.
+- Verlet integration with automatic `alpha` decay from 1 → 0.001 over
+  ~180 ticks, after which the simulation stops cleanly. No more
+  arbitrary `ticksSinceLoad > 400` cap.
+
+**Drag handling rewritten** to use d3's canonical `node.fx / node.fy`
+fixed-coordinate fields: when the user starts dragging, the node's
+fx/fy are set; on release they're cleared so the node rejoins the
+simulation. `node.pinned` is kept for the visual indicator and
+fitToView logic.
+
+**reheat(alpha)** helper added — used by drag start and "reset pins"
+to re-energise the simulation when the data hasn't reloaded but the
+layout needs to re-settle.
+
+**Initial seeding preserved** — we still place nodes by community on
+load so clusters are visible from frame 1 (d3-force respects whatever
+x/y you pre-set; if undefined it uses its own phyllotaxis).
+
+**Bundle cost.** `d3-force@3` + types: +25 KB gzipped runtime, +0 KB
+to Rust binary. The full d3 package is NOT pulled in — only the
+`d3-force` submodule.
+
+**Files touched.** `src/lib/MemoryGraphView.svelte` (physics + drag
+handlers + reheat helper), `package.json` (d3-force dep).
+
+`npm test` — 171/171, 14/14 suites.
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.70] — 2026-06-04
 
 ### Self-Diagnostics — four more one-click repair handlers

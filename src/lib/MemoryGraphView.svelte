@@ -42,6 +42,25 @@
 <script lang="ts">
     import { onMount, onDestroy, createEventDispatcher, tick } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.71 — d3-force replaces the hand-rolled Euler integrator.
+    // Why: the previous custom physics (K_REPEL / d² with simple Euler
+    // + clamp) blew up when two nodes started near each other — one
+    // tick produced a 10⁴-magnitude force, velocity-clamped at 12 px,
+    // but cumulative drift sent a handful of nodes far off-canvas
+    // before the springs could pull them back. With 40 embedding
+    // edges, every escaped node became the apex of a long cone of
+    // edges (the "weird pyramid" the user reported).
+    //
+    // d3-force is the industry standard (since 2015, used by Observable,
+    // d3 itself, every viz tutorial on the web). It uses Verlet
+    // integration with a Barnes-Hut quadtree for repulsion — so the
+    // d² singularity gets a soft minimum and forces stay bounded.
+    // Alpha decays automatically over ~300 ticks, removing the manual
+    // ticksSinceLoad cutoff. Bundle cost: ~25 KB gzipped.
+    import {
+        forceSimulation, forceManyBody, forceLink, forceCenter, forceX, forceY,
+        type Simulation, type SimulationNodeDatum, type SimulationLinkDatum,
+    } from 'd3-force';
 
     export let isEN: boolean = false;
     const dispatch = createEventDispatcher<{
@@ -123,14 +142,26 @@
     let draggingPan = false;
     let lastPx = 0, lastPy = 0;
 
-    // ── Force parameters (calibrated) ────────────────────────────────────
-    const K_REPEL  = 1800;
-    const K_SPRING = 0.04;
-    const REST_LEN = 80;
-    const K_CENTER = 0.005;
-    const DAMPING  = 0.85;
-    const MAX_VEL  = 12;
+    // ── Force parameters (d3-force calibrated) ───────────────────────────
+    // The d3 force model uses different units than our old Euler loop,
+    // so these are not direct ports of the previous constants:
+    //   • forceManyBody().strength(-NEG)  — repulsion, negative = repel.
+    //     Values around -300 to -800 work well for graphs up to ~250
+    //     nodes; we ramp it based on count so the layout stays
+    //     comfortable at both small and large scales.
+    //   • forceLink().distance(REST_LEN)  — preferred edge length.
+    //   • forceLink().strength(s)         — spring stiffness, 0..1.
+    //     Higher = edges contract harder. Same-community edges get a
+    //     stronger pull so clusters separate visually.
+    //   • forceX/forceY().strength(K)     — soft centering on the
+    //     viewport midline. forceCenter() alone is too weak when
+    //     edges drag nodes outward.
+    const REST_LEN       = 110;
+    const REPEL_STRENGTH = -420;   // base repulsion charge
+    const SPRING_STRENGTH = 0.35;  // base edge stiffness
 
+    /** Reference to the running d3 simulation. Replaced on every load. */
+    let sim: Simulation<SimNode, SimulationLinkDatum<SimNode>> | null = null;
     let simRunning = false;
     let rafId: number | null = null;
     let ticksSinceLoad = 0;
@@ -205,7 +236,9 @@
         simNodes = g.nodes.map((n, i) => {
             // V3 — seed initial position by community: nodes of the same
             // community cluster start near each other → faster convergence,
-            // visible clusters from frame 1.
+            // visible clusters from frame 1. d3-force respects whatever
+            // x/y we pre-set; if we left them undefined it would use its
+            // own phyllotaxis seed which doesn't know about communities.
             const c = n.community < 0 ? i : n.community;
             const angle = (c / Math.max(g.stats.community_count, 1)) * Math.PI * 2
                         + (i % 7) * 0.3;
@@ -229,31 +262,91 @@
 
     /** When true, the next time `ticksSinceLoad` reaches AUTOFIT_AT we'll
      *  auto-fit the viewport to the graph. Reset on every load.
-     *  AUTOFIT_AT = 60: enough ticks for the force sim to spread clusters
+     *  AUTOFIT_AT = 60: enough ticks for d3-force to settle (alpha ~0.3)
      *  but BEFORE the user has had time to interact (drag/zoom). */
     const AUTOFIT_AT = 60;
     let autoFitPending = true;
 
     function startSim(): void {
-        if (simRunning) return;
+        if (!graph) return;
+        // Tear down any prior simulation before building a new one.
+        if (sim) { sim.stop(); sim = null; }
+
+        // Build d3-link edge objects. d3 mutates `source`/`target` from
+        // numeric ids into actual node references during simulation, so
+        // we hand it a fresh array on every load.
+        const links: SimulationLinkDatum<SimNode>[] = graph.edges
+            .filter(e => nodesById.has(e.source) && nodesById.has(e.target))
+            .map(e => ({
+                source: nodesById.get(e.source)!,
+                target: nodesById.get(e.target)!,
+                // Store the original metadata so the render code can read
+                // edge.kind / edge.weight. d3 ignores extra fields.
+                kind: e.kind,
+                weight: e.weight,
+            } as any));
+
+        // Repulsion strength: scale gently with node count so dense
+        // graphs don't compress into a hairball and sparse ones don't
+        // explode outward. Range stays bounded so nothing escapes.
+        const n = simNodes.length;
+        const repelStrength = REPEL_STRENGTH * (n < 20 ? 1.3 : n < 80 ? 1.0 : 0.8);
+
+        sim = forceSimulation<SimNode>(simNodes)
+            .force('charge', forceManyBody<SimNode>()
+                .strength(repelStrength)
+                .distanceMin(20)     // soft minimum — kills the d² singularity
+                .distanceMax(800))   // cuts off interactions past view scale
+            .force('link', forceLink<SimNode, SimulationLinkDatum<SimNode>>(links)
+                .id((d) => d.id)
+                .distance((l: any) => {
+                    // Slightly shorter rest length within a community so
+                    // clusters look tight; longer across communities.
+                    const a = l.source as SimNode, b = l.target as SimNode;
+                    const sameComm = a.community >= 0 && a.community === b.community;
+                    return sameComm ? REST_LEN * 0.85 : REST_LEN * 1.15;
+                })
+                .strength((l: any) => {
+                    const a = l.source as SimNode, b = l.target as SimNode;
+                    const sameComm = a.community >= 0 && a.community === b.community;
+                    const w = (l as any).weight ?? 0.5;
+                    return SPRING_STRENGTH * (0.6 + w) * (sameComm ? 1.3 : 1.0);
+                }))
+            .force('center', forceCenter(viewW / 2, viewH / 2).strength(0.05))
+            .force('x', forceX(viewW / 2).strength(0.04))
+            .force('y', forceY(viewH / 2).strength(0.04))
+            .alpha(1)
+            .alphaDecay(0.025)   // decays in ~180 ticks, plenty for n≤250
+            .alphaMin(0.001)
+            .velocityDecay(0.4)
+            .stop();             // we drive ticks manually so the SVG can re-render via Svelte reactivity
+
         simRunning = true;
         const tick = () => {
-            if (!simRunning) return;
-            stepSimulation();
+            if (!simRunning || !sim) return;
+            sim.tick();
+            // Honour user-pinned nodes (drag). d3 supports this via
+            // node.fx / node.fy, but to keep the rest of the codebase
+            // (drag handlers, fitToView, etc.) reading node.x/y we just
+            // freeze their position post-tick.
+            for (const node of simNodes) {
+                if (node.pinned) {
+                    node.vx = 0; node.vy = 0;
+                }
+            }
             ticksSinceLoad++;
-            // One-shot auto-fit once the layout has roughly settled.
-            // Skips if the user already manipulated zoom/pan (drag wakes
-            // the sim → we don't want to fight their viewport).
             if (autoFitPending && ticksSinceLoad >= AUTOFIT_AT) {
                 fitToView();
                 autoFitPending = false;
             }
-            if (ticksSinceLoad > 400) {
+            // d3 will tell us when it's done via alpha < alphaMin, but
+            // we also cap iterations as a safety net.
+            if ((sim.alpha() < sim.alphaMin()) || ticksSinceLoad > 600) {
                 simRunning = false;
                 rafId = null;
                 return;
             }
-            simNodes = simNodes;
+            simNodes = simNodes;   // trigger Svelte re-render
             rafId = requestAnimationFrame(tick);
         };
         rafId = requestAnimationFrame(tick);
@@ -261,71 +354,17 @@
     function stopSim(): void {
         simRunning = false;
         if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+        if (sim) { sim.stop(); sim = null; }
     }
 
-    function stepSimulation(): void {
-        if (!graph) return;
-        const n = simNodes.length;
-        if (n === 0) return;
-        // 1. Pairwise repulsion (O(n²) — fine at n ≤ 250)
-        for (let i = 0; i < n; i++) {
-            const a = simNodes[i];
-            for (let j = i + 1; j < n; j++) {
-                const b = simNodes[j];
-                let dx = b.x - a.x;
-                let dy = b.y - a.y;
-                let d2 = dx * dx + dy * dy;
-                if (d2 < 0.01) { d2 = 0.01; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
-                const d = Math.sqrt(d2);
-                const f = K_REPEL / d2;
-                const fx = (dx / d) * f;
-                const fy = (dy / d) * f;
-                if (!a.pinned) { a.vx -= fx; a.vy -= fy; }
-                if (!b.pinned) { b.vx += fx; b.vy += fy; }
-            }
-        }
-        // 2. Springs on edges (slightly stronger when same community)
-        for (const e of graph.edges) {
-            const a = nodesById.get(e.source);
-            const b = nodesById.get(e.target);
-            if (!a || !b) continue;
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-            const sameComm = a.community >= 0 && a.community === b.community;
-            const k = K_SPRING * (0.5 + e.weight) * (sameComm ? 1.4 : 1.0);
-            const f = k * (d - REST_LEN);
-            const fx = (dx / d) * f;
-            const fy = (dy / d) * f;
-            if (!a.pinned) { a.vx += fx; a.vy += fy; }
-            if (!b.pinned) { b.vx -= fx; b.vy -= fy; }
-        }
-        // 3. Center pull
-        // With very few nodes the repulsion dominates the weak default
-        // center pull and nodes drift off-screen. Scale K_CENTER up
-        // adaptively when n is small so a 5-node graph stays centered.
-        const cx = viewW / 2;
-        const cy = viewH / 2;
-        const centerScale = simNodes.length < 20 ? 4.0 : (simNodes.length < 60 ? 1.6 : 1.0);
-        const k = K_CENTER * centerScale;
-        for (const node of simNodes) {
-            if (node.pinned) continue;
-            node.vx += (cx - node.x) * k;
-            node.vy += (cy - node.y) * k;
-        }
-        // 4. Integrate + clamp + damp
-        for (const node of simNodes) {
-            if (node.pinned) { node.vx = 0; node.vy = 0; continue; }
-            const vmag = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-            if (vmag > MAX_VEL) {
-                node.vx = (node.vx / vmag) * MAX_VEL;
-                node.vy = (node.vy / vmag) * MAX_VEL;
-            }
-            node.x += node.vx;
-            node.y += node.vy;
-            node.vx *= DAMPING;
-            node.vy *= DAMPING;
-        }
+    /** Re-heat the simulation when the user interacts (drag, slider, etc.).
+     *  Equivalent to d3's restart() pattern. */
+    function reheat(alpha = 0.3): void {
+        if (!sim) return;
+        sim.alpha(alpha).restart();
+        sim.stop();              // we keep manual tick control
+        ticksSinceLoad = 0;
+        if (!simRunning) startSim();
     }
 
     // ── Pointer handlers ─────────────────────────────────────────────────
@@ -340,8 +379,12 @@
         (ev.target as Element)?.setPointerCapture?.(ev.pointerId);
         draggingNode = node;
         node.pinned = true;
-        ticksSinceLoad = 0;
-        startSim();
+        // v1.7.71 — d3 honours node.fx / node.fy as "fixed" coordinates
+        // it won't integrate. Without these, sim.tick() would keep
+        // moving the dragged node based on stale velocity.
+        (node as any).fx = node.x;
+        (node as any).fy = node.y;
+        reheat(0.3);
     }
     function onPointerMove(ev: PointerEvent): void {
         if (draggingNode) {
@@ -350,6 +393,8 @@
             const w = screenToWorld(ev.clientX, ev.clientY, rect);
             draggingNode.x = w.x;
             draggingNode.y = w.y;
+            (draggingNode as any).fx = w.x;
+            (draggingNode as any).fy = w.y;
             simNodes = simNodes;
         } else if (draggingPan) {
             panX += (ev.clientX - lastPx) / zoom;
@@ -361,6 +406,11 @@
     function onPointerUp(ev: PointerEvent): void {
         if (draggingNode) {
             (ev.target as Element)?.releasePointerCapture?.(ev.pointerId);
+            // v1.7.71 — release the d3 fix so the node rejoins the
+            // simulation. Pinning toggle still lives on node.pinned for
+            // the visual indicator + autofit.
+            (draggingNode as any).fx = null;
+            (draggingNode as any).fy = null;
             draggingNode = null;
         }
         draggingPan = false;
@@ -434,9 +484,17 @@
      *  which is what the user actually wants ("show me everything"). */
     function resetView(): void { fitToView(); }
     function resetPins(): void {
-        for (const n of simNodes) n.pinned = false;
+        // v1.7.71 — Also clear the d3 fx/fy fields, otherwise the
+        // "pin" toggle would visually flip but the node would stay
+        // frozen at the fixed coordinate.
+        for (const n of simNodes) {
+            n.pinned = false;
+            (n as any).fx = null;
+            (n as any).fy = null;
+        }
         ticksSinceLoad = 0;
-        startSim();
+        autoFitPending = true;
+        reheat(0.6);
     }
     function onKeyDown(ev: KeyboardEvent): void {
         if (ev.key === 'Escape') {
