@@ -61,6 +61,12 @@ export function morphHtml(node: HTMLElement, initialHtml: string | null | undefi
     // Initial mount — set innerHTML once. morphdom isn't needed here
     // because there's nothing to diff against yet.
     node.innerHTML = initialHtml ?? '';
+    // v1.7.57 — Tracks whether this is the first delta-update. On the very
+    // first update the entire new tree is "new" from morphdom's POV, and
+    // animating every element in would produce a jarring full-bubble flash
+    // — exactly what we're trying to avoid. From the second update onward
+    // only the truly-incremental nodes are tagged for the fade-in effect.
+    let _firstUpdate = true;
 
     return {
         update(newHtml: string | null | undefined) {
@@ -73,6 +79,8 @@ export function morphHtml(node: HTMLElement, initialHtml: string | null | undefi
             // intact and just reconciles the descendant tree.
             const target = node.cloneNode(false) as HTMLElement;
             target.innerHTML = safe;
+            const isFirst = _firstUpdate;
+            _firstUpdate = false;
             morphdom(node, target, {
                 childrenOnly: true,
                 onBeforeElUpdated(fromEl, toEl) {
@@ -82,6 +90,31 @@ export function morphHtml(node: HTMLElement, initialHtml: string | null | undefi
                     // changed.
                     if (fromEl.isEqualNode(toEl)) return false;
                     return true;
+                },
+                onNodeAdded(addedNode) {
+                    // v1.7.57 — "Gemini-style" token fade-in. Skip on the
+                    // first update (everything is "new" then; animating
+                    // it all at once would be ugly). For subsequent
+                    // updates, tag element nodes that live INSIDE a
+                    // `.stream-body` ancestor so the CSS animation
+                    // `lucy-token-in` fires once per newly-rendered piece.
+                    // Text nodes (nodeType 3) can't have classes; if a
+                    // chunk lands inside an existing paragraph and only
+                    // grows its trailing text node, no animation fires
+                    // for that — which is fine: the residual flicker
+                    // morphdom already eliminated covers that case.
+                    if (!isFirst && (addedNode as Node).nodeType === 1) {
+                        const el = addedNode as Element;
+                        let p: Element | null = el.parentElement;
+                        while (p) {
+                            if (p.classList && p.classList.contains('stream-body')) {
+                                el.classList?.add('lucy-new-token');
+                                break;
+                            }
+                            p = p.parentElement;
+                        }
+                    }
+                    return addedNode as Node;
                 },
             });
         },

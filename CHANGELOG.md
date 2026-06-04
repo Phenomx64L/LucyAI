@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.57] — 2026-06-03
+
+### Gemini-style generative aura while streaming
+
+User asked for a Gemini-like effect on Lucy's responses now
+that v1.7.56's morphdom diff eliminated the residual shimmer.
+Added two coordinated effects that fire ONLY while the bubble
+is in the streaming state and disappear cleanly when promoted
+to settled.
+
+**Effect 1 — `lucy-stream-aura`** (CSS-only):
+
+A soft accent-coloured text-shadow that pulses under the
+streaming text:
+
+```css
+.stream-body { animation: lucy-stream-aura 2.4s ease-in-out infinite; }
+@keyframes lucy-stream-aura {
+  0%, 100% { text-shadow: 0 0 12px color-mix(... 12%); }
+  50%      { text-shadow: 0 0 22px color-mix(... 30%); }
+}
+```
+
+Reads as "Lucy is actively writing this." text-shadow drives
+GPU compositor (the same pass that draws the bubble's
+backdrop-filter), so it costs essentially zero per chunk.
+
+**Effect 2 — `lucy-token-in`** (morphdom-integrated):
+
+Each newly-rendered element added during streaming gets a
+brief fade-in with a slight blur lift:
+
+```css
+.stream-body .lucy-new-token {
+  animation: lucy-token-in 280ms cubic-bezier(.16, 1, .3, 1) both;
+}
+@keyframes lucy-token-in {
+  from { opacity: 0; filter: blur(2px); transform: translateY(3px); }
+  to   { opacity: 1; filter: blur(0);   transform: translateY(0);   }
+}
+```
+
+The `morphHtml` action's `onNodeAdded` callback (in
+`morph-html.ts`) tags element nodes — `<p>`, `<em>`, `<strong>`,
+`<a class="cite-chip">`, etc. — that are inserted INSIDE a
+`.stream-body` ancestor AFTER the first update. Text nodes
+don't get tagged (they can't carry classes); that's the right
+granularity — paragraph-level reveal feels like "thinking
+aloud", whereas character-level animation would jitter.
+
+**The `_firstUpdate` guard.** The very first morphdom update
+swaps the thinking-dots placeholder for the bubble's initial
+content. From morphdom's POV every node is "new" then, and
+animating all of them at once would make the whole bubble
+flash in. The action tracks `_firstUpdate` in a closure and
+skips `onNodeAdded` on that first pass; from the second
+update onward, only the truly-new nodes fade in.
+
+**Clean settled state.**
+
+`.stream-settled` (the class the promotion path swaps in for
+`.stream-body`) wipes the aura, the token animations, and the
+filter/transform residue:
+
+```css
+.stream-settled,
+.stream-settled .lucy-new-token {
+  animation: none !important;
+  text-shadow: none;
+  filter: none;
+  transform: none;
+  opacity: 1;
+}
+```
+
+Read mode is calm and fully legible. No lingering glow on the
+final response.
+
+**Accessibility.**
+
+`@media (prefers-reduced-motion: reduce)` disables both
+effects. Users with vestibular sensitivities see static
+streaming text.
+
+**Files touched.**
+- `src/lib/morph-html.ts` — add `_firstUpdate` flag,
+  `onNodeAdded` callback that tags new element nodes inside
+  `.stream-body` with `lucy-new-token`.
+- `src/routes/page.css` — `@keyframes lucy-stream-aura` +
+  `@keyframes lucy-token-in` + the `.stream-body` /
+  `.stream-settled` rules to apply / clear them, plus the
+  reduced-motion override.
+
+**Verification.** `svelte-check` passes (0 errors).
+
+---
+
 ## [1.7.56] — 2026-06-03
 
 ### Final fix for the residual streaming shimmer — morphdom DOM diffing
