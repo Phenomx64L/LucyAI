@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.72] — 2026-06-04
+
+### Memory Graph — three actual bugs the v1.7.71 d3-force swap didn't fix
+
+User report after v1.7.71: "the graph still looks like that" — same
+"weird pyramid" of edges, now with 4 orphans drifting to the corners
+of the canvas.
+
+Three real causes diagnosed:
+
+**1. Parallel edges multiplied spring stiffness.**
+The backend emits up to 3 edges between the same pair of nodes (one
+per kind: `tag`, `content`, `embedding`). Feeding all 3 to `forceLink`
+stacks 3 parallel springs, which both crushes node pairs together
+AND inflates the effective force gradient so residual repulsion sent
+outliers flying.
+**Fix:** dedupe edges by node-pair for the physics layer (keep the
+max-weight edge), but keep iterating over the full `graph.edges` list
+for the SVG render so all 3 colours still draw.
+
+**2. Autofit fired at tick 60 — way before convergence.**
+At `alphaDecay=0.025`, alpha was still ~0.22 at tick 60. The viewport
+was frozen showing an intermediate state while the sim kept
+shuffling nodes for another 100+ ticks; by the time it settled, half
+the nodes were outside the autofit-derived viewport.
+**Fix:** pre-warm the sim synchronously for 300 ticks BEFORE the first
+paint (`for (let i=0; i<300; i++) sim.tick()`). At our decay rate,
+alpha falls under 0.002 — fully settled. Then autofit runs on
+already-final positions, then the RAF loop kicks in for the residual
+~0 alpha decay and future drag interactions.
+
+**3. Orphans drifted to the corners.**
+Nodes with degree 0 carry no springs, so pure repulsion pushed them
+off into empty space. The uniform `forceX/Y` strength (0.04) was too
+weak to fight repulsion from 13 other nodes.
+**Fix:** per-node gravity strength via `forceX/Y().strength(d => ...)`
+— orphans get 0.20 (~5× the connected-node gravity), so they settle
+as a halo around the cluster instead of running to the corners.
+
+**Also tightened:**
+- `distanceMax: 800 → 420` — outliers no longer feel the cluster's
+  push, so springs (acting at REST_LEN=110) win unopposed.
+- `velocityDecay: 0.40 → 0.45` — a touch more damping to reduce
+  overshoot in the first 50 ticks of pre-warm.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.71] — 2026-06-04
 
 ### Memory Graph — d3-force replaces hand-rolled Euler integrator

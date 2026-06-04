@@ -272,19 +272,29 @@
         // Tear down any prior simulation before building a new one.
         if (sim) { sim.stop(); sim = null; }
 
-        // Build d3-link edge objects. d3 mutates `source`/`target` from
-        // numeric ids into actual node references during simulation, so
-        // we hand it a fresh array on every load.
-        const links: SimulationLinkDatum<SimNode>[] = graph.edges
-            .filter(e => nodesById.has(e.source) && nodesById.has(e.target))
-            .map(e => ({
-                source: nodesById.get(e.source)!,
-                target: nodesById.get(e.target)!,
-                // Store the original metadata so the render code can read
-                // edge.kind / edge.weight. d3 ignores extra fields.
-                kind: e.kind,
-                weight: e.weight,
-            } as any));
+        // v1.7.72 — Deduplicate edges for the spring force. The backend
+        // emits up to 3 edges between the same pair of nodes (one per
+        // kind: tag, content, embedding). Feeding all of them to
+        // forceLink stacks 3 parallel springs, which crushes node pairs
+        // together and inflates the effective stiffness so that any
+        // residual repulsion sends outliers flying. We keep the RENDER
+        // loop iterating over graph.edges (so colours stay correct) but
+        // pass only the MAX-weight edge per pair to the physics.
+        const pairKey = (s: number, t: number) => (s < t ? `${s}-${t}` : `${t}-${s}`);
+        const bestPerPair = new Map<string, { source: number; target: number; weight: number }>();
+        for (const e of graph.edges) {
+            if (!nodesById.has(e.source) || !nodesById.has(e.target)) continue;
+            const k = pairKey(e.source, e.target);
+            const prev = bestPerPair.get(k);
+            if (!prev || (e.weight ?? 0) > (prev.weight ?? 0)) {
+                bestPerPair.set(k, { source: e.source, target: e.target, weight: e.weight });
+            }
+        }
+        const links: SimulationLinkDatum<SimNode>[] = Array.from(bestPerPair.values()).map(e => ({
+            source: nodesById.get(e.source)!,
+            target: nodesById.get(e.target)!,
+            weight: e.weight,
+        } as any));
 
         // Repulsion strength: scale gently with node count so dense
         // graphs don't compress into a hairball and sparse ones don't
@@ -292,11 +302,19 @@
         const n = simNodes.length;
         const repelStrength = REPEL_STRENGTH * (n < 20 ? 1.3 : n < 80 ? 1.0 : 0.8);
 
+        // v1.7.72 — per-node gravity. Orphans (degree 0) carry no springs
+        // pulling them back to the cluster, so pure repulsion would
+        // drift them off-canvas. Give them ~5× the centering strength of
+        // a connected node so they settle near the centre as halo
+        // around the main cluster instead of running to the edges.
+        const gravityX = (d: SimNode) => (d.degree === 0 ? 0.20 : 0.045);
+        const gravityY = (d: SimNode) => (d.degree === 0 ? 0.20 : 0.045);
+
         sim = forceSimulation<SimNode>(simNodes)
             .force('charge', forceManyBody<SimNode>()
                 .strength(repelStrength)
                 .distanceMin(20)     // soft minimum — kills the d² singularity
-                .distanceMax(800))   // cuts off interactions past view scale
+                .distanceMax(420))   // tighter cutoff: outliers no longer feel push from the cluster
             .force('link', forceLink<SimNode, SimulationLinkDatum<SimNode>>(links)
                 .id((d) => d.id)
                 .distance((l: any) => {
@@ -312,36 +330,47 @@
                     const w = (l as any).weight ?? 0.5;
                     return SPRING_STRENGTH * (0.6 + w) * (sameComm ? 1.3 : 1.0);
                 }))
-            .force('center', forceCenter(viewW / 2, viewH / 2).strength(0.05))
-            .force('x', forceX(viewW / 2).strength(0.04))
-            .force('y', forceY(viewH / 2).strength(0.04))
+            .force('center', forceCenter(viewW / 2, viewH / 2).strength(0.06))
+            .force('x', forceX<SimNode>(viewW / 2).strength(gravityX))
+            .force('y', forceY<SimNode>(viewH / 2).strength(gravityY))
             .alpha(1)
-            .alphaDecay(0.025)   // decays in ~180 ticks, plenty for n≤250
+            .alphaDecay(0.022)   // standard d3 default → settles in ~300 ticks
             .alphaMin(0.001)
-            .velocityDecay(0.4)
+            .velocityDecay(0.45) // a touch heavier damping reduces overshoot
             .stop();             // we drive ticks manually so the SVG can re-render via Svelte reactivity
 
+        // v1.7.72 — Pre-warm synchronously. Run the sim to near
+        // convergence BEFORE the first paint so the user never sees an
+        // intermediate state (the "weird pyramid" was a half-settled
+        // sim that was then frozen by an early autofit). 300 ticks is
+        // enough for alpha to fall below 0.002 at our decay rate.
+        for (let i = 0; i < 300; i++) {
+            sim.tick();
+        }
+
+        // Autofit once on already-settled positions, then immediately
+        // again on the next frame (cheap; SVG reads x/y reactively).
+        fitToView();
+        autoFitPending = false;
+        ticksSinceLoad = 300;
+        simNodes = simNodes;   // trigger first render with settled positions
+
+        // Continue the sim for the residual decay + interactivity. With
+        // alpha already < 0.002, this loop costs ~0 CPU until the user
+        // drags a node, which calls reheat() to wake it up.
         simRunning = true;
         const tick = () => {
             if (!simRunning || !sim) return;
             sim.tick();
-            // Honour user-pinned nodes (drag). d3 supports this via
-            // node.fx / node.fy, but to keep the rest of the codebase
-            // (drag handlers, fitToView, etc.) reading node.x/y we just
-            // freeze their position post-tick.
+            // Honour user-pinned nodes (drag). d3 honours fx/fy set by
+            // the drag handler; we just zero velocity here as belt+braces.
             for (const node of simNodes) {
                 if (node.pinned) {
                     node.vx = 0; node.vy = 0;
                 }
             }
             ticksSinceLoad++;
-            if (autoFitPending && ticksSinceLoad >= AUTOFIT_AT) {
-                fitToView();
-                autoFitPending = false;
-            }
-            // d3 will tell us when it's done via alpha < alphaMin, but
-            // we also cap iterations as a safety net.
-            if ((sim.alpha() < sim.alphaMin()) || ticksSinceLoad > 600) {
+            if ((sim.alpha() < sim.alphaMin()) || ticksSinceLoad > 900) {
                 simRunning = false;
                 rafId = null;
                 return;
