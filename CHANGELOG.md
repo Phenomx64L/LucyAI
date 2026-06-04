@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.54] — 2026-06-03
+
+### THE actual cause: `fin()` was filtering out the promoted bubble
+
+After v1.7.53 the user reported the bubble was STILL being deleted
+at the end of every Lucy response. Did a comprehensive grep across
+all the lifecycle sites of `streamMsgId` and the `'streaming-' +
+tabId` literal, and finally hit it:
+
+**`+page.svelte:7991`** (inside `fin()`):
+
+```js
+t.messages = t.messages.filter(m => m.id !== ('streaming-' + tabId));
+```
+
+This filter is part of `fin()`, the per-turn teardown. It was
+intended to wipe stale streaming placeholders if a turn ended
+without proper cleanup. The intent was correct, but the
+implementation was id-only — and that quietly relied on the
+promoted bubble already having had its id rotated to
+`Date.now() + Math.random()` before `fin()` ran. That rotation
+was the "AI-6 — Forzar recreación del nodo DOM" pattern I removed
+in v1.7.53, *believing it to be vestigial*. The comment was
+**misleading**: the rotation didn't exist to force DOM recreation
+(addCopyBtns wasn't called there). The rotation existed to ESCAPE
+this filter. Without it, every promoted bubble matched
+`m.id === 'streaming-' + tabId` and got filtered out.
+
+That is the bug the user has been reporting for the last several
+iterations. Every fix prior to v1.7.54 (cursor pseudo, rAF
+throttle, open-tag truncation, placeholder during reasoning,
+morph-not-delete, noAnimate, id-rotation removal) made the
+streaming PHASE smoother, but at the moment `fin()` ran the
+filter deleted the entire bubble regardless. v1.7.53 made it
+visible because the historical id-rotation defense was gone.
+
+**Fix (three coordinated changes).**
+
+1. **Role-gated filter in `fin()`.** The two existing id-only
+   filters at the top of `fin()` are replaced with a composite
+   role-aware filter:
+
+   ```js
+   t.messages = t.messages.filter(m => !(
+       (m.id === ('thinking-' + tabId)  && m.role === 'thinking') ||
+       (m.id === ('streaming-' + tabId) && m.role === 'streaming')
+   ));
+   ```
+
+   A promoted bubble has `role === 'lucy'`, so it survives the
+   filter even with the same id. The role check is the actual
+   semantic test: "is this still a placeholder?" — not "does the
+   id match?".
+
+2. **Same role-gate at the START of a new turn.** Line 4199 had
+   the same id-only filter pattern, which would silently delete
+   the previous turn's promoted Lucy answer when the user sent
+   their next message in the same tab. Made it role-aware too.
+
+3. **Rename collision protection.** With id-rotation gone, two
+   consecutive turns would both push messages with id
+   `'streaming-' + tabId`, and Svelte's `{#each (msg.id)}` would
+   warn + mis-render on the duplicate key. Before pushing the new
+   streaming placeholder, walk `t.messages` and rename any
+   PROMOTED bubble that still carries the streaming id to a
+   unique `'lucy-prev-' + Date.now() + '-' + <rand>` id. This
+   rename causes a brief DOM destroy/recreate of the previous
+   bubble — but that bubble is the OLD answer the user has
+   already read and is about to scroll past, masked by the new
+   turn's incoming streaming content. Visually invisible.
+
+**Why prior fixes missed this.** The site (`fin()` line 7991)
+was far from the streaming code path I was auditing, and the
+id-only filter looked semantically harmless. Following the
+streamMsgId trail systematically (every grep hit, every find,
+every filter) is what finally surfaced it. v1.7.52's audit was
+wrong because I trusted the inline comment instead of tracing
+every consumer of the id.
+
+**Files touched.**
+- `src/routes/+page.svelte` — fin() filter rewrite,
+  new-turn-start filter rewrite, previous-turn id rename.
+
+**Test path.** Reproduce "dame un texto largo" in a fresh tab.
+Bubble grows monotonically. At end of stream, the bubble settles
+in place — does NOT disappear. Send a second prompt in the same
+tab. The first answer remains visible above; the new bubble
+starts streaming below. No duplicate-key warnings in DevTools.
+
+---
+
 ## [1.7.53] — 2026-06-03
 
 ### Real fix for the persistent "texto desaparece" — remove the id-rotation

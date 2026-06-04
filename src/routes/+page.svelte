@@ -4195,8 +4195,31 @@ REGLAS DE FORMATO:
 
             // ── Streaming: reemplaza el thinking con texto progresivo (#14) ──
             const streamMsgId = 'streaming-' + tabId;
-            // Limpiar thinking Y cualquier streaming previo huérfano para evitar duplicate keys
-            t.messages = t.messages.filter(m => m.id !== 'thinking-'+tabId && m.id !== streamMsgId);
+            // v1.7.54 — Role-gated cleanup, same pattern as fin(). Previous
+            // turns' promoted-in-place Lucy bubbles still carry the
+            // `streaming-<tabId>` id (since v1.7.53 dropped the id rotation),
+            // so a naive id-only filter would silently delete the entire
+            // previous-turn answer at the START of the new turn. Only sweep
+            // entries that are STILL in placeholder state (role==='thinking'
+            // or 'streaming'). Promoted bubbles (role==='lucy') survive.
+            t.messages = t.messages.filter(m => !(
+                (m.id === ('thinking-' + tabId)  && m.role === 'thinking') ||
+                (m.id === streamMsgId            && m.role === 'streaming')
+            ));
+            // v1.7.54 — Rename any PROMOTED (role==='lucy') bubble that still
+            // carries the streaming id from the previous turn. Without this,
+            // pushing the new turn's streaming placeholder below would
+            // create two messages sharing the same id, breaking Svelte's
+            // `{#each as msg (msg.id)}` keyed reconciliation (warnings +
+            // mis-rendered messages). The rename happens to a bubble the
+            // user has already finished reading and is about to scroll past,
+            // so the brief DOM destroy/recreate the id change causes is
+            // visually masked by the new turn's incoming content.
+            for (const m of t.messages) {
+                if (m.id === streamMsgId && m.role === 'lucy') {
+                    m.id = 'lucy-prev-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+                }
+            }
             // Initial state: show "thinking dots" until the first token arrives, then
             // they're replaced by streamed text + the cursor. Gives feedback during TTFT.
             t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: ahora() });
@@ -7987,8 +8010,27 @@ times the SAME way, switch tool kind entirely.
     async function fin(tabId){
         const t=getTab(tabId);
         if (!t) return;
-        t.messages=t.messages.filter(m=>m.id!==('thinking-'+tabId));
-        t.messages=t.messages.filter(m=>m.id!==('streaming-'+tabId));
+        // v1.7.54 — CRITICAL: ONLY sweep messages that are STILL placeholders
+        // (role 'thinking' or 'streaming'). Previously these filters matched
+        // by id alone, which silently deleted any message that had been
+        // PROMOTED in place (role mutated from streaming→lucy with the
+        // streaming id retained, per v1.7.53). That made the entire Lucy
+        // bubble vanish at the end of every turn — user reported this as
+        // "se vuelve a eliminar todo el mensaje al final" after v1.7.53
+        // removed the historical id-rotation defense that the previous
+        // codebase had been quietly relying on.
+        //
+        // The "AI-6 — Forzar recreación del nodo DOM" comment that lived on
+        // those old id rotations was misleading: the rotation existed not
+        // to force DOM recreation but to ESCAPE these filters. With the
+        // role-gated check below, promoted messages keep their id and still
+        // survive fin(), so the id rotation is no longer needed anywhere.
+        //
+        // Composite filter so we walk the array once instead of twice.
+        t.messages = t.messages.filter(m => !(
+            (m.id === ('thinking-' + tabId)  && m.role === 'thinking') ||
+            (m.id === ('streaming-' + tabId) && m.role === 'streaming')
+        ));
         // v1.7.48 — Sweep any "preparing tools" placeholder bubbles left
         // behind by the streaming→placeholder morph. These are tagged with
         // `_isToolPreparePlaceholder = true` and are intended to keep the
