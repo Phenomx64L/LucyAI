@@ -61,6 +61,13 @@ function defaultInvokeRouter(cacheOverride: Partial<{
                 ...cacheOverride,
             });
         }
+        // v1.7.69 — StatusBar added a 7-day cost sparkline in v1.7.31.
+        // Without an explicit mock the default `null` return tripped
+        // `costByDay.map()` on mount and broke every cache-badge test.
+        // The shape matches `Vec<DailyCost>` from get_cost_by_day.
+        if (cmd === 'get_cost_by_day') {
+            return Promise.resolve([] as { date: string; cost: number }[]);
+        }
         return Promise.resolve(null);
     };
 }

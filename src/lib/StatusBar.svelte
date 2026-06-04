@@ -66,13 +66,21 @@
     // returns. The shape `[{date, cost}]` is folded into a number[] for
     // the Sparkline component.
     let costByDay: { date: string; cost: number }[] = [];
-    $: costSeries = costByDay.map(p => p.cost);
+    // v1.7.69 — Defensive `?? []`. The reactive `.map` runs on every
+    // assignment to `costByDay`; if the backend command isn't
+    // registered (older builds), the test environment, or any path
+    // returns null/undefined, the bare `.map` blew up the StatusBar
+    // mount and cascaded into the failed cache-badge tests. Guard
+    // here AND at the assignment site so neither path can break.
+    $: costSeries = (costByDay ?? []).map(p => p.cost);
     async function refreshCostByDay() {
         try {
-            costByDay = await invoke('get_cost_by_day', { days: 7 });
+            const r = await invoke<{ date: string; cost: number }[]>('get_cost_by_day', { days: 7 });
+            costByDay = Array.isArray(r) ? r : [];
         } catch (e) {
             // Silent — the backend command might not exist in older builds.
             // The chip just renders without the sparkline in that case.
+            costByDay = [];
         }
     }
 

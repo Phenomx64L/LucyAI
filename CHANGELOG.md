@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.69] — 2026-06-04
+
+### Tech-debt sweep — re-enable pre-commit + clean svelte-check
+
+Two small fixes that together restore the green-test invariant the
+pre-commit hook relies on. Every commit since v1.7.41 has shipped with
+`--no-verify` because of these.
+
+**StatusBar.test now passes (4/4)** — `src/lib/StatusBar.svelte`
++ `src/lib/StatusBar.test.ts`:
+- The v1.7.31 cost sparkline introduced `costByDay.map(p => p.cost)`
+  as a reactive `$:` derivation. The test mock's catch-all returns
+  `null` for unknown commands; when `get_cost_by_day` was added, the
+  null landed in `costByDay` and `.map` threw on every mount.
+- Component: defensive `?? []` on the reactive derivation AND
+  `Array.isArray` guard at the assignment site. Either path now
+  tolerates a null/undefined backend response without breaking the
+  StatusBar mount.
+- Test: explicit mock entry for `get_cost_by_day` returning `[]` so
+  the default `null` fallback can't bite future tests either.
+
+**ChatEmptyState.svelte now clean (0 warnings)**:
+- `<button role="listitem">` was invalid (a11y_no_interactive_element_to_noninteractive_role) — wrapped each button in `<div role="listitem" class="ces-sug-item">` with
+  `display: contents` so the grid layout is identical.
+- Removed the leftover `.ces-mark` CSS selector (replaced by
+  `.ces-mark-wrap` + `.ces-mark-img` back in v1.7.32). The
+  `prefers-reduced-motion` block now only targets `.ces-wrap`.
+
+`npm test` — 171/171 passed, 14/14 suites.
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.68] — 2026-06-04
 
 ### Welcome screen refresh — v1.4 cards → v1.7 Operations Console

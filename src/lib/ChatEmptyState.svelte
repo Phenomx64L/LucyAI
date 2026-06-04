@@ -94,15 +94,23 @@
     <div class="ces-suggestions" role="list"
          aria-label={isEN ? 'Suggested starters' : 'Sugerencias para arrancar'}>
         {#each rendered as s}
-            <button class="ces-sug" type="button" role="listitem"
-                    title={s.prompt}
-                    on:click={() => dispatch('suggest', s.prompt)}>
-                <span class="ces-sug-glyph">
-                    <svelte:component this={s.icon} size={16} stroke={1.8} />
-                </span>
-                <span class="ces-sug-label">{s.label}</span>
-                <span class="ces-sug-cmd">{s.prompt}</span>
-            </button>
+            <!-- v1.7.69 — a11y: a `<button role="listitem">` is invalid
+                 (listitem is a non-interactive role and buttons are
+                 interactive). Wrap each button in a `<div
+                 role="listitem">` so the parent's `role="list"` has
+                 valid children while keeping the button as the
+                 keyboard-focusable affordance. -->
+            <div role="listitem" class="ces-sug-item">
+                <button class="ces-sug" type="button"
+                        title={s.prompt}
+                        on:click={() => dispatch('suggest', s.prompt)}>
+                    <span class="ces-sug-glyph">
+                        <svelte:component this={s.icon} size={16} stroke={1.8} />
+                    </span>
+                    <span class="ces-sug-label">{s.label}</span>
+                    <span class="ces-sug-cmd">{s.prompt}</span>
+                </button>
+            </div>
         {/each}
     </div>
 </div>
@@ -268,7 +276,12 @@
         from { opacity: 0; transform: translateY(6px); }
         to   { opacity: 1; transform: none; }
     }
+    /* v1.7.69 — the `.ces-mark` selector was a leftover from the
+       v1.7.31 unicode-glyph era. The breathing animation now lives on
+       `.ces-mark-wrap` (already covered by its own reduced-motion
+       block above), so only `.ces-wrap`'s fade-in needs killing here. */
+    .ces-sug-item { display: contents; } /* keep grid layout unchanged */
     @media (prefers-reduced-motion: reduce) {
-        .ces-wrap, .ces-mark { animation: none !important; }
+        .ces-wrap { animation: none !important; }
     }
 </style>
