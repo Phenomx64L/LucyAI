@@ -20,7 +20,10 @@
     // compared against tauri.conf.json's appVersion '1.7.x', never matched
     // → the tutorial opened on every launch). Now received as prop so the
     // host always passes the real running version.
-    export let currentVersion = '1.7.0';
+    // v1.7.67 — default bumped from '1.7.0' to '1.7.66' so a developer
+    // who instantiates the overlay in isolation (e.g. Storybook, test
+    // harness) doesn't see a stale version label.
+    export let currentVersion = '1.7.66';
     $: LUCY_VERSION = currentVersion;
 
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
@@ -34,116 +37,85 @@
             tip: 'top',
             view: 'terminal',
             welcome: true,
-            tES: `✦ Bienvenido a Lucy v${LUCY_VERSION} — R&D Frontier`,
-            tEN: `✦ Welcome to Lucy v${LUCY_VERSION} — R&D Frontier`,
-            dES: `Hola Iván — Lucy v${LUCY_VERSION} cruza una frontera real: <b>diez capacidades que ningún otro asistente de IA tiene hoy</b>, todas locales, todas con audit trail.<br><br>` +
-                `<b>🆕 Nuevo en v1.4.2-v1.4.5 — Productividad + MCP</b><br>` +
-                `• <b>MCP first-class</b> (1.4.2) — Configuración → MCP. Registra servers (filesystem, github, postgres…), Lucy los invoca por nombre. Connection pool 50× más rápido. <code>mcp_query:&lt;nombre&gt;</code><br>` +
-                `• <b>Smart Chips 3 capas</b> (1.4.2) — sugerencias arriba del input con badge ⚡ heurística · ✦ LLM · ◊ memoria. Lucy aprende qué clicks haces. <code>/chip-stats</code><br>` +
-                `• <b>Configuración con tabs</b> (1.4.2) — Apariencia · IA · MCP · Sistema. Iconos Tabler line, sin más controles aplastados.<br>` +
-                `• <b>Auto-titling de tabs</b> (1.4.3) — Lucy renombra tus pestañas con un título corto cuando termina el primer turno.<br>` +
-                `• <b>Pin de mensajes</b> (1.4.3) — botón · en cada mensaje. Los pinneados quedan en un strip arriba con click-to-scroll. No vuelvas a perder el objetivo.<br>` +
-                `• <b>Tab header rico</b> (1.4.3) — dot azul/ámbar/rojo/gris según actividad · pill 3-letras del modelo · hover preview con costo + tokens.<br>` +
-                `• <b>Atajos visibles en input vacío</b> (1.4.3) — Ctrl+P / Tab / / / @ / Esc cuando no estás escribiendo.<br>` +
-                `• <b>Modo conciso</b> (1.4.3) — botón ≡ en input. Lucy responde en 3 líneas máx. Para preguntas rápidas sin perder transcripción.<br>` +
-                `• <b>Cite chips clickeables</b> (1.4.4) — rutas, hosts (@), memorias (#42), URLs en respuestas de Lucy son clickeables. Color por tipo.<br>` +
-                `• <b>Diff inline en tool cards</b> (1.4.4) — cuando Lucy escribe un archivo, ves el diff línea por línea. <code>/revert &lt;path&gt;</code> deshace.<br>` +
-                `• <b>Cancelación granular</b> (1.4.4) — ⏸ pausa entre iteraciones · ⏭ salta la próxima tool · 🛑 cancela todo.<br>` +
-                `• <b>Branch ⌥ + Replay ⏪</b> (1.4.4) — botones por mensaje de Lucy: bifurca el chat o re-ejecuta un turno con replay.<br>` +
-                `• <b>Notebook export</b> (1.4.4) — <code>/notebook</code> exporta el tab a <code>.ipynb</code> abrible en Jupyter / VSCode.<br><br>` +
-                `<b>✨ Novedades v1.4.1 — Hardening + SRE</b><br>` +
-                `• <b>DB Backup/Restore</b> atómico (VACUUM INTO) desde Configuración → Datos.<br>` +
-                `• <b>Support Bundle</b> exportable (manifest + audit CSV + diagnostics) para tickets.<br>` +
-                `• <b>Inventory Drift</b> — baseline por host y diff estructurado (software/puertos/servicios/certs).<br>` +
-                `• <b>Multi-Host Log Timeline</b> — superpón logs de varios hosts con 4 parsers de timestamp.<br>` +
-                `• <b>Hash Chain Verifier</b> en Auditoría — recomputa SHA-256 e indica el punto exacto de mismatch.<br>` +
-                `• <b>Dashboard expandido</b> — page file, temperaturas, red, failed logins (4625), umbrales editables, widgets re-ordenables (drag-and-drop).<br>` +
-                `• <b>Memory Graph 2.0</b> — embeddings + comunidades (Louvain-lite) + paleta Okabe-Ito color-blind friendly.<br>` +
-                `• <b>Crystal Viewer</b> rediseñado — tarjetas con gradiente, secciones estructuradas con border-left por tier.<br>` +
-                `• <b>Tavily key</b> en Configuración (búsqueda web premium, opcional).<br>` +
-                `• <b>Skills Manager retirado</b> — SkillPicker (<code>/skills</code>) sigue activo.<br><br>` +
-                `<b>🔬 Frontier Capabilities (10/10)</b><br>` +
-                `• <b>F1 Process Lineage</b> — graba el árbol de cada proceso (parent → root) con hash SHA-256 verificable. <code>/help</code> + <code>&lt;TOOL&gt;process_ancestry:PID&lt;/TOOL&gt;</code><br>` +
-                `• <b>F2 State Snapshots</b> — captura estado del sistema cada 15 min y permite diff temporal. <code>/snapshot</code>, <code>/diff</code><br>` +
-                `• <b>F3 Causal Engine</b> — correlaciona arrivals de procesos con síntomas y rankea causas con reasoning. <code>&lt;TOOL&gt;diagnose_spike:60&lt;/TOOL&gt;</code><br>` +
-                `• <b>F4 Self-Healing</b> — recuerda fixes pasados y los propone (con HITL) ante síntomas parecidos. Auto-crystallize en cada incident resuelto.<br>` +
-                `• <b>F5 Sandbox Preview</b> — análisis estático antes de ejecutar destructivos + .wsb config para Windows Sandbox. <code>/preview &lt;cmd&gt;</code><br>` +
-                `• <b>F6 Object Bridge</b> — mantiene PowerShell objects vivos entre turnos; pipeable con un mini-DSL. <code>&lt;TOOL&gt;obj_query:procs | where Mem &gt; 100&lt;/TOOL&gt;</code><br>` +
-                `• <b>F7 Runbook Mining</b> — detecta workflows repetidos y los promueve a skills reusables. <code>/runbooks</code> → <code>/promote-runbook</code><br>` +
-                `• <b>F8 Mini-EDR</b> — clasifica procesos por 7 heurísticos (path/parent/cmdline/entropy/novelty/timing). <code>/preview</code> destructivos<br>` +
-                `• <b>F9 Knowledge Graph</b> — indexa tus repos y aprende qué archivos se tocan juntos. <code>/kg-add</code>, <code>/kg-view &lt;path&gt;</code><br>` +
-                `• <b>F10 Daily Patterns</b> — aprende tus rutinas semanales (Lun 9am → VSCode + Spotify). <code>/routines</code><br>` +
-                `• <b>🔎 Incident Detective</b> — sintetiza F3+F8+F9 en una sola consulta forense. <code>/detective</code><br><br>` +
-                `<b>🎨 UX nueva (10/10)</b><br>` +
-                `• <b>Living Avatar</b> — Lucy ahora respira (idle), pulsa cyan al pensar, brilla dorado al ejecutar, ámbar al preocuparse.<br>` +
-                `• <b>Density Modes</b> — Ctrl+1 (focus) · Ctrl+2 (explore) · Ctrl+3 (war room).<br>` +
-                `• <b>Chapter View</b> — investigaciones multi-paso se renderizan como un libro con índice navegable.<br>` +
-                `• <b>Predictive Chips</b> — sugerencias contextuales arriba del input según el último turno.<br>` +
-                `• <b>Drag-to-Lucy</b> — arrastra URLs, texto, imágenes, archivos: Lucy infiere qué hacer.<br>` +
-                `• <b>Tab Hover Preview</b> — pasa el mouse sobre una pestaña >500ms y ves los últimos mensajes.<br>` +
-                `• <b>Heat Layers</b> — overlays de severidad/recencia en listas de procesos y archivos.<br>` +
-                `• <b>Confidence Markers v2</b> — Lucy distingue [!hechos!], [~hedges~], [?especulaciones?] visualmente.<br>` +
-                `• <b>Circadian Theme</b> — los acentos se enfrían suavemente de día a noche.<br>` +
-                `• <b>Skill Picker</b> — <code>/skills</code> abre un modal con búsqueda fuzzy.<br><br>` +
-                `<b>📊 Telemetría interna</b><br>` +
-                `<code>/frontier-stats</code> muestra qué Frontier tools usaste, cuánto duraron, y error rate. 100% local.<br><br>` +
-                `<b>🏆 Numbers</b><br>` +
-                `103 tests passing · 9 stress tests · ~8,300 LOC R&D · 36 Tauri commands Frontier · 0 deuda técnica visible.<br><br>` +
-                `Vamos a recorrer la interfaz — y después un apartado dedicado a los <b>comandos internos</b>.`,
-            dEN: `Hi Iván — Lucy v${LUCY_VERSION} crosses a real frontier: <b>ten capabilities that no other AI assistant has today</b>, all local, all with an audit trail.<br><br>` +
-                `<b>🆕 New in v1.4.2-v1.4.5 — Productivity + MCP</b><br>` +
-                `• <b>First-class MCP</b> (1.4.2) — Settings → MCP. Register servers (filesystem, github, postgres…), Lucy invokes them by name. Connection pool 50× faster. <code>mcp_query:&lt;name&gt;</code><br>` +
-                `• <b>3-layer Smart Chips</b> (1.4.2) — suggestions above the input with ⚡ heuristic · ✦ LLM · ◊ memory badges. Lucy learns what you click. <code>/chip-stats</code><br>` +
-                `• <b>Tabbed Settings</b> (1.4.2) — Appearance · AI · MCP · System. Tabler line icons, no more cramped controls.<br>` +
-                `• <b>Auto-titled tabs</b> (1.4.3) — Lucy renames tabs with a short title after the first meaningful turn.<br>` +
-                `• <b>Pinned-messages strip</b> (1.4.3) — · button on each message. Pinned messages sit in a sticky strip with click-to-scroll. Stop losing the goal mid-investigation.<br>` +
-                `• <b>Rich tab header</b> (1.4.3) — blue/amber/red/grey dot by activity · 3-letter model pill · hover preview with cost + tokens.<br>` +
-                `• <b>Empty-input shortcut hints</b> (1.4.3) — Ctrl+P / Tab / / / @ / Esc visible when not typing.<br>` +
-                `• <b>Brief mode</b> (1.4.3) — ≡ toggle in input. Lucy answers in 3 lines max. Quick Q&A without losing the transcript.<br>` +
-                `• <b>Clickable cite chips</b> (1.4.4) — file paths, @hosts, #memories, URLs in Lucy's responses are clickable. Color-coded by kind.<br>` +
-                `• <b>Inline diff in tool cards</b> (1.4.4) — when Lucy writes a file you see the line-by-line diff. <code>/revert &lt;path&gt;</code> undoes.<br>` +
-                `• <b>Granular cancel</b> (1.4.4) — ⏸ pause between iterations · ⏭ skip next tool · 🛑 cancel everything.<br>` +
-                `• <b>Branch ⌥ + Replay ⏪</b> (1.4.4) — buttons on Lucy messages: branch the chat or re-run a turn with replay.<br>` +
-                `• <b>Notebook export</b> (1.4.4) — <code>/notebook</code> exports the tab as <code>.ipynb</code> openable in Jupyter / VSCode.<br><br>` +
-                `<b>✨ What's new in v1.4.1 — Hardening + SRE</b><br>` +
-                `• <b>DB Backup/Restore</b> (atomic VACUUM INTO) from Settings → Data.<br>` +
-                `• <b>Support Bundle</b> export (manifest + audit CSV + diagnostics) for tickets.<br>` +
-                `• <b>Inventory Drift</b> — per-host baseline and structured diff (software/ports/services/certs).<br>` +
-                `• <b>Multi-Host Log Timeline</b> — overlay logs from multiple hosts with 4 timestamp parsers.<br>` +
-                `• <b>Hash Chain Verifier</b> in Audit — recomputes SHA-256 and pinpoints mismatch position.<br>` +
-                `• <b>Expanded Dashboard</b> — pagefile, temperatures, network, failed logins (4625), editable thresholds, drag-to-reorder widgets.<br>` +
-                `• <b>Memory Graph 2.0</b> — embeddings + community detection (Louvain-lite) + Okabe-Ito color-blind palette.<br>` +
-                `• <b>Crystal Viewer</b> redesigned — gradient cards, structured sections with tier-colored border-left.<br>` +
-                `• <b>Tavily key</b> in Settings (premium web search, optional).<br>` +
-                `• <b>Skills Manager retired</b> — SkillPicker (<code>/skills</code>) is still active.<br><br>` +
-                `<b>🔬 Frontier Capabilities (10/10)</b><br>` +
-                `• <b>F1 Process Lineage</b> — records every process's parent chain (current → root) with verifiable SHA-256 hash.<br>` +
-                `• <b>F2 State Snapshots</b> — captures system state every 15 min and lets you diff over time. <code>/snapshot</code>, <code>/diff</code><br>` +
-                `• <b>F3 Causal Engine</b> — correlates process arrivals with symptoms and ranks causes with explainable reasoning.<br>` +
-                `• <b>F4 Self-Healing</b> — recalls past fixes and proposes them (with HITL) on similar symptoms. Auto-crystallizes resolved incidents.<br>` +
-                `• <b>F5 Sandbox Preview</b> — static analysis before destructive commands + .wsb config for Windows Sandbox. <code>/preview &lt;cmd&gt;</code><br>` +
-                `• <b>F6 Object Bridge</b> — keeps PowerShell objects alive across turns, pipeable with a small DSL.<br>` +
-                `• <b>F7 Runbook Mining</b> — detects repeated workflows and promotes them to reusable skills.<br>` +
-                `• <b>F8 Mini-EDR</b> — classifies processes by 7 behavioral heuristics (path/parent/cmdline/entropy/novelty/timing).<br>` +
-                `• <b>F9 Knowledge Graph</b> — indexes your repos and learns which files are touched together. <code>/kg-add</code>, <code>/kg-view</code><br>` +
-                `• <b>F10 Daily Patterns</b> — learns your weekly routines (Mon 9am → VSCode + Spotify). <code>/routines</code><br>` +
-                `• <b>🔎 Incident Detective</b> — synthesizes F3+F8+F9 into a single forensic query. <code>/detective</code><br><br>` +
-                `<b>🎨 New UX (10/10)</b><br>` +
-                `• <b>Living Avatar</b> — Lucy now breathes (idle), pulses cyan when thinking, glows gold when executing, amber when concerned.<br>` +
-                `• <b>Density Modes</b> — Ctrl+1 (focus) · Ctrl+2 (explore) · Ctrl+3 (war room).<br>` +
-                `• <b>Chapter View</b> — multi-step investigations render as a book with a navigable index.<br>` +
-                `• <b>Predictive Chips</b> — contextual suggestions above the input based on the last turn.<br>` +
-                `• <b>Drag-to-Lucy</b> — drag URLs, text, images, files: Lucy infers what to do.<br>` +
-                `• <b>Tab Hover Preview</b> — hover over a tab >500ms to see the last messages.<br>` +
-                `• <b>Heat Layers</b> — severity/recency overlays on process and file lists.<br>` +
-                `• <b>Confidence Markers v2</b> — Lucy visually distinguishes [!facts!], [~hedges~], [?speculation?].<br>` +
-                `• <b>Circadian Theme</b> — accents subtly cool from day to night.<br>` +
-                `• <b>Skill Picker</b> — <code>/skills</code> opens a modal with fuzzy search.<br><br>` +
-                `<b>📊 Internal telemetry</b><br>` +
-                `<code>/frontier-stats</code> shows which Frontier tools you used, how long they took, and error rate. 100% local.<br><br>` +
-                `<b>🏆 Numbers</b><br>` +
-                `103 tests passing · 9 stress tests · ~8,300 LOC R&D · 36 Tauri Frontier commands · 0 visible tech debt.<br><br>` +
-                `Let's walk through the interface — and we'll wrap up with a dedicated <b>internal commands</b> reference.`,
+            tES: `✦ Bienvenido a Lucy v${LUCY_VERSION} — Operations Console`,
+            tEN: `✦ Welcome to Lucy v${LUCY_VERSION} — Operations Console`,
+            dES: `Hola Iván — Lucy v${LUCY_VERSION} cierra un arco de 15 versiones que la convirtió de "chat AI con tools de sysadmin" a una <b>consola operacional</b> con su propia identidad visual.<br><br>` +
+                `<b>🛰 Operations Console UI (v1.7.58-66)</b><br>` +
+                `• <b>Mission Strip</b> arriba siempre visible — ● local · ⚯ hosts · ⚠ alertas · ⊕ guard · HH:MM · postura 5-dot.<br>` +
+                `• <b>Tabs por propósito</b> — incidente rojo · ejecutando violeta · investigación ámbar · referencia azul · chat verde.<br>` +
+                `• <b>Code blocks como terminal recordings</b> — traffic lights, hostname, engine glyph (⚡PS · ▶cmd · $bash), timestamp, exit code.<br>` +
+                `• <b>Sidebar con jerarquía</b> — rail de color por sección: Sistema verde · Runbooks ámbar · Acciones violeta · Registros azul.<br>` +
+                `• <b>Evidence pills</b> — citas inline color-coded por origen: memoria cyan · file verde · URL azul · tool ámbar.<br>` +
+                `• <b>Composer ops</b> — prompt λ, dot grid en focus, slash-command ámbar, caret tipo bloque.<br>` +
+                `• <b>Self-Diagnóstico con repair de un click</b> — Diagnóstico te muestra issues + botón "🔧 Reparar" para los conocidos.<br><br>` +
+                `<b>🤖 Intelligence (v1.6.0-v1.7.50)</b><br>` +
+                `• <b>Grounding</b> — cada memoria tiene confidence (0..1) driven by evidence; contradicciones la bajan, refuerzos la suben.<br>` +
+                `• <b>Skill presets curados</b> (v1.6.1) — 18+ presets ECC listos para usar (cost-aware, security-review, hypothesis-driven-debug…).<br>` +
+                `• <b>Multi-intent + RULE 0b</b> (v1.7.49-50) — prompts tipo "genera un reporte detallado del estado de mi maquina, depositalo en el escritorio" siempre se convierten en plan multi-paso con writefile real.<br>` +
+                `• <b>Centralised model catalog + tier health</b> (v1.7.0-v1.7.5) — un único source of truth para todos los modelos soportados, con health check al boot.<br><br>` +
+                `<b>⚡ Streaming overhaul (v1.7.42-57)</b><br>` +
+                `• <b>morphdom DOM diffing</b> (v1.7.56) — el texto fluye sin parpadeo. Indistinguible de ChatGPT/Claude.ai.<br>` +
+                `• <b>Aura Gemini-style</b> (v1.7.57) — text-shadow pulsante mientras Lucy escribe + fade-in por token.<br>` +
+                `• <b>Open-tag placeholder</b> (v1.7.47) — "◌ Lucy está razonando…" en lugar de bubble vacío cuando emite &lt;THOUGHT&gt;.<br><br>` +
+                `<b>🔧 Performance (v1.7.42-44)</b><br>` +
+                `• <b>GPU vendor hints</b> — Lucy se asigna a la dGPU en laptops Optimus/PowerXpress automáticamente.<br>` +
+                `• <b>Idle saver</b> — todas las animaciones se pausan tras 8s sin input. GPU idle ~1-3%.<br><br>` +
+                `<b>💾 Reliability (v1.7.51-65)</b><br>` +
+                `• <b>persistirNow</b> — cerrar Lucy inmediatamente después de cualquier edit (close tab, rename) nunca pierde el cambio.<br>` +
+                `• <b>One-click DB repair</b> — backfill + REINDEX + verify desde el panel Diagnóstico sin SQL ni DB Browser.<br><br>` +
+                `Vamos a recorrer la nueva interfaz — empezamos por la franja superior, lo más distintivo.`,
+            dEN: `Hi Iván — Lucy v${LUCY_VERSION} closes a 15-version arc that took her from "AI chat with sysadmin tools" to a full <b>operations console</b> with her own visual identity.<br><br>` +
+                `<b>🛰 Operations Console UI (v1.7.58-66)</b><br>` +
+                `• <b>Mission Strip</b> always-on top band — ● local · ⚯ hosts · ⚠ alerts · ⊕ guard · HH:MM · 5-dot posture.<br>` +
+                `• <b>Per-tab purpose tint</b> — incident red · executing violet · investigation amber · reference blue · chat green.<br>` +
+                `• <b>Terminal-recording code blocks</b> — traffic lights, hostname, engine glyph (⚡PS · ▶cmd · $bash), timestamp, exit code.<br>` +
+                `• <b>Sidebar category rails</b> — left colour rail per section: System green · Runbooks amber · Actions violet · Records blue.<br>` +
+                `• <b>Evidence pills</b> — inline citations colour-coded by origin: memory cyan · file green · URL blue · tool amber.<br>` +
+                `• <b>Composer ops aesthetic</b> — λ prompt, focus-only dot grid, amber slash-command mode, block-shape caret.<br>` +
+                `• <b>Self-diagnostics with one-click repair</b> — Diagnostics panel ships repair buttons for known issues.<br><br>` +
+                `<b>🤖 Intelligence (v1.6.0-v1.7.50)</b><br>` +
+                `• <b>Grounding</b> — every memory carries a confidence score (0..1) driven by evidence accumulation.<br>` +
+                `• <b>Curated skill presets</b> (v1.6.1) — 18+ ready-to-use ECC presets (cost-aware, security-review, hypothesis-driven-debug…).<br>` +
+                `• <b>Multi-intent + RULE 0b</b> (v1.7.49-50) — prompts like "generate a detailed report of my machine state, save to desktop" always become a multi-step plan with real writefile.<br>` +
+                `• <b>Centralised model catalog + tier health</b> (v1.7.0-v1.7.5) — single source of truth across providers, boot-time health check.<br><br>` +
+                `<b>⚡ Streaming overhaul (v1.7.42-57)</b><br>` +
+                `• <b>morphdom DOM diffing</b> (v1.7.56) — text flows without flicker. Indistinguishable from ChatGPT/Claude.ai.<br>` +
+                `• <b>Gemini-style aura</b> (v1.7.57) — soft text-shadow pulse while Lucy writes + per-token fade-in.<br>` +
+                `• <b>Open-tag placeholder</b> (v1.7.47) — "◌ Lucy is reasoning…" instead of a blank bubble during &lt;THOUGHT&gt;.<br><br>` +
+                `<b>🔧 Performance (v1.7.42-44)</b><br>` +
+                `• <b>GPU vendor hints</b> — auto-binds to the dGPU on Optimus / PowerXpress laptops.<br>` +
+                `• <b>Idle saver</b> — every infinite animation pauses after 8 s of no input. Idle GPU drops to ~1-3%.<br><br>` +
+                `<b>💾 Reliability (v1.7.51-65)</b><br>` +
+                `• <b>persistirNow</b> — closing Lucy right after any structural edit (close tab, rename) never loses the change.<br>` +
+                `• <b>One-click DB repair</b> — backfill + REINDEX + verify from Diagnostics, no SQL or DB Browser needed.<br><br>` +
+                `Let's walk through the new interface — starting with the top band, the most distinctive piece.`,
+        },
+        {
+            // v1.7.67 — New step for the Mission Strip (Direction A1, v1.7.58).
+            // Always above the tab strip, always visible, communicates four
+            // peripheral signals an IT pro tracks without switching tabs.
+            sel: ['.mission-strip'],
+            fallback: '.mission-strip',
+            tip: 'bottom',
+            view: 'terminal',
+            tES: '🛰 Mission Strip — Pulse Operacional',
+            tEN: '🛰 Mission Strip — Operational Pulse',
+            dES: `La franja superior es tu <b>cockpit siempre visible</b>. Léela de izquierda a derecha:<br><br>` +
+                `• <b>● HOSTNAME</b> — tu máquina; el dot latido cada 3.6 s indica que Lucy está viva.<br>` +
+                `• <b>⚯ N/M hosts</b> — hosts remotos en línea (solo aparece si tienes hosts configurados).<br>` +
+                `• <b>⚠ N alertas</b> — incidentes activos. Click → Dashboard.<br>` +
+                `• <b>⊕ guard</b> — skill de seguridad activo, o "limpio".<br>` +
+                `• <b>HH:MM</b> — hora local, actualiza cada minuto.<br>` +
+                `• <b>●●●○○ postura</b> — 5 dots: calm → vigilant → suspicious → alarmed → panic.<br><br>` +
+                `Cualquier chip pasa a ámbar o rojo solo cuando hay algo que merece tu atención. No tienes que cambiar de pestaña para enterarte. <b>Click en cualquier chip → te lleva a la vista relevante.</b>`,
+            dEN: `The top band is your <b>always-visible cockpit</b>. Read it left to right:<br><br>` +
+                `• <b>● HOSTNAME</b> — your machine; the dot heartbeats every 3.6 s to signal Lucy is alive.<br>` +
+                `• <b>⚯ N/M hosts</b> — remote hosts online (only shows when hosts are configured).<br>` +
+                `• <b>⚠ N alerts</b> — active incidents. Click → Dashboard.<br>` +
+                `• <b>⊕ guard</b> — active security skill, or "clean".<br>` +
+                `• <b>HH:MM</b> — local time, ticks once per minute.<br>` +
+                `• <b>●●●○○ posture</b> — 5 dots: calm → vigilant → suspicious → alarmed → panic.<br><br>` +
+                `Any chip turns amber or red only when something actually needs attention. You don't have to switch tabs to find out. <b>Click any chip → opens the relevant view.</b>`,
         },
         {
             sel: ['.chat-wrap.on .chat-area', '.chat-wrap.on', '.panel'],

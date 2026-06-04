@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.67] — 2026-06-04
+
+### Welcome tutorial refresh + DOCX manual v1.7.66
+
+Companion docs sprint to v1.7.66. Brings the in-app onboarding in sync with
+the v1.7 Operations Console era and replaces the stale v1.7.15 user manual
+on the user's Desktop.
+
+**Tutorial (`src/lib/TutorialOverlay.svelte`)**
+- Welcome step rewritten (ES + EN) — the old v1.4.x changelog blob is gone.
+  Replaced with focused v1.7.x content across 6 categories: Operations
+  Console UI · Intelligence · Streaming overhaul · Performance · Reliability.
+- New step targeting `.mission-strip` — explains the always-on operational
+  pulse band introduced in v1.7.58.
+- `currentVersion` default bumped 1.7.0 → 1.7.67 so the "What's new" gate
+  fires for users upgrading from any earlier v1.7.x.
+
+**DOCX manual (`scripts/build-manual.cjs` + Desktop output)**
+- New Node.js build script using the globally-installed `docx@9.7.1`
+  library. Generates a styled 8-section US-Letter manual onto the user's
+  Desktop as `Lucy_Assistant_Manual_v1.7.66.docx`.
+- Sections: What's new in v1.7, Mission Strip reference, Per-tab purpose
+  tint, Terminal-recording code blocks, Self-Diagnostics & repair, Slash
+  command reference, Troubleshooting, License.
+- Uses Lucy's accent green for headings + footers, Arial body, Consolas
+  for command-line strings, native bullet numbering (no unicode bullets).
+- Script is self-contained: it locates `docx` via `npm root -g` so the
+  project's lockfile stays clean.
+
+Zero code paths touched outside `TutorialOverlay.svelte`. No risk of
+regression in runtime behaviour.
+
+---
+
 ## [1.7.66] — 2026-06-04
 
 ### Documentation refresh — SKILL.md v1.1.0 + README "What's New in v1.7"
