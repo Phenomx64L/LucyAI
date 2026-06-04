@@ -105,6 +105,145 @@ Any npm `@modelcontextprotocol/server-*` package works — paste the command ver
 
 ---
 
+## What's New in v1.7 — Operations Console Era
+
+A **15-version arc** (v1.6.0 → v1.7.66) that transformed Lucy from an AI
+chat assistant with sysadmin tools into a full operations console with
+its own visual identity. The headline shifts are listed below; the full
+turn-by-turn detail lives in [CHANGELOG.md](./CHANGELOG.md).
+
+### 🛰 Operations Console UI (v1.7.58 → v1.7.66)
+
+The "Mission Control overhaul" — every chrome surface above and below
+the chat thread now signals "this is an operator's console", not a
+generic copilot:
+
+- **Mission Strip** (v1.7.58) — always-on status band between the title
+  bar and tab strip:
+  `● PRECISION-X · ⚯ 2/3 hosts · ⚠ 0 alerts · ⊕ guard · HH:MM ●●●○○`.
+  Local-host heartbeat dot, remote-host reachability, active incidents,
+  security skill state, local clock, and a 5-dot posture indicator
+  (calm → vigilant → suspicious → alarmed → panic). Click any chip to
+  drill into the matching view.
+- **Per-tab purpose tint** (v1.7.59) — tab strip becomes a session map.
+  Each tab tints its top-border by purpose (incident red, executing
+  violet, investigation amber, reference blue, conversational green).
+  The tint is auto-detected from the tab's content via keyword regex
+  + runtime flags.
+- **Terminal-recording warp-blocks** (v1.7.60) — Lucy's command-output
+  blocks now read as asciinema-style forensic recordings. Header
+  carries traffic-light dots, hostname chip, engine glyph
+  (⚡PS · ▶cmd · $bash · ◇wmic · ⌬netsh · ☐reg · ※cscript · ⇄remote),
+  absolute timestamp, elapsed ms, and an `exit 0`/`exit ≠0` badge.
+- **Sidebar category rails** (v1.7.63) — Sistema/Runbooks/Acciones/
+  Registros each carry their own colour (green/amber/violet/blue) as
+  a 2-px left rail and a dot in the header. Hovering intensifies the
+  rail as a "you-are-here" affordance.
+- **Cite evidence pills** (v1.7.63) — inline citations from Lucy
+  (`<CITE src="…" kind="memory|file|url|tool">`) now render as
+  colour-coded forensic badges — cyan for memory, green for file,
+  blue for URL, amber for tool. Hover lifts the chip with a kind-
+  coloured glow.
+- **Composer ops aesthetic** (v1.7.63) — the input field carries a
+  lambda glyph (`λ`) as the prompt, a soft dot-grid background on
+  focus, and a block-shaped caret. When you start with `/` the prompt
+  turns amber to signal slash-command mode.
+- **Self-diagnostics with one-click repairs** (v1.7.64 → v1.7.66) —
+  the Auto-Diagnóstico panel surfaces real issues (DB integrity,
+  log file, credential store, guardrails, memory pipeline) AND
+  ships repair buttons that fix the common ones without leaving the
+  UI. Includes a four-phase DB repair (force-rewrite + REINDEX +
+  verification) that handles even stale FTS5 shadow-table artefacts.
+
+### 🤖 Intelligence (v1.6.0 → v1.7.50)
+
+- **Grounding** (v1.6.0) — every memory carries a confidence score
+  (0..1) driven by evidence accumulation. Memories with contradictory
+  evidence get downgraded; reinforced ones rise. Backed by a Rust
+  module (`grounding.rs`) and a `memory_evidence` table.
+- **Curated skill preset library** (v1.6.1) — 18+ ready-to-use ECC
+  presets (`cost-aware`, `security-review`, `hypothesis-driven-debug`,
+  …) plus an auto-loader for `docs/security-skills/<name>/SKILL.md`.
+- **Polarity-driven smart chip classification** (v1.6.5 → v1.6.7) —
+  Lucy's auto-suggested follow-up chips are scored by a polarity
+  signal (positive intent vs. negative intent) so destructive
+  suggestions stop sneaking onto the chip strip.
+- **Annealing ontology scoring** (v1.6.6 → v1.6.8) — when Lucy is
+  asked to consolidate memories, she scores candidate ontologies by
+  simulated annealing so the final picks are stable across runs.
+- **Centralised model catalog + tier health** (v1.7.0 → v1.7.5) —
+  one source of truth for every supported model (`gemini-*`,
+  `claude-*`, `gpt-*`, local Ollama), plus a boot-time tier health
+  check that grays out endpoints whose API key is missing or whose
+  remote returns 5xx.
+- **RULE 0b + report-generation skill** (v1.7.50) — a first-class
+  Report Generation intent class with a five-step contract
+  (`<THOUGHT>` plan → multi-tool gather → synthesis → writefile →
+  brief chat narrative). Closes the loop with the JS-side
+  multi-intent detector added in v1.7.49 so prompts like *"genera un
+  reporte detallado del estado de mi maquina, depositalo en mi
+  escritorio"* always escape the sysinfo short-circuit.
+
+### ⚡ Streaming overhaul (v1.7.42 → v1.7.57)
+
+A 15-commit sprint that took Lucy's response rendering from
+"functional but flickery" to indistinguishable from ChatGPT or Claude.ai:
+
+- **morphdom DOM diffing** (v1.7.56) — `<div use:morphHtml>` replaces
+  Svelte's `{@html msg.html}`. Updates mutate only the trailing few
+  characters of the latest text node; the rest of the bubble stays
+  physically untouched. Eliminates the residual streaming shimmer.
+- **rAF throttle + CSS-owned cursor** (v1.7.45) — `renderRevealed`
+  coalesces multiple drain ticks into one paint cycle; the blinking
+  cursor moves from a `<span>` into a `::after` pseudo so it can't
+  be destroyed and recreated on every chunk.
+- **Open-tag placeholder + role-gated `fin()`** (v1.7.46 → v1.7.54)
+  — when Lucy emits `<THOUGHT>` before any prose, the UI shows
+  *"◌ Lucy está razonando…"* until the close tag arrives, instead
+  of going blank. After the stream completes, `fin()` no longer
+  deletes the promoted bubble (the bug that v1.7.45-53 chased
+  through the wrong layer).
+- **Gemini-style aura + token fade-in** (v1.7.57) — streaming
+  bubbles glow with a soft accent-coloured text-shadow, and each
+  newly-added element fades in over 280ms with a slight blur lift.
+  Disappears cleanly on settle.
+
+### 🔧 Performance (v1.7.42 → v1.7.44)
+
+- **GPU vendor hints** for hybrid laptops — `NvOptimusEnablement = 1`
+  and `AmdPowerXpressRequestHighPerformance = 1` exported as Windows-
+  only release-only `#[used] #[no_mangle]` statics so NVIDIA Optimus
+  / AMD PowerXpress bind Lucy to the discrete GPU.
+- **WebView2 GPU flags** — `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+  set to `--enable-gpu-rasterization --enable-zero-copy
+  --ignore-gpu-blocklist`.
+- **Single window effect** — `mica` only, no acrylic, so DWM stops
+  running two blur passes per frame on the same surface.
+- **Idle saver class** (v1.7.44) — `html.lucy-quiescent` after 8 s
+  of no input pauses every infinite CSS animation app-wide via a
+  single `animation-play-state: paused` rule. Idle GPU drops to
+  ~1-3 %.
+
+### 💾 Reliability (v1.7.42 → v1.7.65)
+
+- **Persistence on structural changes** (v1.7.51) — `persistirNow()`
+  bypasses the 500 ms debounce for crearTab / closeTab / rename /
+  clear so closing Lucy immediately after a tab edit never loses
+  the edit.
+- **Self-diagnostic data repair** (v1.7.64 → v1.7.65) — one-click
+  command that backfills NULL confidence values across three tables,
+  force-rewrites every row to clear stale storage state, REINDEXes,
+  and verifies with a fresh `PRAGMA quick_check`.
+
+### 🛡 Hardening
+
+- **`<EXECUTE_REMOTE>` regex preservation** (v1.7.52) — an external
+  patch attempt had stripped attribute support from the cleanup
+  regex; v1.7.52 audits and reverts it with a verbose comment so
+  future "typo fixers" don't repeat the mistake.
+
+---
+
 ## What's New in v1.2.1
 
 A focused **stability + observability + visual refinement** release. No breaking changes — every existing flow keeps working, just feels sharper.

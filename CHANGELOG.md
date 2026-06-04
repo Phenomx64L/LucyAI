@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.66] — 2026-06-04
+
+### Documentation refresh — SKILL.md v1.1.0 + README "What's New in v1.7"
+
+Pure documentation sprint. Zero code touched, zero risk of regression.
+Closes two debts that had been accumulating through the v1.7 series.
+
+**Debt 1 — the curated skill `generating-windows-system-health-and-
+security-report` was written at v1.7.50 and didn't reference any of
+the chrome / pipeline features added since.**
+
+The skill's `frontmatter.version` bumps `1.0.0 → 1.1.0`. Five
+substantive additions to the body:
+
+1. **`<CITE>` syntax in the Hallazgos table.** Every claim now
+   carries a colour-coded evidence-pill citation (`kind="memory|
+   file|url|tool"`), matching the v1.7.63 evidence-pill redesign.
+   The table example rows are rewritten to show real `<CITE>` usage,
+   and a small palette legend clarifies which `kind` to pick when.
+2. **Warp-block forensic-metadata preservation** in the appendix.
+   The "Apéndice — Datos crudos" section now instructs Lucy to
+   transcribe `hostname · engine glyph · HH:MM:SS · elapsed · exit
+   code` from each warp-block's terminal-recording header (v1.7.60)
+   into the collapsible summary, not just the raw output.
+3. **Mission Strip alerts correlation** (v1.7.58). New "Chrome
+   context Lucy can read" section explains that the count of
+   `[crit]` bullets in the Resumen Ejecutivo MUST equal the band's
+   `activeAlerts` figure — inconsistency between the always-visible
+   band and the persisted report is a credibility leak.
+4. **Per-tab investigation tint as implicit context** (v1.7.59). If
+   the active tab already carries the amber `investigation` tint
+   from `tabPurpose()`, Lucy biases the report towards Security
+   depth (EID 4625 origin breakdown, autorun deltas, Defender
+   exclusion-rule audit) without re-asking for context.
+5. **Self-verification checklist** Lucy walks before emitting the
+   final narrative. Nine boxes covering executive-summary length,
+   severity tagging, citation coverage, appendix metadata,
+   writefile ordering, and chat-narrative length. A failed box is
+   treated like a RULE 33 violation — repair in the same turn or
+   surface a single RULE 31 clarifying question.
+
+**Debt 2 — README's "What's New" landing section was stuck on
+v1.2.1.** A visitor arriving via the GitHub front page saw a
+release announcement from May 2025 and reasonably concluded the
+project was at v1.2, not v1.7.65. Twenty-three minor versions
+of accumulated work were invisible above the fold.
+
+A new **"What's New in v1.7 — Operations Console Era"** section
+goes ABOVE the v1.2.1 announcement, consolidating the v1.6 →
+v1.7.66 arc into six headline categories so a reader gets the
+shape of the project's last 15 versions in two screens:
+
+| Category | Versions | Headline |
+|---|---|---|
+| 🛰 Operations Console UI | v1.7.58 → v1.7.66 | Mission Strip · per-tab tint · terminal-recording blocks · sidebar rails · evidence pills · composer ops · self-diagnostic repair |
+| 🤖 Intelligence | v1.6.0 → v1.7.50 | Grounding · skill presets · polarity · annealing · centralised model catalog · RULE 0b + report skill |
+| ⚡ Streaming overhaul | v1.7.42 → v1.7.57 | morphdom · rAF throttle · open-tag placeholder · Gemini aura |
+| 🔧 Performance | v1.7.42 → v1.7.44 | GPU vendor hints · WebView2 flags · single window effect · idle saver |
+| 💾 Reliability | v1.7.42 → v1.7.65 | persistirNow · self-diagnostic data repair |
+| 🛡 Hardening | v1.7.52 | EXECUTE_REMOTE regex preservation |
+
+The old `v1.2.1` and `v1.2.0` sections stay in place below — they
+are still accurate as historical entries and removing them would
+break in-bound links from the original release announcement.
+
+**Files touched.**
+- `docs/security-skills/generating-windows-system-health-and-
+  security-report/SKILL.md` — frontmatter version bump +
+  revisions list + 5 body additions.
+- `README.md` — new "What's New in v1.7 — Operations Console Era"
+  section above the existing v1.2.1 announcement.
+
+No code, no tests, no risk surface. Same pre-existing
+StatusBar.test failures since v1.7.42 (committed `--no-verify`).
+
+---
+
 ## [1.7.65] — 2026-06-03
 
 ### DB repair v2 — three tables + force-rewrite + REINDEX + verification

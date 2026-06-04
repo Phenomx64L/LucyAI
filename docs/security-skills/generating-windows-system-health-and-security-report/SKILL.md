@@ -12,9 +12,19 @@ tags:
 - windows-audit
 - multi-signal-synthesis
 - writefile-deliverable
-version: 1.0.0
+version: 1.1.0
 author: lucy-team
 license: GPLv3
+revisions:
+  - v1.0.0 (2026-06-03, Lucy v1.7.50) initial release alongside RULE 0b.
+  - v1.1.0 (2026-06-04, Lucy v1.7.66) refresh after the Mission Control
+    overhaul. Adds explicit `<CITE>` syntax for evidence references in the
+    Hallazgos table, instructs Lucy to preserve warp-block metadata
+    (hostname / engine / timestamp / exit code) verbatim in the appendix,
+    correlates the report's executive summary with the Mission Strip's
+    live alerts count, surfaces the per-tab investigation tint as
+    implicit context for the LLM, and adds a self-verification checklist
+    Lucy walks through before emitting the final narrative.
 nist_csf:
 - ID.AM-02
 - ID.RA-01
@@ -187,18 +197,38 @@ Compose ONE Markdown document with this structure:
 
 | Severidad | Hallazgo | Acción sugerida |
 |-----------|----------|-----------------|
-| [crit] | <claim with evidence ref> | <one concrete command or step> |
-| [warn] | <claim>                   | <action> |
-| [info] | <claim>                   | <action> |
+| [crit] | <claim> <CITE src="tool:tasklist" kind="tool">tasklist</CITE> | <one concrete command or step> |
+| [warn] | <claim> <CITE src="C:\Windows\System32\winevt\Logs\Security.evtx" kind="file">EID 4625</CITE> | <action> |
+| [info] | <claim> <CITE src="https://learn.microsoft.com/..." kind="url">MS docs</CITE> | <action> |
 
-Cada fila debe citar el tool/comando que produjo la evidencia (RULE 33 anti-hallucination).
+**Citation syntax (added in v1.1.0).** Every claim MUST cite the tool, file,
+or URL that produced the evidence using a `<CITE>` tag. Lucy's frontend
+(v1.7.63) renders these as colour-coded **evidence pills**:
+
+| `kind` | Colour | When to use |
+|---|---|---|
+| `memory` | cyan | Recalled from agent_memories / memory_core |
+| `file` | green | Specific file or evtx path on disk |
+| `url` | blue | Web reference (vendor docs, CVE entry, etc.) |
+| `tool` | amber | Output of a tool you ran in this turn (`tasklist`, `sysinfo`, etc.) |
+
+A bare `<claim>` with no `<CITE>` is a RULE 33 violation: rephrase as
+`(hypothesis)` and add a verification command if the evidence isn't yet
+on the table.
 
 ---
 
 ## 4. Apéndice — Datos crudos
 
+Every tool invocation Lucy made in this turn renders in the chat as a
+"terminal-recording" warp-block (v1.7.60) with `hostname · engine glyph ·
+HH:MM:SS · elapsed · exit code` baked into its header. **Preserve those
+chrome fields verbatim** when you transcribe the block into the appendix —
+they are forensic context, not decoration. The collapsible summary should
+include the hostname so the appendix scans as a list of recordings:
+
 <details>
-<summary>sysinfo</summary>
+<summary>PRECISION-X · ⚡ sysinfo · 14:23:01 · 142ms · exit 0</summary>
 
 ```
 <raw output>
@@ -207,7 +237,7 @@ Cada fila debe citar el tool/comando que produjo la evidencia (RULE 33 anti-hall
 </details>
 
 <details>
-<summary>tasklist (top 25)</summary>
+<summary>PRECISION-X · ⚡ tasklist (top 25) · 14:23:08 · 87ms · exit 0</summary>
 
 ```
 <raw output>
@@ -215,7 +245,7 @@ Cada fila debe citar el tool/comando que produjo la evidencia (RULE 33 anti-hall
 
 </details>
 
-<!-- repetir por cada tool invocado -->
+<!-- repetir por cada tool invocado, conservando hostname + engine + ts -->
 ```
 
 ### Step 5: Persist the Report
@@ -249,6 +279,67 @@ Top 3:
 
 ¿Quieres que aplique el endurecimiento de Defender ahora?
 ```
+
+## Chrome context Lucy can read (v1.1.0)
+
+The Lucy UI itself carries operational context that this skill should
+respect:
+
+### Mission Strip alerts count (v1.7.58)
+
+The top-of-window status band always shows `⚠ N alerts` derived from
+`activeIncidentId`. The **count of `[crit]` rows** in the Resumen
+Ejecutivo MUST equal that number at generation time. If Lucy is about to
+emit a `[crit]` row but `activeAlerts === 0`, she should escalate the
+new incident first (so the band reflects reality) OR downgrade the row
+to `[warn]` with a verification command for the operator to confirm.
+Inconsistency between the band and the report is a credibility leak.
+
+### Per-tab investigation tint (v1.7.59)
+
+A tab whose content matches the investigation regex (phishing, malware,
+threat, breach, forensic, CVE, ransom, c2, intrusion, etc.) gets an
+amber border-top automatically. **If Lucy detects the active tab is
+already tinted as `investigation`,** she can skip re-asking about
+context — the operator has implicitly classified this turn. Bias the
+report towards Security depth: include EID 4625 origin breakdown,
+autorun deltas vs. last clean snapshot, and Defender exclusion-rule
+audit, even if the user's prompt didn't explicitly demand them.
+
+### Streaming pipeline guarantees (v1.7.45-65)
+
+Code blocks Lucy emits during the report render with Shiki
+pre-highlighting (v1.7.55), morphdom in-place updates (v1.7.56), and a
+"Lucy is reasoning" aura while `<THOUGHT>` blocks are open (v1.7.57).
+None of this changes how Lucy writes the report — but it does mean she
+can emit longer narrative blocks without worrying about flicker. There
+is no streaming-performance reason to be terse.
+
+## Self-verification checklist (v1.1.0)
+
+Before emitting the final narrative (Step 6), walk the checklist below
+silently and only commit the response if every box is checked. If any
+fails, fix it before the writefile, not after.
+
+```
+□ Resumen Ejecutivo contains 3-5 bullets
+□ Every bullet is severity-tagged [crit|warn|info]
+□ [crit] bullet count matches Mission Strip's activeAlerts (or has
+  been explicitly reconciled in this turn)
+□ Every claim in Sección 3 has a <CITE src="…" kind="…"> tag
+□ Every tool transcribed into Sección 4 preserves hostname + engine +
+  HH:MM:SS + elapsed + exit code from its warp-block header
+□ The Markdown document references its own generation timestamp
+□ <TOOL>writefile:…</TOOL><FILECONTENT>…</FILECONTENT> is the LAST
+  data action before the chat narrative
+□ Chat narrative is ≤6 lines and contains the exact file path
+□ Chat narrative offers ONE concrete follow-up (e.g. "¿aplicar el
+  endurecimiento de Defender?")
+```
+
+A failing checkbox is treated like a RULE 33 violation: do not ship
+the response with the gap. Either repair it in the same turn or ask
+the operator a single clarifying question (RULE 31 Ambiguity Gate).
 
 ## Key Concepts
 
