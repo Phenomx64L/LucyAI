@@ -7,6 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.56] — 2026-06-03
+
+### Final fix for the residual streaming shimmer — morphdom DOM diffing
+
+User reported that after v1.7.55 the bubble's text still
+shimmered briefly while streaming, even though every other
+streaming-pipeline issue (cursor, throttling, fences, shiki
+pre-application) had been resolved. They asked if it could be
+fully eliminated. Yes — via DOM diffing.
+
+**Why the shimmer persisted.**
+
+Svelte's `{@html msg.html}` binding implements the html mutation
+as `parentNode.innerHTML = newHtml`. That call is the cheapest
+possible implementation, but also the most DESTRUCTIVE: every
+text node, every element, every backdrop-filter sibling inside
+the bubble is destroyed and recreated on every chunk. Even with
+the v1.7.45 rAF throttle capping the rate at 60 fps, each frame
+still does a full parse → destroy-children → create-children →
+re-style cycle. The browser doesn't know that 99 % of the
+content is identical to the previous frame — to it, the whole
+inner DOM just got blown away and rebuilt. That's the residual
+shimmer.
+
+**Fix: introduce morphdom and a Svelte action wrapping it.**
+
+`morphdom` (10 KB gzip, MIT) is a small library that takes
+`(fromNode, toNode)` and applies the MINIMAL DOM mutations
+needed for `fromNode` to look like `toNode`. Text nodes whose
+content didn't change are LEFT IN PLACE — not even touched.
+Elements whose `outerHTML` is identical are skipped via an
+`isEqualNode` short-circuit. The browser doesn't re-rasterize
+unchanged text, doesn't re-blur unchanged backdrop-filter
+layers, doesn't even re-style unchanged elements.
+
+Visible result for the user: text appears to "type itself" onto
+a stable substrate — same UX as ChatGPT and Claude.ai.
+
+**Implementation.**
+
+1. **New module `src/lib/morph-html.ts`** — a Svelte action:
+
+   ```ts
+   export function morphHtml(node, initialHtml) {
+       node.innerHTML = initialHtml ?? '';
+       return {
+           update(newHtml) {
+               const target = node.cloneNode(false);
+               target.innerHTML = newHtml ?? '';
+               morphdom(node, target, {
+                   childrenOnly: true,
+                   onBeforeElUpdated(fromEl, toEl) {
+                       if (fromEl.isEqualNode(toEl)) return false;
+                       return true;
+                   },
+               });
+           },
+       };
+   }
+   ```
+
+   `childrenOnly: true` preserves the host element's identity,
+   attributes, and event listeners. `isEqualNode` short-circuit
+   skips byte-identical subtrees.
+
+2. **`ChatThread.svelte` — every `{@html msg.html}` replaced**
+   with `<div use:morphHtml={msg.html} style="display:contents">`.
+   `display: contents` makes the wrapper transparent to layout
+   so the rendered HTML still flows as direct children of
+   `.msg-lucy` (no extra block, no margin shift, no flex/grid
+   item count change). Three sites converted: the chapter-view
+   linear-mode body, the default lucy/streaming body, and the
+   system-message body.
+
+   The reasoning-body site (line 213) was already inside a real
+   `<div class="reasoning-body">`, so the action is added
+   directly to that existing div without a wrapper.
+
+**Compatibility notes.**
+
+- `display: contents` is supported in Chromium-based WebView2
+  (Tauri 2's runtime) since version 65+. Tauri ships a Chromium
+  fork well past that line.
+
+- `addCopyBtns()` post-render decorations are safe: by the time
+  it runs (only after streaming→lucy promotion), `msg.html`
+  stops changing, so the morphdom action's `update()` stops
+  firing. The `.code-wrap` wrappers and copy/run buttons it
+  inserts are never disturbed by a later morphdom pass.
+
+- `applyShikiToHtml()` (v1.7.55) bakes Shiki output into the
+  HTML string BEFORE it reaches the action. morphdom sees the
+  already-coloured `<code>` content as part of the new tree and
+  preserves it across updates.
+
+**Bundle size.**
+
+`morphdom` adds ~10 KB gzip to the bundle. The improvement in
+perceived smoothness is substantial; the cost is negligible.
+
+**Files touched.**
+- `src/lib/morph-html.ts` *(new)* — 50 lines, single Svelte
+  action plus verbose comment explaining the why.
+- `src/lib/ChatThread.svelte` — import the action, replace 4
+  `{@html msg.html}` sites with `use:morphHtml`.
+- `package.json` — `morphdom` ^2.7.8 added.
+
+**Verification.** `svelte-check` passes (0 errors).
+
+**Test path.** Recompile, reproduce "dame un texto largo".
+Watch the text grow chunk by chunk. The bubble should look
+visually static below the leading edge of the text — no
+shimmer, no flash, just the trailing characters appearing.
+
+---
+
 ## [1.7.55] — 2026-06-03
 
 ### Code block load-latency fix + auto-close mid-stream fences

@@ -20,6 +20,14 @@
     import AgentChapterView from '$lib/AgentChapterView.svelte';
     // v1.7.26 — Empty state hero rendered when a tab has no real messages.
     import ChatEmptyState from '$lib/ChatEmptyState.svelte';
+    // v1.7.56 — morphdom-based DOM-diff action that replaces `{@html msg.html}`
+    // on bubble content. The default Svelte binding implements `innerHTML =
+    // newHtml` on every update, which destroys+recreates every child node
+    // ~25-60 times per second during streaming and produces a residual
+    // shimmer across the bubble. morphHtml walks the diff and only mutates
+    // what actually changed (usually the trailing characters of the last
+    // text node) so text appears to "type itself" onto a stable substrate.
+    import { morphHtml } from '$lib/morph-html';
 
     export let tab: any;
     export let isEN: boolean = false;
@@ -202,7 +210,10 @@
                     <span class="reasoning-chevron">{msg.collapsed ? '▸' : '▾'}</span>
                 </button>
                 {#if !msg.collapsed && msg.html}
-                    <div class="reasoning-body">{@html msg.html}</div>
+                    <!-- v1.7.56 — morphdom-driven content; replaces wholesale
+                         innerHTML rewrites with a diff so streaming text
+                         doesn't shimmer the whole bubble each chunk. -->
+                    <div class="reasoning-body" use:morphHtml={msg.html}></div>
                 {/if}
             </div>
         {:else if msg.role === 'streaming' && !msg.rawContent}
@@ -313,9 +324,14 @@
                                 title={isEN ? 'Switch to chapter view' : 'Cambiar a vista de capítulos'}>
                             ◆ {isEN ? 'Chapter view' : 'Vista de capítulos'}
                         </button>
-                        {@html msg.html}
+                        <!-- v1.7.56 — morphdom-driven content. `display:contents`
+                             makes the wrapper transparent to layout so the
+                             rendered HTML still flows directly inside .msg-lucy
+                             (no extra block, no margin/padding side-effects). -->
+                        <div use:morphHtml={msg.html} style="display:contents"></div>
                     {:else}
-                        {@html msg.html}
+                        <!-- v1.7.56 — see sibling comment above. -->
+                        <div use:morphHtml={msg.html} style="display:contents"></div>
                     {/if}
                     {#if msg.attachments?.length}
                         <div class="msg-img-gallery">
@@ -330,7 +346,10 @@
                     {/if}
                     {#if msg.time}<div class="msg-time">{msg.time}</div>{/if}
                 {:else}
-                    {@html msg.html}
+                    <!-- v1.7.56 — system / non-lucy message body uses the same
+                         morphdom path. Negligible cost (system messages don't
+                         stream) but keeps the rendering primitive uniform. -->
+                    <div use:morphHtml={msg.html} style="display:contents"></div>
                 {/if}
                 {#if msg.button}
                     <button class="msg-btn"

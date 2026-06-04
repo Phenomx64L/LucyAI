@@ -1,0 +1,95 @@
+// ── morph-html.ts — Svelte action that DOM-diffs an HTML string into a host
+// element instead of replacing innerHTML wholesale (v1.7.56).
+//
+// Why this exists
+// ---------------
+// Lucy's streaming render path mutates `msg.html` ~25-60 times per second.
+// Svelte's `{@html msg.html}` binding implements that mutation as
+// `parentNode.innerHTML = newHtml`, which is the cheapest possible
+// implementation but also the most destructive: every text node, every
+// element, every backdrop-filter sibling inside the bubble gets DESTROYED
+// and re-created on every chunk. Even with the rAF throttle, the destroy/
+// re-create cycle costs paint time and is visible as a low-level shimmer
+// across the bubble — the residual flicker the user reported after all the
+// streaming-pipeline fixes in v1.7.45-55.
+//
+// morphdom replaces that wholesale wipe with a tree diff: it compares the
+// old and new DOM, mutates only the nodes that actually changed (usually
+// the trailing few characters of the last text node), and leaves the rest
+// physically untouched. The browser doesn't re-rasterize text, doesn't
+// re-blur backdrop-filter layers, doesn't even re-style nodes whose
+// outerHTML didn't change. Visible result: text appears to "type itself"
+// onto a stable substrate, exactly like ChatGPT or Claude.ai.
+//
+// Why a Svelte action (not a wrapper component)
+// ---------------------------------------------
+// `use:morphHtml={msg.html}` is a 1-liner per call site in ChatThread.svelte
+// — drop-in for the existing `{@html msg.html}` blocks. The action attaches
+// to the host element, sets the initial inner HTML in `mount()`, and
+// morphs the children in `update()` whenever msg.html changes. No extra
+// component, no extra reactive trigger, no extra prop drilling.
+
+import morphdom from 'morphdom';
+
+/**
+ * Svelte action that maintains the host element's inner HTML to match the
+ * provided string, using morphdom for in-place DOM diffing on updates.
+ *
+ * Usage:
+ *   <div use:morphHtml={msg.html} class="bubble-content"></div>
+ *
+ * Initial mount: behaves identically to `innerHTML = html` — single parse,
+ * single insert.
+ *
+ * Subsequent updates: morphdom walks the existing DOM tree against the new
+ * one and applies only the minimal mutations needed. Text nodes whose
+ * content didn't change are LEFT IN PLACE (not even touched), so the
+ * compositor never repaints them. Backdrop-filter siblings around them
+ * inherit that stability — they don't recompose either.
+ *
+ * Edge cases the implementation handles:
+ *   • Null / undefined html → treated as empty string. Won't throw.
+ *   • Equal-content updates → morphdom's `onBeforeElUpdated` short-circuits
+ *     when nodes are equivalent, avoiding pointless walks.
+ *   • Post-render DOM decorations (e.g. addCopyBtns wrapping <pre> in
+ *     .code-wrap): once the message has been promoted to 'lucy' and the
+ *     decorations applied, msg.html stops changing, so this action's
+ *     `update()` stops firing. The decorations are never disturbed by a
+ *     later morphdom pass.
+ */
+export function morphHtml(node: HTMLElement, initialHtml: string | null | undefined) {
+    // Initial mount — set innerHTML once. morphdom isn't needed here
+    // because there's nothing to diff against yet.
+    node.innerHTML = initialHtml ?? '';
+
+    return {
+        update(newHtml: string | null | undefined) {
+            const safe = newHtml ?? '';
+            // morphdom needs a single root element to morph FROM and TO.
+            // We clone the host's shallow shape (same tag, no children) and
+            // populate it with the desired new HTML. Then we ask morphdom
+            // to morph the host to match — with `childrenOnly: true` it
+            // leaves the host's identity, attributes, and event listeners
+            // intact and just reconciles the descendant tree.
+            const target = node.cloneNode(false) as HTMLElement;
+            target.innerHTML = safe;
+            morphdom(node, target, {
+                childrenOnly: true,
+                onBeforeElUpdated(fromEl, toEl) {
+                    // Skip subtrees that are already byte-identical. Cheap
+                    // O(n) walk, but it pays off massively for the common
+                    // streaming case where only the trailing text node
+                    // changed.
+                    if (fromEl.isEqualNode(toEl)) return false;
+                    return true;
+                },
+            });
+        },
+        destroy() {
+            // No event listeners or external state to clean up — morphdom's
+            // mutations are all on `node`, which Svelte itself will remove
+            // when the parent component unmounts. Leaving the body empty
+            // is intentional.
+        },
+    };
+}
