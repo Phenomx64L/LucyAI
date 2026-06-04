@@ -9400,11 +9400,11 @@ if (Test-Path $src) {
     guardLabel={msGuardLabel}
     posture={msPosture}
     {isEN}
-    on:clickLocal={() => setView('diagnostico')}
+    on:clickLocal={() => setView('diagnostics')}
     on:clickHosts={() => setView('nexshell')}
     on:clickAlerts={() => setView('dashboard')}
     on:clickGuard={() => { showSkillPicker = true; }}
-    on:clickPosture={() => setView('diagnostico')}
+    on:clickPosture={() => setView('diagnostics')}
   />
   {/if}
 

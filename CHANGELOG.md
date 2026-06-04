@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.62] — 2026-06-03
+
+### Hotfix — MissionStrip's local + posture chips routed to a non-existent view
+
+User reported that clicking PRECISION-X (the local-host chip in
+the Mission Strip) landed on an empty screen. The chip's tooltip
+correctly read *"Esta máquina (click para diagnóstico)"* but the
+click did nothing visible.
+
+**Cause.** In v1.7.58 I wired both `clickLocal` and `clickPosture`
+to `setView('diagnostico')`. The actual route name registered in
+`+page.svelte` (the `{#if activeView === 'XXX'}` block at line
+10017) is `'diagnostics'` — English, with the trailing `s`. The
+mismatched string left `activeView = 'diagnostico'` after the
+state update, but no view block matched it, so the main area
+rendered nothing. The sidebar still showed the previous view's
+highlight (because no nav update fired against the bad name),
+making the failure look like "Lucy went somewhere blank."
+
+**Fix.** Two-character rename in both handlers:
+
+```diff
+- on:clickLocal={() => setView('diagnostico')}
+- on:clickPosture={() => setView('diagnostico')}
++ on:clickLocal={() => setView('diagnostics')}
++ on:clickPosture={() => setView('diagnostics')}
+```
+
+The Hosts, Alerts, and Guard handlers were unaffected — they
+already used the correct route names (`'nexshell'`,
+`'dashboard'`, and the `showSkillPicker` flag).
+
+**Why I missed this.** I wrote the route names from memory (in
+Spanish) without grepping the actual view block. The other view
+names I happened to remember in English (nexshell, dashboard)
+worked; the one I happened to localise to Spanish failed
+silently because no fallback view block matched. A defensive
+warning in `setView()` ("unknown view `${v}` — staying on
+current") would have caught it; that's a separate cleanup for
+another commit.
+
+**Files touched.**
+- `src/routes/+page.svelte` — two string literals in the
+  MissionStrip prop bindings.
+
+**Verification.** `svelte-check` passes (0 errors). Clicking
+PRECISION-X now opens the SelfDiagnostics panel as intended.
+
+---
+
 ## [1.7.61] — 2026-06-03
 
 ### Hotfix — guard chip overflow blocked the tab strip
