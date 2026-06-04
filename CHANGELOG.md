@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.50] — 2026-06-03
+
+### Close the loop on report generation — system prompt + curated skill
+
+v1.7.49 fixed the JS side (regex-based detection of multi-intent /
+file-output prompts) so report-style requests escape the
+sysinfo quick-tool short-circuit. v1.7.50 closes the loop on
+the LLM side with two complementary changes so the model
+actually produces what the user asked for.
+
+**Change 1 — New system-prompt section: `ReportGeneration`
+(priority 11, stable, in the cache prefix).**
+
+Added between `IntentDetection` (priority 10) and `SafetyRules`
+(priority 20). Promotes "report generation" to a first-class
+intent class (E) that specialises RULE 0's A/B/C/D taxonomy.
+Codifies the contract Lucy must follow when she detects the
+intent:
+
+  STEP 1 — Emit a `<THOUGHT>` block FIRST listing the data points
+           to gather, the resolved output path, and the output
+           format. Without the `<THOUGHT>` the agent loop does
+           not recognise multi-step intent and the short-circuit
+           risks re-engaging.
+  STEP 2 — Emit one `<TOOL>` per data point, expecting 3-7 tool
+           invocations per report.
+  STEP 3 — Synthesise a single Markdown document with the
+           canonical structure: Resumen ejecutivo / per-axis
+           sections (Rendimiento / Seguridad / etc.) / Hallazgos
+           y recomendaciones (severity-tagged, every claim traced
+           to a tool output) / Apéndice raw outputs.
+  STEP 4 — Emit `<TOOL>writefile:<path></TOOL>` plus the full
+           Markdown in `<FILECONTENT>`. Writefile is the LAST
+           data action.
+  STEP 5 — Final narrative in chat: ≤6 lines stating the path,
+           the top 3 findings, and one concrete follow-up.
+
+The section explicitly lists the historical failure modes as
+anti-patterns ("emitting only `<TOOL>sysinfo</TOOL>` and
+stopping", "writing the file via Set-Content instead of native
+writefile", "pasting the raw tool dump as the answer", etc.) so
+the model can recognise them in its own reasoning before
+falling into them.
+
+Registered in `all_section_names`, `build_composable_prompt`'s
+section vector, and `STABLE_SECTIONS` so the cache prefix
+includes the new rules (no per-turn token cost beyond the first
+miss).
+
+**Change 2 — Curated skill: `generating-windows-system-health-
+and-security-report`.**
+
+Added at
+`docs/security-skills/generating-windows-system-health-and-
+security-report/SKILL.md` following Lucy's standard skill
+schema (YAML frontmatter + Workflow / Tools / Common Scenarios
+sections). Frontmatter declares NIST CSF mappings
+(ID.AM-02, ID.RA-01, DE.CM-01, DE.CM-07, RS.AN-01), MITRE
+ATT&CK techniques (T1057, T1082, T1518, T1518.001), NIST AI
+RMF measure (MEASURE-2.7), and standard `domain: sysadmin`,
+`subdomain: system-reporting`.
+
+The skill body codifies:
+
+  • When to use (and when NOT to — forensic deep-dives go
+    elsewhere; single-signal questions go through the quick-tool
+    path)
+  • Prerequisites (Windows 10/11; admin only for Security
+    event log channel; writable destination path)
+  • Full workflow Step 1 → Step 6 mirroring the system-prompt
+    contract but with concrete tool invocations
+    (`<TOOL>sysinfo</TOOL>`, `<TOOL>eventlog:Security:200:
+    FailedLogin</TOOL>`, `<EXECUTE>Get-MpComputerStatus | …
+    </EXECUTE>`, `<EXECUTE>Get-NetFirewallProfile | …</EXECUTE>`,
+    etc.)
+  • Canonical Markdown report template covering Resumen
+    ejecutivo + Rendimiento (hardware base, carga actual,
+    eventos de rendimiento) + Seguridad (postura del antivirus,
+    persistencia, eventos de seguridad, patches, firewall) +
+    Hallazgos y recomendaciones (severity-tagged table with
+    evidence references) + Apéndice raw data (collapsible)
+  • Three Common Scenarios: full report to desktop, security-
+    only audit (no file), PDF report (Edge Headless full-path
+    per existing PDF rule)
+  • Pitfalls: emitting only `<TOOL>sysinfo</TOOL>`, using
+    Set-Content instead of writefile, pasting raw transcripts,
+    skipping the Hallazgos section
+
+When the user's prompt matches the trigger phrasing AND the
+skills auto-router activates this skill, the LLM gets both the
+in-prompt RULE 0b and the skill body as a deep reference,
+ensuring deterministic multi-step behaviour.
+
+**Files touched.**
+- `src-tauri/src/commands/prompt_sections.rs` — new
+  `ReportGenerationSection` struct + 3 registration sites
+  (`all_section_names`, `build_composable_prompt`,
+  `STABLE_SECTIONS`).
+- `docs/security-skills/generating-windows-system-health-and-
+  security-report/SKILL.md` — new 380-line skill.
+- Standard version bumps + CHANGELOG.
+
+**Verification.** `cargo check --lib` passes clean (only the
+pre-existing `skills_dir` dead-code warning, unrelated).
+
+**Net behaviour after v1.7.49 + v1.7.50 stacked.** The failing
+prompt *"genera un reporte detallado del estado de mi maquina,
+tanto a nivel seguridad como de rendimiento, el reporte
+depositalo en mi escritorio"* now:
+
+  1. JS side: short-circuit gate refuses to engage (v1.7.49
+     wantsFileOutput + verb expansion + compound axes detector
+     + reporte-detallado detector all fire).
+  2. Agent loop enters.
+  3. LLM reads RULE 0b in the system prompt (cached, 0 marginal
+     tokens after first miss).
+  4. LLM auto-routes the skill `generating-windows-system-
+     health-and-security-report` and reads its workflow.
+  5. LLM emits `<THOUGHT>` with the 9-signal plan + Desktop path.
+  6. LLM emits 5 performance tools + 4 security tools/commands.
+  7. LLM synthesises the Markdown document.
+  8. LLM emits `<TOOL>writefile:%USERPROFILE%\Desktop\
+     reporte_PRECISION-X_<YYYYMMDD>.md</TOOL>` +
+     `<FILECONTENT>` with the full report.
+  9. Final 6-line chat narrative with path + top 3 + follow-up.
+
+The chain of fixes from v1.7.49 → v1.7.50 turns a silently-
+truncated sysinfo dump into a real on-disk report.
+
+---
+
 ## [1.7.49] — 2026-06-03
 
 ### Stop the sysinfo short-circuit from eating report-generation prompts

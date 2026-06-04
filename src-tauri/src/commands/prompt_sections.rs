@@ -85,6 +85,7 @@ fn all_section_names() -> Vec<(&'static str, u32)> {
         ("Identity", 0),
         ("Runbooks", 5),
         ("IntentDetection", 10),
+        ("ReportGeneration", 11),
         ("SafetyRules", 20),
         ("MemoryRules", 25),
         ("HostRouting", 30),
@@ -208,6 +209,69 @@ impl PromptSection for IntentDetectionSection {
         STEP 2 — OS GUARD: If the user asks for a Linux/Unix/macOS command (sudo, apt, yum, dnf, systemctl, bash, chmod, etc.) AND the current system is Windows, ALWAYS use category D — show as markdown code block only. NEVER wrap Linux commands in <EXECUTE> on a Windows system.\n\
         STEP 3 — QUESTION FORM RULE: If the user's message is phrased as a question ('¿puedes...?', '¿cómo...?', '¿qué comando...?', 'can you give me...', 'how do I...') without explicit imperative action words, default to category D (show, don't run) unless the question is about something already in progress in this conversation.\n\
           RULE 1: For trivial tasks (like simple file creation, basic commands), COMPLETELY BYPASS <THOUGHT> tags and output the markdown codeblock or <EXECUTE> tags NATIVELY to save tokens. Do not pause to ask for permission. Just do it.".to_string()
+    }
+}
+
+// ── v1.7.50 — ReportGenerationSection ────────────────────────────────────────
+//
+// Why this exists. A user prompt of the form "genera un reporte detallado del
+// estado de mi maquina, tanto a nivel seguridad como de rendimiento, el
+// reporte depositalo en mi escritorio" used to short-circuit through the
+// `<TOOL>sysinfo</TOOL>` quick-tool branch in +page.svelte, returning the raw
+// sysinfo dump and finishing. Neither the agent loop nor `writefile` were
+// invoked. v1.7.49 fixed the JS side so prompts of this shape always escape
+// the short-circuit; v1.7.50 (this section) closes the loop on the LLM side
+// by promoting "report generation" to a first-class intent class with
+// explicit rules about the multi-step plan it must emit.
+//
+// Placement. Priority 11 — runs RIGHT AFTER `IntentDetection` (priority 10)
+// and BEFORE `SafetyRules` (priority 20). That ordering lets it specialise
+// the intent-classification system without contradicting any safety rule
+// that comes later. Marked stable (see STABLE_SECTIONS in
+// build_composable_prompt) so it lives in the cache prefix.
+pub struct ReportGenerationSection;
+impl PromptSection for ReportGenerationSection {
+    fn name(&self) -> &'static str { "ReportGeneration" }
+    fn relevant(&self, _ctx: &PromptContext) -> bool { true }
+    fn priority(&self) -> u32 { 11 }
+    fn render(&self, _ctx: &PromptContext) -> String {
+        "RULE 0b — REPORT GENERATION INTENT (specialises RULE 0 category A/B).\n\
+        TRIGGER. The user's message asks Lucy to produce a structured report ABOUT THE LOCAL OR REMOTE SYSTEM and (often) save it to disk. Signals:\n  \
+          • Generation verbs: 'genera', 'gen[eé]rame', 'produce', 'prod[uú]ceme', 'elabora', 'redacta', 'compila', 'construye', 'generate', 'build', 'compile', 'produce', 'write a report'.\n  \
+          • Report nouns: 'reporte', 'informe', 'report', 'auditoría', 'audit', 'overview', 'snapshot', 'panorama', 'estado de salud', 'health check'.\n  \
+          • Quality qualifiers that imply multi-signal synthesis: 'detallado', 'completo', 'exhaustivo', 'ejecutivo', 'integral', 'comprehensive', 'detailed', 'full', 'executive'.\n  \
+          • Compound analysis axes (≥2): 'tanto X como Y', 'seguridad y rendimiento', 'security and performance', 'salud + integridad', etc.\n  \
+          • File-output verbs/targets: 'deposita', 'guarda en', 'exporta', 'save to', 'escritorio', 'desktop', '.md', '.pdf', '.txt', '.json', '.html', 'archivo'.\n\
+        WHEN ANY of these triggers are present, the request is REPORT GENERATION (intent class E). Do NOT respond with a single quick TOOL like '<TOOL>sysinfo</TOOL>' alone — that gets the prompt short-circuited by the frontend and the user never sees the synthesis or the file. Instead follow the contract below.\n\
+        \n\
+        CONTRACT for REPORT GENERATION.\n\
+        STEP 1 — ALWAYS emit a <THOUGHT> block FIRST listing:\n  \
+          (a) The data points you'll gather (e.g. sysinfo, tasklist, netconn, eventlog:Security, eventlog:System, autoruns, hotfix list, defender status, firewall rules, disk usage). Pick the subset that actually matches the requested axes. Security-oriented requests should include Defender state, failed logins from Security event log, suspicious autoruns, listening ports; performance-oriented requests should include CPU/memory/disk pressure, top processes by RAM, page-file usage, top event-log errors.\n  \
+          (b) The output destination if the user named one (e.g. Desktop path). Resolve %USERPROFILE%\\Desktop when needed.\n  \
+          (c) The output format (Markdown for human reading by default; PDF only if the user said 'PDF' explicitly — and follow the Edge Headless rules in the existing prompt for that case).\n\
+        STEP 2 — Emit ONE <TOOL> per data point you listed in STEP 1, in the order you'll need them. Wait for each tool result before emitting the next when ordering matters (sequencing is handled by the agent loop). It is normal and EXPECTED that this turn includes 3-7 <TOOL> invocations.\n\
+        STEP 3 — Once the signals are gathered, SYNTHESISE them in a single Markdown document with this structure:\n  \
+          1. '# Reporte de Estado — <hostname>' + generation timestamp.\n  \
+          2. '## Resumen ejecutivo' — 3-5 bullets stating the most actionable findings ('the box looks healthy, but Defender real-time protection is off' / 'CPU pressure is 70% sustained driven by chrome.exe').\n  \
+          3. One '## <axis>' section per axis the user requested (Rendimiento, Seguridad, etc.) with sub-sections per signal.\n  \
+          4. '## Hallazgos y recomendaciones' — concrete next-step suggestions tagged with severity (info / warn / crit). Every claim must trace back to a tool output that appeared in this turn (RULE 33 applies).\n  \
+          5. '## Apéndice — Datos crudos' — collapsible raw outputs at the end for traceability.\n\
+        STEP 4 — If the user requested file output, emit:\n  \
+          <TOOL>writefile:<full-path>.md</TOOL>\n  \
+          <FILECONTENT>...the full Markdown document from STEP 3...</FILECONTENT>\n  \
+          The writefile must come AFTER all the data-gathering tools. Do NOT split the file into parts; one writefile, one FILECONTENT block.\n\
+        STEP 5 — Final narrative in chat. Keep it short (≤6 lines):\n  \
+          (a) State the file path you wrote, exactly.\n  \
+          (b) The 3 most important findings as bullets (mirror of the executive summary).\n  \
+          (c) Offer one concrete follow-up the user might want next ('¿quieres que aplique el endurecimiento de Defender?').\n\
+        \n\
+        ANTI-PATTERNS that fail this rule:\n  \
+          • Emitting only '<TOOL>sysinfo</TOOL>' and stopping. The frontend will dump 6 lines of CPU/RAM and finish without the agent loop ever running. This is the #1 historical failure mode.\n  \
+          • Skipping STEP 1's <THOUGHT>. Without it the agent loop does not recognise a multi-step intent and the short-circuit risks re-engaging.\n  \
+          • Writing the file with PowerShell Set-Content / Out-File when <TOOL>writefile:</TOOL> is available. Use the native tool.\n  \
+          • Pasting the entire raw tool dump into chat instead of synthesising. The user asked for a REPORT, not a transcript.\n  \
+          • Promising the file ('lo guardaré en tu escritorio') without actually emitting the writefile in this turn. RULE 2b's completion contract applies.\n\
+        ".to_string()
     }
 }
 
@@ -804,6 +868,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &IdentitySection,
         &RunbooksSection,
         &IntentDetectionSection,
+        &ReportGenerationSection,
         &SafetyRulesSection,
         &MemoryRulesSection,
         &HostRoutingSection,
@@ -847,6 +912,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
     const STABLE_SECTIONS: &[&str] = &[
         "Identity",              // user_name + lang — fixed during a session
         "IntentDetection",
+        "ReportGeneration",
         "SafetyRules",
         "MemoryRules",
         "HostRouting",
