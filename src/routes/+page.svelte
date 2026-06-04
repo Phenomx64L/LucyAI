@@ -609,8 +609,18 @@ import { listen } from '@tauri-apps/api/event';
         msPosture = /** @type {0|1|2|3|4} */ (p);
     }
     $: {
-        try { msGuardLabel = peekActiveSecuritySkill() || ''; }
-        catch { msGuardLabel = ''; }
+        // v1.7.61 — peekActiveSecuritySkill() returns the FULL SecuritySkill
+        // object (meta + body markdown of hundreds of lines), not a string.
+        // The v1.7.58 code stringified the entire object into the tooltip,
+        // producing a multi-kilobyte string of escaped backslashes that
+        // overflowed the chip and blocked the tab strip from being clickable.
+        // Extract a short label: prefer the human name, fall back to the id.
+        try {
+            const _sk = peekActiveSecuritySkill();
+            msGuardLabel = _sk?.meta?.name || _sk?.meta?.id || '';
+            // Defensive cap so a freak long name can't break the layout.
+            if (msGuardLabel.length > 40) msGuardLabel = msGuardLabel.slice(0, 38) + '…';
+        } catch { msGuardLabel = ''; }
     }
 
     let tabs               = [];

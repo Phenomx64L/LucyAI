@@ -213,6 +213,20 @@
         align-items: center;
         gap: 4px;
         transition: background-color 120ms ease, color 120ms ease;
+        /* v1.7.61 — Defensive layout cap. Even if a future caller passes a
+           very long guardLabel or hostname, the chip can't grow past 240 px
+           and overflow the strip into the tab area below. Ellipsis kicks in. */
+        max-width: 240px;
+        min-width: 0;
+        overflow: hidden;
+    }
+    .ms-chip .ms-val,
+    .ms-chip .ms-lbl,
+    .ms-chip .ms-host {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
     }
     .ms-chip:hover {
         background: rgba(255, 255, 255, 0.04);

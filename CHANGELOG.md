@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.61] — 2026-06-03
+
+### Hotfix — guard chip overflow blocked the tab strip
+
+User reported that hovering anywhere in the top band brought up
+a massive black tooltip filled with thousands of escaped
+backslashes ("\\\\\\\\…"), and the chip itself had widened so
+far that it overlapped the tab strip below — making the tabs
+literally unclickable.
+
+**Cause.** In v1.7.58 the MissionStrip's `msGuardLabel` derivation
+in `+page.svelte` was:
+
+```js
+$: msGuardLabel = peekActiveSecuritySkill() || '';
+```
+
+`peekActiveSecuritySkill()` does NOT return a short string. It
+returns the entire `SecuritySkillFull` object — `{ meta, body }`
+where `body` is the FULL markdown of the loaded skill (hundreds
+to thousands of lines, often containing regex patterns and
+escape sequences). Svelte rendered that object into the chip's
+text and the `title=` attribute, stringifying the whole markdown
+into a multi-kilobyte blob of escaped backslashes that:
+
+1. Expanded the chip horizontally without bound (no `max-width`).
+2. Rendered as a native browser tooltip on hover, covering the
+   tab strip and stealing pointer events.
+
+**Fix (two parts, defence in depth).**
+
+1. **Correct extraction.** `msGuardLabel` now reads from
+   `_sk?.meta?.name || _sk?.meta?.id || ''`. A 40-char cap with
+   ellipsis is applied as a final guard against any future
+   freak-long name.
+
+2. **Layout hardening.** Every `.ms-chip` in MissionStrip now
+   carries `max-width: 240px; overflow: hidden;` and its inner
+   value spans (`.ms-val`, `.ms-lbl`, `.ms-host`) get
+   `text-overflow: ellipsis; white-space: nowrap`. Even if a
+   future caller passes a giant string, the chip will be capped
+   and the tab strip will stay reachable.
+
+**Why I missed this in v1.7.58.** I assumed `peekActive
+SecuritySkill()` returned a string id (matching the function
+name's "peek" connotation). I should have read the return type
+before deriving from it. The 40-char cap + layout cap together
+make this category of bug impossible regardless of what the
+function returns next time.
+
+**Files touched.**
+- `src/routes/+page.svelte` — `msGuardLabel` derivation fix.
+- `src/lib/MissionStrip.svelte` — `.ms-chip` max-width + value
+  span overflow rules.
+
+**Verification.** `svelte-check` passes (0 errors). The tooltip
+now reads `Skill de seguridad activo: <name>` (≤40 chars) or
+just `clean` when no skill is active, and the chip stops well
+within the strip.
+
+---
+
 ## [1.7.60] — 2026-06-03
 
 ### Terminal-recording-style code blocks (Direction A, step 3)
