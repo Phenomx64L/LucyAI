@@ -7,6 +7,109 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.53] — 2026-06-03
+
+### Real fix for the persistent "texto desaparece" — remove the id-rotation
+
+User reported the disappearance bug AGAIN even after v1.7.52's
+Antigravity-derived `noAnimate` patch and all the prior streaming
+fixes (v1.7.45 rAF throttle, v1.7.46 open-tag truncation, v1.7.47
+placeholder during open tags, v1.7.48 morph instead of delete,
+v1.7.49 multi-intent detection, v1.7.50 RULE 0b, v1.7.51 persist,
+v1.7.52 noAnimate). They specifically noted that *"lo que tarda en
+cargar es la información dentro de los cuadros negros"* — code
+blocks and warp-blocks are slow to populate, and the text vanishes
+around the same time.
+
+**The actual cause (finally identified after my v1.7.52 audit was
+wrong about why id-rotation existed).**
+
+Three sites in `+page.svelte` rotated the streaming bubble's id at
+the moment of promotion from `role: 'streaming'` to `role: 'lucy'`:
+
+```js
+existingStreamMsg.id = Date.now() + Math.random();
+```
+
+The inline comment said *"AI-6 — Forzar recreación del nodo DOM"*.
+My v1.7.52 changelog claimed this was to give `addCopyBtns()` fresh
+nodes to decorate. **That was wrong.** Searching the codebase
+proved `addCopyBtns` is only called once, inside `addMsg()`
+(line 3143). None of the three promotion sites called it — so the
+id-rotation was decorating no one. The pattern was vestigial.
+
+What the id rotation actually DID:
+
+1. Svelte sees `{#each tabs[i].messages as msg (msg.id)}` key changed
+2. Destroys the bubble's DOM node
+3. Creates a brand new DOM node from the new HTML
+4. Mounts it back into the thread
+
+Between steps 2 and 3 the browser may paint exactly once with NO
+bubble in the DOM. That **one-frame gap** is the *"el texto
+desaparece momentáneamente"* the user has been reporting for
+several iterations. Antigravity's `noAnimate` patch suppressed
+the entrance animation that fired AFTER the gap, but did nothing
+to eliminate the gap itself.
+
+**Fix (three coordinated changes):**
+
+1. **Remove id rotation from all three promotion sites.** The
+   bubble's `_streamMsg.id` stays stable throughout
+   streaming→lucy promotion. Svelte's `{#each (msg.id)}` sees
+   the same key, does NOT destroy + recreate the DOM, and
+   updates `{@html msg.html}` in place. Zero gap, zero frame
+   where the bubble is missing.
+
+2. **Add a race guard in the streaming rAF callback.** Without
+   id rotation, a late-firing rAF from the last streaming chunk
+   could clobber the freshly-promoted HTML with the streaming
+   version. New explicit guard:
+   ```js
+   const msg = ...find(m => m.id === streamMsgId);
+   if (!msg) return;
+   if (msg.role !== 'streaming') return;   // ← bail if promoted
+   ```
+   This makes the race protection explicit instead of relying
+   on the side-effect of id mismatch.
+
+3. **Call `addCopyBtns()` after the main promotion site.** The
+   promoted bubble has freshly-rendered `<pre>` nodes from
+   `renderLucyMarkdown(clean)` that need copy buttons, run
+   buttons, and shiki syntax highlighting. The streaming path
+   doesn't decorate them; the permanent message path must.
+   Previously the id rotation re-mounted the DOM, but
+   `addCopyBtns` still wasn't called — meaning code blocks
+   ALREADY rendered without copy buttons in the old code. This
+   fix actually restores that lost decoration as a bonus.
+
+The other two promotion sites (the v1.7.48 morph-into-permanent
+sites in the `_hasToolResp` branch) reuse `existingHtml` from
+the streaming render. Those code blocks were never expected to
+have full decoration; they're transitional placeholders.
+
+**Files touched.**
+- `src/routes/+page.svelte` — remove id rotation at 3 sites,
+  add `role !== 'streaming'` guard in rAF callback, add
+  `addCopyBtns()` call after the main promotion (line 7716+).
+
+**`noAnimate` prop.** Kept in `ChatThread.svelte` and the
+`msg.noAnimate ? '' : ' msg-enter'` class binding. It's now
+unused by the streaming path (no recreation means no entrance
+animation re-fires), but it's a clean primitive any future
+caller can use to suppress the slide-in for programmatically-
+inserted bubbles. Marked vestigial in a comment but harmless
+to keep.
+
+**Verification path for the user.** Recompile + reproduce the
+"dame un texto largo" test. The bubble should grow monotonically
+through streaming, settle smoothly into its permanent form at
+the end, code blocks should appear with copy buttons + shiki
+highlighting, and at no point should the user see the bubble
+blink out of existence.
+
+---
+
 ## [1.7.52] — 2026-06-03
 
 ### Audit of an external (Antigravity / Gemini) patch + revert one regression

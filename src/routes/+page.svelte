@@ -4428,6 +4428,17 @@ Use ONE of these patterns instead:
                     const t2 = getTab(tabId);
                     const msg = t2?.messages.find(m => m.id === streamMsgId);
                     if (!msg) return;
+                    // v1.7.53 — Bail out if the bubble has already been promoted
+                    // (role !== 'streaming'). Otherwise a late-firing rAF callback
+                    // would clobber the promoted HTML with the streaming version,
+                    // causing the user to see post-stream content briefly
+                    // revert to streaming-mid-progress. Replaces the previous
+                    // defense (id rotation in the promotion path) which fixed
+                    // this race but introduced a destroy/recreate DOM cycle —
+                    // and a single-frame gap where the bubble was missing from
+                    // the page. That gap was the "el texto desaparece
+                    // momentáneamente" the user reported across v1.7.45-52.
+                    if (msg.role !== 'streaming') return;
                     const display = cleanStreamDisplay(_revealed);
                     // Anti-flicker: skip DOM update if display text hasn't grown
                     if (display.length === _lastRenderedLen) return;
@@ -4542,9 +4553,22 @@ Use ONE of these patterns instead:
                         ? cleanStreamDisplay(_streamMsg.rawContent)
                         : '';
                     if (displayText.trim().length > 20) {
-                        // Promote with substantive prose — same as before.
-                        _streamMsg.id = Date.now() + Math.random();
-                        _streamMsg.noAnimate = true;
+                        // v1.7.53 — id rotation removed. The previous version
+                        // changed the id to force Svelte's {#each (msg.id)} to
+                        // destroy and recreate the bubble DOM. The rationale
+                        // claimed by AI-6 era (forcing recreation) was no longer
+                        // useful because addCopyBtns isn't called here anyway,
+                        // and the destroy/recreate cycle introduced a one-frame
+                        // gap where the bubble was missing from the DOM — the
+                        // "el texto desaparece" the user reported across the
+                        // last several attempts. Race protection that the id
+                        // rotation provided (against late rAF callbacks
+                        // clobbering the promoted HTML) is now handled by the
+                        // `msg.role !== 'streaming'` bail-out in the rAF
+                        // callback above. noAnimate is left as a no-op (already
+                        // false), kept harmless for any future caller that
+                        // wants to suppress the entrance animation on a real
+                        // new message.
                         _streamMsg.role = 'lucy';
                         _streamMsg.rawRole = 'Lucy';
                         _streamMsg.rawContent = displayText;
@@ -4574,8 +4598,9 @@ Use ONE of these patterns instead:
                         // the agent loop find and remove THIS specific bubble
                         // when its reply is ready — without it we'd
                         // accumulate placeholders across multi-tool turns.
-                        _streamMsg.id = Date.now() + Math.random();
-                        _streamMsg.noAnimate = true;
+                        // v1.7.53 — id rotation removed here too. See sibling
+                        // comment in the substantive-prose branch above for
+                        // the full rationale.
                         _streamMsg.role = 'lucy';
                         _streamMsg.rawRole = 'Lucy';
                         _streamMsg.rawContent = '(preparando herramientas…)';
@@ -7713,15 +7738,38 @@ times the SAME way, switch tool kind entirely.
                 const _rgBadge = t._reflectionBadge || '';
                 const existingStreamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (existingStreamMsg) {
-                    existingStreamMsg.id = Date.now() + Math.random(); // AI-6 — Forzar recreación del nodo DOM
-                    existingStreamMsg.noAnimate = true;
+                    // v1.7.53 — id rotation removed. AI-6 era's "forzar
+                    // recreación del nodo DOM" pattern caused a one-frame gap
+                    // (destroy old + create new) that the user perceived as
+                    // text suddenly disappearing right at the end of stream.
+                    // Race protection is now handled by `msg.role !== 'streaming'`
+                    // inside the rAF callback that drives streaming updates.
+                    // The role change + html update below + refresh() trigger
+                    // an in-place innerHTML update via {@html msg.html} — no
+                    // destroy/recreate, no gap.
                     existingStreamMsg.role = 'lucy';
                     existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`;
                     existingStreamMsg.rawRole = 'Lucy';
                     existingStreamMsg.rawContent = clean;
-                    // AI-6 — see comment near streamMsg.role='lucy' above.
+                    // Re-tokenize on streaming→lucy promotion. Placeholder was
+                    // created with ~0 tokens; without this recompute,
+                    // pruneTabForBudget undercounts long Lucy responses.
                     existingStreamMsg.tokens = Math.ceil(clean.length / 4);
                     refresh();
+                    // v1.7.53 — Decorate the freshly-rendered <pre> nodes. The
+                    // streaming render path doesn't call addCopyBtns; the
+                    // permanent message does need it (copy / run buttons,
+                    // shiki syntax highlighting). Without this call, code
+                    // blocks would render plain.
+                    addCopyBtns({
+                        isEN,
+                        getActiveTabId: () => activeTabId,
+                        getTab,
+                        runProcess: (id) => process(id),
+                        setTabsExecEngine: (id, eng) => { const t2 = getTab(id); if (t2) { t2.execEngine = eng; tabs = tabs; } },
+                        setTabInputValue:  (id, val) => { const t2 = getTab(id); if (t2) { t2.inputValue = val; tabs = tabs; } },
+                        copyToClipboard: (text, btn) => copiarAlPortapapeles(text, btn),
+                    });
                 } else {
                     addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
                 }
