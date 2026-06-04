@@ -37,23 +37,31 @@ export type LucyTagType =
 export function cleanStreamDisplay(text: string, codeGenIntent: boolean): string {
     let cleaned = codeGenIntent
         ? text
-            .replace(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi, (_, c) => '\n```powershell\n' + c.trim() + '\n```\n')
-            .replace(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/gi, (_, c) => '\n```cmd\n' + c.trim() + '\n```\n')
+            .replace(/<EXECUTE>([\s\S]*?)(?:<\/EXECUTE>|$)/gi, (_, c) => '\n```powershell\n' + c.trim() + '\n```\n')
+            .replace(/<EXECUTE_CMD>([\s\S]*?)(?:<\/EXECUTE_CMD>|$)/gi, (_, c) => '\n```cmd\n' + c.trim() + '\n```\n')
         : text
-            .replace(/<EXECUTE>[\s\S]*?<\/EXECUTE>/gi, '')
-            .replace(/<EXECUTE_CMD>[\s\S]*?<\/EXECUTE_CMD>/gi, '');
+            .replace(/<EXECUTE>[\s\S]*?(?:<\/EXECUTE>|$)/gi, '')
+            .replace(/<EXECUTE_CMD>[\s\S]*?(?:<\/EXECUTE_CMD>|$)/gi, '');
 
     cleaned = cleaned
-        .replace(/<EXECUTE_WMIC>[\s\S]*?<\/EXECUTE_WMIC>/gi, '')
-        .replace(/<EXECUTE_NETSH>[\s\S]*?<\/EXECUTE_NETSH>/gi, '')
-        .replace(/<EXECUTE_REG>[\s\S]*?<\/EXECUTE_REG>/gi, '')
-        .replace(/<EXECUTE_CSCRIPT>[\s\S]*?<\/EXECUTE_CSCRIPT>/gi, '')
-        .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
-        .replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
-        .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
-        .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+        .replace(/<EXECUTE_WMIC>[\s\S]*?(?:<\/EXECUTE_WMIC>|$)/gi, '')
+        .replace(/<EXECUTE_NETSH>[\s\S]*?(?:<\/EXECUTE_NETSH>|$)/gi, '')
+        .replace(/<EXECUTE_REG>[\s\S]*?(?:<\/EXECUTE_REG>|$)/gi, '')
+        .replace(/<EXECUTE_CSCRIPT>[\s\S]*?(?:<\/EXECUTE_CSCRIPT>|$)/gi, '')
+        .replace(/<LEARN>[\s\S]*?(?:<\/LEARN>|$)/gi, '')
+        // EXECUTE_REMOTE carries a `target="<host-id>"` attribute (see RULE 14
+        // in prompt_sections.rs HostRoutingSection), so the opening tag is
+        // NOT a bare `<EXECUTE_REMOTE>`. The `[\s\S]*?` after the tag name
+        // (NOT after `>`) lets the matcher accept anything until the next
+        // `<` — which is the start of the close tag — or end-of-string in
+        // the streaming-mid-tag case. Do NOT "fix" this to require a `>`
+        // right after EXECUTE_REMOTE; that breaks attribute-bearing remotes
+        // and leaks `<EXECUTE_REMOTE target="...">...` into the chat UI.
+        .replace(/<EXECUTE_REMOTE[\s\S]*?(?:<\/EXECUTE_REMOTE>|$)/gi, '')
+        .replace(/<REMEMBER[^>]*>[\s\S]*?(?:<\/REMEMBER>|$)/gi, '')
+        .replace(/<TOOL>[\s\S]*?(?:<\/TOOL>|$)/gi, '')
         .replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')
-        .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
+        .replace(/<FILECONTENT>[\s\S]*?(?:<\/FILECONTENT>|$)/gi, '')
         .replace('__TRUNCATED__', '')
         .trim();
 

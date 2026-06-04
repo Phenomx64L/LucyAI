@@ -222,7 +222,7 @@
                 </div>
             </div>
         {:else}
-            <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''} msg-enter"
+            <div class="{msg.role === 'user' ? 'msg-user' : msg.role === 'system' ? 'sys-msg' : 'msg-lucy'}{msg.role === 'streaming' ? ' streaming-active' : ''}{msg.pinned ? ' msg-pinned' : ''}{msg.noAnimate ? '' : ' msg-enter'}"
                 data-msg-id={msg.id}
                 style={msg.style || ''}
                 on:contextmenu|preventDefault={(e) => msg.role !== 'system' && dispatch('contextmessage', { msg, x: e.clientX, y: e.clientY })}

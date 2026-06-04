@@ -4544,6 +4544,7 @@ Use ONE of these patterns instead:
                     if (displayText.trim().length > 20) {
                         // Promote with substantive prose — same as before.
                         _streamMsg.id = Date.now() + Math.random();
+                        _streamMsg.noAnimate = true;
                         _streamMsg.role = 'lucy';
                         _streamMsg.rawRole = 'Lucy';
                         _streamMsg.rawContent = displayText;
@@ -4573,6 +4574,8 @@ Use ONE of these patterns instead:
                         // the agent loop find and remove THIS specific bubble
                         // when its reply is ready — without it we'd
                         // accumulate placeholders across multi-tool turns.
+                        _streamMsg.id = Date.now() + Math.random();
+                        _streamMsg.noAnimate = true;
                         _streamMsg.role = 'lucy';
                         _streamMsg.rawRole = 'Lucy';
                         _streamMsg.rawContent = '(preparando herramientas…)';
@@ -7710,7 +7713,8 @@ times the SAME way, switch tool kind entirely.
                 const _rgBadge = t._reflectionBadge || '';
                 const existingStreamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (existingStreamMsg) {
-                    existingStreamMsg.id = Date.now();
+                    existingStreamMsg.id = Date.now() + Math.random(); // AI-6 — Forzar recreación del nodo DOM
+                    existingStreamMsg.noAnimate = true;
                     existingStreamMsg.role = 'lucy';
                     existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`;
                     existingStreamMsg.rawRole = 'Lucy';
@@ -7901,7 +7905,6 @@ times the SAME way, switch tool kind entirely.
         // Now we promote any streaming msg with content to a regular 'lucy' message.
         const streamMsg = t.messages.find(m => m.id === ('streaming-' + tabId));
         if (streamMsg && streamMsg.rawContent && streamMsg.rawContent.trim()) {
-            streamMsg.id = Date.now() + Math.random();
             streamMsg.role = 'lucy';
             // Remove the blinking cursor from the preserved HTML
             streamMsg.html = (streamMsg.html || '').replace(/<span class="stream-cursor"><\/span>/g, '');

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.52] — 2026-06-03
+
+### Audit of an external (Antigravity / Gemini) patch + revert one regression
+
+User had an external assistant (Google's Antigravity) make
+changes to the streaming/render path while diagnosing the same
+flicker-and-disappear bug class that v1.7.45–v1.7.48 attacked.
+They asked for a review.
+
+**Antigravity's contribution, dissected:**
+
+| Change | Verdict |
+|---|---|
+| Added `(?:</TAG>\|$)` partial-close handling to every tag regex in `llm-stream.ts:cleanStreamDisplay` | Harmless but **dead code** — `+page.svelte:4299` defines a LOCAL `cleanStreamDisplay` that shadows the import. The streaming path uses the inline version; `_cleanStreamDisplay` from `llm-stream` is imported but never called. |
+| Changed `<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>` to `<EXECUTE_REMOTE>[\s\S]*?<\/EXECUTE_REMOTE>` (called it "un error tipográfico") | **REGRESSION.** EXECUTE_REMOTE carries a `target="<host-id>"` attribute per RULE 14 in `HostRoutingSection`. Original regex `<EXECUTE_REMOTE[\s\S]*?` (no closing `>` after the name) accepted attributes; "fixed" version `<EXECUTE_REMOTE>` only matches the bare tag. Even though this code is currently dead, leaving the regression in place is a foot-gun for anyone who later consolidates the duplicate `cleanStreamDisplay` implementations. Reverted. |
+| New `noAnimate` prop on `ChatThread.svelte`'s message div (`${msg.noAnimate ? '' : ' msg-enter'}`) | **Good addition.** Real fix for a real visible problem. |
+| Set `_streamMsg.noAnimate = true` at 3 spots in `+page.svelte` where streaming→permanent promotion happens (and the id is intentionally rotated to force DOM recreation per the existing `AI-6` comment) | **Good addition.** Suppresses the `msg-enter` slide-in that re-fires on the freshly-recreated DOM node. |
+
+**Why the id-rotation pattern exists at all.** Three call sites
+do `existingStreamMsg.id = Date.now() + Math.random()` with the
+inline comment `// AI-6 — Forzar recreación del nodo DOM`. The
+reason: `addCopyBtns()` and `mountEnrichedWidgets()` are
+post-render DOM passes that query `.msg-lucy pre:not(.hc)` and
+`.warp-block[data-enriched-type]:not([data-enriched-mounted])`.
+They bind event handlers on first sight and then skip already-
+bound nodes. If the streaming bubble simply mutated `.html` in
+place, the freshly-rendered `<pre>` elements would still have
+the bound attributes from the streaming version, and the post-
+pass would skip them — leaving code blocks without their copy
+and run buttons.
+
+Forcing a new id triggers Svelte's `{#each tabs[i].messages as
+msg (msg.id)}` keyed re-render, which destroys the old DOM and
+creates a fresh tree. `addCopyBtns()` then sees pristine
+`<pre>` nodes and decorates them. That's correct behaviour — at
+the cost of the `msg-enter` slide-in firing on the recreated
+node. Antigravity's `noAnimate` flag is the minimal, correct
+patch for that side-effect.
+
+**What's still imperfect (left as a future cleanup, not in
+this commit):**
+
+  • Two parallel `cleanStreamDisplay` implementations
+    (`llm-stream.ts` export and the inline one in `+page.svelte`).
+    The inline one has the placeholder logic from v1.7.47 + the
+    truncation logic from v1.7.46. The exported one has the
+    `(?:</TAG>|$)` style but no placeholder pass. They've
+    drifted. Consolidation would prevent future Antigravity-style
+    drift, but it's a non-trivial refactor (the inline version
+    closes over `codeGenIntent`, `infoIntent`, `skillInfoIntent`,
+    `_isLinuxCmd`, `isEN`). Filed as `// TODO(consolidate-clean-stream-display)`.
+  • The id-rotation + noAnimate pattern is a workaround for an
+    architectural issue: `addCopyBtns` should mark mounted nodes
+    via a Set keyed on the message id, not via the `hc` class
+    on the DOM node. That refactor would let us NOT rotate the
+    id, eliminate the DOM destroy/recreate entirely, and remove
+    the need for `noAnimate`. Bigger change, separate sprint.
+
+**Files touched in this commit.**
+- `src/lib/llm-stream.ts` — revert the `EXECUTE_REMOTE` regex
+  back to the attribute-accepting form + verbose inline comment
+  explaining why future "fixers" should NOT touch it.
+
+`ChatThread.svelte` and `+page.svelte`'s `noAnimate` additions
+are kept as-is from Antigravity's patch — they are correct.
+
+---
+
 ## [1.7.51] — 2026-06-03
 
 ### Fix tab-state regression on fast close — un-debounced persist for structural changes
