@@ -9673,48 +9673,46 @@ if (Test-Path $src) {
               </ul>
             </div>
 
-            <!-- CARD 5: R&D Frontier — flagship capabilities -->
+            <!-- CARD 5: Operations Console (v1.7) — flagship surfaces -->
             <div class="empty-section ec5" style="grid-column:1 / -1;border-color:rgba(167,139,250,.25);background:rgba(167,139,250,.04);">
-              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'R&D Frontier — what Lucy v1.4 can do that nothing else can' : 'R&D Frontier — lo que Lucy v1.4 hace y nadie más'}</span></div>
+              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'Operations Console — what v1.7 adds on top of v1.4' : 'Operations Console — lo que v1.7 suma sobre v1.4'}</span></div>
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <ul class="esec-list">
-                  <li><b>F1 · Process Lineage</b> — {isEN ? 'records every process\'s parent chain with verifiable SHA-256 audit hash' : 'graba el árbol de cada proceso con hash SHA-256 verificable'} <code>/process_ancestry:PID</code></li>
-                  <li><b>F2 · State Snapshots</b> — {isEN ? 'auto-captures system state and lets you diff over time' : 'captura el estado del sistema y permite diff temporal'} <code>/snapshot /diff</code></li>
-                  <li><b>F3 · Causal Engine</b> — {isEN ? 'correlates process arrivals with symptoms — answers WHY your machine slowed' : 'correlaciona arrivals con síntomas — explica POR QUÉ se puso lenta'}</li>
-                  <li><b>F4 · Self-Healing</b> — {isEN ? 'recalls past fixes (with HITL) on similar symptoms · auto-crystallizes incidents' : 'recuerda fixes pasados (con HITL) ante síntomas parecidos · auto-crystallize'}</li>
+                  <li><b>{isEN ? 'Mission Strip' : 'Mission Strip'}</b> — {isEN ? 'always-on band: local heartbeat · remote hosts · alerts · guard skill · clock · 5-dot posture' : 'banda siempre visible: heartbeat local · hosts remotos · alertas · guard skill · reloj · postura 5 puntos'}</li>
+                  <li><b>{isEN ? 'Per-tab purpose tint' : 'Tinte de propósito por tab'}</b> — {isEN ? 'top border colours tabs: red incident · violet executing · amber investigation · blue reference' : 'borde superior tiñe tabs: rojo incidente · violeta ejecutando · ámbar investigación · azul referencia'}</li>
+                  <li><b>{isEN ? 'Terminal-recording blocks' : 'Bloques estilo terminal-recording'}</b> — {isEN ? 'traffic lights, hostname chip, engine glyph, timestamp, exit-code pill' : 'semáforo, chip de hostname, glyph del motor, timestamp, badge de exit code'}</li>
+                  <li><b>{isEN ? 'Sidebar category rails' : 'Rails de categoría en sidebar'}</b> — {isEN ? '2 px left rail: System green · Runbooks amber · Actions violet · Logs blue' : 'rail izquierdo 2 px: Sistema verde · Runbooks ámbar · Acciones violeta · Registros azul'}</li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>F5 · Sandbox Preview</b> — {isEN ? 'static analysis + .wsb config before destructive commands' : 'análisis estático + .wsb config antes de destructivos'} <code>/preview &lt;cmd&gt;</code></li>
-                  <li><b>F6 · Object Bridge</b> — {isEN ? 'pipes PowerShell objects across turns with a small DSL' : 'pipea objetos PS entre turnos con mini-DSL'} <code>where / orderby / limit</code></li>
-                  <li><b>F7 · Runbook Mining</b> — {isEN ? 'detects repeated workflows and promotes them to reusable skills' : 'detecta workflows repetidos y los promueve a skills'} <code>/runbooks</code></li>
-                  <li><b>F8 · Mini-EDR</b> — {isEN ? 'classifies processes by 7 behavioral heuristics' : 'clasifica procesos por 7 heurísticos comportamentales'}</li>
+                  <li><b>{isEN ? 'Inline evidence pills' : 'Pills de evidencia inline'}</b> — {isEN ? 'CITE syntax colour-coded by kind: memory cyan · file green · URL blue · tool amber' : 'sintaxis CITE coloreada por tipo: memoria cyan · archivo verde · URL azul · tool ámbar'}</li>
+                  <li><b>{isEN ? 'Ops-aesthetic composer' : 'Composer estilo Ops'}</b> — {isEN ? 'λ prompt, dot grid on focus, amber slash mode, block-shape caret' : 'prompt λ, dot grid al enfocar, modo slash en ámbar, caret en forma de bloque'}</li>
+                  <li><b>{isEN ? 'Auto-route chip' : 'Chip de auto-routing'}</b> — {isEN ? 'shows which tier (Flash/Pro/Local) handled each turn — and why' : 'muestra qué tier (Flash/Pro/Local) atendió cada turno — y por qué'}</li>
+                  <li><b>{isEN ? 'Self-Diagnostics + one-click repair' : 'Auto-diagnóstico + reparación 1-clic'}</b> — {isEN ? '8 health checks; rows with known fixes expose a "Repair" button (DB confidence NULLs, log filename, etc.)' : '8 checks; las filas con fixes conocidos muestran botón "Reparar" (NULLs de confidence, nombre de log, etc.)'} <code>/diagnostico</code></li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>F9 · Knowledge Graph</b> — {isEN ? 'indexes your repos · learns which files are touched together' : 'indexa tus repos · aprende qué archivos tocas juntos'} <code>/kg-view</code></li>
-                  <li><b>F10 · Daily Patterns</b> — {isEN ? 'learns your weekly routines (Mon 9am → VSCode + Spotify)' : 'aprende tus rutinas semanales (Lun 9am → VSCode + Spotify)'} <code>/routines</code></li>
-                  <li><b>🔎 Incident Detective</b> — {isEN ? 'synthesizes F3+F8+F9 into a single forensic query' : 'sintetiza F3+F8+F9 en una sola consulta forense'} <code>/detective</code></li>
-                  <li><b>📊 Telemetry</b> — {isEN ? 'which Frontier tools you use most · 100% local' : 'qué Frontier tools usas más · 100% local'} <code>/frontier-stats</code></li>
+                  <li><b>{isEN ? 'Grounding & confidence' : 'Grounding y confianza'}</b> — {isEN ? 'every memory carries an evidence-driven confidence; contradiction downgrades, reinforcement raises' : 'cada memoria lleva confianza basada en evidencia; la contradicción la baja, el refuerzo la sube'}</li>
+                  <li><b>{isEN ? 'Curated skill presets' : 'Presets de skills curados'}</b> — {isEN ? '18+ ECC-style presets (cost-aware, security-review, hypothesis-driven-debug, …)' : '18+ presets estilo ECC (cost-aware, security-review, hypothesis-driven-debug, …)'} <code>/sec-skill</code></li>
+                  <li><b>{isEN ? 'morphdom streaming' : 'Streaming con morphdom'}</b> — {isEN ? 'DOM diffing replaces full rerenders; tokens fade in over 280 ms with no shimmer' : 'el diffing del DOM reemplaza rerenders completos; los tokens entran con fade de 280 ms sin shimmer'}</li>
+                  <li><b>{isEN ? 'Multi-intent + RULE 0b' : 'Multi-intent + RULE 0b'}</b> — {isEN ? '"generate a report on X to path Y" always becomes a multi-step plan with a real writefile' : '"genera un informe sobre X en la ruta Y" siempre se convierte en plan multi-paso con writefile real'}</li>
                 </ul>
               </div>
             </div>
 
-            <!-- CARD 5b: UX delights -->
+            <!-- CARD 5b: Performance & Reliability (v1.7) -->
             <div class="empty-section" style="grid-column:1 / -1;border-color:rgba(94,200,255,.20);background:rgba(94,200,255,.03);">
-              <div class="esec-hdr" style="color:#5ec8ff;border-color:rgba(94,200,255,.15);"><span class="esec-ico">✦</span><span>{isEN ? 'New UX (v1.4)' : 'UX nueva (v1.4)'}</span></div>
+              <div class="esec-hdr" style="color:#5ec8ff;border-color:rgba(94,200,255,.15);"><span class="esec-ico">✦</span><span>{isEN ? 'Performance & Reliability (v1.7)' : 'Rendimiento y Fiabilidad (v1.7)'}</span></div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Living Avatar' : 'Living Avatar'}</b> — {isEN ? 'Lucy breathes when idle, pulses cyan thinking, glows gold executing, amber when concerned' : 'Lucy respira en idle, pulsa cyan al pensar, dorado al ejecutar, ámbar al preocuparse'}</li>
-                  <li><b>{isEN ? 'Density modes' : 'Modos de densidad'}</b> — <code>Ctrl+1</code> {isEN ? 'focus' : 'focus'} · <code>Ctrl+2</code> {isEN ? 'explore' : 'explore'} · <code>Ctrl+3</code> {isEN ? 'war room' : 'war room'}</li>
-                  <li><b>{isEN ? 'Chapter View' : 'Vista de capítulos'}</b> — {isEN ? 'multi-step investigations render as a book with a navigable index' : 'investigaciones multi-paso se renderizan como un libro con índice'}</li>
-                  <li><b>{isEN ? 'Predictive Chips' : 'Chips predictivos'}</b> — {isEN ? 'contextual suggestions above the input based on the last turn' : 'sugerencias contextuales arriba del input según el último turno'}</li>
-                  <li><b>{isEN ? 'Drag-to-Lucy' : 'Drag-to-Lucy'}</b> — {isEN ? 'drag URLs, text, images, files: Lucy infers what to do' : 'arrastra URLs, texto, imágenes, archivos: Lucy infiere qué hacer'}</li>
+                  <li><b>{isEN ? 'Discrete-GPU vendor hints' : 'Pistas de GPU dedicada'}</b> — {isEN ? 'NvOptimusEnablement + AmdPowerXpressRequestHighPerformance exported so hybrid laptops bind Lucy to the dGPU' : 'NvOptimusEnablement + AmdPowerXpressRequestHighPerformance exportados para que laptops híbridas usen la GPU dedicada'}</li>
+                  <li><b>{isEN ? 'WebView2 GPU flags' : 'Flags GPU de WebView2'}</b> — <code>--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist</code></li>
+                  <li><b>{isEN ? 'Idle saver' : 'Idle saver'}</b> — {isEN ? 'after 8 s without input, every infinite CSS animation pauses. Idle GPU drops to ~1-3%' : 'tras 8 s sin input, toda animación CSS infinita pausa. GPU en idle baja a ~1-3%'}</li>
+                  <li><b>{isEN ? 'Single window effect' : 'Un solo efecto de ventana'}</b> — {isEN ? 'Mica only (no acrylic) so DWM stops running two blur passes per frame' : 'sólo Mica (sin acrylic) para que DWM no corra dos pasos de blur por frame'}</li>
                 </ul>
                 <ul class="esec-list">
-                  <li><b>{isEN ? 'Tab Hover Preview' : 'Vista previa de pestaña'}</b> — {isEN ? 'hover a tab >500ms to see its last messages without switching' : 'pasa el mouse >500ms para ver los últimos mensajes sin cambiar de tab'}</li>
-                  <li><b>{isEN ? 'Heat Layers' : 'Heat Layers'}</b> — {isEN ? 'severity/recency overlays on process and file lists' : 'overlays de severidad/recencia en listas de procesos y archivos'}</li>
-                  <li><b>{isEN ? 'Confidence Markers v2' : 'Confidence Markers v2'}</b> — {isEN ? 'Lucy visually distinguishes [!facts!], [~hedges~], [?speculation?]' : 'Lucy distingue visualmente [!hechos!], [~hedges~], [?especulación?]'}</li>
-                  <li><b>{isEN ? 'Circadian Theme' : 'Tema circadiano'}</b> — {isEN ? 'accents subtly cool from day to night' : 'los acentos se enfrían suavemente de día a noche'}</li>
-                  <li><b>{isEN ? 'Skill Picker' : 'Selector de skills'}</b> — <code>/skills</code> {isEN ? 'opens a fuzzy-search modal' : 'abre un modal con búsqueda fuzzy'}</li>
+                  <li><b>{isEN ? 'rAF-throttled streaming' : 'Streaming throttled por rAF'}</b> — {isEN ? 'multiple drain ticks coalesce into one paint; CSS-owned cursor survives every chunk' : 'múltiples ticks colapsan en un solo paint; el cursor vive en CSS y sobrevive a cada chunk'}</li>
+                  <li><b>{isEN ? 'Open-tag placeholder' : 'Placeholder de open-tag'}</b> — {isEN ? 'when Lucy emits &lt;THOUGHT&gt; before any prose, you see "◌ Lucy is reasoning…" instead of a blank bubble' : 'cuando Lucy emite &lt;THOUGHT&gt; antes de prosa, ves "◌ Lucy está razonando…" en vez de una burbuja vacía'}</li>
+                  <li><b>{isEN ? 'persistirNow on structural changes' : 'persistirNow en cambios estructurales'}</b> — {isEN ? 'bypasses the 500 ms debounce on close/rename/clear so a quick Quit never loses state' : 'evita el debounce de 500 ms al cerrar/renombrar/limpiar para que un cierre rápido no pierda estado'}</li>
+                  <li><b>{isEN ? 'DB repair: confidence NULLs' : 'Reparación DB: NULLs de confidence'}</b> — {isEN ? '4-phase repair (count → COALESCE rewrite × 3 tables → REINDEX → verify) wired into Diagnostics' : 'reparación 4-fase (count → reescritura COALESCE × 3 tablas → REINDEX → verificación) integrada en Diagnóstico'}</li>
                 </ul>
               </div>
             </div>

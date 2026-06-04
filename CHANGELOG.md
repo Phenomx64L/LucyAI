@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.68] — 2026-06-04
+
+### Welcome screen refresh — v1.4 cards → v1.7 Operations Console
+
+The big welcome screen rendered in `+page.svelte` (the one with the
+2×2 grid of capability cards + the v1.4 "R&D Frontier" wide row + the
+"New UX (v1.4)" wide row) still pitched v1.4. After v1.7.67's tutorial
+overlay refresh, this was the last surface in the app still saying
+"Lucy v1.4".
+
+**Replaced two stale wide cards** with current content:
+
+1. **"R&D Frontier — what Lucy v1.4 can do"** →
+   **"Operations Console — what v1.7 adds on top of v1.4"**.
+   Three columns covering: Mission Strip · per-tab purpose tint ·
+   terminal-recording blocks · sidebar category rails · inline evidence
+   pills · ops-aesthetic composer · auto-route chip · self-diagnostics +
+   one-click repair · grounding + confidence · curated skill presets ·
+   morphdom streaming · multi-intent + RULE 0b.
+
+2. **"New UX (v1.4)"** → **"Performance & Reliability (v1.7)"**.
+   Two columns covering: discrete-GPU vendor hints · WebView2 GPU
+   flags · idle saver · single window effect · rAF-throttled streaming ·
+   open-tag placeholder · persistirNow on structural changes · DB repair
+   for confidence NULLs.
+
+The four upper cards (Getting Started, Capabilities, Quick Actions,
+Advanced Tools) and the Reliability & Safety / Custom Memory rows were
+left untouched — their content is still factually correct.
+
+---
+
 ## [1.7.67] — 2026-06-04
 
 ### Welcome tutorial refresh + DOCX manual v1.7.66
