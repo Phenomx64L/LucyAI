@@ -7,6 +7,120 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.55] — 2026-06-03
+
+### Code block load-latency fix + auto-close mid-stream fences
+
+User confirmed v1.7.54 closed the "text disappears" bug
+("mejoró y bastante") but two finer issues remained:
+
+  1. Brief flickers still visible during streaming.
+  2. *"Latencia o demora en la carga de los cuadros conde
+     generalmente imprime codigo."* Code blocks loaded with a
+     visible "popping in" delay.
+
+**Root cause #1 — fence-close transitions cause layout jumps.**
+
+While streaming, the partial buffer often contains an OPEN
+\`\`\`rust fence with no closing \`\`\` yet. `marked.parse()` does NOT
+treat that as a code block — it renders the content as
+paragraph text. Once the closing fence finally arrives, marked
+re-parses the whole block as a `<pre><code>`, which causes:
+
+  - Layout to flip from prose typography to monospace + grey
+    background.
+  - The bubble's height to jump (often by tens of pixels).
+  - The compositor to recreate the backdrop-filter sibling
+    layers around the new `<pre>`.
+
+User perceives this as the code box "popping in" with a delay.
+
+**Root cause #2 — Shiki highlight is applied AFTER paint.**
+
+`addCopyBtns()` walks the rendered DOM, calls `shikiHighlight()`
+on each `<code>`, and replaces the inner HTML with the
+colourised version. By that point Svelte has already painted
+the unhighlighted code. The user sees one frame of plain text,
+then a frame with colours — a visible "loading" moment.
+
+**Fix #1 — auto-close open fences in `renderRevealed()`.**
+
+Before passing the streaming display through `renderMd()`,
+count the `^\`\`\`` matches. If the count is odd (= one unmatched
+opening fence), append a closing fence. Marked now treats the
+partial code as a complete code block from the very first chunk
+that lands inside it. The block grows in place as more chunks
+arrive. When the real closing fence finally arrives, the
+balanced count drops back to even and the appended fence
+becomes a no-op — no second re-parse, no height jump.
+
+**Fix #2 — `applyShikiToHtml()` helper used at promotion.**
+
+New exported helper in `message-render.ts`:
+
+```ts
+export function applyShikiToHtml(html: string): string;
+```
+
+Walks a rendered HTML string and substitutes the inner HTML of
+each `<pre><code class="language-XXX">…</code></pre>` block
+with Shiki output, IF the highlighter is ready and the language
+is one of the four bundled (powershell, bash/sh/cmd, json,
+yaml). Tags the substituted `<code>` with `class="shiki-rendered"`
+so the existing `addCopyBtns()` DOM pass can skip the redundant
+re-highlight while still wiring up copy/run buttons and the
+`.code-wrap` shell.
+
+Called at the streaming→permanent promotion site in
+`+page.svelte` (the most common path):
+
+```js
+existingStreamMsg.html =
+    `<div class="mn">Lucy</div>${_rgBadge}${applyShikiToHtml(renderLucyMarkdown(clean))}`;
+```
+
+Result: the very first frame Svelte paints already contains
+highlighted code. The post-render `addCopyBtns()` pass adds the
+copy/run buttons and `.code-wrap` shell on top — those
+additions don't change the colour scheme, so they're not
+perceived as a "load" delay.
+
+**`addCopyBtns()` update.**
+
+The pre-existing condition `pre:not(.hc)` is preserved. Inside
+the loop, the Shiki/hljs call is now gated by a new
+`!codeEl.classList.contains('shiki-rendered')` check so the
+helper doesn't redundantly re-highlight code that was already
+baked at string-render time.
+
+**Streaming path NOT touched.**
+
+The streaming render still uses plain `renderMd()` without
+Shiki. Reason: marked.parse is called on every drain tick, and
+applying Shiki to a growing code block on every chunk would
+multiply per-frame cost. The unhighlighted streaming look is
+visually fine — colourisation only matters once the block has
+finished growing, which is exactly when promotion runs.
+
+**Other refinements deferred.**
+
+Inline-baking the `.code-wrap` + copy/run buttons into the
+HTML string (eliminating the `addCopyBtns()` post-pass entirely)
+would require migrating run-button click handlers to event
+delegation. That's a separate, larger refactor and won't make
+the colour-loading feel any faster, so it's not in this commit.
+
+**Files touched.**
+- `src/lib/message-render.ts` — new `applyShikiToHtml()`
+  export; `addCopyBtns()` skips Shiki when `.shiki-rendered`
+  marker is present.
+- `src/routes/+page.svelte` — import `applyShikiToHtml`; wrap
+  the rendered HTML at the streaming→permanent promotion site
+  with the helper; auto-close open fences inside
+  `renderRevealed()` before `renderMd()`.
+
+---
+
 ## [1.7.54] — 2026-06-03
 
 ### THE actual cause: `fin()` was filtering out the promoted bubble

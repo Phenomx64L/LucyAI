@@ -149,6 +149,69 @@ export function renderLucyMarkdown(text: string): string {
     return renderMd(withBadges, { mode: 'badges' });
 }
 
+// ── applyShikiToHtml — v1.7.55 ────────────────────────────────────────────────
+//
+// Walks an already-rendered HTML string and substitutes the inner HTML of any
+// `<pre><code class="language-XXX">...</code></pre>` block with Shiki's
+// highlighted output, IF the highlighter is ready and the language is one of
+// the four bundled languages.
+//
+// Why this exists:
+//   The post-render `addCopyBtns()` DOM pass runs Shiki on each <code> element
+//   AFTER Svelte has already painted the unhighlighted version. The user sees
+//   a frame of plain text → a frame of highlighted text — the "los cuadros
+//   tardan en cargar" observation reported after v1.7.54.
+//
+//   By pre-applying Shiki to the HTML string BEFORE assigning it to
+//   `msg.html`, the very first frame Svelte renders already contains
+//   highlighted code. No transition.
+//
+// Why this is safe to skip in the streaming path:
+//   marked.parse is called on every drain tick; running Shiki on every chunk
+//   would multiply per-frame cost by N (one call per code block). Streaming
+//   accepts the unhighlighted look — the only consumer of this helper is the
+//   FINAL render at promotion time, when stream completes.
+//
+// Why we don't break `addCopyBtns()`:
+//   We tag the substituted code element with `class="shiki-rendered"`. The
+//   existing DOM pass already checks for `.hc` and skips already-decorated
+//   nodes; we extend it (in addCopyBtns below) to also recognise
+//   `.shiki-rendered` so it skips the redundant re-highlight pass while still
+//   wiring up the copy/run buttons and the `.code-wrap` shell.
+export function applyShikiToHtml(html: string): string {
+    if (!html) return html;
+    return html.replace(
+        /<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g,
+        (match, langRaw, codeEscaped) => {
+            // Decode the HTML entities marked emitted so Shiki sees the raw text.
+            const code = String(codeEscaped)
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, '&');
+            const lang = String(langRaw).toLowerCase();
+            const langN: string | null =
+                (lang === 'powershell' || lang === 'ps' || lang === 'ps1') ? 'powershell'
+                : (lang === 'bash' || lang === 'sh' || lang === 'shell')    ? 'bash'
+                : (lang === 'cmd' || lang === 'bat' || lang === 'batch')    ? 'bash'  // hljs fallback uses bash anyway
+                : (lang === 'json')                                          ? 'json'
+                : (lang === 'yaml' || lang === 'yml')                        ? 'yaml'
+                : null;
+            if (!langN) return match;
+            const sh = shikiHighlight(code, langN);
+            if (!sh) return match;
+            // Shiki returns its own <pre><code>...</code></pre> wrapper. We
+            // replace the inner of OUR <code> with the inner of Shiki's
+            // wrapper so the existing language-XXX class on the outer <pre>
+            // survives — that class is what `addCopyBtns()` reads to decide
+            // run-button language.
+            const inner = stripPreWrapper(sh);
+            return `<pre><code class="language-${langRaw} shiki-rendered">${inner}</code></pre>`;
+        },
+    );
+}
+
 // ── addCopyBtns options ───────────────────────────────────────────────────────
 export interface AddCopyBtnsOpts {
     isEN: boolean;
@@ -200,7 +263,13 @@ export async function addCopyBtns(opts: AddCopyBtnsOpts): Promise<void> {
         // — only happens during the first ~1 s of app boot before its
         // grammars finish loading — fall back to highlight.js so first
         // paint stays correct.
-        if (codeEl) {
+        // v1.7.55 — Skip the highlight pass entirely if `applyShikiToHtml()`
+        // already baked Shiki output into the code element during the prior
+        // string-level render. Detection: the `.shiki-rendered` class is
+        // present (added by applyShikiToHtml). This avoids both the wasted
+        // re-highlight cost and the visible flash that came from replacing
+        // already-colourised inner HTML with a fresh pass.
+        if (codeEl && !codeEl.classList.contains('shiki-rendered')) {
             const langN = isPowershell ? 'powershell'
                 : (isCmd || isNetsh)   ? 'bash'
                 : lang === 'json'      ? 'json'

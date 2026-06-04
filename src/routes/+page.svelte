@@ -246,7 +246,7 @@ import { listen } from '@tauri-apps/api/event';
              costSummaryMonth, tokenBudgetConfig,
              initHostsFromKeyring,
              hostReachability, markHostReachable } from '$lib/stores';
-    import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns } from '$lib/message-render';
+    import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns, applyShikiToHtml } from '$lib/message-render';
     import { initRecognition, toggleMic as _toggleMic, speak as _speak } from '$lib/voice';
     import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste } from '$lib/file-inputs';
     import { buildWorkingMemoryDigest, slotRelevance, updateWorkingMemory, compactOldTurns } from '$lib/working-memory';
@@ -4467,7 +4467,24 @@ Use ONE of these patterns instead:
                     if (display.length === _lastRenderedLen) return;
                     _lastRenderedLen = display.length;
                     msg.rawContent = display;
-                    const withBadges = renderConfidenceTags(display);
+                    // v1.7.55 — Auto-close any open ``` fence so marked
+                    // renders the partial code as a <pre> from the very
+                    // first chunk it lands in, not as paragraph text that
+                    // suddenly transforms into a <pre> when the closing
+                    // fence arrives. The transformation moment was the
+                    // visible "el cuadro tarda en cargar" jump the user
+                    // reported. Counts un-escaped ``` at line start; if
+                    // odd, append a closing fence to balance them out.
+                    // The synthetic fence is invisible to the user
+                    // because marked includes it in the same code block;
+                    // when the real close arrives, the auto-fence becomes
+                    // a no-op (balanced count = 0) and no transformation
+                    // happens.
+                    const _fenceMatches = display.match(/^```/gm);
+                    const _displayBalanced = (_fenceMatches && _fenceMatches.length % 2 === 1)
+                        ? display + '\n```'
+                        : display;
+                    const withBadges = renderConfidenceTags(_displayBalanced);
                     const parsed = withBadges ? renderMd(withBadges) : '';
                     // Cursor no longer injected as a sibling span; it's a
                     // CSS pseudo on .stream-body that's owned by the
@@ -7771,7 +7788,16 @@ times the SAME way, switch tool kind entirely.
                     // an in-place innerHTML update via {@html msg.html} — no
                     // destroy/recreate, no gap.
                     existingStreamMsg.role = 'lucy';
-                    existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`;
+                    // v1.7.55 — Pre-apply Shiki to the rendered HTML so the
+                    // very first frame Svelte paints already shows
+                    // highlighted code. Previously the highlighting ran in
+                    // `addCopyBtns` AFTER paint, producing a visible
+                    // "loading" moment ("los cuadros tardan en cargar")
+                    // where code blocks rendered plain then turned colourised.
+                    // The helper is a no-op on languages we don't bundle and
+                    // a no-op if Shiki isn't initialised yet (caller's
+                    // post-render addCopyBtns hljs fallback still runs).
+                    existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${applyShikiToHtml(renderLucyMarkdown(clean))}`;
                     existingStreamMsg.rawRole = 'Lucy';
                     existingStreamMsg.rawContent = clean;
                     // Re-tokenize on streaming→lucy promotion. Placeholder was
