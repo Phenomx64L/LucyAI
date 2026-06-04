@@ -117,6 +117,41 @@
         return m.slice(0, 3);
     }
 
+    /** v1.7.59 — Per-tab purpose classification. Drives the colored top
+     *  border (Mission Control A2). Keyword regexes are cheap; this runs
+     *  only when Svelte re-evaluates `each tabs` due to a tab field
+     *  change. Priority ordering: `incident` and `executing` are runtime
+     *  flags and outrank the keyword-derived `investigation` / `reference`.
+     *
+     *  Mapping:
+     *    chat          → default conversational (no tint)
+     *    investigation → security/forensics work (amber)
+     *    incident      → active incident (red, blinking via CSS)
+     *    executing     → tools running right now (violet)
+     *    reference     → documentation / how-to (blue)
+     */
+    function tabPurpose(tab: any): 'chat' | 'investigation' | 'incident' | 'executing' | 'reference' {
+        if (!tab) return 'chat';
+        // Runtime-flag tiers (highest priority).
+        if (tab.activeIncident || tab._activeIncident) return 'incident';
+        if (tab.isExecuting) return 'executing';
+        // Keyword tier — sample last ~3 messages + title for cheap heuristic.
+        const title  = String(tab.title || '').toLowerCase();
+        const recent = (Array.isArray(tab.messages) ? tab.messages : [])
+            .slice(-3)
+            .map((m: any) => String(m?.rawContent ?? m?.content ?? '').slice(0, 200))
+            .join(' ')
+            .toLowerCase();
+        const blob = title + ' ' + recent;
+        if (/phishing|malware|threat|breach|forensic|attack|exploit|cve-?\d|ransom|c2\b|intrusion|investiga|analiz|incident|amenaza|brecha/i.test(blob)) {
+            return 'investigation';
+        }
+        if (/\bdocs?\b|guide|manual|how[- ]to|tutorial|gu[ií]a|c[oó]mo\s+(se|hago|funciona)|qu[eé]\s+es|explica|definici[oó]n/i.test(blob)) {
+            return 'reference';
+        }
+        return 'chat';
+    }
+
     /** Status classification used for the leading dot color and the
      *  preview badge. Ordered by priority — processing wins over stale. */
     function tabState(tab: any): 'processing' | 'fork' | 'error' | 'stale' | 'idle' {
@@ -202,6 +237,7 @@
                      slot="trigger"
                      role="button" tabindex="0"
                      data-tauri-drag-region="false"
+                     data-purpose={tabPurpose(tab)}
                      on:click={() => onTabClick(tab.id)}
                      on:keydown
                      on:mouseenter={(e) => onTabEnter(e, tab)}

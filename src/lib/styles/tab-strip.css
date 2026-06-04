@@ -146,6 +146,50 @@
     border-color: var(--bdr);
     border-top: 2px solid var(--acc);
 }
+
+/* ── v1.7.59 — Per-tab "purpose" tint (Mission Control A2) ────────────────
+   Drives a 2-px coloured top accent that scans the strip as a session map:
+   the operator can see at a glance which tabs are investigations, which
+   are running tools, which are reference reads, and which is the active
+   incident. Implemented as inset box-shadow for non-active tabs (which
+   have no visible top border) and as a border-top-color override for the
+   active tab (which already has a 2-px border-top from `.tab.active`).
+   The default `chat` purpose intentionally has no tint — it's the calm
+   baseline. */
+.tab[data-purpose="investigation"] {
+    box-shadow: inset 0 2px 0 0 rgba(245, 158, 11, 0.55);
+}
+.tab[data-purpose="executing"] {
+    box-shadow: inset 0 2px 0 0 rgba(167, 139, 250, 0.60);
+}
+.tab[data-purpose="incident"] {
+    box-shadow: inset 0 2px 0 0 rgba(239, 68, 68, 0.75);
+    animation: tab-incident-pulse 1.6s ease-in-out infinite;
+}
+.tab[data-purpose="reference"] {
+    box-shadow: inset 0 2px 0 0 rgba(96, 165, 250, 0.55);
+}
+/* Active overrides — the visible 2-px border-top adopts the purpose colour. */
+.tab.active[data-purpose="investigation"] { border-top-color: #f59e0b; box-shadow: none; }
+.tab.active[data-purpose="executing"]     { border-top-color: #a78bfa; box-shadow: none; }
+.tab.active[data-purpose="incident"]      { border-top-color: #ef4444; box-shadow: none; animation: tab-incident-pulse 1.6s ease-in-out infinite; }
+.tab.active[data-purpose="reference"]     { border-top-color: #60a5fa; box-shadow: none; }
+/* `chat` (default): keeps green border-top from .tab.active above. */
+
+@keyframes tab-incident-pulse {
+    0%, 100% { background-color: transparent; }
+    50%      { background-color: rgba(239, 68, 68, 0.06); }
+}
+
+/* Idle / hidden integration (v1.7.44): pause the incident pulse when the
+   window isn't visible or the user is quiescent so the GPU can rest. */
+html.app-hidden     .tab[data-purpose="incident"],
+html.lucy-quiescent .tab[data-purpose="incident"] {
+    animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+    .tab[data-purpose="incident"] { animation: none; }
+}
 .tab-title-txt {
     max-width: 240px;
     overflow: hidden;

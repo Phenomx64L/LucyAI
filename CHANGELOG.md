@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.59] — 2026-06-03
+
+### Per-tab purpose tint (Direction A, step 2)
+
+The tab strip now communicates the OPERATIONAL ROLE of each
+tab at a glance via a 2-px coloured top accent. The strip
+becomes a session map instead of a list of indistinguishable
+chat threads.
+
+**Purpose classification (priority-ordered).**
+
+| Purpose | Trigger | Colour |
+|---|---|---|
+| `incident` | `tab.activeIncident` truthy | red 🔴 + slow pulse |
+| `executing` | `tab.isExecuting` true | violet 🟣 |
+| `investigation` | keywords in title/recent messages: phishing, malware, threat, breach, forensic, attack, exploit, CVE-X, ransom, c2, intrusion, investiga, analiz, incident, amenaza, brecha | amber 🟡 |
+| `reference` | keywords: docs, guide, manual, how-to, tutorial, guía, cómo se/hago/funciona, qué es, explica, definición | blue 🔵 |
+| `chat` *(default)* | none of the above | green (existing accent) |
+
+**Implementation.**
+
+- `tabPurpose(tab)` function in `TabBar.svelte`. Runtime flags
+  (incident, executing) outrank keyword heuristics. Keyword
+  match runs against `title + last 3 message contents (200
+  chars each)` — cheap regex, only re-evaluated when Svelte
+  re-renders the each block.
+- `data-purpose={tabPurpose(tab)}` attribute on each `.tab`
+  div. Drives CSS via attribute selectors — no JS state
+  machine, no extra reactivity.
+- `tab-strip.css` adds rules for each purpose:
+  - Non-active tabs: `box-shadow: inset 0 2px 0 0 rgba(...)`
+    paints a coloured top sliver where the active border-top
+    would be.
+  - Active tabs: `border-top-color` override matches the
+    purpose, `box-shadow: none` to avoid doubling.
+  - `incident`: adds `tab-incident-pulse 1.6s ease-in-out
+    infinite` — subtle background-color wave (≤6 % red) so a
+    real incident can't be missed even peripherally.
+- Quiescent integration (v1.7.44): the incident pulse pauses
+  under `html.app-hidden` and `html.lucy-quiescent`. Respects
+  `prefers-reduced-motion`.
+
+**Why this lands for IT pros.**
+
+Imagine 8 tabs open: a phishing investigation, two ongoing
+agent loops, a runbook reference being read, a normal chat,
+plus three idle. With this commit the strip looks like:
+
+```
+[🔴 phish]  [🟣 ▶ scan]  [🟣 ▶ harden]  [🔵 runbook]  [🟢 chat]  [chat]  [chat]  [chat]
+```
+
+That's the session map an SRE or SOC operator needs. Without
+it, every tab title looks like noise until you click in.
+
+**Files touched.**
+- `src/lib/TabBar.svelte` — new `tabPurpose()` + `data-purpose`
+  attribute on `.tab`.
+- `src/lib/styles/tab-strip.css` — 5 purpose rules + active
+  overrides + `@keyframes tab-incident-pulse`.
+
+**Verification.** `svelte-check` passes (0 errors).
+
+**Next.** A3 — terminal-recording-style code blocks.
+
+---
+
 ## [1.7.58] — 2026-06-03
 
 ### Mission Strip — always-on operational pulse (Direction A, step 1)
