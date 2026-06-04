@@ -729,18 +729,121 @@ body.density-compact .chat{gap:2px !important;}
 .ps-cmd{font-family:var(--mono);color:var(--acc);font-size:11px;display:block;margin-bottom:4px;}
 .ps-out{background:#0a0c15;border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;font-family:var(--mono);font-size:11px;color:#94a3b8;overflow-x:auto;}
 
-/* ── WARP BLOCKS ─────────────────────────────── */
-.warp-block{margin-top:12px;border-radius:8px;overflow:hidden;border:1px solid var(--bdr);font-family:var(--mono);transition:border-color .3s,box-shadow .3s;}
-.warp-block.wb-ok{border-color:rgba(16,185,129,.2);box-shadow:0 0 12px rgba(16,185,129,.04);}
-.warp-block.wb-err{border-color:rgba(255,68,68,.25);box-shadow:0 0 12px rgba(255,68,68,.04);}
-.wb-hdr{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:11px;background:rgba(0,0,0,.35);}
-.wb-ok .wb-hdr{background:rgba(16,185,129,.05);}
-.wb-err .wb-hdr{background:rgba(255,68,68,.06);}
-.wb-status{font-size:12px;font-weight:700;width:16px;text-align:center;flex-shrink:0;}
-.wb-ok .wb-status{color:#10b981;}
-.wb-err .wb-status{color:#ef4444;}
+/* ── WARP BLOCKS ─────────────────────────────────────────────────────────
+   v1.7.60 — "Terminal recording" styling (Mission Control A3).
+   The warp-block now reads as an asciinema/terminal recording rather than
+   a code-fenced output dump: tiny traffic-light dots, hostname chip on
+   the left, engine glyph as the prompt, exit-code badge on the right.
+   The chrome is the cheapest possible "I'm forensic evidence" cue —
+   sysadmins recognise it instantly from screen-recording tools they
+   already use for handoffs and post-mortems. */
+.warp-block{
+    margin-top:12px;
+    border-radius:8px;
+    overflow:hidden;
+    border:1px solid var(--bdr);
+    font-family:var(--mono);
+    transition:border-color .3s,box-shadow .3s;
+    /* v1.7.60 — Faint inner top highlight reads as the recording's "bezel". */
+    box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.03);
+}
+.warp-block.wb-ok{border-color:rgba(16,185,129,.2);box-shadow:inset 0 1px 0 0 rgba(255,255,255,0.03), 0 0 12px rgba(16,185,129,.04);}
+.warp-block.wb-err{border-color:rgba(255,68,68,.25);box-shadow:inset 0 1px 0 0 rgba(255,255,255,0.03), 0 0 12px rgba(255,68,68,.04);}
+
+.wb-hdr{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:6px 10px;
+    font-size:11px;
+    background:linear-gradient(180deg, rgba(0,0,0,.42) 0%, rgba(0,0,0,.32) 100%);
+    border-bottom:1px solid rgba(255,255,255,.04);
+}
+.wb-ok .wb-hdr{background:linear-gradient(180deg, rgba(16,185,129,.07) 0%, rgba(16,185,129,.04) 100%);}
+.wb-err .wb-hdr{background:linear-gradient(180deg, rgba(239,68,68,.08) 0%, rgba(239,68,68,.05) 100%);}
+
+/* v1.7.60 — Traffic-light dots (decorative, asciinema-style). Three small
+   circles on the left of the header that say "this is a recording, not a
+   live terminal". Colour shifts by ok/err state so the leftmost dot reads
+   as a tiny health LED. */
+.wb-dots{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    flex-shrink:0;
+    padding-right:2px;
+}
+.wb-dots > span{
+    width:7px; height:7px;
+    border-radius:50%;
+    background:rgba(255,255,255,.16);
+    transition: background-color .2s ease;
+}
+.wb-ok  .wb-dots > span:first-child{ background:#10b981; box-shadow:0 0 4px rgba(16,185,129,.55); }
+.wb-err .wb-dots > span:first-child{ background:#ef4444; box-shadow:0 0 4px rgba(239,68,68,.6); }
+.wb-dots > span:nth-child(2){ background:rgba(245,158,11,.35); }
+.wb-dots > span:nth-child(3){ background:rgba(96,165,250,.28); }
+
+/* Hostname chip — only renders when meta.hostname is provided. Small monospace
+   pill that says "this command ran on PRECISION-X / web-01 / etc.". */
+.wb-host{
+    font-size:10px;
+    font-weight:600;
+    letter-spacing:.2px;
+    color:#cbd5e1;
+    background:rgba(255,255,255,.04);
+    padding:2px 7px;
+    border-radius:3px;
+    border:1px solid rgba(255,255,255,.06);
+    flex-shrink:0;
+}
+
+/* v1.7.60 — Replaced the static `PS >` prefix with an engine-glyph in its
+   own little badge. Falls back to `$` when meta.engine isn't passed. */
 .wb-cmd{flex:1;color:var(--acc);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:transparent;border:none;padding:0;}
-.wb-time{color:#334155;font-size:10px;flex-shrink:0;}
+.wb-prompt{
+    display:inline-block;
+    color:#64748b;
+    margin-right:6px;
+    font-weight:600;
+    opacity:.85;
+}
+
+/* Absolute timestamp chip (HH:MM:SS). Optional — only renders when meta.ts
+   is provided. Sits between the command and the elapsed-time chip. */
+.wb-ts{
+    color:#64748b;
+    font-size:10px;
+    flex-shrink:0;
+    font-variant-numeric:tabular-nums;
+    letter-spacing:.3px;
+}
+
+.wb-time{color:#475569;font-size:10px;flex-shrink:0;font-variant-numeric:tabular-nums;}
+
+/* v1.7.60 — Exit-code badge. Replaces the old single-character ✓/✗ with a
+   `exit 0` / `exit ≠0` pill. Sysadmins read return codes constantly; this
+   exposes them as first-class metadata instead of a vague check mark. */
+.wb-exit{
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:.3px;
+    padding:1px 6px;
+    border-radius:3px;
+    flex-shrink:0;
+    font-variant-numeric:tabular-nums;
+}
+.wb-exit-ok{
+    color:#10b981;
+    background:rgba(16,185,129,.10);
+    border:1px solid rgba(16,185,129,.30);
+}
+.wb-exit-err{
+    color:#ef4444;
+    background:rgba(239,68,68,.10);
+    border:1px solid rgba(239,68,68,.35);
+}
+
 .wb-lbl{color:#475569;font-size:10px;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .wb-toggle{background:none;border:none;color:#475569;cursor:pointer;font-size:10px;padding:0 2px;line-height:1;flex-shrink:0;transition:.1s;}
 .wb-toggle:hover{color:var(--txt2);}

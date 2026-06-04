@@ -7706,7 +7706,17 @@ times the SAME way, switch tool kind entirely.
 
                     const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.\n\nANTI-HALLUCINATION RULES (strict):\n• If the output is empty or shows "(sin salida)", you MUST report that NO DATA was returned. DO NOT invent results, DO NOT claim "executed successfully — no items found", DO NOT assume the command worked silently.\n• When output is empty, say literally: "El comando no devolvió datos. Esto puede indicar: (a) el comando se redirigió a otro stream, (b) no hay coincidencias, o (c) un fallo silencioso. Sugiero verificar con: <comando alternativo>."\n• ONLY claim success when the output contains observable evidence (rows, values, properties, status fields). NEVER infer state from absence of output.\n• Quote real values from the output when present. NEVER fabricate service names, status values, file paths, or numeric metrics that are not literally in the text above.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
                     const sa=renderLucyMarkdown(analysis);
-                    const wb=warpBlock(cmd,out,true,elapsed,engineLabel);
+                    // v1.7.60 — Pass hostname + engine + absolute timestamp so the
+                    // terminal-recording header (Mission Control A3) shows the full
+                    // forensic context: WHERE the command ran, with WHAT engine,
+                    // and at WHAT exact time of day.
+                    const _wbTs = new Date().toTimeString().slice(0, 8); // HH:MM:SS
+                    const wb=warpBlock(cmd,out,true,elapsed,engineLabel, undefined, undefined, {
+                        hostname: hostName,
+                        engine: engineLabel,
+                        ts: _wbTs,
+                        exitCode: 0,
+                    });
                     addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
                     if(doSpeak)speak(analysis);
                 }catch(err){

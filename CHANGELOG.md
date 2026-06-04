@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.60] — 2026-06-03
+
+### Terminal-recording-style code blocks (Direction A, step 3)
+
+Final piece of the Mission Control overhaul (A1 Mission Strip +
+A2 per-tab tint). Lucy's command-output blocks (`warp-block`)
+now read as **forensic recordings** instead of generic
+code-fenced dumps.
+
+**Before / After header.**
+
+```
+Before:  ✓  PS > Get-Process            142ms  Ejecutado  ▼
+After:   ●●●  PRECISION-X   ⚡ Get-Process    14:23:01  142ms  exit 0   Ejecutado   ▼
+```
+
+Components added in the header (left → right):
+
+1. **Three traffic-light dots** (`.wb-dots`). Decorative,
+   asciinema-style. The leftmost dot reads as a tiny health
+   LED — green on success, red on error.
+2. **Hostname chip** (`.wb-host`). Renders only when
+   `meta.hostname` is passed. Small monospace pill: "this
+   command ran on PRECISION-X / web-01 / …".
+3. **Engine glyph prompt** (`.wb-prompt`). Replaced the static
+   `PS >` prefix with a one-character glyph mapped to the
+   actual engine:
+
+   | Engine | Glyph |
+   |---|---|
+   | powershell / pwsh | ⚡ |
+   | cmd / batch | ▶ |
+   | bash / sh | $ |
+   | wmic | ◇ |
+   | netsh | ⌬ |
+   | reg | ☐ |
+   | cscript / vbs | ※ |
+   | winrm / ssh / remote | ⇄ |
+   | fallback | $ |
+
+4. **Absolute timestamp chip** (`.wb-ts`). Renders only when
+   `meta.ts` is passed (HH:MM:SS). Sits between the command
+   and the elapsed-time chip so the operator can correlate
+   to a real wall-clock event.
+5. **Exit-code badge** (`.wb-exit`). Replaces the old
+   single-character ✓/✗. Reads `exit 0` (green pill) on
+   success or `exit ≠0` (red pill) on error. Sysadmins read
+   return codes constantly — exposing them as first-class
+   metadata is the cheapest semantic-density win in the band.
+
+**API extension.**
+
+`warpBlock()` now takes an optional 8th parameter:
+
+```ts
+warpBlock(cmd, output, ok, elapsedMs, label, enrichedType?,
+          enrichedJson?, meta?: WarpBlockMeta)
+```
+
+Where `WarpBlockMeta = { hostname?, engine?, ts?, exitCode? }`.
+**Backward compatible** — every existing call site renders the
+same as before plus the new traffic-light dots and the styled
+exit-code badge (derived from `ok` when `exitCode` is absent).
+Callers that pass `meta` get the full hostname + engine glyph
++ absolute timestamp.
+
+**First upgraded call site.**
+
+`+page.svelte:7709` (the primary success path of the
+single-shell turn) now passes:
+
+```js
+const _wbTs = new Date().toTimeString().slice(0, 8); // HH:MM:SS
+const wb = warpBlock(cmd, out, true, elapsed, engineLabel,
+                     undefined, undefined, {
+    hostname: hostName,
+    engine:   engineLabel,
+    ts:       _wbTs,
+    exitCode: 0,
+});
+```
+
+Remaining call sites (agent loop branches, remote-host paths,
+retry/rollback paths) will be upgraded in follow-ups as we
+revisit each. They look noticeably better even without the
+upgrade thanks to the styling-only changes (traffic lights,
+exit badge derived from `ok`).
+
+**CSS-level changes.**
+
+- `.wb-hdr` now uses a subtle vertical gradient and a hairline
+  bottom border instead of a flat background — gives the
+  recording a "bezel" feel.
+- `.wb-exit-ok` / `.wb-exit-err` are accent-coloured pills
+  with thin borders.
+- `.wb-host` is a soft monospace chip with `rgba(255,255,255,
+  .04)` background so it reads as metadata, not action.
+- The legacy `.wb-status` selector survives in the light-theme
+  block as harmless dead CSS — kept for now in case a future
+  PR wants to restore an inline status indicator.
+
+**Why this lands for IT pros.**
+
+Asciinema, terminal recorders, post-mortem screenshots — every
+forensic artefact a sysadmin works with looks like this. The
+warp-block now reads as the SAME class of artefact, not as a
+generic code block. The hostname + timestamp + exit-code
+combination is the **minimum forensic header** every
+operations team prints in handoff reports. Lucy now produces
+those headers natively.
+
+**Files touched.**
+- `src/lib/message-render.ts` — `WarpBlockMeta` interface,
+  `_engineGlyph()` helper, extended `warpBlock()` template.
+- `src/routes/page.css` — new `.wb-dots`, `.wb-host`,
+  `.wb-prompt`, `.wb-ts`, `.wb-exit` rules; restyled
+  `.wb-hdr` with gradient + hairline border.
+- `src/routes/+page.svelte` — primary success-path call site
+  upgraded to pass `meta`.
+
+**Verification.** `svelte-check` passes (0 errors).
+
+**Mission Control overhaul status.**
+
+| Step | Version | Status |
+|---|---|---|
+| A1 — Mission Strip | v1.7.58 | ✅ |
+| A2 — Per-tab purpose tint | v1.7.59 | ✅ |
+| A3 — Terminal-recording code blocks | v1.7.60 | ✅ |
+
+Direction A complete. Lucy's chrome now signals "operations
+console" at first glance instead of "AI chat copilot."
+
+---
+
 ## [1.7.59] — 2026-06-03
 
 ### Per-tab purpose tint (Direction A, step 2)

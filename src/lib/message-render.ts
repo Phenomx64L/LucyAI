@@ -25,12 +25,57 @@ hljs.registerLanguage('plaintext',  hljsPlain as any);
 // Builds the collapsible command-output block injected into Lucy messages.
 // When enrichedType is provided (not 'plain'), renders a structured data widget
 // alongside the raw output for rich visualization.
-export function warpBlock(cmd: string, output: string, ok: boolean, elapsedMs: number, label = '', enrichedType?: string, enrichedJson?: string): string {
+//
+// v1.7.60 — "Terminal recording" header (Mission Control A3). Adds:
+//   • Three decorative traffic-light dots on the left (asciinema-style)
+//   • Optional `hostname` chip (defaults to local hostname when absent)
+//   • Optional `engine` icon — PS / cmd / bash / wmic / netsh
+//   • Optional absolute `ts` timestamp (HH:MM:SS) alongside the elapsed time
+//   • Exit-code badge: `exit 0` for ok / `exit ≠0` for error
+//
+// The `meta` parameter is OPTIONAL and backwards-compatible. Call sites that
+// don't pass it render the same as before plus the new traffic-light dots
+// and the styled exit-code badge — already a noticeable upgrade without
+// requiring every caller to thread hostname/engine through.
+export interface WarpBlockMeta {
+    hostname?: string;
+    /** powershell | cmd | bash | wmic | netsh | reg | cscript | other */
+    engine?: string;
+    /** ISO or `HH:MM:SS` string. Absent = no absolute time shown. */
+    ts?: string;
+    /** Optional explicit exit code; when omitted, derived from `ok` (0 or 1). */
+    exitCode?: number;
+}
+
+/** Convert an engine label into a one-character glyph for the header. */
+function _engineGlyph(engine?: string): string {
+    if (!engine) return '$';
+    const e = engine.toLowerCase();
+    if (e === 'powershell' || e === 'ps' || e === 'ps1' || e === 'pwsh') return '⚡';
+    if (e === 'cmd' || e === 'batch' || e === 'bat')                      return '▶';
+    if (e === 'bash' || e === 'sh' || e === 'shell')                      return '$';
+    if (e === 'wmic')                                                      return '◇';
+    if (e === 'netsh')                                                     return '⌬';
+    if (e === 'reg')                                                       return '☐';
+    if (e === 'cscript' || e === 'vbs' || e === 'vbscript')                return '※';
+    if (e === 'winrm' || e === 'ssh' || e === 'remote')                    return '⇄';
+    return '$';
+}
+
+export function warpBlock(
+    cmd: string,
+    output: string,
+    ok: boolean,
+    elapsedMs: number,
+    label = '',
+    enrichedType?: string,
+    enrichedJson?: string,
+    meta?: WarpBlockMeta,
+): string {
     const sc = cmd.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const so = DOMPurify.sanitize(output.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
     const t  = elapsedMs < 1000 ? `${elapsedMs}ms` : `${(elapsedMs / 1000).toFixed(1)}s`;
     const st = ok ? 'wb-ok' : 'wb-err';
-    const si = ok ? '✓' : '✗';
     const hl = label || (ok ? 'Ejecutado' : 'Error');
     // Enriched widget mount point: data attributes consumed by mountEnrichedWidgets()
     // Use encodeURIComponent to safely embed JSON in data attribute without DOMPurify corruption
@@ -45,7 +90,34 @@ export function warpBlock(cmd: string, output: string, ok: boolean, elapsedMs: n
     const outputHtml = so && so.trim()
         ? so
         : `<span class="wb-empty">${ok ? '✓ Comando completado (sin salida)' : '⚠ Sin salida de error'}</span>`;
-    return `<div class="warp-block ${st}"${enrichAttr}><div class="wb-hdr"><span class="wb-status">${si}</span><code class="wb-cmd">PS &gt; ${sc}</code><span class="wb-time">${t}</span><span class="wb-lbl">${hl}</span>${enrichBadge}<button class="wb-toggle" data-collapsed="0">▼</button></div><pre class="wb-out">${outputHtml}</pre><div class="wb-enriched-mount"></div></div>`;
+
+    // v1.7.60 — Terminal-recording header pieces.
+    const dots = `<span class="wb-dots" aria-hidden="true"><span></span><span></span><span></span></span>`;
+    const hostChip = meta?.hostname
+        ? `<span class="wb-host" title="Ejecutado en ${String(meta.hostname).replace(/"/g, '')}">${String(meta.hostname).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`
+        : '';
+    const tsChip = meta?.ts
+        ? `<span class="wb-ts">${String(meta.ts).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`
+        : '';
+    const glyph = _engineGlyph(meta?.engine);
+    const exitVal = typeof meta?.exitCode === 'number' ? meta.exitCode : (ok ? 0 : 1);
+    const exitChip = `<span class="wb-exit ${exitVal === 0 ? 'wb-exit-ok' : 'wb-exit-err'}">exit ${exitVal}</span>`;
+
+    return `<div class="warp-block ${st}"${enrichAttr}>
+<div class="wb-hdr">
+  ${dots}
+  ${hostChip}
+  <code class="wb-cmd"><span class="wb-prompt">${glyph}</span> ${sc}</code>
+  ${tsChip}
+  <span class="wb-time">${t}</span>
+  ${exitChip}
+  <span class="wb-lbl">${hl}</span>
+  ${enrichBadge}
+  <button class="wb-toggle" data-collapsed="0" title="Plegar / desplegar salida">▼</button>
+</div>
+<pre class="wb-out">${outputHtml}</pre>
+<div class="wb-enriched-mount"></div>
+</div>`;
 }
 
 // ── renderConfidenceTags ──────────────────────────────────────────────────────
