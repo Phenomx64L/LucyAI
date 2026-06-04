@@ -35,6 +35,8 @@
     function detectRepair(check) {
         if (!check) return null;
         const msg = (check.message || '').toLowerCase();
+
+        // ── Database checks ──────────────────────────────────────────────
         // agent_memories.confidence NULL — v1.7.64
         if (check.name === 'Database' && check.status === 'error'
             && msg.includes('null value') && msg.includes('confidence')) {
@@ -44,6 +46,51 @@
                 successDefault: isEN ? 'Repair complete' : 'Reparación completada',
             };
         }
+        // v1.7.70 — DB size > 500 MB → VACUUM. The check raises a warning
+        // (not error) when size_mb > 500. Pattern-match the message
+        // because the check doesn't expose a structured "reason" field.
+        if (check.name === 'Database' && check.status === 'warning'
+            && msg.includes('integrity: ok')
+            && /size:\s*[\d.]+\s*mb/.test(msg)) {
+            return {
+                command: 'repair_database_vacuum',
+                label:   isEN ? 'VACUUM database' : 'VACUUM de la BD',
+                successDefault: isEN ? 'VACUUM complete' : 'VACUUM completado',
+            };
+        }
+
+        // ── Memory pipeline: expired pending cleanup ─────────────────────
+        // v1.7.70 — Triggered when expired_pending_cleanup > 100 (warning).
+        if (check.name === 'Memory Pipeline' && check.status === 'warning'
+            && msg.includes('expired')) {
+            return {
+                command: 'repair_memory_purge_expired',
+                label:   isEN ? 'Purge expired' : 'Purgar caducados',
+                successDefault: isEN ? 'Purged' : 'Purgado',
+            };
+        }
+
+        // ── Stream sessions: leaked entries ──────────────────────────────
+        // v1.7.70 — Triggered when STREAM_SESSIONS.len() > 20.
+        if (check.name === 'Stream Sessions' && check.status === 'warning') {
+            return {
+                command: 'repair_clear_leaked_stream_sessions',
+                label:   isEN ? 'Clear leaked sessions' : 'Limpiar sesiones colgadas',
+                successDefault: isEN ? 'Cleared' : 'Limpiado',
+            };
+        }
+
+        // ── App log: oversized ───────────────────────────────────────────
+        // v1.7.70 — Triggered when log file > 100 MB OR file missing.
+        if (check.name === 'App Log'
+            && (check.status === 'warning' || check.status === 'error')) {
+            return {
+                command: 'repair_rotate_app_log',
+                label:   isEN ? 'Rotate log' : 'Rotar log',
+                successDefault: isEN ? 'Log rotated' : 'Log rotado',
+            };
+        }
+
         return null;
     }
 

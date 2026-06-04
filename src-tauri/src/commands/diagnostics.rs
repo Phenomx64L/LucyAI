@@ -715,3 +715,212 @@ pub async fn repair_agent_memories_confidence() -> Result<RepairResult, String> 
     .await
     .map_err(|e| format!("join: {}", e))?
 }
+
+// ── v1.7.70 — Additional repair handlers ─────────────────────────────────────
+//
+// Extension of the v1.7.64 self-diagnostics repair surface. Adds four
+// one-click fixes covering the remaining warning-tier triggers from
+// `run_self_diagnostics()`:
+//
+//   • Database size > 500 MB   → VACUUM
+//   • Memory: expired pending  → DELETE expired rows
+//   • Stream sessions > 20     → drain leaked in-memory entries
+//   • App Log > 100 MB         → rotate (truncate + .1.gz backup)
+//
+// Each handler returns the same `RepairResult` shape so the frontend
+// pattern stays uniform: detect via message substring → invoke
+// command → re-run diagnostics.
+
+/// VACUUM the SQLite database. Reclaims free pages left by deletes,
+/// compacts the file, and refreshes FTS5 shadow tables. Idempotent: on
+/// an already-tight DB it returns "no space reclaimed" without erroring.
+///
+/// Why this exists: the v1.6+ memory pipeline can leave hundreds of MB
+/// of free pages after consolidation/forget cycles. The `check_database
+/// _health` triggers a warning at > 500 MB which is almost always
+/// reclaimable space rather than real growth.
+///
+/// VACUUM rewrites the entire DB file — it can take several seconds on
+/// large DBs and holds an EXCLUSIVE lock for the duration. The
+/// `busy_timeout` is the operator's patience budget.
+#[tauri::command]
+pub async fn repair_database_vacuum() -> Result<RepairResult, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::commands::metrics::shared_db(|conn| {
+            // 30 s — VACUUM on a 500 MB DB can take 10-20 s on slow disks.
+            let _ = conn.busy_timeout(std::time::Duration::from_millis(30_000));
+
+            // Measure before so we can report space reclaimed.
+            let size_before: i64 = {
+                let pc: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap_or(0);
+                let ps: i64 = conn.query_row("PRAGMA page_size",  [], |r| r.get(0)).unwrap_or(0);
+                pc * ps
+            };
+
+            // VACUUM is a single statement; it cannot run inside a tx.
+            conn.execute("VACUUM", [])
+                .map_err(|e| format!("VACUUM failed: {}", e))?;
+
+            let size_after: i64 = {
+                let pc: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap_or(0);
+                let ps: i64 = conn.query_row("PRAGMA page_size",  [], |r| r.get(0)).unwrap_or(0);
+                pc * ps
+            };
+
+            let reclaimed = (size_before - size_after).max(0);
+            let mb_before    = size_before as f64 / 1_048_576.0;
+            let mb_after     = size_after  as f64 / 1_048_576.0;
+            let mb_reclaimed = reclaimed   as f64 / 1_048_576.0;
+
+            Ok(RepairResult {
+                ok: true,
+                rows_repaired: reclaimed,
+                message: format!(
+                    "VACUUM complete. Before: {:.1} MB · After: {:.1} MB · Reclaimed: {:.1} MB.",
+                    mb_before, mb_after, mb_reclaimed
+                ),
+            })
+        })
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
+}
+
+/// Delete `agent_memories` rows whose `expires_at` is in the past.
+/// These are entries the auto-forget pipeline marked but hasn't yet
+/// physically removed. The diagnostic raises a warning above 100
+/// expired-pending entries; this command does the cleanup the pipeline
+/// would have done on its next pass.
+///
+/// `rows_repaired` is the row count actually deleted, so the toast can
+/// say "Cleaned N expired memories" with a real number.
+#[tauri::command]
+pub async fn repair_memory_purge_expired() -> Result<RepairResult, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::commands::metrics::shared_db(|conn| {
+            let _ = conn.busy_timeout(std::time::Duration::from_millis(5_000));
+
+            // Count first for a stable "before" number, then delete.
+            // SQLite returns affected-rows on execute() but counting
+            // ahead gives a deterministic message even if a concurrent
+            // writer changes the table between count and delete.
+            let before: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM agent_memories \
+                 WHERE expires_at > 0 AND expires_at < strftime('%s','now')",
+                [],
+                |r| r.get(0),
+            ).unwrap_or(0);
+
+            let deleted = conn.execute(
+                "DELETE FROM agent_memories \
+                 WHERE expires_at > 0 AND expires_at < strftime('%s','now')",
+                [],
+            ).map_err(|e| format!("delete expired: {}", e))? as i64;
+
+            let msg = if before == 0 {
+                "No expired memories to purge.".to_string()
+            } else {
+                format!("Purged {} expired memor{}.", deleted, if deleted == 1 { "y" } else { "ies" })
+            };
+
+            Ok(RepairResult { ok: true, rows_repaired: deleted, message: msg })
+        })
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
+}
+
+/// Drain leaked entries from the in-memory `STREAM_SESSIONS` map.
+/// The diagnostic flags > 20 active sessions as a leak indicator —
+/// healthy normal usage stays well below that. This command empties
+/// the map; the next real stream will repopulate it cleanly.
+///
+/// Note: this does NOT kill the underlying child processes. The
+/// `cleanup_dead_stream_sessions()` reaper handles that separately
+/// based on PID liveness. This handler is for the case where the map
+/// itself accumulated entries whose processes already died — the
+/// orphan-bookkeeping case, not the orphan-process case.
+#[tauri::command]
+pub async fn repair_clear_leaked_stream_sessions() -> Result<RepairResult, String> {
+    let cleared = match crate::state::STREAM_SESSIONS.lock() {
+        Ok(mut m) => {
+            let n = m.len() as i64;
+            m.clear();
+            n
+        }
+        Err(e) => return Err(format!("session map poisoned: {}", e)),
+    };
+    let msg = if cleared == 0 {
+        "Session map already empty.".to_string()
+    } else {
+        format!("Cleared {} leaked stream session entr{}.",
+            cleared, if cleared == 1 { "y" } else { "ies" })
+    };
+    Ok(RepairResult { ok: true, rows_repaired: cleared, message: msg })
+}
+
+/// Rotate the app log file when it has grown past the warning
+/// threshold (100 MB). Strategy:
+///
+///   1. Read current size.
+///   2. If under 1 MB: nothing to do.
+///   3. Otherwise rename `lucy_app.log` → `lucy_app.log.1` (overwriting
+///      any prior rotation), then create a fresh empty `lucy_app.log`.
+///      The next log line written by `write_app_log()` reopens it
+///      transparently.
+///
+/// We don't gzip the rotated file here — it's a sysadmin tool, the
+/// operator can compress on demand. Keeping the previous run as `.1`
+/// also means an investigation can still grep yesterday's logs.
+#[tauri::command]
+pub async fn repair_rotate_app_log() -> Result<RepairResult, String> {
+    tokio::task::spawn_blocking(|| -> Result<RepairResult, String> {
+        let dir = crate::utils::logging::get_logs_dir();
+        let primary = dir.join("lucy_app.log");
+        if !primary.exists() {
+            // Nothing to rotate — but creating the empty file is harmless
+            // and gives the next write a target.
+            std::fs::File::create(&primary).map_err(|e| format!("create log: {}", e))?;
+            return Ok(RepairResult {
+                ok: true,
+                rows_repaired: 0,
+                message: "Log file didn't exist — created a fresh empty one.".to_string(),
+            });
+        }
+
+        let meta = std::fs::metadata(&primary).map_err(|e| format!("stat: {}", e))?;
+        let size_mb = meta.len() as f64 / 1_048_576.0;
+
+        if meta.len() < 1_048_576 {
+            return Ok(RepairResult {
+                ok: true,
+                rows_repaired: 0,
+                message: format!(
+                    "Log is only {:.2} MB — rotation skipped (threshold 1 MB).",
+                    size_mb
+                ),
+            });
+        }
+
+        let rotated = dir.join("lucy_app.log.1");
+        // Best-effort: remove a stale .1 if it exists. Ignore errors so
+        // a permission glitch on the old backup doesn't block rotation.
+        let _ = std::fs::remove_file(&rotated);
+
+        std::fs::rename(&primary, &rotated)
+            .map_err(|e| format!("rename to .1: {}", e))?;
+        std::fs::File::create(&primary)
+            .map_err(|e| format!("recreate primary: {}", e))?;
+
+        Ok(RepairResult {
+            ok: true,
+            rows_repaired: meta.len() as i64,
+            message: format!(
+                "Rotated {:.1} MB → lucy_app.log.1, fresh log file ready.",
+                size_mb
+            ),
+        })
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
+}

@@ -936,6 +936,13 @@ pub fn run() {
             diagnostics::run_self_diagnostics,
             // v1.7.64 — Repair commands surfaced as buttons inside the panel
             diagnostics::repair_agent_memories_confidence,
+            // v1.7.70 — Additional repair handlers for the remaining warning
+            // triggers (DB size, expired memories, leaked stream sessions,
+            // oversized app log).
+            diagnostics::repair_database_vacuum,
+            diagnostics::repair_memory_purge_expired,
+            diagnostics::repair_clear_leaked_stream_sessions,
+            diagnostics::repair_rotate_app_log,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

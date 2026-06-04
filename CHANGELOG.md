@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.70] — 2026-06-04
+
+### Self-Diagnostics — four more one-click repair handlers
+
+Extension of the v1.7.64 repair surface. Every warning-tier trigger the
+diagnostic panel can raise now has a matching "Reparar" button.
+
+**Backend (`src-tauri/src/commands/diagnostics.rs`)** — four new Tauri
+commands, all returning the existing `RepairResult` shape:
+
+- `repair_database_vacuum` — runs `VACUUM` on the shared SQLite
+  connection. Measures size before/after and reports the MB reclaimed.
+  Uses a 30 s `busy_timeout` so the EXCLUSIVE lock doesn't trip on a
+  busy WAL. Triggered by `Database: warning · Integrity ok · Size >
+  500 MB`.
+- `repair_memory_purge_expired` — `DELETE FROM agent_memories WHERE
+  expires_at > 0 AND expires_at < now`. Counts before and reports the
+  exact row count purged. Triggered by `Memory Pipeline: warning` with
+  "expired" in the message.
+- `repair_clear_leaked_stream_sessions` — drains the in-memory
+  `STREAM_SESSIONS` HashMap. Does NOT kill child processes (that's
+  `cleanup_dead_stream_sessions()`'s job); this targets the
+  orphan-bookkeeping case where the map accumulated entries whose
+  processes already exited. Triggered by `Stream Sessions: warning`
+  (> 20 active).
+- `repair_rotate_app_log` — renames `lucy_app.log` → `lucy_app.log.1`
+  (replacing any prior rotation) and creates a fresh empty file. The
+  next call to `write_app_log()` reopens it transparently. Skipped
+  under 1 MB. Triggered by `App Log: warning` (> 100 MB) or `error`
+  (file missing).
+
+**Registered** in `src-tauri/src/lib.rs` invoke_handler.
+
+**Frontend (`src/lib/SelfDiagnosticsView.svelte`)** — `detectRepair()`
+gained four new branches keying off the check `name` + `status` and a
+narrow message-substring match. Pattern is uniform with the v1.7.64
+agent-memories handler, so adding more in future is a copy-paste
+exercise.
+
+cargo check — clean.
+svelte-check — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.69] — 2026-06-04
 
 ### Tech-debt sweep — re-enable pre-commit + clean svelte-check
