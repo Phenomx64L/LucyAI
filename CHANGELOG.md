@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.58] — 2026-06-03
+
+### Mission Strip — always-on operational pulse (Direction A, step 1)
+
+User accepted the "Mission Control" overhaul direction. This is
+the first of three coordinated changes: a thin status band
+between the title bar and the tab strip that communicates the
+four signals an IT pro tracks in their peripheral vision —
+without making them switch tabs or open a panel.
+
+**Layout.**
+
+```
+┌─ Mission Strip (22 px tall, monospace) ─────────────────────┐
+│ ● PRECISION-X · ⚯ 2/3 hosts · ⚠ 0 alerts · ⊕ clean · 09:53  ●●●○○ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Reading left-to-right:
+
+- `● LOCAL` — slow 3.6 s heartbeat. Establishes "Lucy is alive."
+- `⚯ N/M hosts` — remote host count, only when ≥1 host is
+  configured. Severity ramps via `ms-ok / warn / crit`.
+- `⚠ N alerts` — active incidents from `activeIncidentId`.
+- `⊕ guard` — current security skill / empty = clean.
+- `HH:MM` — local time, updates once a minute, aligned to the
+  next minute boundary on mount.
+- `●●●○○ posture` — 5-dot stance: calm (0) → vigilant (1) →
+  suspicious (2) → alarmed (3) → panic (4). Derived from
+  `activeIncidentId` + any tab `isExecuting` / `isProcessing`.
+
+**Implementation.**
+
+- New `$lib/MissionStrip.svelte` (≈230 lines, ≈80 of CSS).
+  No new dependencies, no new polling — every prop derives from
+  existing stores or one `setInterval(60_000)` for the clock.
+- Mounted in `+page.svelte` between the boot spinner and the
+  TabBar. Hidden during `showSetupOverlay`.
+- Posture and guard label live in dedicated `$:` blocks so the
+  template doesn't carry a TS `as` cast that Svelte's template
+  parser rejects.
+
+**Click routing** (no new screens added):
+
+- Local chip → `setView('diagnostico')`
+- Hosts chip → `setView('nexshell')`
+- Alerts chip → `setView('dashboard')`
+- Guard chip → opens the existing security-skill picker
+- Posture chip → `setView('diagnostico')`
+
+**Quiescent / hidden integration.**
+
+The heartbeat respects v1.7.44's `html.app-hidden` and
+`html.lucy-quiescent` classes — `animation-play-state: paused`
+when the window is hidden or the user has been idle ≥8 s. Also
+respects `prefers-reduced-motion`.
+
+**Why this lands for IT pros.**
+
+The strip is the single most distinguishing chrome element vs.
+a generic AI chat. It signals "you're sitting at a console,
+not a copilot" before the user reads a single line. Doesn't
+replace anything (StatusBar at the bottom still shows model,
+cost, etc.). Just adds the band that tmux / htop / Splunk /
+Grafana all have and "AI chat copilots" universally lack.
+
+**Files touched.**
+- `src/lib/MissionStrip.svelte` *(new)*.
+- `src/routes/+page.svelte` — import + mount + 2 reactive
+  derivations (`msPosture`, `msGuardLabel`).
+
+**Verification.** `svelte-check` passes (0 errors).
+
+**Next.** Direction A continues with A2 (per-tab purpose tint)
+and A3 (terminal-recording-style code blocks) in subsequent
+commits.
+
+---
+
 ## [1.7.57] — 2026-06-03
 
 ### Gemini-style generative aura while streaming

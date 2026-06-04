@@ -130,6 +130,11 @@ import { listen } from '@tauri-apps/api/event';
              disposeTabRev } from '$lib/page/tabs-store';
 
     import TabBar          from '$lib/TabBar.svelte';
+    // v1.7.58 — Mission Strip (Direction A1). Always-visible operational
+    // pulse band that sits between the title bar and the tab strip. Reads
+    // from existing stores ($hosts, $hostReachability, activeIncidentId)
+    // plus a derived posture so it's free of new polling cost.
+    import MissionStrip    from '$lib/MissionStrip.svelte';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
     import ChatInput       from '$lib/ChatInput.svelte';
@@ -588,6 +593,25 @@ import { listen } from '@tauri-apps/api/event';
      *  but Gemini ran" surprise. */
     $: subAgentEffective = pickSubAgentModel(subAgentModel, activeTab?.selectedModel);
     $: verifierEffective = pickSubAgentModel(verifierModel, activeTab?.selectedModel);
+
+    // v1.7.58 — MissionStrip reactive props. Derived once per relevant change
+    // (incident open, tab status flip, skill activation) so the strip stays
+    // accurate without polling. Cast is here in a typed script position
+    // because the template's prop binding rejects the inline `as` cast.
+    /** @type {0|1|2|3|4} */
+    let msPosture = 0;
+    let msGuardLabel = '';
+    $: {
+        const p = activeIncidentId ? 3
+                : tabs.some(t => t?.isExecuting) ? 2
+                : tabs.some(t => t?.isProcessing) ? 1
+                : 0;
+        msPosture = /** @type {0|1|2|3|4} */ (p);
+    }
+    $: {
+        try { msGuardLabel = peekActiveSecuritySkill() || ''; }
+        catch { msGuardLabel = ''; }
+    }
 
     let tabs               = [];
     let activeTabId        = null;
@@ -9340,6 +9364,28 @@ if (Test-Path $src) {
     <div style="width:28px;height:28px;border:2px solid #1e293b;border-top-color:#10b981;border-radius:50%;animation:spin .7s linear infinite;"></div>
     <span style="font-size:12px;color:#334155;letter-spacing:1px;">INICIANDO LUCY...</span>
   </div>
+  {/if}
+
+  <!-- v1.7.58 — Mission Strip (Direction A1). Always-visible operational
+       pulse. Posture derives from: incident open → alarmed; any tab
+       executing → suspicious; any tab processing → vigilant; otherwise
+       calm. The chip click handlers route to existing views so this is a
+       pure surface — no new screens added. -->
+  {#if !showSetupOverlay}
+  <MissionStrip
+    localHost={hostName}
+    remoteHostsTotal={$hosts.length}
+    remoteHostsOnline={$hosts.filter(h => $hostReachability[h.id]?.reachable === true).length}
+    activeAlerts={activeIncidentId ? 1 : 0}
+    guardLabel={msGuardLabel}
+    posture={msPosture}
+    {isEN}
+    on:clickLocal={() => setView('diagnostico')}
+    on:clickHosts={() => setView('nexshell')}
+    on:clickAlerts={() => setView('dashboard')}
+    on:clickGuard={() => { showSkillPicker = true; }}
+    on:clickPosture={() => setView('diagnostico')}
+  />
   {/if}
 
   <TabBar
