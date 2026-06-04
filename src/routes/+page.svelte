@@ -1551,6 +1551,47 @@ import { listen } from '@tauri-apps/api/event';
         // and `.lucy-quiescent` classes start tracking the window/user
         // state from the very first frame. Idempotent on HMR.
         startIdleDetector();
+        // v1.7.51 — Safety net for tab-state persistence. If any call site
+        // ever calls `persistir()` (debounced) right before the user closes
+        // Lucy, the 500ms timeout may not have fired yet. On window close,
+        // synchronously flush whatever LS write is pending. SQLite is async
+        // and can't be flushed reliably in beforeunload — but LS holds the
+        // recent-50 fallback that _leerSesiones picks up if SQLite returns
+        // empty rows, so the user still gets back their last state.
+        window.addEventListener('beforeunload', () => {
+            if (_saveTimer !== null) {
+                clearTimeout(_saveTimer);
+                _saveTimer = null;
+                // Synchronously build + write the LS-slim variant. We skip
+                // the SQLite path here because beforeunload terminates the
+                // process before the async db.execute can finish.
+                try {
+                    const lsData = tabs.map(t => ({
+                        id: t.id,
+                        title: t.title,
+                        messages: (t.messages || [])
+                            .filter(m => m.role !== 'hidden' && m.role !== 'thinking' && m.role !== 'streaming')
+                            .slice(-50)
+                            .map(m => {
+                                const raw = String(m.rawContent ?? m.content ?? '');
+                                return raw.length <= 12_000
+                                    ? m
+                                    : { ...m, rawContent: raw.slice(0, 12_000) + '\n[…truncated for storage]' };
+                            }),
+                        attachedFiles: [],
+                        inputValue: t.inputValue || '',
+                        selectedModel: t.selectedModel,
+                        contextMax: t.contextMax ?? 50000,
+                        execEngine: t.execEngine || 'powershell',
+                        workingMemory: t.workingMemory || null,
+                    }));
+                    safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: lsData });
+                } catch (e) {
+                    // Quota / serialization error — nothing more we can do here.
+                    console.warn('[Lucy] beforeunload flush failed:', e);
+                }
+            }
+        });
         // v1.7.27 — Start circadian accent loop (cools/warms --accent
         // through the day in 6 bands). 10-min recompute interval.
         startCircadian();
@@ -2206,81 +2247,107 @@ import { listen } from '@tauri-apps/api/event';
         };
     }
 
-    function persistir() {
-        // Debounce de 500ms — evita serializar en cada keystroke/mensaje
-        if (_saveTimer) clearTimeout(_saveTimer);
-        _saveTimer = setTimeout(async () => {
-            // Memory v2: per-tab payload size cap. localStorage has a 5-10MB
-            // global quota. With 5 active tabs of ~80 messages each, JSON
-            // serialization can hit that ceiling — and `setItem` then throws
-            // QuotaExceededError mid-session. We pre-trim to fit:
-            //   - LS_FALLBACK keeps last 50 msgs per tab + only essential fields
-            //   - SQLite keeps the full last-100 (no quota issues)
-            // This way localStorage is just a fast warm-cache for boot, and
-            // SQLite is the durable store. Worst case, if SQLite is also full,
-            // user keeps the recent 50 in LS — never a hard data loss.
-            const fullData = tabs.map(t => ({
-                id: t.id,
-                title: t.title,
-                // Skip hidden + thinking + streaming roles — they get rebuilt on next turn
-                messages: t.messages.filter(m => m.role !== 'hidden' && m.role !== 'thinking' && m.role !== 'streaming').slice(-100),
-                attachedFiles: [],
-                inputValue: t.inputValue || '',
-                selectedModel: t.selectedModel,
-                contextMax: t.contextMax ?? 50000,
-                execEngine: t.execEngine || 'powershell',
-                // Persist workingMemory so reload restores recent_files / cmds / etc.
-                workingMemory: t.workingMemory || null,
-            }));
+    // v1.7.51 — Build the persist payload + write to LS + write to SQLite.
+    // Extracted from `persistir()` so we can call it both debounced (streaming
+    // path) and immediate (structural-change path). Returns a Promise that
+    // resolves after the SQLite writes complete; callers that just need fire-
+    // and-forget can ignore it.
+    //
+    // User-reported regression (v1.7.50 era): closing tabs / creating tabs /
+    // renaming / branching all funneled through `persistir()` with its 500ms
+    // debounce. If the user closed Lucy before that debounce fired, the
+    // SQLite write was lost — so on next launch Lucy loaded the previous
+    // session state (the one BEFORE the close/create/rename). That matched
+    // the user's report exactly: "elimino pestañas, abro una nueva, cierro
+    // Lucy, y al reabrir todo vuelve al estado previo a esos cambios."
+    //
+    // Fix strategy: the structural call sites (crearTab, _ejecutarCierreTab,
+    // bifurcarConversación, confirmarRename, limpiarSesion) now call the
+    // `Now`/immediate variant. The streaming hot path keeps the debounce
+    // because it fires dozens of times per second.
+    async function _persistirInner() {
+        // Memory v2: per-tab payload size cap. localStorage has a 5-10MB
+        // global quota. With 5 active tabs of ~80 messages each, JSON
+        // serialization can hit that ceiling — and `setItem` then throws
+        // QuotaExceededError mid-session. We pre-trim to fit:
+        //   - LS_FALLBACK keeps last 50 msgs per tab + only essential fields
+        //   - SQLite keeps the full last-100 (no quota issues)
+        // This way localStorage is just a fast warm-cache for boot, and
+        // SQLite is the durable store. Worst case, if SQLite is also full,
+        // user keeps the recent 50 in LS — never a hard data loss.
+        const fullData = tabs.map(t => ({
+            id: t.id,
+            title: t.title,
+            // Skip hidden + thinking + streaming roles — they get rebuilt on next turn
+            messages: t.messages.filter(m => m.role !== 'hidden' && m.role !== 'thinking' && m.role !== 'streaming').slice(-100),
+            attachedFiles: [],
+            inputValue: t.inputValue || '',
+            selectedModel: t.selectedModel,
+            contextMax: t.contextMax ?? 50000,
+            execEngine: t.execEngine || 'powershell',
+            workingMemory: t.workingMemory || null,
+        }));
 
-            // Slim LS variant: cap each tab to last 50 visible messages and drop
-            // anything bigger than ~12k chars per message (long outputs).
-            const lsData = fullData.map(d => ({
-                ...d,
-                messages: d.messages.slice(-50).map(m => {
-                    const raw = String(m.rawContent ?? m.content ?? '');
-                    if (raw.length <= 12_000) return m;
-                    return { ...m, rawContent: raw.slice(0, 12_000) + '\n[…truncated for storage; full version in SQLite]' };
-                }),
-            }));
+        const lsData = fullData.map(d => ({
+            ...d,
+            messages: d.messages.slice(-50).map(m => {
+                const raw = String(m.rawContent ?? m.content ?? '');
+                if (raw.length <= 12_000) return m;
+                return { ...m, rawContent: raw.slice(0, 12_000) + '\n[…truncated for storage; full version in SQLite]' };
+            }),
+        }));
 
+        try {
+            const ok = safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: lsData });
+            if (!ok) {
+                const ultraSlim = lsData.map(d => ({ ...d, messages: d.messages.slice(-15) }));
+                safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: ultraSlim });
+            }
+        } catch(e) {
+            console.warn("[Lucy] localStorage limit exceeded, relying on SQLite", e);
+        }
+        const data = fullData;
+
+        if (db) {
             try {
-                const ok = safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: lsData });
-                if (!ok) {
-                    // safeSetLS already logged + auto-warned. Try one more time
-                    // with an even tighter slice as last resort.
-                    const ultraSlim = lsData.map(d => ({ ...d, messages: d.messages.slice(-15) }));
-                    safeSetLS('lucy_sessions_svelte', { version: SCHEMA_VERSION, data: ultraSlim });
+                if (data.length > 0) {
+                    const placeholders = data.map((_, i) => `$${i + 1}`).join(',');
+                    await db.execute(
+                        `DELETE FROM lucy_sessions WHERE id NOT IN (${placeholders})`,
+                        data.map(d => d.id)
+                    );
+                } else {
+                    await db.execute(`DELETE FROM lucy_sessions`);
                 }
-            } catch(e) {
-                console.warn("[Lucy] localStorage limit exceeded, relying on SQLite", e);
-            }
-            // Use the FULL data for SQLite below — no quota constraints there.
-            const data = fullData;
-            
-            if (db) {
-                try {
-                    // SEC-5 FIX: use parameterized queries to prevent SQL injection.
-                    // Tab IDs are Date.now() strings today, but future sources could be unsafe.
-                    if (data.length > 0) {
-                        const placeholders = data.map((_, i) => `$${i + 1}`).join(',');
-                        await db.execute(
-                            `DELETE FROM lucy_sessions WHERE id NOT IN (${placeholders})`,
-                            data.map(d => d.id)
-                        );
-                    } else {
-                        await db.execute(`DELETE FROM lucy_sessions`);
-                    }
-                    
-                    for (let i = 0; i < data.length; i++) {
-                        await db.execute(
-                            `INSERT INTO lucy_sessions (id, idx, json_data) VALUES ($1, $2, $3)
-                             ON CONFLICT(id) DO UPDATE SET idx=excluded.idx, json_data=excluded.json_data`,
-                            [data[i].id, i, JSON.stringify(data[i])]
-                        );
-                    }
-                } catch(e) { console.error("[Lucy SQL] Persist err:", e); }
-            }
+                for (let i = 0; i < data.length; i++) {
+                    await db.execute(
+                        `INSERT INTO lucy_sessions (id, idx, json_data) VALUES ($1, $2, $3)
+                         ON CONFLICT(id) DO UPDATE SET idx=excluded.idx, json_data=excluded.json_data`,
+                        [data[i].id, i, JSON.stringify(data[i])]
+                    );
+                }
+            } catch(e) { console.error("[Lucy SQL] Persist err:", e); }
+        }
+    }
+
+    /** v1.7.51 — Immediate (un-debounced) persist. Call this from structural
+     *  changes (crearTab, _ejecutarCierreTab, bifurcarConversación,
+     *  confirmarRename, limpiarSesion) so the user's tab edits survive a
+     *  fast close. Cancels any pending debounced write so we don't write
+     *  twice. */
+    async function persistirNow() {
+        if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+        await _persistirInner();
+    }
+
+    function persistir() {
+        // Debounce de 500ms — evita serializar en cada keystroke/mensaje.
+        // v1.7.51 — body extracted into _persistirInner() so we can also
+        // call it un-debounced via persistirNow() from structural changes.
+        if (_saveTimer) clearTimeout(_saveTimer);
+        _saveTimer = setTimeout(() => {
+            _saveTimer = null;
+            _persistirInner().catch(e => console.error("[Lucy SQL] Persist err:", e));
         }, 500);
     }
 
@@ -2492,7 +2559,9 @@ import { listen } from '@tauri-apps/api/event';
         activeTabId = id;
         showWelcome = false;
         syncTabsStore(tabs);    // P2 audit: keep tabs-store mirror in sync
-        persistir();
+        // v1.7.51 — immediate (un-debounced) persist on structural change
+        // so the new tab survives a fast Lucy close (<500ms).
+        persistirNow();
         tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
     }
 
@@ -2600,7 +2669,8 @@ import { listen } from '@tauri-apps/api/event';
         activeTabId = newId;
         showWelcome = false;
         syncTabsStore(tabs);
-        persistir();
+        // v1.7.51 — structural change → un-debounced persist (see persistirNow comment).
+        persistirNow();
         toast(
             isEN
                 ? `Branched into a new tab at message ${msgIdx + 1}`
@@ -2685,7 +2755,9 @@ import { listen } from '@tauri-apps/api/event';
         // Drop the persistent session summary so it doesn't accumulate
         // across closed-and-recreated tabs with random uuids.
         invoke('delete_session_summary', { tabId: String(id) }).catch(e => debug.log('[summary] drop failed:', e));
-        persistir();
+        // v1.7.51 — closing a tab is the most common "user closes Lucy right
+        // after" pattern. MUST persist immediately, not debounced.
+        persistirNow();
     }
 
     // v1.7.18: confirmarCierreTab / cancelarCierreTab / pendingCloseTabId
@@ -2719,7 +2791,8 @@ import { listen } from '@tauri-apps/api/event';
         renamingTabId = null;
         renameValue = '';
         refresh();
-        persistir();
+        // v1.7.51 — rename is a low-frequency explicit user action.
+        persistirNow();
     }
 
     function onRenameKey(e, tabId) {
@@ -2734,7 +2807,9 @@ import { listen } from '@tauri-apps/api/event';
         t.messages = [];
         contextUsed = 0;
         refresh();
-        persistir();
+        // v1.7.51 — clearing messages is irreversible from the user's POV;
+        // persist immediately so a fast close doesn't restore them.
+        persistirNow();
     }
 
     // ── ZOOM CON CTRL+RUEDA ───────────────────────────────────────────────────

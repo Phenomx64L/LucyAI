@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.51] — 2026-06-03
+
+### Fix tab-state regression on fast close — un-debounced persist for structural changes
+
+User reported: *"elimino pestañas, genero una nueva conversación
+pero al cerrarla Lucy vuelve a un estado antes de haber hecho
+cualquier cambio"*. Two screenshots showed the active tab set
+shrinking from 7 (Monitorización / Hola Lucy / Habilidades /
+Nueva Terminal / Pe1 / Report / Nueva Terminal) at 19:44 to 6 at
+19:45 with the most recently created tab gone — then on the next
+launch Lucy reverted to the older snapshot, undoing the closes
+and creates.
+
+**Trace.** `+page.svelte` has a single persistence helper,
+`persistir()`, that **debounces 500 ms** before writing to both
+`localStorage` (slim, last 50 messages per tab) and SQLite
+(full, last 100). The debounce exists so streaming responses,
+which call `persistir()` dozens of times per second, don't write
+on every chunk.
+
+But the same debounced helper was wired into FIVE low-frequency
+structural call sites: `crearTab` (new terminal),
+`_ejecutarCierreTab` (close tab), the branch-conversation path
+(`bifurcarConversación`), `confirmarRename` (rename tab title),
+and `limpiarSesion` (clear chat). When the user closed Lucy
+within 500 ms of any of those actions — which is the common case
+for "I'll just close that tab and quit" — the debounce timer
+was cancelled by the window unload before it fired, so neither
+SQLite nor localStorage received the new state. On next launch,
+`_leerSesiones()` returned the pre-change snapshot.
+
+**Fix (three changes).**
+
+1. Extracted the persist body into a new `_persistirInner()`
+   helper that does build + LS write + SQLite write.
+2. New public `persistirNow()` that cancels any pending debounce
+   timer and awaits `_persistirInner()` immediately. The five
+   structural call sites now call `persistirNow()` instead of
+   `persistir()`. The streaming hot path keeps the debounced
+   `persistir()` because it's safe — losing the last 500 ms of
+   a streaming response on a hard crash is acceptable; losing a
+   user's explicit close-tab action is not.
+3. Added a `beforeunload` listener that, if a debounce is
+   pending, cancels the timer and synchronously writes the
+   slim LS variant. SQLite is async and can't be flushed
+   reliably from `beforeunload`, but `_leerSesiones()` falls
+   back to the LS variant when SQLite returns empty rows, so
+   the user's last state still loads on next launch even if
+   the LS slim variant is the only survivor.
+
+**Touched call sites.**
+- `crearTab` → `persistirNow()` (new terminal)
+- branch-conversation path inside the message context menu →
+  `persistirNow()`
+- `_ejecutarCierreTab` → `persistirNow()` (close tab — the
+  highest-risk site)
+- `confirmarRename` → `persistirNow()` (title rename)
+- `limpiarSesion` → `persistirNow()` (clear chat)
+- All streaming/typing call sites → still debounced `persistir()`
+
+**Net effect.** Closing a tab and immediately quitting Lucy now
+guarantees the close survives. Creating a tab and immediately
+quitting now guarantees the new tab is there on relaunch.
+Streaming load on the persist path is unchanged.
+
+**Files touched.**
+- `src/routes/+page.svelte` — `_persistirInner()` extraction,
+  `persistirNow()` helper, 5 call-site updates, `beforeunload`
+  safety net.
+
+---
+
 ## [1.7.50] — 2026-06-03
 
 ### Close the loop on report generation — system prompt + curated skill
