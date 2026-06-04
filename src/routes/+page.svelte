@@ -4518,7 +4518,16 @@ Use ONE of these patterns instead:
             // agent loop completo para que la respuesta del tool se reinyecte como contexto.
             const _isMultiStep = /<THOUGHT>/i.test(resp) || (resp.includes('<TOOL>') && resp.includes('<EXECUTE'));
             const _userMultiIntent = isMultiIntentPrompt(raw);
-            if (!_isMultiStep && !_userMultiIntent) {
+            // v1.7.49 — Belt-and-braces guard: even when `isMultiIntentPrompt`
+            // misses a pattern (it's heuristic, not exhaustive), if the user's
+            // prompt clearly asks Lucy to WRITE the result to disk, the
+            // quick-tool short-circuit cannot satisfy the request because
+            // none of those branches invoke writefile. Force the agent loop
+            // so the LLM can chain sysinfo/security/etc. + a final
+            // <TOOL>writefile:...</TOOL>. Distinct from the multi-intent
+            // regex so we can debug each path independently in telemetry.
+            const _wantsFileOutput = /\b(escritorio|desktop|guarda\s+(?:en|el|la|lo)|guardar\s+(?:en|el|la|lo|como)|deposita(?:lo)?|dep[oó]sit[aá](?:lo|melo|me)?|exporta(?:lo)?|exp[oó]rtalo|save\s+(?:as|to|it)|export(?:\s+it|\s+to)?|en\s+(?:un\s+)?archivo|to\s+(?:a\s+)?file|en\s+(?:mi\s+)?(?:carpeta|escritorio|documentos|downloads|descargas)|\.(?:md|txt|pdf|json|csv|html|docx?|xlsx?)\b)/i.test(raw || '');
+            if (!_isMultiStep && !_userMultiIntent && !_wantsFileOutput) {
                 if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");fin(tabId);return;}
                 if(resp.includes('<TOOL>netconn</TOOL>')){
                     try{const conns=await invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Red</div>${e}`,style:'border-left-color:#ef4444;'});}

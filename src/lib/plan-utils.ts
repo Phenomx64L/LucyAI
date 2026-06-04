@@ -90,19 +90,63 @@ export function renderPlanCard(plan: PlanStep, planId: string): string {
 // ── isMultiIntentPrompt ───────────────────────────────────────────────────────
 // Heuristic: returns true if the user's text asks for ≥2 independent things.
 // Used to skip the quick-tool short-circuit when there's a compound request.
+//
+// v1.7.49 — Expanded after a user-reported bug where the prompt
+// "genera un reporte detallado del estado de mi maquina, tanto a nivel
+// seguridad como de rendimiento, el reporte depositalo en mi escritorio"
+// short-circuited through the sysinfo quick-tool branch in `+page.svelte`.
+// That branch only runs `get_system_health`, dumps the raw output, and
+// returns — so the security analysis, the synthesis report, and the
+// requested writefile-to-desktop never happened. The prompt was clearly
+// multi-intent (gather + analyse two dimensions + write to disk) but the
+// regex didn't catch the verbs ("genera", "depositalo") or the
+// compound-noun pattern ("reporte detallado").
+//
+// New detectors added below:
+//   • Report-generation verbs: genera / produce / elabora / compila /
+//     redacta / construye + their English equivalents.
+//   • File-output verbs and targets: deposita / guarda en / exporta /
+//     save to / desktop / escritorio / .md / .pdf / etc.
+//   • Compound analysis dimensions: when the prompt joins ≥2 analysis
+//     axes with "tanto X como Y", "X y Y", "seguridad y rendimiento",
+//     etc. these are multi-step by definition.
 export function isMultiIntentPrompt(text: string): boolean {
     if (!text || typeof text !== 'string') return false;
     const p = text.toLowerCase();
     // 1. Sequencing connectors that imply "do X, then Y"
     const seq = /\b(?:y\s+(?:luego|despu[eé]s|tambi[eé]n|haz|busca|verifica|comprueba|checa|investiga|consulta|compara)|luego|despu[eé]s|tras\s+eso|antes\s+(?:de\s+|checa|verifica|haz)|una\s+vez|con\s+eso|entonces|adem[aá]s|posteriormente|then|after\s+that|once\s+you)\b/i;
     if (seq.test(p)) return true;
-    // 2. Multiple imperative verbs (≥2) → multi-step intent
-    const verbs = /\b(verifica|busca|investiga|checa|chequea|consulta|compara|analiza|haz|hazlo|dame|mu[eé]strame|lista|ejecuta|corre|instala|actualiza|descarga|guarda|crea|edita|abre|env[ií]a|prueba|valida|revisa|inspecciona|detecta|search|check|verify|investigate|analyze|compare|list|run|create|edit|fetch|download|install|update)\b/g;
+    // 2. Multiple imperative verbs (≥2) → multi-step intent. v1.7.49 expanded
+    //    the verb set to include report-generation, document production, and
+    //    file-output language.
+    const verbs = /\b(verifica|busca|investiga|checa|chequea|consulta|compara|analiza|haz|hazlo|dame|mu[eé]strame|lista|ejecuta|corre|instala|actualiza|descarga|guarda|crea|edita|abre|env[ií]a|prueba|valida|revisa|inspecciona|detecta|genera|gen[eé]rame|produce|prod[uú]ceme|elabora|elab[oó]rame|compila|comp[ií]lame|redacta|red[aá]ctame|construye|constr[uú]yeme|deposita|dep[oó]sit[aá]lo|exporta|exp[oó]rtalo|env[ií]alo|gu[aá]rdalo|search|check|verify|investigate|analyze|compare|list|run|create|edit|fetch|download|install|update|generate|produce|build|compile|export|deposit|save\s+to|write\s+to)\b/g;
     const matches = p.match(verbs);
     if (matches && matches.length >= 2) return true;
     // 3. Web/research request paired with hardware/system action
     const wantsWeb   = /\b(internet|web|google|busca\s+en\s+l[ií]nea|search\s+online|investiga\s+en|search\s+the\s+web|navega)\b/i.test(p);
     const wantsLocal = /\b(specs?|especificaciones|hardware|sistema|gpu|cpu|memoria|disco|configuraci[oó]n|configuracion)\b/i.test(p);
     if (wantsWeb && wantsLocal) return true;
+    // 4. v1.7.49 — File-output intent: ANY mention of writing the result to
+    //    disk / a file / a folder / the desktop is automatically multi-step
+    //    because it requires a `writefile` TOOL on top of whatever else the
+    //    prompt asks. The short-circuit branches in +page.svelte never
+    //    invoke writefile, so without this guard the user's "save to disk"
+    //    requirement is silently dropped.
+    const wantsFileOutput = /\b(escritorio|desktop|en\s+(?:un\s+)?archivo|to\s+(?:a\s+)?file|guarda\s+(?:en|el|la|lo)|guardar\s+(?:en|el|la|lo|como)|save\s+(?:as|to|it)|exporta(?:lo)?|expor[tt]ar|export(?:\s+it|\s+to)?|deposita(?:lo)?|dep[oó]sit[aá](?:lo|melo|me)?|dejame\s+(?:un|el)|d[eé]jalo\s+en|en\s+(?:mi\s+)?(?:carpeta|escritorio|documentos|downloads|descargas)|\.(?:md|txt|pdf|json|csv|html|docx?|xlsx?)\b|c:\\\\)/i;
+    if (wantsFileOutput.test(p)) return true;
+    // 5. v1.7.49 — Compound analysis dimensions: "tanto X como Y" /
+    //    "tanto a nivel X como Y" / explicit joiners of ≥2 axes like
+    //    seguridad, rendimiento, salud, performance, integridad, etc.
+    //    A request that names ≥2 analysis dimensions cannot be answered
+    //    by a single quick-tool short-circuit (sysinfo alone covers
+    //    rendimiento, not seguridad).
+    if (/\btanto\b[\s\S]{1,80}\bcomo\b/i.test(p)) return true;
+    const analysisAxes = /\b(seguridad|rendimiento|performance|salud|integridad|cumplimiento|compliance|forense|forensic|amenazas?|threats?|vulnerabilidades?|vulnerabilit(?:y|ies)|configuraci[oó]n|hardening|disponibilidad|availability|estabilidad|backup|copia\s+de\s+seguridad)\b/g;
+    const axesMatches = p.match(analysisAxes);
+    if (axesMatches && new Set(axesMatches).size >= 2) return true;
+    // 6. v1.7.49 — "Reporte detallado / completo / exhaustivo / ejecutivo /
+    //    integral" almost always means "gather many signals + synthesize".
+    //    A single sysinfo dump never satisfies a request phrased that way.
+    if (/\b(reporte|informe|report)\s+(?:detallado|completo|exhaustivo|ejecutivo|integral|comprehensive|detailed|full|executive)\b/i.test(p)) return true;
     return false;
 }

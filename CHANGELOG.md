@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.49] — 2026-06-03
+
+### Stop the sysinfo short-circuit from eating report-generation prompts
+
+User reported: *"genera un reporte detallado del estado de mi
+maquina, tanto a nivel seguridad como de rendimiento, el reporte
+depositalo en mi escritorio"* — Lucy returned only the raw
+`sysinfo` output (a 6-line `[CPU]` / `[MEMORY]` dump), did no
+security analysis, did not synthesise anything, and never wrote
+the requested file to the desktop.
+
+Traced the prompt through the code:
+
+1. Lucy's LLM emitted only `<TOOL>sysinfo</TOOL>` (no `<THOUGHT>`,
+   no plan, no chained TOOL/EXECUTE).
+2. `_isMultiStep = /<THOUGHT>/i.test(resp) || (resp.includes('<TOOL>') && resp.includes('<EXECUTE'))`
+   → **false**.
+3. `_userMultiIntent = isMultiIntentPrompt(raw)` → **false**, because:
+   - No sequencing connectors ("y luego", "después", "entonces")
+   - "genera" and "depositalo" were not in the verb whitelist
+   - No web+local combo
+4. `+page.svelte:4521` short-circuit fired: ran
+   `get_system_health`, dumped raw output, called `fin(tabId)`,
+   returned. No agent loop. No writefile. No security checks.
+
+**Fix.** Three independent improvements so the same prompt class
+can never short-circuit again:
+
+1. **Expanded `isMultiIntentPrompt` verb whitelist** to include
+   report-generation verbs (genera, produce, elabora, compila,
+   redacta, construye, generate, build, compile) and file-output
+   verbs (deposita, exporta, save to, write to). Two of those
+   in a prompt is enough to trip the `≥2 verbs` heuristic.
+
+2. **New detector: file-output intent.** Any mention of
+   `escritorio`, `desktop`, `guarda en`, `exporta`, `.md` /
+   `.pdf` / `.txt` etc. now returns true on its own. A request
+   to write the result to disk is inherently multi-step because
+   it requires a `writefile` TOOL on top of whatever else is
+   asked.
+
+3. **New detector: compound analysis dimensions.** Phrases like
+   `tanto X como Y` or naming ≥2 distinct axes (seguridad,
+   rendimiento, salud, integridad, cumplimiento, etc.) signal
+   that a single quick-tool can't satisfy the request. Also
+   catches `reporte detallado / completo / exhaustivo / ejecutivo`
+   which always implies multi-signal synthesis.
+
+4. **Belt-and-braces guard in `+page.svelte:4521`.** Even if
+   `isMultiIntentPrompt` misses a pattern (it's heuristic, not
+   exhaustive), a separate `_wantsFileOutput` regex is also
+   checked at the short-circuit site. The short-circuit branches
+   never invoke `writefile`, so writing-to-disk requests must
+   always go to the agent loop.
+
+**Net effect for the failing prompt.** Now matches multiple
+detectors at once (3 verbs, file-output intent, compound axes,
+"reporte detallado"). Drops into the agent loop, where the LLM
+gets the chance to emit a real plan:
+`<TOOL>sysinfo</TOOL>` + `<TOOL>get_system_health</TOOL>` +
+security checks + `<TOOL>writefile:C:\\Users\\...\\Desktop\\
+reporte.md</TOOL><FILECONTENT>...</FILECONTENT>` + a final
+narrative summary.
+
+**Files touched.**
+- `src/lib/plan-utils.ts` — `isMultiIntentPrompt` expanded with
+  three new detector clauses (file-output, compound axes,
+  report-quality adjectives), verb whitelist grew by ~20 entries.
+- `src/routes/+page.svelte` — short-circuit gate now also checks
+  `_wantsFileOutput` so writing-to-disk requests bypass the
+  quick-tool branches entirely.
+
+---
+
 ## [1.7.48] — 2026-06-03
 
 ### Real fix: stop deleting the streaming bubble mid-flow
