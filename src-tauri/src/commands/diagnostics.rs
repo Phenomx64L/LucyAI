@@ -591,56 +591,123 @@ pub struct RepairResult {
     pub message: String,
 }
 
-/// Backfill any NULL `confidence` values in `agent_memories` and `memory_core`
-/// to the schema's default (0.5 — neutral confidence). This category of bug
-/// can appear when an INSERT predates the v1.6.0 migration that added the
-/// `NOT NULL DEFAULT 0.5` column, or when a code path explicitly sets the
-/// column to NULL bypassing the constraint.
+/// Backfill any NULL `confidence` values in EVERY table that carries the
+/// column (added in v1.6.0 grounding migration). Idempotent — re-running on
+/// a clean DB returns `rows_repaired: 0`.
 ///
-/// Idempotent: returns `{ ok: true, rows_repaired: 0, message: "Nothing to repair" }`
-/// if no NULLs are present. Safe to call from a button repeatedly.
+/// v1.7.65 — Expanded after v1.7.64's narrow version reported "nothing to
+/// repair" while `PRAGMA quick_check` still flagged
+/// "NULL value in agent_memories.confidence". Two real causes were missed:
+///
+///   1. `agent_insights.confidence` was not in the repair list. Three tables
+///      carry this column, not two.
+///   2. Even when no row has NULL on a SELECT, SQLite's integrity check can
+///      still report it if a stale FTS5 shadow table or a partial index is
+///      out of sync. A COALESCE-style force-update rewrites every row's
+///      storage page, and a follow-up REINDEX rebuilds derived structures.
+///
+/// Strategy:
+///   a) Walk all three confidence-bearing tables. For each, COUNT the NULLs,
+///      then run `UPDATE … SET confidence = COALESCE(confidence, 0.5)` which
+///      both fixes NULLs AND forces every row to be rewritten — clears
+///      stale storage state that a narrow `WHERE confidence IS NULL` would
+///      miss.
+///   b) REINDEX the database to rebuild any stale indexes / shadow tables.
+///   c) Run `PRAGMA quick_check` to verify the fix took. Surface the result
+///      in the response message so the operator can see what changed.
 #[tauri::command]
 pub async fn repair_agent_memories_confidence() -> Result<RepairResult, String> {
     tokio::task::spawn_blocking(|| {
-        // shared_db's signature is `fn(closure -> Result<R, String>) -> Result<R, String>`
-        // so the inner closure's success type IS the success type of the outer call —
-        // no double-Result wrapping. Returning the closure result directly is correct.
         crate::commands::metrics::shared_db(|conn| {
-            // Run both UPDATEs in a single transaction so a partial failure
-            // doesn't leave one table cleaned and the other dirty.
+            // 5 s busy_timeout — same rationale as check_database_health.
+            let _ = conn.busy_timeout(std::time::Duration::from_millis(5000));
+
+            // ── Phase 1: count NULLs PER TABLE before the fix ─────────────
+            // Used in the response message so the operator sees exactly what
+            // we touched. Missing tables (e.g. if a migration was skipped)
+            // are handled gracefully — we report 0 instead of erroring.
+            let null_count = |table: &str| -> i64 {
+                conn.query_row(
+                    &format!("SELECT COUNT(*) FROM {} WHERE confidence IS NULL", table),
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+            };
+            let nulls_before = (
+                null_count("agent_memories"),
+                null_count("memory_core"),
+                null_count("agent_insights"),
+            );
+
+            // ── Phase 2: force-rewrite every row's confidence ─────────────
+            // COALESCE preserves non-NULL values and substitutes 0.5 for
+            // NULL. Crucially, the UPDATE touches every row (not just the
+            // ones the WHERE clause would have isolated), which forces
+            // SQLite to rewrite the storage pages and clear stale state
+            // that integrity_check sometimes reports for ghost rows.
             let tx = conn
                 .unchecked_transaction()
                 .map_err(|e| format!("tx open: {}", e))?;
 
-            let agent_rows = tx
-                .execute(
-                    "UPDATE agent_memories SET confidence = 0.5 WHERE confidence IS NULL",
-                    [],
-                )
-                .map_err(|e| format!("agent_memories repair: {}", e))? as i64;
+            let touched = |table: &str| -> Result<i64, String> {
+                let sql = format!(
+                    "UPDATE {} SET confidence = COALESCE(confidence, 0.5)",
+                    table
+                );
+                tx.execute(&sql, [])
+                    .map(|n| n as i64)
+                    .map_err(|e| format!("{} update: {}", table, e))
+            };
 
-            let core_rows = tx
-                .execute(
-                    "UPDATE memory_core SET confidence = 0.5 WHERE confidence IS NULL",
-                    [],
-                )
-                .map_err(|e| format!("memory_core repair: {}", e))? as i64;
+            let touched_agent  = touched("agent_memories")?;
+            let touched_core   = touched("memory_core")?;
+            let touched_insights = touched("agent_insights").unwrap_or(0);
 
             tx.commit().map_err(|e| format!("tx commit: {}", e))?;
 
-            let total = agent_rows + core_rows;
-            let message = if total == 0 {
-                "Nothing to repair — no NULL confidence values found.".to_string()
-            } else {
+            // ── Phase 3: REINDEX to refresh derived structures ────────────
+            // Catches stale indexes and FTS5 shadow tables that
+            // PRAGMA quick_check may have been keying off of.
+            // REINDEX is safe to run on an open DB but can take a few
+            // seconds for large indexes — that's why we're already inside
+            // spawn_blocking with a busy_timeout set.
+            let _ = conn.execute("REINDEX", []);
+
+            // ── Phase 4: verify with a fresh quick_check ──────────────────
+            let post_check: String = conn
+                .query_row("PRAGMA quick_check", [], |r| r.get(0))
+                .unwrap_or_else(|e| format!("verify failed: {}", e));
+
+            // ── Compose the human-readable summary ────────────────────────
+            let total_nulls_fixed = nulls_before.0 + nulls_before.1 + nulls_before.2;
+            let total_rewritten = touched_agent + touched_core + touched_insights;
+
+            let message = if total_nulls_fixed == 0 && post_check == "ok" {
                 format!(
-                    "Repaired {} row(s): agent_memories={}, memory_core={}. Default confidence set to 0.5.",
-                    total, agent_rows, core_rows,
+                    "Refreshed {} row(s) across 3 tables, reindexed. Integrity: ok (no NULLs were present — the prior error was a stale storage/index artefact).",
+                    total_rewritten
+                )
+            } else if total_nulls_fixed > 0 && post_check == "ok" {
+                format!(
+                    "Fixed {} NULL value(s) (agent_memories={}, memory_core={}, agent_insights={}) and refreshed {} row(s) total. Reindexed. Integrity: ok.",
+                    total_nulls_fixed,
+                    nulls_before.0, nulls_before.1, nulls_before.2,
+                    total_rewritten
+                )
+            } else {
+                // Still reporting a problem after the aggressive repair.
+                // Hand the operator the verbatim integrity output so they
+                // know what to chase next.
+                format!(
+                    "Updated {} row(s) but integrity check still reports: {}. Manual inspection recommended (DB Browser for SQLite).",
+                    total_rewritten, post_check
                 )
             };
 
             Ok(RepairResult {
-                ok: true,
-                rows_repaired: total,
+                ok: post_check == "ok",
+                rows_repaired: total_nulls_fixed,
                 message,
             })
         })

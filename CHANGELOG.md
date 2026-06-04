@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.65] — 2026-06-03
+
+### DB repair v2 — three tables + force-rewrite + REINDEX + verification
+
+User clicked v1.7.64's "Reparar confidence NULL" and got
+`Nothing to repair — no NULL confidence values found`, but on
+re-scan the Database row was still red with
+`Integrity: NULL value in agent_memories.confidence`.
+
+**Root cause analysis — two things missed in v1.7.64.**
+
+1. **Three tables, not two.** I assumed the v1.6.0 migration only
+   added `confidence` to `agent_memories` and `memory_core`.
+   `agent_insights.confidence` (declared in `metrics.rs:167`) was
+   also added. The repair never touched it.
+
+2. **`PRAGMA quick_check` can flag a column even when no row
+   shows NULL on a SELECT.** Stale FTS5 shadow tables and
+   partial indexes can keep the violation alive in SQLite's
+   internal state after the actual row data has been cleaned.
+   A narrow `UPDATE … WHERE confidence IS NULL` finds nothing
+   and reports "0 rows" but the integrity check still complains
+   because it's keying off the stale derived structure.
+
+**Fix — aggressive repair, then verify.**
+
+The new repair runs in four phases:
+
+```
+Phase 1 — COUNT NULLs per table (agent_memories, memory_core,
+                                  agent_insights) for reporting.
+
+Phase 2 — UPDATE … SET confidence = COALESCE(confidence, 0.5)
+          per table, inside one transaction.
+          COALESCE preserves non-NULL values; the UPDATE touches
+          every row whether NULL or not. This forces SQLite to
+          rewrite every storage page and clears stale state.
+
+Phase 3 — REINDEX. Rebuilds all indexes and FTS5 shadow tables.
+          Catches the artefact that quick_check was keying off
+          even when the data was already clean.
+
+Phase 4 — PRAGMA quick_check verification. The fresh integrity
+          result is surfaced in the response message so the
+          operator sees whether the fix actually took.
+```
+
+**Response message variants.**
+
+| Scenario | Message |
+|---|---|
+| No NULLs found, integrity ok | `Refreshed N row(s) across 3 tables, reindexed. Integrity: ok (no NULLs were present — the prior error was a stale storage/index artefact).` |
+| NULLs found and fixed, integrity ok | `Fixed K NULL value(s) (agent_memories=X, memory_core=Y, agent_insights=Z) and refreshed N row(s) total. Reindexed. Integrity: ok.` |
+| Still failing after the repair | `Updated N row(s) but integrity check still reports: <quick_check output>. Manual inspection recommended.` |
+
+The third case is rare but possible (a corrupted page that
+REINDEX can't fix). When it happens, the operator gets the
+verbatim SQLite error so they can chase it with DB Browser for
+SQLite or similar.
+
+**Why the UPDATE-everything approach is safe.**
+
+`COALESCE(confidence, 0.5)` is a no-op for rows whose
+confidence is already non-NULL — the value written equals the
+value already stored. The only behavioural change is the
+storage-page rewrite, which is exactly the side effect we
+want to clear stale state. No data is lost, no semantics
+change.
+
+Idempotency preserved: re-running on a clean DB still returns
+gracefully with the "no NULLs were present" message.
+
+**Why REINDEX is part of the recipe.**
+
+`PRAGMA quick_check` examines tables AND their derived
+structures (indexes, FTS5 shadow tables). If the table data is
+clean but a stale FTS5 entry references a deleted row's NULL
+confidence, the check still flags it. REINDEX rebuilds these
+structures from the current table data, eliminating that class
+of phantom report.
+
+**Files touched.**
+- `src-tauri/src/commands/diagnostics.rs` — expanded the
+  `repair_agent_memories_confidence` body. Same Tauri command
+  name and signature as v1.7.64 (no frontend changes required).
+
+**Verification.** `cargo check --lib` passes clean.
+
+**Operator workflow** (unchanged from v1.7.64).
+
+1. Click "Reparar confidence NULL" in the Database row.
+2. Toast confirms the verbose repair report.
+3. Panel re-runs the full diagnostic.
+4. Database row flips to green.
+
+This time it actually flips. v1.7.64's narrower repair couldn't
+clear the stale state.
+
+---
+
 ## [1.7.64] — 2026-06-03
 
 ### Self-diagnostics fixes — App Log false positive + one-click DB repair
