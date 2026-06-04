@@ -82,6 +82,55 @@ body[data-state="error"] .igrp {
     .igrp:focus-within { border-color: var(--state-color, rgba(16, 185, 129, .4)); }
 }
 
+/* ── v1.7.63 — Prompt glyph (B2 composer ops aesthetic) ──────────────
+   Sits inside .igrp absolutely, top-left of the textarea row. Reads as
+   "you are at a prompt" without disturbing the existing flex layout.
+   Default = subtle accent green; turns amber when the buffer starts
+   with `/` (slash-command intent) via the `.islash` toggle.
+   On focus, the glyph brightens to signal "the prompt is active." */
+.iprompt {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    width: 14px;
+    line-height: 1;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 13px;
+    font-weight: 700;
+    color: rgba(16,185,129,0.45);
+    pointer-events: none;
+    user-select: none;
+    transition: color var(--motion-fast) var(--ease-out),
+                text-shadow var(--motion-fast) var(--ease-out);
+    z-index: 1;
+}
+.igrp:focus-within .iprompt {
+    color: var(--acc, #10b981);
+    text-shadow: 0 0 6px rgba(16,185,129,0.45);
+}
+.igrp.islash .iprompt {
+    color: rgba(245,158,11,0.85);
+}
+.igrp.islash:focus-within .iprompt {
+    color: #fbbf24;
+    text-shadow: 0 0 6px rgba(245,158,11,0.55);
+}
+
+/* Subtle dot grid that appears only on focus. Reads as "you're at the
+   command surface" without bothering the resting state. The grid is a
+   single radial-gradient repeated with background-size — cheap, GPU-
+   compositor-only, no per-frame paint. */
+.igrp:focus-within {
+    background-image:
+        radial-gradient(circle, rgba(255,255,255,0.04) 0.6px, transparent 0.7px);
+    background-size: 8px 8px;
+    background-position: 0 0;
+}
+.igrp.islash:focus-within {
+    background-image:
+        radial-gradient(circle, rgba(245,158,11,0.08) 0.6px, transparent 0.7px);
+}
+
 /* ── Textarea ────────────────────────────────────────────────────── */
 .ibox {
     width: 100%;
@@ -97,7 +146,13 @@ body[data-state="error"] .igrp {
     overflow-y: hidden;
     line-height: 1.5;
     padding: 2px 0;
+    padding-left: 22px;        /* v1.7.63 — make room for the iprompt glyph */
     box-sizing: border-box;
+    /* v1.7.63 — Wider block caret reads as "terminal cursor" instead of the
+       default thin bar. Browsers that don't support `caret-shape` fall back
+       to the standard caret without breaking anything. */
+    caret-color: var(--acc, #10b981);
+    caret-shape: block;
 }
 .ibox::placeholder { color: #334155; }
 

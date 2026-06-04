@@ -311,7 +311,13 @@
     </div>
     {/if}
 
-    <div class="igrp" style="position:relative;">
+    <!-- v1.7.63 — Composer ops-aesthetic. `iprompt` is a small lambda/dollar
+         glyph that frames the textarea as a command-line. `igrp` gets a dot
+         grid background on focus via CSS; the `class:islash` toggle below
+         tints the prompt amber when the buffer starts with `/` to hint at
+         slash-command mode. Purely cosmetic — no behavioural change. -->
+    <div class="igrp" class:islash={(tab.inputValue || '').trimStart().startsWith('/')} style="position:relative;">
+        <span class="iprompt" aria-hidden="true">λ</span>
         <textarea class="ibox" rows="1"
             placeholder={tab.pendingMessage
                 ? (isEN ? 'Message queued — waiting for Lucy…' : 'Mensaje en espera — esperando a Lucy…')

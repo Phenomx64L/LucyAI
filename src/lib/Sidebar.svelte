@@ -135,8 +135,10 @@
         {#if !sidebarCollapsed}<span class="sb-togtxt">{isEN ? 'Collapse' : 'Colapsar'}</span>{/if}
     </button>
 
-    <!-- ── Sistema (collapsible — Sprint 1 UI-2) ── -->
-    <div class="sb-lbl sb-accordion-hdr" role="button" tabindex="0"
+    <!-- ── Sistema (collapsible — Sprint 1 UI-2) ──
+         v1.7.63 — data-section drives the category-color rail (B1 polish).
+         Sistema is the "core surface" so it inherits the accent green. -->
+    <div class="sb-lbl sb-accordion-hdr" data-section="sistema" role="button" tabindex="0"
          on:click={() => toggleSection('sistema')}
          on:keydown={(e) => e.key === 'Enter' && toggleSection('sistema')}>
         {#if !sidebarCollapsed}
@@ -147,7 +149,7 @@
         {/if}
     </div>
     {#if sistemaOpen || sidebarCollapsed}
-    <div class="sb-accordion-body">
+    <div class="sb-accordion-body" data-section="sistema">
     <!-- v1.7.25 — data-concept attributes wire the sidebar items into
          Lucy's 5-concept color palette (memory cyan, security amber,
          ai teal, infra blue, automation violet). Only the items that
@@ -225,8 +227,9 @@
     {/if}
     <div class="sb-div"></div>
 
-    <!-- ── Runbooks (collapsible) ── -->
-    <div class="sb-lbl sb-accordion-hdr" style="padding-right:14px;"
+    <!-- ── Runbooks (collapsible) ──
+         v1.7.63 — data-section="runbooks" → amber category rail. -->
+    <div class="sb-lbl sb-accordion-hdr" data-section="runbooks" style="padding-right:14px;"
          role="button" tabindex="0">
         {#if !sidebarCollapsed}
             <!-- Clicking the label toggles; clicking + button opens the modal -->
@@ -246,7 +249,7 @@
         {/if}
     </div>
     {#if runbooksOpen || sidebarCollapsed}
-    <div class="sb-accordion-body">
+    <div class="sb-accordion-body" data-section="runbooks">
     {#if !$runbooks.length && !sidebarCollapsed}
         <div style="padding:4px 14px 8px;font-size:11px;color:#334155;font-style:italic;">{isEN ? 'No runbooks' : 'Sin runbooks'}</div>
     {/if}
@@ -272,8 +275,9 @@
 
     <div class="sb-div"></div>
 
-    <!-- ── Acciones directas (collapsible) ── -->
-    <div class="sb-lbl sb-accordion-hdr" style="padding-right:14px;">
+    <!-- ── Acciones directas (collapsible) ──
+         v1.7.63 — data-section="acciones" → violet category rail. -->
+    <div class="sb-lbl sb-accordion-hdr" data-section="acciones" style="padding-right:14px;">
         {#if !sidebarCollapsed}
             <span style="flex:1;cursor:pointer;display:inline-flex;align-items:center;gap:6px;"
                   on:click={() => toggleSection('acciones')}
@@ -293,7 +297,7 @@
         {/if}
     </div>
     {#if accionesOpen || sidebarCollapsed}
-    <div class="sb-accordion-body">
+    <div class="sb-accordion-body" data-section="acciones">
 
     {#each quickActions as accion, i}
     <div class="sb-it sb-action-item" role="button" tabindex="0"
@@ -334,8 +338,9 @@
          utilities still get pushed to the sidebar's bottom edge. -->
     <div class="sb-div"></div>
 
-    <!-- ── Registros (accordion) ── -->
-    <div class="sb-lbl sb-accordion-hdr" role="button" tabindex="0"
+    <!-- ── Registros (accordion) ──
+         v1.7.63 — data-section="registros" → blue category rail. -->
+    <div class="sb-lbl sb-accordion-hdr" data-section="registros" role="button" tabindex="0"
          on:click={() => dispatch('toggleregistros')}
          on:keydown={(e) => e.key === 'Enter' && dispatch('toggleregistros')}>
         {#if !sidebarCollapsed}
@@ -346,7 +351,7 @@
         {/if}
     </div>
     {#if registrosOpen || sidebarCollapsed}
-    <div class="sb-accordion-body">
+    <div class="sb-accordion-body" data-section="registros">
         <!-- Activity Feed (24h) — vive aquí porque su naturaleza es
              registro/histórico, no acción. Antes estaba sobre Runbooks y
              desplazaba Memoria/Capacidad/Diagnóstico fuera del viewport. -->

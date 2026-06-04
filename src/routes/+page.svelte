@@ -8809,6 +8809,22 @@ if (Test-Path $src) {
     // ── NAVEGACIÓN DE VISTAS ─────────────────────────────────────────────────
 
     async function setView(v) {
+        // v1.7.63 — Defensive guard against typo'd view names. The bug v1.7.62
+        // fixed (clickLocal → 'diagnostico' vs. real 'diagnostics') failed
+        // silently because no view block matched and Svelte just rendered
+        // nothing. A noisy warning surfaces this category instantly in
+        // DevTools and prevents the operator from landing on a blank screen.
+        // The valid set must stay in sync with the `{#if activeView === '…'}`
+        // blocks below in this file (lines ~9591+).
+        const _validViews = new Set([
+            'terminal', 'dashboard', 'logviewer', 'nexshell', 'inventory',
+            'compliance', 'audittrail', 'capacity', 'diagnostics', 'memory',
+        ]);
+        if (!_validViews.has(v)) {
+            // eslint-disable-next-line no-console
+            console.warn(`[setView] unknown view "${v}" — staying on "${activeView}". Valid: ${[..._validViews].join(', ')}`);
+            return;
+        }
         // BUG FIX (May 2026): even if v === activeView, when the user is
         // returning to Terminal IA from another module we need to re-scroll
         // because Chrome/Edge re-paints the chat-area and resets scrollTop

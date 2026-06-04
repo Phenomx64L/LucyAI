@@ -423,3 +423,78 @@
    only when the user mouses over the row. */
 .sb-action-item:hover .sb-shell-btn,
 .sb-action-item:hover .sb-rm-btn { opacity: 1; }
+
+/* ── v1.7.63 — Category color rail per section (B1 polish) ─────────────────
+   Each section header carries a `data-section="…"` attribute. We paint:
+     • A 2 px vertical rail along the left edge of the section's
+       accordion body (only when open), tinted by the category colour.
+     • A tiny matching dot to the left of the header label so the colour
+       is also visible when the section is collapsed.
+
+   The four section palettes:
+     sistema   → accent green (#10b981)   — core surfaces / data views
+     runbooks  → amber (#f59e0b)          — playbook automation
+     acciones  → violet (#a78bfa)         — direct PowerShell actions
+     registros → blue (#60a5fa)           — historical / read-only
+
+   Cost: pure CSS, attribute selectors, no JS state machine, no extra
+   reactivity. Quiescent-safe (no animation that needs pausing).
+*/
+
+/* Tiny dot inside the section header (visible even when sidebar collapsed). */
+.sb-accordion-hdr[data-section]::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.08);
+    flex-shrink: 0;
+    transition: background-color .2s ease, box-shadow .2s ease;
+}
+.sb-accordion-hdr[data-section="sistema"]::before  {
+    background: var(--acc, #10b981);
+    box-shadow: 0 0 4px rgba(16,185,129,.55);
+}
+.sb-accordion-hdr[data-section="runbooks"]::before {
+    background: #f59e0b;
+    box-shadow: 0 0 4px rgba(245,158,11,.55);
+}
+.sb-accordion-hdr[data-section="acciones"]::before {
+    background: #a78bfa;
+    box-shadow: 0 0 4px rgba(167,139,250,.55);
+}
+.sb-accordion-hdr[data-section="registros"]::before {
+    background: #60a5fa;
+    box-shadow: 0 0 4px rgba(96,165,250,.55);
+}
+
+/* Left rail along the section's accordion body. Only renders when the
+   section is open (the body itself only mounts when `if …Open`). */
+.sb-accordion-body[data-section] {
+    position: relative;
+}
+.sb-accordion-body[data-section]::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    pointer-events: none;
+    opacity: .35;
+    transition: opacity .2s ease;
+}
+.sb-accordion-body[data-section="sistema"]::before  { background: var(--acc, #10b981); }
+.sb-accordion-body[data-section="runbooks"]::before { background: #f59e0b; }
+.sb-accordion-body[data-section="acciones"]::before { background: #a78bfa; }
+.sb-accordion-body[data-section="registros"]::before { background: #60a5fa; }
+
+/* Slightly intensify the rail when the user is hovering anywhere in the
+   section's body — reads as a "you are here" affordance. */
+.sb-accordion-body[data-section]:hover::before { opacity: .65; }
+
+/* Collapsed sidebar: hide the body rail (no visible body) but keep the
+   header dot (the only locator the user has at that width). */
+.sidebar.closed .sb-accordion-body[data-section]::before { display: none; }

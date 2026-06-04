@@ -7,6 +7,144 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.63] — 2026-06-03
+
+### Facelift combo — sidebar hierarchy + cite-evidence-pills + composer ops aesthetic + setView guard
+
+Four coordinated polish changes that close the gaps remaining
+after Direction A (Mission Strip / per-tab tint / terminal-
+recording code blocks). The chrome now signals "ops console"
+not just at top-level (Mission Strip) but down through the
+entire sidebar, the citation system, and the composer surface
+the operator touches every prompt.
+
+**B10 — Defensive guard in `setView()`.**
+
+A `Set` of valid view names is now checked at the top of
+`setView()`. Unknown names log a single `console.warn` and
+return without changing state, instead of silently leaving the
+operator on a blank screen (the failure mode of v1.7.62's
+hotfix). Valid set must stay in sync with the
+`{#if activeView === '…'}` blocks in `+page.svelte`.
+
+```js
+const _validViews = new Set([
+    'terminal', 'dashboard', 'logviewer', 'nexshell',
+    'inventory', 'compliance', 'audittrail', 'capacity',
+    'diagnostics', 'memory',
+]);
+if (!_validViews.has(v)) {
+    console.warn(`[setView] unknown view "${v}" — staying on …`);
+    return;
+}
+```
+
+**B1 — Sidebar hierarchy with category color rails.**
+
+Each of the four sections (Sistema, Runbooks, Acciones
+directas, Registros) now carries a `data-section="…"` attribute
+on its header AND its accordion body. CSS attribute selectors
+paint:
+
+- A 5-px coloured dot inside the section header (visible even
+  when the sidebar is collapsed).
+- A 2-px coloured rail along the left edge of the section's
+  accordion body when open.
+
+Palette:
+
+| Section | Colour | Meaning |
+|---|---|---|
+| Sistema | accent green `#10b981` | core surfaces |
+| Runbooks | amber `#f59e0b` | playbook automation |
+| Acciones directas | violet `#a78bfa` | direct PowerShell (no AI) |
+| Registros | blue `#60a5fa` | historical / read-only |
+
+Hovering anywhere inside a section intensifies the rail from
+`opacity: .35` to `.65` as a "you are here" affordance. No JS,
+no animation that needs quiescing — pure attribute-selector
+CSS.
+
+**B3 — Cite chips redesigned as "evidence pills".**
+
+`<a class="cite-chip" data-cite-kind="memory|file|url|tool">`
+chips now look like forensic badges instead of soft default
+chips. Changes:
+
+- Bumped weight to `font-weight: 600` and added `letter-spacing
+  : 0.2px` for the stamped-metadata feel.
+- Inner shadow `inset 0 1px 0 0 rgba(255,255,255,0.04)` gives
+  the chip subtle "depth on the prose."
+- Hover lifts the chip by `1 px` and adds a kind-coloured glow
+  via `box-shadow`.
+- Per-kind palettes so an operator can scan a long Lucy answer
+  and tell at a glance which evidence came from memory (cyan),
+  file (green), web (blue), tool (amber).
+- `::before` thin currentColor bar reads as a stamp's left
+  edge — works on every modern browser, costs nothing.
+
+**B2 — Composer ops aesthetic.**
+
+The textarea now reads as a command-line surface, not a
+generic chat input:
+
+- New `iprompt` glyph (`λ`) absolutely positioned at the
+  textarea's top-left. Dim green at rest, brightens with a
+  soft accent glow on focus.
+- When the buffer starts with `/`, the prompt switches to amber
+  to signal slash-command mode (`.igrp.islash` toggle via Svelte
+  reactive class binding on the input value).
+- `.igrp:focus-within` paints a subtle 8-px dot-grid
+  background using a single `radial-gradient` repeated via
+  `background-size` — costs nothing per frame (compositor-only).
+- Textarea gets `caret-color: var(--acc)` plus
+  `caret-shape: block` for a block-style cursor on supported
+  browsers. Falls back to the default thin caret gracefully.
+- `padding-left: 22px` on the textarea makes room for the
+  prompt glyph without overlap.
+
+Everything is cosmetic — no behavioural change to the input
+handler, no new events, no extra state. The slash detection is
+a pure derived class based on `tab.inputValue`.
+
+**Files touched.**
+- `src/routes/+page.svelte` — `setView()` defensive guard.
+- `src/lib/Sidebar.svelte` — `data-section="…"` on 4 header
+  rows + 4 body wrappers.
+- `src/lib/styles/sidebar.css` — `.sb-accordion-hdr[data-
+  section]::before` dot + `.sb-accordion-body[data-section]::
+  before` rail rules.
+- `src/app.css` — `cite-chip` redesign + 4 per-kind palettes.
+- `src/lib/ChatInput.svelte` — `<span class="iprompt">` +
+  `.islash` class binding.
+- `src/lib/styles/composer.css` — `.iprompt`, dot-grid focus
+  background, block caret, `padding-left` shift.
+
+**Verification.** `svelte-check` passes (0 errors). Two
+pre-existing warnings remain in `ChatEmptyState.svelte` from
+prior sprints — unrelated.
+
+**Facelift status.**
+
+| Step | Version | Status |
+|---|---|---|
+| A1 — Mission Strip | v1.7.58 | ✅ |
+| A2 — Per-tab purpose tint | v1.7.59 | ✅ |
+| A3 — Terminal-recording code blocks | v1.7.60 | ✅ |
+| B10 — setView defensive guard | v1.7.63 | ✅ |
+| B1 — Sidebar hierarchy | v1.7.63 | ✅ |
+| B3 — Cite evidence pills | v1.7.63 | ✅ |
+| B2 — Composer ops aesthetic | v1.7.63 | ✅ |
+
+Lucy's chrome now signals "operations console" from the title
+bar down through every surface an IT pro touches in normal
+use. The remaining polish opportunities (typography upgrade,
+empty-state pulse widget, console-style modals, side-rail
+timeline) live in the original B-tier proposal and can be
+pulled in incrementally.
+
+---
+
 ## [1.7.62] — 2026-06-03
 
 ### Hotfix — MissionStrip's local + posture chips routed to a non-existent view
