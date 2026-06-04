@@ -441,7 +441,12 @@ fn check_stream_sessions() -> DiagnosticCheck {
 fn check_log_file() -> DiagnosticCheck {
     let start = std::time::Instant::now();
     let log_dir = crate::utils::logging::get_logs_dir();
-    let log_file = log_dir.join("lucy.log");
+    // v1.7.64 — Filename fix. `write_app_log()` in utils::logging writes to
+    // `lucy_app.log`, not `lucy.log`. The diagnostic was looking for the
+    // wrong filename, so it would ALWAYS report "Log file not found" even on
+    // a perfectly healthy install — a false positive that surfaced as a
+    // permanent yellow warning in the panel.
+    let log_file = log_dir.join("lucy_app.log");
 
     if !log_file.exists() {
         return DiagnosticCheck {
@@ -562,4 +567,84 @@ fn check_guardrails() -> DiagnosticCheck {
         })),
         elapsed_ms: start.elapsed().as_millis() as u64,
     }
+}
+
+// ── v1.7.64 — Repair commands invoked from SelfDiagnosticsView buttons ─────
+//
+// Each "repair" command targets ONE known issue surfaced by `run_self_
+// diagnostics()` so the operator can fix it without dropping to the shell or
+// opening DB Browser for SQLite. Commands are idempotent: running them on
+// an already-clean DB returns "0 rows repaired" and doesn't error.
+//
+// Adding a new repair:
+//   1. Write the repair fn here. Use `crate::commands::metrics::shared_db`
+//      so it shares the connection pool with everything else.
+//   2. Register in lib.rs `invoke_handler!`.
+//   3. Surface a "Reparar" button on the relevant DiagnosticCheck in
+//      `SelfDiagnosticsView.svelte` by adding the message-pattern detector
+//      there.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairResult {
+    pub ok: bool,
+    pub rows_repaired: i64,
+    pub message: String,
+}
+
+/// Backfill any NULL `confidence` values in `agent_memories` and `memory_core`
+/// to the schema's default (0.5 — neutral confidence). This category of bug
+/// can appear when an INSERT predates the v1.6.0 migration that added the
+/// `NOT NULL DEFAULT 0.5` column, or when a code path explicitly sets the
+/// column to NULL bypassing the constraint.
+///
+/// Idempotent: returns `{ ok: true, rows_repaired: 0, message: "Nothing to repair" }`
+/// if no NULLs are present. Safe to call from a button repeatedly.
+#[tauri::command]
+pub async fn repair_agent_memories_confidence() -> Result<RepairResult, String> {
+    tokio::task::spawn_blocking(|| {
+        // shared_db's signature is `fn(closure -> Result<R, String>) -> Result<R, String>`
+        // so the inner closure's success type IS the success type of the outer call —
+        // no double-Result wrapping. Returning the closure result directly is correct.
+        crate::commands::metrics::shared_db(|conn| {
+            // Run both UPDATEs in a single transaction so a partial failure
+            // doesn't leave one table cleaned and the other dirty.
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("tx open: {}", e))?;
+
+            let agent_rows = tx
+                .execute(
+                    "UPDATE agent_memories SET confidence = 0.5 WHERE confidence IS NULL",
+                    [],
+                )
+                .map_err(|e| format!("agent_memories repair: {}", e))? as i64;
+
+            let core_rows = tx
+                .execute(
+                    "UPDATE memory_core SET confidence = 0.5 WHERE confidence IS NULL",
+                    [],
+                )
+                .map_err(|e| format!("memory_core repair: {}", e))? as i64;
+
+            tx.commit().map_err(|e| format!("tx commit: {}", e))?;
+
+            let total = agent_rows + core_rows;
+            let message = if total == 0 {
+                "Nothing to repair — no NULL confidence values found.".to_string()
+            } else {
+                format!(
+                    "Repaired {} row(s): agent_memories={}, memory_core={}. Default confidence set to 0.5.",
+                    total, agent_rows, core_rows,
+                )
+            };
+
+            Ok(RepairResult {
+                ok: true,
+                rows_repaired: total,
+                message,
+            })
+        })
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
 }

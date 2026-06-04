@@ -2,11 +2,14 @@
     import { createEventDispatcher, onMount } from 'svelte';
     import { runSelfDiagnostics, statusIcon, categoryLabel } from '$lib/diagnostics';
     import { staggerIn } from '$lib/stagger';
+    import { invoke } from '@tauri-apps/api/core';
+    import { toast } from 'svelte-sonner';
     import Stethoscope from '@tabler/icons-svelte/icons/stethoscope';
     import RefreshCw from '@tabler/icons-svelte/icons/refresh';
     import CircleCheck from '@tabler/icons-svelte/icons/circle-check';
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     import CircleX from '@tabler/icons-svelte/icons/circle-x';
+    import Wrench from '@tabler/icons-svelte/icons/tool';
 
     export let isEN = false;
 
@@ -15,6 +18,48 @@
     let loading = false;
     let report = null;
     let error = '';
+
+    // v1.7.64 — Tracks which check is currently being repaired so we can
+    // disable the corresponding button + show a spinner. Keyed on the check
+    // name so multiple repair buttons can be queued/inspected independently.
+    let repairing = new Set();
+
+    /**
+     * Inspect a check and return a repair descriptor if Lucy knows how to
+     * fix this specific failure mode. Returns null when no repair is wired,
+     * which keeps the button hidden.
+     *
+     * Adding a new repair: add another entry here, register the matching
+     * Tauri command in the backend, and wire it in `runRepair()` below.
+     */
+    function detectRepair(check) {
+        if (!check) return null;
+        const msg = (check.message || '').toLowerCase();
+        // agent_memories.confidence NULL — v1.7.64
+        if (check.name === 'Database' && check.status === 'error'
+            && msg.includes('null value') && msg.includes('confidence')) {
+            return {
+                command: 'repair_agent_memories_confidence',
+                label:   isEN ? 'Repair NULL confidence' : 'Reparar confidence NULL',
+                successDefault: isEN ? 'Repair complete' : 'Reparación completada',
+            };
+        }
+        return null;
+    }
+
+    async function runRepair(check, repair) {
+        repairing = new Set([...repairing, check.name]);
+        try {
+            const result = await invoke(repair.command);
+            toast.success(result?.message || repair.successDefault);
+            // Re-run the diagnostic so the green/red state updates immediately.
+            await runDiag();
+        } catch (e) {
+            toast.error((isEN ? 'Repair failed: ' : 'Reparación falló: ') + String(e));
+        } finally {
+            repairing = new Set([...repairing].filter(n => n !== check.name));
+        }
+    }
 
     onMount(() => { runDiag(); });
 
@@ -100,11 +145,24 @@
         <div class="sd-group" in:staggerIn={{ index: gi + 1, step: 60, duration: 220 }}>
             <div class="sd-group-hdr">{categoryLabel(category)}</div>
             {#each checks as check}
+            {@const _repair = detectRepair(check)}
             <div class="sd-check" class:ok={check.status === 'ok'} class:warn={check.status === 'warning'} class:err={check.status === 'error'}>
                 <div class="sd-check-top">
                     <span class="sd-check-icon" style="color:{statusColorCSS(check.status)}">{statusIcon(check.status)}</span>
                     <span class="sd-check-name">{check.name}</span>
                     <span class="sd-check-ms">{check.elapsed_ms}ms</span>
+                    <!-- v1.7.64 — "Reparar" button only renders when detectRepair()
+                         matched the check. Hidden for unrecognised failures so
+                         the operator isn't promised a fix Lucy can't deliver. -->
+                    {#if _repair}
+                        <button class="sd-repair-btn"
+                                on:click={() => runRepair(check, _repair)}
+                                disabled={repairing.has(check.name)}
+                                title={_repair.label}>
+                            <Wrench size={11} strokeWidth={2}/>
+                            <span>{repairing.has(check.name) ? (isEN ? 'Repairing…' : 'Reparando…') : _repair.label}</span>
+                        </button>
+                    {/if}
                 </div>
                 <div class="sd-check-msg">{check.message}</div>
                 {#if check.details}
@@ -156,6 +214,40 @@
     .sd-check-icon{font-size:13px;font-weight:700;}
     .sd-check-name{font-size:12px;font-weight:600;color:var(--txt);}
     .sd-check-ms{margin-left:auto;font-size:10px;color:#475569;font-family:var(--mono);}
+
+    /* v1.7.64 — Repair button. Compact pill that sits to the right of the
+       elapsed-time chip on the same row as the check name. Hidden by
+       default; only renders when `detectRepair(check)` matched a known
+       fix. Disabled state shows "Reparando…" while the Tauri command
+       runs. Colour is ambient amber so the operator's eye picks it up
+       without competing with the red error icon. */
+    .sd-repair-btn{
+        display:inline-flex;
+        align-items:center;
+        gap:4px;
+        font-size:10px;
+        font-weight:700;
+        font-family:var(--mono);
+        letter-spacing:.3px;
+        color:var(--amber, #f59e0b);
+        background:rgba(245,158,11,.10);
+        border:1px solid rgba(245,158,11,.30);
+        border-radius:3px;
+        padding:2px 7px;
+        margin-left:6px;
+        cursor:pointer;
+        white-space:nowrap;
+        transition:.15s;
+    }
+    .sd-repair-btn:hover{
+        background:rgba(245,158,11,.18);
+        border-color:rgba(245,158,11,.50);
+        color:#fbbf24;
+    }
+    .sd-repair-btn:disabled{
+        opacity:.6;
+        cursor:wait;
+    }
     .sd-check-msg{font-size:11px;color:var(--txt2);font-family:var(--mono);line-height:1.4;}
 
     .sd-check-details{margin-top:6px;}

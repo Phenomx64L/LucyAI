@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.64] — 2026-06-03
+
+### Self-diagnostics fixes — App Log false positive + one-click DB repair
+
+User opened the SelfDiagnostics panel and asked how to clean up
+the two non-green entries it reported. Both were real items
+with very different causes:
+
+| Check | Status | Cause |
+|---|---|---|
+| App Log | warning | Diagnostic looking for wrong filename (false positive) |
+| Database | error | Real data: NULL value in `agent_memories.confidence` |
+
+**Fix 1 — App Log filename mismatch.**
+
+The diagnostic at `diagnostics.rs:444` was opening
+`<APPDATA>\Lucy\logs\lucy.log`. But the actual log writer
+(`utils/logging.rs::write_app_log()`) appends to
+`<APPDATA>\Lucy\logs\lucy_app.log` (note the `_app` suffix).
+Result: the diagnostic ALWAYS reported "Log file not found" no
+matter how healthy the install was. One-character rename in
+`diagnostics.rs`:
+
+```diff
+- let log_file = log_dir.join("lucy.log");
++ let log_file = log_dir.join("lucy_app.log");
+```
+
+**Fix 2 — One-click DB repair for NULL confidence values.**
+
+The `agent_memories.confidence` column was added in the v1.6.0
+grounding migration as `NOT NULL DEFAULT 0.5`. SQLite backfills
+existing rows with the default when you ALTER TABLE ADD COLUMN
+with a default value, so a clean install/upgrade shouldn't
+produce NULLs. The user's DB had them anyway, likely from
+either (a) a hand-edited row from earlier development, or (b) a
+code path that explicitly set the column to NULL bypassing the
+constraint.
+
+Rather than chase the root cause speculatively, ship a repair:
+
+- New Tauri command `repair_agent_memories_confidence` (in
+  `diagnostics.rs`). Runs a single transaction over both
+  `agent_memories` and `memory_core`:
+
+  ```sql
+  UPDATE agent_memories SET confidence = 0.5 WHERE confidence IS NULL;
+  UPDATE memory_core    SET confidence = 0.5 WHERE confidence IS NULL;
+  ```
+
+  Returns `{ ok: bool, rows_repaired: i64, message: String }`.
+  Idempotent — re-running on a clean DB returns
+  `rows_repaired: 0` with a "nothing to repair" message.
+
+- Registered in `lib.rs` invoke_handler.
+
+- `SelfDiagnosticsView.svelte` gains a `detectRepair(check)`
+  helper that pattern-matches check name + status + message to
+  decide whether to surface a repair button. For the database
+  failure, it matches `name === 'Database' && status ===
+  'error' && message contains "null value" && "confidence"`.
+  Adding new repairs in the future is a one-entry change in
+  `detectRepair()` plus a new Rust command.
+
+- New `.sd-repair-btn` style: compact amber pill with a
+  Tabler `Wrench` icon. Sits to the right of the elapsed-time
+  chip on the same row as the check name. Disabled state shows
+  "Reparando…" while the Tauri command runs.
+
+- On successful repair, the panel automatically re-runs the
+  full diagnostic so the failed check flips to green (or shows
+  a different residual issue if there is one).
+
+**Files touched.**
+- `src-tauri/src/commands/diagnostics.rs` — filename fix +
+  new `RepairResult` struct + new
+  `repair_agent_memories_confidence` Tauri command.
+- `src-tauri/src/lib.rs` — register the new command in the
+  invoke_handler array.
+- `src/lib/SelfDiagnosticsView.svelte` — `detectRepair()`
+  helper, `runRepair()` async handler, conditional button in
+  the check template, `.sd-repair-btn` styling.
+
+**Verification.** `cargo check --lib` passes clean (only the
+pre-existing `skills_dir` dead-code warning). `svelte-check`
+passes (0 errors).
+
+**Operator workflow.**
+
+1. Open Diagnóstico panel.
+2. See the Database row marked red with the NULL message.
+3. Click "Reparar confidence NULL".
+4. Toast confirms `Repaired N row(s): agent_memories=X,
+   memory_core=Y. Default confidence set to 0.5.`
+5. Panel re-runs automatically; Database row flips to green.
+
+No SQL knowledge, no DB Browser for SQLite, no shell —
+operations-team-friendly.
+
+---
+
 ## [1.7.63] — 2026-06-03
 
 ### Facelift combo — sidebar hierarchy + cite-evidence-pills + composer ops aesthetic + setView guard

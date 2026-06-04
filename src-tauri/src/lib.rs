@@ -934,6 +934,8 @@ pub fn run() {
             notify::request_notification_permission,
             // Self-Diagnostics (P0 Feature 5)
             diagnostics::run_self_diagnostics,
+            // v1.7.64 — Repair commands surfaced as buttons inside the panel
+            diagnostics::repair_agent_memories_confidence,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");
