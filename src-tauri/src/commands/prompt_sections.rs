@@ -93,6 +93,7 @@ fn all_section_names() -> Vec<(&'static str, u32)> {
         ("FileTools", 40),
         ("WebKnowledge", 45),
         ("SubAgents", 48),
+        ("ForkAdvice", 49),
         ("PersistentMemory", 50),
         ("TieredMemory", 55),
         ("CodeWorkflow", 60),
@@ -125,6 +126,10 @@ pub struct PromptContext<'a> {
     pub core_memory:      &'a str,
     pub principles:       &'a str,
     pub extra_context:    &'a str,  // working memory, compacted history, etc.
+    // v1.7.73 — Auto-fork advice. None if disabled (e.g. /serial bypass)
+    // or below threshold. When Some, the ForkAdviceSection renders a
+    // strong directive nudging the LLM to use fork_task + wait_task.
+    pub fork_advice:      Option<&'a crate::commands::fork_advisor::ForkAdvice>,
 }
 
 // ── Trait ────────────────────────────────────────────────────────────────────
@@ -861,6 +866,55 @@ impl PromptSection for UserInstructionSection {
 // ── Builder ──────────────────────────────────────────────────────────────────
 
 /// Assemble the system prompt from all relevant sections, ordered by priority.
+// v1.7.73 — Auto-fork directive injected only when the fork advisor
+// scored the user prompt above its threshold (FORK_THRESHOLD). Keeps
+// the SubAgents tool description (which is stable cache content) and
+// adds a STRONG per-turn nudge — placed AFTER the cache boundary so
+// it's part of the dynamic section, allowing per-prompt branch lists.
+//
+// Why the priority is high (49): this needs to land near the
+// SubAgentsSection (48) so the LLM reads "here's how to fork" → "you
+// SHOULD fork now" back to back.
+pub struct ForkAdviceSection;
+impl PromptSection for ForkAdviceSection {
+    fn name(&self) -> &'static str { "ForkAdvice" }
+    fn relevant(&self, ctx: &PromptContext) -> bool {
+        ctx.fork_advice.map(|a| a.should_fork).unwrap_or(false)
+    }
+    fn priority(&self) -> u32 { 49 }
+    fn render(&self, ctx: &PromptContext) -> String {
+        let advice = match ctx.fork_advice {
+            Some(a) => a,
+            None => return String::new(),
+        };
+        let branches_block = if advice.branches.is_empty() {
+            String::from("    (detected via signal — enumerate the concrete branches yourself before forking)")
+        } else {
+            advice.branches.iter()
+                .enumerate()
+                .map(|(i, b)| format!("    - branch_{}: {}", i + 1, b))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let signals = advice.signals.iter()
+            .map(|s| format!("{}({:.2})", s.kind, s.weight))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        format!(
+            "🔱 FORK ADVISOR — STRONG DIRECTIVE (confidence {:.2}, signals: {})\n\
+             This user request has ≥2 INDEPENDENT branches Lucy should investigate in PARALLEL using fork_task / wait_task.\n\
+             Suggested branches:\n{}\n\
+             REQUIRED PATTERN:\n  \
+               1. Emit one <TOOL>fork_task:branch_id|||single-shot instruction</TOOL> per branch in the SAME turn.\n  \
+               2. Do unrelated work or read context while the forks run.\n  \
+               3. Later turn(s): <TOOL>wait_task:branch_id</TOOL> for each, synthesize results.\n  \
+             If you intentionally choose NOT to fork (e.g. branches share state or order matters), state the reason in one sentence before proceeding sequentially.\n\
+             The user can override this advice for the NEXT turn with the /serial slash command.",
+            advice.confidence, signals, branches_block
+        )
+    }
+}
+
 /// Returns the complete prompt string.
 pub fn build_composable_prompt(ctx: &PromptContext) -> String {
     // Register all sections — cheap stack allocations, no Box<dyn>
@@ -877,6 +931,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &WebKnowledgeSection,
         &ConfidenceCalibrationSection,
         &SubAgentsSection,
+        &ForkAdviceSection,   // v1.7.73 — placed right after SubAgents
         &McpRegistrySection,
         &PersistentMemorySection,
         &TieredMemorySection,
@@ -957,6 +1012,10 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
 
 /// Drop-in replacement for the old monolithic build_system_prompt.
 /// Same signature, same output semantics, but internally composable.
+///
+/// Computes the fork advisor inline so every caller benefits without
+/// a wider API change. Callers that need to bypass advice (e.g.
+/// `/serial` slash command) should use `build_system_prompt_v2_with_options`.
 pub fn build_system_prompt_v2(
     lang: &str,
     context: &str,
@@ -966,10 +1025,36 @@ pub fn build_system_prompt_v2(
     working_dir: &str,
     runbooks_dir: Option<&str>,
 ) -> String {
+    build_system_prompt_v2_with_options(
+        lang, context, hosts_context, user_name, prompt, working_dir, runbooks_dir,
+        /* allow_fork_advice = */ true,
+    )
+}
+
+/// Same as `build_system_prompt_v2` but lets the caller suppress the
+/// fork advice for a single turn — used by the `/serial` slash command.
+pub fn build_system_prompt_v2_with_options(
+    lang: &str,
+    context: &str,
+    hosts_context: &str,
+    user_name: &str,
+    prompt: &str,
+    working_dir: &str,
+    runbooks_dir: Option<&str>,
+    allow_fork_advice: bool,
+) -> String {
     let user_profile = std::env::var("USERPROFILE")
         .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
     let core_mem_block = crate::commands::memory::render_core_sync();
     let principles_block = crate::commands::principles::render_principles_block(None);
+
+    // v1.7.73 — Fork advisor runs once per turn; the result lives on
+    // the stack and the section borrows it via the PromptContext.
+    let advice = if allow_fork_advice {
+        Some(crate::commands::fork_advisor::advise(prompt))
+    } else {
+        None
+    };
 
     let ctx = PromptContext {
         lang_instruction: lang,
@@ -984,6 +1069,7 @@ pub fn build_system_prompt_v2(
         core_memory: &core_mem_block,
         principles: &principles_block,
         extra_context: context,
+        fork_advice: advice.as_ref(),
     };
 
     build_composable_prompt(&ctx)

@@ -65,3 +65,7 @@ pub mod annealing;
 pub mod security_skills;
 // v1.7.16 — Pre-delivery script syntax verification.
 pub mod script_verify;
+// v1.7.73 — Auto-fork heuristic. Scores user prompts for parallel-branch
+// suitability and nudges the LLM toward fork_task / wait_task when ≥2
+// independent investigations are detected.
+pub mod fork_advisor;

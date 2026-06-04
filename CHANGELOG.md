@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.73] — 2026-06-04
+
+### Auto-fork advisor — Lucy decides when to spawn sub-agents
+
+**Problem.** Until now, Lucy only forked sub-agents (`fork_task` +
+`wait_task`) when the operator explicitly asked. The SubAgents section
+in the system prompt described the tools but provided no nudge, so the
+LLM defaulted to sequential execution on every multi-branch request.
+Skills got an auto-router in v1.7.5; sub-agents never did.
+
+**Module: `src-tauri/src/commands/fork_advisor.rs` (new, 13 tests).**
+Stateless sintactic scorer that returns a `ForkAdvice {
+should_fork, confidence, branches, signals }` for any prompt. Signals
+and weights (threshold 0.65):
+
+- `explicit_parallel` (0.65) — "en paralelo", "in parallel",
+  "simultáneamente", "concurrent(ly)", "mientras revisa/analiza/…"
+- `multi_host` (0.65) — ≥2 hostname-shaped tokens (`PROD-AD-01`,
+  `web-01`, `app2.example.com`). Filters out common SysAdmin words
+  via a stop list.
+- `list` (0.65) — ≥3 enumerated items (bullets, numbered, or
+  comma-separated list following a colon).
+- `compare` (0.30) — comparison verbs ("compara", "diff", "vs",
+  "contrasta").
+- `cross_domain` (0.30) — two recognized verbs straddling " y " /
+  " and " (audita … y revisa …).
+- `multi_path` (0.30) — ≥2 distinct absolute paths or URLs.
+- `structural` (0.10) — long prompt + newline + colon as tie-breaker.
+
+Bypass marker `[NO-FORK]` honoured anywhere in the prompt — short-
+circuits to `should_fork=false` with a `bypass` signal.
+
+**Prompt section: `ForkAdviceSection`** (priority 49, right after
+`SubAgentsSection` at 48). Only renders when `should_fork`. Emits a
+strong directive:
+
+> 🔱 FORK ADVISOR — STRONG DIRECTIVE (confidence X, signals: …)
+> This request has ≥2 INDEPENDENT branches Lucy should investigate
+> in PARALLEL using fork_task / wait_task. Suggested branches: …
+> REQUIRED PATTERN: emit one fork_task per branch in the SAME turn,
+> do other work, then wait_task per branch, synthesize.
+
+Placed AFTER the cache boundary (per-prompt content, not stable).
+
+**Wire-up in `prompt_sections.rs`:**
+- New field `PromptContext.fork_advice: Option<&ForkAdvice>`
+- `build_system_prompt_v2_with_options(..., allow_fork_advice: bool)`
+  added — preserves the existing `build_system_prompt_v2` API
+  (delegates with `allow_fork_advice = true`).
+- The advisor runs inside the prompt builder and the result lives on
+  the stack for the lifetime of the build call.
+
+**Tauri command: `fork_advice(prompt)`** — exposed to the frontend so
+the composer can show a live preview chip before the user sends.
+
+**Frontend: chip + `/serial` slash command.**
+- Violet `.fa-chip` rendered between user prompt and Lucy's response
+  when the advisor scored ≥ threshold ("🔱 fork-advised · N ramas
+  · NN%"). Tooltip lists the signals, confidence, and branches.
+- `/serial`, `/no-fork`, `/nofork` slash commands — toggle a per-tab
+  bypass flag. Sub-options: `on`, `off`, `once`, no-arg toggles.
+- When bypass is on, `askLucyStream` appends `[NO-FORK]` to the
+  outgoing prompt. The advisor recognises the marker and emits a
+  muted `.fa-bypass` chip ("serial · bypass") so the toggle's
+  effect is visible in the chat history.
+
+Zero shared mutable state across the JS↔Rust boundary — the bypass
+travels as a literal marker in the prompt text.
+
+`cargo test --lib fork_advisor` — 13/13 passed.
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.72] — 2026-06-04
 
 ### Memory Graph — three actual bugs the v1.7.71 d3-force swap didn't fix

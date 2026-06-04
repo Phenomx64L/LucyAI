@@ -262,6 +262,13 @@ import { listen } from '@tauri-apps/api/event';
     // commands). Persisted in localStorage alongside the rest of lucyConfig.
     let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, economyMode: false, userAvatarUrl: '', briefMode: false };
     let _lastRouteDecision = null;  // RoutingDecision | null — type erased for plain-JS <script>
+    // v1.7.73 — Fork advisor bypass flag, keyed by tabId. Toggled via the
+    // `/serial` slash command. When set, the next prompt's system build
+    // suppresses the parallel directive (`allow_fork_advice = false`).
+    let _forkBypassByTab = new Map();
+    // v1.7.73 — Last fork-advice result keyed by tabId, used by the composer
+    // chip to preview "🔱 fork-advised · N ramas" before the user sends.
+    let _forkAdviceByTab = new Map();
     // Tier B #1 — Session-wide accumulated savings (USD). Reset at app start;
     // not persisted (this is "since you opened Lucy", not "all time").
     let _economySavingsUsd = 0;
@@ -3867,6 +3874,9 @@ REGLAS DE FORMATO:
                 lucyConfig = { ...lucyConfig, privacyMode: !!on };
                 try { localStorage.setItem('lucy_privacy_mode', on ? '1' : '0'); } catch {}
             },
+            // v1.7.73 — fork advisor bypass per tab. Used by /serial.
+            setForkAdviceBypass: (id, on) => { _forkBypassByTab.set(id, !!on); },
+            getForkAdviceBypass: (id) => !!_forkBypassByTab.get(id),
             // Sprint 8 — openers for floating modals
             openSkillPicker: () => { showSkillPicker = true; },
             // v1.6.1 — ECC skill preset picker (distinct surface from the
@@ -4144,6 +4154,58 @@ REGLAS DE FORMATO:
                           `<span class="ar-close" title="Deactivate">✕</span>` +
                         `</div>`,
                 });
+            })();
+
+            // v1.7.73 — Fork advisor preview chip. Same surface pattern as
+            // the auto-route chip: a system message rendered between the
+            // user's prompt and Lucy's reply so the operator sees the
+            // advisor's verdict for THIS turn. If /serial bypass is on, we
+            // emit a muted variant ("serial · bypass") so the toggle is
+            // visible.
+            (async () => {
+                try {
+                    const _bypassOn = !!_forkBypassByTab.get(tabId);
+                    const _advice = await invoke('fork_advice', { prompt: raw });
+                    _forkAdviceByTab.set(tabId, _advice);
+                    if (_bypassOn) {
+                        addMsg(tabId, {
+                            role: 'system', rawRole: 'Sistema', rawContent: '',
+                            html: `<div class="fa-chip fa-bypass" title="Fork advisor bypassed via /serial">` +
+                                  `<span class="fa-icon">🪡</span>` +
+                                  `<span class="fa-label">${isEN ? 'serial · bypass' : 'serial · bypass'}</span>` +
+                                  `</div>`,
+                        });
+                        return;
+                    }
+                    if (!_advice || !_advice.should_fork) return;
+                    const _signals = (_advice.signals || [])
+                        .map(s => `${s.kind}(${(s.weight).toFixed(2)})`).join(' + ');
+                    const _branchList = (_advice.branches || []).slice(0, 6)
+                        .map((b, i) => `  ${i + 1}. ${b}`).join('\n');
+                    const _conf = Math.round((_advice.confidence || 0) * 100);
+                    const _tip =
+                        `Fork Advisor — confidence ${_conf}%\n` +
+                        `Signals: ${_signals}\n` +
+                        (_branchList ? `\nSuggested branches:\n${_branchList}\n` : '') +
+                        `\nLucy received a STRONG directive in this turn's system prompt to use fork_task/wait_task.\n` +
+                        `Use /serial to bypass for the next prompt.`;
+                    const _branchCount = (_advice.branches || []).length;
+                    const _branchTxt = _branchCount > 0
+                        ? (isEN ? `${_branchCount} branches` : `${_branchCount} ramas`)
+                        : (isEN ? 'parallel-worthy' : 'paralelizable');
+                    addMsg(tabId, {
+                        role: 'system', rawRole: 'Sistema', rawContent: '',
+                        html: `<div class="fa-chip" title="${_tip.replace(/"/g, '&quot;')}">` +
+                              `<span class="fa-icon">🔱</span>` +
+                              `<span class="fa-label">${isEN ? 'fork-advised' : 'fork sugerido'}</span>` +
+                              `<span class="fa-sep">·</span>` +
+                              `<span class="fa-branches">${_branchTxt}</span>` +
+                              `<span class="fa-score">${_conf}%</span>` +
+                              `</div>`,
+                    });
+                } catch (_e) {
+                    // Fail-silent: advisor is non-critical.
+                }
             })();
 
             // v1.7.4 — security skills take priority over normal presets:
@@ -8241,6 +8303,13 @@ if (Test-Path $src) {
 
     async function askLucyStream(params, onChunk, tabId) {
         const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        // v1.7.73 — If the user toggled /serial bypass for this tab, append
+        // the [NO-FORK] marker so the backend fork advisor skips its
+        // directive. Stateless on the wire — the marker travels with the
+        // prompt; no shared mutable state cross-thread.
+        if (tabId && _forkBypassByTab.get(tabId) && params && typeof params.prompt === 'string') {
+            params = { ...params, prompt: params.prompt + '\n[NO-FORK]' };
+        }
         let accumulated = '';
         const streamState = { cancelled: false, unlisten: null };
         const t0 = performance.now();
@@ -11480,6 +11549,44 @@ if (Test-Path $src) {
       :global(.ar-cleared) {
         opacity: .4;
         pointer-events: none;
+      }
+
+      /* v1.7.73 — Fork advisor chip. Violet to differentiate from the
+         green auto-route chip; rendered between the user prompt and
+         Lucy's response when the advisor scored ≥ FORK_THRESHOLD.
+         Bypass variant (.fa-bypass) is muted/grey. */
+      :global(.fa-chip) {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-family: var(--mono, ui-monospace, monospace);
+        font-size: 10.5px;
+        padding: 3px 9px;
+        border: 1px solid rgba(167, 139, 250, .30);
+        border-radius: 7px;
+        background: rgba(167, 139, 250, .07);
+        color: #a78bfa;
+        margin: 4px 0;
+        cursor: help;
+        max-width: 360px;
+      }
+      :global(.fa-chip:hover) { background: rgba(167, 139, 250, .14); }
+      :global(.fa-chip .fa-icon)     { font-size: 12px; line-height: 1; }
+      :global(.fa-chip .fa-label)    { font-weight: 700; letter-spacing: .25px; }
+      :global(.fa-chip .fa-sep)      { opacity: .35; }
+      :global(.fa-chip .fa-branches) { opacity: .85; }
+      :global(.fa-chip .fa-score)    {
+        font-size: 9.5px; font-weight: 700;
+        padding: 1px 5px;
+        border-radius: 5px;
+        background: rgba(167, 139, 250, .14);
+        margin-left: 2px;
+      }
+      :global(.fa-chip.fa-bypass) {
+        color: var(--txt3, #64748b);
+        background: rgba(255, 255, 255, .03);
+        border-color: rgba(255, 255, 255, .10);
+      }
+      :global(.fa-chip.fa-bypass .fa-score) {
+        background: rgba(255, 255, 255, .05);
       }
 
       /* v1.7.16 — Script verifier badges. Render as small inline pills

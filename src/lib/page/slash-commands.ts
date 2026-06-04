@@ -77,6 +77,13 @@ export interface SlashCtx {
     /** Persist a flag toggle + mirror back into lucyConfig. Page wires both. */
     setSmartRouting: (on: boolean) => void;
     setPrivacyMode:  (on: boolean) => void;
+    /** v1.7.73 — toggle the per-tab "serial bypass" for the fork advisor.
+     *  When true, the NEXT prompt sent from this tab is built with
+     *  `allow_fork_advice = false` (no parallel directive injected).
+     *  The page consumes the flag once and resets it. */
+    setForkAdviceBypass?: (tabId: string, on: boolean) => void;
+    /** v1.7.73 — read the current bypass state for `/serial` display. */
+    getForkAdviceBypass?: (tabId: string) => boolean;
 }
 
 /**
@@ -245,6 +252,44 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             } else {
                 const cur = ctx.lucyFlags.smartRouting ? 'ON' : 'OFF';
                 sysMsg(`Estado actual: <b>${cur}</b>. Uso: <code>/smart-router on</code> o <code>/smart-router off</code>.`);
+            }
+            return true;
+        }
+
+        // v1.7.73 — Per-tab bypass for the auto-fork advisor.
+        //   /serial       → toggle for THIS tab (persists until disabled)
+        //   /serial once  → suppress for the next prompt only
+        //   /serial on    → force ON (advisor disabled until /serial off)
+        //   /serial off   → force OFF (advisor re-enabled)
+        // The page consumes the flag in its turn-loop when building the
+        // system prompt: bypass → allow_fork_advice = false.
+        case 'serial':
+        case 'no-fork':
+        case 'nofork': {
+            const a = (arg || '').trim().toLowerCase();
+            const cur = ctx.getForkAdviceBypass?.(tabId) ?? false;
+            if (!ctx.setForkAdviceBypass) {
+                sysMsg(`<div class="mn">⛌ Fork advisor bypass not wired in this build.</div>`, 'var(--amber)');
+                return true;
+            }
+            if (a === 'on' || a === '1' || a === 'true' || a === 'enable') {
+                ctx.setForkAdviceBypass(tabId, true);
+                sysMsg(`<div class="mn" style="color:#a78bfa;">🪡 Serial mode: ON</div>
+                    <div style="font-size:11px;color:var(--txt2);">El fork advisor está desactivado para esta pestaña hasta que ejecutes <code>/serial off</code>.</div>`);
+            } else if (a === 'off' || a === '0' || a === 'false' || a === 'disable') {
+                ctx.setForkAdviceBypass(tabId, false);
+                sysMsg(`<div class="mn">🔱 Serial mode: OFF</div>
+                    <div style="font-size:11px;color:var(--txt2);">El fork advisor vuelve a sugerir paralelismo cuando detecte ≥2 ramas.</div>`);
+            } else if (a === 'once' || a === '1x') {
+                ctx.setForkAdviceBypass(tabId, true);
+                sysMsg(`<div class="mn" style="color:#a78bfa;">🪡 Serial mode: NEXT TURN ONLY</div>
+                    <div style="font-size:11px;color:var(--txt2);">Tu próximo mensaje en esta pestaña se ejecutará en serie aunque el advisor sugiera fork.</div>`);
+            } else {
+                // No arg → toggle
+                const next = !cur;
+                ctx.setForkAdviceBypass(tabId, next);
+                sysMsg(`<div class="mn" style="color:${next ? '#a78bfa' : 'var(--acc)'};">${next ? '🪡 Serial mode: ON' : '🔱 Serial mode: OFF'}</div>
+                    <div style="font-size:11px;color:var(--txt2);">Usa <code>/serial on|off|once</code> para fijar el estado explícitamente.</div>`);
             }
             return true;
         }

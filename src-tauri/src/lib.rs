@@ -943,6 +943,10 @@ pub fn run() {
             diagnostics::repair_memory_purge_expired,
             diagnostics::repair_clear_leaked_stream_sessions,
             diagnostics::repair_rotate_app_log,
+            // v1.7.73 — Auto-fork advisor. Scores the user prompt for
+            // parallel-branch potential so the composer can show a chip
+            // and the prompt builder can inject a strong directive.
+            commands::fork_advisor::fork_advice,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");
