@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.84] — 2026-06-05
+
+### Code splitting — heavy views become async chunks
+
+Pre-v1.7.84, Lucy's main bundle was monolithic: every Svelte view (NexShell
+~4 kLoC, MemoryGraphView + d3-force ~1.1 kLoC + 25 KB lib, DashboardView,
+LogViewer, Inventory, Compliance) plus every vendor dep landed in the
+first chunk the WebView had to parse before painting the terminal.
+
+**Change**: `vite.config.js` `manualChunks` grouping. Rollup now emits
+separate JS chunks at build time; runtime loads them on demand when the
+operator first navigates to the matching view.
+
+**Chunks emitted** (observed in `npm run build`):
+- `view-nexshell.js` → 179 KB (NexShellView — the biggest single
+  component, terminal styling + ANSI parser).
+- `view-graph.js` → MemoryGraphView + d3-force together (~30 KB).
+- `view-dash.js` → 12 KB (DashboardView + integrations).
+- `view-ops.js` → 23 KB (LogViewer + Inventory + Compliance, grouped
+  because they're all read-mostly tabular views used in the same
+  operator session).
+- `vendor-md.js` → marked + DOMPurify + highlight.js + shiki.
+- `vendor-icons.js` → 71 KB (the Tabler icon tree).
+- Everything else → main `_page.svelte.js` (~698 KB).
+
+**Why grouping vs per-component chunks**: tiny chunks (< 10 KB each)
+trade JS size for HTTP request count. The grouping keeps related views
+in one chunk so cross-navigation within "ops" (LogViewer → Inventory)
+is free, while still splitting the heaviest views (NexShell + graph)
+into their own asset.
+
+**Zero source changes** — the existing `import X from '$lib/X.svelte'`
+statements keep working; Rollup just decides which output chunk each
+matched module lands in. No `{#await import()}` wrappers needed because
+the `{#if activeView === 'X'}` guards already prevent code execution
+until the view is active.
+
+**Net effect on boot**: WebView starts rendering the terminal view
+without parsing/initializing NexShell/Graph/Dashboard code. The
+secondary chunks stream in the background while the operator is
+already using Lucy.
+
+`npm run build` — clean, all chunks under the 1.5 MB warning threshold.
+
+---
+
 ## [1.7.83] — 2026-06-05
 
 ### Performance Sprint Tier 2 — Rust trifecta (embedding cache + audit batch + tokio tune)

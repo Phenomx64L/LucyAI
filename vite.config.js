@@ -48,6 +48,51 @@ export default defineConfig(async () => ({
       output: {
         // Strip Vite's default banner comments that leak version + plugin info.
         banner: "",
+        // ── v1.7.84 — Code splitting for heavy views ───────────────────
+        // Lucy's main bundle was monolithic — every Svelte view (NexShell
+        // ~4 kLoC, MemoryGraph ~1.1 kLoC, Dashboard ~1.3 kLoC, etc.) plus
+        // every vendor dep landed in the first chunk the WebView had to
+        // parse before paint. Splitting them out lets the WebView start
+        // rendering the terminal view while the others stream in the
+        // background.
+        //
+        // manualChunks is the lowest-friction approach: we don't have to
+        // rewrite the existing static `import X from '$lib/...'`
+        // statements; Rollup just groups matching modules into separate
+        // .js chunks at build time. Chunks load on demand when the
+        // matched module is first reached at runtime (the Svelte
+        // {#if activeView === 'X'} guard means the heavy view code is
+        // only executed when the user actually navigates there).
+        //
+        // Grouping rationale:
+        //   • `view-nexshell` — the biggest single component (~140 KB
+        //     minified). Heavy on shell terminal styling + ANSI parser.
+        //   • `view-graph`    — MemoryGraphView + d3-force together.
+        //     Only loaded when the operator opens the graph overlay.
+        //   • `view-dash`     — DashboardView + integrations panels.
+        //   • `view-ops`      — LogViewer + Inventory + Compliance,
+        //     grouped because they're all read-mostly tabular views
+        //     and tend to be used in the same operator session.
+        //   • `vendor-md`     — marked + DOMPurify + highlight.js —
+        //     used in the artifact panel + chat thread, but only the
+        //     active chat tab needs them ready on first paint.
+        //   • `vendor-icons`  — Tabler icon tree, fragments out to its
+        //     own chunk so each view doesn't drag the whole icon set in.
+        manualChunks(id) {
+          if (id.includes('NexShellView.svelte'))    return 'view-nexshell';
+          if (id.includes('MemoryGraphView.svelte')
+            || id.includes('node_modules/d3-force')) return 'view-graph';
+          if (id.includes('DashboardView.svelte'))   return 'view-dash';
+          if (id.includes('LogViewerView.svelte')
+            || id.includes('InventoryView.svelte')
+            || id.includes('ComplianceView.svelte')) return 'view-ops';
+          if (id.includes('node_modules/marked')
+            || id.includes('node_modules/dompurify')
+            || id.includes('node_modules/highlight.js')
+            || id.includes('node_modules/shiki'))    return 'vendor-md';
+          if (id.includes('node_modules/@tabler'))   return 'vendor-icons';
+          return undefined;  // default: bundler decides
+        },
       },
     },
     // Throw on chunks > 1.5 MB so we notice if a vendor lib explodes.
