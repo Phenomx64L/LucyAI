@@ -122,12 +122,20 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 ],
             },
             {
-                title: isEN ? 'Routing & Skills' : 'Routing y Skills',
+                title: isEN ? 'Skills' : 'Skills',
                 items: [
-                    { cmd: '/sec-skill',  desc: isEN ? 'Browse / activate security skills' : 'Buscar / activar security skills' },
-                    { cmd: '/model',      desc: isEN ? 'Change active model' : 'Cambiar el modelo activo' },
-                    { cmd: '/route',      desc: isEN ? 'Show last routing decision' : 'Ver la última decisión de routing' },
-                    { cmd: '/serial',     desc: isEN ? 'Toggle fork advisor bypass for this tab' : 'Activar/desactivar bypass del fork advisor' },
+                    { cmd: '/skills',       desc: isEN ? 'Executable skill picker (user runbook-style)' : 'Picker de skills ejecutables (runbook-style del usuario)' },
+                    { cmd: '/preset',       desc: isEN ? 'ECC-style behavioural presets (AD, Hyper-V, SQL, IIS…)' : 'Presets de framing (AD, Hyper-V, SQL, IIS…)' },
+                    { cmd: '/sec-skill',    desc: isEN ? 'Anthropic security / forensic catalog (200+)' : 'Catálogo de security / forensics de Anthropic (200+)' },
+                    { cmd: '/capabilities', desc: isEN ? 'Self-introspection: every skill, MCP, framework loaded' : 'Auto-introspección: skills, MCPs y frameworks cargados' },
+                ],
+            },
+            {
+                title: isEN ? 'Routing' : 'Routing',
+                items: [
+                    { cmd: '/model',        desc: isEN ? 'Change active model' : 'Cambiar el modelo activo' },
+                    { cmd: '/route',        desc: isEN ? 'Show last routing decision' : 'Ver la última decisión de routing' },
+                    { cmd: '/serial',       desc: isEN ? 'Toggle fork advisor bypass for this tab' : 'Activar/desactivar bypass del fork advisor' },
                     { cmd: '/smart-router', desc: isEN ? 'Toggle smart-router on/off' : 'Activar/desactivar smart-router' },
                 ],
             },

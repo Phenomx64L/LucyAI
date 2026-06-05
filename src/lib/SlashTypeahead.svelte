@@ -70,8 +70,12 @@
         { cmd: '/crystals',    desc_en: 'View memory crystals',                desc_es: 'Ver crystals de memoria' },
         { cmd: '/insights',    desc_en: 'View consolidated insights',          desc_es: 'Ver insights consolidados' },
         { cmd: '/consolidate', desc_en: 'Run consolidation now',               desc_es: 'Ejecutar consolidación ahora' },
-        // Routing & Skills
-        { cmd: '/sec-skill',   desc_en: 'Browse / activate security skills',   desc_es: 'Buscar / activar security skills' },
+        // Skills (4 distinct universes — see slash-commands.ts for details)
+        { cmd: '/skills',      desc_en: 'Executable skill picker (runbook-style)',  desc_es: 'Picker de skills ejecutables' },
+        { cmd: '/preset',      desc_en: 'Behavioural presets (AD, Hyper-V, SQL…)',  desc_es: 'Presets de framing (AD, Hyper-V, SQL…)' },
+        { cmd: '/sec-skill',   desc_en: 'Anthropic security / forensic catalog',    desc_es: 'Catálogo de security / forensics' },
+        { cmd: '/capabilities',desc_en: 'Self-introspection: skills + MCPs loaded', desc_es: 'Auto-introspección: skills + MCPs' },
+        // Routing
         { cmd: '/model',       desc_en: 'Change active model',                 desc_es: 'Cambiar el modelo activo' },
         { cmd: '/route',       desc_en: 'Show last routing decision',          desc_es: 'Última decisión de routing' },
         { cmd: '/serial',      desc_en: 'Toggle fork advisor bypass',          desc_es: 'Bypass del fork advisor' },

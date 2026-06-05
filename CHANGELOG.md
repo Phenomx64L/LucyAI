@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.92] — 2026-06-05
+
+### Slash menu + typeahead: all 4 skill universes now visible
+
+Operator reported a real gap: the slash menu (v1.7.89) and typeahead
+(v1.7.91) surfaced only `/sec-skill` under a single "Routing & Skills"
+group. Lucy actually has FOUR distinct skill universes — three of them
+were invisible in the discovery surfaces.
+
+**The four universes** (each is a separate slash command, distinct
+backend):
+- **`/skills`** — executable runbook-style skill picker (user
+  scripts).
+- **`/preset`** — ECC-style behavioural framings (28 presets
+  including the v1.7.76 / v1.7.77 SysAdmin set: AD, Hyper-V, SQL,
+  IIS, network, Linux, DNS+cert, file-server).
+- **`/sec-skill`** — Anthropic security / forensic catalog (200+).
+- **`/capabilities`** — self-introspection of every skill, MCP, and
+  framework currently loaded.
+
+**Fix**:
+- `slash-commands.ts` v1.7.89 menu — split the old "Routing & Skills"
+  category into TWO: **Skills** (the four above) and **Routing**
+  (model, route, serial, smart-router).
+- `SlashTypeahead.svelte` — catalog mirrored.
+- Total commands in the discovery surfaces: 21 → 24.
+
+The four-universe split matches what the operator actually means when
+asking "what skills are available?": executable (runs a script),
+preset (frames the LLM), forensic catalog (research-style guides),
+or self-introspect (show me everything loaded right now).
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.91] — 2026-06-05
 
 ### Slash typeahead — live autocomplete as you type `/`
