@@ -85,3 +85,7 @@ pub mod semantic_links;
 // duplicate memories created within the same session before the 24 h
 // LLM consolidation has a chance to fuse them.
 pub mod auto_dedup;
+// v1.7.93 — sqlite-vec HNSW vector index. Backs embedding recall with
+// sub-millisecond ANN inside the same .db file (no separate server).
+// Backfill from the legacy `embeddings` table runs once on boot.
+pub mod vec_search;

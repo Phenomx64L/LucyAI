@@ -2920,6 +2920,7 @@ dependencies = [
  "sha2",
  "similar",
  "simsearch",
+ "sqlite-vec",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -5294,6 +5295,15 @@ checksum = "7bba3a93db0cc4f7bdece8bb09e77e2e785c20bfebf79eb8340ed80708048790"
 dependencies = [
  "nom",
  "unicode_categories",
+]
+
+[[package]]
+name = "sqlite-vec"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

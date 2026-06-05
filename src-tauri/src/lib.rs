@@ -123,6 +123,16 @@ pub fn run() {
         }
     }
 
+    // v1.7.93 — Register sqlite-vec auto-extension BEFORE any connection
+    // is opened. The auto-extension hook fires at each `sqlite3_open` so
+    // every pooled connection inherits the vec0 virtual-table type.
+    // Failure here is non-fatal — vec_search degrades to no-op and the
+    // app continues with the legacy linear cosine scan path.
+    match commands::vec_search::init_extension() {
+        Ok(_)  => eprintln!("[vec_search] sqlite-vec auto-extension registered"),
+        Err(e) => eprintln!("[vec_search] init failed (degrading to legacy cosine): {}", e),
+    }
+
     tauri::Builder::default()
         // v1.4.10 — Single-instance: if a second Lucy is launched, focus
         // the existing window instead of spawning a duplicate process.
@@ -181,6 +191,37 @@ pub fn run() {
             // older twin. Complements the 24 h LLM consolidation by
             // catching same-session noise before it accumulates.
             commands::auto_dedup::start_background_loop();
+
+            // v1.7.93 — One-shot sqlite-vec backfill. Runs once on app
+            // start (in a blocking background task) to copy any
+            // pre-existing rows from the legacy `embeddings` table into
+            // the new vec0 HNSW index. Idempotent — subsequent boots
+            // skip entries already present.
+            tauri::async_runtime::spawn(async {
+                // Wait a bit so the DB pool is settled.
+                tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    let _ = crate::commands::metrics::shared_db(|conn| {
+                        match crate::commands::vec_search::backfill_from_embeddings(conn) {
+                            Ok((ins, _skip, err)) => {
+                                if ins > 0 || err > 0 {
+                                    crate::utils::logging::write_app_log(
+                                        "INFO",
+                                        &format!("vec_search backfill: inserted={} errored={}", ins, err),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                crate::utils::logging::write_app_log(
+                                    "WARN",
+                                    &format!("vec_search backfill failed: {}", e),
+                                );
+                            }
+                        }
+                        Ok::<(), String>(())
+                    });
+                }).await;
+            });
 
             // ── OpenClaw Gateway — token-protected localhost webhook receiver ──
             // Opt-out via `LUCY_DISABLE_OPENCLAW=1`. Auth required: clients must

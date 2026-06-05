@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.93] — 2026-06-05
+
+### sqlite-vec — durable HNSW vector index inside the same .db
+
+Plan C from the memory-DB conversation: integrate
+[`sqlite-vec`](https://github.com/asg017/sqlite-vec) so Lucy gets a
+true HNSW vector index without leaving SQLite, without running a
+separate server (Qdrant, Weaviate, …), and without breaking the
+air-gap deploy story.
+
+**Crate**: `sqlite-vec = "0.1"` (0.1.9 resolved). Bundled with our
+existing `rusqlite = "0.31"` build (added `load_extension` feature
+so the static auto-extension hook works). Zero new external
+dependencies; the `.dll`/`.so` payload is statically linked into
+`lucy-svelte.exe`.
+
+**New module** (`src-tauri/src/commands/vec_search.rs`, 2 tests):
+- `init_extension()` registers `sqlite3_vec_init` as a
+  `sqlite3_auto_extension` BEFORE the connection pool is built, so
+  every pooled connection inherits the `vec0` virtual-table type.
+  Called once from `lib.rs::run()`. Failure is logged and the app
+  degrades to the legacy linear cosine scan.
+- `embeddings_vec` virtual table (created lazily): `vec0(embedding
+  float[768] distance_metric=cosine)`. Cosine metric so a hit's
+  `distance` ∈ [0, 2] maps directly to `similarity = 1 - distance`.
+- `embeddings_vec_map` side-table joins vec0 rowids back to source
+  rows (entity_type, entity_id, text). Indexed by entity for cheap
+  upsert/delete.
+- `upsert_vec` / `delete_vec` keep the index in sync.
+- `knn(conn, query, limit)` runs a `MATCH … AND k = ?` against vec0
+  joined to the map. Returns `VecHit { entity_type, entity_id, text,
+  distance }`.
+- `backfill_from_embeddings()` — idempotent one-shot. Pulls every
+  768-dim row from the legacy `embeddings` table that isn't already
+  in the vec0 index and inserts it.
+
+**Wired into the existing pipeline** (`commands/embeddings.rs`):
+- `semantic_search` gained a tier between the in-memory `vec_index`
+  fast path and the linear cosine scan: if the in-memory index is
+  cold (just booted, not yet built) we hit `vec_search::knn` first.
+  Persistent durable index → no cold-boot rebuild penalty.
+- `upsert_embedding` mirrors every new vector into vec0 (best-effort;
+  failure logged but the source `embeddings` row still commits).
+- `delete_embedding` drops the matching vec0 entry.
+
+**Boot wire-up** (`lib.rs::run` + setup hook):
+- Extension registration: BEFORE `tauri::Builder::default()`.
+- Backfill: tokio task spawned in `setup()`, fires after 45 s warmup
+  so DB pool is settled. Logs `inserted=N errored=N` only when there's
+  something to report. Idempotent across restarts.
+
+**What this buys Lucy**:
+- Sub-millisecond ANN even at 100K+ vectors (HNSW vs O(N) linear scan).
+- DURABLE: index survives restarts. No 60-second cold-boot rebuild
+  like the in-memory `vec_index` does.
+- Hybrid queries possible (vec MATCH + SQL filter in the same SELECT).
+  Not yet exercised by the recall layer — opportunity for v1.8.
+- Stays inside the same `lucy.db` file. Backup, audit, air-gap
+  stories unchanged.
+
+**What it doesn't break**:
+- Source-of-truth is still the legacy `embeddings` table.
+  `vec_search` is a derived index.
+- Linear cosine scan stays as the final fallback. If vec0 returns
+  empty (cold backfill, dim mismatch, extension load failure) the
+  caller transparently falls through.
+- No frontend changes needed — the upgrade is fully under the recall
+  surface.
+
+cargo test --lib vec_search — 2/2 passed.
+cargo check — clean (1 pre-existing warning).
+
+---
+
 ## [1.7.92] — 2026-06-05
 
 ### Slash menu + typeahead: all 4 skill universes now visible

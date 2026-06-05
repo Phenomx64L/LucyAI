@@ -402,6 +402,12 @@ pub async fn upsert_embedding(
                created_at = strftime('%s','now')",
             params![id, entity_type, entity_id, text, blob, dims, used_model],
         ).map_err(|e| format!("Failed to upsert embedding: {}", e))?;
+        // v1.7.93 — Mirror into the sqlite-vec index in the SAME txn-less
+        // pass. Failure here is logged but not propagated — the source
+        // row in `embeddings` is what matters; vec_search degrades to no
+        // hit and the caller falls back to the in-memory HNSW or the
+        // linear cosine scan.
+        let _ = super::vec_search::upsert_vec(conn, &entity_type, &entity_id, &text, &v);
         Ok(())
     })?;
     // Invalidate HNSW index so it rebuilds on next unfiltered search
@@ -416,8 +422,10 @@ pub async fn delete_embedding(entity_type: String, entity_id: String) -> Result<
     shared_db(|conn| {
         conn.execute(
             "DELETE FROM embeddings WHERE entity_type = ?1 AND entity_id = ?2",
-            params![entity_type, entity_id],
+            params![&entity_type, &entity_id],
         ).map_err(|e| format!("Failed to delete embedding: {}", e))?;
+        // v1.7.93 — Drop the matching vec_search index entry too.
+        let _ = super::vec_search::delete_vec(conn, &entity_type, &entity_id);
         Ok(())
     })?;
     // Invalidate HNSW index
@@ -453,6 +461,39 @@ pub async fn semantic_search(
                 .map(|(et, eid, text, score)| SemanticHit { entity_type: et, entity_id: eid, text, score })
                 .collect();
             return Ok(hits);
+        }
+    }
+
+    // ── v1.7.93 — Second-tier fast path: sqlite-vec HNSW on disk ─────────
+    // The in-memory vec_index above is the fastest path BUT it's not built
+    // until the background loader fires AND has to rebuild on every boot.
+    // sqlite-vec gives us a durable, on-disk HNSW that survives restarts.
+    // Sits between the in-memory index (fastest, transient) and the linear
+    // scan (slowest, always works). Only used for unfiltered queries —
+    // entity_type filtering against the vec0 join would require an extra
+    // CTE we haven't wired yet.
+    if entity_type.is_none() {
+        let knn_res = shared_db(|conn| {
+            super::vec_search::knn(conn, &qvec, limit)
+                .map_err(|e| e)
+        });
+        if let Ok(rows) = knn_res {
+            if !rows.is_empty() {
+                let hits: Vec<SemanticHit> = rows.into_iter()
+                    .map(|h| SemanticHit {
+                        entity_type: h.entity_type,
+                        entity_id:   h.entity_id,
+                        text:        h.text,
+                        // cosine_distance ∈ [0, 2] → similarity = 1 - distance
+                        // (we set distance_metric=cosine on the vec0 table).
+                        score:       (1.0_f32 - h.distance).max(0.0),
+                    })
+                    .filter(|h| h.score >= min_score)
+                    .collect();
+                if !hits.is_empty() {
+                    return Ok(hits);
+                }
+            }
         }
     }
 

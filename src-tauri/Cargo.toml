@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.7.92"
+version = "1.7.93"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
@@ -52,7 +52,12 @@ tauri-plugin-window-state = "2"
 # likely to corrupt under that scenario).
 tauri-plugin-single-instance = "2"
 regex = "1"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
+# v1.7.93 — sqlite-vec extension. HNSW vector index inside the SAME .db
+# file. No separate server, no extra process — just a virtual table type
+# we register at boot. Replaces the linear cosine scan for embeddings
+# with sub-millisecond ANN.
+sqlite-vec = "0.1"
 # P11 audit: connection pool — splits read/write so concurrent readers don't
 # serialize through one mutex. r2d2_sqlite 0.24 matches rusqlite 0.31 series.
 r2d2 = "0.8"
