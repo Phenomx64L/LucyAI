@@ -181,7 +181,18 @@
         align-items: center;
         gap: 4px;
         height: 22px;
-        padding: 0 14px;
+        /* v1.7.74 — Right padding reserves the column directly above the
+           window-control buttons (panic + focus + minimize + maximize +
+           close = 5 × 46 px = 230 px). Without it, the posture chip and
+           the strip's clickable background landed right above the ×
+           button. Although the bands are on different Y rows (the
+           TabBar is BELOW the strip), Fitts's-law-style corner clicks
+           — sweeping the cursor in from the top-right corner of the
+           screen — would hit the chip before reaching ×. Reserving the
+           right column gives the close button the "infinite target"
+           at the corner that operators expect on Windows.
+           14 px left padding preserved unchanged. */
+        padding: 0 240px 0 14px;
         font-family: var(--mono, ui-monospace, monospace);
         font-size: 10.5px;
         line-height: 1;

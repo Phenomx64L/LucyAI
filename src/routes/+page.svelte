@@ -1286,13 +1286,35 @@ import { listen } from '@tauri-apps/api/event';
 
     $: contextMax   = activeTab?.contextMax ?? 50000;
     $: ctxPct       = Math.min(100, Math.round((contextUsed / contextMax) * 100));
+    // v1.7.74 — Badge label resolution. Order matters — more specific
+    // matches must come BEFORE more general ones (3.1-flash-lite contains
+    // "3-flash" as a substring so it'd otherwise be tagged "Flash 3").
+    // The Anthropic / OpenAI labels were missing entirely, which is why
+    // the badge stayed blank when a Claude/GPT tab was active.
     $: modelLabel = (() => {
         const m = activeTab?.selectedModel || '';
-        if (m.includes('3.1-pro'))        return '◆ Pro 3.1';
-        if (m.includes('3-flash'))        return '⚡ Flash 3';
-        if (m.includes('3.1-flash-lite')) return '› Lite 3.1';
-        if (m.includes('2.5-pro'))        return '◆ Pro 2.5';
-        return '⚡ Flash 2.5';
+        if (!m)                            return '⚡ Flash 3.5';   // empty → show default label
+        // Local Ollama
+        if (m.startsWith('local-'))        return '◐ Local';
+        // NVIDIA NIM (owner/model shape or 'nvidia-custom')
+        if (m === 'nvidia-custom' || m.includes('/')) return '◍ NIM';
+        // Gemini family (specific → general)
+        if (m.includes('3.1-pro'))         return '◆ Pro 3.1';
+        if (m.includes('3.1-flash-lite'))  return '› Lite 3.1';
+        if (m.includes('3.5-flash'))       return '⚡ Flash 3.5';
+        if (m.includes('3-flash'))         return '⚡ Flash 3';
+        if (m.includes('2.5-pro'))         return '◆ Pro 2.5';
+        if (m.includes('flash-lite'))      return '› Flash-Lite';
+        if (m.startsWith('gemini-2.5-flash')) return '⚡ Flash 2.5';
+        // Anthropic family
+        if (m.includes('opus-4-7'))        return '◇ Opus 4.7';
+        if (m.includes('sonnet-4-6'))      return '◇ Sonnet 4.6';
+        if (m.includes('sonnet-4-5'))      return '◇ Sonnet 4.5';
+        if (m.includes('haiku-4-5'))       return '◇ Haiku 4.5';
+        // OpenAI family
+        if (m.includes('gpt-5.5-mini'))    return '○ GPT-5.5m';
+        if (m.includes('gpt-5.5'))         return '○ GPT-5.5';
+        return m.slice(0, 20);   // unknown — show raw id truncated so the bug is visible, not silent
     })();
     // U9: descripción del modelo para tooltip
     $: modelDesc = (() => {
@@ -2579,7 +2601,12 @@ import { listen } from '@tauri-apps/api/event';
         const t = {
             id, title: userLang.startsWith('en') ? 'New Terminal' : 'Nueva Terminal',
             messages: [],
-            attachedFiles: [], inputValue: '', selectedModel: 'gemini-3-flash-preview', nvidiaCustomModel: '',
+            // v1.7.74 — Default to LLM.FAST ('gemini-3.5-flash'). The legacy
+            // 'gemini-3-flash-preview' string is no longer in LLM_GROUPS, so
+            // the composer's <select bind:value> couldn't resolve it and
+            // rendered an empty model badge for every new tab. The badge now
+            // shows the actual default from frame 1.
+            attachedFiles: [], inputValue: '', selectedModel: LLM.FAST, nvidiaCustomModel: '',
             contextMax: 50000, _histIdx: undefined,
             isProcessing: false, usedVoice: false, isListening: false,
             pendingMessage: null,       // {text, files, usedVoice} — queued while processing
@@ -2689,7 +2716,7 @@ import { listen } from '@tauri-apps/api/event';
             id: newId, title: newTitle,
             messages: clonedMsgs,
             attachedFiles: [], inputValue: '',
-            selectedModel: src.selectedModel || 'gemini-3-flash-preview',
+            selectedModel: src.selectedModel || LLM.FAST,
             nvidiaCustomModel: src.nvidiaCustomModel || '',
             contextMax: src.contextMax || 50000,
             _histIdx: undefined,

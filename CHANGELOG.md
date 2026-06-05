@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.74] — 2026-06-04
+
+### UI fixes — Mission Strip vs window controls + empty model badge
+
+**Two operator-reported bugs:**
+
+**1. Mission Strip stole the corner click target.**
+Mission Strip rendered full-width with content (posture chip + clock)
+ending at the very right edge of the window. Although the strip and
+the window-control buttons live on different Y rows (TabBar is below
+Mission Strip), Fitts's-law-style corner clicks — sweeping the cursor
+in from the top-right corner of the screen — would hit the strip's
+chip before reaching the × button. Reduced precision when going for
+minimize / maximize / close.
+
+*Fix*: `padding-right: 240 px` on `.mission-strip`. Reserves the column
+directly above the 5-button (panic + focus + min + max + close = 230
+px) control cluster so the close button regains its corner "infinite
+target".
+
+**2. Model badge on the composer was blank on every new tab.**
+`crearTab()` set `selectedModel: 'gemini-3-flash-preview'` — a legacy
+id no longer in `LLM_GROUPS`. The `<select bind:value={tab.selectedModel}>`
+couldn't resolve it, so the badge rendered as an empty pill. The
+operator had to manually pick a model on every new tab just to see
+which one was active.
+
+*Fix*:
+- `crearTab()` and the tab-duplicate path now default to
+  `LLM.FAST` (the single source of truth in `$lib/llm-models.ts`,
+  resolves to `'gemini-3.5-flash'`).
+- `modelLabel` rewritten: was only matching old Gemini ids
+  (`3.1-pro`, `3-flash`, `3.1-flash-lite`, `2.5-pro`) and fell through
+  to `'⚡ Flash 2.5'` for everything else. New version covers Gemini
+  3.5 + 3.1, Anthropic Opus/Sonnet/Haiku, OpenAI GPT-5.5 (+ mini),
+  Local Ollama, and NVIDIA NIM. Ordering: specific → general so
+  `3.1-flash-lite` no longer triggers the `3-flash` rule.
+- Unknown ids now render as a truncated raw id (`m.slice(0, 20)`)
+  instead of a wrong/silent fallback — bugs surface visibly.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.73] — 2026-06-04
 
 ### Auto-fork advisor — Lucy decides when to spawn sub-agents
