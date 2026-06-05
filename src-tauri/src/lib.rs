@@ -174,6 +174,14 @@ pub fn run() {
             // any new ones. Cooldown of 4 h prevents nagging.
             commands::proactive_detector::start_background_loop();
 
+            // v1.7.89 — Fast no-LLM dedup loop. Every 30 minutes, scans
+            // memories saved in the last hour for near-duplicates
+            // (tag-Jaccard ≥ 0.90, title 3-gram cosine ≥ 0.92, or
+            // verbatim content prefix collision) and supersedes the
+            // older twin. Complements the 24 h LLM consolidation by
+            // catching same-session noise before it accumulates.
+            commands::auto_dedup::start_background_loop();
+
             // ── OpenClaw Gateway — token-protected localhost webhook receiver ──
             // Opt-out via `LUCY_DISABLE_OPENCLAW=1`. Auth required: clients must
             // send `Authorization: Bearer <token>` header. Token is written to
@@ -1005,6 +1013,8 @@ pub fn run() {
             commands::semantic_links::memory_link_list,
             commands::semantic_links::memory_link_remove,
             commands::semantic_links::memory_link_kinds,
+            // v1.7.89 — Manual trigger for the fast dedup pass.
+            commands::auto_dedup::auto_dedup_run,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

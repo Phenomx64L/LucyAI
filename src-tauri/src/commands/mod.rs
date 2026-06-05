@@ -81,3 +81,7 @@ pub mod graph_layout_cache;
 // derives_from, references, contradicts, refines — that turn the
 // similarity graph into a reasoning graph.
 pub mod semantic_links;
+// v1.7.89 — Fast no-LLM dedup pass (every 30 min). Catches near-
+// duplicate memories created within the same session before the 24 h
+// LLM consolidation has a chance to fuse them.
+pub mod auto_dedup;

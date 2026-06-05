@@ -75,7 +75,7 @@ export function setLlmDisambEnabled(on: boolean): void {
 
 export interface UnifiedRouteResult {
     /** Which tier won, in order of cost: keyword < embedding < llm < manual */
-    method:      'keyword' | 'embedding' | 'llm' | 'manual' | 'preset' | 'none';
+    method:      'keyword' | 'embedding' | 'fused' | 'llm' | 'manual' | 'preset' | 'none';
     /** Active skill if one was selected this turn. */
     skill:       SecuritySkillFull | null;
     /** Confidence score in [0, 1]. Keyword scores are normalized by 100. */
@@ -162,10 +162,13 @@ export async function autoRouteSkill(userPrompt: string): Promise<UnifiedRouteRe
         id: c.meta.id, name: c.meta.name, score: c.score,
     }));
 
-    // Tier 1 or 2 succeeded.
-    if (raw.method === 'keyword' || raw.method === 'embedding') {
+    // Tier 1, 2, or 2.5 (v1.7.88 RRF-fused) succeeded.
+    if (raw.method === 'keyword' || raw.method === 'embedding' || raw.method === 'fused') {
         if (!raw.top) return { ...empty, elapsed_ms: performance.now() - t0 };
         const full = await loadSkillBody(raw.top.meta.id);
+        // v1.7.88 — keyword keeps its 0..100 → 0..1 normalization; embedding
+        // is already a cosine in 0..1 * 100; fused inherits whatever the
+        // backend assigned to top (typically the embedding cosine).
         const score = raw.method === 'keyword' ? Math.min(1.0, raw.top.score / 100) : raw.top.score / 100;
         return {
             method: raw.method as any,

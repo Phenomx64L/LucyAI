@@ -720,6 +720,70 @@ pub async fn security_skills_auto_route(user_prompt: String) -> Result<AutoRoute
                 embeddings_available: true,
             });
         }
+
+        // ── Tier 2.5 — RRF fusion of keyword + embedding rankings ──────
+        //
+        // Cherry-pick from rohitg00/agentmemory's triple-stream retrieval.
+        // When NEITHER keyword nor embedding crossed its individual
+        // threshold but BOTH produced candidates, fusing the two
+        // rankings via Reciprocal Rank Fusion frequently surfaces the
+        // correct skill — the one that ranks well in BOTH streams even
+        // if it dominates neither.
+        //
+        // RRF score per skill_id:  score = Σ 1 / (k + rank_i)
+        // where rank_i is its 1-indexed rank in each ranking it appears
+        // in, and k = 60 (Cormack et al. 2009 standard).
+        //
+        // We accept a fused top if it has BOTH:
+        //   • Appeared in both rankings (≥2 streams)
+        //   • Its keyword score is ≥ 25% of TIER1 threshold (so we don't
+        //     fuse pure noise) OR its embedding cosine is ≥ TIER3 floor.
+        const RRF_K: f64 = 60.0;
+        const FUSED_MIN_RRF_SCORE: f64 = 0.025;  // both streams at rank ≤ 5
+        let mut fused: std::collections::HashMap<String, (f64, u8)> = std::collections::HashMap::new();
+        for (rank, h) in kw_hits.iter().enumerate() {
+            let entry = fused.entry(h.meta.id.clone()).or_insert((0.0, 0));
+            entry.0 += 1.0 / (RRF_K + (rank as f64 + 1.0));
+            entry.1 |= 0b01;   // stream 1: keyword
+        }
+        for (rank, (_, h)) in emb_ranked.iter().enumerate() {
+            let entry = fused.entry(h.meta.id.clone()).or_insert((0.0, 0));
+            entry.0 += 1.0 / (RRF_K + (rank as f64 + 1.0));
+            entry.1 |= 0b10;   // stream 2: embedding
+        }
+        // Keep only candidates present in BOTH streams (mask == 0b11).
+        let mut both: Vec<(String, f64)> = fused.into_iter()
+            .filter(|(_, (_, mask))| *mask == 0b11)
+            .map(|(id, (s, _))| (id, s))
+            .collect();
+        both.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some((fused_id, fused_score)) = both.first() {
+            if *fused_score >= FUSED_MIN_RRF_SCORE {
+                // Pull the SkillSearchHit from either ranking (richer
+                // metadata available on the embedding side; fall back to
+                // keyword).
+                let resolved = emb_ranked.iter().find(|(_, h)| &h.meta.id == fused_id).map(|(_, h)| h.clone())
+                    .or_else(|| kw_hits.iter().find(|h| &h.meta.id == fused_id).cloned());
+                if let Some(top_hit) = resolved {
+                    // Build the candidate list as the top-5 of the fused
+                    // ranking, resolving each to its richest SkillSearchHit.
+                    let mut fused_cands: Vec<SkillSearchHit> = Vec::new();
+                    for (id, _) in both.iter().take(5) {
+                        if let Some(h) = emb_ranked.iter().find(|(_, h)| &h.meta.id == id).map(|(_, h)| h.clone())
+                            .or_else(|| kw_hits.iter().find(|h| &h.meta.id == id).cloned()) {
+                            fused_cands.push(h);
+                        }
+                    }
+                    return Ok(AutoRouteResult {
+                        method: "fused".into(),
+                        top: Some(top_hit),
+                        candidates: fused_cands,
+                        embeddings_available: true,
+                    });
+                }
+            }
+        }
+
         // Tier 3 zone — surface candidates for caller-side disambiguation.
         return Ok(AutoRouteResult {
             method: "ambiguous".into(),

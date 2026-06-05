@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.88] — 2026-06-05
+
+### RRF auto-route fusion + fast session-scoped dedup
+
+Two cherry-picks from the memory-system research repos
+(`rohitg00/agentmemory`'s triple-stream retrieval and
+`savantskie/persistent-ai-memory`'s dedup pattern), adapted to Lucy's
+Rust + SQLite stack with no new runtime dependencies.
+
+**1. RRF fusion in security skill auto-router**
+(`security_skills.rs::security_skills_auto_route`). Until now the
+router was strictly tiered: keyword wins → return; else embedding
+wins → return; else ambiguous. The middle case ("neither stream
+crossed its individual threshold but BOTH produced reasonable
+candidates") fell to the ambiguous tier — Lucy then waited for the
+operator to disambiguate even though the right answer was the skill
+ranked well in both streams.
+
+New Tier 2.5 between embedding-wins and ambiguous:
+- Reciprocal Rank Fusion over the keyword + embedding ranked lists
+  using the canonical Cormack k=60 constant. A skill's RRF score is
+  the sum of 1/(k + rank) across every list it appears in.
+- A fused-top is accepted only if (a) it appears in BOTH lists and
+  (b) its RRF score ≥ 0.025 (≈ top-5 in both streams). Below that
+  threshold the router falls through to the existing ambiguous tier.
+- Returns `method = "fused"` so the frontend chip can label it
+  distinctly from pure keyword / pure embedding hits.
+
+`unified-context.ts` gained the `'fused'` variant in its
+`RoutingResult.method` union and treats it the same as keyword /
+embedding for caller-facing behaviour.
+
+Expected: previously-ambiguous prompts (most "borderline" auto-
+routes the operator saw) now skip the disambiguation modal because
+the fused ranking unambiguously points to one skill.
+
+**2. Fast no-LLM session-scoped dedup loop** (new
+`commands/auto_dedup.rs`, 3 tests).
+
+Lucy already has a 24-hour LLM-powered consolidation pass
+(`auto_consolidate_run`) that fuses semantically-related clusters.
+That's the right tool for "you mentioned WSUS in three different
+contexts; here's a unified note" — but it can take up to a day. The
+v1.7.65 bug ("13 partial duplicates accumulated") was caused by an
+agent loop saving the same finding 13 times within minutes; waiting
+for the 24 h cycle to catch that is annoying.
+
+New 30-minute background loop:
+- Scans memories created in the last 60 minutes (capped at 200).
+- Detects near-dups via three signals (any one triggers):
+    * Tag-set Jaccard ≥ 0.90
+    * Title char-3-gram cosine ≥ 0.92
+    * Verbatim content prefix collision (FNV-1a on first 256 chars)
+- Supersedes the OLDER twin by setting `superseded_by = <newer_id>`.
+  The newer memory keeps its full content; the older one drops out
+  of recall but stays as audit history.
+- Skips `importance ≥ 3` memories (explicit user saves) and any
+  already-superseded ones.
+- O(n²) over the window but n ≤ 200 so each tick is < 1 ms.
+- Logs to `lucy_app.log` only when at least one supersede happened.
+- Manual trigger via the new `auto_dedup_run` Tauri command.
+
+Bootstraps 7 min after app start; uses `tauri::async_runtime::spawn`
+to play nicely with the runtime cap added in v1.7.83.
+
+cargo test --lib auto_dedup — 3/3 passed.
+svelte-check — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.87] — 2026-06-05
 
 ### Memory Graph: typed semantic relationships (memory-graph-style)
