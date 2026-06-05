@@ -537,3 +537,76 @@
     align-self: center;
     margin-left: 4px;
 }
+
+/* ── v1.7.78 — Extended Thinking (visible reasoning) ─────────────────────────
+   Native <details> / <summary> disclosure widget for the THOUGHT blocks the
+   model emits during chain-of-thought. Collapsed by default so the chat
+   stays clean; click the summary to expand the reasoning trace.
+
+   Style choices mirror Claude.ai's thinking blocks (subtle background,
+   dimmed text, monospace summary). Cyan accent so the block reads as
+   "machine-internal" rather than competing with normal chat content. */
+.lucy-thought {
+    margin: 6px 0 10px;
+    padding: 0;
+    border: 1px solid rgba(34, 211, 238, 0.16);
+    border-left: 2px solid rgba(34, 211, 238, 0.45);
+    border-radius: 6px;
+    background: rgba(34, 211, 238, 0.03);
+    overflow: hidden;
+    font-size: 0.94em;
+}
+.lucy-thought > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 6px 10px;
+    color: #22d3ee;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.25px;
+    user-select: none;
+    transition: background 0.12s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.lucy-thought > summary::-webkit-details-marker { display: none; }
+.lucy-thought > summary::before {
+    content: '▸';
+    display: inline-block;
+    width: 10px;
+    transition: transform 0.18s ease;
+    opacity: 0.75;
+}
+.lucy-thought[open] > summary::before { transform: rotate(90deg); }
+.lucy-thought > summary:hover { background: rgba(34, 211, 238, 0.07); }
+.lucy-thought > :not(summary) {
+    padding: 8px 12px 10px;
+    color: var(--txt2, #94a3b8);
+    border-top: 1px solid rgba(34, 211, 238, 0.10);
+    background: rgba(0, 0, 0, 0.15);
+    line-height: 1.5;
+}
+.lucy-thought p { margin: 0 0 8px; }
+.lucy-thought p:last-child { margin-bottom: 0; }
+.lucy-thought code {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.92em;
+}
+.lucy-thought pre {
+    background: rgba(0, 0, 0, 0.35);
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    overflow-x: auto;
+    margin: 6px 0;
+}
+.lucy-thought ul, .lucy-thought ol { padding-left: 18px; margin: 4px 0; }
+.lucy-thought li { margin: 2px 0; }
+/* Honour reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+    .lucy-thought > summary::before { transition: none; }
+}

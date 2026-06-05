@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.78] — 2026-06-05
+
+### Extended Thinking visible — collapsible reasoning blocks
+
+Frontier-product parity: Claude.ai, ChatGPT o3, and Gemini Deep Think
+all show the model's chain-of-thought as a collapsible block above
+the final answer. Lucy already received `<THOUGHT>...</THOUGHT>` tags
+from her system prompt but `cleanStreamDisplay` was DELETING them —
+the operator never got to see Lucy's reasoning.
+
+**Change:** `cleanStreamDisplay` in `src/lib/llm-stream.ts` now
+converts THOUGHT blocks into a native `<details>` disclosure widget
+instead of stripping them. Collapsed by default so the chat stays
+clean; the operator opens it on demand.
+
+**Markup emitted (passes through marked → DOMPurify):**
+```
+<details class="lucy-thought">
+<summary>💭 Razonando…</summary>
+
+(reasoning content as markdown — bullets, fences, links all render)
+
+</details>
+```
+
+**Styling** (`src/lib/styles/chat-thread.css`):
+- Cyan accent (`#22d3ee`) so the block reads as machine-internal vs
+  competing with normal chat content. Matches the v1.7.76 maintenance-
+  tab cyan family.
+- 2-px left border for the "internal thought" treatment.
+- Monospace summary with rotating `▸` chevron.
+- Dimmed body text (`--txt2`) so expanded reasoning doesn't fight
+  the final answer for attention.
+- Markdown elements (p / code / pre / ul / li) styled tightly for
+  the inner content.
+- `@media (prefers-reduced-motion: reduce)` honours system preference.
+
+**Mid-stream behaviour:** the regex match arm `(?:<\/THOUGHT>|$)` ALSO
+captures unclosed tags during streaming, so reasoning shows up
+progressively inside the collapsed widget. Same UX Anthropic ships
+in Claude.ai — the user can pop it open mid-response to watch
+reasoning unfold token-by-token.
+
+**Zero JS runtime cost.** `<details>` is a native HTML5 disclosure
+widget; no Svelte reactivity, no event handlers, no extra dependencies.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.77] — 2026-06-05
 
 ### 5 more SysAdmin skill presets — Tier 1 ops domains

@@ -60,7 +60,26 @@ export function cleanStreamDisplay(text: string, codeGenIntent: boolean): string
         .replace(/<EXECUTE_REMOTE[\s\S]*?(?:<\/EXECUTE_REMOTE>|$)/gi, '')
         .replace(/<REMEMBER[^>]*>[\s\S]*?(?:<\/REMEMBER>|$)/gi, '')
         .replace(/<TOOL>[\s\S]*?(?:<\/TOOL>|$)/gi, '')
-        .replace(/<THOUGHT>[\s\S]*?(?:<\/THOUGHT>|$)/gi, '')
+        // v1.7.78 — Extended Thinking visible.
+        // Instead of deleting <THOUGHT>...</THOUGHT> blocks (the model's
+        // internal reasoning), convert them to a collapsed <details>
+        // block so the operator can OPT-IN to see Lucy's reasoning trace
+        // — matching the Claude/Gemini/o3 "extended thinking" pattern.
+        //
+        // Why <details>: native HTML disclosure widget, zero JS, zero
+        // reactive cost, works with markdown render and DOMPurify pass-
+        // through (HTML5 details + summary are in the safe default list).
+        //
+        // Mid-stream case: the trailing `(?:<\/THOUGHT>|$)` form matches
+        // both closed and unclosed tags. While streaming, the inner text
+        // appears progressively inside the collapsed widget so the user
+        // can pop it open to watch reasoning unfold token-by-token —
+        // the exact UX Anthropic ships in Claude.ai.
+        //
+        // Blank line padding around `$1` so marked() treats the inner
+        // text as markdown (bullets, fences, links all work).
+        .replace(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/gi,
+                 (_, inner) => `\n<details class="lucy-thought">\n<summary>💭 Razonando…</summary>\n\n${inner.trim()}\n\n</details>\n`)
         .replace(/<FILECONTENT>[\s\S]*?(?:<\/FILECONTENT>|$)/gi, '')
         .replace('__TRUNCATED__', '')
         .trim();
