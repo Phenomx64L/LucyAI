@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.96] — 2026-06-05
+
+### Tier-B operational sentinels — Lucy watches the host
+
+Four more loops added to `commands/housekeeping.rs`. Where Tier A
+(v1.7.95) keeps Lucy herself fit, Tier B watches the host she lives
+on. All four are *observe-and-report* — they never mutate operator
+state. Findings land in `lucy_app.log` and `proactive_detector`
+picks them up as insights on its next 3-min tick.
+
+**6. `disk_sentinel`** — 30 min, 4 min warmup.
+- Walks every mounted drive via `sysinfo::Disks`.
+- WARN at <15% free, ERROR at <5% free.
+- Reports mount, free %, free GiB per affected drive.
+- No auto-cleanup — operator decides what's safe to remove.
+
+**7. `resource_pressure`** — 5 min, 6 min warmup.
+- Samples RAM via `sysinfo::System::refresh_memory`.
+- Samples CPU via two `refresh_cpu` calls separated by
+  `MINIMUM_CPU_UPDATE_INTERVAL` + 50 ms (required for accurate
+  delta-based usage).
+- WARN if used-mem ≥ 85% OR average CPU ≥ 85%.
+- One log line summarises both axes so trend is easy to spot.
+
+**8. `db_size_watcher`** — 12 h, 12 min warmup.
+- `PRAGMA page_count * PRAGMA page_size` → logical DB size.
+- INFO at every tick (trend visible for long-term auditing).
+- WARN past 500 MB, ERROR past 2 GB with VACUUM recommendation.
+- Excludes WAL/SHM (those auto-checkpoint per existing PRAGMA).
+
+**9. `rotated_log_sweep`** — 24 h, 30 min warmup.
+- `utils::logging` already auto-rotates lucy_app.log at 5 MB and
+  gzips the previous file. Over months the .gz archives accumulate.
+- Prunes any `*.gz` in `%APPDATA%/Lucy/logs/` older than 30 days.
+- NEVER touches the active `*.log` file.
+- Reports count + bytes freed.
+
+**Wired** in the same `start_all()` from v1.7.95 — operator gets
+all nine loops via one call. Each loop gated independently by
+`LUCY_HK_NO_<NAME>`.
+
+**Cadences** chosen to keep load thin: disk_sentinel and
+db_size_watcher run far apart, resource_pressure piggybacks on the
+existing 5-min slot already used by mcp_health (different work, so
+they don't contend on the same resource).
+
+cargo test --lib housekeeping — 2/2 passed (added `tier_b_module_paths_compile`).
+cargo check — clean.
+
+---
+
 ## [1.7.95] — 2026-06-05
 
 ### Tier-A self-care schedulers — Lucy keeps herself fit between turns

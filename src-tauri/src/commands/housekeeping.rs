@@ -45,11 +45,17 @@ use std::time::Duration;
 /// Single entry point — called once from `lib.rs::run` setup().
 /// Each sub-loop has its own once-guard inside, so re-calls are no-ops.
 pub fn start_all() {
+    // Tier A — self-care
     embed_warmup::spawn();
     audit_verify::spawn();
     mcp_health::spawn();
     crystal_promo::spawn();
     snapshot_retention::spawn();
+    // Tier B — operational sentinels (v1.7.96)
+    disk_sentinel::spawn();
+    resource_pressure::spawn();
+    db_size_watcher::spawn();
+    rotated_log_sweep::spawn();
 }
 
 fn env_disabled(name: &str) -> bool {
@@ -431,6 +437,272 @@ pub mod snapshot_retention {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// TIER B — operational sentinels (v1.7.96)
+//
+// Where Tier A keeps *Lucy* fit, Tier B watches the *host* she lives on.
+// Loops here observe + report; they NEVER mutate operator state. The
+// signal lands in lucy_app.log (and via proactive_detector picks it up
+// as an insight on the next 3 min tick).
+//
+//   • disk_sentinel       — drive free-space monitor
+//   • resource_pressure   — RAM / CPU pressure detector
+//   • db_size_watcher     — lucy.db logical size tracker
+//   • rotated_log_sweep   — prune ancient .log.gz archives
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── 6. disk free-space sentinel ─────────────────────────────────────────
+//
+// Polls every mounted drive via sysinfo::Disks. Logs at WARN when any
+// drive drops below 15% free, ERROR below 5%. We deliberately don't
+// auto-clean anything — the operator decides what's safe to remove.
+pub mod disk_sentinel {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(30 * 60);        // 30 min
+    const WARN_PCT: f64 = 15.0;
+    const CRIT_PCT: f64 = 5.0;
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_DISK_SENTINEL") {
+            eprintln!("[housekeeping] disk_sentinel disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(240)).await;  // 4 min warmup
+            loop {
+                let _ = tauri::async_runtime::spawn_blocking(tick).await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    fn tick() {
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        let mut warn_drives: Vec<String> = Vec::new();
+        let mut crit_drives: Vec<String> = Vec::new();
+        for d in &disks {
+            let total = d.total_space() as f64;
+            if total < 1.0 { continue; }
+            let free = d.available_space() as f64;
+            let pct = (free / total) * 100.0;
+            let mount = d.mount_point().to_string_lossy().to_string();
+            // Report bytes in GiB for readability.
+            let free_gib = free / (1024.0 * 1024.0 * 1024.0);
+            let line = format!("{} ({:.1}% free, {:.1} GiB)", mount, pct, free_gib);
+            if pct < CRIT_PCT {
+                crit_drives.push(line);
+            } else if pct < WARN_PCT {
+                warn_drives.push(line);
+            }
+        }
+        if !crit_drives.is_empty() {
+            crate::utils::logging::write_app_log(
+                "ERROR",
+                &format!("housekeeping/disk_sentinel: CRITICAL low free space — {}",
+                         crit_drives.join("; ")),
+            );
+        }
+        if !warn_drives.is_empty() {
+            crate::utils::logging::write_app_log(
+                "WARN",
+                &format!("housekeeping/disk_sentinel: low free space — {}",
+                         warn_drives.join("; ")),
+            );
+        }
+    }
+}
+
+// ── 7. resource pressure detector ───────────────────────────────────────
+//
+// RAM and CPU pressure both degrade Lucy's responsiveness (LLM token
+// streaming, SIMD cosine batches) AND signal a host issue the operator
+// might want to know about. We sample sysinfo once per tick and log at
+// WARN past a threshold. CPU needs a brief refresh-sleep-refresh pattern
+// because sysinfo reports usage as a delta between two refreshes.
+pub mod resource_pressure {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(5 * 60);         // 5 min
+    const MEM_WARN_PCT: f64 = 85.0;
+    const CPU_WARN_PCT: f64 = 85.0;
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_RESOURCE_PRESSURE") {
+            eprintln!("[housekeeping] resource_pressure disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(360)).await;  // 6 min warmup
+            loop {
+                tick().await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    async fn tick() {
+        use sysinfo::System;
+        let mut sys = System::new();
+        sys.refresh_memory();
+        sys.refresh_cpu();
+        // Required gap for accurate CPU sampling per sysinfo docs.
+        tokio::time::sleep(Duration::from_millis(
+            sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.as_millis() as u64 + 50,
+        )).await;
+        sys.refresh_cpu();
+
+        let total_mem = sys.total_memory() as f64;
+        let used_mem  = sys.used_memory() as f64;
+        let mem_pct   = if total_mem > 0.0 { used_mem / total_mem * 100.0 } else { 0.0 };
+
+        let cpus = sys.cpus();
+        let cpu_avg: f64 = if cpus.is_empty() {
+            0.0
+        } else {
+            cpus.iter().map(|c| c.cpu_usage() as f64).sum::<f64>() / (cpus.len() as f64)
+        };
+
+        let mem_hot = mem_pct >= MEM_WARN_PCT;
+        let cpu_hot = cpu_avg >= CPU_WARN_PCT;
+        if mem_hot || cpu_hot {
+            crate::utils::logging::write_app_log(
+                "WARN",
+                &format!("housekeeping/resource_pressure: mem={:.1}% cpu={:.1}% (mem_hot={} cpu_hot={})",
+                         mem_pct, cpu_avg, mem_hot, cpu_hot),
+            );
+        }
+    }
+}
+
+// ── 8. database size watcher ────────────────────────────────────────────
+//
+// lucy.db can grow large over months (user previously flagged a 386 MB
+// instance). We periodically log the logical size via PRAGMA so growth
+// trends are visible in the log, and we escalate to ERROR past a hard
+// cap so the operator runs VACUUM / clean-up.
+pub mod db_size_watcher {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(12 * 3600);      // 12 h
+    const SIZE_WARN_MB: f64 = 500.0;
+    const SIZE_CRIT_MB: f64 = 2048.0;
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_DB_SIZE_WATCHER") {
+            eprintln!("[housekeeping] db_size_watcher disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(720)).await;  // 12 min warmup
+            loop {
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    let _ = tick();
+                }).await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    fn tick() -> Result<(), String> {
+        let bytes: i64 = crate::commands::metrics::shared_db(|conn| {
+            // page_count * page_size = logical DB size (excluding WAL/SHM).
+            let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))
+                .map_err(|e| format!("page_count: {}", e))?;
+            let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))
+                .map_err(|e| format!("page_size: {}", e))?;
+            Ok::<i64, String>(page_count.saturating_mul(page_size))
+        })?;
+        let mb = (bytes as f64) / (1024.0 * 1024.0);
+        if mb >= SIZE_CRIT_MB {
+            crate::utils::logging::write_app_log(
+                "ERROR",
+                &format!("housekeeping/db_size_watcher: lucy.db is {:.1} MB — past CRIT cap ({:.0} MB). Consider VACUUM + memory archival.", mb, SIZE_CRIT_MB),
+            );
+        } else if mb >= SIZE_WARN_MB {
+            crate::utils::logging::write_app_log(
+                "WARN",
+                &format!("housekeeping/db_size_watcher: lucy.db is {:.1} MB — past WARN cap ({:.0} MB).", mb, SIZE_WARN_MB),
+            );
+        } else {
+            // Healthy: still log at INFO once per tick so trend is visible
+            // when an operator is investigating long-term growth.
+            crate::utils::logging::write_app_log(
+                "INFO",
+                &format!("housekeeping/db_size_watcher: lucy.db = {:.1} MB", mb),
+            );
+        }
+        Ok(())
+    }
+}
+
+// ── 9. rotated log sweep ────────────────────────────────────────────────
+//
+// utils::logging rotates the main lucy_app.log at 5 MB and gzips the
+// previous file as lucy_app.1.log.gz. Over months, *.log.gz archives
+// accumulate (audit + agent_loop + future logs). We prune any .gz older
+// than N days. The active .log is never touched.
+pub mod rotated_log_sweep {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(24 * 3600);      // 24 h
+    const MAX_AGE_DAYS: u64 = 30;
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_ROTATED_LOG_SWEEP") {
+            eprintln!("[housekeeping] rotated_log_sweep disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(1800)).await;  // 30 min warmup
+            loop {
+                let _ = tauri::async_runtime::spawn_blocking(tick).await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    fn tick() {
+        let dir = crate::utils::logging::get_logs_dir();
+        let Ok(read) = std::fs::read_dir(&dir) else { return; };
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(Duration::from_secs(MAX_AGE_DAYS * 86_400))
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let mut pruned = 0u32;
+        let mut bytes_freed: u64 = 0;
+        for entry in read.flatten() {
+            let path = entry.path();
+            // Only .gz archives — never the active *.log file.
+            if path.extension().and_then(|s| s.to_str()) != Some("gz") { continue; }
+            let Ok(meta) = entry.metadata() else { continue; };
+            let Ok(modified) = meta.modified() else { continue; };
+            if modified < cutoff {
+                let size = meta.len();
+                if std::fs::remove_file(&path).is_ok() {
+                    pruned += 1;
+                    bytes_freed += size;
+                }
+            }
+        }
+        if pruned > 0 {
+            let mib = (bytes_freed as f64) / (1024.0 * 1024.0);
+            crate::utils::logging::write_app_log(
+                "INFO",
+                &format!("housekeeping/rotated_log_sweep: removed {} stale .gz archive(s), {:.1} MiB",
+                         pruned, mib),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +711,17 @@ mod tests {
     fn env_disabled_reads_env() {
         // Sanity: a name we know isn't set returns false.
         assert!(!env_disabled("LUCY_HK_DEFINITELY_NOT_SET_ZZZ"));
+    }
+
+    #[test]
+    fn tier_b_module_paths_compile() {
+        // Forces the linker to resolve every Tier B sub-module so a typo
+        // in one of the spawn() symbols fails the test build, not just
+        // runtime startup. We don't call spawn() (it would start a real
+        // tokio loop); we just take its function pointer.
+        let _ = disk_sentinel::spawn as fn();
+        let _ = resource_pressure::spawn as fn();
+        let _ = db_size_watcher::spawn as fn();
+        let _ = rotated_log_sweep::spawn as fn();
     }
 }
