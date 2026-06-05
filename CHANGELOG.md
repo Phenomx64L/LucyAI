@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.89] — 2026-06-05
+
+### Fix — Lone `/` shows an interactive command menu instead of an error
+
+User report: typing just `/` and pressing Enter rendered "Comando
+desconocido: /. Usa /help para ver disponibles." That's user-hostile —
+the operator is signalling "what's there?" and we punished them with
+an error toast.
+
+**Cause**: the `default:` branch in `dispatchSlashCommand` caught the
+empty `cmd` case (raw input `'/'` parses to `cmd = ''`, then
+`/${cmd}` = `'/'`).
+
+**Fix**: explicit empty-`cmd` branch BEFORE the switch renders a
+curated, scannable command menu grouped by category:
+
+- **Memory & Graph** — /memory, /kg, /link, /recall, /crystals,
+  /insights, /consolidate
+- **Routing & Skills** — /sec-skill, /model, /route, /serial,
+  /smart-router
+- **Operations** — /proactive, /snapshot, /diff, /detective, /runbooks
+- **Workspace** — /clear, /theme, /privacy, /help
+
+Each entry shows the command (mono, accent colour) and a one-line
+description. Bilingual labels (matches `ctx.isEN`). Each `<code>` carries
+a `data-slash-fill` attribute so a future UI handler could wire
+click-to-fill the composer (out of scope for this fix — the user can
+type the command from what they see).
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.88] — 2026-06-05
 
 ### RRF auto-route fusion + fast session-scoped dedup

@@ -101,6 +101,80 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
     const sysMsg = (html: string, color = 'var(--acc)') =>
         ctx.addMsg(tabId, { role: 'system', html: `<div style="color:${color};font-size:11px;font-family:var(--mono);">${html}</div>` });
 
+    // v1.7.89 — Empty `/` shorthand. The user typed just the slash and
+    // pressed Enter — they want to discover commands, not get an
+    // "unknown command" error. Render a curated, scannable menu grouped
+    // by category. The full list is still available via /help; this is
+    // the "what's there to do?" view.
+    if (!cmd) {
+        const isEN = ctx.isEN;
+        const cats: Array<{ title: string; items: Array<{ cmd: string; desc: string }> }> = [
+            {
+                title: isEN ? 'Memory & Graph' : 'Memoria y Grafo',
+                items: [
+                    { cmd: '/memory',     desc: isEN ? 'Open Memory Browser' : 'Abrir el explorador de memoria' },
+                    { cmd: '/kg',         desc: isEN ? 'Open Knowledge Graph' : 'Abrir el grafo de conocimiento' },
+                    { cmd: '/link',       desc: isEN ? 'Manage typed semantic links between memories' : 'Gestionar relaciones tipadas entre memorias' },
+                    { cmd: '/recall',     desc: isEN ? 'Recall memories by query' : 'Recuperar memorias por consulta' },
+                    { cmd: '/crystals',   desc: isEN ? 'View memory crystals' : 'Ver crystals de memoria' },
+                    { cmd: '/insights',   desc: isEN ? 'View consolidated insights' : 'Ver insights consolidados' },
+                    { cmd: '/consolidate',desc: isEN ? 'Run consolidation now' : 'Ejecutar consolidación ahora' },
+                ],
+            },
+            {
+                title: isEN ? 'Routing & Skills' : 'Routing y Skills',
+                items: [
+                    { cmd: '/sec-skill',  desc: isEN ? 'Browse / activate security skills' : 'Buscar / activar security skills' },
+                    { cmd: '/model',      desc: isEN ? 'Change active model' : 'Cambiar el modelo activo' },
+                    { cmd: '/route',      desc: isEN ? 'Show last routing decision' : 'Ver la última decisión de routing' },
+                    { cmd: '/serial',     desc: isEN ? 'Toggle fork advisor bypass for this tab' : 'Activar/desactivar bypass del fork advisor' },
+                    { cmd: '/smart-router', desc: isEN ? 'Toggle smart-router on/off' : 'Activar/desactivar smart-router' },
+                ],
+            },
+            {
+                title: isEN ? 'Operations' : 'Operaciones',
+                items: [
+                    { cmd: '/proactive',  desc: isEN ? 'List proactive insights' : 'Listar insights proactivos' },
+                    { cmd: '/snapshot',   desc: isEN ? 'Capture a state snapshot' : 'Capturar snapshot del sistema' },
+                    { cmd: '/diff',       desc: isEN ? 'Diff two snapshots' : 'Comparar snapshots' },
+                    { cmd: '/detective',  desc: isEN ? 'Incident forensics synthesis' : 'Síntesis forense de incidente' },
+                    { cmd: '/runbooks',   desc: isEN ? 'Open runbook list' : 'Abrir la lista de runbooks' },
+                ],
+            },
+            {
+                title: isEN ? 'Workspace' : 'Espacio de trabajo',
+                items: [
+                    { cmd: '/clear',      desc: isEN ? 'Clear current chat' : 'Limpiar el chat actual' },
+                    { cmd: '/theme',      desc: isEN ? 'Change visual theme' : 'Cambiar tema visual' },
+                    { cmd: '/privacy',    desc: isEN ? 'Toggle privacy mode (local-only LLM)' : 'Modo privacidad (sólo LLM local)' },
+                    { cmd: '/help',       desc: isEN ? 'Full command reference' : 'Referencia completa de comandos' },
+                ],
+            },
+        ];
+
+        const groups = cats.map(c => {
+            const items = c.items.map(it =>
+                `<li style="margin:3px 0;">
+                    <code style="color:var(--acc);font-weight:700;cursor:pointer;" data-slash-fill="${it.cmd}">${it.cmd}</code>
+                    <span style="opacity:.65;"> — ${it.desc}</span>
+                </li>`
+            ).join('');
+            return `<div style="margin-top:8px;">
+                <div style="color:var(--txt2);font-weight:700;font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;">${c.title}</div>
+                <ul style="list-style:none;padding:2px 0 0 6px;margin:2px 0;">${items}</ul>
+            </div>`;
+        }).join('');
+
+        sysMsg(`<div style="color:var(--acc);font-weight:700;">⌨ ${isEN ? 'Available commands' : 'Comandos disponibles'}</div>
+            ${groups}
+            <div style="margin-top:10px;font-size:10px;opacity:.55;">
+                ${isEN
+                    ? 'Type the command and press Enter. Use <code>/help</code> for the full reference.'
+                    : 'Escribe el comando y pulsa Enter. Usa <code>/help</code> para la referencia completa.'}
+            </div>`);
+        return true;
+    }
+
     switch (cmd.toLowerCase()) {
         case 'help': case '?':
             sysMsg(`<b>Comandos disponibles:</b><br>
