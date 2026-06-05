@@ -152,26 +152,37 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             },
         ];
 
+        // v1.7.90 — Use CSS CLASSES instead of data-* attributes for the
+        // interactive items. The sanitizer (cleanForDisplay → DOMPurify)
+        // strips data-* unless explicitly allowlisted; class names pass
+        // through unchanged. The delegated click handler in +page.svelte
+        // reads the command from the `.slash-cmd-name`'s textContent.
+        // v1.7.90 — Plain-text rendering: each line reads like a system
+        // message line, but the command name is a click-to-fill button.
+        // No grid, no card chrome — operator gets the discoverability
+        // without a "modal that took over the chat".
         const groups = cats.map(c => {
             const items = c.items.map(it =>
-                `<li style="margin:3px 0;">
-                    <code style="color:var(--acc);font-weight:700;cursor:pointer;" data-slash-fill="${it.cmd}">${it.cmd}</code>
-                    <span style="opacity:.65;"> — ${it.desc}</span>
-                </li>`
+                `<div class="slash-cmd-row">
+                    <button type="button" class="slash-cmd-name">${it.cmd}</button>
+                    <span class="slash-cmd-desc"> — ${it.desc}</span>
+                </div>`
             ).join('');
-            return `<div style="margin-top:8px;">
-                <div style="color:var(--txt2);font-weight:700;font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;">${c.title}</div>
-                <ul style="list-style:none;padding:2px 0 0 6px;margin:2px 0;">${items}</ul>
+            return `<div class="slash-cmd-group">
+                <div class="slash-cmd-cat">${c.title}</div>
+                ${items}
             </div>`;
         }).join('');
 
-        sysMsg(`<div style="color:var(--acc);font-weight:700;">⌨ ${isEN ? 'Available commands' : 'Comandos disponibles'}</div>
+        sysMsg(`<div class="slash-cmd-menu">
+            <div class="slash-cmd-head">⌨ ${isEN ? 'Available commands' : 'Comandos disponibles'}</div>
             ${groups}
-            <div style="margin-top:10px;font-size:10px;opacity:.55;">
+            <div class="slash-cmd-hint">
                 ${isEN
-                    ? 'Type the command and press Enter. Use <code>/help</code> for the full reference.'
-                    : 'Escribe el comando y pulsa Enter. Usa <code>/help</code> para la referencia completa.'}
-            </div>`);
+                    ? 'Click a command to insert it · or type it and press Enter · <code>/help</code> for the full reference.'
+                    : 'Haz clic en un comando para insertarlo · o escríbelo y pulsa Enter · <code>/help</code> para la referencia completa.'}
+            </div>
+        </div>`);
         return true;
     }
 

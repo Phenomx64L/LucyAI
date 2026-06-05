@@ -1903,6 +1903,38 @@ import { listen } from '@tauri-apps/api/event';
         document.addEventListener('click', _clickHandler);
         // Plan card buttons (opus-4-7 #3 Plan/Act/Verify)
         document.addEventListener('click', handlePlanButtonClick);
+        // v1.7.90 — Slash command menu click → fill the composer with
+        // the clicked command. Delegated so we don't have to wire
+        // onclick on every rendered menu instance. Same approach the
+        // auto-route chip uses (identify by CSS class, not data-*,
+        // because the sanitizer strips data attrs).
+        document.addEventListener('click', (e) => {
+            const btn = e.target?.closest?.('.slash-cmd-name');
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const cmd = (btn.textContent || '').trim();
+            if (!cmd || !activeTabId) return;
+            const tab = getTab(activeTabId);
+            if (!tab) return;
+            // Append a space so the operator can immediately type
+            // arguments (most commands take args). If the field already
+            // has content, replace it — the menu is an explicit pick.
+            tab.inputValue = cmd + ' ';
+            refresh();
+            // Focus the composer and put the cursor at the end.
+            tick().then(() => {
+                const ibox = document.querySelector('.chat-wrap.on .ibox');
+                if (ibox) {
+                    ibox.focus();
+                    try {
+                        const end = ibox.value ? ibox.value.length : 0;
+                        if (ibox.setSelectionRange) ibox.setSelectionRange(end, end);
+                    } catch {}
+                }
+            });
+        });
+
         // v1.7.11 — Auto-route chip click → deactivate the current
         // skill/preset and remove the chip from view. Delegated so
         // we don't have to wire onclick on every chip instance.

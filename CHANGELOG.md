@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.90] — 2026-06-05
+
+### Slash menu — clickable text, no modal-style chrome
+
+Two operator-reported follow-ups to v1.7.89's `/` menu:
+1. The styled inline HTML I emitted got stripped by the page
+   sanitizer (`safeHtml` removes inline `style` and most data-* attrs),
+   so the menu actually rendered as a wall of dim text — defeating
+   the "scannable categories" goal.
+2. Even if styled, a card/panel/pill look was the wrong vibe; the
+   operator preferred to keep the chat thread free of modal-style
+   chrome and have the listing read like a normal system message.
+
+**Fix in two layers** (slash-commands.ts + chat-thread.css):
+
+- Markup uses **CSS class names** (`.slash-cmd-name`, `.slash-cmd-cat`,
+  etc.) instead of inline styles. Class-based selectors survive the
+  sanitizer; the styling lives in `chat-thread.css` so it actually
+  applies.
+- Visual treatment is deliberately **flat**: monospace, dim,
+  group-by-bold-label, command names rendered as accent-coloured
+  inline buttons that look like links (no pill background, no border,
+  no panel chrome). On hover the command name brightens with a subtle
+  text-shadow — readable without screaming.
+
+**Click-to-fill** (`+page.svelte`):
+- Delegated `document` click listener — same pattern the auto-route
+  chip uses (`.ar-chip` selector) so we don't need per-message
+  wiring.
+- On click of `.slash-cmd-name`, the command (textContent) replaces
+  `activeTab.inputValue` with `cmd + ' '`, focuses the composer, and
+  positions the caret at the end. The operator can immediately type
+  arguments.
+
+**Net**: typing `/` Enter renders a plain-looking categorized listing
+that's actually interactive — discoverability without visual noise.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.89] — 2026-06-05
 
 ### Fix — Lone `/` shows an interactive command menu instead of an error

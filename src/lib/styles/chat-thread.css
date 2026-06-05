@@ -538,6 +538,75 @@
     margin-left: 4px;
 }
 
+/* ── v1.7.90 — Slash command listing (rendered when operator types "/") ──
+   Stays visually as PLAIN TEXT (no pill buttons, no panel chrome — same
+   monospace dim look as a system message) but each command name is a
+   button-shaped link the operator can click to insert. The point is
+   discoverability + low friction, NOT a flashy menu modal. */
+.slash-cmd-menu {
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--txt2, #94a3b8);
+    opacity: 0.92;
+}
+.slash-cmd-head {
+    color: var(--acc, #10b981);
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.slash-cmd-group { margin-top: 6px; }
+.slash-cmd-cat {
+    color: var(--txt2, #94a3b8);
+    font-weight: 600;
+    opacity: 0.75;
+}
+.slash-cmd-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.slash-cmd-row {
+    display: list-item;
+}
+.slash-cmd-name {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--acc, #10b981);
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: 600;
+    padding: 0;
+    cursor: pointer;
+    user-select: text;
+    text-align: left;
+    transition: color 0.12s, text-shadow 0.12s;
+}
+.slash-cmd-name:hover {
+    color: #34d399;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--acc, #10b981) 35%, transparent);
+}
+.slash-cmd-name:focus-visible {
+    outline: 1px solid var(--acc, #10b981);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+.slash-cmd-desc {
+    color: var(--txt2, #94a3b8);
+    opacity: 0.7;
+}
+.slash-cmd-hint {
+    margin-top: 8px;
+    font-size: 10px;
+    color: var(--txt3, #64748b);
+    opacity: 0.7;
+}
+.slash-cmd-hint code {
+    color: var(--acc, #10b981);
+    opacity: 0.85;
+}
+
 /* ── v1.7.78 — Extended Thinking (visible reasoning) ─────────────────────────
    Native <details> / <summary> disclosure widget for the THOUGHT blocks the
    model emits during chain-of-thought. Collapsed by default so the chat
