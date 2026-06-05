@@ -89,3 +89,8 @@ pub mod auto_dedup;
 // sub-millisecond ANN inside the same .db file (no separate server).
 // Backfill from the legacy `embeddings` table runs once on boot.
 pub mod vec_search;
+// v1.7.95 — Tier-A self-care schedulers. Five background loops that keep
+// Lucy fit between user interactions: embedding cache warmup, audit
+// hash-chain verification, MCP health probe, memory crystal promotion,
+// state snapshot retention. Each is gated by a LUCY_HK_NO_* env var.
+pub mod housekeeping;

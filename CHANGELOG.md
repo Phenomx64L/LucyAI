@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.95] — 2026-06-05
+
+### Tier-A self-care schedulers — Lucy keeps herself fit between turns
+
+Five new background loops in `commands/housekeeping.rs`. All follow
+the v1.7.80/.83/.85 tokio pattern (set-once `AtomicBool`, warmup delay
+before the first tick, periodic loop after that). Each loop logs to
+`lucy_app.log` only when something actionable happens — a healthy
+install runs silently.
+
+Per-loop env var (`LUCY_HK_NO_<NAME>`) lets the operator disable a
+single loop without recompiling.
+
+**1. `embed_warmup`** — one-shot, 2 min warmup.
+- Pulls the 20 most-recent DISTINCT prompts from `chip_click_log`.
+- Embeds each via `embed_via_ollama_pub` so the v1.7.83 LRU cache
+  lands populated.
+- First real query against any of those prompts is then served
+  from cache — no Ollama round-trip on cold boot.
+
+**2. `audit_verify`** — 12 h, 5 min warmup.
+- Walks every `incident_id` in `audit_chain`.
+- Calls the existing `hash_chain::verify_incident_chain` on each.
+- ANY chain reporting `ok=false` is logged at ERROR level with the
+  list of broken incident ids. proactive_detector picks it up on
+  its next tick and surfaces as a CRITICAL insight.
+
+**3. `mcp_health`** — 5 min, 3 min warmup.
+- Reads every enabled `mcp_servers` row directly from SQLite.
+- Calls the existing `discover_mcp_tools` to confirm the server
+  responds to `tools/list`.
+- Unreachable ones are listed at WARN — no auto-disable (operator
+  may be debugging a transient outage).
+
+**4. `crystal_promo`** — 6 h, 10 min warmup.
+- Promotes `agent_memories` with `access_count ≥ 5` AND
+  `confidence ≥ 0.80` AND not-yet-promoted into `agent_crystals`.
+- INSERT OR IGNORE so re-runs are idempotent. Source memory
+  is never modified; the crystal is a separate durable row that
+  bypasses the auto-forget decay path.
+
+**5. `snapshot_retention`** — 6 h, 15 min warmup.
+- Prunes `state_snapshots` past either cap:
+  - Older than 30 days (age cap)
+  - Beyond the 200 newest (count cap)
+- Single SELECT per cap with a single DELETE; bounded work per tick.
+
+**Wired** in `lib.rs::run` setup: `commands::housekeeping::start_all()`
+called once. Each sub-module's own once-guard means duplicate calls
+are no-ops.
+
+**Cadences chosen** so no two loops run in the same minute on average
+— minimal contention with the existing schedulers
+(`db_maintenance` 1h, `auto_consolidate` 24h, `auto_dedup` 30 min,
+`proactive_detector` 3 min, `vec_search` backfill one-shot).
+
+cargo test --lib housekeeping — 1/1 passed.
+cargo check — clean.
+
+---
+
 ## [1.7.94] — 2026-06-05
 
 ### Hybrid SQL+vector recall — the "Qdrant query" inside SQLite

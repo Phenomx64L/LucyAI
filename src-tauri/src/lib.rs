@@ -192,6 +192,16 @@ pub fn run() {
             // catching same-session noise before it accumulates.
             commands::auto_dedup::start_background_loop();
 
+            // v1.7.95 — Tier-A self-care schedulers. Five loops that keep
+            // Lucy fit without operator intervention:
+            //   • embed_warmup        — one-shot, populate v1.7.83 LRU.
+            //   • audit_verify        — 12 h hash-chain re-verification.
+            //   • mcp_health          —  5 min MCP server liveness probe.
+            //   • crystal_promo       —  6 h promote hot memories.
+            //   • snapshot_retention  —  6 h prune old state_snapshots.
+            // Each can be individually disabled via env (LUCY_HK_NO_*).
+            commands::housekeeping::start_all();
+
             // v1.7.93 — One-shot sqlite-vec backfill. Runs once on app
             // start (in a blocking background task) to copy any
             // pre-existing rows from the legacy `embeddings` table into
