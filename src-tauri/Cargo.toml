@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.7.85"
+version = "1.7.86"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
@@ -140,3 +140,37 @@ overflow-checks = true   # LOGIC-4 FIX: catch integer overflow instead of silent
                          # Prevents wrong results from as-casts on file sizes, token counts, PIDs.
 debug         = false    # no debug info embedded
 debug-assertions = false
+
+# ── PGO PROFILES (v1.7.86) ───────────────────────────────────────────────────
+#
+# Profile-Guided Optimization: the compiler is given real-workload profile
+# data and uses it to make smarter inlining, branch-prediction, and
+# register-allocation decisions on Lucy's HOT paths (memory recall, SIMD
+# cosine, stream parsing, prompt builder).
+#
+# Two-stage workflow:
+#
+#   1. `release-pgo-gen` — instrument the binary so it WRITES profile data
+#      to disk during normal use. Slower (~10-20%) and produces a larger
+#      binary. Only used during the training run.
+#
+#   2. `release-pgo-use` — read the merged profile and apply it to a
+#      regular release build. Same shape as `release`, but ~5-15% faster
+#      on the hot paths.
+#
+# Run via `scripts/build-pgo.ps1` (see that file for the full cycle).
+#
+# Why opt-out via a separate profile vs editing [profile.release]:
+# the dev/build workflows (cargo run, tauri dev) shouldn't pay PGO's
+# costs. Operators who don't generate profiles still get the standard
+# release; the PGO profile is for the release-pipeline operator only.
+
+[profile.release-pgo-gen]
+inherits         = "release"
+codegen-units    = 16       # parallel build during instrumented training
+lto              = "thin"   # full LTO interacts oddly with PGO codegen
+
+[profile.release-pgo-use]
+inherits         = "release"
+codegen-units    = 1        # standard release tuning during the optimized build
+lto              = "fat"

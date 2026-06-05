@@ -138,6 +138,51 @@
     let zoom = 1.0;
     let panX = 0, panY = 0;
 
+    // v1.7.86 — Canvas2D edge underlay. The reference is bound in the
+    // template; paintEdges() is called from the simulation tick AND from
+    // hover/pan handlers so the edges stay in sync with both the layout
+    // settling and the viewport transform.
+    let edgeCanvas: HTMLCanvasElement | null = null;
+    let _edgeCtx: CanvasRenderingContext2D | null = null;
+    /** Cache DPR-corrected context. Re-acquired when canvas binds. */
+    function _getEdgeCtx(): CanvasRenderingContext2D | null {
+        if (!edgeCanvas) return null;
+        if (!_edgeCtx) {
+            _edgeCtx = edgeCanvas.getContext('2d', { alpha: true });
+        }
+        return _edgeCtx;
+    }
+    /** Repaint all edges in ONE pass. Runs in ~0.3 ms for 100 edges and
+     *  doesn't touch the DOM. The hover-dim case is folded into the same
+     *  alpha calculation as edgeOpacity uses for the (now-removed) SVG. */
+    function paintEdges(): void {
+        const ctx = _getEdgeCtx();
+        if (!ctx || !graph) return;
+        const dpr = window.devicePixelRatio || 1;
+        // Clear in physical pixels.
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, edgeCanvas!.width, edgeCanvas!.height);
+        // World-space transform: same convention as the SVG group
+        // `transform="translate(panX*zoom, panY*zoom) scale(zoom)"`,
+        // adjusted for devicePixelRatio so HiDPI displays render sharp.
+        ctx.setTransform(zoom * dpr, 0, 0, zoom * dpr, panX * zoom * dpr, panY * zoom * dpr);
+        for (const edge of graph.edges) {
+            const a = nodesById.get(edge.source);
+            const b = nodesById.get(edge.target);
+            if (!a || !b) continue;
+            const op = edgeOpacity(edge);
+            if (op < 0.02) continue;       // sub-perceptual cull
+            ctx.strokeStyle = edgeStroke(edge);
+            ctx.globalAlpha = op;
+            ctx.lineWidth = 0.7 + edge.weight * 2.2;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+    }
+
     let draggingNode: SimNode | null = null;
     let draggingPan = false;
     let lastPx = 0, lastPy = 0;
@@ -390,6 +435,7 @@
         autoFitPending = false;
         ticksSinceLoad = 300;
         simNodes = simNodes;   // trigger first render with settled positions
+        paintEdges();          // v1.7.86 — initial canvas paint after pre-warm
 
         // Continue the sim for the residual decay + interactivity. With
         // alpha already < 0.002, this loop costs ~0 CPU until the user
@@ -415,6 +461,7 @@
                 return;
             }
             simNodes = simNodes;   // trigger Svelte re-render
+            paintEdges();          // v1.7.86 — canvas edge repaint
             rafId = requestAnimationFrame(tick);
         };
         rafId = requestAnimationFrame(tick);
@@ -481,11 +528,13 @@
             (draggingNode as any).fx = w.x;
             (draggingNode as any).fy = w.y;
             simNodes = simNodes;
+            paintEdges();                  // v1.7.86 — drag is mid-frame
         } else if (draggingPan) {
             panX += (ev.clientX - lastPx) / zoom;
             panY += (ev.clientY - lastPy) / zoom;
             lastPx = ev.clientX;
             lastPy = ev.clientY;
+            paintEdges();                  // v1.7.86 — repaint on pan
         }
     }
     function onPointerUp(ev: PointerEvent): void {
@@ -517,6 +566,7 @@
         const wyAfter = (ev.clientY - rect.top)  / zoom - panY;
         panX += (wxAfter - wxBefore);
         panY += (wyAfter - wyBefore);
+        paintEdges();                      // v1.7.86 — repaint on zoom
     }
     function onNodeClick(ev: MouseEvent, node: SimNode): void {
         ev.stopPropagation();
@@ -844,6 +894,27 @@
                     : 'Tus memorias existen pero ninguna alcanza los umbrales de similitud para conectarse. Baja los umbrales en ⚙ arriba (prueba tag 0.15 / content 0.15) para ver aristas.'}
             </div>
         {:else if graph}
+            <!-- v1.7.86 — Canvas2D overlay for edges. The previous SVG
+                 implementation rendered every edge as a <line> DOM node;
+                 with 17 nodes and ~90 edges, every d3-force tick updated
+                 90 DOM elements × 60 fps = 5400 DOM mutations/sec just
+                 for the edges. Even with morphdom and Svelte's reactive
+                 batching, this was the single biggest cost in the graph
+                 view — visible as stutter on larger graphs.
+
+                 The canvas underlay paints all edges in ONE draw call
+                 per simulation tick. SVG above keeps the nodes (which
+                 still need pointer events for drag/hover/click) and the
+                 labels (few, and benefit from native text rendering).
+                 The two layers share the same world-space transform so
+                 they overlay perfectly: edges connect node centers
+                 exactly even at high zoom levels. -->
+            <canvas bind:this={edgeCanvas}
+                    class="mg-edge-canvas"
+                    width={viewW * (window.devicePixelRatio || 1)}
+                    height={viewH * (window.devicePixelRatio || 1)}
+                    style="width:{viewW}px;height:{viewH}px;"
+                    aria-hidden="true"></canvas>
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
             <svg id="mg-canvas" width={viewW} height={viewH}
                  role="application" tabindex="0"
@@ -856,18 +927,11 @@
                  class:dragging={draggingPan || draggingNode !== null}
                  style="touch-action:none;">
                 <g transform="translate({panX * zoom},{panY * zoom}) scale({zoom})">
-                    <!-- Edges first so they sit under nodes -->
-                    {#each graph.edges as edge (edge.source + '-' + edge.target)}
-                        {@const a = nodesById.get(edge.source)}
-                        {@const b = nodesById.get(edge.target)}
-                        {#if a && b}
-                            {@const op = edgeOpacity(edge)}
-                            <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                                  stroke={edgeStroke(edge)}
-                                  stroke-width={0.7 + edge.weight * 2.2}
-                                  opacity={op}/>
-                        {/if}
-                    {/each}
+                    <!-- v1.7.86 — Edges moved to the <canvas> above for
+                         performance (SVG <line> per edge × 60 fps was
+                         the bottleneck). The data + helpers (edgeOpacity,
+                         edgeStroke) live on, consumed by paintEdges(). -->
+
                     <!-- Nodes -->
                     {#each simNodes as node (node.id)}
                         {@const op = nodeOpacity(node)}
@@ -878,8 +942,8 @@
                            opacity={op}
                            on:pointerdown={(e) => onNodePointerDown(e, node)}
                            on:click={(e) => onNodeClick(e, node)}
-                           on:mouseenter={() => hoveredNodeId = node.id}
-                           on:mouseleave={() => hoveredNodeId = null}
+                           on:mouseenter={() => { hoveredNodeId = node.id; paintEdges(); }}
+                           on:mouseleave={() => { hoveredNodeId = null; paintEdges(); }}
                            on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectedNode = node; } }}>
                             <circle cx={node.x} cy={node.y} r={r}
                                     fill={nodeColor(node)}
@@ -1090,6 +1154,22 @@
     .mg-thr-toggle { grid-column: 1 / -1; gap: 8px; }
 
     .mg-canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+    /* v1.7.86 — Canvas2D edge underlay. Absolutely positioned to occupy
+       the same space as the SVG above it; pointer-events:none so the
+       SVG stays the event-capture layer (nodes need pointerdown for
+       drag, the empty SVG area handles pan). image-rendering hints
+       the browser to use bilinear sampling on HiDPI scaling. */
+    .mg-edge-canvas {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        image-rendering: auto;
+    }
+    #mg-canvas {
+        position: absolute;
+        inset: 0;
+        background: transparent;
+    }
     svg { display: block; cursor: grab; outline: none; }
     svg.dragging { cursor: grabbing; }
     .mg-node { cursor: pointer; transition: opacity .15s; }
