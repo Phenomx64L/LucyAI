@@ -137,6 +137,10 @@ import { listen } from '@tauri-apps/api/event';
     import MissionStrip    from '$lib/MissionStrip.svelte';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
+    // v1.7.79 — Claude-style artifacts side panel for long code blocks
+    // and documents. Operator opens with the chat-message context-menu
+    // "Open as artifact" entry; panel stays mounted with multiple tabs.
+    import ArtifactPanel   from '$lib/ArtifactPanel.svelte';
     import ChatInput       from '$lib/ChatInput.svelte';
     // v1.6.1 — ECC-adapted skill preset system (system-prompt framing).
     import SkillPresetPicker from '$lib/SkillPresetPicker.svelte';
@@ -269,6 +273,55 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.73 — Last fork-advice result keyed by tabId, used by the composer
     // chip to preview "🔱 fork-advised · N ramas" before the user sends.
     let _forkAdviceByTab = new Map();
+
+    // ── v1.7.79 — Artifacts state ────────────────────────────────────────
+    // Session-scoped (not persisted). Each artifact is a chunk promoted
+    // from a chat message — a long code block or a markdown document.
+    let _artifacts = [];           // Array<{id,title,kind,language,content,sourceTabId,createdAt}>
+    let _artifactActive = null;    // id of the currently visible tab
+    let _artifactOpen = false;     // panel visibility
+
+    /** Promote a code block or markdown chunk into the artifact panel.
+     *  Called from the chat message context menu. Returns the new artifact id. */
+    function _promoteToArtifact(opts) {
+        const id = 'art_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+        const a = {
+            id,
+            title: String(opts.title || (opts.kind === 'code' ? 'Code' : 'Document')).slice(0, 60),
+            kind: opts.kind === 'code' ? 'code' : 'markdown',
+            language: opts.language || '',
+            content: String(opts.content || ''),
+            sourceTabId: opts.sourceTabId || activeTabId,
+            createdAt: Date.now(),
+        };
+        _artifacts = [..._artifacts, a];
+        _artifactActive = id;
+        _artifactOpen = true;
+        return id;
+    }
+    /** Light heuristic — does this chat message look worth promoting?
+     *  Used by ChatThread to render the "Open as artifact" affordance
+     *  only when there's actually something substantial. */
+    function _artifactCandidateOf(rawContent) {
+        if (!rawContent) return null;
+        const s = String(rawContent);
+        // Fenced code block ≥ 30 lines is the primary trigger.
+        const codeFence = s.match(/```([a-zA-Z0-9_-]*)\n([\s\S]+?)```/);
+        if (codeFence) {
+            const lang = codeFence[1];
+            const body = codeFence[2];
+            if (body.split('\n').length >= 30) {
+                return { kind: 'code', language: lang || '', content: body.trim(), title: (lang || 'code') + ' block' };
+            }
+        }
+        // Markdown body > 1500 chars (after stripping common tags) qualifies.
+        const stripped = s.replace(/<[A-Z_]+>[\s\S]*?<\/[A-Z_]+>/g, '').trim();
+        if (stripped.length >= 1500 && /^#{1,3}\s|\n#{1,3}\s|\n\s*[-*]\s/.test(stripped)) {
+            const firstH = stripped.match(/^#\s+(.+)/m);
+            return { kind: 'markdown', language: '', content: stripped, title: firstH ? firstH[1] : 'Document' };
+        }
+        return null;
+    }
     // Tier B #1 — Session-wide accumulated savings (USD). Reset at app start;
     // not persisted (this is "since you opened Lucy", not "all time").
     let _economySavingsUsd = 0;
@@ -10185,6 +10238,35 @@ if (Test-Path $src) {
   <!-- v1.7.17 — Single instance of the in-app dialog host. -->
   <DialogHost />
 
+  <!-- v1.7.79 — Artifacts side panel. Rendered at root so it can overlay
+       any view (Terminal, Dashboard, NexShell, …) without z-index fights.
+       Stays mounted but visually hidden when no artifacts exist or the
+       operator has closed the panel — the lazy { #if } guard inside the
+       component skips its body when invisible so cost stays at ~0. -->
+  <ArtifactPanel
+      artifacts={_artifacts}
+      activeId={_artifactActive}
+      open={_artifactOpen}
+      {isEN}
+      on:close={() => { _artifactOpen = false; }}
+      on:select={(e) => { _artifactActive = e.detail.id; }}
+      on:remove={(e) => {
+          _artifacts = _artifacts.filter(a => a.id !== e.detail.id);
+          if (_artifactActive === e.detail.id) {
+              _artifactActive = _artifacts.length ? _artifacts[_artifacts.length - 1].id : null;
+          }
+          if (_artifacts.length === 0) _artifactOpen = false;
+      }}
+      on:gotoSource={(e) => {
+          const _src = e.detail.sourceTabId || '';
+          if (_src) {
+              activeTabId = _src;
+              showWelcome = false;
+              tick().then(() => { scrollChat(); });
+          }
+      }}
+  />
+
   <!-- v1.7.29 — Knowledge Graph overlay at root level. Opened by
        sidebar/slash/palette/empty-hero. Closes itself or dispatches
        `openmemoria` to jump to a specific memory row. -->
@@ -11839,6 +11921,24 @@ if (Test-Path $src) {
             tabs = tabs;
             toast(isEN ? '✕ Message removed' : '✕ Mensaje eliminado', 'info');
         }
+    }}
+    on:open-as-artifact={(e) => {
+        // v1.7.79 — Promote a code block or markdown chunk from the
+        // right-clicked message into the artifact side panel.
+        const _src = String(e.detail.msg.markdown || e.detail.msg.rawContent || e.detail.msg.html || '');
+        const _cand = _artifactCandidateOf(_src);
+        if (!_cand) {
+            toast(isEN ? 'Nothing substantial to open' : 'Nada sustancial para abrir', 'info');
+            return;
+        }
+        const _id = _promoteToArtifact({
+            title:    _cand.title,
+            kind:     _cand.kind,
+            language: _cand.language,
+            content:  _cand.content,
+            sourceTabId: activeTabId,
+        });
+        toast(isEN ? 'Opened as artifact' : 'Abierto como artefacto', 'info');
     }}
   />
 

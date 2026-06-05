@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.79] — 2026-06-05
+
+### Artifacts side panel — Claude/ChatGPT Canvas parity (MVP)
+
+When Lucy emits a long code block or a substantial markdown document
+mid-conversation, scrolling the chat to read 80 lines of PowerShell
+between two replies is hostile. Claude/ChatGPT solved this with side
+"artifact" / "Canvas" panels years ago. This is Lucy's MVP.
+
+**New component**: `src/lib/ArtifactPanel.svelte` — slide-in right
+panel (480 px / 42 vw). Multi-tab header, per-artifact metadata
+(language, line count, age), copy / download / go-to-source actions.
+Native `<details>`-style chrome, zero animation frameworks.
+
+**Rendering pipeline reuses the existing chat stack:**
+- Code → highlight.js auto-detect (or explicit language hint).
+- Markdown → marked → DOMPurify.
+The panel is just a focused view of the same content the chat bubble
+holds, never a divergent copy.
+
+**Promotion path** (`+page.svelte`):
+- New chat-message context-menu entry: "◐ Open as artifact" (only
+  on Lucy messages, not user messages).
+- `_artifactCandidateOf()` heuristic decides if there's anything
+  substantial to promote: fenced code ≥ 30 lines OR markdown body
+  ≥ 1500 chars with structure (headings / bullets). If not, the
+  operator gets a quiet toast and nothing opens — the affordance
+  stays consistent.
+- Multiple artifacts coexist as tabs; the last-promoted is selected.
+- Closing the panel keeps the artifacts (session-scoped); reopening
+  is one click on a new promotion.
+
+**Actions in the panel header:**
+- ⧉ Copy raw content to clipboard (✓ on success).
+- ↓ Download as file. Extension picked from the language hint
+  (powershell→ps1, python→py, rust→rs, etc.); markdown falls to .md.
+- ↗ Jump to source message (switches to the originating tab).
+- ✕ per-tab close + ✕ panel close.
+
+**Styling** (`src/lib/ArtifactPanel.svelte <style>`): cyan accent
+(`#22d3ee`) matching the v1.7.76 maintenance family and the v1.7.78
+thinking blocks — reads as "machine-internal surface" rather than
+competing with chat. Tabs collapse with ellipsis past 200 px; the
+header scrolls horizontally if many artifacts pile up.
+
+**MVP limitations** (documented honestly):
+- Session-scoped: closing Lucy clears artifacts. No SQLite persistence
+  yet; that's deferred to v1.8 once we know operator usage patterns.
+- Read-only view. No inline editing yet — Claude's "edit artifact and
+  ask Lucy to update it" loop is the obvious next step.
+- One promotion per chat message: if a single message has 2 code
+  blocks, only the first qualifies. Multi-block extraction lands
+  next.
+
+**Zero impact** on chat thread behaviour — the original block stays
+where it was; the artifact panel is purely additive.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.78] — 2026-06-05
 
 ### Extended Thinking visible — collapsible reasoning blocks

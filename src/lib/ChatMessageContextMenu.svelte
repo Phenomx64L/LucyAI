@@ -97,6 +97,14 @@
 
         {#if isLucy}
             <div class="ctx-sep"></div>
+            <!-- v1.7.79 — Promote to artifact side panel. Available on
+                 every Lucy message; the +page handler checks if the
+                 content actually has a long code block / markdown doc
+                 and only opens the panel when it does. -->
+            <button class="ctx-item" on:click={() => pick('open-as-artifact')}>
+                <span class="ctx-ico">◐</span>
+                {isEN ? 'Open as artifact' : 'Abrir como artefacto'}
+            </button>
             <button class="ctx-item" on:click={() => pick('branch')}>
                 <span class="ctx-ico">⌥</span>
                 {isEN ? 'Branch from here' : 'Bifurcar desde aquí'}
