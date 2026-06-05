@@ -93,10 +93,13 @@ pub fn spawn_background_maintenance() {
             let r3 = prune_task_events(events_days);
             let r4 = checkpoint_wal();
             let r5 = optimize();
+            // v1.7.85 — Periodic VACUUM gate. Most ticks return "skip-*";
+            // an actual VACUUM fires at most once per week per install.
+            let r6 = vacuum_if_due();
 
             eprintln!(
-                "[db_maint] pass complete: chips_pruned={} turns_pruned={} events_pruned={} wal={} optimize={}",
-                r1, r2, r3, r4, r5,
+                "[db_maint] pass complete: chips_pruned={} turns_pruned={} events_pruned={} wal={} optimize={} vacuum={}",
+                r1, r2, r3, r4, r5, r6,
             );
 
             tick.tick().await;
@@ -187,6 +190,71 @@ fn checkpoint_wal() -> &'static str {
     match res {
         Ok(_) => "ok",
         Err(_) => "busy",  // Acceptable — checkpoint retried next interval.
+    }
+}
+
+/// v1.7.85 — Gated background VACUUM. PRAGMA optimize + auto-checkpoint
+/// keep the DB efficient at the page level but don't reclaim file
+/// space released by consolidation / forget cycles. After a few weeks
+/// of normal use Lucy's DB can carry 30-60 % free pages — VACUUM
+/// rewrites the file and reclaims them.
+///
+/// VACUUM is expensive (rewrites every page, holds EXCLUSIVE lock for
+/// several seconds on a 500 MB DB). We gate it tightly:
+///   1. DB size ≥ 250 MB. Below that, the savings aren't worth the
+///      lock window.
+///   2. Last VACUUM was > 7 days ago. Tracked in a tiny key/value
+///      table `lucy_kv` we create here lazily.
+///   3. No active streams in STREAM_SESSIONS. If the operator is mid-
+///      LLM-response, we don't want to freeze the chat.
+///   4. No active OS notification permissions / NexShell live sessions
+///      (skipped here since they don't write the shared DB hot path).
+///
+/// Returns a status string for the log line. "skip" is the common case.
+fn vacuum_if_due() -> &'static str {
+    // Cheap guard #1: stream sessions.
+    if let Ok(m) = crate::state::STREAM_SESSIONS.lock() {
+        if !m.is_empty() {
+            return "skip-streams";
+        }
+    }
+    // Cheap guard #2: DB size.
+    let size_mb = current_db_size_mb();
+    if size_mb < 250.0 {
+        return "skip-size";
+    }
+    // Cheap guard #3: last-vacuum-at timestamp. Stored in lucy_kv so the
+    // check is one row read; no env var or app-state coupling.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64).unwrap_or(0);
+    let last: i64 = shared_db(|conn| {
+        let _ = conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS lucy_kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);"
+        );
+        let v: Option<String> = conn.query_row(
+            "SELECT v FROM lucy_kv WHERE k = 'last_vacuum_at'", [],
+            |r| r.get(0)
+        ).ok();
+        Ok::<i64, String>(v.and_then(|s| s.parse().ok()).unwrap_or(0))
+    }).unwrap_or(0);
+    if now - last < 7 * 86400 {
+        return "skip-recent";
+    }
+    // Run it.
+    let res = shared_db(|conn| {
+        conn.execute("VACUUM", [])
+            .map_err(|e| format!("vacuum: {}", e))?;
+        let _ = conn.execute(
+            "INSERT INTO lucy_kv (k, v) VALUES ('last_vacuum_at', ?1) \
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            [&now.to_string()],
+        );
+        Ok::<(), String>(())
+    });
+    match res {
+        Ok(_) => "vacuumed",
+        Err(_) => "busy",
     }
 }
 

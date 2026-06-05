@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.85] — 2026-06-05
+
+### Performance Sprint Tier 3 — Memory Graph cache + gated VACUUM
+
+Two structural optimizations that pay off over time rather than on
+boot.
+
+**1. Memory Graph layout cache** (`commands/graph_layout_cache.rs` +
+`MemoryGraphView.svelte`). Today (v1.7.72) opening the graph runs the
+full d3-force pre-warm: 300 sequential ticks × ~3 ms = ~900 ms of
+stutter before first paint. For investigation tabs where the operator
+reopens the graph multiple times in a session, this is the biggest
+single source of "Lucy feels slow" after the streaming pipeline.
+
+New surfaces:
+- New SQLite table `memory_graph_layout` (auto-schema, lazy-pruned at
+  30-day retention).
+- `graph_layout_load()` returns all cached `(node_id, x, y, pinned)`.
+- `graph_layout_save_bulk(entries)` upserts in one transaction (one
+  fsync regardless of graph size). NaN/Inf filtered server-side.
+- `graph_layout_clear()` for operator-triggered reset (no slash command
+  wired yet — exposed for future `/graph reset` use).
+
+`MemoryGraphView.svelte`:
+- `initSimulation` is now async. Pulls the cache BEFORE seeding
+  simNodes; if a node has a cached `(x,y)`, that's the seed instead
+  of the community ring. Pre-warm converges in ~30 ticks instead of
+  300. Cache miss falls through unchanged.
+- `_persistLayoutIfNeeded()` fires once per load — at the moment the
+  sim's `alpha` drops below `alphaMin` AND from `onDestroy()` as a
+  belt-and-braces. Best-effort: a failed save is silent and just
+  means the next open does a cold pre-warm.
+- `_layoutPersisted` flag re-armed on every `loadGraph()` so a
+  threshold-slider change saves the new arrangement when it settles.
+
+Expected: subsequent graph opens within the same week paint instantly
+(node positions seeded from cache, sim alpha starts near 0).
+
+**2. Gated background VACUUM** (`commands/db_maintenance.rs`). The
+existing hourly maintenance loop pruned high-volume tables, ran
+`PRAGMA optimize`, and TRUNCATE'd the WAL — but never reclaimed file
+space released by consolidation/forget cycles. After a few weeks Lucy's
+DB can carry 30-60 % free pages.
+
+New `vacuum_if_due()` runs at the end of each maintenance pass with
+three tight gates:
+1. DB size ≥ 250 MB (below that, savings aren't worth the lock window).
+2. Last VACUUM > 7 days ago (tracked in new tiny `lucy_kv` table,
+   created lazily — no migration).
+3. No active streams (`STREAM_SESSIONS` empty) so we don't freeze a
+   live LLM response with the EXCLUSIVE lock.
+
+Most ticks return `skip-size` / `skip-recent` / `skip-streams`. An
+actual VACUUM fires at most once per week per install, during a quiet
+window. The Diagnostics panel's manual `/diagnostico → Database →
+VACUUM` button (v1.7.70) keeps working for operator-triggered runs.
+
+`cargo check` — clean.
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.84] — 2026-06-05
 
 ### Code splitting — heavy views become async chunks

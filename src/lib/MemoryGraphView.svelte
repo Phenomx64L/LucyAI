@@ -206,7 +206,7 @@
                 useEmbeddings,
             });
             graph = g;
-            initSimulation(g);
+            await initSimulation(g);
         } catch (e) {
             error = String(e);
             graph = null;
@@ -215,7 +215,7 @@
         }
     }
 
-    function initSimulation(g: MemoryGraph): void {
+    async function initSimulation(g: MemoryGraph): Promise<void> {
         stopSim();
         // Pre-compute degree + neighbors for sizing and V7 hover-highlight.
         const degree = new Map<number, number>();
@@ -233,7 +233,40 @@
         const cx = viewW / 2;
         const cy = viewH / 2;
         const R = Math.min(viewW, viewH) * 0.35;
+
+        // v1.7.85 — Layout cache. Load any previously-saved (x,y) for nodes
+        // we've seen before. If the cache has the node, seed sim with its
+        // last known position so d3-force starts from a stable layout
+        // instead of the community ring → the pre-warm converges in ~30
+        // ticks instead of 300, and the operator sees the same graph they
+        // closed last time. Cache miss falls through to the existing
+        // community-ring seed.
+        //
+        // Cache loads non-blocking but BEFORE the simNodes assignment so
+        // its result is available when we build each node. We swallow
+        // errors silently — cache is best-effort and the fallback layout
+        // is fine.
+        const _cachedPos = new Map<number, { x: number; y: number; pinned: number }>();
+        try {
+            const _rows = await invoke<Array<{ node_id: number; x: number; y: number; pinned: number }>>(
+                'graph_layout_load'
+            );
+            for (const r of _rows) _cachedPos.set(r.node_id, r);
+        } catch (_e) { /* no cache, no problem */ }
+
         simNodes = g.nodes.map((n, i) => {
+            // v1.7.85 — Cache hit short-circuit. Same node id → same
+            // position; no need to reseed by community.
+            const _hit = _cachedPos.get(n.id);
+            if (_hit) {
+                return {
+                    ...n,
+                    x: _hit.x, y: _hit.y,
+                    vx: 0, vy: 0,
+                    pinned: _hit.pinned === 1,
+                    degree: degree.get(n.id) ?? 0,
+                };
+            }
             // V3 — seed initial position by community: nodes of the same
             // community cluster start near each other → faster convergence,
             // visible clusters from frame 1. d3-force respects whatever
@@ -254,6 +287,9 @@
         });
         nodesById = new Map(simNodes.map((n) => [n.id, n]));
         ticksSinceLoad = 0;
+        // v1.7.85 — Re-arm the layout-persist one-shot per reload so a
+        // threshold change saves the new arrangement once it settles.
+        _layoutPersisted = false;
         // Re-arm the auto-fit one-shot whenever the data reloads. Without
         // this, refetch (changing thresholds) keeps stale viewport.
         autoFitPending = true;
@@ -373,6 +409,9 @@
             if ((sim.alpha() < sim.alphaMin()) || ticksSinceLoad > 900) {
                 simRunning = false;
                 rafId = null;
+                // v1.7.85 — Persist final settled layout once the sim
+                // converges, so next open is instant.
+                _persistLayoutIfNeeded();
                 return;
             }
             simNodes = simNodes;   // trigger Svelte re-render
@@ -384,6 +423,23 @@
         simRunning = false;
         if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
         if (sim) { sim.stop(); sim = null; }
+    }
+
+    /** v1.7.85 — Persist current (x,y) layout so the next graph open is
+     *  instant. Called from onDestroy and from sim alpha-decay completion.
+     *  Fire-and-forget — failure is silent, the operator just gets a
+     *  cold restart on next open. NaN/Inf are filtered backend-side as
+     *  a defensive belt-and-braces. */
+    let _layoutPersisted = false;
+    async function _persistLayoutIfNeeded(): Promise<void> {
+        if (_layoutPersisted || simNodes.length === 0) return;
+        _layoutPersisted = true;
+        const _entries = simNodes
+            .filter(n => Number.isFinite(n.x) && Number.isFinite(n.y))
+            .map(n => ({ node_id: n.id, x: n.x, y: n.y, pinned: n.pinned ? 1 : 0 }));
+        try {
+            await invoke('graph_layout_save_bulk', { entries: _entries });
+        } catch (_e) { /* best-effort */ }
     }
 
     /** Re-heat the simulation when the user interacts (drag, slider, etc.).
@@ -662,6 +718,12 @@
         loadGraph().then(focusCanvas);
     });
     onDestroy(() => {
+        // v1.7.85 — Persist layout before tearing down. Sync-fire so the
+        // bulk write hits the backend before the component unmounts.
+        // (Tauri invokes are network-async but the Rust handler enqueues
+        // immediately; even if it doesn't fully complete before the
+        // component is gone, the call is in flight.)
+        _persistLayoutIfNeeded();
         stopSim();
         window.removeEventListener('keydown', onKeyDown);
         if (_refetchTimer) clearTimeout(_refetchTimer);

@@ -996,6 +996,10 @@ pub fn run() {
             commands::proactive_detector::proactive_insights_recent,
             commands::proactive_detector::proactive_insight_dismiss,
             commands::proactive_detector::proactive_run_once,
+            // v1.7.85 — Memory Graph layout cache.
+            commands::graph_layout_cache::graph_layout_load,
+            commands::graph_layout_cache::graph_layout_save_bulk,
+            commands::graph_layout_cache::graph_layout_clear,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

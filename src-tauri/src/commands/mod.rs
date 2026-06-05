@@ -73,3 +73,6 @@ pub mod fork_advisor;
 // surface operator-actionable insights without being asked
 // (memory buildup, log size, DB size, integrity alarms, failure spikes).
 pub mod proactive_detector;
+// v1.7.85 — Memory Graph layout cache. Saves d3-force-derived (x,y)
+// positions so reopening the graph skips the 300-tick pre-warm.
+pub mod graph_layout_cache;
