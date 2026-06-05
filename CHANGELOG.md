@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.87] — 2026-06-05
+
+### Memory Graph: typed semantic relationships (memory-graph-style)
+
+Cherry-picked from the `memory-graph/memory-graph` MCP server's
+relationship taxonomy. The existing Memory Graph encoded three flavours
+of SIMILARITY (tag overlap, content TF-IDF, embedding cosine). Useful
+for visualization but blind to operational meaning: it can't tell that
+"memory #42 solved memory #17" or "memory #88 contradicts the
+assumption in #12". Reasoning, not just clustering.
+
+This adds an explicit, typed edge layer that the operator (or Lucy)
+authors deliberately.
+
+**Backend** (`src-tauri/src/commands/semantic_links.rs`, 1 test):
+- New SQLite table `memory_semantic_links` (lazy-schema; no migration).
+- Six closed kinds: `causal` · `resolves` · `derives_from` ·
+  `references` · `contradicts` · `refines`. Closed enum so the renderer
+  can colour-key them consistently.
+- `(source_id, target_id, kind)` is UNIQUE — upsert semantics.
+- Confidence ∈ [0, 1]. Default 1.0 for operator-authored; lower values
+  let future auto-inferred links coexist without overpowering the
+  visualization.
+- Tauri commands: `memory_link_add` · `memory_link_list` ·
+  `memory_link_remove` · `memory_link_kinds`.
+
+**Slash command** (`src/lib/page/slash-commands.ts`):
+- `/link <source> <target> <kind> [note]` — create.
+- `/link list` — list (max 30 newest).
+- `/link kinds` — show the closed taxonomy.
+- `/link rm <link_id>` — remove.
+
+**Graph rendering** (`MemoryGraphView.svelte`): typed links paint ON
+TOP of the similarity edges in the same canvas pass:
+- Each kind has its own colour: causal red, resolves green, derives
+  cyan, references grey, contradicts amber, refines violet.
+- Arrow direction is unambiguous: 8 px filled triangle at the target,
+  positioned at `nodeRadius + 2 px` so it doesn't overlap the node.
+- Line width 1.8 px (thicker than similarity edges) and alpha
+  proportional to confidence — operationally-significant links
+  dominate the visual hierarchy.
+
+**Why this matters**: with similarity edges alone you see "these
+memories cluster". With typed links you see "this memory SOLVED that
+one"  — actionable when you're triaging an incident and want to
+pull the resolution chain. The graph stops being a tag cloud and
+starts being a reasoning surface.
+
+cargo test --lib semantic_links — 1/1.
+svelte-check — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.86] — 2026-06-05
 
 ### Performance Sprint Tier 4 — PGO build pipeline + Canvas2D graph renderer

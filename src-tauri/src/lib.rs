@@ -1000,6 +1000,11 @@ pub fn run() {
             commands::graph_layout_cache::graph_layout_load,
             commands::graph_layout_cache::graph_layout_save_bulk,
             commands::graph_layout_cache::graph_layout_clear,
+            // v1.7.87 — Typed semantic links between memories.
+            commands::semantic_links::memory_link_add,
+            commands::semantic_links::memory_link_list,
+            commands::semantic_links::memory_link_remove,
+            commands::semantic_links::memory_link_kinds,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

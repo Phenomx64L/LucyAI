@@ -263,6 +263,76 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         //   /serial off   → force OFF (advisor re-enabled)
         // The page consumes the flag in its turn-loop when building the
         // system prompt: bypass → allow_fork_advice = false.
+        // v1.7.87 — Typed semantic relationships between memories.
+        //   /link <source_id> <target_id> <kind> [note]
+        //   /link list             — list current links
+        //   /link kinds            — show allowed kinds
+        //   /link rm <link_id>     — remove a link
+        case 'link':
+        case 'memlink': {
+            const parts = arg.split(/\s+/).filter(Boolean);
+            (async () => {
+                try {
+                    if (parts.length === 0 || parts[0] === 'list') {
+                        const rows = await invoke('memory_link_list') as any[];
+                        if (!rows.length) {
+                            sysMsg(`<div class="mn">🔗 No semantic links yet.</div>
+                                <div style="font-size:11px;color:var(--txt2);">Create one with <code>/link &lt;source_id&gt; &lt;target_id&gt; &lt;kind&gt; [note]</code>.</div>`);
+                            return;
+                        }
+                        const lis = rows.slice(0, 30).map(r => {
+                            const date = new Date(r.created_at * 1000).toISOString().slice(0, 10);
+                            return `<li style="margin:4px 0;font-family:var(--mono);font-size:11px;">
+                                <span style="color:#a78bfa;font-weight:700;">#${r.id}</span>
+                                <span style="opacity:.55;"> · </span>
+                                <span style="color:var(--txt1);">${r.source_id}</span>
+                                <span style="color:#22d3ee;"> ─[${String(r.kind).replace(/</g,'&lt;')}]→ </span>
+                                <span style="color:var(--txt1);">${r.target_id}</span>
+                                <span style="opacity:.55;"> · ${r.confidence.toFixed(2)} · ${date}</span>
+                                ${r.note ? `<div style="opacity:.75;margin-left:24px;">${String(r.note).replace(/</g,'&lt;')}</div>` : ''}
+                            </li>`;
+                        }).join('');
+                        sysMsg(`<div class="mn" style="color:#a78bfa;">🔗 Semantic links (${rows.length})</div>
+                            <ul style="list-style:none;padding:4px 0 0 4px;margin:4px 0;">${lis}</ul>`);
+                        return;
+                    }
+                    if (parts[0] === 'kinds') {
+                        const kinds = await invoke('memory_link_kinds') as string[];
+                        sysMsg(`<div class="mn">🔗 Allowed kinds</div>
+                            <div style="font-family:var(--mono);font-size:11px;color:var(--txt2);">${kinds.join(' · ')}</div>`);
+                        return;
+                    }
+                    if (parts[0] === 'rm' || parts[0] === 'remove') {
+                        const id = parseInt(parts[1] || '', 10);
+                        if (!Number.isFinite(id)) { sysMsg(`<div class="mn">Usage: <code>/link rm &lt;link_id&gt;</code></div>`, 'var(--amber)'); return; }
+                        const ok = await invoke('memory_link_remove', { id });
+                        sysMsg(`<div class="mn">${ok ? '✓ Link removed' : '⚠ No link with that id'}</div>`);
+                        return;
+                    }
+                    // Default: create. parts = [source, target, kind, ...note]
+                    if (parts.length < 3) {
+                        sysMsg(`<div class="mn">Usage: <code>/link &lt;source_id&gt; &lt;target_id&gt; &lt;kind&gt; [note]</code></div>
+                            <div style="font-size:11px;color:var(--txt2);">Use <code>/link kinds</code> to see allowed kinds.</div>`, 'var(--amber)');
+                        return;
+                    }
+                    const sourceId = parseInt(parts[0], 10);
+                    const targetId = parseInt(parts[1], 10);
+                    const kind     = parts[2];
+                    const note     = parts.slice(3).join(' ') || null;
+                    if (!Number.isFinite(sourceId) || !Number.isFinite(targetId)) {
+                        sysMsg(`<div class="mn">source_id and target_id must be integers.</div>`, 'var(--amber)');
+                        return;
+                    }
+                    const id = await invoke('memory_link_add', { sourceId, targetId, kind, confidence: 1.0, note });
+                    sysMsg(`<div class="mn" style="color:#a78bfa;">🔗 Link #${id} created</div>
+                        <div style="font-family:var(--mono);font-size:11px;">${sourceId} ─[${String(kind).replace(/</g,'&lt;')}]→ ${targetId}${note ? ` · ${String(note).replace(/</g,'&lt;')}` : ''}</div>`);
+                } catch (e) {
+                    sysMsg(`<div class="mn">/link failed: ${String(e)}</div>`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         // v1.7.80 — Proactive Operations Assistant surfaces.
         //   /proactive       → list current open insights
         //   /proactive scan  → force a fresh detector tick now

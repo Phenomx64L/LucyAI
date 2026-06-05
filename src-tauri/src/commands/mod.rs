@@ -76,3 +76,8 @@ pub mod proactive_detector;
 // v1.7.85 — Memory Graph layout cache. Saves d3-force-derived (x,y)
 // positions so reopening the graph skips the 300-tick pre-warm.
 pub mod graph_layout_cache;
+// v1.7.87 — Typed semantic relationships between memories (inspired
+// by the memory-graph MCP server). Six closed kinds — causal, resolves,
+// derives_from, references, contradicts, refines — that turn the
+// similarity graph into a reasoning graph.
+pub mod semantic_links;

@@ -144,6 +144,24 @@
     // settling and the viewport transform.
     let edgeCanvas: HTMLCanvasElement | null = null;
     let _edgeCtx: CanvasRenderingContext2D | null = null;
+
+    // v1.7.87 — Typed semantic links. Loaded once per graph open
+    // alongside the similarity edges. Rendered in the same canvas pass
+    // but with a distinct colour palette per kind so the operator can
+    // tell similarity from reasoning at a glance.
+    interface SemLink {
+        id: number; source_id: number; target_id: number;
+        kind: string; confidence: number; note: string | null;
+    }
+    let semanticLinks: SemLink[] = [];
+    const SEM_COLORS: Record<string, string> = {
+        causal:       '#ef4444',  // red — flow of cause
+        resolves:     '#10b981',  // green — fixed/solved
+        derives_from: '#22d3ee',  // cyan — derivation
+        references:   '#94a3b8',  // grey — neutral pointer
+        contradicts:  '#f59e0b',  // amber — conflict
+        refines:      '#a78bfa',  // violet — improvement
+    };
     /** Cache DPR-corrected context. Re-acquired when canvas binds. */
     function _getEdgeCtx(): CanvasRenderingContext2D | null {
         if (!edgeCanvas) return null;
@@ -179,6 +197,42 @@
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.stroke();
+        }
+        // v1.7.87 — Typed semantic links drawn ON TOP of similarity
+        // edges, slightly thicker so they read as the operational layer.
+        // Each kind gets its own colour; we render an arrowhead on the
+        // target end so the direction is unambiguous.
+        for (const link of semanticLinks) {
+            const a = nodesById.get(link.source_id);
+            const b = nodesById.get(link.target_id);
+            if (!a || !b) continue;
+            const colour = SEM_COLORS[link.kind] || '#cbd5e1';
+            const alpha = 0.5 + 0.5 * link.confidence;
+            ctx.strokeStyle = colour;
+            ctx.fillStyle   = colour;
+            ctx.globalAlpha = alpha;
+            ctx.lineWidth = 1.8;
+            // Shorten the line slightly so the arrowhead doesn't overlap
+            // the target circle. Use the node radius as the visual offset.
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const dist = Math.hypot(dx, dy) || 1;
+            const ux = dx / dist, uy = dy / dist;
+            const targetR = nodeRadius(b) + 2;
+            const tx = b.x - ux * targetR;
+            const ty = b.y - uy * targetR;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(tx, ty);
+            ctx.stroke();
+            // Arrowhead: 8-px triangle pointing at the target.
+            const head = 8;
+            const px = -uy, py = ux;          // perpendicular unit vector
+            ctx.beginPath();
+            ctx.moveTo(tx, ty);
+            ctx.lineTo(tx - ux * head + px * head * 0.45, ty - uy * head + py * head * 0.45);
+            ctx.lineTo(tx - ux * head - px * head * 0.45, ty - uy * head - py * head * 0.45);
+            ctx.closePath();
+            ctx.fill();
         }
         ctx.globalAlpha = 1;
     }
@@ -298,6 +352,13 @@
             );
             for (const r of _rows) _cachedPos.set(r.node_id, r);
         } catch (_e) { /* no cache, no problem */ }
+
+        // v1.7.87 — Pull typed semantic links in parallel with the
+        // layout cache. Best-effort: failure just means the second edge
+        // layer doesn't render this session.
+        try {
+            semanticLinks = await invoke<SemLink[]>('memory_link_list');
+        } catch (_e) { semanticLinks = []; }
 
         simNodes = g.nodes.map((n, i) => {
             // v1.7.85 — Cache hit short-circuit. Same node id → same
