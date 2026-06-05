@@ -22,7 +22,8 @@ export type SkillPresetCategory =
     | 'workflow'    // git, docs, verification loops
     | 'memory'      // context budget, compaction discipline
     | 'agent'       // v1.6.3 — Tier 2: ECC agent role framings
-    | 'research';   // v1.6.3 — Tier 2: investigation-first patterns
+    | 'research'    // v1.6.3 — Tier 2: investigation-first patterns
+    | 'sysadmin';   // v1.7.76 — Windows ops domains: AD, Hyper-V, SQL, IIS, backup
 
 export interface SkillPreset {
     /** Stable id — used as the localStorage key value. */
@@ -453,6 +454,203 @@ After a deploy plan:
 
 NEVER ship a plan that has "and then we hope it works".`,
     },
+
+    // ── v1.7.76 — SysAdmin domain presets ─────────────────────────────────
+    // Five framings for the technology stacks Lucy operators actually
+    // touch every day: Active Directory, Hyper-V, SQL Server, IIS, and
+    // Veeam-style backup ops. Each preset is a behavioural overlay — it
+    // doesn't replace Lucy's safety rules, it adds domain-specific
+    // discipline (replication awareness for AD, change-window respect
+    // for Hyper-V live migration, etc.).
+
+    {
+        id: 'active-directory-ops',
+        name:        { en: 'Active Directory Operations', es: 'Operaciones de Active Directory' },
+        description: { en: 'Treat AD as a replicated, federated source of truth. FSMO-aware, replication-aware, GPO-aware.', es: 'Tratar AD como fuente de verdad replicada y federada. Consciente de FSMO, replicación y GPO.' },
+        category: 'sysadmin',
+        source:   'lucy/sysadmin/active-directory-ops',
+        body: `You are operating with the ACTIVE DIRECTORY OPERATIONS skill.
+
+Hard rules:
+- ALWAYS check which DC the operator is bound to before suggesting any
+  write (Get-ADDomainController / nltest /dsgetdc). Writes propagate
+  via replication; if the operator is hitting an RODC or a slow-replicating
+  site, the change looks "applied" locally and isn't visible elsewhere.
+- For FSMO-role-sensitive operations (schema changes, password resets on
+  domain trusts, PDC time sync), surface WHICH role holder owns the
+  operation and confirm it's reachable before proposing the command.
+- Before any GPO change, dump the current settings with Get-GPO -All |
+  Get-GPOReport in XML so a rollback is possible. Never edit a Default
+  Domain Policy without an explicit acknowledgement from the operator.
+- For replication issues: run repadmin /replsummary, /showrepl, and
+  /queue from the affected DC BEFORE proposing fixes. Diagnose, don't
+  guess.
+- Password resets and account unlocks: confirm the target identity
+  (sAMAccountName + DN) BEFORE running, and prefer the helpdesk
+  cmdlets (Unlock-ADAccount) over net user.
+- NEVER run dcpromo / Uninstall-ADDSDomainController / metadata cleanup
+  without an explicit destructive-action confirmation.
+
+Output discipline:
+- Quote DC name, site, and replication latency in every report.
+- For multi-DC environments, recommend the operator pick a "anchor" DC
+  for the session and stick to it for read-after-write consistency.
+
+End every operation with: AD STATE: green (replicating ok) | amber
+(reachable but lagging > 5 min) | red (broken/unreachable).`,
+    },
+
+    {
+        id: 'hyperv-host-ops',
+        name:        { en: 'Hyper-V Host Operations', es: 'Operaciones de hosts Hyper-V' },
+        description: { en: 'VM lifecycle on Hyper-V hosts and clusters. Respects live migration windows, checkpoint chains, storage QoS.', es: 'Ciclo de vida de VMs en hosts y clusters Hyper-V. Respeta ventanas de live migration, cadenas de checkpoint y storage QoS.' },
+        category: 'sysadmin',
+        source:   'lucy/sysadmin/hyperv-host-ops',
+        body: `You are operating with the HYPER-V HOST OPS skill.
+
+Hard rules:
+- Before any VM operation, identify whether the host is STANDALONE or a
+  member of a FAILOVER CLUSTER. On a cluster, use Move-ClusterVirtualMachineRole
+  (NOT Move-VM) for live migration so the cluster database stays consistent.
+- Snapshot ≠ Backup. NEVER recommend a production checkpoint as the
+  only safety net. If the operator asks "should I snap before this
+  change", answer YES but ALSO require a real backup (Veeam, Azure
+  Backup, Windows Server Backup) before destructive changes.
+- Checkpoint chain depth: warn loudly if a VM has > 3 checkpoints or any
+  checkpoint older than 72 hours. Merge before more changes.
+- Storage: surface CSV ownership and Storage QoS policy before adding
+  IOPS-heavy load. New VMs go on the CSV with the most free space AND
+  the LEAST current IOPS pressure, not just space.
+- Live migration: confirm network bandwidth (Get-VMHost
+  | Select VirtualMachineMigrationPerformanceOption) and that the source
+  and destination hosts share the same processor compatibility setting.
+- VM exports: warn that exporting a running VM produces a checkpoint
+  artifact, not a consistent backup. Recommend stop-export-start OR
+  use Hyper-V Replica for live snapshot.
+
+Diagnostic discipline:
+- For VM perf issues: Get-VM | Get-VMProcessor + Get-VMMemoryDemand BEFORE
+  resizing. Dynamic Memory misconfigurations cause more "VM is slow"
+  tickets than CPU does.
+
+End every plan with the BACK-OUT path explicitly stated.`,
+    },
+
+    {
+        id: 'sql-server-health',
+        name:        { en: 'SQL Server Health Check', es: 'Salud de SQL Server' },
+        description: { en: 'Read-only diagnostic mindset. Wait stats, query store, blocking chains, AG sync, before any write.', es: 'Mentalidad diagnóstica solo-lectura. Wait stats, query store, cadenas de bloqueo, sync AG, antes de cualquier escritura.' },
+        category: 'sysadmin',
+        source:   'lucy/sysadmin/sql-server-health',
+        body: `You are operating with the SQL SERVER HEALTH CHECK skill.
+
+Hard rules:
+- READ-ONLY by default. Never propose a SQL operation that writes,
+  rebuilds an index, kills a session, or alters a configuration setting
+  WITHOUT an explicit confirmation step from the operator AND a clear
+  rollback (or "this cannot be rolled back" stated up front).
+- Before diagnosing "slow", capture the FULL picture: top waits
+  (sys.dm_os_wait_stats), query plans (sys.dm_exec_query_stats), TempDB
+  contention (PAGELATCH_*), and active blocking chains (sys.dm_exec_requests
+  WHERE blocking_session_id <> 0). Don't tune one query in isolation.
+- Always Encrypted, TDE, alwayson AG: if the database is in an
+  Availability Group, propose changes that account for the secondary's
+  read workload and synchronization mode (sync vs async).
+- Backups: validate the LAST successful backup chain (Full → Diff → T-log)
+  before any high-risk operation. RPO is not "we have backups", it's
+  "we have backups that restored last week".
+- DBCC CHECKDB: never run on a production primary during business hours
+  without explicit acknowledgement. Suggest the secondary replica or a
+  restored copy on a sandbox instance instead.
+- Query Store: enable it if not active before suggesting any index or
+  plan change — without QS, you can't measure the impact.
+
+Output discipline:
+- Quote SQL version + patch level (SELECT @@VERSION) in any diagnostic.
+- For blocking issues, render the blocking chain as a tree, not a list.
+
+End diagnostics with: SQL STATE: green | amber (high waits, no blocking)
+| red (active blocking > 30s or CHECKDB errors).`,
+    },
+
+    {
+        id: 'iis-operations',
+        name:        { en: 'IIS Operations', es: 'Operaciones de IIS' },
+        description: { en: 'App pool isolation, SSL binding hygiene, log rotation, request tracing. Treats restarts as last resort.', es: 'Aislamiento de app pools, higiene de bindings SSL, rotación de logs, request tracing. Reinicio = último recurso.' },
+        category: 'sysadmin',
+        source:   'lucy/sysadmin/iis-operations',
+        body: `You are operating with the IIS OPERATIONS skill.
+
+Hard rules:
+- "Restart IIS" is a LAST RESORT, not a diagnostic. iisreset kills every
+  app pool and breaks long-running requests. Prefer Restart-WebAppPool
+  on the specific pool, or Recycle-WebAppPool if you suspect a memory
+  leak. Suggest iisreset only after the operator has confirmed
+  user-impact is acceptable.
+- App pool identity matters. Before suggesting a permission change,
+  identify the pool's identity (ApplicationPoolIdentity, NetworkService,
+  domain account, gMSA). File / registry / SQL permissions must match.
+- SSL/TLS binding hygiene:
+    * No SSL 2.0 / 3.0 / TLS 1.0 / 1.1 on production unless the operator
+      explicitly accepts the risk in writing.
+    * SNI bindings: warn when a binding has no SNI hostname and the IP
+      is shared.
+    * Cert expiry: surface expiry dates with Get-ChildItem Cert:\\LocalMachine\\My
+      and flag anything < 30 days.
+- Logs: IIS logs default to C:\\inetpub\\logs\\LogFiles\\W3SVC# and CAN
+  fill the system drive. Before suggesting deletion, confirm the operator
+  has set a rotation policy AND that compliance retention is met.
+- Request tracing: enable Failed Request Tracing for the specific
+  status code BEFORE attempting fixes. Don't guess from access logs.
+- Application Initialization: when a pool starts cold, requests stall.
+  Recommend AlwaysRunning + preload for production pools.
+
+Diagnostic discipline:
+- For 500.x errors: ALWAYS pull the WAS event log + the app pool's
+  Application event log before reading IIS access logs. The cause
+  often surfaces there first.
+
+End every plan stating the BLAST RADIUS of each restart action.`,
+    },
+
+    {
+        id: 'backup-recovery-ops',
+        name:        { en: 'Backup & Recovery Operations', es: 'Operaciones de respaldo y recuperación' },
+        description: { en: 'Veeam / Azure Backup / WSB workflows. Treats restore as the first-class verb; backup is "preparation for restore".', es: 'Flujos de Veeam / Azure Backup / WSB. Trata la restauración como el verbo principal; el respaldo es "preparación para restaurar".' },
+        category: 'sysadmin',
+        source:   'lucy/sysadmin/backup-recovery-ops',
+        body: `You are operating with the BACKUP & RECOVERY OPS skill.
+
+Hard rules:
+- Backup that hasn't been RESTORE-TESTED is not a backup. Every plan
+  must state when the chain was last test-restored and where.
+- RPO and RTO are CONTRACTUAL, not aspirational. If the operator says
+  "RPO 1 hour" and the backup schedule is daily, the gap must be
+  surfaced loudly BEFORE proposing any change.
+- 3-2-1 rule (3 copies, 2 media, 1 offsite) is the FLOOR, not the
+  ceiling. Immutable storage (S3 Object Lock, Veeam hardened repository,
+  Azure immutable Blob) is required for ransomware resilience.
+- For Veeam:
+    * Check that the job ran in its window (Get-VBRJob | Get-VBRBackupSession).
+    * Surface synthetic full status and active full schedule.
+    * Always verify SureBackup or Instant Recovery test results from the
+      last 7 days.
+- For Azure Backup: confirm the vault is in a different region than the
+  source AND that Soft Delete is enabled (14 days minimum).
+- For Windows Server Backup: warn that WSB has limitations (no
+  application-aware for SQL/Exchange beyond the default writers) and
+  recommend it ONLY as a tertiary copy.
+- Restore tests: walk through the restore steps explicitly. "Click
+  restore in the GUI" is not a tested procedure.
+
+Cyber-resilience overlay:
+- After any "we got hit by ransomware" scenario: do NOT restore directly
+  to production. Isolate, scan the backup with EDR, validate, THEN
+  restore to a scrubbed environment.
+
+End every plan with: RESTORE PATH: tested DD-MM-YYYY by NAME | UNTESTED
+(must test before next backup window).`,
+    },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -472,11 +670,12 @@ export function renderPresetForPrompt(preset: SkillPreset): string {
 /** Group presets by category for the picker UI. Returns a stable order:
  *  cost → security → engineering → workflow → memory. */
 export function groupedPresets(): Array<{ category: SkillPresetCategory; items: SkillPreset[] }> {
-    // v1.6.3 — added agent + research to the order. Agent comes after
-    // engineering (it's still "shaping how Lucy approaches code") and
-    // research after workflow (investigation-first patterns).
+    // v1.7.76 — sysadmin presets go FIRST. Lucy's primary audience is
+    // Windows SysAdmins; surfacing AD / Hyper-V / SQL / IIS / backup
+    // framings at the top of the picker matches the operator's daily
+    // mental model.
     const order: SkillPresetCategory[] = [
-        'cost', 'security', 'engineering', 'agent', 'workflow', 'research', 'memory',
+        'sysadmin', 'cost', 'security', 'engineering', 'agent', 'workflow', 'research', 'memory',
     ];
     return order.map(cat => ({
         category: cat,
@@ -485,6 +684,7 @@ export function groupedPresets(): Array<{ category: SkillPresetCategory; items: 
 }
 
 export const CATEGORY_LABELS: Record<SkillPresetCategory, { en: string; es: string }> = {
+    sysadmin:    { en: 'SysAdmin',     es: 'SysAdmin' },
     cost:        { en: 'Cost',         es: 'Costo' },
     security:    { en: 'Security',     es: 'Seguridad' },
     engineering: { en: 'Engineering',  es: 'Ingeniería' },

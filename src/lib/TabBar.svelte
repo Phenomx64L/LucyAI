@@ -130,7 +130,7 @@
      *    executing     → tools running right now (violet)
      *    reference     → documentation / how-to (blue)
      */
-    function tabPurpose(tab: any): 'chat' | 'investigation' | 'incident' | 'executing' | 'reference' {
+    function tabPurpose(tab: any): 'chat' | 'investigation' | 'incident' | 'executing' | 'reference' | 'maintenance' {
         if (!tab) return 'chat';
         // Runtime-flag tiers (highest priority).
         if (tab.activeIncident || tab._activeIncident) return 'incident';
@@ -143,11 +143,50 @@
             .join(' ')
             .toLowerCase();
         const blob = title + ' ' + recent;
-        if (/phishing|malware|threat|breach|forensic|attack|exploit|cve-?\d|ransom|c2\b|intrusion|investiga|analiz|incident|amenaza|brecha/i.test(blob)) {
+
+        // v1.7.76 — Investigation keywords expanded. Coverage spans:
+        //   • Security primitives: phishing, malware, ransomware, threat
+        //   • Forensics + IR: forensic, ioc, indicator of compromise,
+        //     soc, siem, edr, mdr, xdr, ndr, dlp, csirt, hunt
+        //   • Attack chain: exfiltrat, persistence, lateral, kerberoast,
+        //     mimikatz, cobalt strike, beacon, c2, c&c
+        //   • CVE / advisories: cve-N, advisory, kb article when about
+        //     a vulnerability (we DO NOT match plain "kb" — too generic).
+        //   • ES translations: vulnerabilidad, ataque, sospechoso,
+        //     compromis, exfiltr, persistencia, lateral, brecha,
+        //     intrusi, amenaza, malicios, infectado, ransom, ddos.
+        // Word-boundary checks (\b) where collisions with normal words
+        // are likely (e.g. "lateral" alone would match "lateral movement"
+        // but not "bilateral").
+        if (/phishing|malware|ransom(?:ware)?|spyware|adware|trojan|troyano|botnet|rootkit|backdoor|keylogger|spoofing|smishing|vishing|\bcve-?\d|advisory\b|\bioc\b|\bsoc\b|\bsiem\b|\bedr\b|\bmdr\b|\bxdr\b|\bndr\b|\bdlp\b|\bcsirt\b|threat\s*(?:hunt|actor|intel|model)|forensic|exfiltrat|persistence|persistencia|lateral\s*movement|movimiento\s*lateral|kerberoast|mimikatz|cobalt\s*strike|\bbeacon\b|\bc2\b|c&c\b|intrusion|intrusi[oó]n|breach|brecha|exploit|attack|atacante|ataque|amenaza|vulnerabilidad|cve\b|\bnvd\b|sospechos|compromis|infectad|malicios|investiga|analiz(?:a|ar|ando)\s+(?:log|evento|trafico|tr[aá]fico|proceso|memoria)|incident\b|ddos\b|brute[- ]?force|fuerza\s*bruta|injection|inyecci[oó]n/i.test(blob)) {
             return 'investigation';
         }
-        if (/\bdocs?\b|guide|manual|how[- ]to|tutorial|gu[ií]a|c[oó]mo\s+(se|hago|funciona)|qu[eé]\s+es|explica|definici[oó]n/i.test(blob)) {
+
+        // v1.7.76 — Reference keywords expanded. Covers:
+        //   • Doc verbs: docs, documentation, manual, guide, tutorial,
+        //     how-to, walk[- ]?through, step[- ]?by[- ]?step, instructiv,
+        //     paso a paso, explica, define, definici[oó]n, qu[eé] es,
+        //     c[oó]mo (se|hago|funciona|configurar|instalar)
+        //   • Brand doc surfaces: learn.microsoft, microsoft docs,
+        //     technet, kb article, msdn
+        //   • Reference primitives: cheatsheet, cheat sheet, reference,
+        //     ejemplo, syntax, sintaxis, schema, esquema, parameter,
+        //     par[aá]metro, prerequis, requisito, requirements, RFC ####
+        if (/\bdocs?\b|documentation|documentaci[oó]n|manual\b|guide\b|gu[ií]a\b|tutorial|how[- ]?to|walk[- ]?through|step[- ]?by[- ]?step|paso\s+a\s+paso|instructiv|cheat[- ]?sheet|reference\b|cheatsheet|ejemplo\b|syntax|sintaxis|schema|esquema\s+de\b|prerequis|requisito|requirements?\b|learn\.microsoft|microsoft\s+docs|technet\b|msdn\b|kb\s*\d{6}|rfc\s*\d{3,5}|c[oó]mo\s+(se|hago|funciona|configurar|instalar|configurar|montar|levantar)|qu[eé]\s+es\b|explica\b|explicar|definici[oó]n|definir|defin[aei]\s+/i.test(blob)) {
             return 'reference';
+        }
+
+        // v1.7.76 — Maintenance keywords (NEW bucket, cyan tint). Routine
+        // ops work distinct from investigation (no incident) and from
+        // executing (a maintenance tab might be planning, not running).
+        // Covers: backup/restore, cleanup, optimize, vacuum/reindex,
+        // patch/update/upgrade, schedule, cron, runbook execution,
+        // health check, capacity, baseline.
+        // ES: backup, respaldo, mantenimiento, actualizar, actualizaci[oó]n,
+        // parche, parchear, limpiar, depurar, optimizar, programar,
+        // calendarizar, rutina, salud, capacidad, planificar, recortar.
+        if (/\bbackup\b|\brestore\b|cleanup|clean[- ]?up|optimi[zs]e|optimi[zs]aci[oó]n|optimi[zs]ar|vacuum\b|reindex|defrag|patch(?:ing)?|patch\s+(tuesday|management)|update(?:s|d)?\b|upgrade\b|actualiza(?:r|ci[oó]n|do|dos)?|parche\b|parchear|hotfix|servicing|wsus\b|sccm\b|maintenance\b|mantenimiento|housekeeping|rotaci[oó]n\s+de\s+logs?|log\s+rotation|disk\s+clean|liberaci[oó]n\s+de\s+disco|respaldo\b|capacit(?:y|ation)|capacidad\s+(?:de|del)|baseline|baselining|health[- ]?check|chequeo|cron\b|crontab|programar\s+tarea|scheduled\s+task|tarea\s+programada|runbook\s+(?:run|execute|ejecuta)|monitoring\s+setup|setup\s+monitoring|configurar\s+(?:respaldo|backup|monitoreo)/i.test(blob)) {
+            return 'maintenance';
         }
         return 'chat';
     }

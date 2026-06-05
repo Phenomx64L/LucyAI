@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.76] — 2026-06-05
+
+### Tab tinting expanded + 5 new SysAdmin skill presets
+
+Two pulido changes that close out the "more content, less guesswork"
+debts from the v1.7 roadmap.
+
+**1. Tab purpose tinting — keyword vocabulary expanded.**
+`src/lib/TabBar.svelte::tabPurpose()`. The v1.7.59 heuristic only
+recognized ~15 English-leaning terms (phishing, malware, threat,
+CVE-#, etc. on the investigation side; docs/guide/tutorial on the
+reference side). After 2 weeks of real use, lots of obvious Spanish
+ops vocabulary fell into the default "chat" bucket.
+
+Expansions:
+- **Investigation** (amber): now covers SOC/SIEM/EDR/MDR/XDR/NDR/DLP
+  acronyms, CSIRT, IoC, threat hunt/actor/intel, persistence /
+  lateral movement / kerberoast / mimikatz / cobalt strike / beacon,
+  vulnerabilidad / ataque / sospechoso / compromis / exfiltr /
+  infectad / malicios, plus ddos and brute-force / fuerza bruta.
+- **Reference** (blue): now covers documentation surfaces (learn.microsoft,
+  technet, msdn, kb ######, rfc ####), instructional verbs
+  (step-by-step, paso a paso, walk-through), and reference primitives
+  (cheatsheet, syntax, sintaxis, schema, esquema, requirements,
+  prerequisitos, ejemplo).
+- **NEW maintenance bucket** (cyan #22d3ee): routine ops work that
+  isn't an incident and isn't (necessarily) running yet. Triggers
+  on backup/restore, cleanup, vacuum/reindex, defrag, patch, upgrade,
+  parche/parchear, hotfix, WSUS/SCCM, log rotation, capacity baseline,
+  health-check, cron/crontab, scheduled task / tarea programada.
+  CSS at `src/lib/styles/tab-strip.css`.
+
+Word-boundary checks (`\b`) added where collisions with common words
+were likely (e.g. "lateral" inside "bilateral", "soc" inside
+"socorro"). Regex stays under 1 KB so the run-cost is negligible.
+
+**2. 5 new SysAdmin skill presets.**
+`src/lib/skill-presets.ts`. New category `sysadmin` placed FIRST in
+the picker (Lucy's primary audience is Windows SysAdmins; surfacing
+domain framings before code/engineering matches the operator's
+mental model).
+
+- **Active Directory Operations** — FSMO-aware, replication-aware,
+  GPO-aware. Always quotes the DC the operator is bound to before
+  any write; requires repadmin diagnostics before fixes; gates dcpromo
+  / metadata cleanup behind explicit destructive-action confirm.
+- **Hyper-V Host Operations** — distinguishes standalone vs cluster;
+  Move-ClusterVirtualMachineRole (not Move-VM) on clusters; checkpoint
+  ≠ backup discipline; warns on chains > 3 or older than 72 h.
+- **SQL Server Health Check** — read-only by default; full-picture
+  diagnostics (waits + plans + TempDB + blocking) before tuning;
+  Always Encrypted / AG awareness; gated DBCC CHECKDB on production
+  primaries; Query Store required before plan changes.
+- **IIS Operations** — iisreset is LAST RESORT; Restart-WebAppPool
+  preferred; SSL/TLS hygiene (no SSLv2/v3/TLS1.0/1.1, SNI checks,
+  cert expiry < 30 d flagged); FRT before guessing from access logs.
+- **Backup & Recovery Operations** — restore-tested or it's not a
+  backup; RPO/RTO are contractual; 3-2-1 floor + immutable storage;
+  Veeam SureBackup verification; Azure Backup vault region + soft
+  delete; ransomware overlay (isolate, scan, scrub, then restore).
+
+Each preset ~400-550 tokens. They're behavioural overlays (system-
+prompt framings), not scripts; they shape HOW Lucy approaches the
+domain, not WHAT she runs.
+
+`svelte-check` — 0 errors, 0 warnings.
+`npm test` — 171/171 passed.
+
+---
+
 ## [1.7.75] — 2026-06-04
 
 ### Mission Strip folded into the StatusBar — single chrome bar at bottom
