@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.81] — 2026-06-05
+
+### Hotfix — proactive_detector boot panic
+
+`v1.7.80` crashed on first `npm run tauri dev` with:
+
+```
+thread 'main' panicked at src\commands\proactive_detector.rs:144:5:
+there is no reactor running, must be called from the context of a
+Tokio 1.x runtime
+```
+
+Root cause: `start_background_loop` called `tokio::spawn` directly from
+inside `tauri::Builder::setup()`. At that point the Tauri runtime
+wrapper is initialised but `tokio::runtime::Handle::current()` can't
+be resolved because setup() runs in a thin shim context.
+
+Same pattern as `db_maintenance::spawn_background_maintenance` (which
+works correctly): use `tauri::async_runtime::spawn` and
+`tauri::async_runtime::spawn_blocking` instead. Those resolve to the
+global Tauri-managed runtime regardless of caller context.
+
+Two call sites changed in `src-tauri/src/commands/proactive_detector.rs`:
+- `start_background_loop`: `tokio::spawn` → `tauri::async_runtime::spawn`;
+  the inner `tokio::task::spawn_blocking` → `tauri::async_runtime::spawn_blocking`.
+- `proactive_run_once` (Tauri command): same fix on its `spawn_blocking`.
+
+`tokio::time::sleep` inside the spawned future still works because
+Tauri's async runtime wraps tokio under the hood — only the SPAWN call
+needs the wrapper.
+
+`cargo check` — clean.
+
+---
+
 ## [1.7.80] — 2026-06-05
 
 ### Proactive Operations Assistant (MVP) — Lucy notices things unprompted

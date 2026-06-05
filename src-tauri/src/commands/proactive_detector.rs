@@ -124,7 +124,12 @@ pub fn proactive_insight_dismiss(id: i64) -> Result<(), String> {
 /// Force a detector tick — useful for /proactive scan command or tests.
 #[tauri::command]
 pub async fn proactive_run_once() -> Result<i64, String> {
-    tokio::task::spawn_blocking(run_all_detectors)
+    // v1.7.81 — Use tauri::async_runtime instead of tokio::task directly.
+    // Tauri 2 runs the global runtime via its own wrapper; calling the
+    // raw tokio::task::spawn_blocking before the runtime is fully set
+    // up panics with "no reactor running". The wrapper plays nice with
+    // both the main thread setup() context and worker threads.
+    tauri::async_runtime::spawn_blocking(run_all_detectors)
         .await
         .map_err(|e| format!("join: {}", e))?
 }
@@ -141,13 +146,21 @@ pub async fn proactive_run_once() -> Result<i64, String> {
 ///   • Multiplies with the 4-hour cooldown — same dedupe_key fires at
 ///     most ~6 times per day even at the most aggressive detection rate.
 pub fn start_background_loop() {
-    tokio::spawn(async {
+    // v1.7.81 — Use Tauri's async runtime wrapper instead of `tokio::spawn`
+    // directly. setup() runs in a context where the raw tokio runtime
+    // isn't reachable via `tokio::runtime::Handle::current()`, so calling
+    // tokio::spawn from here panics with "no reactor running". The Tauri
+    // wrapper resolves to the global runtime regardless of caller context.
+    // Same pattern as db_maintenance::spawn_background_maintenance.
+    tauri::async_runtime::spawn(async {
         // Wait a bit on boot so we don't race the DB-open + migrations.
+        // Tauri's async runtime wraps tokio so tokio::time::sleep works
+        // here without dragging in its own runtime handle.
         tokio::time::sleep(Duration::from_secs(60)).await;
         loop {
             // Run detectors on a blocking thread so the rest of the
             // app doesn't block on SQL queries.
-            let _ = tokio::task::spawn_blocking(run_all_detectors).await;
+            let _ = tauri::async_runtime::spawn_blocking(run_all_detectors).await;
             tokio::time::sleep(Duration::from_secs(180)).await;
         }
     });
