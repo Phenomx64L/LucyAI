@@ -18,6 +18,8 @@
     const localModels = _localModels as import('svelte/store').Writable<any[]>;
     const nvidiaModels = _nvidiaModels as import('svelte/store').Writable<any[]>;
     import { suggestFlags, applyFlagCompletion, type FlagSuggestion } from '$lib/flag-completions';
+    // v1.7.91 — Slash command typeahead overlay.
+    import SlashTypeahead from '$lib/SlashTypeahead.svelte';
     import { detectHeavyPrompt } from '$lib/smart-router';
 
     export let tab: any;
@@ -76,6 +78,11 @@
     // on a "-flag-shaped" token of a known command. Tab/Enter to insert,
     // Esc to dismiss, ArrowUp/Down to navigate.
     let _textareaEl: HTMLTextAreaElement | null = null;
+    // v1.7.91 — Slash typeahead overlay ref. Exposes handleKey() so the
+    // textarea's keydown handler can route arrow nav before the textarea's
+    // default behaviour. Null until the {#if} mounts the component (the
+    // typeahead self-hides when there's nothing to show).
+    let _slashTypeaheadEl: SlashTypeahead | null = null;
     let _flagSuggestions: FlagSuggestion[] = [];
     let _flagSelIdx = 0;
 
@@ -318,6 +325,29 @@
          slash-command mode. Purely cosmetic — no behavioural change. -->
     <div class="igrp" class:islash={(tab.inputValue || '').trimStart().startsWith('/')} style="position:relative;">
         <span class="iprompt" aria-hidden="true">λ</span>
+        <!-- v1.7.91 — Slash typeahead overlay. Bound via _slashTypeaheadEl
+             so on:keydown below can route arrows/Enter/Tab/Esc to it
+             BEFORE the textarea's default behaviour. select event
+             rewrites inputValue with the picked command + space and
+             re-focuses the textarea. -->
+        <SlashTypeahead
+            bind:this={_slashTypeaheadEl}
+            value={tab.inputValue || ''}
+            focused={_ifocused}
+            {isEN}
+            on:select={(e) => {
+                tab.inputValue = e.detail.cmd + ' ';
+                tick().then(() => {
+                    autoResize();
+                    if (_textareaEl) {
+                        _textareaEl.focus();
+                        try {
+                            const end = _textareaEl.value.length;
+                            _textareaEl.setSelectionRange(end, end);
+                        } catch {}
+                    }
+                });
+            }} />
         <textarea class="ibox" rows="1"
             placeholder={tab.pendingMessage
                 ? (isEN ? 'Message queued — waiting for Lucy…' : 'Mensaje en espera — esperando a Lucy…')
@@ -330,7 +360,12 @@
             on:input={(e) => { autoResize(); refreshFlagSuggestions(); dispatch('inputchange', { event: e }); }}
             on:paste={() => tick().then(autoResize)}
             on:cut={() => tick().then(autoResize)}
-            on:keydown={(e) => { if (handleSuggestionKey(e)) return; dispatch('keydown', { event: e }); }}
+            on:keydown={(e) => {
+                // v1.7.91 — slash typeahead first claim on arrow/Enter/Tab/Esc.
+                if (_slashTypeaheadEl && _slashTypeaheadEl.handleKey(e)) return;
+                if (handleSuggestionKey(e)) return;
+                dispatch('keydown', { event: e });
+            }}
             on:blur={() => { _ifocused = false; setTimeout(() => { _flagSuggestions = []; }, 120); }}
             disabled={!!tab.pendingMessage}></textarea>
 

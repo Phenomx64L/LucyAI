@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.91] — 2026-06-05
+
+### Slash typeahead — live autocomplete as you type `/`
+
+Completes the slash UX trifecta (v1.7.89 menu on bare `/`, v1.7.90
+clickable text listing, this — live typeahead while typing).
+
+**New component**: `src/lib/SlashTypeahead.svelte`. Floating popover
+above the textarea, activates when:
+- The input value starts with `/`
+- At least one character has been typed after the slash (so the
+  bare-`/`+Enter menu from v1.7.89 still wins)
+- The textarea is focused
+
+**Filtering** — three-tier score:
+- Prefix match against the command name → 100 - excess length.
+- Substring anywhere in command name → 50 - position.
+- Substring in description → 10 - position×0.1.
+
+Top 8 matches surface. Catalog mirrors the v1.7.89 menu (same 21
+commands, same category order). Mirrored locally instead of pulling
+from `slash-commands.ts` because the typeahead doesn't want the
+whole command tree — keeps the surface focused.
+
+**Keyboard**:
+- `ArrowDown` / `ArrowUp` — move selection.
+- `Enter` / `Tab` — pick the highlighted item.
+- `Escape` — close.
+- Mouse — hover highlights, click picks.
+
+Exposes `handleKey(KeyboardEvent): boolean` so the host's
+`on:keydown` can route arrow/Enter/Tab/Esc BEFORE the textarea's
+default behaviour fires. Returns `true` when consumed.
+
+**Wire-up** (`ChatInput.svelte`):
+- `<SlashTypeahead bind:this={_slashTypeaheadEl} ... />` mounted
+  inside the `.igrp` wrapper so its `position: absolute` measures
+  relative to the textarea group.
+- `on:keydown` on the textarea calls `_slashTypeaheadEl.handleKey(e)`
+  FIRST; only falls through to the existing flag-suggestion handler
+  and dispatch when typeahead doesn't claim the key. Same pattern
+  the flag suggestions already use.
+- `on:select` rewrites `tab.inputValue` to `cmd + ' '`, refocuses
+  the textarea, and positions the caret at the end.
+
+**Styling**: monospace, dim, same vocabulary as the v1.7.90 listing.
+Popover sits ABOVE the input (CSS `bottom: 100%`) so it never gets
+clipped by a short viewport and doesn't push chat content. Selected
+row gets a subtle green tint; hover follows the same path.
+
+Typing experience: `/me…` → popover shows `/memory`, `/memlink`;
+`↓` highlights the next; `↵` inserts `/memory ` and operator keeps
+typing args without breaking flow.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.90] — 2026-06-05
 
 ### Slash menu — clickable text, no modal-style chrome
