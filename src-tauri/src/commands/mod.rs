@@ -69,3 +69,7 @@ pub mod script_verify;
 // suitability and nudges the LLM toward fork_task / wait_task when ≥2
 // independent investigations are detected.
 pub mod fork_advisor;
+// v1.7.80 — Proactive Operations Assistant. Background detectors that
+// surface operator-actionable insights without being asked
+// (memory buildup, log size, DB size, integrity alarms, failure spikes).
+pub mod proactive_detector;

@@ -130,6 +130,14 @@ pub fn run() {
             // Disable via LUCY_DB_MAINT_DISABLE=1 (CI / tests).
             commands::db_maintenance::spawn_background_maintenance();
 
+            // v1.7.80 — Proactive Operations Assistant background loop.
+            // Watches memory pipeline, stream sessions, app log, DB size,
+            // integrity, and audit-trail failure rates. Surfaces insights
+            // through the proactive_insights table; the frontend polls
+            // `proactive_insights_recent` every ~2 minutes and toasts
+            // any new ones. Cooldown of 4 h prevents nagging.
+            commands::proactive_detector::start_background_loop();
+
             // ── OpenClaw Gateway — token-protected localhost webhook receiver ──
             // Opt-out via `LUCY_DISABLE_OPENCLAW=1`. Auth required: clients must
             // send `Authorization: Bearer <token>` header. Token is written to
@@ -947,6 +955,11 @@ pub fn run() {
             // parallel-branch potential so the composer can show a chip
             // and the prompt builder can inject a strong directive.
             commands::fork_advisor::fork_advice,
+            // v1.7.80 — Proactive Operations Assistant. Frontend polls
+            // these; backend background loop populates the insights table.
+            commands::proactive_detector::proactive_insights_recent,
+            commands::proactive_detector::proactive_insight_dismiss,
+            commands::proactive_detector::proactive_run_once,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

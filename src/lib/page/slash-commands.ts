@@ -263,6 +263,59 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         //   /serial off   → force OFF (advisor re-enabled)
         // The page consumes the flag in its turn-loop when building the
         // system prompt: bypass → allow_fork_advice = false.
+        // v1.7.80 — Proactive Operations Assistant surfaces.
+        //   /proactive       → list current open insights
+        //   /proactive scan  → force a fresh detector tick now
+        //   /proactive clear → dismiss all open insights
+        case 'proactive':
+        case 'insights': {
+            const a = (arg || '').trim().toLowerCase();
+            (async () => {
+                try {
+                    if (a === 'scan' || a === 'run') {
+                        const n = await invoke('proactive_run_once') as number;
+                        sysMsg(`<div class="mn" style="color:#22d3ee;">🛰 Proactive scan complete</div>
+                            <div style="font-size:11px;color:var(--txt2);">${n} new insight(s) detected.</div>`);
+                        return;
+                    }
+                    if (a === 'clear' || a === 'dismiss-all') {
+                        const rows = await invoke('proactive_insights_recent', { limit: 100 }) as any[];
+                        for (const r of rows) {
+                            await invoke('proactive_insight_dismiss', { id: r.id });
+                        }
+                        sysMsg(`<div class="mn">🛰 Dismissed ${rows.length} insight(s).</div>`);
+                        return;
+                    }
+                    const rows = await invoke('proactive_insights_recent', { limit: 10 }) as any[];
+                    if (!rows.length) {
+                        sysMsg(`<div class="mn" style="color:var(--acc);">🛰 No open insights — Lucy isn't worried about anything right now.</div>`);
+                        return;
+                    }
+                    const lis = rows.map(r => {
+                        const tone = r.severity === 'critical' ? 'color:#ef4444' :
+                                     r.severity === 'warning'  ? 'color:#f59e0b' :
+                                                                  'color:#22d3ee';
+                        const ageMin = Math.max(0, Math.round((Date.now() / 1000 - r.created_at) / 60));
+                        const ageStr = ageMin < 60 ? `${ageMin}m` : `${Math.round(ageMin/60)}h`;
+                        const hint = r.action_hint ? `<div style="font-size:10px;opacity:.75;margin-top:2px;">→ ${String(r.action_hint).replace(/</g,'&lt;')}</div>` : '';
+                        return `<li style="margin:6px 0;">
+                            <span style="${tone};font-weight:700;font-family:var(--mono);">[${r.severity.toUpperCase()}]</span>
+                            <span style="font-weight:600;">${String(r.title).replace(/</g,'&lt;')}</span>
+                            <span style="opacity:.55;font-size:10px;margin-left:6px;">${ageStr}</span>
+                            <div style="font-size:11px;opacity:.85;margin-top:2px;">${String(r.detail).replace(/</g,'&lt;')}</div>
+                            ${hint}
+                        </li>`;
+                    }).join('');
+                    sysMsg(`<div class="mn" style="color:#22d3ee;">🛰 Open insights (${rows.length})</div>
+                        <ul style="list-style:none;padding:4px 0 0 4px;margin:4px 0;">${lis}</ul>
+                        <div style="font-size:10px;opacity:.55;margin-top:6px;">Use <code>/proactive scan</code> to refresh · <code>/proactive clear</code> to dismiss all.</div>`);
+                } catch (e) {
+                    sysMsg(`<div class="mn" style="color:var(--red);">/proactive failed: ${String(e)}</div>`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
+
         case 'serial':
         case 'no-fork':
         case 'nofork': {

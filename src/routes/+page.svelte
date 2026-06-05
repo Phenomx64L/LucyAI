@@ -1660,9 +1660,42 @@ import { listen } from '@tauri-apps/api/event';
         catch (e) { console.warn('[MCP] failed to load servers', e); }
     }
 
+    // v1.7.80 — Proactive Operations Assistant client poll.
+    // Tracks ids we've already toasted so the same insight doesn't
+    // surface as a notification every 2 minutes.
+    let _proactiveSeenIds = new Set();
+    async function pollProactiveInsights() {
+        try {
+            const rows = await invoke('proactive_insights_recent', { limit: 20 });
+            for (const r of (rows || [])) {
+                if (_proactiveSeenIds.has(r.id)) continue;
+                _proactiveSeenIds.add(r.id);
+                // Skip if older than 5 minutes — those are pre-existing on
+                // app boot, not "freshly detected during this session".
+                const ageSec = Math.max(0, (Date.now() / 1000) - r.created_at);
+                if (ageSec > 300) continue;
+                const icon = r.severity === 'critical' ? '🔴'
+                           : r.severity === 'warning'  ? '🟠'
+                           :                              '🛰';
+                const hint = r.action_hint ? `\n→ ${r.action_hint}` : '';
+                toast(`${icon} ${r.title}${hint}`,
+                    r.severity === 'critical' ? 'error' :
+                    r.severity === 'warning'  ? 'warning' : 'info');
+            }
+        } catch (_e) {
+            // Silent fail: backend may not be ready on first poll.
+        }
+    }
+
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // v1.7.80 — kick off the proactive insights poll. First tick at
+        // 90 s (let the backend's own 60 s warmup finish) then every 2 min.
+        setTimeout(() => {
+            pollProactiveInsights();
+            setInterval(pollProactiveInsights, 120_000);
+        }, 90_000);
         // v1.7.44 — Wire up the idle detector FIRST so the `.app-hidden`
         // and `.lucy-quiescent` classes start tracking the window/user
         // state from the very first frame. Idempotent on HMR.

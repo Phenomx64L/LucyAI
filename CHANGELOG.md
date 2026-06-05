@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.80] — 2026-06-05
+
+### Proactive Operations Assistant (MVP) — Lucy notices things unprompted
+
+The frontier AI products are all REACTIVE: operator types, assistant
+responds. Lucy already collects diagnostic state, app logs, memory
+pipeline metrics, and stream session maps — every signal needed to
+PRE-EMPT problems instead of waiting for the operator to ask. This is
+the eyes-on-the-data layer that turns "data Lucy already has" into
+"insights she surfaces unprompted".
+
+**New Rust module** (`src-tauri/src/commands/proactive_detector.rs`,
+2 tests):
+- Background tokio loop (3-minute tick) runs 6 detectors over
+  Lucy's existing state.
+- New SQLite table `proactive_insights` with auto-schema (no
+  migration needed) — kind, severity, title, detail, dedupe_key,
+  dismissed, action_hint.
+- Cooldown logic: same dedupe_key suppressed for 4 h. Prevents
+  nagging the operator with the same insight every 3 minutes.
+- Retention: rows older than 14 days auto-deleted on each tick.
+
+**6 detectors:**
+- `memory_expired_buildup` — > 100 expired memories pending cleanup
+  → suggests `/diagnostico` purge.
+- `stream_session_leak` — > 20 entries in STREAM_SESSIONS → suggests
+  the v1.7.70 clear-leaked repair.
+- `log_oversized` — lucy_app.log > 80 MB (BELOW the diagnostic warn
+  at 100 MB — proactive nudge).
+- `db_size_creeping` — DB > 400 MB (BELOW the 500 MB warning).
+- `db_integrity_alarm` — PRAGMA quick_check returns non-ok (CRITICAL
+  severity). Skips known lock-contention false-positives.
+- `command_failure_spike` — > 20 error/critical entries in audit_trail
+  in the last 24 h.
+
+**Tauri commands** (registered in lib.rs):
+- `proactive_insights_recent(limit)` — frontend polls.
+- `proactive_insight_dismiss(id)` — user dismisses an open insight.
+- `proactive_run_once()` — force a detector tick (`/proactive scan`).
+
+**Background loop** started in `lib.rs::setup()` after a 60 s warmup
+(lets the DB-open + migrations finish first). Runs forever; idempotent
+on hot-reload.
+
+**Frontend surfaces:**
+- `+page.svelte`: poll every 120 s starting at 90 s after mount. New
+  insights become toasts with severity tone (info cyan / warning
+  amber / critical red). Already-seen ids tracked in `_proactiveSeenIds`
+  so the same insight doesn't toast twice. Insights older than 5 min
+  (pre-existing at app boot) are silently absorbed — only freshly
+  detected ones surface as toasts.
+- `slash-commands.ts`: new `/proactive` (alias `/insights`) command:
+    * `/proactive`      → list current open insights with severity,
+      age, action hint.
+    * `/proactive scan` → force a detector tick now.
+    * `/proactive clear` → dismiss all open insights.
+
+**Why this matters:** none of Claude/ChatGPT/Gemini does this for
+SysAdmin. They CAN respond to questions about logs; they can't tell
+you "btw, your DB is creeping toward the size where VACUUM would
+help" without being asked. Lucy now does.
+
+cargo test --lib proactive_detector — 2/2 passed.
+svelte-check — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.79] — 2026-06-05
 
 ### Artifacts side panel — Claude/ChatGPT Canvas parity (MVP)
