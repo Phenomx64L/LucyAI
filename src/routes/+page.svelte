@@ -9503,22 +9503,15 @@ if (Test-Path $src) {
        executing → suspicious; any tab processing → vigilant; otherwise
        calm. The chip click handlers route to existing views so this is a
        pure surface — no new screens added. -->
-  {#if !showSetupOverlay}
-  <MissionStrip
-    localHost={hostName}
-    remoteHostsTotal={$hosts.length}
-    remoteHostsOnline={$hosts.filter(h => $hostReachability[h.id]?.reachable === true).length}
-    activeAlerts={activeIncidentId ? 1 : 0}
-    guardLabel={msGuardLabel}
-    posture={msPosture}
-    {isEN}
-    on:clickLocal={() => setView('diagnostics')}
-    on:clickHosts={() => setView('nexshell')}
-    on:clickAlerts={() => setView('dashboard')}
-    on:clickGuard={() => { showSkillPicker = true; }}
-    on:clickPosture={() => setView('diagnostics')}
-  />
-  {/if}
+  <!-- v1.7.75 — Mission Strip was removed from the top of the window
+       to free the corner above the close button (Fitts's-law-style
+       click target) AND to eliminate duplicate signals with the
+       StatusBar at the bottom. Its 4 unique chips (remote hosts,
+       active alerts, guard skill, local clock) were folded into the
+       StatusBar; the hostname dot lives in the StatusBar's existing
+       Host chip; posture was already there. The "Direction A1" docs
+       still describe the strip as a concept — that wording is now
+       shorthand for the same signals rendered in the StatusBar. -->
 
   <TabBar
     {tabs} {activeTabId} {canScrollLeft} {canScrollRight}
@@ -10157,10 +10150,19 @@ if (Test-Path $src) {
       </div><!-- fin .ws -->
 
       <StatusBar
-        {hostName} {lucyConfig} activeTab={activeTab} {keyringOk} {auditAlerts}
+        {hostName} activeTab={activeTab} {keyringOk} {auditAlerts}
         {appVersion} {userLang} {isEN} {lucyState} {appReady} {showSetupOverlay}
         costSummaryMonth={$costSummaryMonth} tokenBudgetConfig={$tokenBudgetConfig}
         {getEffectiveModel}
+        remoteHostsTotal={$hosts.length}
+        remoteHostsOnline={$hosts.filter(h => $hostReachability[h.id]?.reachable === true).length}
+        activeAlerts={activeIncidentId ? 1 : 0}
+        guardLabel={msGuardLabel}
+        posture={msPosture}
+        on:clickHosts={() => setView('nexshell')}
+        on:clickAlerts={() => setView('dashboard')}
+        on:clickGuard={() => { showSkillPicker = true; }}
+        on:clickPosture={() => setView('diagnostics')}
       />
 
     </div>

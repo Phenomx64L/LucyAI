@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { createEventDispatcher, onMount } from 'svelte';
+    import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
@@ -26,7 +26,10 @@
     import { cubicOut } from 'svelte/easing';
 
     export let hostName: string = '---';
-    export let lucyConfig: { name: string } = { name: '' };
+    // v1.7.75 — `lucyConfig` removed. The pre-1.7.75 Host chip rendered
+    // "Iván · PRECISION-X" combining the user's display name with the
+    // hostname. The trimmed v1.7.75 chip shows only the hostname; the
+    // user identity belongs in the welcome hero, not in the chrome.
     export let activeTab: any = null;
     export let keyringOk: boolean = true;
     export let auditAlerts: number = 0;
@@ -40,7 +43,63 @@
     export let tokenBudgetConfig: TokenBudgetConfig | null = null;
     export let getEffectiveModel: (tab: any) => string = (t) => t?.selectedModel || '';
 
-    const dispatch = createEventDispatcher<{ changelang: string }>();
+    // v1.7.75 — Mission Strip chips folded in. These were on the top band
+    // until v1.7.74; consolidating into the StatusBar frees the corner
+    // above the close button and eliminates the hostname+posture
+    // duplication that already existed between the strip and this bar.
+    export let remoteHostsTotal: number = 0;
+    export let remoteHostsOnline: number = 0;
+    export let activeAlerts: number = 0;
+    export let guardLabel: string = '';
+    export let posture: 0 | 1 | 2 | 3 | 4 = 0;
+
+    const dispatch = createEventDispatcher<{
+        changelang: string;
+        clickHosts: void;
+        clickAlerts: void;
+        clickGuard: void;
+        clickPosture: void;
+    }>();
+
+    // ── v1.7.75 — Local clock (folded from MissionStrip) ─────────────────
+    // Updates once per minute, aligned to the next minute boundary.
+    let _now: string = '';
+    let _clockTimer: ReturnType<typeof setInterval> | null = null;
+    function _formatNow(): string {
+        const d = new Date();
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+    onMount(() => {
+        _now = _formatNow();
+        const msUntilNextMinute = (60 - new Date().getSeconds()) * 1000;
+        const _bootstrap = setTimeout(() => {
+            _now = _formatNow();
+            _clockTimer = setInterval(() => { _now = _formatNow(); }, 60_000);
+        }, msUntilNextMinute);
+        return () => clearTimeout(_bootstrap);
+    });
+    onDestroy(() => { if (_clockTimer) clearInterval(_clockTimer); });
+
+    // Severity classes for the folded-in chips. Same colour vocabulary as
+    // the rest of the bar (cok / cy / cr / cm).
+    $: hostsTone = remoteHostsTotal === 0           ? 'cm'
+                 : remoteHostsOnline === remoteHostsTotal ? 'cok'
+                 : remoteHostsOnline === 0           ? 'cr'
+                 : 'cy';
+    $: alertsTone = activeAlerts === 0  ? 'cok'
+                  : activeAlerts === 1  ? 'cy'
+                  : 'cr';
+    $: guardTone  = guardLabel ? 'cv' : 'cm';   // violet when a skill is active
+    $: postureTone = posture <= 0 ? 'cok'
+                   : posture === 1 ? 'cy'
+                   : posture === 2 ? 'cy'
+                   : posture === 3 ? 'cr'
+                   : 'cr';
+    $: guardLabelShort = (() => {
+        const s = String(guardLabel || '').trim();
+        if (!s) return isEN ? 'clean' : 'limpio';
+        return s.length > 28 ? s.slice(0, 27) + '…' : s;
+    })();
 
     // ── PromptGuard 2 ML status (Phase 2 LlamaFirewall, May 2026) ──
     // Probed once at mount. Drives the small "ML" badge after "GUARD".
@@ -176,9 +235,63 @@
 
 {#if !showSetupOverlay}
 <div class="bbar">
+    <!-- v1.7.75 — Host chip kept but trimmed: just the hostname (no
+         "Host:" label, no user name prefix). Lucy's title bar carries
+         the user's identity already; here we only need the machine. -->
     {#if hostName !== '---'}
-    <div class="bi"><span>Host:</span><span style="color:#0f7b5a;">{lucyConfig.name} · {hostName}</span></div>
+    <div class="bi sb-host" title={`${isEN ? 'Local host' : 'Host local'}: ${hostName}`}>
+        <span class="sb-host-dot" aria-hidden="true"></span>
+        <span style="color:#0f7b5a;">{hostName}</span>
+    </div>
     {/if}
+
+    <!-- v1.7.75 — Mission Strip chips folded in: remote hosts, alerts,
+         guard skill, clock, posture. Each is clickable and routes to
+         the same view the strip's chip used to (NexShell, Dashboard,
+         skill picker, Diagnostics). -->
+    <button class="bi sb-ms-chip" type="button"
+            on:click={() => dispatch('clickHosts')}
+            title={isEN
+                ? `Remote hosts online / total. Click to open NexShell.`
+                : `Hosts remotos online / total. Click para abrir NexShell.`}>
+        <span class="sb-ms-glyph">⚯</span>
+        <span class={hostsTone}>{remoteHostsOnline}/{remoteHostsTotal}</span>
+        <span class="sb-ms-unit">{isEN ? 'hosts' : 'hosts'}</span>
+    </button>
+
+    <button class="bi sb-ms-chip" type="button"
+            on:click={() => dispatch('clickAlerts')}
+            title={isEN
+                ? `Active incident alerts. Click to open Dashboard.`
+                : `Alertas de incidente activas. Click para abrir Dashboard.`}>
+        <span class="sb-ms-glyph">⚠</span>
+        <span class={alertsTone}>{activeAlerts}</span>
+        <span class="sb-ms-unit">{isEN ? 'alerts' : 'alertas'}</span>
+    </button>
+
+    <button class="bi sb-ms-chip sb-ms-guard" type="button"
+            on:click={() => dispatch('clickGuard')}
+            title={isEN
+                ? `Active security skill / guard. Click to change.`
+                : `Skill / guard activo. Click para cambiar.`}>
+        <span class="sb-ms-glyph">⊕</span>
+        <span class={guardTone}>{guardLabelShort}</span>
+    </button>
+
+    <button class="bi sb-ms-chip sb-ms-posture" type="button"
+            on:click={() => dispatch('clickPosture')}
+            title={isEN
+                ? `Operational posture: calm → vigilant → suspicious → alarmed → panic. Click for Diagnostics.`
+                : `Postura operacional: calmo → vigilante → sospechoso → alarmado → pánico. Click para Diagnóstico.`}>
+        {#each [0,1,2,3,4] as i}
+            <span class="sb-posture-dot {i <= posture ? 'on ' + postureTone : ''}" aria-hidden="true"></span>
+        {/each}
+    </button>
+
+    <span class="bi sb-ms-clock" aria-label={isEN ? 'Local time' : 'Hora local'}>
+        <span class="sb-ms-glyph">◷</span>
+        <span>{_now}</span>
+    </span>
 
     <!-- U6 — Density mode pill: click to cycle focus → explore → war-room
          v1.4.17 — wrapped in LucyTooltip (replaces native title=); now
@@ -209,16 +322,13 @@
         {@const _shortModel = _model.includes('/') ? _model.split('/').pop() : _model}
         {@const _pricing = getPricing(_model)}
         {@const _isFree = _pricing.inputPer1K === 0 && _pricing.outputPer1K === 0}
-        {@const _modelIcon = getModelIcon(_model) || '◉'}
-        <div class="bi" title={`${isEN ? 'Active model in this tab' : 'Modelo activo en esta pestaña'}: ${_model}`}>
-            <span>{isEN ? 'Model:' : 'Modelo:'}</span><span class="cm">{_modelIcon} {_shortModel}</span>
-        </div>
+        <!-- v1.7.75 — Model name removed from the StatusBar. The composer's
+             own model badge (.mbdg) shows the active model with proper
+             label, icon, and dropdown to switch. Keeping it here was a
+             stale duplicate that wasted horizontal space.
 
-        <!-- ── Dynamic per-model rate pill ──
-             Updates instantly when the user picks a different model or
-             changes the effort level. The pill shows the WORK rate
-             (input / output per 1M tokens) so the user can immediately
-             see what each call will cost them. -->
+             The Rate chip stays — pricing is decision-critical info and
+             doesn't appear anywhere else in the chrome. -->
         <div class="bi rate-pill" class:rate-free={_isFree}
              title={isEN
                 ? `Rate for ${_shortModel}: ${pricingLabel(_model)}${_pricing.effort ? ` · effort ${_pricing.effort}` : ''}. Effort only multiplies token COUNT, not the per-token price.`
@@ -479,4 +589,55 @@
         letter-spacing: .3px;
         opacity: .85;
     }
+
+    /* v1.7.75 — Mission Strip chips folded into the StatusBar. Same
+       monospace + opacity vocabulary as the rest of the bar so they
+       read as one family, not as an injected band. */
+    .sb-host { display: inline-flex; align-items: center; gap: 5px; }
+    .sb-host-dot {
+        display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+        background: var(--acc, #10b981);
+        box-shadow: 0 0 5px color-mix(in srgb, var(--acc, #10b981) 60%, transparent);
+        animation: sbHostBeat 3.6s ease-in-out infinite;
+    }
+    @keyframes sbHostBeat { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+
+    .sb-ms-chip {
+        appearance: none;
+        background: transparent;
+        border: none;
+        padding: 0 6px;
+        margin: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: inherit;
+        color: var(--txt3, #94a3b8);
+        max-width: 220px;
+        white-space: nowrap;
+        overflow: hidden;
+        transition: color .12s;
+    }
+    .sb-ms-chip:hover { color: var(--txt1, #f1f5f9); }
+    .sb-ms-glyph    { opacity: .8; }
+    .sb-ms-unit     { opacity: .55; font-size: .9em; }
+    .sb-ms-clock    { display: inline-flex; align-items: center; gap: 5px; opacity: .7; }
+    /* Skill guard label can be long — let the global text-overflow
+       handle it. Glyph stays full opacity for scan-ability. */
+    .sb-ms-guard > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+
+    /* Posture: five dots that light up cumulatively (0 = none, 4 = all). */
+    .sb-ms-posture { gap: 3px; padding: 0 8px; }
+    .sb-posture-dot {
+        display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+        background: rgba(255, 255, 255, .12);
+    }
+    .sb-posture-dot.on.cok  { background: var(--acc,   #10b981); box-shadow: 0 0 4px color-mix(in srgb, var(--acc,   #10b981) 55%, transparent); }
+    .sb-posture-dot.on.cy   { background: var(--amber, #f59e0b); box-shadow: 0 0 4px color-mix(in srgb, var(--amber, #f59e0b) 55%, transparent); }
+    .sb-posture-dot.on.cr   { background: var(--red,   #ef4444); box-shadow: 0 0 6px color-mix(in srgb, var(--red,   #ef4444) 70%, transparent); }
+    /* Violet tone for the guard skill label — distinct from "alert" amber.
+       Aligned with the .fa-chip / Operations Console palette. */
+    :global(.cv) { color: #a78bfa; }
 </style>

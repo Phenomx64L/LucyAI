@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.75] — 2026-06-04
+
+### Mission Strip folded into the StatusBar — single chrome bar at bottom
+
+The user's v1.7.74 padding fix to keep Mission Strip clear of the
+window-control buttons wasn't enough; the corner above the close
+button still felt cramped. Operator proposal: fuse the strip into
+the bottom StatusBar — they already shared signals (hostname,
+posture) and the bottom band has more horizontal real estate.
+
+**Removed from `src/routes/+page.svelte`**: the entire `<MissionStrip>`
+render block. The component file stays in `src/lib/MissionStrip.svelte`
+for any future surface that wants it, but no longer mounts at app
+chrome level. Top of the window now goes directly from the (custom,
+data-tauri-drag-region) title bar to the TabBar — the close-corner
+"infinite target" is restored.
+
+**Folded into `src/lib/StatusBar.svelte`**:
+- ⚯ remote hosts — online / total, with hosts colour tier (green when
+  all online, amber for partial, red for all down, muted when no
+  hosts configured). Click → NexShell.
+- ⚠ active alerts — count with severity colouring. Click → Dashboard.
+- ⊕ guard skill — short label (28-char cap) in violet when active,
+  muted "limpio"/"clean" when no skill is loaded. Click → skill picker.
+- ●●●●● posture — five cumulative dots, calm → vigilant → suspicious
+  → alarmed → panic. Click → Diagnostics.
+- ◷ HH:MM — local clock, updates once a minute, aligned to the next
+  minute boundary so the hop is precise (folded from MissionStrip).
+- New props `remoteHostsTotal`, `remoteHostsOnline`, `activeAlerts`,
+  `guardLabel`, `posture` + 4 click event dispatchers.
+
+**Removed from StatusBar (duplicates that the new layout doesn't need)**:
+- `Modelo: …` chip — the composer's `.mbdg` badge already shows the
+  active model with proper label, icon, and dropdown to switch
+  (v1.7.74 fixed the empty-badge bug). Keeping it here wasted ~140 px.
+- `Host: Iván · PRECISION-X` reduced to just the hostname pill with
+  a heartbeat dot. User identity belongs in the welcome hero, not in
+  the chrome.
+- `lucyConfig` prop dropped (only Host chip used it).
+
+**Bottom bar layout (left → right)**:
+`● host · hosts · alerts · guard · posture · clock · density · rate · cost · cache · 🛡 guard-LEDs · ML · LLM · version`
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.74] — 2026-06-04
 
 ### UI fixes — Mission Strip vs window controls + empty model badge
