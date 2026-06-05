@@ -56,6 +56,11 @@ pub fn start_all() {
     resource_pressure::spawn();
     db_size_watcher::spawn();
     rotated_log_sweep::spawn();
+    // Tier C — proactive trust sentinels (v1.7.97)
+    clock_drift::spawn();
+    network_heartbeat::spawn();
+    ollama_model_health::spawn();
+    cert_expiry::spawn();
 }
 
 fn env_disabled(name: &str) -> bool {
@@ -703,6 +708,301 @@ pub mod rotated_log_sweep {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// TIER C — proactive trust sentinels (v1.7.97)
+//
+// Tier A keeps Lucy fit, Tier B watches the host hardware, Tier C
+// guards the trust + connectivity surface Lucy *depends* on but doesn't
+// own: wall-clock accuracy (audit chain integrity), Ollama liveness,
+// embedding-model availability, and TLS-cert freshness on the host.
+//
+//   • clock_drift          — local clock vs HTTP Date header
+//   • network_heartbeat    — Ollama endpoint reachability
+//   • ollama_model_health  — required embedding model present
+//   • cert_expiry          — Windows cert store expiring-soon scan
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── 10. clock drift sentinel ────────────────────────────────────────────
+//
+// Audit-chain timestamps and incident correlation across hosts assume
+// the local clock is roughly correct. NTP usually keeps it accurate,
+// but laptops returning from sleep, VMs with stale time sources, and
+// hosts with a broken w32time service can drift minutes-to-hours
+// silently. We compare the local clock to the HTTP Date header on a
+// well-known endpoint. Drift > 5 min → WARN, > 30 min → ERROR.
+pub mod clock_drift {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(6 * 3600);       // 6 h
+    const WARN_SECS: i64 = 5 * 60;       // 5 min
+    const CRIT_SECS: i64 = 30 * 60;      // 30 min
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_CLOCK_DRIFT") {
+            eprintln!("[housekeeping] clock_drift disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(420)).await;  // 7 min warmup
+            loop {
+                tick().await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    async fn tick() {
+        // HEAD against a reliable, low-cost endpoint. We don't care
+        // about the body — only the Date header.
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .build() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let resp = match client.head("https://www.google.com").send().await {
+            Ok(r) => r,
+            Err(_) => return,   // offline; nothing actionable
+        };
+        let date_str = match resp.headers().get(reqwest::header::DATE)
+            .and_then(|v| v.to_str().ok()) {
+            Some(s) => s.to_string(),
+            None => return,
+        };
+        // RFC 2822 e.g. "Tue, 15 Apr 2025 07:28:00 GMT"
+        let server_time = match chrono::DateTime::parse_from_rfc2822(&date_str) {
+            Ok(t) => t.timestamp(),
+            Err(_) => return,
+        };
+        let local_time = chrono::Utc::now().timestamp();
+        let delta = local_time - server_time;  // positive = local is ahead
+
+        if delta.abs() >= CRIT_SECS {
+            crate::utils::logging::write_app_log(
+                "ERROR",
+                &format!("housekeeping/clock_drift: local clock off by {} s ({} ahead). Audit timestamps unreliable. Sync via w32tm /resync.",
+                         delta, if delta > 0 { "local" } else { "remote" }),
+            );
+        } else if delta.abs() >= WARN_SECS {
+            crate::utils::logging::write_app_log(
+                "WARN",
+                &format!("housekeeping/clock_drift: local clock off by {} s.", delta),
+            );
+        }
+    }
+}
+
+// ── 11. network heartbeat ───────────────────────────────────────────────
+//
+// Lucy's hot path runs through Ollama (local embeddings + small-model
+// inference). If Ollama is down, semantic_search degrades silently to
+// linear scan and embed_warmup quietly fails. We probe /api/version
+// every 7 min and log WARN if it's unreachable for two consecutive
+// ticks (avoids false alarms on a one-tick blip).
+pub mod network_heartbeat {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    static MISS_STREAK: AtomicBool = AtomicBool::new(false);   // single-bit memory
+    const TICK: Duration = Duration::from_secs(7 * 60);        // 7 min
+    const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/version";
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_NETWORK_HEARTBEAT") {
+            eprintln!("[housekeeping] network_heartbeat disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(150)).await;  // 2.5 min warmup
+            loop {
+                tick().await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    async fn tick() {
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(4))
+            .build() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let ok = matches!(
+            client.get(OLLAMA_URL).send().await,
+            Ok(r) if r.status().is_success()
+        );
+        if ok {
+            // Reset the streak silently — log only the recovery if we
+            // were previously down.
+            if MISS_STREAK.swap(false, Ordering::SeqCst) {
+                crate::utils::logging::write_app_log(
+                    "INFO",
+                    "housekeeping/network_heartbeat: Ollama recovered.",
+                );
+            }
+        } else {
+            // First miss → record. Second consecutive miss → WARN.
+            let was_missing = MISS_STREAK.swap(true, Ordering::SeqCst);
+            if was_missing {
+                crate::utils::logging::write_app_log(
+                    "WARN",
+                    "housekeeping/network_heartbeat: Ollama unreachable at 127.0.0.1:11434 for ≥2 ticks. Semantic recall is degraded.",
+                );
+            }
+        }
+    }
+}
+
+// ── 12. ollama embedding-model presence ─────────────────────────────────
+//
+// Even when Ollama itself is alive, the required embedding model
+// (nomic-embed-text) may have been removed via `ollama rm`. semantic
+// recall would then silently fall back to Gemini (paid API) or pure
+// linear scan. We poll /api/tags hourly and WARN if the model is gone.
+pub mod ollama_model_health {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(3600);           // 1 h
+    const TAGS_URL: &str = "http://127.0.0.1:11434/api/tags";
+    const REQUIRED_MODEL: &str = "nomic-embed-text";
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_OLLAMA_MODEL_HEALTH") {
+            eprintln!("[housekeeping] ollama_model_health disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(540)).await;  // 9 min warmup
+            loop {
+                tick().await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    async fn tick() {
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(6))
+            .build() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let json: serde_json::Value = match client.get(TAGS_URL).send().await {
+            Ok(r) => match r.json().await { Ok(v) => v, Err(_) => return },
+            Err(_) => return,   // Ollama offline; network_heartbeat covers it
+        };
+        // Response shape: { "models": [ { "name": "nomic-embed-text:latest", ... }, ... ] }
+        let present = json.get("models")
+            .and_then(|m| m.as_array())
+            .map(|arr| arr.iter().any(|m| {
+                m.get("name").and_then(|n| n.as_str())
+                    .map(|s| s.starts_with(REQUIRED_MODEL))
+                    .unwrap_or(false)
+            }))
+            .unwrap_or(false);
+        if !present {
+            crate::utils::logging::write_app_log(
+                "WARN",
+                &format!("housekeeping/ollama_model_health: required embedding model `{}` is NOT present in Ollama. Run: ollama pull {}",
+                         REQUIRED_MODEL, REQUIRED_MODEL),
+            );
+        }
+    }
+}
+
+// ── 13. Windows certificate expiry scan ─────────────────────────────────
+//
+// Sysadmin hosts often carry their own TLS certs in CurrentUser\My
+// for client-cert auth, code signing, S/MIME. A silent expiry breaks
+// the workflow exactly when the operator needs it. We shell out to
+// PowerShell once per day and surface any cert expiring within 30
+// days.
+//
+// Implementation note: Cert:\CurrentUser\My is accessible without
+// admin; Cert:\LocalMachine\My would need elevation. We pick the
+// user store so the loop never errors on a non-elevated install.
+pub mod cert_expiry {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(24 * 3600);      // 24 h
+    const WARN_DAYS: i64 = 30;
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_CERT_EXPIRY") {
+            eprintln!("[housekeeping] cert_expiry disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            tokio::time::sleep(Duration::from_secs(2400)).await;  // 40 min warmup
+            loop {
+                let _ = tauri::async_runtime::spawn_blocking(tick).await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    fn tick() {
+        // Single-line PowerShell: returns JSON array of expiring certs.
+        // ConvertTo-Json with depth 2 keeps Subject + Thumbprint + NotAfter.
+        let ps = format!(
+            "Get-ChildItem Cert:\\CurrentUser\\My -ErrorAction SilentlyContinue | \
+             Where-Object {{ $_.NotAfter -lt (Get-Date).AddDays({}) -and $_.NotAfter -gt (Get-Date) }} | \
+             Select-Object Thumbprint, Subject, @{{n='NotAfter';e={{$_.NotAfter.ToString('o')}}}} | \
+             ConvertTo-Json -Compress -Depth 2",
+            WARN_DAYS
+        );
+        let output = match std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return,   // PowerShell missing — nothing we can do
+        };
+        if !output.status.success() { return; }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() || trimmed == "null" { return; }
+
+        // ConvertTo-Json returns a bare object (not array) when there's
+        // exactly one match; normalise to array.
+        let value: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let arr: Vec<serde_json::Value> = match value {
+            serde_json::Value::Array(a) => a,
+            other => vec![other],
+        };
+        if arr.is_empty() { return; }
+
+        let summary: Vec<String> = arr.iter().take(5).map(|c| {
+            let subj = c.get("Subject").and_then(|v| v.as_str()).unwrap_or("?");
+            let exp  = c.get("NotAfter").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("{} (expires {})", subj, exp)
+        }).collect();
+        crate::utils::logging::write_app_log(
+            "WARN",
+            &format!("housekeeping/cert_expiry: {} cert(s) in CurrentUser\\My expire within {} days — {}",
+                     arr.len(), WARN_DAYS, summary.join("; ")),
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn tick() {
+        // No-op on non-Windows. The scheduler still spawns so the
+        // start_all() contract is uniform; it just never reports.
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,5 +1023,14 @@ mod tests {
         let _ = resource_pressure::spawn as fn();
         let _ = db_size_watcher::spawn as fn();
         let _ = rotated_log_sweep::spawn as fn();
+    }
+
+    #[test]
+    fn tier_c_module_paths_compile() {
+        // Same guard for Tier C.
+        let _ = clock_drift::spawn as fn();
+        let _ = network_heartbeat::spawn as fn();
+        let _ = ollama_model_health::spawn as fn();
+        let _ = cert_expiry::spawn as fn();
     }
 }

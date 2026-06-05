@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.97] — 2026-06-05
+
+### Tier-C proactive trust sentinels — Lucy verifies what she depends on
+
+Four more loops added to `commands/housekeeping.rs`, bringing the
+total to **thirteen** background sentinels. Tier C guards the trust
++ connectivity surface Lucy *depends on* but doesn't own.
+
+**10. `clock_drift`** — 6 h, 7 min warmup.
+- HEAD `https://www.google.com`, parse RFC 2822 Date header.
+- WARN if local clock off by ≥ 5 min, ERROR ≥ 30 min.
+- Matters because audit-chain timestamps + cross-host incident
+  correlation assume the local clock is correct. Laptops back
+  from sleep and VMs with stale time sources drift silently.
+
+**11. `network_heartbeat`** — 7 min, 2.5 min warmup.
+- GET `http://127.0.0.1:11434/api/version` (Ollama).
+- Two-tick streak required before WARN — avoids false alarms on
+  a one-tick blip. Recovery logged at INFO.
+- Lucy's semantic recall degrades silently to linear scan if
+  Ollama is down; this surface makes that visible immediately.
+
+**12. `ollama_model_health`** — 1 h, 9 min warmup.
+- GET `/api/tags`, scan for `nomic-embed-text`.
+- WARN with the exact `ollama pull` command if the required
+  embedding model is missing.
+- Catches the case where the operator ran `ollama rm` against the
+  wrong model — Lucy would then fall back to Gemini's paid API
+  for every embed.
+
+**13. `cert_expiry`** — 24 h, 40 min warmup, Windows-only.
+- PowerShell one-liner against `Cert:\CurrentUser\My` filtering
+  for `NotAfter` within 30 days.
+- Returns JSON, summarises the first 5 expiring certs (Subject +
+  ISO timestamp) in one WARN line.
+- Uses CurrentUser store (no elevation required); on non-Windows
+  the tick is a no-op so the start_all() contract stays uniform.
+
+**Wired** in the same `start_all()`. All four gated by
+`LUCY_HK_NO_<NAME>`. Cadences staggered (clock_drift 6 h, heartbeat
+7 min, model_health 1 h, cert_expiry 24 h) so no two Tier-C loops
+share a slot.
+
+cargo test --lib housekeeping — 3/3 passed (added
+`tier_c_module_paths_compile`).
+cargo check — clean.
+
+**Thirteen schedulers now**: 5 (Tier A self-care) + 4 (Tier B
+operational) + 4 (Tier C trust). Operator can disable any one via
+`LUCY_HK_NO_<NAME>`.
+
+---
+
 ## [1.7.96] — 2026-06-05
 
 ### Tier-B operational sentinels — Lucy watches the host
