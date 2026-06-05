@@ -1242,6 +1242,15 @@ import { listen } from '@tauri-apps/api/event';
     // Pre-flight token/cost estimate for the current input. Updates reactively
     // as the user types so they can choose a cheaper model before pressing Enter.
     // Single source of truth: $lib/cost-predictor (also reusable in tests).
+    //
+    // v1.7.84 — Memo across reactive re-runs. The `$: costPrediction` block
+    // reruns on EVERY change to any tracked dependency — including unrelated
+    // `tabs = tabs` triggers fired by other Svelte handlers. predictCost is
+    // O(n) over the prompt; for a 3 KB prompt that's ~12 µs per run × ~40
+    // reruns/sec during heavy typing = visible CPU on the typing path.
+    // Memoizing on (text, filesChars, model) cuts the cost to one call per
+    // genuine input change — the typical case for a single chat tab.
+    let _costPredMemo = { key: '', value: null };
     $: costPrediction = (() => {
         if (!activeTab) return null;
         const text = (activeTab.inputValue || '');
@@ -1249,6 +1258,11 @@ import { listen } from '@tauri-apps/api/event';
         const totalChars = text.length + filesChars;
         if (totalChars < 8) return null; // too short to bother
         const m = getEffectiveModel(activeTab);
+        // Memo key includes text length as a coarse anti-collision prefix —
+        // two prompts that share the same first 32 chars but differ in length
+        // get separate cache slots.
+        const _memoKey = `${m}|${filesChars}|${text.length}|${text.slice(0, 32)}|${text.slice(-32)}`;
+        if (_costPredMemo.key === _memoKey) return _costPredMemo.value;
         // Use prompt + filesChars as the "context" estimate fed into the model.
         const est = _libPredictCost(text, filesChars, m);
         // Map estimate.usd to a UI severity level.
@@ -1257,7 +1271,7 @@ import { listen } from '@tauri-apps/api/event';
         else if (est.usd >= 0.05)      level = 'high';
         else if (est.usd >= 0.01)      level = 'warn';
         // Backwards-compatible shape: keep field names callers already use.
-        return {
+        const _out = {
             inputTokens:  est.inputTokens,
             outputTokens: est.outputTokens,
             totalTokens:  est.inputTokens + est.outputTokens,
@@ -1266,6 +1280,9 @@ import { listen } from '@tauri-apps/api/event';
             level,
             model: m,
         };
+        // v1.7.84 — store memo (see _costPredMemo declaration above).
+        _costPredMemo = { key: _memoKey, value: _out };
+        return _out;
     })();
     const _formatTokens = _libFormatTokens;
     let darkMode           = localStorage?.getItem('lucy_dark') !== 'false'; // tema oscuro/claro

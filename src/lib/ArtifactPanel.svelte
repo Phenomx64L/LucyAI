@@ -22,7 +22,42 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
     import { marked } from 'marked';
-    import hljs from 'highlight.js/lib/common';
+    // v1.7.85 — Lazy-language highlight.js (matches message-render.ts).
+    // `highlight.js/lib/common` bundles ~35 languages (~50 KB gzipped);
+    // we only need the handful the artifact panel actually renders.
+    // Each language registered explicitly stays under 8 KB total. Auto-
+    // detect (used when no language hint is given) falls back to
+    // plaintext + best effort across the registered set.
+    import hljs       from 'highlight.js/lib/core';
+    import hljsPS     from 'highlight.js/lib/languages/powershell';
+    import hljsBash   from 'highlight.js/lib/languages/bash';
+    import hljsJson   from 'highlight.js/lib/languages/json';
+    import hljsYaml   from 'highlight.js/lib/languages/yaml';
+    import hljsPython from 'highlight.js/lib/languages/python';
+    import hljsRust   from 'highlight.js/lib/languages/rust';
+    import hljsJs     from 'highlight.js/lib/languages/javascript';
+    import hljsTs     from 'highlight.js/lib/languages/typescript';
+    import hljsSql    from 'highlight.js/lib/languages/sql';
+    import hljsPlain  from 'highlight.js/lib/languages/plaintext';
+    // Same `as any` cast pattern used in message-render.ts — the
+    // highlight.js v11 typings don't perfectly model the registered
+    // language shape and the runtime contract is identical.
+    hljs.registerLanguage('powershell', hljsPS     as any);
+    hljs.registerLanguage('bash',       hljsBash   as any);
+    hljs.registerLanguage('sh',         hljsBash   as any);
+    hljs.registerLanguage('json',       hljsJson   as any);
+    hljs.registerLanguage('yaml',       hljsYaml   as any);
+    hljs.registerLanguage('yml',        hljsYaml   as any);
+    hljs.registerLanguage('python',     hljsPython as any);
+    hljs.registerLanguage('py',         hljsPython as any);
+    hljs.registerLanguage('rust',       hljsRust   as any);
+    hljs.registerLanguage('rs',         hljsRust   as any);
+    hljs.registerLanguage('javascript', hljsJs     as any);
+    hljs.registerLanguage('js',         hljsJs     as any);
+    hljs.registerLanguage('typescript', hljsTs     as any);
+    hljs.registerLanguage('ts',         hljsTs     as any);
+    hljs.registerLanguage('sql',        hljsSql    as any);
+    hljs.registerLanguage('plaintext',  hljsPlain  as any);
     import DOMPurify from 'dompurify';
 
     /** Open + ordered list of artifacts. Driven by the page's reactive store. */
