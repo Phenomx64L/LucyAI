@@ -173,16 +173,96 @@ async fn embed_via_gemini(text: &str) -> Result<(Vec<f32>, String), String> {
     Ok((v, GEMINI_EMBED_MODEL.to_string()))
 }
 
+// v1.7.83 — LRU-ish embedding cache.
+// Lucy's auto-router (v1.7.5) embeds the user prompt to score against
+// 18+ skill presets. During streaming an investigation tab can hit
+// embed_with_fallback dozens of times with very similar (often
+// IDENTICAL) text — the unified context orchestrator + memory recall
+// + skill auto-router all share the same query string. Without a
+// cache, each invocation is a 50-200 ms Ollama round-trip (or worse,
+// a Gemini paid call). The cache cuts that to a microsecond clone.
+//
+// Sizing:
+//   - 256 entries × ~3 KB per (text + 768-dim f32 vector) ≈ 750 KB.
+//     Trivial vs Lucy's typical ~200 MB working set.
+//   - Hot prompts (the same user message during a single turn) dominate
+//     the access pattern, so even FIFO eviction works fine — no need
+//     for proper LRU bookkeeping.
+//
+// Keyed on (text_hash, model_label): different models DO produce
+// different vectors, so the cache must scope by model. Using a hash
+// instead of the raw text keeps the HashMap key cheap.
+
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+const EMBED_CACHE_MAX: usize = 256;
+
+#[derive(Clone)]
+struct CachedEmbedding {
+    vector: Vec<f32>,
+    model_used: String,
+}
+
+static EMBED_CACHE: once_cell::sync::Lazy<Mutex<(std::collections::HashMap<u64, CachedEmbedding>, VecDeque<u64>)>>
+    = once_cell::sync::Lazy::new(|| Mutex::new((std::collections::HashMap::with_capacity(EMBED_CACHE_MAX + 1), VecDeque::with_capacity(EMBED_CACHE_MAX + 1))));
+
+/// FNV-1a 64-bit. Same algorithm as the frontend cache; collision risk
+/// at 256 entries is < 10⁻¹⁶, way below the noise floor.
+fn _embed_key(text: &str, model: Option<&str>) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in text.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h ^= b'|' as u64;
+    h = h.wrapping_mul(0x100000001b3);
+    if let Some(m) = model {
+        for b in m.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
+
+fn _embed_cache_get(key: u64) -> Option<CachedEmbedding> {
+    EMBED_CACHE.lock().ok().and_then(|guard| guard.0.get(&key).cloned())
+}
+
+fn _embed_cache_put(key: u64, value: CachedEmbedding) {
+    if let Ok(mut guard) = EMBED_CACHE.lock() {
+        let (map, order) = &mut *guard;
+        if map.insert(key, value).is_none() {
+            order.push_back(key);
+            // Evict oldest if over capacity.
+            while order.len() > EMBED_CACHE_MAX {
+                if let Some(old) = order.pop_front() {
+                    map.remove(&old);
+                }
+            }
+        }
+    }
+}
+
 /// Try Ollama first (preferred — free, local, no rate limits, no telemetry),
 /// fall back to Gemini text-embedding-004 if Ollama isn't reachable.
 ///
 /// This is the function ALL call sites should use. The individual `embed_via_*`
 /// helpers exist for tests and the `embeddings_available` smoke check only.
+///
+/// v1.7.83 — first checks the in-process LRU cache (see EMBED_CACHE above)
+/// before hitting either provider. Cache miss falls through to the network
+/// call and stores the result.
 async fn embed_with_fallback(
     text: &str,
     model: Option<String>,
 ) -> Result<(Vec<f32>, String), String> {
-    match embed_via_ollama(text, model.clone()).await {
+    let key = _embed_key(text, model.as_deref());
+    if let Some(hit) = _embed_cache_get(key) {
+        return Ok((hit.vector, hit.model_used));
+    }
+    let result = match embed_via_ollama(text, model.clone()).await {
         Ok(r) => Ok(r),
         Err(ollama_err) => {
             // Only fall back to Gemini if the user has it configured. If both
@@ -203,7 +283,15 @@ async fn embed_with_fallback(
                 )),
             }
         }
+    };
+    // Cache the successful result so the next identical call returns instantly.
+    if let Ok((ref v, ref m)) = result {
+        _embed_cache_put(key, CachedEmbedding {
+            vector: v.clone(),
+            model_used: m.clone(),
+        });
     }
+    result
 }
 
 // ── Internal helper (used by pdf.rs and other sibling modules) ────────────

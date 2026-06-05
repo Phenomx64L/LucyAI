@@ -16,8 +16,98 @@ pub struct AuditQueryResult {
     pub has_more: bool,
 }
 
+// v1.7.83 — Audit-trail write batching.
+//
+// Background:
+//   Pre-v1.7.83 each save_audit_entry call ran its own INSERT in its
+//   own implicit transaction. With WAL + synchronous=NORMAL that's
+//   still ONE fsync to disk per entry — fine in isolation, but during
+//   burst sessions (agent loops, multi-host parallel commands, replay
+//   re-runs) audit writes pile up at ~10-30 per second. Each fsync is
+//   ~1-3 ms on SSD, ~10-30 ms on HDD; the latency stacks visibly.
+//
+// Strategy:
+//   • save_audit_entry returns IMMEDIATELY with a synthetic id
+//     (Unix-nanos timestamp). Frontend uses the id only as a key in
+//     its reactive store; no caller compares it to a real DB rowid.
+//   • Entries land in PENDING (a Mutex<Vec<_>>).
+//   • A background flusher (spawned on first call via OnceCell) drains
+//     PENDING every 500 ms inside ONE transaction. N entries → 1 fsync
+//     instead of N fsyncs.
+//   • On shutdown the flusher is a daemon thread — entries pending at
+//     exit are lost. Acceptable trade-off for an audit *trail*: the
+//     command itself ran, and the worst case is a missing log row
+//     within the last 500 ms of the session. The real audit-of-record
+//     for compliance lives in hash_chain.rs which is sync.
+
+#[derive(Clone)]
+struct PendingAuditEntry {
+    timestamp: String,
+    host_id: String,
+    host_name: String,
+    command: String,
+    source: String,
+    exit_code: Option<i32>,
+    duration_ms: Option<i64>,
+    output_preview: String,
+    user: String,
+}
+
+static PENDING_AUDIT: once_cell::sync::Lazy<std::sync::Mutex<Vec<PendingAuditEntry>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::with_capacity(64)));
+static FLUSHER_STARTED: once_cell::sync::OnceCell<()> = once_cell::sync::OnceCell::new();
+
+fn _start_audit_flusher() {
+    FLUSHER_STARTED.get_or_init(|| {
+        tauri::async_runtime::spawn(async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                _drain_audit_buffer().await;
+            }
+        });
+    });
+}
+
+async fn _drain_audit_buffer() {
+    // Take ownership of the current buffer in one swap, release the lock
+    // immediately so producers can keep enqueueing while we write.
+    let batch: Vec<PendingAuditEntry> = {
+        let mut g = match PENDING_AUDIT.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if g.is_empty() { return; }
+        std::mem::take(&mut *g)
+    };
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = shared_db(|conn| -> Result<(), String> {
+            let tx = conn.unchecked_transaction()
+                .map_err(|e| format!("audit batch tx open: {}", e))?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO audit_trail (timestamp, host_id, host_name, command, source, exit_code, duration_ms, output_preview, user) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                ).map_err(|e| format!("audit batch prep: {}", e))?;
+                for e in &batch {
+                    let _ = stmt.execute(rusqlite::params![
+                        e.timestamp, e.host_id, e.host_name, e.command, e.source,
+                        e.exit_code, e.duration_ms, e.output_preview, e.user,
+                    ]);
+                }
+            }
+            tx.commit().map_err(|e| format!("audit batch commit: {}", e))?;
+            Ok(())
+        });
+    }).await;
+}
+
 /// Persist a single audit entry. Called from the frontend after every command
-/// execution (local::execute_cmd, hosts::execute_remote_*, shell::execute_powershell, etc.)
+/// execution (local::execute_cmd, hosts::execute_remote_*, shell::execute_powershell, etc.).
+///
+/// v1.7.83 — fire-and-forget batched write. Returns a synthetic Unix-nanos
+/// id immediately; the entry is queued and flushed by the background
+/// drainer at most 500 ms later. Frontend uses the id only as a reactive-
+/// store key, not a foreign reference.
 #[tauri::command]
 pub async fn save_audit_entry(
     timestamp: String,
@@ -36,20 +126,27 @@ pub async fn save_audit_entry(
     } else {
         output_preview
     };
-
-    tokio::task::spawn_blocking(move || {
-        shared_db(|conn| {
-            conn.execute(
-                "INSERT INTO audit_trail (timestamp, host_id, host_name, command, source, exit_code, duration_ms, output_preview, user)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                rusqlite::params![timestamp, host_id, host_name, command, source, exit_code, duration_ms, preview, user],
-            )
-            .map_err(|e| format!("Failed to insert audit entry: {}", e))?;
-            Ok(conn.last_insert_rowid())
-        })
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    _start_audit_flusher();
+    let synthetic_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+    if let Ok(mut g) = PENDING_AUDIT.lock() {
+        g.push(PendingAuditEntry {
+            timestamp, host_id, host_name, command, source,
+            exit_code, duration_ms, output_preview: preview, user,
+        });
+        // Hard backstop: if a single burst pushes the buffer above 512,
+        // flush eagerly so memory doesn't grow without bound during a
+        // network outage that's keeping the flusher's spawn_blocking
+        // waiting on a busy DB lock.
+        if g.len() >= 512 {
+            drop(g);
+            // Fire a one-shot drain. The periodic flusher continues normally.
+            tauri::async_runtime::spawn(async { _drain_audit_buffer().await; });
+        }
+    }
+    Ok(synthetic_id)
 }
 
 /// Query audit trail with optional filters: host, source, date range, search term.

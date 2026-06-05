@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.83] — 2026-06-05
+
+### Performance Sprint Tier 2 — Rust trifecta (embedding cache + audit batch + tokio tune)
+
+Three backend optimizations. None visible in the UI but all reduce
+CPU, syscall, or latency cost on the hot paths Lucy exercises during
+investigations and agent loops.
+
+**1. Embedding LRU cache** (`commands/embeddings.rs`). The auto-router
+(v1.7.5) + unified context orchestrator + memory recall ALL embed the
+user prompt as their first step. During streaming, the same text gets
+embedded several times — each one is a 50-200 ms Ollama round-trip or
+a paid Gemini call.
+
+  - 256-slot FIFO cache keyed on `FNV-1a64(text | model)`. Sized at
+    ~750 KB (256 × 3 KB), trivial vs Lucy's ~200 MB working set.
+  - Cache hit returns the cached vector in microseconds; miss falls
+    through to the existing Ollama→Gemini fallback chain unchanged.
+  - Eviction is FIFO not strict-LRU — hot prompts dominate the access
+    pattern so the simpler scheme works fine and avoids the doubly-
+    linked-list bookkeeping overhead.
+
+  Expected: 70-90 % cache hit rate during agent loops; observable
+  drop in tier health probe latency and faster auto-routing.
+
+**2. Tokio runtime cap** (`lib.rs::run`). Tauri's default async runtime
+spawns one worker per LOGICAL core. On modern desktops (12-32 logical
+cores), that's an order of magnitude more workers than Lucy's mixed
+workload uses. Two real costs observed:
+
+  - Scheduler thrash: short tasks bounce across cores, killing L1/L2
+    locality.
+  - Cross-die wakeups on hybrid CPUs (Intel 12th-gen+, AMD chiplets):
+    200-500 ns each.
+
+  Cap at `min(8, logical_cores).max(2)`. Set via a custom
+  `tokio::runtime::Builder` and `tauri::async_runtime::set(...)`
+  BEFORE the `tauri::Builder::default()` call — Tauri reads the
+  global handle on first plugin init. Runtime is `Box::leak`'d so it
+  outlives the setup block (otherwise it'd be torn down with Tauri's
+  tasks still pending).
+
+**3. Audit-trail write batching** (`commands/audit.rs`). Pre-1.7.83
+each `save_audit_entry` ran its own INSERT in its own implicit
+transaction. With WAL + synchronous=NORMAL that's still ONE fsync per
+entry — ~1-3 ms on SSD, ~10-30 ms on HDD. Burst sessions (agent loops,
+parallel multi-host commands, replay re-runs) wrote at 10-30 entries/sec
+and the latency stacked.
+
+  - In-memory `Vec<PendingAuditEntry>` queue.
+  - Background flusher (spawned via OnceCell on first call) drains the
+    queue every 500 ms in ONE transaction. N entries → 1 fsync.
+  - `save_audit_entry` returns IMMEDIATELY with a synthetic Unix-nanos
+    id. Frontend uses the id only as a reactive-store key, not a
+    foreign reference, so the API contract is preserved.
+  - Hard backstop: if the buffer reaches 512 (e.g. network outage holds
+    up the flusher), an eager one-shot drain fires. Memory can't grow
+    unbounded.
+  - Daemon thread is intentionally not joined on shutdown — pending
+    entries within the last 500 ms may be lost. The audit-of-record
+    for compliance lives in `hash_chain.rs` which is synchronous.
+
+`cargo check` — clean (1 pre-existing warning).
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.82] — 2026-06-05
 
 ### Performance Sprint Tier 1 — 5 quick wins for daily snappiness

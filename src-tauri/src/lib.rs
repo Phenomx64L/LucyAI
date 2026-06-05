@@ -87,6 +87,42 @@ pub fn run() {
         }
     }
 
+    // v1.7.83 — Custom Tokio runtime with a sane worker cap.
+    //
+    // Tauri's default async runtime spawns one worker per LOGICAL core. On
+    // modern desktops (12-32 logical cores), that's an order of magnitude
+    // more workers than Lucy's mixed I/O + occasional SIMD workload can
+    // actually use. Two real consequences observed:
+    //   • Scheduler thrash — short-lived tasks (a 200-token Ollama embed)
+    //     get bounced across cores, killing L1/L2 cache locality.
+    //   • Wakeup overhead on hybrid CPUs (12th-gen Intel+, AMD with chiplets)
+    //     where cross-die wakeups cost 200-500 ns each.
+    //
+    // Cap at min(8, logical_cores). 8 covers any realistic concurrent
+    // workload Lucy generates (a few open streams + the proactive detector
+    // tick + the audit batch flusher + tier health probes). MUST be set
+    // BEFORE tauri::Builder::default() because Tauri reads the global
+    // async-runtime handle on first .plugin() call.
+    {
+        use std::thread::available_parallelism;
+        let workers = available_parallelism()
+            .map(|n| n.get().min(8).max(2))
+            .unwrap_or(4);
+        if let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(workers)
+            .thread_name("lucy-tokio")
+            .enable_all()
+            .build()
+        {
+            tauri::async_runtime::set(rt.handle().clone());
+            // Leak the runtime so it lives the lifetime of the process.
+            // Without this, dropping `rt` at end of block would tear down
+            // the runtime while Tauri still holds tasks on it.
+            Box::leak(Box::new(rt));
+            eprintln!("[tokio] lucy runtime: {} worker threads", workers);
+        }
+    }
+
     tauri::Builder::default()
         // v1.4.10 — Single-instance: if a second Lucy is launched, focus
         // the existing window instead of spawning a duplicate process.
