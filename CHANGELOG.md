@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.77] — 2026-06-05
+
+### 5 more SysAdmin skill presets — Tier 1 ops domains
+
+Extension of v1.7.76's sysadmin category. Targets the five domains
+where Lucy operators spend the most "I'm in a remote shell, what do
+I run first" time — chosen because each enters play in > 10 % of
+real SysAdmin sessions (network triage, remote-shell auth, Linux
+host triage, DNS/cert lifecycle, file-server permissions).
+
+**New presets** (all under `sysadmin` category, ~450-600 tokens each):
+
+- **Network Diagnostics** — layer-by-layer triage (L1 link → L2 ARP
+  → L3 gateway → L4 socket → L7 DNS). Baseline-first discipline
+  (ipconfig/all + route + ARP + DNS chain + MTU discovery + traceroute
+  to IP not name). HSRP/VRRP awareness, VLAN troubleshooting. Verdict:
+  green/amber/red per layer.
+
+- **PowerShell Remoting & WinRM** — NexShell expert mode. Canonical
+  WinRM diagnostic chain (Test-WSMan → winrm get config → TrustedHosts
+  → Resolve-DnsName). Auth tier order: Kerberos > CredSSP (gated by
+  explicit confirmation, double-hop only) > Negotiate > Basic+HTTPS.
+  Session-management discipline (Enter-PSSession vs New-PSSession +
+  Invoke-Command, throttle limits, disconnect/reconnect). JEA endpoint
+  preference. Verdict: REMOTING PATH: <method> via <listener>.
+
+- **Linux Server Health** — full-picture diagnostics via NexShell SSH
+  before any write. CPU/mem/disk/net/proc capture, OOM analysis
+  (kernel killed + cgroup), systemd drift (failed units, masked,
+  ExecStart PATH), journald hygiene (--disk-usage, SystemMaxUse),
+  cgroup v2 throttling, SELinux/AppArmor denials (ausearch, NEVER
+  setenforce 0 as fix). Distro+kernel quoted in every report.
+
+- **DNS & Certificate Lifecycle** — DNS resolver chain capture
+  (Resolve-DnsName -Server per hop, dig +trace), conditional fwd vs
+  stub vs root hints, scavenging hygiene, CNAME chain rules,
+  DNSSEC awareness. Cert side: full endpoint enumeration (IIS + LDAPS
+  + RDP + SQL + SMTP), expiry calendar (< 30 d red, < 90 d amber),
+  SAN-not-CN validation, ACME rate limits + challenge type,
+  CRL/AIA reachability via certutil. Expiry rendered with "(N days
+  left)".
+
+- **File Server & SMB Operations** — NTFS + Share permission layers
+  (effective = more restrictive), token bloat detection (> 120 groups
+  breaks SMB silently), Access-Based Enumeration, VSS diff-area
+  capacity, Data Deduplication "never defrag" rule, FSRM hard-quota
+  silent-reject trap, SMB version + signing (SMB1 OFF mandatory in
+  2026), SMB Multichannel/RDMA, Alternate Data Streams + Mark-of-the-Web.
+  Walks "I can't access X" through Share → NTFS → ABE → token in that
+  order.
+
+**Total skill-presets count: 23 → 28.** The sysadmin category now has
+10 framings, covering the bulk of a Windows-shop operator's day.
+
+`svelte-check` — 0 errors, 0 warnings.
+
+---
+
 ## [1.7.76] — 2026-06-05
 
 ### Tab tinting expanded + 5 new SysAdmin skill presets
