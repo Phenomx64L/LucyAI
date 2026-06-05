@@ -1056,6 +1056,8 @@ pub fn run() {
             commands::semantic_links::memory_link_kinds,
             // v1.7.89 — Manual trigger for the fast dedup pass.
             commands::auto_dedup::auto_dedup_run,
+            // v1.7.94 — Hybrid SQL+vector recall exposed to the frontend.
+            commands::vec_search::vec_search_query,
         ])
         .run(tauri::generate_context!())
         .expect("Error al iniciar Lucy");

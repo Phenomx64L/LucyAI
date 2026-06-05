@@ -182,6 +182,11 @@ pub struct VecHit {
 
 /// k-NN query against the vec0 index. Returns up to `limit` results
 /// ranked by cosine distance.
+///
+/// Mostly superseded by `knn_filtered` (v1.7.94) for production calls.
+/// Kept around as a thin public utility for callers that genuinely
+/// don't need any filtering.
+#[allow(dead_code)]
 pub fn knn(
     conn: &rusqlite::Connection,
     query: &[f32],
@@ -221,6 +226,184 @@ pub fn knn(
         out.push(row.map_err(|e| format!("knn row: {}", e))?);
     }
     Ok(out)
+}
+
+/// v1.7.94 — Hybrid SQL+vector recall. Filters by entity_type and/or
+/// memory metadata (importance / superseded / expiry) INSIDE the same
+/// SELECT that runs the vec0 MATCH. This is the "Qdrant-style" payload
+/// filtering — except it stays in SQLite.
+///
+/// Strategy: over-fetch from vec0 (k = limit × `over_fetch_factor`)
+/// because sqlite-vec's MATCH doesn't natively know about our filters;
+/// it returns the top-k by distance. We then SQL-filter the join and
+/// LIMIT to the actual desired count. As long as `over_fetch_factor`
+/// is high enough relative to filter selectivity, this gives correct
+/// top-N filtered results.
+///
+/// `over_fetch_factor` defaults to 5 if 0. For very selective filters
+/// (e.g. "tag = 'rare_topic' AND importance >= 3"), the caller may
+/// want to pass 10 or 15 to avoid losing recall.
+#[derive(Default, Clone, Copy)]
+pub struct VecFilter<'a> {
+    /// If Some, restrict to embeddings_vec_map.entity_type = filter.
+    pub entity_type: Option<&'a str>,
+    /// If Some AND entity_type is "agent_memory", require
+    /// agent_memories.importance >= filter.
+    pub importance_min: Option<i64>,
+    /// If true AND entity_type is "agent_memory", exclude rows whose
+    /// agent_memories.superseded_by IS NOT NULL.
+    pub exclude_superseded: bool,
+    /// If true AND entity_type is "agent_memory", exclude rows that
+    /// have expired (expires_at > 0 AND < now).
+    pub exclude_expired: bool,
+}
+
+pub fn knn_filtered(
+    conn: &rusqlite::Connection,
+    query: &[f32],
+    limit: usize,
+    filter: VecFilter,
+    over_fetch_factor: usize,
+) -> Result<Vec<VecHit>, String> {
+    if query.len() != EMBEDDING_DIM {
+        return Err(format!(
+            "query dim {} != index dim {}", query.len(), EMBEDDING_DIM
+        ));
+    }
+    ensure_schema(conn)?;
+
+    let limit = limit.clamp(1, 200);
+    let factor = if over_fetch_factor == 0 { 5 } else { over_fetch_factor };
+    let k = (limit * factor).min(1000);
+
+    // Build the WHERE chain dynamically. The MATCH + k = ? are required
+    // by sqlite-vec; the rest are conventional SQL predicates.
+    let mut wheres: Vec<String> = vec![
+        "v.embedding MATCH ?".to_string(),
+        "k = ?".to_string(),
+    ];
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(vec_to_blob(query)),
+        Box::new(k as i64),
+    ];
+
+    if let Some(et) = filter.entity_type {
+        wheres.push("m.entity_type = ?".to_string());
+        params.push(Box::new(et.to_string()));
+    }
+
+    // Memory-specific filters only kick in when the entity_type IS
+    // agent_memory (or no filter — in which case we can't narrow to one
+    // table without a CTE per type; left for v1.8).
+    let memory_filters_active = filter.importance_min.is_some()
+        || filter.exclude_superseded
+        || filter.exclude_expired;
+
+    let agent_memory_join_needed = memory_filters_active
+        && (filter.entity_type == Some("agent_memory")
+            || filter.entity_type.is_none());
+
+    let join_clause = if agent_memory_join_needed {
+        // LEFT JOIN so non-agent_memory rows survive the join. The
+        // entity_type guard inside each predicate keeps the filter
+        // logically scoped.
+        "LEFT JOIN agent_memories am ON m.entity_type = 'agent_memory' AND am.id = CAST(m.entity_id AS INTEGER)"
+    } else {
+        ""
+    };
+
+    if let Some(min) = filter.importance_min {
+        wheres.push("(m.entity_type != 'agent_memory' OR am.importance >= ?)".to_string());
+        params.push(Box::new(min));
+    }
+    if filter.exclude_superseded {
+        wheres.push("(m.entity_type != 'agent_memory' OR am.superseded_by IS NULL)".to_string());
+    }
+    if filter.exclude_expired {
+        wheres.push("(m.entity_type != 'agent_memory' OR am.expires_at IS NULL OR am.expires_at = 0 OR am.expires_at > strftime('%s','now'))".to_string());
+    }
+
+    let sql = format!(
+        "SELECT m.entity_type, m.entity_id, m.text, v.distance \
+         FROM embeddings_vec v \
+         JOIN embeddings_vec_map m ON m.vec_rowid = v.rowid \
+         {join} \
+         WHERE {where_clause} \
+         ORDER BY v.distance ASC \
+         LIMIT ?",
+        join = join_clause,
+        where_clause = wheres.join(" AND ")
+    );
+    params.push(Box::new(limit as i64));
+
+    let mut stmt = conn.prepare(&sql)
+        .map_err(|e| format!("prepare knn_filtered: {}", e))?;
+
+    // Convert Box<dyn ToSql> chain into rusqlite's params_from_iter.
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter()
+        .map(|b| b.as_ref())
+        .collect();
+
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(param_refs.iter()),
+        |r| Ok(VecHit {
+            entity_type: r.get(0)?,
+            entity_id:   r.get(1)?,
+            text:        r.get(2)?,
+            distance:    r.get::<_, f64>(3)? as f32,
+        }),
+    ).map_err(|e| format!("knn_filtered query: {}", e))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("knn_filtered row: {}", e))?);
+    }
+    Ok(out)
+}
+
+/// Tauri command shim around knn_filtered. Lets the frontend run
+/// hybrid SQL+vector queries without going through semantic_search
+/// (useful for `/memory` browser, the auto-router's MCP scoring,
+/// future memory-graph node-detail panels, etc).
+///
+/// The `query_text` is embedded server-side via the shared
+/// Ollama→Gemini fallback; the frontend doesn't need to know the
+/// embedding model in use.
+#[tauri::command]
+pub async fn vec_search_query(
+    query_text: String,
+    limit: Option<u32>,
+    entity_type: Option<String>,
+    importance_min: Option<i64>,
+    exclude_superseded: Option<bool>,
+    exclude_expired: Option<bool>,
+) -> Result<Vec<VecHit>, String> {
+    if query_text.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let limit = limit.unwrap_or(10).clamp(1, 100) as usize;
+    // Embed query through the same cache + fallback chain everything
+    // else uses (v1.7.83 LRU caches identical prompts).
+    let (qvec, _model) = crate::commands::embeddings::embed_via_ollama_pub(&query_text, None).await?;
+    // v1.7.94 — Filter owns its strings inside the spawn_blocking
+    // closure so nothing borrows from the async frame across the
+    // task boundary. (Original VecFilter<'a> needs &'a str for use by
+    // synchronous callers that don't want to allocate.)
+    let exclude_sup = exclude_superseded.unwrap_or(false);
+    let exclude_exp = exclude_expired.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::metrics::shared_db(|conn| {
+            let filter = VecFilter {
+                entity_type: entity_type.as_deref(),
+                importance_min,
+                exclude_superseded: exclude_sup,
+                exclude_expired:    exclude_exp,
+            };
+            knn_filtered(conn, &qvec, limit, filter, 5)
+        })
+    })
+    .await
+    .map_err(|e| format!("join: {}", e))?
 }
 
 /// One-shot backfill from the legacy `embeddings` table. Safe to call

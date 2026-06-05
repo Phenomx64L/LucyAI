@@ -464,17 +464,28 @@ pub async fn semantic_search(
         }
     }
 
-    // ── v1.7.93 — Second-tier fast path: sqlite-vec HNSW on disk ─────────
+    // ── v1.7.93/94 — Second-tier fast path: sqlite-vec HNSW on disk ──────
     // The in-memory vec_index above is the fastest path BUT it's not built
     // until the background loader fires AND has to rebuild on every boot.
     // sqlite-vec gives us a durable, on-disk HNSW that survives restarts.
     // Sits between the in-memory index (fastest, transient) and the linear
-    // scan (slowest, always works). Only used for unfiltered queries —
-    // entity_type filtering against the vec0 join would require an extra
-    // CTE we haven't wired yet.
-    if entity_type.is_none() {
+    // scan (slowest, always works).
+    //
+    // v1.7.94 — Now supports entity_type filtering via knn_filtered, so
+    // semantic_search no longer falls through to the linear scan when the
+    // caller wants to scope the search (e.g. only chunks of a runbook).
+    {
+        let filter = super::vec_search::VecFilter {
+            entity_type: entity_type.as_deref(),
+            // For pure semantic_search we don't know whether the caller
+            // wants to skip superseded/expired memories — that's a
+            // memory-pipeline concern, not a generic embedding-search
+            // one. Defaults stay off; the per-table recall paths
+            // (memory.rs, metrics.rs) can pass tighter filters.
+            ..Default::default()
+        };
         let knn_res = shared_db(|conn| {
-            super::vec_search::knn(conn, &qvec, limit)
+            super::vec_search::knn_filtered(conn, &qvec, limit, filter, 5)
                 .map_err(|e| e)
         });
         if let Ok(rows) = knn_res {

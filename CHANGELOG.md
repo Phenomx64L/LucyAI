@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.94] — 2026-06-05
+
+### Hybrid SQL+vector recall — the "Qdrant query" inside SQLite
+
+v1.7.93 added the durable on-disk HNSW index but the query path could
+only do unfiltered top-K. That's only half of what makes a vector DB
+useful — the other half is FILTERING by metadata (importance, tags,
+expiry, entity_type) IN THE SAME SELECT. This commit turns it on.
+
+**New** (`commands/vec_search.rs`):
+
+`VecFilter` struct + `knn_filtered(conn, query, limit, filter,
+over_fetch_factor)`:
+- `entity_type` — restrict to `embeddings_vec_map.entity_type = X`.
+- `importance_min` — require `agent_memories.importance >= N` (memory-
+  specific filter; only enforced when joined row is an agent_memory).
+- `exclude_superseded` — drop rows where
+  `agent_memories.superseded_by IS NOT NULL`.
+- `exclude_expired` — drop rows past their `expires_at` timestamp.
+
+**Over-fetch strategy**: sqlite-vec's MATCH returns the top-k by
+distance only; filtering happens in the SQL join AFTER. So we
+over-fetch (default 5×) to keep recall high after the filter prunes.
+Caller can bump to 10× / 15× for very selective filters.
+
+**Wired into `embeddings.rs::semantic_search`**:
+- The `entity_type.is_none()` guard from v1.7.93 is gone. Now ALL
+  semantic_search calls (filtered or not) hit `vec_search::knn_filtered`
+  first. The linear scan stays as the durable fallback when vec0
+  returns nothing.
+
+**New Tauri command** `vec_search_query`:
+- Frontend can run hybrid queries directly without going through
+  `semantic_search`'s post-processing.
+- Embedding done server-side via the v1.7.83 LRU cache + Ollama→Gemini
+  fallback chain. Frontend just hands over the query text.
+- Args: `query_text`, `limit`, `entity_type`, `importance_min`,
+  `exclude_superseded`, `exclude_expired`.
+- Spawn-blocking with owned strings inside the closure (the
+  borrow-bound `VecFilter<'a>` is reconstructed inside the closure
+  so nothing borrows across the task boundary).
+- Registered in `lib.rs::invoke_handler`.
+
+**What this unlocks** (now possible without a new round-trip):
+- Memory Browser: "show me memories similar to X with importance ≥ 2
+  excluding superseded" — one query.
+- Auto-router: rank skill candidates by similarity AND entity_type
+  filter.
+- Memory Graph: "find the 10 nearest neighbours of node N that are
+  also unexpired" — one query.
+
+cargo check — clean.
+cargo test --lib vec_search — 2/2 passed.
+
+---
+
 ## [1.7.93] — 2026-06-05
 
 ### sqlite-vec — durable HNSW vector index inside the same .db
