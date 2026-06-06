@@ -52,7 +52,7 @@ mod utils;
 mod commands;
 mod guardrails;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry, activity_feed, replay, shell_recording, cve_match, db_backup, support_bundle, inventory_drift, dashboard_integrations, hash_chain};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry, activity_feed, replay, shell_recording, cve_match, db_backup, support_bundle, inventory_drift, dashboard_integrations, hash_chain, pty};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -875,6 +875,12 @@ pub fn run() {
             metrics::loop_block_stats,
             // v1.7.99 — D3: per-model latency sparkline data source.
             metrics::recent_model_latencies,
+            // v1.7.100 — D1: interactive PTY for the in-app xterm pane.
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
+            pty::pty_status,
             metrics::get_confidence_distribution,
             // Provider Management (Multi-LLM Support)
             providers::save_credential,

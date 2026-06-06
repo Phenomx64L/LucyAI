@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.7.99"
+version = "1.7.100"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
@@ -58,6 +58,12 @@ rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
 # we register at boot. Replaces the linear cosine scan for embeddings
 # with sub-millisecond ANN.
 sqlite-vec = "0.1"
+# v1.7.100 — D1 (split-view terminal): cross-platform PTY for the in-app
+# xterm.js panel. portable-pty wraps Windows' ConPTY and Unix openpty in
+# a single Send+Sync API. We use the master read/write halves directly;
+# the child handle is kept alive in our PTY state so the shell process
+# doesn't get reaped on a drop chain hiccup.
+portable-pty = "0.8"
 # P11 audit: connection pool — splits read/write so concurrent readers don't
 # serialize through one mutex. r2d2_sqlite 0.24 matches rusqlite 0.31 series.
 r2d2 = "0.8"

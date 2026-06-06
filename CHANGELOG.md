@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.100] — 2026-06-05
+
+### Option D wave 3 — D1 in-app terminal panel (xterm.js + PTY)
+
+The big one. Lucy now has a real interactive shell pane side-by-side
+with the chat, no longer dependent on the one-shot
+`execute_powershell` plumbing. Sysadmin workflows (chat with Lucy
+about a host while running commands live next to her) become a
+single-window experience.
+
+**Backend: `commands/pty.rs` (new)**
+
+Singleton PTY backed by `portable-pty` (the same crate WezTerm uses).
+Five Tauri commands:
+
+- `pty_open(cols, rows)` — spawns the shell (configurable via
+  `LUCY_PTY_SHELL`, defaults to `powershell.exe` on Windows,
+  `$SHELL` or `/bin/bash` elsewhere). Idempotent: if already open,
+  returns Ok and keeps the user's scrollback.
+- `pty_write(data)` — UTF-8 passthrough to PTY stdin. xterm's
+  raw escape sequences (arrows, Ctrl-C, etc.) reach the shell verbatim.
+- `pty_resize(cols, rows)` — updates the master's window size so
+  curses-style apps re-layout.
+- `pty_close()` — kills the child, joins the reader thread.
+- `pty_status()` — cheap probe for the frontend.
+
+A dedicated `lucy-pty-reader` OS thread blocks on the master's
+reader, base64-encodes each 4 KB chunk, and emits as `pty:data`
+Tauri events. Base64 avoids JSON UTF-8 quirks at chunk boundaries
+(ANSI sequences + partial multibyte runes). Exit emits `pty:exit`.
+
+Why a thread (not tokio): portable-pty's reader is blocking stdio.
+A plain thread keeps the executor surface flat — no `spawn_blocking`,
+no runtime coupling. Reader thread cooperates with `pty_close` via
+a shared `AtomicBool` so the close path is bounded.
+
+**Frontend: `XtermPane.svelte` (new)**
+
+Wraps xterm.js. Key design choices:
+
+- `@xterm/xterm` + `@xterm/addon-fit` **dynamically imported** so the
+  ~80 KB chunk only loads when the panel opens. Sessions that never
+  toggle the terminal pay zero bundle cost.
+- xterm theme overridden to match Lucy's accent (`#10b981`) +
+  surface colors. Reads as part of the app, not a foreign widget.
+- `pty:data` events → base64-decoded → `term.write(Uint8Array)`.
+- `term.onData` → `invoke('pty_write')`. Throttled `pty_resize`
+  (80 ms trailing) so dragging the window doesn't spam the backend.
+- `keepAlive` prop (default `true`) controls whether closing the
+  Svelte component also closes the PTY. The side panel sets it to
+  `true` so toggling the UI off doesn't kill a running shell — only
+  app shutdown does.
+- ResizeObserver-driven `safeFit()` re-fits on container resize.
+
+**Frontend: side panel in `+page.svelte`**
+
+- Vertical "TERM" toggle on the right edge (`.terminal-toggle`).
+  Shifts left with the panel so the chevron always sits on the
+  outer edge.
+- Panel: `position: fixed; right: 0; width: 40vw` (min 360 px, max
+  920 px). Pure overlay — no reflow on toggle. The 22 px-high
+  StatusBar at the bottom stays visible.
+- `Ctrl + \`` shortcut wired through the existing `svelte:window`
+  keydown handler. Suppressed while focus is inside the xterm
+  (otherwise the operator couldn't type a backtick).
+- State persisted to `localStorage` as `lucy_terminal_open` so the
+  panel comes back the same way next launch.
+
+**Deps**
+
+- `portable-pty = "0.8"` (Rust)
+- `@xterm/xterm@^6` + `@xterm/addon-fit@^0.11` (npm)
+
+**Closes Option D** — all five UX/Design proposals (D1-D5) shipped
+across v1.7.98 + v1.7.99 + v1.7.100. Lucy is now ready for the
+Linux port discussion.
+
+**Verification**
+- `cargo test --lib pty` — 2/2 passed (`default_shell_returns_non_empty`,
+  `status_is_false_before_open`).
+- `cargo check` — clean.
+- `npm run check` — 0 errors, 0 warnings (7223 files).
+- `npm run test` — 171/171 vitest passed.
+
+---
+
 ## [1.7.99] — 2026-06-05
 
 ### Option D wave 2 — consolidation shimmer + latency sparkline

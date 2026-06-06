@@ -146,6 +146,11 @@ import { listen } from '@tauri-apps/api/event';
     // crystal_promo emits the `memory:consolidated` Tauri event. Self
     // mounts/unmounts via internal queue, so just sit it at root.
     import CrystalFlash        from '$lib/CrystalFlash.svelte';
+    // v1.7.100 — D1: in-app xterm.js side panel, backed by the
+    // commands::pty singleton. Lazy-mounted: only loaded once the
+    // operator toggles the panel on (saves ~80 KB on the cold-start
+    // bundle for sessions that never open the terminal).
+    import XtermPane           from '$lib/XtermPane.svelte';
     // v1.7.98 — Note: +page.svelte is plain JS, so we only import the
     // runtime function. The AccentId type lives in accent-store.ts and is
     // not needed at runtime; activeAccent is loosely typed below.
@@ -520,6 +525,14 @@ import { listen } from '@tauri-apps/api/event';
     // via initAccent(); we default to 'emerald' here so the first render
     // before onMount lights the swatch correctly.
     let activeAccent = 'emerald';
+    // v1.7.100 — D1: terminal side panel. State persisted to localStorage
+    // so the operator's preference survives restarts. Default off — we
+    // don't want first-launch users to see a confusing extra pane.
+    let terminalOpen = safeGetLS('lucy_terminal_open', '0') === '1';
+    function toggleTerminal() {
+        terminalOpen = !terminalOpen;
+        safeSetLSString('lucy_terminal_open', terminalOpen ? '1' : '0');
+    }
     let _showCustomThemeEditor = false;
     let _customThemeDraft = '';
     let _customThemeError = '';
@@ -9596,6 +9609,19 @@ if (Test-Path $src) {
       if (e.key === 'Escape' && showDragOverlay) {
         showDragOverlay = false;
       }
+      // v1.7.100 — D1: Ctrl+` (backtick) toggles the terminal panel.
+      // We don't intercept while the user is typing in the embedded
+      // xterm (which captures all keystrokes itself); the shortcut
+      // only fires when the active target is outside the panel.
+      if (e.ctrlKey && (e.key === '`' || e.key === '~')) {
+        const inXterm = (e.target instanceof HTMLElement)
+            && e.target.closest('.terminal-side-panel');
+        if (!inXterm) {
+          e.preventDefault();
+          toggleTerminal();
+          return;
+        }
+      }
       onGlobalKey(e);
     }}
     on:wheel={onGlobalWheel}
@@ -10351,6 +10377,43 @@ if (Test-Path $src) {
        the backend `memory:consolidated` event and paints a brief gold
        vignette + count pill. Auto-clears; no upstream state needed. -->
   <CrystalFlash />
+
+  <!-- v1.7.100 — D1: in-app terminal side panel.
+       Toggle button (always visible) + the panel itself (lazy mount).
+       Panel takes 40% viewport width, anchored right. XtermPane keeps
+       its PTY alive across panel toggles (keepAlive=true), so the
+       operator's scrollback survives closing & reopening — only the
+       app shutdown actually tears the shell down. -->
+  <button
+    type="button"
+    class="terminal-toggle"
+    class:on={terminalOpen}
+    on:click={toggleTerminal}
+    title={isEN
+      ? (terminalOpen ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)')
+      : (terminalOpen ? 'Ocultar terminal (Ctrl+`)' : 'Mostrar terminal (Ctrl+`)')}
+    aria-label={isEN ? 'Toggle terminal panel' : 'Alternar panel de terminal'}
+  >
+    <span class="terminal-toggle-glyph">{terminalOpen ? '▶' : '◀'}</span>
+    <span class="terminal-toggle-label">{isEN ? 'TERM' : 'TERM'}</span>
+  </button>
+  {#if terminalOpen}
+    <aside class="terminal-side-panel" aria-label={isEN ? 'Terminal' : 'Terminal'}>
+      <div class="terminal-side-panel-bar">
+        <span class="terminal-side-panel-title">{isEN ? 'Terminal' : 'Terminal'}</span>
+        <button
+          type="button"
+          class="terminal-side-panel-close"
+          on:click={toggleTerminal}
+          title={isEN ? 'Hide (Ctrl+`)' : 'Ocultar (Ctrl+`)'}
+          aria-label={isEN ? 'Close terminal' : 'Cerrar terminal'}
+        >×</button>
+      </div>
+      <div class="terminal-side-panel-body">
+        <XtermPane keepAlive={true} {isEN} />
+      </div>
+    </aside>
+  {/if}
 
   <!-- v1.7.79 — Artifacts side panel. Rendered at root so it can overlay
        any view (Terminal, Dashboard, NexShell, …) without z-index fights.

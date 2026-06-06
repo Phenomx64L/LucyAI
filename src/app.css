@@ -1618,3 +1618,114 @@ textarea:focus-visible,
 @media (prefers-reduced-motion: reduce) {
     .msg-user, .msg-lucy { transition: none; }
 }
+
+/* ── v1.7.100 — D1 terminal side panel ─────────────────────────────────
+   In-app xterm.js panel anchored to the right edge of the viewport.
+   The toggle button is a vertical tab on the right edge; it shifts
+   left when the panel opens so the chevron sits on the panel's outer
+   edge. Pure overlay (position:fixed) — does not reshape the main
+   layout, so toggling costs no reflow. Chat is centered with
+   margin:auto so the 40 vw panel typically covers only blank gutter
+   on common monitor widths.
+   ────────────────────────────────────────────────────────────────── */
+.terminal-toggle {
+    position: fixed;
+    bottom: 36px;                 /* clear of the StatusBar */
+    right: 0;
+    z-index: 8400;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 22px;
+    padding: 8px 0;
+    background: rgba(13, 17, 23, 0.92);
+    color: var(--accent);
+    border: 1px solid var(--accent-border);
+    border-right: none;
+    border-radius: 6px 0 0 6px;
+    cursor: pointer;
+    font-family: var(--font-mono, monospace);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.45);
+    transition: right var(--motion-base, 240ms) var(--ease-out, ease-out),
+                background var(--motion-fast, 160ms) var(--ease-out, ease-out),
+                color var(--motion-fast, 160ms) var(--ease-out, ease-out);
+}
+.terminal-toggle:hover {
+    background: rgba(16, 185, 129, 0.10);
+    color: var(--text-bright);
+}
+.terminal-toggle.on { right: 40vw; }
+.terminal-toggle-glyph { font-size: 10px; line-height: 1; }
+.terminal-toggle-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    line-height: 1;
+}
+
+.terminal-side-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 22px;                 /* leave the StatusBar visible */
+    width: 40vw;
+    min-width: 360px;
+    max-width: 920px;
+    z-index: 8300;
+    display: flex;
+    flex-direction: column;
+    background: #060810;
+    border-left: 1px solid var(--accent-border);
+    box-shadow: -8px 0 30px -6px rgba(0, 0, 0, 0.55);
+    animation: terminal-slide var(--motion-base, 240ms) var(--ease-out, cubic-bezier(.16,1,.3,1)) 1;
+}
+@keyframes terminal-slide {
+    from { transform: translateX(8%); opacity: 0; }
+    to   { transform: translateX(0);  opacity: 1; }
+}
+.terminal-side-panel-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    user-select: none;
+}
+.terminal-side-panel-title { flex: 1; color: var(--accent); }
+.terminal-side-panel-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: color var(--motion-fast, 160ms) var(--ease-out, ease-out),
+                background var(--motion-fast, 160ms) var(--ease-out, ease-out);
+}
+.terminal-side-panel-close:hover {
+    color: var(--red);
+    background: rgba(255, 68, 68, 0.10);
+}
+.terminal-side-panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .terminal-side-panel { animation: none; }
+    .terminal-toggle     { transition: none; }
+}

@@ -94,3 +94,8 @@ pub mod vec_search;
 // hash-chain verification, MCP health probe, memory crystal promotion,
 // state snapshot retention. Each is gated by a LUCY_HK_NO_* env var.
 pub mod housekeeping;
+// v1.7.100 — D1 split-view terminal. Singleton interactive PTY wired to
+// the in-app xterm.js pane. portable-pty + a blocking reader thread
+// that emits chunks as `pty:data` Tauri events. See pty.rs for the
+// lifecycle contract.
+pub mod pty;
