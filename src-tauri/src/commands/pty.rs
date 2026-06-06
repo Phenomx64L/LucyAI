@@ -129,6 +129,21 @@ pub async fn pty_open(app: AppHandle, cols: u16, rows: u16) -> Result<(), String
         .map_err(|e| format!("openpty: {}", e))?;
 
     let shell = default_shell();
+    // v1.7.102 Sprint-2 H1: audit every PTY shell spawn. Without this
+    // hook the interactive xterm pane bypasses Lucy's command-execution
+    // audit chain entirely — operator-curated permission rules and
+    // bypass-token UI don't apply to keystrokes typed into the panel.
+    // This is the first checkpoint: we record WHICH shell got launched,
+    // when, and with which environment knob. Per-keystroke / per-line
+    // audit is bigger architectural work (deferred to a future sprint).
+    crate::utils::logging::write_app_log(
+        "INFO",
+        &format!(
+            "[PTY_OPEN] shell={} cols={} rows={} env_override={}",
+            shell, cols, rows,
+            std::env::var("LUCY_PTY_SHELL").is_ok()
+        ),
+    );
     let cmd = CommandBuilder::new(&shell);
     let child = pair
         .slave

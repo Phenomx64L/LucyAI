@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.102] — 2026-06-06
+
+### Sprint #2 — Security hardening pre-Linux-port
+
+Eight fixes from the high-severity tier of the 5-agent audit. H7
+(`save_agent_memory` tx refactor) and H12 (signed backups) deferred
+to Sprint #3 — both require architectural decisions that warrant
+their own focused PR.
+
+**B5 — MCP raw-command bypass closed**
+- `call_mcp_tool` and `discover_mcp_tools` previously accepted any
+  string as `server_name` and spawned it as a subprocess, bypassing
+  the operator-curated `mcp_servers` registry, the bypass-token UI,
+  and the audit chain. An indirect prompt-injection in tool output
+  could pivot the agent to spawn arbitrary commands.
+- New `resolve_server()` helper looks up the name in `mcp_servers`
+  (by id OR name, only enabled rows) and returns the registered
+  command. Fast-rejects raw command lines that contain whitespace,
+  path separators, or exceed 128 chars.
+- Operator escape hatch: `LUCY_MCP_ALLOW_RAW=1` env var preserves
+  legacy behaviour for debugging.
+- Tool calls now log to `lucy_app.log` at INFO with the resolved
+  command, closing the audit gap.
+
+**B4 — `vec_search::init_extension` transmute tightened**
+- Original code did `std::mem::transmute` through `*const ()` then a
+  second `transmute` into the auto-extension shape. Safer alternatives
+  (typed coercion, direct cast) all fail to compile because
+  `sqlite_vec` deliberately exports `sqlite3_vec_init` as a 0-arg stub
+  patched by the vendored C source at link time.
+- The transmute stays (load-bearing), but: (1) the target type alias
+  now matches rusqlite's FFI exactly (`*mut *const c_char` for the
+  pzErrMsg arg, not the more obvious `*mut *mut`); (2) a `const _: ()`
+  assertion pins the fn-pointer size at compile time so a future
+  rusqlite FFI bump fails the build instead of silently producing UB.
+
+**H1 — PTY shell launch now audited**
+- `pty_open` writes `[PTY_OPEN] shell=… cols=… rows=… env_override=…`
+  to `lucy_app.log`. Records WHICH shell got launched and whether
+  `LUCY_PTY_SHELL` override was active.
+- Per-keystroke / per-line PTY audit (buffering until Enter, scanning
+  against the existing blocklist + permission rules) is bigger
+  architectural work — landing it requires reworking xterm's onData
+  callback. Deferred to Sprint #3.
+
+**H4 — Housekeeping loops moved to `spawn_blocking`**
+- `embed_warmup::run_once`, `audit_verify::tick`, and
+  `mcp_health::tick` previously called `shared_db` (a sync function)
+  directly inside `tauri::async_runtime::spawn(async { … })`. Each
+  call blocked the tokio worker for the SQL duration — observable
+  during cold-start contention with the LLM warmup path.
+- All three now wrap the `shared_db` call in `spawn_blocking`. Join
+  errors handled the same as inner errors (silent skip — non-critical
+  loops).
+
+**H5 — `vec_search::upsert_vec` wrapped in transaction**
+- Three statements (vec0 DELETE + INSERT + side-table UPDATE / INSERT)
+  were independent. A crash between them left an orphaned
+  `embeddings_vec_map` row pointing at a non-existent vec0 rowid;
+  next k-NN that hit that row returned garbage.
+- Wrapped in `conn.unchecked_transaction()` + explicit commit. Atomic.
+
+**H8 — `log_usage_internal` wrapped in transaction**
+- Token-usage INSERT + daily-summary UPSERT were two independent
+  writes. A crash between them silently diverged the cost dashboard
+  from the row-level audit log.
+- Wrapped in `conn.unchecked_transaction()` + commit.
+
+**H11 — `withGlobalTauri: false`**
+- Disabled exposure of `window.__TAURI__` to every script in the
+  WebView. With this on, any XSS via `{@html}` (e.g. if the
+  sanitisation pipeline ever drifts) immediately gained access to
+  every Tauri command — including `pty_write`, `execute_powershell`,
+  `db_backup_restore`. Repo grep for `window.__TAURI__` returned 0
+  matches (everything uses `@tauri-apps/api` imports), so this is a
+  pure tightening.
+
+**Verification**
+- `cargo test --lib` — 298/298 passed.
+- `cargo check` — clean.
+- `npm run check` — 0 errors, 0 warnings.
+
+**Deferred to Sprint #3**
+- H7 (`save_agent_memory` tx refactor — crosses 3+ modules).
+- H12 (signed backups — needs HMAC scheme + keyring entry + format
+  migration for backwards-compat).
+- H1 follow-up (per-line PTY audit + permission rule gate).
+- B5 follow-up: revisit `parse_command` to use `shlex` so paths with
+  spaces stop tokenising incorrectly.
+
+---
+
 ## [1.7.101] — 2026-06-05
 
 ### Sprint #1 — Critical bug + security fixes from the 5-agent audit

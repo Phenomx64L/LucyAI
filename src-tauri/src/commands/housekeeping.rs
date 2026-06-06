@@ -117,23 +117,31 @@ pub mod embed_warmup {
     }
 
     async fn run_once() {
-        // Pull the 20 most-recent distinct prompts. SELECT DISTINCT
-        // because the same prompt re-used (rerun, branch, replay) is
-        // worth only one embed.
-        let prompts: Vec<String> = match crate::commands::metrics::shared_db(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT DISTINCT text FROM chip_click_log \
-                 WHERE text IS NOT NULL AND length(text) > 8 \
-                 ORDER BY occurred_at DESC LIMIT 20"
-            ).map_err(|e| format!("warmup prepare: {}", e))?;
-            let rows: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(0))
-                .map_err(|e| format!("warmup query: {}", e))?
-                .filter_map(|r| r.ok())
-                .collect();
-            Ok::<Vec<String>, String>(rows)
-        }) {
-            Ok(v) => v,
-            Err(_) => return,
+        // v1.7.102 Sprint-2 H4: wrap the sync shared_db call in
+        // spawn_blocking. Without this, the SELECT runs on the tokio
+        // worker and stalls every other async task (PTY data emit, LLM
+        // streaming, UI polls) for the SQL duration. Brief but
+        // observable during cold start.
+        let prompts: Vec<String> = match tauri::async_runtime::spawn_blocking(|| {
+            crate::commands::metrics::shared_db(|conn| {
+                // Pull the 20 most-recent distinct prompts. SELECT DISTINCT
+                // because the same prompt re-used (rerun, branch, replay) is
+                // worth only one embed.
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT text FROM chip_click_log \
+                     WHERE text IS NOT NULL AND length(text) > 8 \
+                     ORDER BY occurred_at DESC LIMIT 20"
+                ).map_err(|e| format!("warmup prepare: {}", e))?;
+                let rows: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(0))
+                    .map_err(|e| format!("warmup query: {}", e))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok::<Vec<String>, String>(rows)
+            })
+        }).await {
+            Ok(Ok(v))  => v,
+            Ok(Err(_)) => return,
+            Err(_)     => return,   // join error — runtime shutting down
         };
         if prompts.is_empty() { return; }
         let mut warmed = 0usize;
@@ -183,23 +191,28 @@ pub mod audit_verify {
     }
 
     async fn tick() {
-        // Pull all incident_ids that have at least one chained audit row.
-        let incidents: Vec<String> = match crate::commands::metrics::shared_db(|conn| {
-            let mut stmt = match conn.prepare(
-                "SELECT DISTINCT incident_id FROM audit_chain WHERE incident_id IS NOT NULL"
-            ) {
-                Ok(s) => s,
-                // Table doesn't exist yet — no incidents to verify.
-                Err(_) => return Ok::<Vec<String>, String>(vec![]),
-            };
-            let rows: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(0))
-                .map_err(|e| format!("audit_verify query: {}", e))?
-                .filter_map(|r| r.ok())
-                .collect();
-            Ok(rows)
-        }) {
-            Ok(v) => v,
-            Err(_) => return,
+        // v1.7.102 Sprint-2 H4: shared_db on spawn_blocking — see
+        // embed_warmup::run_once for the same rationale.
+        let incidents: Vec<String> = match tauri::async_runtime::spawn_blocking(|| {
+            crate::commands::metrics::shared_db(|conn| {
+                // Pull all incident_ids that have at least one chained audit row.
+                let mut stmt = match conn.prepare(
+                    "SELECT DISTINCT incident_id FROM audit_chain WHERE incident_id IS NOT NULL"
+                ) {
+                    Ok(s) => s,
+                    // Table doesn't exist yet — no incidents to verify.
+                    Err(_) => return Ok::<Vec<String>, String>(vec![]),
+                };
+                let rows: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(0))
+                    .map_err(|e| format!("audit_verify query: {}", e))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(rows)
+            })
+        }).await {
+            Ok(Ok(v))  => v,
+            Ok(Err(_)) => return,
+            Err(_)     => return,
         };
 
         let mut broken: Vec<String> = Vec::new();
@@ -257,26 +270,30 @@ pub mod mcp_health {
     }
 
     async fn tick() {
-        // Pull every enabled server. The mcp_server_list command already
-        // filters by enabled = 1 / 0 — we read directly from the table
-        // here to skip the async hop and avoid Tauri command overhead.
-        let servers: Vec<(String, String)> = match crate::commands::metrics::shared_db(|conn| {
-            let mut stmt = match conn.prepare(
-                "SELECT name, command FROM mcp_servers WHERE enabled = 1"
-            ) {
-                Ok(s) => s,
-                Err(_) => return Ok::<Vec<(String, String)>, String>(vec![]),
-            };
-            let rows: Vec<(String, String)> = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        // v1.7.102 Sprint-2 H4: shared_db on spawn_blocking.
+        let servers: Vec<(String, String)> = match tauri::async_runtime::spawn_blocking(|| {
+            crate::commands::metrics::shared_db(|conn| {
+                // Pull every enabled server. The mcp_server_list command already
+                // filters by enabled = 1 / 0 — we read directly from the table
+                // here to skip the async hop and avoid Tauri command overhead.
+                let mut stmt = match conn.prepare(
+                    "SELECT name, command FROM mcp_servers WHERE enabled = 1"
+                ) {
+                    Ok(s) => s,
+                    Err(_) => return Ok::<Vec<(String, String)>, String>(vec![]),
+                };
+                let rows: Vec<(String, String)> = stmt.query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("mcp_health query: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+                Ok(rows)
             })
-            .map_err(|e| format!("mcp_health query: {}", e))?
-            .filter_map(|r| r.ok())
-            .collect();
-            Ok(rows)
-        }) {
-            Ok(v) => v,
-            Err(_) => return,
+        }).await {
+            Ok(Ok(v))  => v,
+            Ok(Err(_)) => return,
+            Err(_)     => return,
         };
 
         let mut down: Vec<String> = Vec::new();

@@ -38,6 +38,66 @@ use crate::commands::metrics::shared_db;
 
 // ── Shared helpers ──────────────────────────────────────────────────────
 
+/// v1.7.102 Sprint-2 B5: registry resolver.
+///
+/// Before this fix, `call_mcp_tool` / `discover_mcp_tools` accepted ANY
+/// string as `server_name` and ran it as a subprocess via
+/// `spawn_and_initialize` — bypassing the operator-curated `mcp_servers`
+/// registry, the bypass-token UI, the blocklist, and the audit chain.
+/// An indirect prompt-injection in tool output could pivot the agent
+/// into spawning arbitrary commands.
+///
+/// We now require `server_name` to resolve to a row in `mcp_servers`
+/// where `enabled = 1`. The returned `(command, env_keys)` come from
+/// the registry, so even if the LLM asks for "powershell -c rm-rf",
+/// the resolver rejects it because the literal string isn't a
+/// registered name. Operator escape hatch: `LUCY_MCP_ALLOW_RAW=1`
+/// preserves the legacy behaviour for one-off debugging.
+fn resolve_server(server_name: &str) -> Result<(String, Vec<String>), String> {
+    if std::env::var("LUCY_MCP_ALLOW_RAW").is_ok() {
+        // Escape hatch — operator explicitly opted out of the gate.
+        return Ok((server_name.to_string(), Vec::new()));
+    }
+    // Reject obvious raw commands fast: a registered name is a short
+    // identifier, never a path or whitespace-laden command line.
+    if server_name.contains(char::is_whitespace)
+        || server_name.contains('\\')
+        || server_name.contains('/')
+        || server_name.is_empty()
+        || server_name.len() > 128
+    {
+        return Err(format!(
+            "MCP server '{}' rejected: not a registered name. Register it via the MCP Servers panel first.",
+            server_name.chars().take(60).collect::<String>()
+        ));
+    }
+    let name = server_name.to_string();
+    crate::commands::metrics::shared_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT command, env_keys FROM mcp_servers \
+             WHERE (name = ?1 OR id = ?1) AND enabled = 1 \
+             LIMIT 1"
+        ).map_err(|e| format!("resolve_server prepare: {}", e))?;
+        let row = stmt.query_row(rusqlite::params![&name], |r| {
+            let cmd: String = r.get(0)?;
+            let env_keys: String = r.get(1).unwrap_or_default();
+            Ok((cmd, env_keys))
+        });
+        match row {
+            Ok((cmd, env_keys_json)) => {
+                let env_keys: Vec<String> = serde_json::from_str(&env_keys_json)
+                    .unwrap_or_default();
+                Ok((cmd, env_keys))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(format!(
+                "MCP server '{}' is not registered (or disabled). Open the MCP Servers panel to register it.",
+                name
+            )),
+            Err(e) => Err(format!("resolve_server query: {}", e)),
+        }
+    })
+}
+
 /// Parse a command-line string into (program, args), applying the
 /// `npx` → `npx.cmd` + `-y` injection used everywhere.
 fn parse_command(cmd_line: &str) -> (String, Vec<String>) {
@@ -536,13 +596,23 @@ pub async fn call_mcp_tool(
     query: String,
     env: Option<HashMap<String, String>>,
 ) -> Result<String, String> {
+    // v1.7.102 Sprint-2 B5: gate through the registry. The previous
+    // contract treated `server_name` as a raw command line — an
+    // LLM-driven RCE vector via prompt injection. Now we resolve it to
+    // a registered, operator-curated `mcp_servers` row.
+    let (resolved_cmd, _registered_env_keys) = resolve_server(&server_name)?;
+    crate::utils::logging::write_app_log(
+        "INFO",
+        &format!("MCP tool call: server='{}' (resolved=`{}`)", server_name, resolved_cmd),
+    );
+
     let parts: Vec<&str> = query.split("|||").collect();
     let tool_name = parts[0].trim().to_string();
     let args_str = parts.get(1).unwrap_or(&"{}").trim().to_string();
     let args_json: Value = serde_json::from_str(&args_str).unwrap_or(json!({}));
 
     let (mut child, mut stdin, mut reader, _stderr) =
-        spawn_and_initialize(&server_name, env).await?;
+        spawn_and_initialize(&resolved_cmd, env).await?;
     let res = call_tool(&mut stdin, &mut reader, &tool_name, args_json).await;
     let _ = child.kill().await;
     match res {
@@ -557,8 +627,10 @@ pub async fn discover_mcp_tools(
     server_name: String,
     env: Option<HashMap<String, String>>,
 ) -> Result<String, String> {
+    // v1.7.102 Sprint-2 B5: same registry gate as call_mcp_tool.
+    let (resolved_cmd, _registered_env_keys) = resolve_server(&server_name)?;
     let (mut child, mut stdin, mut reader, _stderr) =
-        spawn_and_initialize(&server_name, env).await?;
+        spawn_and_initialize(&resolved_cmd, env).await?;
     let tools = list_tools(&mut stdin, &mut reader).await?;
     let _ = child.kill().await;
     let pretty = serde_json::to_string_pretty(&tools).unwrap_or_default();

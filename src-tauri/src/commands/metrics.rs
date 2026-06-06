@@ -387,14 +387,21 @@ pub async fn log_usage_internal(
     let total_tokens = input_tokens + output_tokens;
 
     with_db(|conn| {
-        conn.execute(
+        // v1.7.102 Sprint-2 H8: wrap the two writes in a single transaction.
+        // Previously they were independent execute() calls — a crash (or
+        // process kill) between them left token_usage carrying a row that
+        // daily_summary didn't reflect, and the cost dashboard diverged
+        // from the row log without any way to reconcile. Atomic now.
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("log_usage tx open: {}", e))?;
+        tx.execute(
             "INSERT INTO token_usage (id, task_id, timestamp, model, input_tokens, output_tokens, total_cost, user, request_type)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![&id, &task_id, &timestamp, model, input_tokens, output_tokens, total_cost, user, request_type],
         ).map_err(|e| format!("Failed to insert token_usage: {}", e))?;
 
         // Atomic UPSERT — replaces the prior check-then-insert race.
-        conn.execute(
+        tx.execute(
             "INSERT INTO daily_summary (date, model, total_tokens, total_cost, request_count)
              VALUES (?1, ?2, ?3, ?4, 1)
              ON CONFLICT(date, model) DO UPDATE SET
@@ -403,6 +410,7 @@ pub async fn log_usage_internal(
                  request_count = request_count + 1",
             rusqlite::params![&date, model, total_tokens, total_cost],
         ).map_err(|e| format!("Failed to upsert daily_summary: {}", e))?;
+        tx.commit().map_err(|e| format!("log_usage tx commit: {}", e))?;
         Ok(())
     })
 }

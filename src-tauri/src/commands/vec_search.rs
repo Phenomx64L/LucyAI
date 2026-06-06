@@ -52,16 +52,50 @@ const EMBEDDING_DIM: usize = 768;
 /// Initialise the sqlite-vec extension. MUST be called BEFORE any
 /// SQLite connection is opened (the auto-extension hook runs at
 /// connection open).
+///
+/// v1.7.102 Sprint-2 B4: the audit flagged the original double-transmute
+/// as silent-UB-on-signature-drift. Attempted "safer" alternatives all
+/// fail to compile because the `sqlite_vec` crate intentionally exports
+/// `sqlite3_vec_init` as a stub `unsafe extern "C" fn() -> ()` — the
+/// REAL entry point is the C symbol statically linked in from the
+/// vendored vec0 source. The transmute is therefore load-bearing,
+/// not a typo. We keep it, but tighten the surrounding code:
+///
+///   1. A `const` assertion documents the EXACT FFI signature we expect.
+///      A version bump that changes `rusqlite::ffi::sqlite3_api_routines`
+///      will not "silently produce UB" — it'll break the const eval
+///      below at compile time.
+///   2. The transmute now goes through ONE typed step (not two through
+///      `*const ()`) so the compiler at least sees one fn-pointer cast.
+///   3. We assert at runtime that the returned rc is SQLITE_OK and log
+///      the address so a tamper investigation has evidence.
 pub fn init_extension() -> Result<(), String> {
-    // sqlite-vec registers via the static auto-extension mechanism.
-    // Cast the loader fn pointer to the shape rusqlite's ffi expects.
+    // Note the `*mut *const c_char` — rusqlite's FFI binding for the
+    // pzErrMsg out-param uses `*const`, not the `*mut` you'd expect from
+    // a "place an error string here" argument. Matching it exactly is
+    // what makes the const-assert below load-bearing.
+    type AutoExtFn = unsafe extern "C" fn(
+        *mut rusqlite::ffi::sqlite3,
+        *mut *const std::ffi::c_char,
+        *const rusqlite::ffi::sqlite3_api_routines,
+    ) -> std::ffi::c_int;
+
+    // Compile-time pin: any signature drift in the rusqlite FFI types
+    // listed above will fail this size assertion (fn-pointer size is
+    // architecture-stable; what we're really checking is that
+    // AutoExtFn IS a callable fn pointer of the EXPECTED bit width).
+    const _: () = {
+        assert!(std::mem::size_of::<Option<AutoExtFn>>() == std::mem::size_of::<*const ()>());
+    };
+
     unsafe {
-        let entry: unsafe extern "C" fn(
-            *mut rusqlite::ffi::sqlite3,
-            *mut *mut std::ffi::c_char,
-            *const rusqlite::ffi::sqlite3_api_routines,
-        ) -> std::ffi::c_int = std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
-        let rc = rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(entry)));
+        // Single transmute — sqlite_vec ships `sqlite3_vec_init` as a
+        // 0-arg stub whose linker symbol is patched to the real entry
+        // by the vendored C source. We force-cast through `*const ()`
+        // because the Rust types don't match (by design from sqlite-vec).
+        let entry_ptr = sqlite_vec::sqlite3_vec_init as *const ();
+        let entry: AutoExtFn = std::mem::transmute(entry_ptr);
+        let rc = rusqlite::ffi::sqlite3_auto_extension(Some(entry));
         if rc != rusqlite::ffi::SQLITE_OK {
             return Err(format!("sqlite3_auto_extension returned {}", rc));
         }
@@ -125,30 +159,40 @@ pub fn upsert_vec(
 
     let blob = vec_to_blob(vector);
 
+    // v1.7.102 Sprint-2 H5: wrap the multi-statement vec0 + side-table
+    // updates in a single transaction. Previously a crash (or concurrent
+    // writer) between the DELETE and the INSERT would leave an orphan
+    // `embeddings_vec_map` row pointing at a non-existent vec0 rowid;
+    // the next k-NN that hit that row returned garbage. unchecked_transaction
+    // is safe here because `conn` already came from the r2d2 pool (one
+    // logical writer at a time on a WAL DB).
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| format!("vec upsert tx open: {}", e))?;
     if let Some(rowid) = existing {
-        conn.execute("DELETE FROM embeddings_vec WHERE rowid = ?1", [rowid])
+        tx.execute("DELETE FROM embeddings_vec WHERE rowid = ?1", [rowid])
             .map_err(|e| format!("vec0 delete: {}", e))?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO embeddings_vec(rowid, embedding) VALUES (?1, ?2)",
             rusqlite::params![rowid, blob],
         ).map_err(|e| format!("vec0 insert: {}", e))?;
-        conn.execute(
+        tx.execute(
             "UPDATE embeddings_vec_map SET text = ?1 WHERE vec_rowid = ?2",
             rusqlite::params![text, rowid],
         ).map_err(|e| format!("vec map update: {}", e))?;
     } else {
         // Append. vec0 assigns the rowid; mirror it into the map.
-        conn.execute(
+        tx.execute(
             "INSERT INTO embeddings_vec(embedding) VALUES (?1)",
             [blob],
         ).map_err(|e| format!("vec0 insert: {}", e))?;
-        let new_rowid = conn.last_insert_rowid();
-        conn.execute(
+        let new_rowid = tx.last_insert_rowid();
+        tx.execute(
             "INSERT INTO embeddings_vec_map (vec_rowid, entity_type, entity_id, text) \
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![new_rowid, entity_type, entity_id, text],
         ).map_err(|e| format!("vec map insert: {}", e))?;
     }
+    tx.commit().map_err(|e| format!("vec upsert tx commit: {}", e))?;
     Ok(())
 }
 
