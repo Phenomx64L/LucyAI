@@ -137,6 +137,15 @@ import { listen } from '@tauri-apps/api/event';
     import MissionStrip    from '$lib/MissionStrip.svelte';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
+    // v1.7.98 — Option D4 (conversation minimap) + D5 (accent swatches).
+    // Both are standalone components; ConversationMinimap observes the
+    // ChatThread DOM through selectors so no coupling to its internals.
+    import ConversationMinimap from '$lib/ConversationMinimap.svelte';
+    import AccentSwatches      from '$lib/AccentSwatches.svelte';
+    // v1.7.98 — Note: +page.svelte is plain JS, so we only import the
+    // runtime function. The AccentId type lives in accent-store.ts and is
+    // not needed at runtime; activeAccent is loosely typed below.
+    import { initAccent }      from '$lib/accent-store';
     // v1.7.79 — Claude-style artifacts side panel for long code blocks
     // and documents. Operator opens with the chat-message context-menu
     // "Open as artifact" entry; panel stays mounted with multiple tabs.
@@ -503,6 +512,10 @@ import { listen } from '@tauri-apps/api/event';
     // Mirrored in localStorage by theme-loader.ts. We keep a reactive copy
     // here so the dots list re-renders when the user imports/deletes a theme.
     let _customThemes = listCustomThemes();
+    // v1.7.98 — D5: accent picker state. Initialized properly in onMount
+    // via initAccent(); we default to 'emerald' here so the first render
+    // before onMount lights the swatch correctly.
+    let activeAccent = 'emerald';
     let _showCustomThemeEditor = false;
     let _customThemeDraft = '';
     let _customThemeError = '';
@@ -1707,6 +1720,11 @@ import { listen } from '@tauri-apps/api/event';
     onMount(async () => {
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
+        // v1.7.98 — D5: restore the operator's accent choice before first
+        // paint so the initial frame already reflects it (no flicker from
+        // emerald → chosen-accent). Sets data-accent on <html> and writes
+        // the four --accent* CSS vars.
+        try { activeAccent = initAccent(); } catch { /* no-LS fallback ok */ }
         // v1.7.80 — kick off the proactive insights poll. First tick at
         // 90 s (let the backend's own 60 s warmup finish) then every 2 min.
         setTimeout(() => {
@@ -10098,6 +10116,11 @@ if (Test-Path $src) {
               on:citeclick={(e) => onCiteClick(e.detail.kind, e.detail.value)}
               on:fixclick={(e) => { if (window._lucyRunFix) window._lucyRunFix(e.detail.key); }}
             />
+            <!-- v1.7.98 — D4: Conversation minimap. Sibling of ChatThread so
+                 its absolute positioning inside `.chat-wrap` works without
+                 disturbing chat layout. Auto-hides for short conversations
+                 (<8 turns). -->
+            <ConversationMinimap {tab} isActiveTab={activeTabId === tab.id} {isEN} />
             <!-- U5 — Predictive next-action chips. Only renders when there are chips for the active tab. -->
             {#if activeTabId === tab.id && predictiveChips.length > 0}
               <PredictiveChipStrip chips={predictiveChips}
@@ -11095,6 +11118,12 @@ if (Test-Path $src) {
                         on:click={() => setWarpTheme('custom-' + ct.id)}></button>
               {/each}
             </div>
+
+            <!-- v1.7.98 — D5: Accent swatches. Orthogonal to the warp theme
+                 above: this picks JUST the primary action hue while the
+                 grid above picks the gradient backdrop. Persisted in
+                 localStorage by accent-store.ts. -->
+            <AccentSwatches bind:active={activeAccent} {isEN} />
 
             <!-- Tier B #3 — Custom themes management row -->
             <div class="custom-theme-controls">

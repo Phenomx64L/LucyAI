@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.98] — 2026-06-05
+
+### Option D (UX/Design) — first wave: minimap + accent picker
+
+Two purely-frontend additions. Both standalone Svelte components,
+zero backend impact, zero new deps.
+
+**D4 — `ConversationMinimap.svelte`** (new file)
+- Narrow 6 px vertical strip rendered to the right of the chat area.
+- One tick per turn, color-coded by role:
+  blue=user, accent=lucy, violet=tool, red=error.
+- Translucent "viewport rectangle" tracks the scrolled section so the
+  operator always sees where they are in a long thread.
+- **Click a tick** → smooth-scroll to that turn.
+- **Drag the strip** → scrub through the conversation (faster than
+  wheel scroll for 100+ turn threads).
+- Auto-hides for conversations under 8 turns (no value, just noise).
+- Observes ChatThread DOM via MutationObserver + scroll/resize
+  observers — no coupling to ChatThread internals, no re-render
+  bloat. Mutation events are rAF-throttled so streaming tokens
+  don't spam recompute.
+- Mounted inside `.chat-wrap` next to ChatThread; required adding
+  `position: relative` to `.chat-wrap` in `chat-thread.css` as a
+  pure positioning anchor (no visual change).
+
+**D5 — Accent swatch picker** (new files)
+- `accent-store.ts` — six preset accents (emerald, cyan, violet,
+  amber, pink, sky), each defining `--accent` + `--accent-dim` +
+  `--accent-border` + `--accent-glow`. Persisted to localStorage
+  as `lucy_accent_id`.
+- `AccentSwatches.svelte` — six circular swatches, mounted in the
+  settings panel right after the existing 11-theme grid.
+- **Orthogonal** to the warp theme system: themes pick the gradient
+  backdrop, accents pick the primary action hue. Operator can mix
+  any pair (e.g. AMOLED backdrop + violet accent).
+- `initAccent()` is called in `onMount` BEFORE first paint so there's
+  no flicker from default emerald → user's choice on app boot.
+- Hardcoded `rgba(16,185,129,…)` literals scattered through the
+  codebase keep their green identity by design — accents target the
+  brand surface (input border, send button, sidebar active row,
+  citation chips, minimap viewport).
+
+**What's still coming in Option D**
+- v1.7.99: D2 (memory consolidation animation) + D3 (per-skill
+  latency sparkline in status bar).
+- v1.7.100: D1 (split view chat + xterm.js terminal — needs new dep).
+
+**Verification**
+- `npm run check` — 0 errors, 0 warnings across 7218 files.
+- `npm run test` — 171/171 vitest passed.
+- Both new components carry their own scoped styles + a
+  `prefers-reduced-motion: reduce` rule that disables all
+  transitions.
+
+---
+
 ## [1.7.97] — 2026-06-05
 
 ### Tier-C proactive trust sentinels — Lucy verifies what she depends on

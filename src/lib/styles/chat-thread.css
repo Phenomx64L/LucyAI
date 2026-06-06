@@ -32,6 +32,10 @@
     flex-direction: column;
     flex: 1;
     overflow: hidden;
+    /* v1.7.98 — anchor for ConversationMinimap (absolute positioning).
+       chat-wrap was already a flex column with overflow:hidden, so
+       adding position:relative is purely an anchor — no visual change. */
+    position: relative;
     max-width: 960px;
     width: 100%;
     margin: 0 auto;
