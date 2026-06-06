@@ -200,7 +200,7 @@ pub fn run() {
             //   • crystal_promo       —  6 h promote hot memories.
             //   • snapshot_retention  —  6 h prune old state_snapshots.
             // Each can be individually disabled via env (LUCY_HK_NO_*).
-            commands::housekeeping::start_all();
+            commands::housekeeping::start_all(&handle);
 
             // v1.7.93 — One-shot sqlite-vec backfill. Runs once on app
             // start (in a blocking background task) to copy any
@@ -873,6 +873,8 @@ pub fn run() {
             metrics::log_task_event,
             metrics::get_task_telemetry,
             metrics::loop_block_stats,
+            // v1.7.99 — D3: per-model latency sparkline data source.
+            metrics::recent_model_latencies,
             metrics::get_confidence_distribution,
             // Provider Management (Multi-LLM Support)
             providers::save_credential,

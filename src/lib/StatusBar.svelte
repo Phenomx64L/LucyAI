@@ -2,6 +2,10 @@
     import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import StatusOrb from '$lib/StatusOrb.svelte';
+    // v1.7.99 — D3: per-model latency sparkline. Polls the backend's
+    // recent_model_latencies command every 30 s and renders a tiny
+    // canvas trend line. Inert when there is no data yet.
+    import LatencySparkline from '$lib/LatencySparkline.svelte';
     import type { CostSummary, TokenBudgetConfig } from '$lib/stores';
     import { densityMode, cycleDensityMode } from '$lib/density-mode';
     // v1.4.17 — LucyTooltip migration (replaces native title=).
@@ -476,6 +480,13 @@
                       title="{tier}: {t?.status ?? 'unknown'}{t?.latency_ms ? ` (${t.latency_ms}ms)` : ''}"></span>
             {/each}
         </span>
+    </div>
+
+    <!-- v1.7.99 — D3: latency sparkline sits just before the version label.
+         Width ~90 px, height 16 px. focusModel left blank → renders every
+         model that has samples; can be wired to the active model later. -->
+    <div class="bi r" style="padding:0 8px; gap:6px;">
+        <LatencySparkline {isEN} />
     </div>
 
     <div class="bi r" style="opacity:0.6; font-size:12px;">

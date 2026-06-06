@@ -142,6 +142,10 @@ import { listen } from '@tauri-apps/api/event';
     // ChatThread DOM through selectors so no coupling to its internals.
     import ConversationMinimap from '$lib/ConversationMinimap.svelte';
     import AccentSwatches      from '$lib/AccentSwatches.svelte';
+    // v1.7.99 — D2: ambient overlay that fires when housekeeping/
+    // crystal_promo emits the `memory:consolidated` Tauri event. Self
+    // mounts/unmounts via internal queue, so just sit it at root.
+    import CrystalFlash        from '$lib/CrystalFlash.svelte';
     // v1.7.98 — Note: +page.svelte is plain JS, so we only import the
     // runtime function. The AccentId type lives in accent-store.ts and is
     // not needed at runtime; activeAccent is loosely typed below.
@@ -10342,6 +10346,11 @@ if (Test-Path $src) {
 
   <!-- v1.7.17 — Single instance of the in-app dialog host. -->
   <DialogHost />
+
+  <!-- v1.7.99 — D2: ambient memory-consolidation shimmer. Listens for
+       the backend `memory:consolidated` event and paints a brief gold
+       vignette + count pill. Auto-clears; no upstream state needed. -->
+  <CrystalFlash />
 
   <!-- v1.7.79 — Artifacts side panel. Rendered at root so it can overlay
        any view (Terminal, Dashboard, NexShell, …) without z-index fights.

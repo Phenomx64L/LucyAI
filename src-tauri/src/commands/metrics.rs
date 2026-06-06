@@ -2054,6 +2054,62 @@ pub async fn loop_block_stats(days: Option<i64>) -> Result<Vec<LoopBlockStat>, S
     })
 }
 
+// ── v1.7.99 — D3: per-model latency time series ─────────────────────────
+//
+// Powers the LatencySparkline component in the StatusBar. Returns the
+// last N task_events rows that carry both a non-null elapsed_ms AND a
+// `model` field in metadata, ordered newest-first. Frontend bins them
+// per-model and draws a sparkline.
+//
+// We deliberately don't filter by event_type — Lucy logs latency on
+// several events (plan_dryrun, plan_execute, batch, rollback_*) and
+// all of them contribute meaningful "how fast is the model right
+// now" signal. The sparkline reads as "recent throughput", not "chat
+// turn duration".
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelLatencyPoint {
+    pub model:      String,
+    pub elapsed_ms: i64,
+    pub ts:         i64,
+}
+
+/// Pull the most recent latency samples per model. `limit` caps the
+/// total row count (default 200, max 1000) — frontend further trims
+/// per-model to a window of ~30 points for the sparkline.
+#[tauri::command]
+pub async fn recent_model_latencies(
+    limit: Option<i64>,
+) -> Result<Vec<ModelLatencyPoint>, String> {
+    let limit = limit.unwrap_or(200).clamp(1, 1000);
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(json_extract(metadata, '$.model'), 'unknown') AS model,
+                elapsed_ms,
+                CAST(strftime('%s', timestamp) AS INTEGER)              AS ts
+             FROM task_events
+             WHERE elapsed_ms IS NOT NULL
+               AND elapsed_ms > 0
+               AND json_extract(metadata, '$.model') IS NOT NULL
+             ORDER BY timestamp DESC
+             LIMIT ?1"
+        ).map_err(|e| format!("recent_model_latencies prepare: {}", e))?;
+        let rows: Vec<ModelLatencyPoint> = stmt
+            .query_map(rusqlite::params![limit], |r| {
+                Ok(ModelLatencyPoint {
+                    model:      r.get(0)?,
+                    elapsed_ms: r.get(1)?,
+                    ts:         r.get(2)?,
+                })
+            })
+            .map_err(|e| format!("recent_model_latencies query: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    })
+}
+
 /// Query aggregated telemetry data for the quality dashboard.
 /// Returns event summaries grouped by type for the given period.
 #[tauri::command]

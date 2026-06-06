@@ -40,11 +40,33 @@
 //     `tauri::async_runtime::spawn` for async work.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
+
+// v1.7.99 — AppHandle stash for Tauri event emission. Set once by
+// start_all() and consumed by the few sub-modules that need to push
+// signals to the frontend (currently: crystal_promo). Using OnceLock
+// keeps every existing sub-module's API unchanged — only emitting
+// loops need to reach for it.
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Best-effort emit. Silent if the handle isn't installed yet
+/// (extremely unlikely once start_all has run) or if Tauri's
+/// emit channel is closed. Designed for fire-and-forget UI signals.
+fn try_emit(event: &str, payload: serde_json::Value) {
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(event, payload);
+    }
+}
 
 /// Single entry point — called once from `lib.rs::run` setup().
 /// Each sub-loop has its own once-guard inside, so re-calls are no-ops.
-pub fn start_all() {
+///
+/// v1.7.99 — Now takes an AppHandle so loops can emit Tauri events to
+/// the frontend (e.g. memory:consolidated for D2 visualization).
+pub fn start_all(app: &AppHandle) {
+    let _ = APP_HANDLE.set(app.clone());
     // Tier A — self-care
     embed_warmup::spawn();
     audit_verify::spawn();
@@ -370,6 +392,18 @@ pub mod crystal_promo {
                     "INFO",
                     &format!("housekeeping/crystal_promo: promoted {} memory→crystal", promoted),
                 );
+                // v1.7.99 — D2: tell the frontend so it can play the
+                // consolidation animation. Fire-and-forget — UI signal,
+                // not a correctness path. Payload carries count + the
+                // first few promoted source ids so the UI can deep-link
+                // the user into the Memory Browser if they click the
+                // toast.
+                let sample_ids: Vec<i64> = rows.iter().take(3).map(|r| r.0).collect();
+                try_emit("memory:consolidated", serde_json::json!({
+                    "count":      promoted,
+                    "sample_ids": sample_ids,
+                    "ts":         now,
+                }));
             }
             Ok(promoted)
         })

@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.99] — 2026-06-05
+
+### Option D wave 2 — consolidation shimmer + latency sparkline
+
+Two more UX features land. Wave 3 (D1 split view + xterm.js) ships as
+v1.7.100.
+
+**D2 — Memory consolidation animation**
+
+Backend: `commands/housekeeping.rs` now stashes the AppHandle in a
+`OnceLock` at `start_all()` time. The `crystal_promo` sub-loop emits
+a fire-and-forget Tauri event `memory:consolidated` after a non-zero
+promotion tick, carrying `{count, sample_ids, ts}`.
+
+- `start_all` signature changed: `start_all(app: &AppHandle)`.
+  `lib.rs::setup` now passes `&handle`.
+- `try_emit()` helper silently no-ops if the handle isn't set yet —
+  safe under bootstrap ordering edge cases.
+
+Frontend: new `CrystalFlash.svelte`, mounted once at the +page.svelte
+root.
+
+- Listens for `memory:consolidated`, queues events so back-to-back
+  promotions render in sequence instead of overlapping.
+- Plays a 1.9 s shimmer:
+  - Gold inset vignette around the viewport (box-shadow-only — no
+    new layer allocation).
+  - Center-top pill with rotating ◆ crystal + "N memories
+    crystallized" text.
+- Ambient register on purpose — no toast, no click target.
+  Promotion is a self-care signal, not an action item.
+- Respects `prefers-reduced-motion` (shortens to 0.6 s).
+
+**D3 — Per-model latency sparkline**
+
+Backend: new Tauri command `recent_model_latencies(limit)` in
+`metrics.rs`. Pulls the last N `task_events` rows that carry both a
+non-null `elapsed_ms` AND a `model` field in metadata, ordered
+newest-first.
+
+- Doesn't filter by event_type on purpose — Lucy logs latency on
+  several events (`plan_dryrun`, `plan_execute`, `batch`,
+  `rollback_*`) and all of them contribute meaningful throughput
+  signal.
+- Capped 1-1000, default 200. Frontend trims to 30 points per model.
+
+Frontend: new `LatencySparkline.svelte`, mounted in the StatusBar.
+
+- 90 × 16 px canvas, polled every 30 s.
+- One polyline per model, color picked deterministically by a
+  hash of the model name (additions don't shift existing colors).
+- Y-axis is log10 so a slow outlier doesn't collapse the rest into
+  a flat line.
+- Last-sample dot on the focused model for "where are we now".
+- Hover tooltip: `model · p50 N ms · p95 N ms · K samples`.
+- ResizeObserver guarded — jsdom (vitest) tests stay green.
+
+**Verification**
+- `cargo check` — clean.
+- `npm run check` — 0 errors, 0 warnings (7220 files).
+- `npm run test` — 171/171 vitest passed.
+
+---
+
 ## [1.7.98] — 2026-06-05
 
 ### Option D (UX/Design) — first wave: minimap + accent picker
