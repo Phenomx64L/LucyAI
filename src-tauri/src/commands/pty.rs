@@ -49,9 +49,19 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::{AppHandle, Emitter};
 
 /// Internal state carried while a PTY is open. None when closed.
+///
+/// v1.7.101 Sprint-1 B6 fix: the `writer` was previously a field of this
+/// struct and `pty_write` held the global STATE mutex across the
+/// blocking `write_all + flush`. A stuck shell (full pipe, paused
+/// stdout reader) would deadlock every other command — including
+/// pty_close and pty_status — behind the writer.
+///
+/// We now keep the writer in a SEPARATE mutex (`writer()` below) so
+/// long-running writes don't block close/resize/status. We also wrap
+/// the actual write/resize syscalls in `spawn_blocking` so they don't
+/// stall the tokio runtime.
 struct PtyState {
     master: Box<dyn portable_pty::MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
     child:  Box<dyn portable_pty::Child + Send + Sync>,
     /// Set to true by the close path so the reader thread can bail
     /// cleanly on its next iteration instead of waiting on a dead pipe.
@@ -64,6 +74,16 @@ struct PtyState {
 fn state() -> &'static Mutex<Option<PtyState>> {
     static STATE: OnceLock<Mutex<Option<PtyState>>> = OnceLock::new();
     STATE.get_or_init(|| Mutex::new(None))
+}
+
+/// Separate writer mutex (v1.7.101 B6). Decoupled from `state()` so the
+/// blocking `write_all` path can't starve `pty_close` / `pty_status` /
+/// `pty_resize`. Held only briefly to grab a `&mut` to the writer, then
+/// the actual I/O runs inside `spawn_blocking` while still holding the
+/// guard — but only that thread is blocked, never the tokio executor.
+fn writer() -> &'static Mutex<Option<Box<dyn Write + Send>>> {
+    static WRITER: OnceLock<Mutex<Option<Box<dyn Write + Send>>>> = OnceLock::new();
+    WRITER.get_or_init(|| Mutex::new(None))
 }
 
 /// Pick the shell program to spawn. Operator can override via the
@@ -123,7 +143,8 @@ pub async fn pty_open(app: AppHandle, cols: u16, rows: u16) -> Result<(), String
         .master
         .try_clone_reader()
         .map_err(|e| format!("clone reader: {}", e))?;
-    let writer = pair
+    // Renamed v1.7.101 B6 to avoid shadowing the new `writer()` static accessor.
+    let writer_box: Box<dyn Write + Send> = pair
         .master
         .take_writer()
         .map_err(|e| format!("take writer: {}", e))?;
@@ -175,10 +196,17 @@ pub async fn pty_open(app: AppHandle, cols: u16, rows: u16) -> Result<(), String
         })
         .map_err(|e| format!("spawn reader thread: {}", e))?;
 
+    // v1.7.101 B6 — install state and writer separately. Order matters:
+    // writer first, so any concurrent pty_write call that sneaks in
+    // between these two assignments sees "writer set, state set" or
+    // "writer unset" — never "state set but writer absent".
+    {
+        let mut wguard = writer().lock().map_err(|e| format!("pty writer lock poisoned: {}", e))?;
+        *wguard = Some(writer_box);
+    }
     let mut guard = state().lock().map_err(|e| format!("pty state lock poisoned: {}", e))?;
     *guard = Some(PtyState {
         master: pair.master,
-        writer,
         child,
         closing,
         reader_thread: Some(reader_thread),
@@ -190,30 +218,47 @@ pub async fn pty_open(app: AppHandle, cols: u16, rows: u16) -> Result<(), String
 /// us strings — we pass them through verbatim. Escape sequences for
 /// arrow keys, Ctrl-C, etc. all arrive correctly because xterm encodes
 /// them as the raw ANSI bytes that the shell expects.
+///
+/// v1.7.101 B6: the actual write runs on `spawn_blocking` so we never
+/// stall the tokio runtime, and we lock the SEPARATE writer mutex
+/// (`writer()`) so a stuck shell can't block pty_close / pty_resize.
 #[tauri::command]
 pub async fn pty_write(data: String) -> Result<(), String> {
-    let mut guard = state().lock().map_err(|e| format!("pty state lock poisoned: {}", e))?;
-    let st = guard.as_mut().ok_or_else(|| "pty not open".to_string())?;
-    st.writer.write_all(data.as_bytes()).map_err(|e| format!("pty write: {}", e))?;
-    st.writer.flush().map_err(|e| format!("pty flush: {}", e))?;
-    Ok(())
+    let bytes = data.into_bytes();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = writer().lock().map_err(|e| format!("pty writer lock poisoned: {}", e))?;
+        let w = guard.as_mut().ok_or_else(|| "pty not open".to_string())?;
+        w.write_all(&bytes).map_err(|e| format!("pty write: {}", e))?;
+        w.flush().map_err(|e| format!("pty flush: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("pty_write join: {}", e))?
 }
 
 /// Update PTY window size. Called by the frontend's FitAddon whenever
 /// the host element resizes.
+///
+/// v1.7.101 B6: `master.resize` issues a synchronous IOCTL on Windows
+/// ConPTY — moved to spawn_blocking so a slow resize never stalls the
+/// async executor. We still take the state mutex briefly to grab a
+/// clone-able size, then release before doing the syscall.
 #[tauri::command]
 pub async fn pty_resize(cols: u16, rows: u16) -> Result<(), String> {
-    let guard = state().lock().map_err(|e| format!("pty state lock poisoned: {}", e))?;
-    let st = guard.as_ref().ok_or_else(|| "pty not open".to_string())?;
-    st.master
-        .resize(PtySize {
-            rows: rows.max(4),
-            cols: cols.max(20),
-            pixel_width:  0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("pty resize: {}", e))?;
-    Ok(())
+    let size = PtySize {
+        rows: rows.max(4),
+        cols: cols.max(20),
+        pixel_width:  0,
+        pixel_height: 0,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = state().lock().map_err(|e| format!("pty state lock poisoned: {}", e))?;
+        let st = guard.as_ref().ok_or_else(|| "pty not open".to_string())?;
+        st.master.resize(size).map_err(|e| format!("pty resize: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("pty_resize join: {}", e))?
 }
 
 /// Kill the child + join the reader thread. Safe to call when the PTY
@@ -230,6 +275,13 @@ pub async fn pty_close() -> Result<(), String> {
             let _ = st.child.kill();
             taken = Some(st);
         }
+    }
+    // v1.7.101 B6: also drop the writer so pty_write returns "not open"
+    // promptly after close. Acquired in a separate scope so it doesn't
+    // serialize with the state lock or with the join below.
+    {
+        let mut wguard = writer().lock().map_err(|e| format!("pty writer lock poisoned: {}", e))?;
+        *wguard = None;
     }
     // Join outside the mutex so the reader thread can finish without
     // contending with us for the same lock.
@@ -270,5 +322,17 @@ mod tests {
         let _ = pty_close().await;
         let s = pty_status().await.expect("pty_status should not error");
         assert!(!s, "no PTY should be open at test start");
+    }
+
+    #[tokio::test]
+    async fn write_when_closed_returns_not_open() {
+        // v1.7.101 Sprint-1 B6 regression test: with the writer in its
+        // own mutex, the not-open path should still surface a clean
+        // "pty not open" instead of any deadlock / wrong-error symptom.
+        let _ = pty_close().await;
+        let r = pty_write("hello\n".into()).await;
+        assert!(r.is_err(), "writing to a closed PTY must error");
+        let msg = r.unwrap_err();
+        assert!(msg.contains("not open"), "got unexpected error: {}", msg);
     }
 }

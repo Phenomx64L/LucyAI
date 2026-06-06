@@ -143,6 +143,22 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_agent_memories_expires \
          ON agent_memories(expires_at) WHERE expires_at > 0",
+        // ── v1.7.101 — Sprint #1 B1 fix ───────────────────────────────────
+        // Tier-A `crystal_promo` housekeeping loop was shipping an INSERT
+        // against `agent_crystals(source_id, summary, content, tags, …)` —
+        // but the live schema only carries `narrative, key_outcomes,
+        // files_affected, lessons, source_chars`. The prepare() failed
+        // every 6h since v1.7.95 and the loop silently returned Ok(0).
+        //
+        // Adding `source_id` (nullable, indexed unique) closes the
+        // idempotency gap: the promoter's WHERE id NOT IN (SELECT
+        // source_id …) can now actually find promoted rows, and INSERT
+        // OR IGNORE on a unique source_id prevents double-promotion.
+        // Existing crystals get source_id=NULL — they're not eligible
+        // for "already promoted" lookups but otherwise unaffected.
+        "ALTER TABLE agent_crystals ADD COLUMN source_id INTEGER NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_crystals_source_id \
+         ON agent_crystals(source_id) WHERE source_id IS NOT NULL",
         // ── Tier A #1 — Hierarchical forks + cost ledger ─────────────────
         // parent_task_id: the task_id of the fork that spawned THIS one.
         // Empty string = top-level fork (no parent). Enables tree rendering
@@ -2083,11 +2099,17 @@ pub async fn recent_model_latencies(
 ) -> Result<Vec<ModelLatencyPoint>, String> {
     let limit = limit.unwrap_or(200).clamp(1, 1000);
     with_db(|conn| {
+        // v1.7.101 Sprint-1 B2 fix: `task_events.timestamp` is already an
+        // INTEGER epoch column (see init schema). Wrapping it in
+        // `strftime('%s', timestamp)` treats the INT as a Julian Day
+        // number, so the v1.7.99 sparkline was plotting garbage timestamps.
+        // Returning the column directly is both correct AND lets the query
+        // planner use the existing index on `timestamp`.
         let mut stmt = conn.prepare(
             "SELECT
                 COALESCE(json_extract(metadata, '$.model'), 'unknown') AS model,
                 elapsed_ms,
-                CAST(strftime('%s', timestamp) AS INTEGER)              AS ts
+                timestamp                                              AS ts
              FROM task_events
              WHERE elapsed_ms IS NOT NULL
                AND elapsed_ms > 0
@@ -2116,11 +2138,17 @@ pub async fn recent_model_latencies(
 pub async fn get_task_telemetry(
     period: Option<String>,
 ) -> Result<Vec<TelemetrySummary>, String> {
-    let since = match period.as_deref() {
-        Some("day") => "datetime('now', '-1 day')",
-        Some("week") => "datetime('now', '-7 days')",
-        Some("all") => "datetime('1970-01-01')",
-        _ => "datetime('now', '-30 days')", // default: month
+    // v1.7.101 Sprint-1 B3 fix: `task_events.timestamp` is INTEGER epoch.
+    // The original `strftime('%s', datetime('now','-1 day'))` returns a
+    // TEXT result which SQLite then coerces lexicographically when
+    // compared with the INTEGER column — a real correctness bug, not just
+    // a perf nit. Use `unixepoch(...)` so we get an INTEGER directly and
+    // the comparison stays in the right type domain.
+    let since_unix: &str = match period.as_deref() {
+        Some("day")  => "unixepoch('now', '-1 day')",
+        Some("week") => "unixepoch('now', '-7 days')",
+        Some("all")  => "0",
+        _            => "unixepoch('now', '-30 days')", // default: month
     };
 
     with_db(|conn| {
@@ -2130,10 +2158,10 @@ pub async fn get_task_telemetry(
                     AVG(elapsed_ms) as avg_ms,
                     MAX(timestamp) as last_ts
              FROM task_events
-             WHERE timestamp >= strftime('%s', {})
+             WHERE timestamp >= {}
              GROUP BY event_type
              ORDER BY cnt DESC",
-            since
+            since_unix
         );
         let mut stmt = conn.prepare(&sql)
             .map_err(|e| format!("prepare: {}", e))?;

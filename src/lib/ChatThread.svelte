@@ -337,7 +337,26 @@
                         <div class="msg-img-gallery">
                             {#each msg.attachments as att}
                                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                                <figure class="msg-img-fig" title={att.name} on:click={() => { const w=window.open('','_blank'); if(w){w.document.write(`<img src="${att.previewUrl}" style="max-width:100%;max-height:100vh;">`);} }} on:keydown>
+                                <figure class="msg-img-fig" title={att.name} on:click={() => {
+                                    // v1.7.101 Sprint-1 H14 fix: previous version did
+                                    // `w.document.write(\`<img src="${att.previewUrl}">\`)` which
+                                    // interpolates the URL into raw HTML — any `"`/`javascript:`
+                                    // in previewUrl would break out of the attribute. New path
+                                    // creates the <img> via DOM APIs (browser-side URL parsing,
+                                    // no HTML parsing of attacker input) AND blocks scheme prefixes
+                                    // we never want to honour for an image preview.
+                                    const url = String(att.previewUrl || '');
+                                    const allowed = /^(data:image\/|blob:|https?:|tauri:|asset:)/i.test(url);
+                                    if (!allowed) return;
+                                    const w = window.open('', '_blank');
+                                    if (!w) return;
+                                    const img = w.document.createElement('img');
+                                    img.src = url;
+                                    img.style.maxWidth = '100%';
+                                    img.style.maxHeight = '100vh';
+                                    img.alt = String(att.name || '');
+                                    w.document.body.appendChild(img);
+                                }} on:keydown>
                                     <img src={att.previewUrl} alt={att.name} class="msg-img-thumb" />
                                     <figcaption class="msg-img-cap">{att.name}</figcaption>
                                 </figure>

@@ -15,6 +15,16 @@ pub fn validate_host(host: &str) -> Result<(), String> {
     if host.is_empty() || host.len() > 253 {
         return Err("Host inválido: vacío o demasiado largo.".to_string());
     }
+    // SECURITY v1.7.101 Sprint-1 H10: reject leading `-` to prevent
+    // argv-injection via `user@-oProxyCommand=evil`. OpenSSH (and other
+    // tools that consume the host part) interpret a leading hyphen as
+    // an option. DNS names + IPs never start with `-`, so this is a
+    // pure tightening with no legitimate-input cost.
+    if host.starts_with('-') {
+        return Err(format!(
+            "Host inválido '{}': no puede comenzar con '-' (riesgo de argv-injection).", host
+        ));
+    }
     // SECURITY: ASCII-only — rechaza caracteres Unicode look-alike
     // (ej. U+FF07 fullwidth apostrophe, U+02BB modifier letter) que `is_alphanumeric`
     // (Unicode-aware) aceptaría pero PowerShell/SSH podrían interpretar como meta-chars.
@@ -45,6 +55,15 @@ pub fn validate_password(pwd: &str) -> Result<(), String> {
 pub fn validate_username(user: &str) -> Result<(), String> {
     if user.is_empty() || user.len() > 128 {
         return Err("Username inválido: vacío o demasiado largo.".to_string());
+    }
+    // SECURITY v1.7.101 Sprint-1 H10: same leading-`-` defense as
+    // validate_host. A username like `-oProxyCommand=evil` would
+    // otherwise concatenate cleanly into `format!("{}@{}", user, host)`
+    // and present as an SSH option in argv parsing edge cases.
+    if user.starts_with('-') {
+        return Err(format!(
+            "Username inválido '{}': no puede comenzar con '-' (riesgo de argv-injection).", user
+        ));
     }
     // SECURITY: ASCII-only para evitar Unicode trickery (look-alike chars que pasen
     // el filtro pero confundan a PowerShell/SSH). is_alphanumeric() acepta Unicode.

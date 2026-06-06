@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.101] — 2026-06-05
+
+### Sprint #1 — Critical bug + security fixes from the 5-agent audit
+
+Seven targeted fixes for the criticals + highs surfaced by the
+pre-Linux-port audit. Most importantly: **Tier-A crystal promotion has
+been silently broken since v1.7.95** — this release is the first time
+it actually runs.
+
+**B1 — `crystal_promo` schema mismatch (silent feature death)**
+- Migration `agent_crystals ADD COLUMN source_id INTEGER NULL` + a unique
+  partial index on `source_id WHERE source_id IS NOT NULL`. Existing
+  crystals get NULL — unaffected.
+- Rewrote the promoter against the REAL schema: maps
+  `(title, content) → narrative`, `tags → key_outcomes`,
+  `content.len() → source_chars`. Narrative capped at 8 KiB.
+- Replaced the silent `match ... Err(_) => return Ok(0)` with a WARN log,
+  since now a prepare error means a genuine regression, not a missing
+  feature column.
+
+**B2 — `recent_model_latencies` timestamp corruption**
+- `CAST(strftime('%s', timestamp) AS INTEGER)` on an INTEGER epoch column
+  treats the integer as a Julian Day number — every `ts` returned to
+  the v1.7.99 sparkline was garbage. Replaced with `timestamp` directly.
+
+**B3 — `get_task_telemetry` datetime/INTEGER mismatch**
+- `task_events.timestamp` is INTEGER epoch but the SQL compared against
+  `strftime('%s', datetime('now','-1 day'))` which returns TEXT, forcing
+  SQLite into a lexicographic coercion. Replaced with `unixepoch('now',
+  '-N days')` so both sides are INTEGER.
+
+**B6 — `pty_write` Mutex held across blocking I/O**
+- Split the writer out of `PtyState` into its own `OnceLock<Mutex<…>>`
+  so a stuck shell can no longer block `pty_close`, `pty_resize`, or
+  `pty_status`. The close button works under back-pressure now.
+- Moved `pty_write` and `pty_resize` syscalls into `spawn_blocking` so
+  they never stall the tokio executor.
+- New test `write_when_closed_returns_not_open` covers the writer-split
+  edge.
+
+**H3 — `snapshot_retention` swallowing SQL errors**
+- Replaced `.unwrap_or(0)` on both DELETEs with explicit `match` arms
+  that log a WARN on error. A column-rename or corrupt-index failure
+  used to look identical to "0 rows pruned" — leak window now visible.
+
+**H10 — host/username validators allowed leading `-`**
+- `validate_host` and `validate_username` now reject any input starting
+  with `-`, blocking argv-injection via `user@-oProxyCommand=evil`.
+  DNS names + IPs never start with `-` so this is a pure tightening.
+
+**H14 — ChatThread image popup XSS via `document.write`**
+- Old path interpolated `att.previewUrl` directly into raw HTML — any
+  `"`/`javascript:` would break out. Replaced with DOM API
+  (`createElement('img')` + `.src = url`) so the browser parses the URL
+  scheme. Added a scheme allowlist (`data:image/`, `blob:`, `https?:`,
+  `tauri:`, `asset:`).
+
+**Verification**
+- `cargo test --lib` — 298/298 passed (was 297 + new
+  `write_when_closed_returns_not_open`).
+- `cargo check` — clean.
+- `npm run check` — 0 errors, 0 warnings (7223 files).
+
+**Still open for Sprint #2 (v1.8.0 security pre-port)**
+- B4 (`vec_search` transmute), B5 (MCP raw-command gate), H1 (PTY
+  audit), H4 (housekeeping `spawn_blocking`), H5 (`vec_search` tx),
+  H7+H8 (memory + cost tx), H11 (`withGlobalTauri: false`),
+  H12 (signed backups).
+
+---
+
 ## [1.7.100] — 2026-06-05
 
 ### Option D wave 3 — D1 in-app terminal panel (xterm.js + PTY)

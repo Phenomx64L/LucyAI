@@ -342,9 +342,21 @@ pub mod crystal_promo {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64).unwrap_or(0);
 
-            // Pick eligible memories. We require confidence column to
-            // exist (added in v1.6.0 grounding); if not we get an error
-            // and bail.
+            // v1.7.101 Sprint-1 B1 fix: rewritten against the REAL
+            // agent_crystals schema (id, session_id, project, narrative,
+            // key_outcomes, files_affected, lessons, source_chars,
+            // created_at, source_id [added v1.7.101]). The original v1.7.95
+            // INSERT targeted columns that never existed — prepare failed
+            // every tick and this loop returned Ok(0) silently.
+            //
+            // We map agent_memory → crystal as:
+            //   narrative      = "<title>\n\n<content>" (the human-readable
+            //                    storyboard the crystal table is built for)
+            //   key_outcomes   = [tags…]            (the promotion *reason*)
+            //   files_affected = []                 (unknown at this layer)
+            //   lessons        = []                 (operator-curated only)
+            //   source_chars   = content.len()      (bytes consolidated)
+            //   source_id      = agent_memories.id  (idempotency key)
             let mut stmt = match conn.prepare(
                 "SELECT id, title, content, tags \
                  FROM agent_memories \
@@ -356,7 +368,16 @@ pub mod crystal_promo {
                  LIMIT 50"
             ) {
                 Ok(s) => s,
-                Err(_) => return Ok(0i64),
+                Err(e) => {
+                    // Now that the schema is fixed, a prepare error here
+                    // means a REAL regression (column dropped, DB
+                    // corrupted). Surface it.
+                    crate::utils::logging::write_app_log(
+                        "WARN",
+                        &format!("housekeeping/crystal_promo: select prepare failed ({}). Skipping tick.", e),
+                    );
+                    return Ok(0i64);
+                }
             };
             let rows: Vec<(i64, String, String, String)> = stmt
                 .query_map(rusqlite::params![ACCESS_THRESHOLD, CONFIDENCE_THRESHOLD],
@@ -371,18 +392,38 @@ pub mod crystal_promo {
                 .map_err(|e| format!("tx open: {}", e))?;
             let mut promoted = 0i64;
             {
-                // Schema fields vary across versions — we INSERT with a
-                // wide column set and rely on DEFAULT values for ones we
-                // don't supply. If the INSERT fails for a missing column
-                // we silently skip that row.
                 let insert_sql = "INSERT OR IGNORE INTO agent_crystals \
-                    (source_id, summary, content, tags, created_at) \
-                    VALUES (?1, ?2, ?3, ?4, ?5)";
-                if let Ok(mut ins) = tx.prepare(insert_sql) {
-                    for (id, title, content, tags) in &rows {
-                        if ins.execute(rusqlite::params![id, title, content, tags, now]).is_ok() {
-                            promoted += 1;
-                        }
+                    (source_id, narrative, key_outcomes, files_affected, lessons, \
+                     source_chars, created_at) \
+                    VALUES (?1, ?2, ?3, '[]', '[]', ?4, ?5)";
+                let mut ins = tx.prepare(insert_sql)
+                    .map_err(|e| format!("crystal_promo insert prepare: {}", e))?;
+                for (id, title, content, tags) in &rows {
+                    // narrative = title + content, capped at 8 KiB — the
+                    // crystal table is for digests, not full snapshots.
+                    let narrative = if title.is_empty() {
+                        content.clone()
+                    } else {
+                        format!("{}\n\n{}", title, content)
+                    };
+                    let truncated_narrative = if narrative.len() > 8192 {
+                        format!("{}…", &narrative[..8189])
+                    } else {
+                        narrative
+                    };
+                    // key_outcomes: tags is already a JSON array string in
+                    // agent_memories; reuse verbatim, fallback to "[]" if
+                    // not well-formed.
+                    let key_outcomes_json = if tags.trim_start().starts_with('[') {
+                        tags.clone()
+                    } else {
+                        "[]".to_string()
+                    };
+                    let source_chars = content.len() as i64;
+                    if ins.execute(rusqlite::params![
+                        id, truncated_narrative, key_outcomes_json, source_chars, now,
+                    ]).is_ok() {
+                        promoted += 1;
                     }
                 }
             }
@@ -447,21 +488,43 @@ pub mod snapshot_retention {
                 .map(|d| d.as_secs() as i64).unwrap_or(0)
                 - MAX_AGE_DAYS * 86_400;
 
-            // Age cap.
-            let by_age = conn.execute(
+            // v1.7.101 Sprint-1 H3 fix: replaced `.unwrap_or(0)` with an
+            // explicit match that surfaces real SQL errors as WARN. The
+            // previous code masked column-rename / lock-timeout / corrupt
+            // index errors as "0 rows pruned" — so a broken retention
+            // path would silently grow state_snapshots forever.
+            let by_age = match conn.execute(
                 "DELETE FROM state_snapshots WHERE captured_at < ?1",
                 [cutoff],
-            ).unwrap_or(0) as i64;
+            ) {
+                Ok(n) => n as i64,
+                Err(e) => {
+                    crate::utils::logging::write_app_log(
+                        "WARN",
+                        &format!("housekeeping/snapshot_retention age-prune failed: {}", e),
+                    );
+                    0
+                }
+            };
 
             // Count cap — keep the newest KEEP_NEWEST, drop the rest.
-            let by_count = conn.execute(
+            let by_count = match conn.execute(
                 "DELETE FROM state_snapshots \
                  WHERE id NOT IN (\
                    SELECT id FROM state_snapshots \
                    ORDER BY captured_at DESC LIMIT ?1\
                  )",
                 [KEEP_NEWEST],
-            ).unwrap_or(0) as i64;
+            ) {
+                Ok(n) => n as i64,
+                Err(e) => {
+                    crate::utils::logging::write_app_log(
+                        "WARN",
+                        &format!("housekeeping/snapshot_retention count-prune failed: {}", e),
+                    );
+                    0
+                }
+            };
 
             let total = by_age + by_count;
             if total > 0 {
