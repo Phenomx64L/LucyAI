@@ -166,18 +166,63 @@
 
         // 1) Mutation observer — re-collects ticks whenever ChatThread
         //    adds, removes, or restructures bubbles (streaming, replay,
-        //    branch, etc.). Throttled via rAF so we don't recompute on
-        //    every character of a streaming token.
+        //    branch, etc.).
+        //
+        //    v1.7.104 Sprint-4 perf: the audit measured 1-3ms per
+        //    animation frame at 60fps on a 200-msg thread during a
+        //    stream, sustained ~10-15% main-thread cost.
+        //
+        //    Two tightenings:
+        //    a) Filter at the callback: only fire `recompute()` when a
+        //       mutation actually adds/removes a `.msg-user`/.msg-lucy`
+        //       *child* of chatArea. Mid-stream {@html} reassignments
+        //       fire a flood of subtree mutations on a bubble's INNER
+        //       nodes that we don't care about — they don't change
+        //       tick count or per-tick offsets.
+        //    b) Debounce to 250 ms while a stream is active (detected
+        //       by ANY mutation in the last 200 ms — heuristic but
+        //       cheap). When the stream stops, the trailing tick
+        //       redraws within one rAF.
         let pending = false;
-        mutationObs = new MutationObserver(() => {
+        let lastMutationAt = 0;
+        const STREAM_QUIET_MS = 200;
+        const STREAM_DEBOUNCE_MS = 250;
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const interestingNode = (n: Node): boolean => {
+            if (!(n instanceof HTMLElement)) return false;
+            // True if THIS node, or one of its closest ancestors up to
+            // chat-area, is a msg-* bubble being added/removed.
+            return !!n.matches?.('.msg-user, .msg-lucy')
+                || !!n.querySelector?.('.msg-user, .msg-lucy');
+        };
+        const hasInterestingChange = (records: MutationRecord[]): boolean => {
+            for (const r of records) {
+                if (r.type !== 'childList') continue;
+                if ([...r.addedNodes].some(interestingNode)) return true;
+                if ([...r.removedNodes].some(interestingNode)) return true;
+            }
+            return false;
+        };
+
+        mutationObs = new MutationObserver((records) => {
+            lastMutationAt = performance.now();
+            if (!hasInterestingChange(records)) return;
+            const inStream = (performance.now() - lastMutationAt) < STREAM_QUIET_MS;
+            if (inStream) {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    debounceTimer = null;
+                    recompute();
+                }, STREAM_DEBOUNCE_MS);
+                return;
+            }
             if (pending) return;
             pending = true;
             requestAnimationFrame(() => { pending = false; recompute(); });
         });
         mutationObs.observe(chatArea, {
             childList: true, subtree: true,
-            // characterData is intentionally OFF — streaming token-by-token
-            // would otherwise spam recompute().
             characterData: false,
         });
 
@@ -187,7 +232,14 @@
 
         // 3) Resize observer — recompute % positions if the chat-area
         //    itself changes size (sidebar collapse, window resize).
-        resizeObs = new ResizeObserver(() => recompute());
+        //    v1.7.104 Sprint-4 perf: coalesce with rAF so a typing-driven
+        //    composer-growth doesn't fire recompute every keystroke.
+        let resizePending = false;
+        resizeObs = new ResizeObserver(() => {
+            if (resizePending) return;
+            resizePending = true;
+            requestAnimationFrame(() => { resizePending = false; recompute(); });
+        });
         resizeObs.observe(chatArea);
 
         await recompute();
@@ -202,9 +254,16 @@
         }
     }
 
-    // Re-mount observers when the active tab flips or its id changes.
-    $: if (isActiveTab && tab?.id) { mountObservers(); }
-    $: if (!isActiveTab)            { teardownObservers(); ticks = []; }
+    // v1.7.104 Sprint-4 perf: gate on tab.id specifically (not the
+    // whole `tab` object) so streaming reassignments of `tab.messages`
+    // don't tear down + recreate observers on every token. The audit
+    // measured this as a visible perf cliff on long threads.
+    let _boundTabId: string | number | null = null;
+    $: if (isActiveTab && tab?.id && tab.id !== _boundTabId) {
+        _boundTabId = tab.id;
+        mountObservers();
+    }
+    $: if (!isActiveTab) { teardownObservers(); ticks = []; _boundTabId = null; }
 
     onMount(() => { mountObservers(); });
     onDestroy(() => { teardownObservers(); });

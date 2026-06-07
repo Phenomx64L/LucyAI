@@ -11,8 +11,17 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-const POLL_INTERVAL_MS = 8 * 1000;  // 8 seconds
-const INITIAL_DELAY_MS = 10 * 1000; // 10s after boot — let the system settle
+// v1.7.104 Sprint-4 perf: bumped 8s → 30s. The audit measured ~6-10%
+// sustained CPU at idle from the every-8-seconds enumeration of the
+// process table (sysinfo::System::refresh_processes is not free —
+// allocates a fresh Vec<Process> per call and round-trips IPC + an
+// SQLite write batch). 30s still catches every "interesting" lineage
+// event (a build step, an LLM job, a scheduled task) because those
+// events typically last >30s. Sub-30s lineage is a niche feature.
+// Initial delay also bumped 10s → 25s to let the auto_forget + LLM
+// warmup paths finish before this loop competes for the pool.
+const POLL_INTERVAL_MS = 30 * 1000; // 30 seconds (was 8)
+const INITIAL_DELAY_MS = 25 * 1000; // 25s after boot (was 10)
 
 let _initialTimer: ReturnType<typeof setTimeout> | null = null;
 let _intervalTimer: ReturnType<typeof setInterval> | null = null;

@@ -89,7 +89,12 @@
                 lineHeight: 1.18,
                 cursorBlink: true,
                 allowProposedApi: true,
-                scrollback: 5000,
+                // v1.7.104 Sprint-4 perf: scrollback 5000 → 2000.
+                // 5000 × ~160 cols × ~10 bytes ≈ 8 MB resident per
+                // instance. 2000 is still ~3 hours of typical sysadmin
+                // session typing; longer histories live in the
+                // `lucy_app.log` audit trail (v1.7.103 H1 follow-up).
+                scrollback: 2000,
                 theme: {
                     // Match Lucy's dark surface so the embed reads as
                     // part of the app, not a foreign element.

@@ -462,12 +462,18 @@ pub fn run() {
             });
 
             // ── Memory auto-forget sweep (Tier 1 #1) ────────────────────
-            // Runs once 60s after startup (not blocking launch), then every
+            // Runs once after startup (not blocking launch), then every
             // 12h. Cleans TTL-expired memories + low-value old rows. Errors
             // are logged but never crash the app — the memory store works
             // fine without this, it just grows slowly.
+            //
+            // v1.7.104 Sprint-4 perf: warmup bumped 60s → 5min. At 60s
+            // the sweep raced the LLM warmup + sqlite-vec backfill +
+            // process_lineage first tick, adding 200-600 ms to "first
+            // interaction" responsiveness. 5 min puts it well clear of
+            // any boot-time contention window.
             tauri::async_runtime::spawn(async {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                 loop {
                     match crate::commands::metrics::auto_forget_run(Some(false)) {
                         Ok(r) if r.total_deleted > 0 => {
@@ -593,8 +599,13 @@ pub fn run() {
             // Runs in background — never blocks the UI. Also runs hourly
             // downsampling to keep the table size bounded.
             tauri::async_runtime::spawn(async {
-                // Wait 2 min after startup (let system settle)
-                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                // v1.7.104 Sprint-4 perf: 167s warmup (was 120s). The
+                // extra 47s phase-shifts the 5-min capacity sample off
+                // the top-of-hour grid where db_maintenance (3600s) and
+                // ollama_model_health (3600s) collide. With this shift,
+                // no three writers compete for the r2d2 pool at the
+                // same epoch-aligned tick.
+                tokio::time::sleep(std::time::Duration::from_secs(167)).await;
                 let mut sample_interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
                 let mut downsample_counter: u32 = 0;
                 loop {

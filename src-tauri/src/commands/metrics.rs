@@ -143,6 +143,24 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_agent_memories_expires \
          ON agent_memories(expires_at) WHERE expires_at > 0",
+        // ── v1.7.104 Sprint-4 perf — D3 sparkline index ─────────────────
+        // `recent_model_latencies` (v1.7.99) selects with
+        // `WHERE json_extract(metadata,'$.model') IS NOT NULL ORDER BY
+        // timestamp DESC`. With no index on the json path, every poll
+        // (every 30s while the UI is open) does a json-parse of `metadata`
+        // for each candidate row. As task_events grows past ~5k rows the
+        // poll measurably stalls.
+        //
+        // A SQLite **expression index** on the json_extract result lets
+        // the planner skip the parse for the predicate AND lets it use
+        // an index-only scan when ordering on timestamp. Filtered
+        // (partial) so we don't index rows missing both fields — most
+        // task_events carry no model.
+        "CREATE INDEX IF NOT EXISTS idx_task_events_model_ts \
+         ON task_events(timestamp DESC) \
+         WHERE elapsed_ms IS NOT NULL \
+           AND elapsed_ms > 0 \
+           AND json_extract(metadata, '$.model') IS NOT NULL",
         // ── v1.7.101 — Sprint #1 B1 fix ───────────────────────────────────
         // Tier-A `crystal_promo` housekeeping loop was shipping an INSERT
         // against `agent_crystals(source_id, summary, content, tags, …)` —

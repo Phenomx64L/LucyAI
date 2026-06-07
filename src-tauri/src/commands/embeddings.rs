@@ -196,7 +196,12 @@ async fn embed_via_gemini(text: &str) -> Result<(Vec<f32>, String), String> {
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-const EMBED_CACHE_MAX: usize = 256;
+// v1.7.104 Sprint-4 perf: bumped 256 → 1024. Audit measured a busy
+// operator types 50+ unique queries per session — the old 256 cap
+// thrashed after ~30 min, defeating the cache's purpose. Memory cost
+// of 4× larger cache: 768 dims × 4 bytes × 1024 entries ≈ 3.1 MB
+// resident, still trivial against Lucy's typical ~100 MB working set.
+const EMBED_CACHE_MAX: usize = 1024;
 
 #[derive(Clone)]
 struct CachedEmbedding {

@@ -876,7 +876,12 @@ pub mod clock_drift {
             Ok(c) => c,
             Err(_) => return,
         };
-        let resp = match client.head("https://www.google.com").send().await {
+        // v1.7.104 Sprint-4 perf: switched google.com → cloudflare.com.
+        // cloudflare.com/cdn-cgi/trace returns ~200 bytes (vs google's
+        // multi-KB HTML), zero third-party cookies, and reads as a
+        // more sensible outbound for a sysadmin tool. The Date header
+        // semantics are identical (RFC 7231 HTTP-date).
+        let resp = match client.head("https://www.cloudflare.com/cdn-cgi/trace").send().await {
             Ok(r) => r,
             Err(_) => return,   // offline; nothing actionable
         };

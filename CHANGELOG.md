@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.104] — 2026-06-06
+
+### Sprint #4 — Performance pre-Linux-port
+
+Targeted at the high-impact perf hot spots from the 5-agent audit.
+Skipping the structural rework items (12k-line `+page.svelte` split,
+shiki vs highlight.js decision) — those are post-port projects.
+
+**Steady-state CPU**
+- `process_lineage_poll` cadence 8s → **30s**. Audit measured the
+  every-8-seconds `System::refresh_processes` enumeration as ~6-10%
+  sustained CPU on a quiet box. 30s still catches every interesting
+  lineage event (builds, LLM jobs, scheduled tasks usually >30s).
+  Initial delay bumped 10s → 25s.
+- `refreshLocalModels` Ollama poll 30s → **90s**, AND gated on
+  `document.visibilityState === 'visible'`. Network heartbeat
+  (7 min) + ollama_model_health (1 h) already cover liveness; this
+  loop's only real job is refreshing the `/model` picker when a
+  model is added/removed.
+- `auto_forget` warmup 60s → **5 min**. At 60s it raced LLM warmup
+  + sqlite-vec backfill + process_lineage first tick, costing the
+  user 200-600 ms of perceived "first interaction" latency.
+- Capacity sample warmup 120s → **167s**. The 47s phase shift
+  moves the 5-min cadence off the top-of-hour grid where
+  db_maintenance + ollama_model_health collide.
+
+**Frontend hot path**
+- `ConversationMinimap` MutationObserver tightened:
+  - Filter at callback: only fire `recompute()` when an actually
+    interesting `.msg-user`/`.msg-lucy` child is added or removed.
+    Mid-stream `{@html}` reassignments fire a flood of subtree
+    mutations on bubble inner nodes that we don't care about.
+  - Debounce to 250 ms while a stream is active (detected by any
+    mutation in last 200 ms). Trailing recompute lands within one
+    rAF after the stream stops.
+  - ResizeObserver coalesced with rAF so composer-grow-typing
+    doesn't fire recompute every keystroke.
+  - Reactive gate fixed: re-mount observers only when `tab.id`
+    changes, NOT when `tab.messages` mutates. Was tearing down +
+    recreating observers on every streamed token before.
+- Audit measured the old path at 1-3 ms per 60 fps frame on a 200-msg
+  thread = sustained ~10-15% main-thread cost during streams.
+
+**Memory / cache**
+- `EMBED_CACHE_MAX` 256 → **1024**. Audit measured ~30 min before
+  a busy operator (50+ unique queries) thrashed the cache. 4× larger
+  costs ~3.1 MB resident — trivial against Lucy's typical ~100 MB
+  working set.
+- `xterm` scrollback 5000 → **2000**. ~8 MB → ~3.2 MB per pane.
+  v1.7.103 H1 follow-up already mirrors lines to `lucy_app.log` so
+  long histories aren't lost.
+
+**Database**
+- New filtered expression index `idx_task_events_model_ts` on
+  `task_events(timestamp DESC) WHERE elapsed_ms IS NOT NULL AND
+  json_extract(metadata,'$.model') IS NOT NULL`. Lets the v1.7.99
+  `recent_model_latencies` query (D3 sparkline, polled every 30s)
+  skip the JSON-parse for the predicate AND use an index-only scan
+  on timestamp. Index is partial so we don't pay for rows that
+  don't carry a model.
+
+**Privacy/footprint**
+- `clock_drift` outbound switched from `www.google.com` → 
+  `cloudflare.com/cdn-cgi/trace`. ~200 byte response vs multi-KB
+  HTML, no third-party cookies, more sensible outbound for a
+  sysadmin tool.
+
+**Verification**
+- `cargo check` — clean.
+- `npm run check` — 0 errors, 0 warnings.
+
+**Deferred (post-Linux-port)**
+- `+page.svelte` 12k LOC split into lazy panels (multi-day refactor).
+- Pick shiki vs highlight.js (user-facing decision).
+- Lazy-import `jspdf` / `jspdf-autotable` / `uplot` (medium effort,
+  needs PDF-export site survey).
+- proactive_detector prepared-statement cache.
+- vec backfill chunking.
+- Reasoning ticker → CSS-only animation.
+
+**Audit punch-list status (cumulative after Sprints #1–#4)**
+- 🔴 6/6 criticals resolved
+- 🟠 14/14 highs resolved
+- 🟡 mediums: 8/12 high-impact items landed; 4 structural items
+  intentionally deferred with rationale
+
+Lucy is ready for the Linux port. 🐧
+
+---
+
 ## [1.7.103] — 2026-06-06
 
 ### Sprint #3 — Final pre-Linux-port cleanup

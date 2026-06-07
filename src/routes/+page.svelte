@@ -1826,9 +1826,18 @@ import { listen } from '@tauri-apps/api/event';
         loadMcpServers().catch(() => {});
         // Cargar modelos locales (Ollama) — no bloquear si falla
         refreshLocalModels().catch(() => {});
-        // Ping periódico al endpoint Ollama (cada 30s) para el indicador de estado
-        // Stored in module ref so onDestroy can clear it (prevents HMR-induced timer leaks)
-        _ollamaPingInterval = setInterval(() => { refreshLocalModels().catch(() => {}); }, 30000);
+        // Ping periódico al endpoint Ollama para el indicador de estado.
+        // v1.7.104 Sprint-4 perf: was 30s unconditional. Audit found the
+        // backend network_heartbeat (7 min) + ollama_model_health (1 h)
+        // already cover liveness; this loop's job is only to refresh the
+        // /model picker list when the user installs/removes a model.
+        // Bumped to 90s AND gated on visibility so a minimised Lucy
+        // stops pinging Ollama (battery + Ollama-wakeup cost).
+        // Stored in module ref so onDestroy can clear it.
+        _ollamaPingInterval = setInterval(() => {
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+            refreshLocalModels().catch(() => {});
+        }, 90_000);
         // Cargar modelos NVIDIA NIM — solo si la key está configurada
         refreshNvidiaModels().catch(() => {});
         // Notification API permission (no bloqueante)
