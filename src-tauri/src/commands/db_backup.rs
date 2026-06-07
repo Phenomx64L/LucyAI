@@ -24,6 +24,144 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use crate::commands::metrics::shared_db;
 
+// ── v1.7.103 Sprint-3 H12 — HMAC-SHA256 backup signing ───────────────
+//
+// Threat closed: db_backup_restore previously accepted any SQLite file
+// whose schema mentioned `agent_memories` + `audit_chain`. An attacker
+// who could drop a file on disk could swap the audit chain by handing
+// the operator a doctored "backup". Now we require an HMAC-SHA256
+// sidecar (`.sig`) computed at backup time with a key in the OS
+// keyring — useless without access to the live machine where Lucy
+// was originally installed.
+//
+// Format: the sidecar is a single-line file `path.db.sig` containing
+// the hex-encoded MAC (64 chars). Constant-time comparison via the
+// `subtle` crate.
+//
+// Escape hatches:
+//   • `LUCY_BACKUP_UNSIGNED=1` accepts legacy unsigned backups (pre-
+//     v1.7.103). Operator opts in explicitly; the audit log records
+//     each acceptance.
+//   • Restoring a backup created on a DIFFERENT machine requires the
+//     operator to export+import the keyring entry (intentionally
+//     painful — the whole point is binding to the live install).
+
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+type HmacSha256 = Hmac<Sha256>;
+
+const KEYRING_SERVICE: &str = "Lucy.Backup";
+const KEYRING_USER:    &str = "hmac-key-v1";
+const SIG_EXT:         &str = "sig";
+
+/// Get-or-create the per-install HMAC key. Stored in the OS keyring
+/// (Credential Manager on Windows, Keychain on macOS, Secret Service
+/// on Linux). Generated lazily on first backup; subsequent backups
+/// reuse the same key so all sigs verify.
+fn get_or_create_hmac_key() -> Result<Vec<u8>, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .map_err(|e| format!("keyring entry: {}", e))?;
+    if let Ok(existing) = entry.get_password() {
+        // Stored as hex for portability (keyring backends are usually
+        // string-typed). Hex parsing failure means a corrupted entry
+        // — we treat that the same as missing and regenerate.
+        if let Ok(decoded) = hex_decode(&existing) {
+            if decoded.len() == 32 {
+                return Ok(decoded);
+            }
+        }
+    }
+    // Fresh key: 32 random bytes from the OS CSPRNG (rand crate, already
+    // a dep). Stored hex-encoded in the keyring.
+    use rand::RngCore;
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    let hex = hex_encode(&key);
+    entry.set_password(&hex)
+        .map_err(|e| format!("keyring set: {}", e))?;
+    Ok(key.to_vec())
+}
+
+/// Path of the signature sidecar for a backup file (e.g.
+/// `/x/lucy.db` → `/x/lucy.db.sig`).
+fn sig_path_for(backup: &Path) -> PathBuf {
+    let mut p = backup.as_os_str().to_os_string();
+    p.push(".");
+    p.push(SIG_EXT);
+    PathBuf::from(p)
+}
+
+/// Compute HMAC-SHA256 over the file's bytes. Streams in 64 KiB chunks
+/// so a multi-GB backup doesn't blow memory.
+fn compute_mac(path: &Path, key: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|e| format!("hmac init: {}", e))?;
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| format!("open {} for mac: {}", path.display(), e))?;
+    let mut buf = [0u8; 65_536];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("read for mac: {}", e))?;
+        if n == 0 { break; }
+        mac.update(&buf[..n]);
+    }
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+/// Write the hex-encoded MAC to the sidecar.
+fn write_sig(sig_path: &Path, mac: &[u8]) -> Result<(), String> {
+    std::fs::write(sig_path, hex_encode(mac).as_bytes())
+        .map_err(|e| format!("write sig {}: {}", sig_path.display(), e))
+}
+
+/// Verify the sidecar against the backup. Returns Ok(()) on match,
+/// Err on any failure mode (missing, malformed, mismatch). All
+/// comparisons constant-time via `subtle`.
+fn verify_sig(backup: &Path) -> Result<(), String> {
+    let sig_path = sig_path_for(backup);
+    if !sig_path.exists() {
+        return Err(format!(
+            "Missing signature sidecar '{}'. This backup was either created \
+             before v1.7.103 or has been tampered with. Set \
+             LUCY_BACKUP_UNSIGNED=1 to accept unsigned backups (legacy).",
+            sig_path.display()
+        ));
+    }
+    let sig_hex = std::fs::read_to_string(&sig_path)
+        .map_err(|e| format!("read sig {}: {}", sig_path.display(), e))?;
+    let expected = hex_decode(sig_hex.trim())
+        .map_err(|e| format!("decode sig hex: {}", e))?;
+    let key = get_or_create_hmac_key()?;
+    let actual = compute_mac(backup, &key)?;
+    use subtle::ConstantTimeEq;
+    if actual.as_slice().ct_eq(expected.as_slice()).unwrap_u8() == 1 {
+        Ok(())
+    } else {
+        Err("Backup signature mismatch — file tampered, corrupted, or signed \
+             with a different machine's key.".to_string())
+    }
+}
+
+// Minimal hex helpers — avoiding the `hex` crate dep for just two
+// functions. Both reject malformed input cleanly.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 { return Err("odd hex length".into()); }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for i in (0..s.len()).step_by(2) {
+        let byte = u8::from_str_radix(&s[i..i+2], 16)
+            .map_err(|e| format!("hex decode: {}", e))?;
+        out.push(byte);
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbInfo {
     /// Absolute path on disk (e.g. `C:\Users\X\AppData\Roaming\com.lucy.dev\lucy.db`)
@@ -162,6 +300,28 @@ pub async fn db_backup_create(target_path: String) -> Result<u64, String> {
         Ok(())
     })?;
 
+    // v1.7.103 Sprint-3 H12: HMAC-sign the freshly written file. The
+    // sidecar lands at `<target>.sig` and is consulted by restore.
+    // Failure here is non-fatal but logged loudly — we don't want
+    // a partial backup masquerading as signed, but we DO want the
+    // operator to know they should re-back-up.
+    let mac_result = (|| -> Result<(), String> {
+        let key = get_or_create_hmac_key()?;
+        let mac = compute_mac(&target, &key)?;
+        write_sig(&sig_path_for(&target), &mac)
+    })();
+    if let Err(e) = mac_result {
+        crate::utils::logging::write_app_log(
+            "ERROR",
+            &format!("Backup signing failed for {}: {}. Backup is UNSIGNED — restore will require LUCY_BACKUP_UNSIGNED=1.", target.display(), e),
+        );
+    } else {
+        crate::utils::logging::write_app_log(
+            "INFO",
+            &format!("Backup signed: {}.sig", target.display()),
+        );
+    }
+
     // Return the size of the produced file so the UI can show "Backed up: 4.2 MB"
     std::fs::metadata(&target)
         .map(|md| md.len())
@@ -192,6 +352,29 @@ pub async fn db_backup_restore(
     }
     if !source.is_file() {
         return Err(format!("Source path is not a file: {}", source_path));
+    }
+
+    // ── 0. v1.7.103 Sprint-3 H12: HMAC verification BEFORE we touch
+    //       the live DB. A schema-shaped tamper file passes the legacy
+    //       validate_lucy_db check; only the HMAC binds the backup to
+    //       this specific install.
+    if std::env::var("LUCY_BACKUP_UNSIGNED").is_ok() {
+        crate::utils::logging::write_app_log(
+            "WARN",
+            &format!("Restoring UNSIGNED backup '{}' (LUCY_BACKUP_UNSIGNED override active).", source_path),
+        );
+    } else {
+        verify_sig(&source).map_err(|e| {
+            crate::utils::logging::write_app_log(
+                "ERROR",
+                &format!("Restore rejected — sig verification failed for '{}': {}", source_path, e),
+            );
+            format!("Restore rejected: {}", e)
+        })?;
+        crate::utils::logging::write_app_log(
+            "INFO",
+            &format!("Restore proceeding — sig verified for '{}'.", source_path),
+        );
     }
 
     // ── 1. Validate it's a Lucy-shaped SQLite file ─────────────────────
@@ -339,6 +522,46 @@ fn validate_lucy_db(path: &Path) -> Result<i64, String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    // ── v1.7.103 Sprint-3 H12 — HMAC sidecar tests ─────────────────────
+
+    #[test]
+    fn hex_round_trip() {
+        let bytes = vec![0x00, 0x10, 0xff, 0xab, 0xcd];
+        let s = hex_encode(&bytes);
+        assert_eq!(s, "0010ffabcd");
+        assert_eq!(hex_decode(&s).unwrap(), bytes);
+    }
+
+    #[test]
+    fn hex_decode_rejects_malformed() {
+        assert!(hex_decode("xyz").is_err(), "non-hex chars rejected");
+        assert!(hex_decode("abc").is_err(), "odd length rejected");
+    }
+
+    #[test]
+    fn sig_path_appends_extension() {
+        let p = Path::new(r"C:\backups\lucy.db");
+        let sig = sig_path_for(p);
+        let s = sig.to_string_lossy();
+        assert!(s.ends_with(".sig"));
+        assert!(s.contains("lucy.db"));
+    }
+
+    /// MAC over an empty file is deterministic; flipping a byte invalidates it.
+    #[test]
+    fn compute_mac_detects_tamper() {
+        let tmp = std::env::temp_dir().join("lucy_test_mac.bin");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"hello world").unwrap();
+        let key = vec![0u8; 32];
+        let mac_a = compute_mac(&tmp, &key).expect("mac compute");
+        // Tamper one byte → MAC must differ.
+        std::fs::write(&tmp, b"hello W0rld").unwrap();
+        let mac_b = compute_mac(&tmp, &key).expect("mac compute 2");
+        assert_ne!(mac_a, mac_b, "MAC must change when content changes");
+        let _ = std::fs::remove_file(&tmp);
+    }
 
     /// Validation must REJECT a non-SQLite file (e.g. user picked a Word doc).
     #[test]

@@ -934,8 +934,30 @@ pub async fn save_agent_memory(
         return Ok(dup);
     }
 
-    // No dups found — insert the fresh row.
-    let new_id = with_db(|conn| {
+    // v1.7.103 Sprint-3 H7: re-probe stage 1 INSIDE the final tx so a
+    // concurrent writer that snuck in during the async stage 2 window
+    // cannot land a duplicate. Stage 2 (Ollama embed probe) is async
+    // and intrinsically can't be in the same tx — so we accept that
+    // narrow race for semantic dedup and tighten the FTS path which
+    // we CAN gate atomically.
+    //
+    // The closure returns SaveMemoryResult directly (either the
+    // re-probe hit OR the freshly inserted row), so the caller can't
+    // tell whether the dedup landed in the first probe or the
+    // re-probe — by design.
+    let result = with_db(|conn| {
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("save_agent_memory tx open: {}", e))?;
+
+        // Defensive re-probe under tx. If anyone slipped in between our
+        // first stage1 call and this tx, surface as duplicate.
+        if let Some(dup) = stage1_fts_dedup(&tx, &title, &content)? {
+            // stage1_fts_dedup already incremented access_count via its
+            // own UPDATE. Commit so that counter persists.
+            tx.commit().map_err(|e| format!("save_agent_memory tx commit (dup): {}", e))?;
+            return Ok(dup);
+        }
+
         let imp  = importance.unwrap_or(1).max(1).min(3);
         let tags  = tags.unwrap_or_else(|| "[]".to_string());
         let files = files.unwrap_or_else(|| "[]".to_string());
@@ -952,19 +974,22 @@ pub async fn save_agent_memory(
             }
             _ => 0,
         };
-        conn.execute(
+        tx.execute(
             "INSERT INTO agent_memories (session_id, title, content, tags, files, importance, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![sid, title, content, tags, files, imp, expires_at],
         ).map_err(|e| format!("save_agent_memory: {}", e))?;
-        Ok(conn.last_insert_rowid())
+        let new_id = tx.last_insert_rowid();
+        tx.commit().map_err(|e| format!("save_agent_memory tx commit: {}", e))?;
+
+        Ok(SaveMemoryResult {
+            id: new_id,
+            action: "inserted".to_string(),
+            reason: "New memory stored".to_string(),
+        })
     })?;
 
-    Ok(SaveMemoryResult {
-        id: new_id,
-        action: "inserted".to_string(),
-        reason: "New memory stored".to_string(),
-    })
+    Ok(result)
 }
 
 /// Stage 1 — FTS5 bm25 dedup. Returns Some(dup-result) when a strong

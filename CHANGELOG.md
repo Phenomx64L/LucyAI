@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.103] — 2026-06-06
+
+### Sprint #3 — Final pre-Linux-port cleanup
+
+The four items deferred from Sprint #2 all land here. After this
+release, every critical + high finding from the 5-agent audit is
+either resolved or has explicit deferral rationale.
+
+**H7 — `save_agent_memory` race condition closed**
+- Stage 1 (FTS5 bm25 dedup), Stage 2 (async Ollama embed dedup), and
+  the final INSERT used to live in three separate `with_db` borrows.
+  A concurrent writer that slipped in between Stage 1 and the INSERT
+  produced silent duplicates.
+- The final closure now runs `stage1_fts_dedup` AGAIN inside the
+  same `unchecked_transaction()` as the INSERT — defensive re-probe
+  under tx. Stage 2 stays outside the tx (semantic dedup is best-
+  effort and async; we can't hold a connection across an Ollama
+  request). The narrow Stage-2 race is accepted by design.
+- Caller-visible behaviour unchanged: returns the same
+  `SaveMemoryResult { action: "duplicate" | "inserted" }`.
+
+**H12 — Signed backups (HMAC-SHA256 sidecar)**
+- New crate deps: `hmac = "0.12"` + `subtle = "2.5"`. SHA-256 was
+  already pulled in for the binary self-integrity check.
+- `db_backup_create` now writes a `.sig` sidecar next to every
+  backup containing a hex-encoded HMAC-SHA256 over the file. The
+  key is per-install: generated on first backup, stored hex in the
+  OS keyring under `Lucy.Backup / hmac-key-v1` (32 random bytes
+  from `rand::thread_rng`).
+- `db_backup_restore` verifies the sidecar BEFORE any of the schema
+  checks or file copy steps. Constant-time MAC comparison via
+  `subtle::ConstantTimeEq`.
+- Escape hatch: `LUCY_BACKUP_UNSIGNED=1` accepts legacy unsigned
+  backups (created before v1.7.103). Acceptance is logged at WARN.
+- Streaming MAC: 64 KiB chunks so multi-GB DBs don't blow memory.
+- 4 new tests covering hex round-trip, malformed-input rejection,
+  sidecar path derivation, and MAC tamper detection.
+
+**H1 follow-up — Per-line PTY audit**
+- Sprint #2 logged `[PTY_OPEN]` at shell launch but PTY keystrokes
+  themselves were never audited — a gap vs. `execute_powershell`.
+- New per-session audit buffer in `pty.rs`. `pty_write` pushes
+  bytes to the PTY first, then appends to a separate `Mutex<Vec<u8>>`
+  audit buffer. Complete lines (after `\n`/`\r`) drain to the log
+  as `[PTY_INPUT] ...`. Partial input (arrow keys, mid-line typing,
+  Ctrl-C) stays in the buffer and never logs.
+- Cap at 8 KiB — runaway pastes log a single `[PTY_INPUT_TRUNCATED]`
+  marker and reset.
+- Per-line cap of 1024 chars (pathological single-line pastes).
+- `pty_close` flushes the tail (anything typed without final Enter)
+  and emits `[PTY_CLOSE]`.
+- 2 new tests covering partial-line buffering and the runaway-paste
+  cap.
+
+**B5 follow-up — `parse_command` now uses `shlex`**
+- Added `shlex = "1.3"` dep. `parse_command` in `mcp.rs` replaces
+  `split_whitespace` with `shlex::split`, which respects POSIX-style
+  single + double quoting. Paths with spaces (very common on
+  Windows: `"C:\Program Files\Node\node.exe" server.js`) now
+  tokenise as the user expects.
+- Fallback to the old behaviour on unbalanced quotes so a typo
+  surfaces as a useful spawn error.
+- 3 new tests covering quoted paths, the `npx -y` injection, and
+  the empty-string edge.
+
+**Verification**
+- `cargo test --lib` — **307/307** passed (was 298, added 9 new).
+- `cargo check` — clean.
+- `npm run check` — 0 errors, 0 warnings.
+
+**Audit punch-list status (post Sprint #1 + #2 + #3)**
+- 🔴 6/6 criticals resolved
+- 🟠 14/14 highs resolved
+- 🟡 mediums remain (perf-mostly, queued for post-Linux-port)
+
+Lucy is now ready for the Linux port discussion.
+
+---
+
 ## [1.7.102] — 2026-06-06
 
 ### Sprint #2 — Security hardening pre-Linux-port

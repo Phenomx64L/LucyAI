@@ -86,6 +86,62 @@ fn writer() -> &'static Mutex<Option<Box<dyn Write + Send>>> {
     WRITER.get_or_init(|| Mutex::new(None))
 }
 
+/// Per-line audit buffer (v1.7.103 Sprint-3 H1 follow-up). Sprint #2
+/// added a `[PTY_OPEN]` log at shell launch; this hook records what
+/// the operator actually typed once a newline lands. We buffer raw
+/// bytes (xterm sends partial multibyte runes on chunk boundaries,
+/// arrow keys are 3-byte CSI sequences, etc.) and only emit complete
+/// lines.
+///
+/// Cap at 8 KiB so a runaway paste of binary data can't grow the
+/// buffer unboundedly. When the cap trips we log a single `truncated`
+/// marker and reset.
+const AUDIT_BUF_MAX: usize = 8 * 1024;
+fn audit_buf() -> &'static Mutex<Vec<u8>> {
+    static BUF: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    BUF.get_or_init(|| Mutex::new(Vec::with_capacity(256)))
+}
+
+/// Drain accumulated bytes up to (and including) every newline, log
+/// each complete line, and keep the tail. Called from `pty_write` AFTER
+/// the bytes have been pushed onto the PTY successfully so a logging
+/// failure can't block real shell input.
+fn flush_audit_lines(buf: &mut Vec<u8>) {
+    loop {
+        let Some(nl) = buf.iter().position(|&b| b == b'\n' || b == b'\r') else {
+            // No newline yet — keep buffering. Trim if we've blown the cap
+            // (rare; protects against long runaway pastes).
+            if buf.len() > AUDIT_BUF_MAX {
+                crate::utils::logging::write_app_log(
+                    "WARN",
+                    &format!("[PTY_INPUT_TRUNCATED] dropped {} unflushed bytes", buf.len()),
+                );
+                buf.clear();
+            }
+            return;
+        };
+        let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
+        // Skip the newline itself + strip any solitary \r that prefixed
+        // a \n (windows-style line ending typed in the embedded shell).
+        let line_str = String::from_utf8_lossy(
+            line_bytes.iter().filter(|&&b| b != b'\n' && b != b'\r').copied().collect::<Vec<u8>>().as_slice()
+        ).to_string();
+        let trimmed = line_str.trim();
+        if trimmed.is_empty() { continue; }   // bare Enter / blank line
+        // Cap individual line length — paranoid against pathological
+        // single-line pastes that bypassed the buffer cap.
+        let logged = if trimmed.len() > 1024 {
+            format!("{}…", &trimmed[..1021])
+        } else {
+            trimmed.to_string()
+        };
+        crate::utils::logging::write_app_log(
+            "INFO",
+            &format!("[PTY_INPUT] {}", logged),
+        );
+    }
+}
+
 /// Pick the shell program to spawn. Operator can override via the
 /// LUCY_PTY_SHELL env var — useful for testing with bash on WSL or
 /// pwsh.exe instead of the legacy powershell.exe.
@@ -241,10 +297,23 @@ pub async fn pty_open(app: AppHandle, cols: u16, rows: u16) -> Result<(), String
 pub async fn pty_write(data: String) -> Result<(), String> {
     let bytes = data.into_bytes();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = writer().lock().map_err(|e| format!("pty writer lock poisoned: {}", e))?;
-        let w = guard.as_mut().ok_or_else(|| "pty not open".to_string())?;
-        w.write_all(&bytes).map_err(|e| format!("pty write: {}", e))?;
-        w.flush().map_err(|e| format!("pty flush: {}", e))?;
+        // 1. Push bytes to the PTY first — if the shell hangs we still
+        //    want the write attempt to be the visible error, not an
+        //    audit-buffer hiccup.
+        {
+            let mut guard = writer().lock().map_err(|e| format!("pty writer lock poisoned: {}", e))?;
+            let w = guard.as_mut().ok_or_else(|| "pty not open".to_string())?;
+            w.write_all(&bytes).map_err(|e| format!("pty write: {}", e))?;
+            w.flush().map_err(|e| format!("pty flush: {}", e))?;
+        }
+        // 2. v1.7.103 H1 follow-up: per-line audit. We only log lines
+        //    (post-newline) so arrow keys + Ctrl-C + partial typing
+        //    stay out of the log. The audit buffer mutex is distinct
+        //    from the writer mutex so this can never block real I/O.
+        if let Ok(mut buf) = audit_buf().lock() {
+            buf.extend_from_slice(&bytes);
+            flush_audit_lines(&mut buf);
+        }
         Ok::<(), String>(())
     })
     .await
@@ -298,6 +367,17 @@ pub async fn pty_close() -> Result<(), String> {
         let mut wguard = writer().lock().map_err(|e| format!("pty writer lock poisoned: {}", e))?;
         *wguard = None;
     }
+    // v1.7.103 H1 follow-up: flush whatever was in the audit buffer
+    // (anything typed without a final Enter) and reset for the next
+    // session.
+    if let Ok(mut buf) = audit_buf().lock() {
+        if !buf.is_empty() {
+            // Force a synthetic newline so flush_audit_lines emits the tail.
+            buf.push(b'\n');
+            flush_audit_lines(&mut buf);
+        }
+        crate::utils::logging::write_app_log("INFO", "[PTY_CLOSE]");
+    }
     // Join outside the mutex so the reader thread can finish without
     // contending with us for the same lock.
     if let Some(mut st) = taken {
@@ -337,6 +417,36 @@ mod tests {
         let _ = pty_close().await;
         let s = pty_status().await.expect("pty_status should not error");
         assert!(!s, "no PTY should be open at test start");
+    }
+
+    #[test]
+    fn audit_buffer_flushes_complete_lines_only() {
+        // v1.7.103 H1 follow-up regression test. Partial input must NOT
+        // emit a log line; only completed lines do.
+        let mut buf: Vec<u8> = b"echo h".to_vec();
+        flush_audit_lines(&mut buf);
+        // No newline yet — buffer untouched.
+        assert_eq!(buf, b"echo h", "partial line should not flush");
+
+        // Append the rest + newline. We can't observe the log line
+        // directly, but we can verify the buffer is drained.
+        buf.extend_from_slice(b"ello\n");
+        flush_audit_lines(&mut buf);
+        assert!(buf.is_empty(), "complete line should drain the buffer");
+
+        // Mid-line again — leftover stays buffered for next flush.
+        buf.extend_from_slice(b"echo world\nfoo");
+        flush_audit_lines(&mut buf);
+        assert_eq!(buf, b"foo", "tail after final newline stays buffered");
+    }
+
+    #[test]
+    fn audit_buffer_caps_runaway_paste() {
+        // Bigger than AUDIT_BUF_MAX, no newline → buffer must be cleared.
+        let huge: Vec<u8> = vec![b'x'; AUDIT_BUF_MAX + 100];
+        let mut buf = huge;
+        flush_audit_lines(&mut buf);
+        assert!(buf.is_empty(), "runaway paste over cap must be dropped");
     }
 
     #[tokio::test]

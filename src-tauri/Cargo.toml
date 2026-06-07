@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.7.102"
+version = "1.7.103"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
@@ -64,6 +64,18 @@ sqlite-vec = "0.1"
 # the child handle is kept alive in our PTY state so the shell process
 # doesn't get reaped on a drop chain hiccup.
 portable-pty = "0.8"
+# v1.7.103 Sprint-3 B5 follow-up: POSIX-style shell-word splitter.
+# Old `parse_command` used `split_whitespace` which tokenises
+# `"C:\Program Files\Node\node.exe" server.js` as 3 args (mangled
+# path). shlex respects single + double quotes the same way bash and
+# wezterm do — what a user pasted into the MCP Servers panel.
+shlex = "1.3"
+# v1.7.103 Sprint-3 H12 — HMAC-SHA256 for backup signing. sha2 is
+# already a dep (for self-integrity check); we just need the HMAC
+# wrapper. The key lives in the OS keyring via the existing `keyring`
+# crate so backup sidecar files are useless without the live machine.
+hmac = "0.12"
+subtle = "2.5"  # constant-time MAC comparison
 # P11 audit: connection pool — splits read/write so concurrent readers don't
 # serialize through one mutex. r2d2_sqlite 0.24 matches rusqlite 0.31 series.
 r2d2 = "0.8"

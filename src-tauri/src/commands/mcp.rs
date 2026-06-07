@@ -100,19 +100,63 @@ fn resolve_server(server_name: &str) -> Result<(String, Vec<String>), String> {
 
 /// Parse a command-line string into (program, args), applying the
 /// `npx` → `npx.cmd` + `-y` injection used everywhere.
+///
+/// v1.7.103 Sprint-3 B5 follow-up: previously used `split_whitespace`,
+/// which mangled paths like `"C:\Program Files\Node\node.exe" srv.js`
+/// into three tokens. shlex respects single + double quoting the same
+/// way bash and wezterm do. If shlex can't parse (extremely unlikely
+/// — unbalanced quote), we fall back to the old behaviour so a typo
+/// in the MCP registry still gets a useful error from the spawn
+/// attempt instead of a silent skip.
 fn parse_command(cmd_line: &str) -> (String, Vec<String>) {
-    let mut parts = cmd_line.split_whitespace();
-    let mut base_cmd = parts.next().unwrap_or("npx").to_string();
+    let mut parts: Vec<String> = shlex::split(cmd_line)
+        .unwrap_or_else(|| cmd_line.split_whitespace().map(|s| s.to_string()).collect());
+    if parts.is_empty() { parts.push("npx".to_string()); }
+    let mut base_cmd = parts.remove(0);
     if cfg!(windows) && base_cmd == "npx" {
         base_cmd = "npx.cmd".to_string();
     }
-    let mut args_vec: Vec<String> = parts.map(|s| s.to_string()).collect();
+    let mut args_vec = parts;
     if (base_cmd == "npx" || base_cmd == "npx.cmd")
         && !args_vec.iter().any(|a| a == "-y")
     {
         args_vec.insert(0, "-y".to_string());
     }
     (base_cmd, args_vec)
+}
+
+#[cfg(test)]
+mod parse_command_tests {
+    use super::parse_command;
+
+    #[test]
+    fn quoted_path_with_spaces_stays_one_token() {
+        // v1.7.103 B5 follow-up regression test.
+        let (cmd, args) = parse_command(r#""C:\Program Files\Node\node.exe" server.js"#);
+        assert_eq!(cmd, r"C:\Program Files\Node\node.exe");
+        assert_eq!(args, vec!["server.js"]);
+    }
+
+    #[test]
+    fn unquoted_npx_injects_dash_y() {
+        let (cmd, args) = parse_command("npx some-mcp-package");
+        // On Windows this is `npx.cmd`, on others it's `npx`. Either way
+        // the -y must precede the package name so npm doesn't prompt.
+        assert!(cmd == "npx" || cmd == "npx.cmd");
+        assert_eq!(args, vec!["-y", "some-mcp-package"]);
+    }
+
+    #[test]
+    fn empty_string_does_not_panic() {
+        let (cmd, args) = parse_command("");
+        // Same npx/.cmd switch as the unquoted test — we don't care
+        // which variant; both surface a useful spawn error.
+        assert!(cmd == "npx" || cmd == "npx.cmd", "got cmd={}", cmd);
+        // Empty input still gets the npx -y injection so a typo
+        // surfaces an Ollama-style "couldn't resolve" rather than a
+        // panic deep in the spawn path.
+        assert_eq!(args, vec!["-y"]);
+    }
 }
 
 /// Spawn a subprocess for an MCP server and run the JSON-RPC handshake

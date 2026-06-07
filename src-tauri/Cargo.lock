@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "lucy-svelte"
-version = "1.7.101"
+version = "1.7.102"
 dependencies = [
  "aho-corasick",
  "async-trait",
@@ -2924,6 +2924,7 @@ dependencies = [
  "chrono",
  "flate2",
  "futures-util",
+ "hmac",
  "image",
  "keyring",
  "mimalloc",
@@ -2945,9 +2946,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shlex",
  "similar",
  "simsearch",
  "sqlite-vec",
+ "subtle",
  "sysinfo",
  "tauri",
  "tauri-build",
