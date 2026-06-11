@@ -5165,7 +5165,7 @@ Use ONE of these patterns instead:
             // v1.7.112 F1 — per-stream dedup set for speculative read-only
             // tool prefetch (see _speculateReadOnlyFromStream).
             const _specSet = new Set();
-            const resp = await askLucyStream(aiParams, (accumulated) => {
+            let resp = await askLucyStream(aiParams, (accumulated) => {
                 const t2 = getTab(tabId);
                 if (t2?._cancelled) return;
                 // Encolar solo el texto NUEVO desde el último chunk
@@ -5396,6 +5396,59 @@ Use ONE of these patterns instead:
             // is non-deterministic about which shape to emit (THOUGHT vs
             // bare EXECUTE). Adding EXECUTE / EXECUTE_CMD / PLAN to the
             // entry condition makes ANY actionable block trigger the loop.
+            // v1.7.116 root-cause fix — auto-promote a bare/fenced READ-ONLY
+            // command to execution.
+            //
+            // Failure mode (user-reported): Gemini Flash answers an actionable
+            // query ("qué hora es mi equipo") by emitting the command as a
+            // ```powershell fence (or bare prose) INSTEAD of <EXECUTE_CMD>, so
+            // nothing runs, the context never changes, and the loop spins
+            // until skip-stuck — the model never gives the actual time.
+            //
+            // When the response carries NO execution/tool tag but DOES contain
+            // a single, short, READ-ONLY command (Get-*, whoami, date, …), and
+            // the user's intent is actionable (not informational / code-gen /
+            // skill-reference), we wrap it in <EXECUTE_CMD> so the normal
+            // execution machinery runs it and feeds the result back.
+            //
+            // Scoped to READ-ONLY command prefixes ON PURPOSE: auto-running a
+            // Get-Date is risk-free, while anything that writes/deletes still
+            // REQUIRES the model to emit the tag explicitly. The Rust
+            // execute_powershell guardrails (blocklist + permission rules)
+            // remain the backstop regardless.
+            if (!infoIntent && !codeGenIntent && !skillInfoIntent
+                && !/<EXECUTE_CMD\b|<EXECUTE\b|<TOOL>/i.test(resp)) {
+                const _SAFE_CMD_RE = /^\s*(Get-[A-Za-z]+|Test-[A-Za-z]+|Measure-[A-Za-z]+|Resolve-[A-Za-z]+|Select-[A-Za-z]+|Show-[A-Za-z]+|whoami|hostname|systeminfo|ipconfig|ifconfig|date|time|echo|pwd|ver|uptime|nslookup|ping|tracert|Get-Date|Get-TimeZone)\b/i;
+                const _fence = resp.match(/```(?:powershell|pwsh|ps1?|cmd|bat|shell|sh)?\s*\n?([\s\S]*?)```/i);
+                let _cand = _fence ? _fence[1].trim() : '';
+                // Also handle the BARE case: the whole cleaned response is just
+                // the command on one line (no fence at all).
+                if (!_cand) {
+                    const _bare = (resp || '')
+                        .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                        .replace(/<REMEMBER[\s\S]*?<\/REMEMBER>/gi, '')
+                        .trim();
+                    if (_SAFE_CMD_RE.test(_bare) && _bare.length <= 200 && !/\n/.test(_bare)) {
+                        _cand = _bare;
+                    }
+                }
+                // Promote only a SINGLE, short, read-only command line.
+                if (_cand && _cand.length <= 200 && !/\n\s*\n/.test(_cand) && _SAFE_CMD_RE.test(_cand)) {
+                    const _oneLine = _cand.split('\n')[0].trim();
+                    if (_fence) {
+                        resp = resp.replace(_fence[0], `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`);
+                    } else {
+                        resp = `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`;
+                    }
+                    pushTrace({
+                        phase: 'info',
+                        label: `Auto-ejecución: el modelo propuso un comando read-only sin tag — lo ejecuto`,
+                        detail: _oneLine.slice(0, 120),
+                        tabId,
+                    });
+                }
+            }
+
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>|<EXECUTE_CMD\b|<EXECUTE\b|<PLAN>/i.test(resp)) {
                 // U2 — Lucy mood: executing while agent loop runs tools
                 setLucyMood('executing', { force: true });
