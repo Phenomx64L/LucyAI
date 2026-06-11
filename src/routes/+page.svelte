@@ -743,6 +743,40 @@ import { listen } from '@tauri-apps/api/event';
             _speculativePrefetch('search_web', webQ, () => invoke('search_web', { query: webQ }));
         }
     }
+    // v1.7.113 audit M6 — stateful <THOUGHT> streamer. The old per-chunk
+    // `acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/)` re-ran a backtracking
+    // regex over the ENTIRE growing accumulator on every streamed chunk — and
+    // kept doing so even AFTER </THOUGHT> closed, when there was nothing left
+    // to extract. On a 50KB response streamed in thousands of chunks that's
+    // O(n²) wasted CPU during the hottest UI path.
+    //
+    // This factory returns a per-stream callback that:
+    //   • finds the <THOUGHT> open tag once (cached index),
+    //   • uses cheap native indexOf (no regex backtracking),
+    //   • STOPS all work permanently once </THOUGHT> is seen — every later
+    //     chunk in the stream becomes a single boolean check.
+    // `emit(delta)` receives only the newly-revealed reasoning text.
+    function _makeThoughtStreamer(emit) {
+        let startIdx = -1;   // index just past "<THOUGHT>"
+        let lastLen = 0;     // chars of thought already emitted
+        let closed = false;  // </THOUGHT> seen → done forever
+        return (acc) => {
+            if (closed || !acc) return;
+            if (startIdx === -1) {
+                const open = acc.search(/<THOUGHT>/i);
+                if (open === -1) return;            // no thought yet
+                startIdx = open + '<THOUGHT>'.length;
+            }
+            const closeAt = acc.indexOf('</THOUGHT>', startIdx);
+            const end = closeAt === -1 ? acc.length : closeAt;
+            const cur = acc.slice(startIdx, end);
+            if (cur.length > lastLen) {
+                emit(cur.slice(lastLen));
+                lastLen = cur.length;
+            }
+            if (closeAt !== -1) closed = true;      // nothing more to stream
+        };
+    }
     // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
     let showCheatsheet = false;
     // v1.6.1 — ECC-style skill preset picker. Opened via composer chip
@@ -4321,7 +4355,14 @@ REGLAS DE FORMATO:
     // call from both the simple-response path AND each agent-loop turn.
     //
     // Returns the number of facts persisted (useful for logging/telemetry).
-    function extractAndPersistMemory(text) {
+    // v1.7.113 audit M5 — optional `seen` Set dedups REMEMBER tags within a
+    // single runAI invocation. The same <REMEMBER>k: v</REMEMBER> commonly
+    // reappears across turns (it's still in the context the model echoes), and
+    // every reappearance previously fired a fresh set_user_profile IPC + a
+    // full cargarMemoriasDB() reload — even though set_user_profile is
+    // idempotent (same key overwrites). Dedup on key+value so a genuine value
+    // change still persists, while a verbatim repeat is skipped.
+    function extractAndPersistMemory(text, seen = null) {
         if (!text || typeof text !== 'string') return 0;
         const matches = [...text.matchAll(/<REMEMBER(?:\s+category="([^"]+)")?>([\s\S]*?)<\/REMEMBER>/gi)];
         if (!matches.length) return 0;
@@ -4335,6 +4376,12 @@ REGLAS DE FORMATO:
             const key = body.slice(0, colonIdx).trim().toLowerCase().replace(/\s+/g, '_').slice(0, 80);
             const value = body.slice(colonIdx + 1).trim().slice(0, 500);
             if (!key || !value) continue;
+            // M5 — skip a verbatim key+value already persisted this run.
+            if (seen) {
+                const dedupKey = key + ' ' + value;
+                if (seen.has(dedupKey)) continue;
+                seen.add(dedupKey);
+            }
             invoke('set_user_profile', { key, value, category }).catch(e => {
                 console.warn('[remember] save failed:', e);
             });
@@ -4361,6 +4408,11 @@ REGLAS DE FORMATO:
         // dead/streaming bubble — a slow leak that compounded across repeated
         // Stop clicks in a long session.
         let _drainTimer = null;
+        // v1.7.113 M5 — per-run dedup set for <REMEMBER> persistence. Shared
+        // across the first-turn, continuation, verifier-refine and simple-path
+        // extraction calls so a fact the model repeats across turns is saved
+        // once, not on every turn it echoes the tag.
+        const _persistedMemKeys = new Set();
         // Best-effort DESIGN.md detection — non-blocking. Caches per cwd.
         refreshDesignMd().catch(() => {});
         // ── Memory decay reinforcement (F1+, May 2026) ──────────────────────
@@ -5340,7 +5392,7 @@ Use ONE of these patterns instead:
                 // entering the loop — covers the most common case where the
                 // user says "memorize X" and the model immediately replies
                 // with <REMEMBER>...</REMEMBER> + a <THOUGHT>/<TOOL>.
-                extractAndPersistMemory(agentResp);
+                extractAndPersistMemory(agentResp, _persistedMemKeys);
                 // v1.7.105 — MAX_LOOPS configurable via setting.
                 //
                 // The old hard-coded 25 was a safety cap to prevent runaway
@@ -5530,6 +5582,15 @@ Use ONE of these patterns instead:
                 const escapeHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
                 // SECURITY: alias for brevity when building stepsHtml — always escape user-controlled content
                 const esc = escapeHtml;
+                // v1.7.113 audit M4 — cap the tool-card array. A prolific run
+                // (MAX_LOOPS up to 200) could accumulate hundreds of cards, all
+                // re-rendered on every renderAgentTask() frame — a quadratic
+                // render cost late in long sessions. We keep the most recent
+                // AGENT_TOOL_CARDS_MAX and evict the OLDEST cards that are no
+                // longer running (finished/errored), so in-flight cards never
+                // disappear mid-execution and the visible "citations" list
+                // still reflects recent activity.
+                const AGENT_TOOL_CARDS_MAX = 50;
                 const newToolCard = (icon, label, kind='read') => {
                     const card = {
                         id: 'tc-' + Math.random().toString(36).slice(2,9),
@@ -5540,6 +5601,16 @@ Use ONE of these patterns instead:
                         output: ''
                     };
                     agentToolCards.push(card);
+                    if (agentToolCards.length > AGENT_TOOL_CARDS_MAX) {
+                        // Drop oldest non-running cards until back under the cap.
+                        for (let i = 0; i < agentToolCards.length && agentToolCards.length > AGENT_TOOL_CARDS_MAX; ) {
+                            if (agentToolCards[i].status !== 'running') {
+                                agentToolCards.splice(i, 1);
+                            } else {
+                                i++;
+                            }
+                        }
+                    }
                     renderAgentTask();
                     return card;
                 };
@@ -7670,16 +7741,13 @@ Use ONE of these patterns instead:
                                     images: null
                                 };
                                 try {
-                                    let _lastL = 0;
+                                    // v1.7.113 M6 — stateful thought streamer (stops after </THOUGHT>).
+                                    const _thoughtStream = _makeThoughtStreamer(d => updateReasoning(d));
                                     agentResp = await askLucyStream(refineParams, (acc) => {
-                                        const m = acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/i);
-                                        if (m && m[1].length > _lastL) {
-                                            updateReasoning(m[1].slice(_lastL));
-                                            _lastL = m[1].length;
-                                        }
+                                        _thoughtStream(acc);
                                     }, tabId);
                                     // Refinement turn may also emit <REMEMBER> tags.
-                                    extractAndPersistMemory(agentResp);
+                                    extractAndPersistMemory(agentResp, _persistedMemKeys);
                                     // Loop continues — the parser at the top of the next iteration
                                     // will detect that the new agentResp has no tool tags and exit
                                     // cleanly with the refined answer + a "refined" badge below.
@@ -7932,20 +8000,13 @@ times the SAME way, switch tool kind entirely.
                     renderAgentTask();
 
                     try {
-                        let _lastThoughtLen = 0;
+                        // v1.7.113 M6 — stateful thought streamer (stops after </THOUGHT>).
+                        const _thoughtStream = _makeThoughtStreamer(d => updateReasoning(d));
                         // v1.7.112 F1 — per-turn dedup set for speculative prefetch.
                         const _specSetTurn = new Set();
                         agentResp = await askLucyStream(nextParams, (acc) => {
                             // Live thought streaming: extract partial <THOUGHT> as it arrives
-                            const m = acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/i);
-                            if (m) {
-                                const cur = m[1];
-                                if (cur.length > _lastThoughtLen) {
-                                    const delta = cur.slice(_lastThoughtLen);
-                                    _lastThoughtLen = cur.length;
-                                    updateReasoning(delta);
-                                }
-                            }
+                            _thoughtStream(acc);
                             // F1 — speculatively prefetch read-only network tools
                             // as their tags close mid-stream on continuation turns
                             // (the research-heavy path where this saves the most).
@@ -7960,7 +8021,7 @@ times the SAME way, switch tool kind entirely.
                     // Persist any <REMEMBER> tags emitted in this continuation turn.
                     // Same fix as the first-turn extraction above — without this,
                     // facts the model decides to remember mid-loop got dropped.
-                    extractAndPersistMemory(agentResp);
+                    extractAndPersistMemory(agentResp, _persistedMemKeys);
 
                     // v1.7.107 perf #5 — skip-stuck detector. If two
                     // consecutive turns produce byte-identical responses
@@ -8118,7 +8179,7 @@ times the SAME way, switch tool kind entirely.
             // discarded — Lucy "forgot" facts users explicitly asked her to
             // memorize. Now extracted into a helper that ALSO runs inside the
             // agent loop on every agentResp turn (see end of agent-loop block).
-            extractAndPersistMemory(resp);
+            extractAndPersistMemory(resp, _persistedMemKeys);
 
             const learnM=resp.match(/<LEARN>([\s\S]*?)<\/LEARN>/i);
             if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}fin(tabId);return;}
