@@ -494,6 +494,18 @@ pub async fn stream_shell_cmd(
     validate_host(&host)?;
     validate_username(&username)?;
     if let Some(ref p) = password { validate_password(p)?; }
+    // v1.7.111 audit H2 — reject an SSH key path that could be reinterpreted
+    // as an option. A legitimate identity file is an absolute filesystem
+    // path; one starting with '-' (e.g. "-oProxyCommand=calc.exe") is an
+    // argument-injection attempt. Although `cmd.arg("-i").arg(kp)` makes kp
+    // the OPERAND of -i (so ssh's getopt won't re-parse it as a flag), we
+    // fail closed here as defense-in-depth and to guard any future call site
+    // that interpolates the path differently.
+    if let Some(ref kp) = key_path {
+        if kp.trim_start().starts_with('-') {
+            return Err("Ruta de clave SSH inválida: no puede comenzar con '-'".to_string());
+        }
+    }
 
     // Check permission rules before executing
     let perm = crate::commands::metrics::check_permission(command.clone(), "command".to_string()).await?;

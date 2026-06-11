@@ -727,6 +727,54 @@ import { listen } from '@tauri-apps/api/event';
         return mainModel || 'gemini-2.5-flash';
     }
 
+    // v1.7.111 audit F3 — cross-MODEL verifier selection.
+    //
+    // The agent-loop verifier (line ~7469) already does SEMANTIC review (it
+    // asks an LLM to flag bugs / hallucinations / unmet goals — not a syntax
+    // lint). The weakness was the model PICK: pickSubAgentModel('auto', …)
+    // returns the cheapest cloud model regardless of the main agent. When the
+    // main agent IS that model (e.g. both gemini-2.5-flash, the default), the
+    // verifier reviews its own output with the SAME model — correlated blind
+    // spots, so it rubber-stamps mistakes the model is structurally prone to.
+    //
+    // This helper, used only when verifierMode is 'auto', deliberately routes
+    // the review to a DIFFERENT provider family than the main agent so the
+    // two models' failure modes are uncorrelated — the core of real
+    // cross-validation. Falls back to pickSubAgentModel when no cross-family
+    // option is configured (one-provider setups keep working unchanged).
+    function _providerFamily(modelId) {
+        const m = (modelId || '').toLowerCase();
+        if (m.startsWith('local-') || m.startsWith('ollama')) return 'ollama';
+        if (m.startsWith('gemini') || m.startsWith('models/')) return 'gemini';
+        if (m.startsWith('claude') || m.startsWith('anthropic')) return 'anthropic';
+        if (m.startsWith('gpt') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('openai')) return 'openai';
+        if (m.startsWith('meta/') || m.startsWith('nvidia')) return 'nvidia';
+        return 'unknown';
+    }
+    function pickCrossVerifierModel(mainModel) {
+        // Respect any explicit verifier model / non-auto mode unchanged.
+        if (verifierModel && verifierModel !== 'auto') {
+            return pickSubAgentModel(verifierModel, mainModel);
+        }
+        const hasProv = (p) => configuredProvs.includes(p);
+        const mainFam = _providerFamily(mainModel);
+        // Preference order of DISTINCT families, cheapest-capable first.
+        // We skip whichever family the main agent is using.
+        const candidates = [
+            ['gemini',    'gemini-2.5-flash'],
+            ['anthropic', 'claude-3-5-sonnet-latest'],
+            ['openai',    'gpt-4o-mini'],
+            ['nvidia',    'meta/llama-3.3-70b-instruct'],
+        ];
+        for (const [fam, model] of candidates) {
+            if (fam === mainFam) continue;       // must differ from main
+            if (hasProv(fam)) return model;
+        }
+        // No distinct cloud family available → fall back to the normal picker
+        // (may return the same family; better a same-model review than none).
+        return pickSubAgentModel('auto', mainModel);
+    }
+
     /** Reactive label that shows the user which model their sub-agent setting
      *  is going to actually invoke right now — eliminates the "I picked Ollama
      *  but Gemini ran" surprise. */
@@ -1263,6 +1311,11 @@ import { listen } from '@tauri-apps/api/event';
 
     let showTutorial       = false;    // guided tour overlay
     let _clickHandler      = null;     // ref al event listener de links externos
+    // v1.7.111 H8 — refs to the two formerly-anonymous delegated click
+    // handlers so onDestroy can removeEventListener them (prevents duplicate
+    // firing after component remount / HMR).
+    let _slashCmdClickHandler = null;  // ref al listener del menú slash
+    let _arChipClickHandler   = null;  // ref al listener del chip auto-route
 
     // --- ACCIONES RÁPIDAS DINÁMICAS ---
     let quickActions = [];
@@ -2001,7 +2054,11 @@ import { listen } from '@tauri-apps/api/event';
         // onclick on every rendered menu instance. Same approach the
         // auto-route chip uses (identify by CSS class, not data-*,
         // because the sanitizer strips data attrs).
-        document.addEventListener('click', (e) => {
+        // v1.7.111 audit H8 — named handler (was anonymous) so onDestroy can
+        // unbind it. Anonymous delegated listeners accumulated one duplicate
+        // per component remount (HMR in dev, tab teardown/rebuild in prod),
+        // each firing the handler an extra time per click.
+        _slashCmdClickHandler = (e) => {
             const btn = e.target?.closest?.('.slash-cmd-name');
             if (!btn) return;
             e.preventDefault();
@@ -2026,12 +2083,14 @@ import { listen } from '@tauri-apps/api/event';
                     } catch {}
                 }
             });
-        });
+        };
+        document.addEventListener('click', _slashCmdClickHandler);
 
         // v1.7.11 — Auto-route chip click → deactivate the current
         // skill/preset and remove the chip from view. Delegated so
         // we don't have to wire onclick on every chip instance.
-        document.addEventListener('click', (e) => {
+        // v1.7.111 H8 — named so onDestroy can unbind it.
+        _arChipClickHandler = (e) => {
             // v1.7.11 fix: safeHtml strips data-* attrs not on the
             // allowlist, so we identify chips by their class instead.
             const chip = e.target.closest('.ar-chip');
@@ -2050,7 +2109,8 @@ import { listen } from '@tauri-apps/api/event';
             if (closer) closer.textContent = '✓';
             const skillSpan = chip.querySelector('.ar-skill');
             if (skillSpan) skillSpan.textContent = 'deactivated for next turn';
-        });
+        };
+        document.addEventListener('click', _arChipClickHandler);
 
         // ── Quick-look popover for tool-card refs — see $lib/page/ql-popover.ts ──
         _qlHandle = attachQlPopover({ isEN });
@@ -2238,6 +2298,10 @@ import { listen } from '@tauri-apps/api/event';
         if (typeof handlePlanButtonClick === 'function') {
             try { document.removeEventListener('click', handlePlanButtonClick); } catch {}
         }
+        // v1.7.111 H8 — unbind the two delegated click handlers that were
+        // previously anonymous (and thus leaked one duplicate per remount).
+        if (_slashCmdClickHandler) { try { document.removeEventListener('click', _slashCmdClickHandler); } catch {} _slashCmdClickHandler = null; }
+        if (_arChipClickHandler)   { try { document.removeEventListener('click', _arChipClickHandler); } catch {} _arChipClickHandler = null; }
         // Quick-look popover — detaches listeners + removes DOM node atomically.
         if (_qlHandle) { try { _qlHandle.detach(); } catch {} _qlHandle = null; }
         // ── Active streaming AI requests — cancel + unlisten ──
@@ -4214,6 +4278,14 @@ REGLAS DE FORMATO:
         t.isProcessing=true; startExecTimer(); refresh();
         // Hoisted refs so catch/finally can clean up even on unexpected throws.
         let _reasoningTickerRef = null;
+        // v1.7.111 audit H4 — hoist the streaming drain timer to function
+        // scope so the finally block can always clear it. Previously it was
+        // declared inside the try; if askLucyStream threw (provider error) or
+        // the user cancelled mid-stream, the clearInterval after the await was
+        // skipped and the 40ms interval kept firing renderRevealed() into a
+        // dead/streaming bubble — a slow leak that compounded across repeated
+        // Stop clicks in a long session.
+        let _drainTimer = null;
         // Best-effort DESIGN.md detection — non-blocking. Caches per cwd.
         refreshDesignMd().catch(() => {});
         // ── Memory decay reinforcement (F1+, May 2026) ──────────────────────
@@ -4744,7 +4816,7 @@ Use ONE of these patterns instead:
             let _tokenQ = [];       // cola de fragmentos de texto entrantes
             let _revealed = '';     // texto revelado al usuario hasta ahora
             let _prevAccLen = 0;    // longitud del accumulated anterior
-            let _drainTimer = null;
+            _drainTimer = null;     // v1.7.111 H4 — hoisted to function scope (declared above)
             const DRAIN_MS = 40;    // ms entre revelados — 40ms reduce flicker vs 30ms
 
             const cleanStreamDisplay = (text) => {
@@ -7442,10 +7514,15 @@ Use ONE of these patterns instead:
                             stepsHtml += `[✦ ${isEN ? 'Verifier reviewing…' : 'Verificador revisando…'}]\n`;
                             renderAgentTask();
 
-                            const verModel = pickSubAgentModel(verifierModel, getEffectiveModel(t));
+                            // v1.7.111 F3 — prefer a DIFFERENT provider family
+                            // than the main agent so the review isn't the same
+                            // model rubber-stamping its own blind spots.
+                            const _mainModel = _routedLoopModel || getEffectiveModel(t);
+                            const verModel = pickCrossVerifierModel(_mainModel);
+                            const _crossFamily = _providerFamily(verModel) !== _providerFamily(_mainModel);
                             pushTrace({
                                 phase: 'info',
-                                label: `Verifier sub-agent running (${verModel})`,
+                                label: `Verifier sub-agent running (${verModel})${_crossFamily ? ' · cross-model' : ''}`,
                                 step: loop_i + 1,
                                 tabId,
                             });
@@ -8508,6 +8585,10 @@ times the SAME way, switch tool kind entirely.
             // Belt-and-braces: stop the reasoning ticker even if finishReasoning()
             // wasn't reached (early throw, cancellation, etc.).
             if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+            // v1.7.111 H4 — same guarantee for the streaming drain timer. If the
+            // stream threw or was cancelled, the inline clearInterval after the
+            // await never ran; clear it here so it can't keep firing.
+            if (_drainTimer) { clearInterval(_drainTimer); _drainTimer = null; }
             // Drop any lingering empty `streaming` skeleton bubbles — they show as
             // a ghost placeholder under the user message when the loop ends without
             // streaming text (the second screenshot bug).
