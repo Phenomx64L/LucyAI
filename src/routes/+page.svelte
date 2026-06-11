@@ -4713,7 +4713,28 @@ REGLAS DE FORMATO:
             // err on the side of NOT polluting context with weak hits.
             try {
                 const _raw = (raw || '').trim();
-                if (_raw.length >= 8 && _raw.length <= 4000) {
+                // v1.7.115 perf-fix — gate the pre-loop recall hard. The
+                // embedding round-trip it triggers is BLOCKING and, when the
+                // active model is local Ollama, contends with the main
+                // generation on the same instance (both get slower). Skip it
+                // for:
+                //   • short / trivial queries (greetings, "qué hora", status)
+                //     — recall adds nothing and just delays the answer,
+                //   • when the selected model is local-* (avoid Ollama
+                //     self-contention),
+                //   • when Ollama is known offline (the call would just burn
+                //     the full timeout before falling back).
+                // Timeout tightened 1500 → 700ms so even on a miss the cost is
+                // bounded and small.
+                const _TRIVIAL_RE = /^\s*(hola|hi|hey|buenas|saludos|gracias|thanks|ok|vale|s[ií]|no|qu[eé]\s+hora|what\s+time|qu[eé]\s+d[ií]a|what\s+day|fecha|date|hora|time|ping|test|status|estado)\b/i;
+                const _selModel = (t.selectedModel || '');
+                const _skipRecall =
+                    _raw.length < 16 ||
+                    _raw.length > 4000 ||
+                    _TRIVIAL_RE.test(_raw) ||
+                    _selModel.startsWith('local-') ||
+                    ($ollamaOnline === false);
+                if (!_skipRecall) {
                     const _autoHits = await Promise.race([
                         invoke('semantic_search', {
                             query: _raw,
@@ -4722,7 +4743,7 @@ REGLAS DE FORMATO:
                             minScore: 0.45,
                             model: null,
                         }),
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('auto-recall timeout')), 1500))
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('auto-recall timeout')), 700))
                     ]);
                     if (Array.isArray(_autoHits) && _autoHits.length > 0) {
                         const _formatted = _autoHits
