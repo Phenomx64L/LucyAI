@@ -91,6 +91,10 @@ import { listen } from '@tauri-apps/api/event';
 
     // Phase 2c — reconnected orphans (reflection gate, posture strip, incident timeline, webhook listener)
     import { reflectBeforeEmit, isPass, isWarn, isEscalate, getReasons, getRisk, renderVerdictBadge } from '$lib/reflection-gate';
+    // v1.7.109 audit F4 — confidence-gated emit. Deterministic 0..1 score on
+    // the final answer; surfaces a "low confidence" badge when the model's
+    // own language hedges (creo que / no encontré / probably / I'm not sure).
+    import { scoreConfidence, renderConfidenceBadge } from '$lib/confidence-gate';
     import PostureStrip from '$lib/PostureStrip.svelte';
     import IncidentTimeline from '$lib/IncidentTimeline.svelte';
     // Phase 3 (R&D Frontier) — circadian theme + density modes + Lucy moods + F2 snapshots
@@ -4479,6 +4483,63 @@ REGLAS DE FORMATO:
             const _memCtx = construirContextoMemoria(raw, t);
             ctx += _memCtx;
 
+            // v1.7.109 audit H6 — proactive semantic recall.
+            //
+            // Until now Lucy only did semantic search when the LLM
+            // explicitly emitted <TOOL>semantic:…</TOOL>. That cost a
+            // full extra turn (~2-4s) just for the model to ask "wait,
+            // do I already know this?" — and on >50% of research turns
+            // the model never asked at all, leaving relevant memories
+            // unrecalled.
+            //
+            // Frontier pattern: run a cheap top-K semantic recall on
+            // the user's raw message BEFORE the first LLM call and
+            // inject the hits as part of the system context. The model
+            // sees "you already know about X, Y, Z" as facts, not as
+            // a tool call result. Saves a turn AND raises recall
+            // quality (LLM doesn't have to first decide it needs to
+            // search).
+            //
+            // Best-effort: if Ollama is down / embeddings unavailable,
+            // we just skip the injection. The existing keyword-based
+            // construirContextoMemoria still ran above so we're not
+            // worse off than v1.7.108. minScore=0.45 is stricter than
+            // the on-demand tool (0.30) — automatic injection should
+            // err on the side of NOT polluting context with weak hits.
+            try {
+                const _raw = (raw || '').trim();
+                if (_raw.length >= 8 && _raw.length <= 4000) {
+                    const _autoHits = await Promise.race([
+                        invoke('semantic_search', {
+                            query: _raw,
+                            entityType: 'memory',
+                            limit: 5,
+                            minScore: 0.45,
+                            model: null,
+                        }),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('auto-recall timeout')), 1500))
+                    ]);
+                    if (Array.isArray(_autoHits) && _autoHits.length > 0) {
+                        const _formatted = _autoHits
+                            .filter(h => h && h.text)
+                            .slice(0, 5)
+                            .map((h, i) => `${i + 1}. [score ${(h.score ?? 0).toFixed(2)}] ${String(h.text).slice(0, 400)}`)
+                            .join('\n');
+                        if (_formatted) {
+                            ctx += `\n\n--- MEMORIAS RECORDADAS AUTOMÁTICAMENTE (top-K semántico sobre tu mensaje) ---\n${_formatted}\n--- FIN MEMORIAS AUTO ---\nUsa estos hechos como base de tu respuesta cuando sean relevantes. NO los re-consultes con <TOOL>semantic:…</TOOL> a menos que necesites detalles adicionales no incluidos arriba.`;
+                            try {
+                                setContextSnapshot({ memoriesCount: (t._lastMemoryHitsCount ?? 0) + _autoHits.length });
+                            } catch {}
+                        }
+                    }
+                }
+            } catch (e) {
+                // Silenced on purpose — Ollama down, embeddings missing, or
+                // timeout are all "skip recall, continue normally". Only
+                // log to debug so we don't spam the trace timeline.
+                try { debug.log(`[+page] pre-loop semantic recall skipped: ${String(e).slice(0, 120)}`); } catch {}
+            }
+
             // v1.7.34 — Self-introspection inject. When the user asks
             // a meta-question about Lucy's own capabilities ("qué skills
             // tienes", "qué puedes hacer", "what can you do", etc.) we
@@ -4906,6 +4967,35 @@ Use ONE of these patterns instead:
                 }
             } catch (rgErr) {
                 console.warn('[reflection-gate] Error, continuing:', rgErr);
+            }
+
+            // v1.7.109 audit F4 — confidence scoring on every response.
+            //
+            // Deterministic regex-based score (no LLM call, microseconds).
+            // We score the FULL response including any <THOUGHT> blocks; the
+            // scorer strips scaffolding internally so hedges inside <THOUGHT>
+            // don't pollute the score for the user-visible portion.
+            //
+            // Storage pattern mirrors _reflectionBadge: stash on the tab,
+            // consume + clear when the message is rendered downstream.
+            // Badge only appears for low-confidence (band === 'low'); medium
+            // and high pass silently. The score is logged to debug so we can
+            // build telemetry over time about model confidence trends.
+            try {
+                const _conf = scoreConfidence(resp || '');
+                debug.log(`[confidence-gate] score=${_conf.score.toFixed(2)} band=${_conf.band} reasons=${(_conf.reasons || []).join('|')}`);
+                t._confidenceBadge = renderConfidenceBadge(_conf);
+                t._lastConfidenceScore = _conf.score;
+                if (_conf.band === 'low') {
+                    pushTrace({
+                        phase: 'warn',
+                        label: `Confianza baja (${Math.round(_conf.score * 100)}%) — ${(_conf.reasons || []).join('; ') || 'señales de duda'}`,
+                        tabId: t.id,
+                    });
+                }
+            } catch (cgErr) {
+                // Failed scoring is a no-op (badge stays empty); never block emit.
+                console.warn('[confidence-gate] scoring error, skipping:', cgErr);
             }
 
             // Para TOOL/EXECUTE/THOUGHT responses: preservar texto visible ANTES de
@@ -8277,6 +8367,10 @@ times the SAME way, switch tool kind entirely.
                 }
                 // Transición suave: reutilizar el mensaje streaming existente si aún está
                 const _rgBadge = t._reflectionBadge || '';
+                // v1.7.109 F4 — confidence badge appended after safety badge.
+                // Empty string when score is medium/high so no visual noise on
+                // normal answers; non-empty only for low-confidence emits.
+                const _cgBadge = t._confidenceBadge || '';
                 const existingStreamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (existingStreamMsg) {
                     // v1.7.53 — id rotation removed. AI-6 era's "forzar
@@ -8298,7 +8392,7 @@ times the SAME way, switch tool kind entirely.
                     // The helper is a no-op on languages we don't bundle and
                     // a no-op if Shiki isn't initialised yet (caller's
                     // post-render addCopyBtns hljs fallback still runs).
-                    existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${applyShikiToHtml(renderLucyMarkdown(clean))}`;
+                    existingStreamMsg.html = `<div class="mn">Lucy</div>${_rgBadge}${_cgBadge}${applyShikiToHtml(renderLucyMarkdown(clean))}`;
                     existingStreamMsg.rawRole = 'Lucy';
                     existingStreamMsg.rawContent = clean;
                     // Re-tokenize on streaming→lucy promotion. Placeholder was
@@ -8341,7 +8435,7 @@ times the SAME way, switch tool kind entirely.
                                 ? _t.messages.find(m => m.id === _msgIdForVerify)
                                 : _t.messages.slice().reverse().find(m => m.role === 'lucy' && m.rawContent === clean);
                             if (!_msg) return;
-                            _msg.html = `<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(annotated)}`;
+                            _msg.html = `<div class="mn">Lucy</div>${_rgBadge}${_cgBadge}${renderLucyMarkdown(annotated)}`;
                             _msg.rawContent = annotated;
                             _msg.tokens = Math.ceil(annotated.length / 4);
                             refresh();
@@ -8349,6 +8443,7 @@ times the SAME way, switch tool kind entirely.
                         .catch(e => console.warn('[script-verifier] post-stream verify failed:', e));
                 }
                 if (_rgBadge) t._reflectionBadge = null; // limpiar badge usado
+                if (_cgBadge) t._confidenceBadge = null; // v1.7.109 F4 — clear confidence badge after consume
                 if(doSpeak)speak(clean);
             }
         }catch(e){

@@ -935,6 +935,29 @@ pub async fn save_agent_memory(
     // keeps the memory forever — same as pre-TTL behaviour.
     ttl_days:   Option<i64>,
 ) -> Result<SaveMemoryResult, String> {
+    // v1.7.109 audit C3 — PII / secret scrub at the persistence boundary.
+    //
+    // Without this, memories like "Conexión: postgres://admin:Sup3r!@db.prod"
+    // — that the agent loop happily extracts from a `<REMEMBER>` tag — land
+    // verbatim in agent_memories. From there they leak via:
+    //   • DB backups (db_backup.rs serializes rows verbatim)
+    //   • Memory Browser UI (renders the row content)
+    //   • Export commands and snapshot replays
+    //   • Future LLM prompts that recall the memory (the secret crosses the
+    //     network boundary again on every recall)
+    //
+    // We reuse the same scrub_for_audit pass used by the audit logger
+    // (utils/secret_scrubber.rs). It already has 11 unit tests and short-
+    // circuits cleanly on non-secret text, so the typical mundane memory
+    // costs one marker scan.
+    //
+    // Dedup notes: stage1 (FTS) and stage2 (embeddings) below operate on
+    // the SCRUBBED text. That means two memories that differed only by
+    // secret value (e.g. two API tokens for the same service) get correctly
+    // dedup'd — which is what we want, since they encode the same fact.
+    let title   = crate::utils::secret_scrubber::scrub_for_audit(&title);
+    let content = crate::utils::secret_scrubber::scrub_for_audit(&content);
+
     // Stage 1 + INSERT happen synchronously in the DB closure. Stage 2
     // (embedding probe) is async, so we run it BEFORE the DB closure
     // when bm25 didn't catch a dup. The closure handles the insert + dup

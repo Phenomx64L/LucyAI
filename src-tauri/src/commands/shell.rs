@@ -278,21 +278,63 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
         clean_script
     );
 
-    // Unique temp path — pid + nanos timestamp avoids collisions across
-    // concurrent invocations.
+    // v1.7.109 audit C1 — symlink-resistant temp file creation.
+    //
+    // Old version was `fs::write(predictable_path)` where the path was
+    // `lucy_ps_<pid>_<nanos>.ps1` in %TEMP%. Three problems:
+    //   1. fs::write FOLLOWS symlinks. An attacker with local write access
+    //      to %TEMP% could pre-create a symlink at a predicted path
+    //      pointing to a sensitive file; we'd overwrite the target with
+    //      the script. (PID is enumerable, nanos has limited precision —
+    //      both can be predicted within a small window.)
+    //   2. Even without an attacker, two execute_powershell calls in the
+    //      same nanosecond (rare but possible under sub-µs scheduler)
+    //      would clobber each other.
+    //   3. fs::write silently truncates any existing target.
+    //
+    // Fix: 64 bits of cryptographic entropy in the filename + create_new
+    // (which fails atomically if anything — file, dir, or symlink — exists
+    // at the path). Retry up to 8 times on AlreadyExists for the pathological
+    // case where entropy collides. 64 bits ≈ 1 in 1.8e19 collision per draw,
+    // so reaching the retry limit means an active attacker — we fail closed.
     let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_path = std::env::temp_dir()
-        .join(format!("lucy_ps_{}_{}.ps1", pid, nanos));
-
-    std::fs::write(&tmp_path, wrapped_script.as_bytes())
-        .map_err(|e| {
-            write_app_log("ERROR", &format!("Fallo escribir script temp: {}", e));
-            format!("No se pudo escribir script temporal: {}", e)
-        })?;
+    let mut tmp_path: std::path::PathBuf = std::path::PathBuf::new();
+    let mut last_err: Option<std::io::Error> = None;
+    for _ in 0..8 {
+        let suffix: u64 = rand::random();
+        let candidate = std::env::temp_dir()
+            .join(format!("lucy_ps_{}_{:016x}.ps1", pid, suffix));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(wrapped_script.as_bytes()) {
+                    // We created the file but failed to populate it — clean
+                    // up to avoid leaving an empty stub in %TEMP%.
+                    let _ = std::fs::remove_file(&candidate);
+                    write_app_log("ERROR", &format!("Fallo escribir script temp: {}", e));
+                    return Err(format!("No se pudo escribir script temporal: {}", e));
+                }
+                tmp_path = candidate;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_err = Some(e);
+                continue;
+            }
+            Err(e) => {
+                write_app_log("ERROR", &format!("Fallo crear script temp: {}", e));
+                return Err(format!("No se pudo crear script temporal: {}", e));
+            }
+        }
+    }
+    if tmp_path.as_os_str().is_empty() {
+        let detail = last_err.map(|e| e.to_string()).unwrap_or_else(|| "retries exhausted".to_string());
+        write_app_log("ERROR", &format!("Symlink/collision retries exhausted: {}", detail));
+        return Err(format!("No se pudo crear script temporal de forma segura: {}", detail));
+    }
 
     let tmp_path_for_run = tmp_path.clone();
     let child = tokio::task::spawn_blocking(move || {
