@@ -647,10 +647,19 @@ import { listen } from '@tauri-apps/api/event';
     // alias. Map (not LRU) is fine — bounded by a manual eviction at 64
     // entries which covers realistic research depth without unbounded
     // RAM growth on a runaway loop.
-    const _urlCache = new Map(); // key → { value, ts }
+    const _urlCache = new Map(); // key → { value, ts }  (resolved values)
+    // v1.7.112 F1 — in-flight promise map. Powers two things:
+    //   1. Request coalescing: two identical fetches in the same instant share
+    //      one network round-trip instead of racing.
+    //   2. Speculative prefetch: a fetch kicked off mid-stream (see
+    //      _speculativePrefetch) lands here; when the agent loop later
+    //      dispatches the same tool, _cachedFetch coalesces onto the
+    //      already-running promise instead of starting fresh.
+    const _inflightFetch = new Map(); // key → Promise<value>
     const _URL_CACHE_TTL_MS = 10 * 60 * 1000;
     const _URL_CACHE_MAX = 64;
-    let _urlCacheHits = 0; // debug: surfaced in performance panel later
+    let _urlCacheHits = 0;      // debug: surfaced in performance panel later
+    let _specPrefetchHits = 0;  // F1 telemetry: loop calls served by a prefetch
     async function _cachedFetch(kind, query, fetcher) {
         const key = `${kind}::${query}`;
         const now = Date.now();
@@ -659,14 +668,80 @@ import { listen } from '@tauri-apps/api/event';
             _urlCacheHits++;
             return hit.value;
         }
-        const value = await fetcher();
-        if (_urlCache.size >= _URL_CACHE_MAX) {
-            // Evict oldest entry — Map iteration order is insertion order.
-            const oldest = _urlCache.keys().next().value;
-            if (oldest !== undefined) _urlCache.delete(oldest);
+        // Coalesce onto an in-flight fetch (speculative prefetch OR a
+        // concurrent identical call). If THAT promise rejects (e.g. a
+        // best-effort speculative fetch failed), fall through and run our own
+        // fetcher — which carries the loop's retryWithBackoff resilience.
+        const inflight = _inflightFetch.get(key);
+        if (inflight) {
+            try {
+                _specPrefetchHits++;
+                return await inflight;
+            } catch { /* fall through to a fresh fetch below */ }
         }
-        _urlCache.set(key, { value, ts: now });
-        return value;
+        const p = (async () => {
+            const value = await fetcher();
+            if (_urlCache.size >= _URL_CACHE_MAX) {
+                // Evict oldest entry — Map iteration order is insertion order.
+                const oldest = _urlCache.keys().next().value;
+                if (oldest !== undefined) _urlCache.delete(oldest);
+            }
+            _urlCache.set(key, { value, ts: Date.now() });
+            return value;
+        })();
+        _inflightFetch.set(key, p);
+        try {
+            return await p;
+        } finally {
+            _inflightFetch.delete(key);
+        }
+    }
+    // v1.7.112 F1 — fire-and-forget speculative prefetch. Warms the cache for a
+    // read-only network tool the model just emitted mid-stream, so the agent
+    // loop's later dispatch hits/coalesces instead of starting a cold fetch.
+    // Best-effort: errors are swallowed (the loop will retry through
+    // _cachedFetch with its own backoff). No-op if already warm.
+    function _speculativePrefetch(kind, query, fetcher) {
+        const key = `${kind}::${query}`;
+        if (_urlCache.has(key) || _inflightFetch.has(key)) return;
+        _cachedFetch(kind, query, fetcher).catch(() => {});
+    }
+    // v1.7.112 F1 — scan freshly-streamed text for CLOSED read-only network
+    // tool tags and kick off the fetch speculatively. By the time the full
+    // response arrives and the loop dispatches the tool, the round-trip is
+    // already in flight (or done), shaving ~200-800ms per fetch off perceived
+    // latency on research-heavy turns.
+    //
+    // Scoped to fetch: and search_web: ONLY — pure reads with no side effects,
+    // so a model that emits a closed tag then changes course just leaves an
+    // unused (harmless) cache entry. THOUGHT regions are stripped first so the
+    // model weighing options inside its reasoning ("I could fetch A or B")
+    // never triggers a real network call. `specSet` dedups per stream.
+    function _speculateReadOnlyFromStream(accumulated, specSet) {
+        if (!accumulated || accumulated.indexOf('</TOOL>') === -1) return;
+        // Drop closed AND unclosed-trailing THOUGHT regions — only action-level
+        // tags (outside reasoning) should speculate.
+        let actionable = accumulated.replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '');
+        actionable = actionable.replace(/<THOUGHT>[\s\S]*$/i, '');
+        let m;
+        const FETCH_RE = /<TOOL>fetch:([^<]+)<\/TOOL>/gi;
+        while ((m = FETCH_RE.exec(actionable)) !== null) {
+            const urlQ = (m[1] || '').trim();
+            if (!urlQ) continue;
+            const key = `fetch:${urlQ}`;
+            if (specSet.has(key)) continue;
+            specSet.add(key);
+            _speculativePrefetch('fetch_url_content', urlQ, () => invoke('fetch_url_content', { url: urlQ }));
+        }
+        const WEB_RE = /<TOOL>search_web:([^<]+)<\/TOOL>/gi;
+        while ((m = WEB_RE.exec(actionable)) !== null) {
+            const webQ = (m[1] || '').trim();
+            if (!webQ) continue;
+            const key = `web:${webQ}`;
+            if (specSet.has(key)) continue;
+            specSet.add(key);
+            _speculativePrefetch('search_web', webQ, () => invoke('search_web', { query: webQ }));
+        }
     }
     // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
     let showCheatsheet = false;
@@ -5008,6 +5083,9 @@ Use ONE of these patterns instead:
 
             // U2 — Lucy mood: thinking while LLM streams
             setLucyMood('thinking');
+            // v1.7.112 F1 — per-stream dedup set for speculative read-only
+            // tool prefetch (see _speculateReadOnlyFromStream).
+            const _specSet = new Set();
             const resp = await askLucyStream(aiParams, (accumulated) => {
                 const t2 = getTab(tabId);
                 if (t2?._cancelled) return;
@@ -5015,6 +5093,10 @@ Use ONE of these patterns instead:
                 const newText = accumulated.substring(_prevAccLen);
                 _prevAccLen = accumulated.length;
                 if (newText) _tokenQ.push(newText);
+                // F1 — speculatively prefetch fetch:/search_web: tools the
+                // moment their tag closes, so the round-trip overlaps the rest
+                // of the stream instead of starting cold after it.
+                _speculateReadOnlyFromStream(accumulated, _specSet);
             }, tabId);
 
             // Parar drain y vaciar cola restante
@@ -7851,6 +7933,8 @@ times the SAME way, switch tool kind entirely.
 
                     try {
                         let _lastThoughtLen = 0;
+                        // v1.7.112 F1 — per-turn dedup set for speculative prefetch.
+                        const _specSetTurn = new Set();
                         agentResp = await askLucyStream(nextParams, (acc) => {
                             // Live thought streaming: extract partial <THOUGHT> as it arrives
                             const m = acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/i);
@@ -7862,6 +7946,10 @@ times the SAME way, switch tool kind entirely.
                                     updateReasoning(delta);
                                 }
                             }
+                            // F1 — speculatively prefetch read-only network tools
+                            // as their tags close mid-stream on continuation turns
+                            // (the research-heavy path where this saves the most).
+                            _speculateReadOnlyFromStream(acc, _specSetTurn);
                         }, tabId);
                     } catch(e) {
                         stepsHtml += `[ERROR] ${esc(String(e))}\n`;

@@ -922,6 +922,29 @@ pub struct SaveMemoryResult {
 ///
 /// `tags`  — JSON array string, e.g. `["rust","cargo","fix"]`
 /// `files` — JSON array string of related file paths
+// v1.7.112 audit C4 — process-wide serialization of the semantic-dedup
+// critical section.
+//
+// THE RACE (before this lock): two save_agent_memory calls for
+// semantically-similar-but-FTS-different content (paraphrases — "el
+// servidor X cayó" vs "X server went down") could interleave:
+//   T1: stage1 (FTS no match) → stage2 embed probe (no dup, nothing inserted yet)
+//   T2: stage1 (FTS no match) → stage2 embed probe (still no dup)
+//   T1: tx re-probe stage1 (FTS no match) → INSERT
+//   T2: tx re-probe stage1 (FTS no match) → INSERT
+//   → two near-duplicate rows survive. The in-tx re-probe only re-runs
+//     stage1 (FTS), which never matched, so it can't catch this.
+//
+// THE FIX: hold an async mutex across the stage2-probe → insert window so
+// the second caller's probe runs AFTER the first caller's row + embedding
+// are committed, and therefore finds the now-existing semantic dup.
+// save_agent_memory only fires when the LLM emits a <REMEMBER> tag (rare,
+// human-paced) so full serialization here costs nothing measurable while
+// eliminating the race outright. tokio::sync::Mutex (not std) because we
+// hold the guard across the `.await` of stage2_embedding_dedup.
+static SAVE_MEMORY_DEDUP_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
 #[tauri::command]
 pub async fn save_agent_memory(
     title:      String,
@@ -958,18 +981,25 @@ pub async fn save_agent_memory(
     let title   = crate::utils::secret_scrubber::scrub_for_audit(&title);
     let content = crate::utils::secret_scrubber::scrub_for_audit(&content);
 
-    // Stage 1 + INSERT happen synchronously in the DB closure. Stage 2
-    // (embedding probe) is async, so we run it BEFORE the DB closure
-    // when bm25 didn't catch a dup. The closure handles the insert + dup
-    // dance for stages 1 and 2 atomically.
+    // Fast-path Stage 1 probe OUTSIDE the lock — FTS dedup is atomic on its
+    // own (single SELECT) and catches the common exact/near-exact repeat
+    // without any serialization cost. Most duplicate saves are caught here.
     let stage1_result = with_db(|conn| stage1_fts_dedup(conn, &title, &content))?;
     if let Some(dup) = stage1_result {
         return Ok(dup);
     }
 
+    // v1.7.112 C4 — everything from the semantic probe through the INSERT is
+    // the race-critical section. Serialize it so a concurrent paraphrase
+    // save can't slip a near-duplicate past Stage 2's blind spot. Held
+    // across the async embed probe, hence the tokio mutex.
+    let _dedup_guard = SAVE_MEMORY_DEDUP_LOCK.lock().await;
+
     // Stage 2 — try embedding-based dedup. If Ollama is offline or any
     // step fails, fall through to insert without semantic dedup. Stage 2
-    // is best-effort; we never block a save on it.
+    // is best-effort; we never block a save on it. With the lock held, a
+    // concurrent save that started just before us has already committed its
+    // row + embedding, so our probe now sees it and dedups correctly.
     let stage2_result = stage2_embedding_dedup(&title, &content).await;
     if let Ok(Some(dup)) = stage2_result {
         return Ok(dup);
