@@ -202,6 +202,16 @@ pub async fn execute_cmd(
 ) -> Result<String, String> {
     rotate_audit_log();
 
+    // v1.7.108 audit C2 — scrubbed copy for every audit() call below. The
+    // real `script` still goes to cmd.exe verbatim; only the on-disk audit
+    // trail (%APPDATA%\Lucy\logs\lucy_audit.log) gets the redacted view.
+    // We compute it once, then truncate at the same 200-char boundary used
+    // historically. scrub_for_audit short-circuits for non-secret lines so
+    // the typical Get-Process / dir audit costs O(n) ASCII scan and one
+    // String alloc — cheaper than the disk write that follows.
+    let scrub_full = crate::utils::secret_scrubber::scrub_for_audit(&script);
+    let scrub = crate::utils::safe_truncate(&scrub_full, 200);
+
     // v1.7.9 — Placeholder guard. Refuse to execute when the script
     // contains literal example values from a documentation skill body
     // (C:\Ruta\Al\…, tu-usuario@dominio.com, <TENANT_ID>, etc). This
@@ -210,7 +220,7 @@ pub async fn execute_cmd(
     if let Some(evidence) = crate::utils::placeholder_guard::detect_placeholders(&script) {
         audit(&format!(
             "[{}] [HOST:{}] [PLACEHOLDER_GUARD] {} :: {}",
-            ts(), host(), evidence, &script[..script.len().min(200)]
+            ts(), host(), evidence, scrub
         ));
         return Err(crate::utils::placeholder_guard::refusal_message(&evidence));
     }
@@ -236,7 +246,7 @@ pub async fn execute_cmd(
                 if authorized_script == &script {
                     was_blocked_but_bypassed = true;
                     audit(&format!("[{}] [HOST:{}] [CMD_AUTHORIZED_BYPASS] {}",
-                        ts(), host(), &script[..script.len().min(200)]));
+                        ts(), host(), scrub));
                     tokens_map.remove(token);
                 }
             }
@@ -261,7 +271,7 @@ pub async fn execute_cmd(
         if matches!(scan.decision, crate::guardrails::ScanDecision::Block) {
             audit(&format!(
                 "[{}] [HOST:{}] [GUARDRAIL_S2_PENDING_AUTH] {} :: {}",
-                ts(), host(), scan.reason, &script[..script.len().min(200)]
+                ts(), host(), scan.reason, scrub
             ));
             return Err(issue_block_token(&format!("guardrail:{}", scan.reason)));
         }
@@ -284,14 +294,14 @@ pub async fn execute_cmd(
         for blocked in &blocklist {
             if lower.contains(blocked) {
                 audit(&format!("[{}] [HOST:{}] [CMD_BLOCKED_PENDING_AUTH] {}",
-                    ts(), host(), &script[..script.len().min(200)]));
+                    ts(), host(), scrub));
                 return Err(issue_block_token(blocked));
             }
         }
     }
 
     let op = if bypassed { "CMD_EXEC_BYPASS" } else { "CMD_EXECUTED" };
-    audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op, &script[..script.len().min(200)]));
+    audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op, scrub));
 
     // BUG-7 FIX: spawn the child explicitly so we can capture its PID and kill it
     // on timeout (same pattern as execute_powershell). The old .output() call left

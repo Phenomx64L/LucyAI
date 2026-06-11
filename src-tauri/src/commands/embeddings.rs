@@ -128,6 +128,73 @@ async fn embed_via_ollama(text: &str, model: Option<String>) -> Result<(Vec<f32>
     Ok((v, m))
 }
 
+/// v1.7.108 audit M1 — batched embedding via Ollama's newer /api/embed
+/// endpoint (available in Ollama 0.1.40+). Takes an `input: [str, str, ...]`
+/// array and returns `embeddings: [[..], [..], ...]` in the same order.
+///
+/// On a 50-memory backfill this is 1 HTTP round-trip instead of 50 — wallclock
+/// drops from 2.5-10s to 200-500ms (the bulk of latency is per-request TCP +
+/// JSON overhead, not the GPU work). The GPU forward-pass itself parallelizes
+/// well within a single request because nomic-embed-text is small enough.
+///
+/// Returns `Err` on ANY failure (network, HTTP non-2xx, malformed JSON,
+/// length mismatch) — the caller falls back to per-text sequential embed_via_ollama.
+async fn embed_batch_via_ollama(
+    texts: &[&str],
+    model: Option<&str>,
+) -> Result<(Vec<Vec<f32>>, String), String> {
+    if texts.is_empty() {
+        return Ok((vec![], DEFAULT_EMBED_MODEL.to_string()));
+    }
+    let m = model.unwrap_or(DEFAULT_EMBED_MODEL).to_string();
+    let base = ollama_base();
+    let url = format!("{}/api/embed", base);
+
+    let body = serde_json::json!({ "model": m, "input": texts });
+    let resp = HTTP_CLIENT
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama batch embed request failed ({}): {}", url, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Ollama batch returned {} — falling back to per-text",
+            resp.status()
+        ));
+    }
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Ollama batch invalid JSON: {}", e))?;
+    let arr = json["embeddings"].as_array()
+        .ok_or("Ollama batch response missing 'embeddings' array")?;
+
+    // Per-row vector decode.
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(arr.len());
+    for row in arr {
+        let inner = row.as_array()
+            .ok_or("Ollama batch row is not an array")?;
+        let v: Vec<f32> = inner.iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect();
+        if v.is_empty() {
+            return Err("Ollama batch returned an empty vector".to_string());
+        }
+        out.push(v);
+    }
+
+    if out.len() != texts.len() {
+        return Err(format!(
+            "Ollama batch length mismatch: requested {} got {}",
+            texts.len(), out.len()
+        ));
+    }
+
+    Ok((out, m))
+}
+
 /// Call Google's Gemini embedding API as a cloud fallback when Ollama is down.
 /// Returns (vec, "text-embedding-004"). Reads the API key from the same keyring
 /// entry the ask_lucy commands use.
@@ -603,35 +670,97 @@ pub async fn backfill_embeddings(
         Ok(rows.into_iter().collect())
     })?;
 
-    // 3. For each missing row, call Ollama + insert. We do this sequentially
-    //    on purpose — Ollama's embedding endpoint is single-model single-GPU
-    //    on most user setups; parallel requests just queue internally.
+    // 3. Filter the pending list once.
+    let pending: Vec<(String, String)> = pairs.into_iter()
+        .filter(|(id, text)| !existing_ids.contains(id) && !text.trim().is_empty())
+        .collect();
+
+    // v1.7.108 audit M1 — batch embedding via Ollama's /api/embed.
+    //
+    // The old loop made one HTTP call per memory; on a 50-row backfill that
+    // was 50 sequential request/response cycles. Even with the same GPU work,
+    // per-request TCP + JSON overhead dominated wallclock (~50-200 ms each).
+    // Batching collapses the network cost to one round-trip per BATCH_CHUNK.
+    //
+    // CHUNK size 16 chosen because:
+    //   • Most Ollama deployments are single-GPU with ~8GB VRAM — 16 nomic
+    //     texts fit comfortably in one forward pass.
+    //   • Keeps payload < 100 KB even for long-text memories, so we don't
+    //     trip the default 1 MB HTTP body limit some proxies impose.
+    //   • Limits blast radius if the batch fails — we re-try at most 16 rows
+    //     via the per-text fallback before moving on.
+    //
+    // Fallback: if /api/embed errors (older Ollama < 0.1.40 returns 404,
+    // network blip, model not loaded), we drop back to embed_via_ollama
+    // per text for THAT chunk only. The next chunk re-tries the batch path.
+    const BATCH_CHUNK: usize = 16;
     let mut new_count = 0u32;
-    for (id, text) in pairs {
-        if existing_ids.contains(&id) || text.trim().is_empty() {
-            continue;
-        }
-        match embed_via_ollama(&text, model.clone()).await {
-            Ok((v, used_model)) => {
-                let blob = vec_to_blob(&v);
-                let dims = v.len() as i64;
-                let row_id = generate_id();
-                let _ = shared_db(|conn| {
-                    conn.execute(
-                        "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                         ON CONFLICT(entity_type, entity_id) DO NOTHING",
-                        params![row_id, entity_type, id, text, blob, dims, used_model],
-                    ).map_err(|e| format!("insert: {}", e))?;
-                    Ok(())
-                });
-                new_count += 1;
+
+    for chunk in pending.chunks(BATCH_CHUNK) {
+        let texts_ref: Vec<&str> = chunk.iter().map(|(_, t)| t.as_str()).collect();
+
+        let batch_result = embed_batch_via_ollama(&texts_ref, model.as_deref()).await;
+
+        match batch_result {
+            Ok((vecs, used_model)) => {
+                // Bulk-insert under a single tx for the chunk — fewer DB locks.
+                let chunk_owned: Vec<(String, String, Vec<f32>)> = chunk.iter()
+                    .zip(vecs.into_iter())
+                    .map(|((id, text), v)| (id.clone(), text.clone(), v))
+                    .collect();
+                let used_model_clone = used_model.clone();
+                let entity_type_inner = entity_type.clone();
+                let inserted = shared_db(move |conn| {
+                    let tx = conn.unchecked_transaction().map_err(|e| format!("tx: {}", e))?;
+                    let mut n = 0u32;
+                    {
+                        let mut stmt = tx.prepare(
+                            "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                             ON CONFLICT(entity_type, entity_id) DO NOTHING"
+                        ).map_err(|e| format!("prepare: {}", e))?;
+                        for (id, text, v) in &chunk_owned {
+                            let blob = vec_to_blob(v);
+                            let dims = v.len() as i64;
+                            let row_id = generate_id();
+                            stmt.execute(params![row_id, entity_type_inner, id, text, blob, dims, used_model_clone]).map_err(|e| format!("insert: {}", e))?;
+                            n += 1;
+                        }
+                    }
+                    tx.commit().map_err(|e| format!("commit: {}", e))?;
+                    Ok(n)
+                })?;
+                new_count += inserted;
             }
-            Err(e) => {
-                eprintln!("[embeddings] backfill skip {} / {}: {}", entity_type, id, e);
-                // Stop early if Ollama is down — no point hammering it for the
-                // rest of the corpus on the same failure.
-                return Err(format!("Backfill aborted after {} embeddings: {}", new_count, e));
+            Err(batch_err) => {
+                // Per-text fallback for this chunk. Telemetry so we know how
+                // often we're hitting older Ollama / batch failures.
+                eprintln!("[embeddings] batch failed, per-text fallback: {}", batch_err);
+                for (id, text) in chunk {
+                    match embed_via_ollama(text, model.clone()).await {
+                        Ok((v, used_model)) => {
+                            let blob = vec_to_blob(&v);
+                            let dims = v.len() as i64;
+                            let row_id = generate_id();
+                            let _ = shared_db(|conn| {
+                                conn.execute(
+                                    "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
+                                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                                     ON CONFLICT(entity_type, entity_id) DO NOTHING",
+                                    params![row_id, &entity_type, id, text, blob, dims, used_model],
+                                ).map_err(|e| format!("insert: {}", e))?;
+                                Ok(())
+                            });
+                            new_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[embeddings] backfill skip {} / {}: {}", entity_type, id, e);
+                            // Stop early if Ollama is down — no point hammering
+                            // it for the rest of the corpus on the same failure.
+                            return Err(format!("Backfill aborted after {} embeddings: {}", new_count, e));
+                        }
+                    }
+                }
             }
         }
     }

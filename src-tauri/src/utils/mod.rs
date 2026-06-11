@@ -10,6 +10,11 @@ pub mod placeholder_guard;
 // Consolidates three duplicated implementations into one runtime-
 // dispatched entry point. Boot logs which backend is active.
 pub mod simd_cosine;
+// v1.7.108 audit C2 — secret scrubber for audit logs. All writeln! sites
+// in shell.rs / local.rs that dump user scripts now go through
+// scrub_for_audit so Bearer tokens, password=, URL-embedded creds, AWS
+// keys, GitHub PATs and LLM provider keys never reach disk.
+pub mod secret_scrubber;
 
 /// Safely truncate a string at a char boundary, never panicking.
 /// Returns a slice of at most `max_bytes` bytes, ending at a valid UTF-8 boundary.

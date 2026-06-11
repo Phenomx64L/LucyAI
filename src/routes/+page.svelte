@@ -7443,11 +7443,30 @@ Use ONE of these patterns instead:
                     //   3. Smart Collapse — rewrite OLD results into one info-rich line
                     //   4. Anti-thrashing — skip compaction when last 2 reduced <10%
                     const TOOL_RESULT_CAP = 12_000;
+                    // v1.7.108 audit H7 — head + tail truncation instead of
+                    // head-only. The old code dropped the last N chars of any
+                    // oversized result, which was the worst possible choice
+                    // for log files (errors usually at the end), grep output
+                    // (last matches often the most specific) and stack traces
+                    // (the actual error is at the bottom). New: keep 60% head
+                    // + 40% tail, marker in the middle says how much was
+                    // dropped + how to reread it.
+                    const TOOL_HEAD_FRAC = 0.60;
                     const capped = toolResults.map((r, i) => {
                         const s = String(r ?? '');
-                        const text = s.length <= TOOL_RESULT_CAP
-                            ? s
-                            : s.slice(0, TOOL_RESULT_CAP) + `\n\n[…truncated ${(s.length - TOOL_RESULT_CAP).toLocaleString()} chars. Use readlines:path:start:count if you need a specific section.]`;
+                        let text;
+                        if (s.length <= TOOL_RESULT_CAP) {
+                            text = s;
+                        } else {
+                            const headLen = Math.floor(TOOL_RESULT_CAP * TOOL_HEAD_FRAC);
+                            const tailLen = TOOL_RESULT_CAP - headLen;
+                            const head = s.slice(0, headLen);
+                            const tail = s.slice(s.length - tailLen);
+                            const dropped = s.length - headLen - tailLen;
+                            text = head
+                                + `\n\n[…${dropped.toLocaleString()} chars elided (head + tail kept). For a specific section use readlines:path:start:count]\n\n`
+                                + tail;
+                        }
                         // Best-effort kind extraction: parse leading "[KIND] " or "[NAME RESULT] " marker.
                         const kindMatch = text.match(/^\[([\w\s\-_:]+?)\]/);
                         return { kind: kindMatch ? kindMatch[1].toLowerCase().trim() : 'tool', text };
@@ -7467,6 +7486,62 @@ Use ONE of these patterns instead:
                         debug.log(`[ctx-compress] step ${loop_i + 1}: skipped (anti-thrashing)`);
                     }
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
+
+                    // v1.7.108 audit C5 + H7 — rolling window cap on agentCtx.
+                    //
+                    // Before: agentCtx += tool results forever. On a 60-loop
+                    // research run with 10KB/loop of compressed results, the
+                    // context grew to ~600KB by the end. The reactive
+                    // compressContext() below still helped, but it had to
+                    // redo more work every loop AND the LLM saw less of the
+                    // recent (relevant) context once the model's window
+                    // saturated.
+                    //
+                    // Now: if agentCtx crosses 35KB, we keep the prefix
+                    // (initial user goal + system framing — never trimmed)
+                    // plus the LAST 5 TOOL RESULTS blocks verbatim, and
+                    // replace the middle with a one-line digest. Frontier
+                    // pattern — recent state matters most, oldest state is
+                    // already memorialized in the model's prior turn.
+                    //
+                    // Why 35KB not 60KB: leaves headroom for system prompt
+                    // (~10-15KB), memory recall block (~5KB), and the
+                    // CONTINUATION prompt template (~2KB) before we hit the
+                    // typical 64KB practical limit on continuation calls.
+                    const AGENT_CTX_ROLLING_MAX = 35_000;
+                    const AGENT_CTX_KEEP_LAST = 5; // recent TOOL RESULTS blocks
+                    if (agentCtx.length > AGENT_CTX_ROLLING_MAX) {
+                        const _before = agentCtx.length;
+                        // Split on the TOOL RESULTS marker. Index 0 is the prefix
+                        // (everything before the first tool turn — verifier
+                        // feedback, initial setup, etc). Subsequent indices are
+                        // each tool-result block.
+                        const TOOL_MARK = /\n\n--- TOOL RESULTS \(step \d+\) ---\n/g;
+                        const markers = [];
+                        let mm;
+                        TOOL_MARK.lastIndex = 0;
+                        while ((mm = TOOL_MARK.exec(agentCtx)) !== null) {
+                            markers.push({ index: mm.index, len: mm[0].length });
+                        }
+                        if (markers.length > AGENT_CTX_KEEP_LAST + 1) {
+                            const prefix = agentCtx.slice(0, markers[0].index);
+                            const cutFrom = markers[0].index;
+                            const cutTo = markers[markers.length - AGENT_CTX_KEEP_LAST].index;
+                            const dropped = cutTo - cutFrom;
+                            const firstStep = (agentCtx.slice(markers[0].index, markers[0].index + markers[0].len).match(/step (\d+)/) || [])[1] || '?';
+                            const lastDroppedStep = (agentCtx.slice(markers[markers.length - AGENT_CTX_KEEP_LAST - 1].index).match(/step (\d+)/) || [])[1] || '?';
+                            const tail = agentCtx.slice(cutTo);
+                            const digest = `\n\n--- OLDER TOOL RESULTS (steps ${firstStep}-${lastDroppedStep}) COLLAPSED ---\n[${dropped.toLocaleString()} chars from ${markers.length - AGENT_CTX_KEEP_LAST} earlier tool turns dropped to keep context within budget. The most recent ${AGENT_CTX_KEEP_LAST} turns remain verbatim below. If you need to reread an older result, re-call the tool.]`;
+                            agentCtx = prefix + digest + tail;
+                            pushTrace({
+                                phase: 'info',
+                                label: `🪟 Rolling context: ${_before.toLocaleString()} → ${agentCtx.length.toLocaleString()} chars (kept last ${AGENT_CTX_KEEP_LAST} turns)`,
+                                step: loop_i + 1,
+                                tabId,
+                                detail: `Dropped ${dropped.toLocaleString()} chars from steps ${firstStep}-${lastDroppedStep}. Saves ~${Math.round((dropped/4))} tokens.`,
+                            });
+                        }
+                    }
 
                     // ── Anti-hallucination guard ──────────────────────────
                     // If every tool result this turn is empty/error/no-output,

@@ -31,6 +31,14 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
 
     rotate_audit_log();
 
+    // v1.7.108 audit C2 — scrubbed copy used in ALL writeln!(log_file, ...)
+    // calls below. The real `script` still flows to PowerShell so the user's
+    // intent is executed verbatim; only the disk audit trail gets the
+    // redacted view. Without this, Bearer tokens / passwords passed inline
+    // (e.g. `curl -H "Authorization: Bearer sk-..."`) landed in
+    // %APPDATA%\Lucy\logs\lucy_audit.log readable by any local process.
+    let scrub = crate::utils::secret_scrubber::scrub_for_audit(&script);
+
     // v1.7.9 — Placeholder guard. See utils/placeholder_guard.rs.
     // Refuses to run example values from a documentation skill body
     // before they hit PowerShell and trigger the autocorrect / agent
@@ -39,7 +47,10 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     if let Some(evidence) = crate::utils::placeholder_guard::detect_placeholders(&script) {
         let line = format!(
             "[{}] [USR:{}] [PLACEHOLDER_GUARD] {} :: {}",
-            timestamp, user, evidence, &script[..script.len().min(200)]
+            timestamp, user, evidence,
+            &crate::utils::secret_scrubber::scrub_for_audit(
+                &script[..script.len().min(200)]
+            )
         );
         let _ = OpenOptions::new().create(true).append(true).open(&audit_path)
             .and_then(|mut f| {
@@ -88,7 +99,7 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
                 if let Some((authorized_script, _expiry)) = tokens_map.get(token) {
                     if authorized_script == &script {
                         was_blocked_but_bypassed = true;
-                        let _ = writeln!(log_file, "[{}] [HOST: {}] [AUTHORIZED_BYPASS] Token consumido para: {}", timestamp, user, script);
+                        let _ = writeln!(log_file, "[{}] [HOST: {}] [AUTHORIZED_BYPASS] Token consumido para: {}", timestamp, user, scrub);
                         write_app_log("WARNING", "Usuario autorizó comando destructivo vía token");
                         tokens_map.remove(token);
                     }
@@ -122,7 +133,7 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
                 }
             }
             let _ = writeln!(log_file, "[{}] [HOST: {}] [GUARDRAIL_S10_PENDING_AUTH] {} :: {}",
-                timestamp, user, scan.reason, script);
+                timestamp, user, scan.reason, scrub);
             write_app_log("WARNING", &format!("Guardrail intercepted: {}", scan.reason));
             return Err(format!("SECURITY_BLOCK:{}:{}", new_token, scan.reason));
         }
@@ -143,7 +154,7 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
                     }
                 }
 
-                let _ = writeln!(log_file, "[{}] [HOST: {}] [BLOCKED_PENDING_AUTH] Script: {}", timestamp, user, script);
+                let _ = writeln!(log_file, "[{}] [HOST: {}] [BLOCKED_PENDING_AUTH] Script: {}", timestamp, user, scrub);
                 write_app_log("WARNING", &format!("Bloqueado comando prohibido: {}", blocked));
                 return Err(format!("SECURITY_BLOCK:{}:{}", new_token, blocked));
             }
@@ -156,17 +167,17 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     let perm = crate::commands::metrics::check_permission(script.clone(), "command".to_string())
         .await
         .map_err(|e| {
-            let _ = writeln!(log_file, "[{}] [HOST: {}] [PERMISSION_CHECK_ERROR] {} - Script: {}", timestamp, user, e, script);
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [PERMISSION_CHECK_ERROR] {} - Script: {}", timestamp, user, e, scrub);
             write_app_log("ERROR", &format!("check_permission falló: {}", e));
             format!("Error verificando permisos (fail-closed): {}", e)
         })?;
     match perm.action.as_str() {
         "block" => {
-            let _ = writeln!(log_file, "[{}] [HOST: {}] [BLOCKED_BY_RULE] Rule: {} - Script: {}", timestamp, user, perm.reason, script);
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [BLOCKED_BY_RULE] Rule: {} - Script: {}", timestamp, user, perm.reason, scrub);
             return Err(format!("Permiso denegado: {}", perm.reason));
         }
         "ask" => {
-            let _ = writeln!(log_file, "[{}] [HOST: {}] [PERMISSION_REQUIRED] Rule: {} - Script: {}", timestamp, user, perm.reason, script);
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [PERMISSION_REQUIRED] Rule: {} - Script: {}", timestamp, user, perm.reason, scrub);
             return Err(format!("Comando requiere aprobación: {}. Crea una regla 'allow' en Permisos para ejecutar.", perm.reason));
         }
         "allow" => {}, // Continue with execution
@@ -174,9 +185,9 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     }
 
     if was_blocked_but_bypassed {
-        let _ = writeln!(log_file, "[{}] [HOST: {}] [EXECUTED_AFTER_BYPASS] Script: {}", timestamp, user, script);
+        let _ = writeln!(log_file, "[{}] [HOST: {}] [EXECUTED_AFTER_BYPASS] Script: {}", timestamp, user, scrub);
     } else {
-        let _ = writeln!(log_file, "[{}] [HOST: {}] [EXECUTED] Script: {}", timestamp, user, script);
+        let _ = writeln!(log_file, "[{}] [HOST: {}] [EXECUTED] Script: {}", timestamp, user, scrub);
     }
 
     let script_clone = script.clone();
