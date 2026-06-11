@@ -5032,7 +5032,29 @@ Use ONE of these patterns instead:
                 // user says "memorize X" and the model immediately replies
                 // with <REMEMBER>...</REMEMBER> + a <THOUGHT>/<TOOL>.
                 extractAndPersistMemory(agentResp);
-                const MAX_LOOPS = 25;
+                // v1.7.105 — MAX_LOOPS configurable via setting.
+                //
+                // The old hard-coded 25 was a safety cap to prevent runaway
+                // agent loops. For real research tasks (multi-source doc
+                // analysis, fleet-wide scans, long debugging chains) 25 is
+                // genuinely too low — a single "validate this URL + build
+                // a memory" turn can spend 5-8 iterations on web search +
+                // page reads alone.
+                //
+                // Settings key: `lucy_max_agent_loops` (localStorage).
+                // Slash command: `/agent-loops <n>` (added below in
+                // slash-commands.ts).
+                // Default: 60 — covers the 99th percentile of real
+                // research sessions without sacrificing the safety net.
+                // Range: 10-200 (anything outside clamps).
+                //
+                // The anti-runaway machinery below (MAX_IDENTICAL_TOOL_CALLS,
+                // editCountsByPath, target_loop / error_repeat detectors)
+                // is unchanged — those catch the actual failure modes the
+                // 25 cap was guarding against. The cap is now the last
+                // line of defence, not the first.
+                const _userMaxLoops = parseInt(safeGetLS('lucy_max_agent_loops', '60'), 10);
+                const MAX_LOOPS = isFinite(_userMaxLoops) ? Math.max(10, Math.min(200, _userMaxLoops)) : 60;
                 const ESCALATED_MAX_TOKENS = 64000; // openclaude pattern
                 let escalatedTokens = null; // null = usar default, número = override
                 let truncationRecoveryCount = 0;
