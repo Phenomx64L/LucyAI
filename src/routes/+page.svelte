@@ -619,6 +619,20 @@ import { listen } from '@tauri-apps/api/event';
     //      when the agent emits an mcp_query / mcp_discover tag.
     let mcpServers = [];
     let showMcpServersModal = false;
+    // v1.7.106 — MAX_LOOPS visible slider (Sistema panel). Mirrors the
+    // localStorage key `lucy_max_agent_loops` that the agent loop reads
+    // at line ~5056. Initial load defaults to 60 to match the agent's
+    // own default. on:change writes back; next research session picks
+    // up the new value automatically. No restart needed.
+    let _maxAgentLoops = (() => {
+        const raw = parseInt(safeGetLS('lucy_max_agent_loops', '60'), 10);
+        return isFinite(raw) ? Math.max(10, Math.min(200, raw)) : 60;
+    })();
+    function _persistMaxAgentLoops() {
+        const n = Math.max(10, Math.min(200, parseInt(String(_maxAgentLoops), 10) || 60));
+        _maxAgentLoops = n;
+        safeSetLSString('lucy_max_agent_loops', String(n));
+    }
     // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
     let showCheatsheet = false;
     // v1.6.1 — ECC-style skill preset picker. Opened via composer chip
@@ -11706,6 +11720,42 @@ if (Test-Path $src) {
             <button class="settings-btn" style="display:inline-flex;align-items:center;gap:5px;" on:click={() => { showSettingsModal = false; exportBugReport(); }}>
               <Bug size={13}/> {isEN ? 'Export Bug Report' : 'Exportar Reporte'}
             </button>
+          </div>
+
+          <!-- ── v1.7.106 — Agent loop cap slider ─────────────────────────
+               The agent loop (research, runbooks, multi-step diagnostics)
+               stops after N iterations as a safety net against runaway
+               tool calls. Default 60 covers normal research; raise to
+               ~120 for big API doc surveys, ~200 for entire product docs.
+               Persisted in localStorage; new value picks up at next turn. -->
+          <div class="settings-row">
+            <span class="settings-label">
+              {isEN ? 'Agent loop cap' : 'Iteraciones del agente'}
+              <span class="help-i" title={isEN
+                ? 'Maximum turns per agentic research session before Lucy hard-stops as a safety net. Raise for deeper investigations (e.g. multi-endpoint API docs).'
+                : 'Máximo de turnos por sesión de investigación agentica antes de que Lucy se detenga como salvaguarda. Súbelo para investigaciones profundas (p. ej. docs de APIs con muchos endpoints).'
+              }>ⓘ</span>
+            </span>
+            <div style="display:flex;align-items:center;gap:10px;flex:1;">
+              <input
+                type="range" min="10" max="200" step="10"
+                bind:value={_maxAgentLoops}
+                on:change={_persistMaxAgentLoops}
+                style="flex:1;accent-color:var(--accent);"
+                aria-label={isEN ? 'Agent loop cap slider' : 'Slider de iteraciones del agente'} />
+              <input
+                type="number" min="10" max="200" step="1"
+                bind:value={_maxAgentLoops}
+                on:change={_persistMaxAgentLoops}
+                style="width:64px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);border-radius:5px;color:var(--text-bright);padding:4px 8px;font-family:var(--font-mono);font-size:12px;text-align:right;"
+                aria-label={isEN ? 'Agent loop cap value' : 'Valor de iteraciones del agente'} />
+              <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);min-width:42px;">
+                {_maxAgentLoops <= 30 ? (isEN ? 'tight' : 'estricto')
+                 : _maxAgentLoops <= 80 ? (isEN ? 'balanced' : 'normal')
+                 : _maxAgentLoops <= 140 ? (isEN ? 'deep' : 'profundo')
+                 : (isEN ? 'extreme' : 'extremo')}
+              </span>
+            </div>
           </div>
 
           <!-- ── System Health (moved from footer — only shows real status, not decorative "all good") ── -->
