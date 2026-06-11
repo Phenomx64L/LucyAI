@@ -205,6 +205,129 @@ pub fn scan_url(url: &str) -> ScanResult {
     ScanResult::allow()
 }
 
+// ── DNS-rebinding guard (audit H1, v1.7.110) ─────────────────────────────
+//
+// `scan_url` above only inspects the URL *string*. That blocks literal
+// internal targets (http://127.0.0.1, http://169.254.169.254) but a
+// hostname like `evil.example.com` that RESOLVES to 127.0.0.1 sails
+// through — the classic DNS-rebinding / internal-redirect SSRF. The
+// reqwest redirect policy has the same blind spot: it scans the redirect
+// URL string, not the resolved IP.
+//
+// `host_resolves_to_internal` does the missing check: extract the host,
+// resolve it via the OS resolver, and reject if ANY resolved address is
+// loopback / private / link-local / unspecified / multicast / unique-local.
+// We reject if *any* address is internal (not just all) — a host that
+// returns both a public and an internal A record is an attack shape, not
+// a legitimate multi-homed service.
+//
+// Caveat — TOCTOU: there is still a sub-second window between this resolve
+// and reqwest's own resolve where a racing attacker DNS could flip the
+// record. Fully closing that requires a custom connector that pins the
+// validated IP. This guard closes the *practical* attack (a hostname
+// pointing at an internal IP), which is the overwhelmingly common case;
+// the pinning connector is tracked as a follow-up. Being blocking
+// (std resolver), callers MUST invoke this inside spawn_blocking.
+
+/// Extract the bare host (no scheme, userinfo, port, or path) from a URL.
+/// Returns None if the URL is malformed. Handles IPv6 bracket notation.
+fn extract_host(url: &str) -> Option<String> {
+    // Strip scheme.
+    let after_scheme = url.split("://").nth(1)?;
+    // Cut at the first path / query / fragment delimiter.
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // Strip userinfo (everything up to and including the last '@').
+    let hostport = match authority.rsplit_once('@') {
+        Some((_, hp)) => hp,
+        None => authority,
+    };
+    if hostport.is_empty() {
+        return None;
+    }
+    // IPv6 literal: [::1]:8080  → ::1
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let host = rest.split(']').next()?;
+        return Some(host.to_string());
+    }
+    // host:port → host
+    let host = hostport.split(':').next().unwrap_or(hostport);
+    if host.is_empty() { None } else { Some(host.to_string()) }
+}
+
+/// True if the given resolved IP is one we must never let an LLM-driven
+/// fetch reach. Covers IPv4 + IPv6 internal ranges, including IPv4-mapped
+/// IPv6 (::ffff:10.0.0.1 style) and IPv6 unique-local (fc00::/7).
+fn ip_is_internal(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()        // 127.0.0.0/8
+                || v4.is_private()  // 10/8, 172.16/12, 192.168/16
+                || v4.is_link_local() // 169.254/16 (includes IMDS 169.254.169.254)
+                || v4.is_unspecified() // 0.0.0.0
+                || v4.is_broadcast()   // 255.255.255.255
+                || v4.is_multicast()
+                // CGNAT shared address space 100.64.0.0/10 — used by some
+                // cloud internal networks.
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64)
+        }
+        IpAddr::V6(v6) => {
+            // IPv4-mapped (::ffff:a.b.c.d) — re-check as IPv4.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return ip_is_internal(IpAddr::V4(mapped));
+            }
+            v6.is_loopback()         // ::1
+                || v6.is_unspecified() // ::
+                || v6.is_multicast()
+                // Unique-local fc00::/7 (is_unique_local is unstable on
+                // stable Rust, so check the high bits manually).
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // Link-local fe80::/10
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Resolve `url`'s host and report whether it points at an internal target.
+/// Returns Err(reason) if the host resolves to (or contains) an internal IP,
+/// or if the host cannot be resolved at all (fail-closed). Ok(()) means every
+/// resolved address is a routable public IP.
+///
+/// BLOCKING — call from spawn_blocking. The port is irrelevant to the
+/// internal/external decision so we resolve against a dummy :80.
+pub fn host_resolves_to_internal(url: &str) -> Result<(), String> {
+    use std::net::ToSocketAddrs;
+
+    let host = extract_host(url)
+        .ok_or_else(|| "no se pudo extraer el host de la URL".to_string())?;
+
+    // If the host is already a literal IP, ToSocketAddrs still works and
+    // ip_is_internal catches it — so this path also hardens against
+    // octal/hex/decimal IP obfuscation that the string regex might miss
+    // (the OS resolver normalizes 0x7f.0.0.1 → 127.0.0.1).
+    let addrs = (host.as_str(), 80u16)
+        .to_socket_addrs()
+        .map_err(|e| format!("no se pudo resolver el host '{}': {}", host, e))?;
+
+    let mut saw_any = false;
+    for sa in addrs {
+        saw_any = true;
+        if ip_is_internal(sa.ip()) {
+            return Err(format!(
+                "el host '{}' resuelve a una dirección interna ({})",
+                host, sa.ip()
+            ));
+        }
+    }
+    if !saw_any {
+        return Err(format!("el host '{}' no resolvió a ninguna dirección", host));
+    }
+    Ok(())
+}
+
 // ── Unit tests ──────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
@@ -228,6 +351,46 @@ mod tests {
         // ConvertTo-SecureString '...'
         let r = scan("hunter2';Invoke-Expression('calc.exe');#", Role::SecretMaterial);
         assert_eq!(r.decision, ScanDecision::Block);
+    }
+
+    // ── H1 DNS-rebinding guard helpers ──────────────────────────────────
+
+    #[test]
+    fn extract_host_basic() {
+        assert_eq!(extract_host("https://example.com/path?q=1").as_deref(), Some("example.com"));
+        assert_eq!(extract_host("http://user:pass@host.tld:8080/x").as_deref(), Some("host.tld"));
+        assert_eq!(extract_host("https://[::1]:443/admin").as_deref(), Some("::1"));
+        assert_eq!(extract_host("http://10.0.0.5").as_deref(), Some("10.0.0.5"));
+        assert_eq!(extract_host("notaurl"), None);
+    }
+
+    #[test]
+    fn ip_internal_classification() {
+        use std::net::IpAddr;
+        // Internal
+        assert!(ip_is_internal("127.0.0.1".parse::<IpAddr>().unwrap()));
+        assert!(ip_is_internal("10.1.2.3".parse::<IpAddr>().unwrap()));
+        assert!(ip_is_internal("192.168.0.1".parse::<IpAddr>().unwrap()));
+        assert!(ip_is_internal("172.16.5.5".parse::<IpAddr>().unwrap()));
+        assert!(ip_is_internal("169.254.169.254".parse::<IpAddr>().unwrap()));
+        assert!(ip_is_internal("100.64.0.1".parse::<IpAddr>().unwrap())); // CGNAT
+        assert!(ip_is_internal("::1".parse::<IpAddr>().unwrap()));
+        assert!(ip_is_internal("fc00::1".parse::<IpAddr>().unwrap()));    // unique-local
+        assert!(ip_is_internal("fe80::1".parse::<IpAddr>().unwrap()));    // link-local
+        assert!(ip_is_internal("::ffff:127.0.0.1".parse::<IpAddr>().unwrap())); // v4-mapped loopback
+        // Public
+        assert!(!ip_is_internal("8.8.8.8".parse::<IpAddr>().unwrap()));
+        assert!(!ip_is_internal("1.1.1.1".parse::<IpAddr>().unwrap()));
+        assert!(!ip_is_internal("2606:4700:4700::1111".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn resolve_literal_internal_ip_blocked() {
+        // Literal internal IPs should be caught by the resolver path too —
+        // ToSocketAddrs resolves a literal IP to itself.
+        assert!(host_resolves_to_internal("http://127.0.0.1:11434/api/tags").is_err());
+        assert!(host_resolves_to_internal("http://10.0.0.1/").is_err());
+        assert!(host_resolves_to_internal("http://[::1]/").is_err());
     }
 
     #[test]

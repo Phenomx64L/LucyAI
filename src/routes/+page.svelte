@@ -4683,7 +4683,27 @@ Use ONE of these patterns instead:
                     ? '[Modo conciso: responde en máx. 3 líneas, sin preámbulos] '
                     : '[Brief mode: answer in 3 lines max, no preamble] ')
                 : '';
-            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
+            // v1.7.110 audit H5 — per-TASK model routing for the agent loop.
+            //
+            // Before: getEffectiveModel(t) was called with NO prompt, so the
+            // smart-router never saw the user's actual message and always
+            // returned the manual dropdown model. A heavy "audita el equipo y
+            // genera informe" ran the whole agentic loop on Gemini Flash; a
+            // trivial "ls /tmp" could be stuck on Opus.
+            //
+            // Now: route ONCE on the real user message and PIN that model for
+            // every turn of this run. We deliberately do NOT re-route per turn
+            // — Anthropic prompt caching is per-model, so switching mid-loop
+            // would discard the cache (turn 1 Opus cache-write → turn 2 Flash
+            // → turn 3 Opus cache-miss). Routing by the task and staying there
+            // gives the frontier "right model for the job" behaviour while
+            // keeping the cache warm.
+            //
+            // Zero behaviour change when smart routing is OFF: getEffectiveModel
+            // short-circuits to the manual model regardless of the prompt arg
+            // (see its `if (!smartRouting && !privacyMode) return manual`).
+            const _routedLoopModel = getEffectiveModel(t, raw || '');
+            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
 
             // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
             const codeGenIntent = /dame\s+(un\s+)?script|escrib[ea]\s+(un\s+)?script|crea\s+(un\s+)?script|genera\s+(un\s+)?script|give\s+me\s+(a\s+)?script|write\s+(a\s+)?script|create\s+(a\s+)?script|generate\s+(a\s+)?script|hazme\s+(un\s+)?script|necesito\s+(un\s+)?script|quiero\s+(un\s+)?script|dame\s+.*c[oó]digo|dame\s+.*powershell|haz\s+.*script/i.test(raw);
@@ -5247,7 +5267,10 @@ Use ONE of these patterns instead:
                 // it to the task_events row without recomputing each time.
                 // Powers the loop_block_stats() query → users can spot which
                 // models get stuck most often and adjust their default.
-                const _loopModelName = (typeof getEffectiveModel === 'function' ? getEffectiveModel(t) : null) || 'unknown';
+                // v1.7.110 H5 — reuse the task-routed model pinned at loop
+                // entry instead of re-routing (keeps prompt cache warm + this
+                // telemetry row reflects the model actually driving the run).
+                const _loopModelName = _routedLoopModel || (typeof getEffectiveModel === 'function' ? getEffectiveModel(t) : null) || 'unknown';
 
                 // ── Same-target loop dedup (May 2026) ────────────────────────
                 // Catches the bug fingerprint: Lucy creates a file, opens it,
@@ -7482,7 +7505,7 @@ Use ONE of these patterns instead:
                                     context: agentCtx.slice(-4000),
                                     userName: lucyConfig.name,
                                     runbooksDir: lucyConfig.runbooksDir || null,
-                                    model: getEffectiveModel(t),
+                                    model: (_routedLoopModel || getEffectiveModel(t)), // v1.7.110 H5 — pinned loop model
                                     lang: userLang,
                                     hostsJson: JSON.stringify($hosts),
                                     images: null
@@ -7744,7 +7767,7 @@ times the SAME way, switch tool kind entirely.
                         });
                     }
 
-                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
+                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
 
                     stepsHtml += `<span style="opacity:0.6">[↻ Siguiente turno...]</span>\n`;
                     renderAgentTask();

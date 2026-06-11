@@ -9,6 +9,34 @@ use std::sync::OnceLock;
 use crate::state::{HTTP_CLIENT, ALLOWED_MODELS};
 use crate::commands::metrics::log_usage_internal;
 
+// v1.7.110 audit H3 — bounded JSON parse for untrusted LLM / MCP response
+// bodies.
+//
+// serde_json already enforces a 128-level recursion limit by default, so a
+// deeply-NESTED "depth bomb" returns an Err rather than overflowing the
+// stack — that dimension was never actually exploitable here. The remaining
+// risk is the WIDTH / total-size dimension: a malicious or MITM'd provider
+// streaming a multi-gigabyte body that `res.text()` buffers fully into RAM
+// before we ever parse it. This helper caps the body length and documents
+// the recursion behaviour so the bound is explicit at every call site.
+//
+// 24 MB ceiling: a 64k-token completion with heavily JSON-escaped content
+// plus usage metadata tops out around 3-5 MB in practice; 24 MB is generous
+// headroom for the largest legitimate response while still rejecting a
+// runaway stream by ~3 orders of magnitude.
+const MAX_LLM_JSON_BYTES: usize = 24 * 1024 * 1024;
+
+fn parse_json_capped(body: &str) -> Result<serde_json::Value, String> {
+    if body.len() > MAX_LLM_JSON_BYTES {
+        return Err(format!(
+            "respuesta JSON excede el límite de {} MB ({} bytes) — posible payload malicioso, abortando parse",
+            MAX_LLM_JSON_BYTES / (1024 * 1024),
+            body.len()
+        ));
+    }
+    serde_json::from_str(body).map_err(|e| format!("Error parseando JSON: {}", e))
+}
+
 // ── Sprint 4, UI-7 — Process-wide prompt cache telemetry ──────────────────
 //
 // Anthropic returns `cache_creation_input_tokens` (write) and
@@ -517,6 +545,23 @@ pub async fn fetch_url_content(url: String) -> Result<String, String> {
     let scan = crate::guardrails::scan_url(&url);
     if !matches!(scan.decision, crate::guardrails::ScanDecision::Allow) {
         return Err(format!("URL bloqueada por guardrail [{}]", scan.reason));
+    }
+    // v1.7.110 audit H1 — DNS-rebinding guard. scan_url only checked the URL
+    // string; this resolves the host and rejects if it points at an internal
+    // IP (the hostname-resolves-to-127.0.0.1 SSRF the string regex can't see).
+    // Also hardens against octal/hex/decimal IP obfuscation since the OS
+    // resolver normalizes those. Blocking resolver → spawn_blocking so we
+    // don't stall the tokio worker.
+    {
+        let url_for_resolve = url.clone();
+        let resolve_check = tauri::async_runtime::spawn_blocking(move || {
+            crate::guardrails::host_resolves_to_internal(&url_for_resolve)
+        })
+        .await
+        .map_err(|e| format!("Error interno verificando host: {}", e))?;
+        if let Err(reason) = resolve_check {
+            return Err(format!("URL bloqueada por SSRF guard: {}", reason));
+        }
     }
     let res = HTTP_CLIENT
         .get(&url)
@@ -1047,7 +1092,7 @@ pub async fn ask_lucy(
     }
 
     let body_text = res.text().await.map_err(|e| format!("Error al leer body: {}", e))?;
-    let v: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| format!("Error parseando JSON: {}", e))?;
+    let v: serde_json::Value = parse_json_capped(&body_text)?;
 
     if provider == "anthropic" {
         if let Some(reason) = v["stop_reason"].as_str() {
@@ -1431,7 +1476,7 @@ REGLAS:
     let body_text = res.text().await.map_err(|e| e.to_string())?;
 
     if status.is_success() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
+        if let Ok(v) = parse_json_capped(&body_text) {
             let text = match provider {
                 "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
                 "anthropic" => v["content"].get(0).and_then(|c| c["text"].as_str()),

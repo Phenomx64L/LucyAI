@@ -89,6 +89,25 @@ fn env_disabled(name: &str) -> bool {
     std::env::var(name).is_ok()
 }
 
+/// v1.7.110 audit M3 — per-loop phase jitter to break the thundering herd.
+///
+/// Each scheduler's tick schedule is anchored to when its bootstrap sleep
+/// ends. The bootstrap delays were hand-staggered (120s, 150s, 180s, …) but
+/// loops with periods that share common factors (e.g. two 6-hour loops, or a
+/// 12h and a 6h) drift back into alignment over days of uptime and then
+/// thunder on the r2d2 pool (max 8 connections) on the same wall-clock
+/// minute.
+///
+/// Adding a random 0-45s offset to each bootstrap PERMANENTLY shifts that
+/// loop's entire downstream schedule by a unique amount, so no two loops
+/// stay phase-locked. 45s is large enough to separate ticks (each DB scan is
+/// sub-second) but small enough not to meaningfully delay any single loop's
+/// first run. Computed once per process at spawn time — deterministic for the
+/// life of the run, random across runs.
+fn boot_jitter() -> Duration {
+    Duration::from_millis(rand::random::<u64>() % 45_000)
+}
+
 // ── 1. embedding cache warmup ───────────────────────────────────────────
 //
 // At boot, embed the N most-recent distinct user prompts so the v1.7.83
@@ -111,7 +130,7 @@ pub mod embed_warmup {
         }
         tauri::async_runtime::spawn(async {
             // Let the DB pool and embedding model settle before we hit them.
-            tokio::time::sleep(Duration::from_secs(120)).await;
+            tokio::time::sleep(Duration::from_secs(120) + boot_jitter()).await;
             run_once().await;
         });
     }
@@ -182,7 +201,7 @@ pub mod audit_verify {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(300)).await;   // 5 min warmup
+            tokio::time::sleep(Duration::from_secs(300) + boot_jitter()).await;   // 5 min warmup + jitter
             loop {
                 tick().await;
                 tokio::time::sleep(TICK).await;
@@ -261,7 +280,7 @@ pub mod mcp_health {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(180)).await;  // 3 min warmup
+            tokio::time::sleep(Duration::from_secs(180) + boot_jitter()).await;  // 3 min warmup + jitter
             loop {
                 tick().await;
                 tokio::time::sleep(TICK).await;
@@ -339,7 +358,7 @@ pub mod crystal_promo {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(600)).await;  // 10 min warmup
+            tokio::time::sleep(Duration::from_secs(600) + boot_jitter()).await;  // 10 min warmup + jitter
             loop {
                 let _ = tauri::async_runtime::spawn_blocking(|| {
                     let _ = tick();
@@ -488,7 +507,7 @@ pub mod snapshot_retention {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(900)).await;  // 15 min warmup
+            tokio::time::sleep(Duration::from_secs(900) + boot_jitter()).await;  // 15 min warmup + jitter
             loop {
                 let _ = tauri::async_runtime::spawn_blocking(|| {
                     let _ = tick();
@@ -590,7 +609,7 @@ pub mod disk_sentinel {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(240)).await;  // 4 min warmup
+            tokio::time::sleep(Duration::from_secs(240) + boot_jitter()).await;  // 4 min warmup + jitter
             loop {
                 let _ = tauri::async_runtime::spawn_blocking(tick).await;
                 tokio::time::sleep(TICK).await;
@@ -656,7 +675,7 @@ pub mod resource_pressure {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(360)).await;  // 6 min warmup
+            tokio::time::sleep(Duration::from_secs(360) + boot_jitter()).await;  // 6 min warmup + jitter
             loop {
                 tick().await;
                 tokio::time::sleep(TICK).await;
@@ -719,7 +738,7 @@ pub mod db_size_watcher {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(720)).await;  // 12 min warmup
+            tokio::time::sleep(Duration::from_secs(720) + boot_jitter()).await;  // 12 min warmup + jitter
             loop {
                 let _ = tauri::async_runtime::spawn_blocking(|| {
                     let _ = tick();
@@ -781,7 +800,7 @@ pub mod rotated_log_sweep {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(1800)).await;  // 30 min warmup
+            tokio::time::sleep(Duration::from_secs(1800) + boot_jitter()).await;  // 30 min warmup + jitter
             loop {
                 let _ = tauri::async_runtime::spawn_blocking(tick).await;
                 tokio::time::sleep(TICK).await;
@@ -859,7 +878,7 @@ pub mod clock_drift {
             return;
         }
         tauri::async_runtime::spawn(async {
-            tokio::time::sleep(Duration::from_secs(420)).await;  // 7 min warmup
+            tokio::time::sleep(Duration::from_secs(420) + boot_jitter()).await;  // 7 min warmup + jitter
             loop {
                 tick().await;
                 tokio::time::sleep(TICK).await;
