@@ -8138,7 +8138,49 @@ times the SAME way, switch tool kind entirely.
                             }, tabId);
                             stepsHtml += `<span style="opacity:0.7;color:#caa45c">[⏹ Respuesta idéntica detectada — deteniendo el bucle.]</span>\n`;
                             finishReasoning();
-                            renderAgentTask();
+                            // v1.7.115 FIX — skip-stuck previously did a bare
+                            // `break`, leaving the user with NO answer (just the
+                            // warning) — the "no hizo nada" symptom. The model IS
+                            // stuck, but its repeated response still contains
+                            // prose / a suggested command we can surface. Strip
+                            // the scaffolding tags and deliver the best-available
+                            // text as the final answer; if there's no prose at
+                            // all, deliver a clear explanation of what happened so
+                            // the turn never ends empty.
+                            const _stuckClean = String(agentResp || '')
+                                .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                                .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                                .replace(/<EXECUTE_CMD>[\s\S]*?(?:<\/EXECUTE_CMD>|$)/gi, '')
+                                .replace(/<EXECUTE_REMOTE[^>]*>[\s\S]*?(?:<\/EXECUTE_REMOTE>|$)/gi, '')
+                                .replace(/<EXECUTE[^>]*>[\s\S]*?(?:<\/EXECUTE[^>]*>|$)/gi, '')
+                                .replace(/<FILECONTENT>[\s\S]*?(?:<\/FILECONTENT>|$)/gi, '')
+                                .replace(/__TRUNCATED__/g, '')
+                                .trim();
+                            // Did any real tool/command actually run this whole task?
+                            const _didAnyWork = (filesMod.size > 0) ||
+                                (Array.isArray(toolResults) && toolResults.length > 0) ||
+                                agentToolCards.some(c => c.status === 'done');
+                            let _finalStuck;
+                            if (_stuckClean.length >= 8) {
+                                _finalStuck = _stuckClean;
+                            } else if (!_didAnyWork) {
+                                // Most common cause: the model described a command
+                                // but never emitted a real <EXECUTE_CMD> tag, so
+                                // nothing ran and it kept re-planning. Tell the user
+                                // plainly + surface the command it was looping on.
+                                const _loopedCmd = (agentResp.match(/<EXECUTE_CMD>([\s\S]*?)(?:<\/EXECUTE_CMD>|$)/i) || [])[1]
+                                    || (agentResp.match(/```(?:powershell|ps1?)?\s*([\s\S]*?)```/i) || [])[1]
+                                    || '';
+                                _finalStuck = isEN
+                                    ? `I got stuck repeating the same step without new information, so I stopped instead of looping.${_loopedCmd ? `\n\nIt looks like I wanted to run this but it never executed:\n\n\`\`\`powershell\n${_loopedCmd.trim().slice(0, 400)}\n\`\`\`\n\nYou can run it directly, or rephrase your request.` : ' Try rephrasing your request.'}`
+                                    : `Me quedé repitiendo el mismo paso sin información nueva, así que me detuve en lugar de seguir en bucle.${_loopedCmd ? `\n\nParece que quería ejecutar esto pero nunca corrió:\n\n\`\`\`powershell\n${_loopedCmd.trim().slice(0, 400)}\n\`\`\`\n\nPuedes ejecutarlo directamente, o reformular tu pregunta.` : ' Intenta reformular tu pregunta.'}`;
+                            } else {
+                                _finalStuck = isEN
+                                    ? `I completed the work above but stopped before adding a summary (I was repeating myself). Scroll up for the results.`
+                                    : `Completé el trabajo de arriba pero me detuve antes de resumir (me estaba repitiendo). Revisa los resultados arriba.`;
+                            }
+                            renderAgentTask(_finalStuck);
+                            clearAgentCheckpoint(tabId);
                             break;
                         }
                     } else {
