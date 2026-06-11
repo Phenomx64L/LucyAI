@@ -4408,6 +4408,12 @@ REGLAS DE FORMATO:
         // dead/streaming bubble — a slow leak that compounded across repeated
         // Stop clicks in a long session.
         let _drainTimer = null;
+        // v1.7.114 audit F2 — live elapsed ticker for running tool cards.
+        // Hoisted so the finally block can always stop it. Without a ticking
+        // timer, a long-running tool (30s web fetch, slow command) showed only
+        // a static spinner — reading as "frozen". This drives a ~700ms
+        // re-render so running cards visibly count up.
+        let _cardTicker = null;
         // v1.7.113 M5 — per-run dedup set for <REMEMBER> persistence. Shared
         // across the first-turn, continuation, verifier-refine and simple-path
         // extraction calls so a fact the model repeats across turns is saved
@@ -5611,6 +5617,16 @@ Use ONE of these patterns instead:
                             }
                         }
                     }
+                    // v1.7.114 F2 — start the live elapsed ticker (self-stops when
+                    // no card is running, and also cleared in runAI's finally).
+                    if (!_cardTicker) {
+                        _cardTicker = setInterval(() => {
+                            if (!agentToolCards.some(c => c.status === 'running')) {
+                                clearInterval(_cardTicker); _cardTicker = null; return;
+                            }
+                            renderAgentTask();
+                        }, 700);
+                    }
                     renderAgentTask();
                     return card;
                 };
@@ -5629,7 +5645,12 @@ Use ONE of these patterns instead:
                     const statusIcon = c.status === 'running'
                         ? `<span class="tc-spinner"></span>`
                         : c.status === 'error' ? '✕' : '✓';
-                    const dur = c.duration > 0 ? `<span class="tc-dur">${c.duration.toFixed(2)}s</span>` : '';
+                    // v1.7.114 F2 — running cards show a live, ticking elapsed
+                    // (1-decimal) so long tools read as actively working;
+                    // finished cards show the final 2-decimal duration.
+                    const dur = (c.status === 'running' && c.startTs)
+                        ? `<span class="tc-dur tc-dur-live">${((Date.now() - c.startTs) / 1000).toFixed(1)}s</span>`
+                        : c.duration > 0 ? `<span class="tc-dur">${c.duration.toFixed(2)}s</span>` : '';
                     let diffHtml = '';
                     if (c.diff) {
                         const oldLines = c.diff.oldStr.split('\n');
@@ -7321,9 +7342,61 @@ Use ONE of these patterns instead:
                         }
                     }
 
+                    // v1.7.114 audit F5 — multi-writefile support.
+                    //
+                    // The single-match path below (`wfM`/`fcM`) only ever handled
+                    // the FIRST writefile tag — if the model emitted writes to two
+                    // different files in one turn, the 2nd+ were SILENTLY DROPPED
+                    // (the model had to re-emit them next turn, or just lost them).
+                    // When there are 2+ writefile tags we instead pair each with
+                    // its adjacent <FILECONTENT>, collapse same-path writes to the
+                    // last (a turn rewriting one file twice is regenerating, not
+                    // appending), and run the INDEPENDENT paths concurrently via
+                    // Promise.allSettled. The battle-tested single-write block
+                    // below is left completely untouched for the common 1-write
+                    // case.
+                    const _allWfTags = [...agentResp.matchAll(/<TOOL>writefile:[^<]+<\/TOOL>/gi)];
                     const wfM = agentResp.match(/<TOOL>writefile:([^<]+)<\/TOOL>/i);
                     const fcM = lucyText.match(/<FILECONTENT>([\s\S]*?)<\/FILECONTENT>/i);
-                    if (wfM && fcM) {
+                    if (_allWfTags.length >= 2) {
+                        toolUsed = true;
+                        const _pairs = [...agentResp.matchAll(/<TOOL>writefile:([^<]+)<\/TOOL>\s*<FILECONTENT>([\s\S]*?)<\/FILECONTENT>/gi)];
+                        // Collapse same-path → last content wins.
+                        const _byPath = new Map();
+                        for (const p of _pairs) {
+                            const pth = (p[1] || '').trim();
+                            if (pth) _byPath.set(pth, p[2] ?? '');
+                        }
+                        lucyText = lucyText.replace(/<TOOL>writefile:[^<]+<\/TOOL>/gi, '').replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
+                        if (_byPath.size >= 2) {
+                            stepsHtml += `[⚡ ${_byPath.size} escrituras independientes en paralelo]\n`;
+                        }
+                        // One card per distinct path; each op reads OLD content
+                        // (for the diff) then writes — serial WITHIN a path,
+                        // concurrent ACROSS paths (distinct files never race).
+                        const _writeOps = [...(_byPath.entries())].map(([_wp, _wc]) => {
+                            const _wCard = newToolCard('⊞', `Write ${_wp}`, 'write');
+                            return (async () => {
+                                try {
+                                    let _oldC = '';
+                                    try { _oldC = String(await invoke('read_file_content', { path: _wp }) || ''); } catch { _oldC = ''; }
+                                    const _r = await retryWithBackoff(() => invoke('write_file_content', { path: _wp, content: _wc, force: true }), 3, false);
+                                    _wCard.diff = { oldStr: _oldC, newStr: _wc };
+                                    filesMod.add(_wp);
+                                    _updateWM(t, { type: 'file', path: _wp, op: 'created' });
+                                    if (!t._writeUndo) t._writeUndo = new Map();
+                                    t._writeUndo.set(_wp, _oldC);
+                                    toolResults.push(`[WRITE RESULT] ${_r}`);
+                                    stepsHtml += `[⊞ Escritura] ${esc(_wp)}\n`;
+                                    finishToolCard(_wCard, `✓ ${String(_r).trim()}`, true);
+                                } catch (e) {
+                                    toolResults.push(`[WRITE ERROR ${_wp}] ${e}`);
+                                    finishToolCard(_wCard, `✗ ${String(e)}`, false);
+                                }
+                            })();
+                        });
+                        await Promise.allSettled(_writeOps);
+                    } else if (wfM && fcM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>writefile:[^<]+<\/TOOL>/gi, '').replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '');
                         const _wPath = wfM[1].trim();
@@ -8738,6 +8811,8 @@ times the SAME way, switch tool kind entirely.
             // stream threw or was cancelled, the inline clearInterval after the
             // await never ran; clear it here so it can't keep firing.
             if (_drainTimer) { clearInterval(_drainTimer); _drainTimer = null; }
+            // v1.7.114 F2 — stop the live tool-card elapsed ticker.
+            if (_cardTicker) { clearInterval(_cardTicker); _cardTicker = null; }
             // Drop any lingering empty `streaming` skeleton bubbles — they show as
             // a ghost placeholder under the user message when the loop ends without
             // streaming text (the second screenshot bug).
