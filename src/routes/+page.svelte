@@ -633,6 +633,37 @@ import { listen } from '@tauri-apps/api/event';
         _maxAgentLoops = n;
         safeSetLSString('lucy_max_agent_loops', String(n));
     }
+    // v1.7.107 perf #3 — per-session URL cache. Long research sessions
+    // re-fetch the same docs page across 5-10 agent turns (the model
+    // forgets it already read it, or needs to recheck a section). Each
+    // fetch is a 200-800ms Rust roundtrip + network. A 10-min TTL cache
+    // collapses repeats to ~0ms without sacrificing freshness for the
+    // common case (a session lasts minutes, not hours).
+    // Keyed by "tool::query" so search_web and fetch_url_content don't
+    // alias. Map (not LRU) is fine — bounded by a manual eviction at 64
+    // entries which covers realistic research depth without unbounded
+    // RAM growth on a runaway loop.
+    const _urlCache = new Map(); // key → { value, ts }
+    const _URL_CACHE_TTL_MS = 10 * 60 * 1000;
+    const _URL_CACHE_MAX = 64;
+    let _urlCacheHits = 0; // debug: surfaced in performance panel later
+    async function _cachedFetch(kind, query, fetcher) {
+        const key = `${kind}::${query}`;
+        const now = Date.now();
+        const hit = _urlCache.get(key);
+        if (hit && (now - hit.ts) < _URL_CACHE_TTL_MS) {
+            _urlCacheHits++;
+            return hit.value;
+        }
+        const value = await fetcher();
+        if (_urlCache.size >= _URL_CACHE_MAX) {
+            // Evict oldest entry — Map iteration order is insertion order.
+            const oldest = _urlCache.keys().next().value;
+            if (oldest !== undefined) _urlCache.delete(oldest);
+        }
+        _urlCache.set(key, { value, ts: now });
+        return value;
+    }
     // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
     let showCheatsheet = false;
     // v1.6.1 — ECC-style skill preset picker. Opened via composer chip
@@ -4496,7 +4527,7 @@ REGLAS DE FORMATO:
                 const thinkMsg = getTab(tabId)?.messages.find(m=>m.id==='thinking-'+tabId);
                 if (thinkMsg) { thinkMsg.html = `<span style="color:#3a5a7a;font-size:11px;">↻ Leyendo documentación (${urlsToFetch.length} URL${urlsToFetch.length>1?'s':''})…</span>`; refresh(); }
                 const fetchResults = await Promise.allSettled(
-                    urlsToFetch.map(u => invoke('fetch_url_content', { url: u }))
+                    urlsToFetch.map(u => _cachedFetch('fetch_url_content', u, () => invoke('fetch_url_content', { url: u })))
                 );
                 let webCtx = ''; let fetchedCount = 0;
                 fetchResults.forEach((res, i) => {
@@ -5078,6 +5109,24 @@ Use ONE of these patterns instead:
                 let stepsHtml = '';
                 let filesMod = new Set();
                 const editCountsByPath = new Map(); // anti-loop: contar ediciones por archivo
+                // v1.7.107 perf #5 — skip-stuck identical response detector.
+                // Cheap djb2 hash of the previous turn's agentResp. If two
+                // consecutive continuation turns produce the exact same
+                // response, the model is stuck regenerating the same plan
+                // and burning loops + tokens. Break early with a trace log
+                // instead of waiting for MAX_IDENTICAL_TOOL_CALLS to trip
+                // (which only fires if the SAME tool repeats — a stuck
+                // response with NO tool tag would otherwise run to
+                // MAX_LOOPS). 2 consecutive matches required so a model
+                // that briefly re-asserts a status line doesn't trip it.
+                let _lastAgentRespHash = '';
+                let _identicalRespStreak = 0;
+                const _hashResp = (s) => {
+                    let h = 5381;
+                    const str = String(s || '').trim();
+                    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+                    return h >>> 0;
+                };
                 // ── Generic anti-loop: counts identical tool calls by hash(kind+args) ──
                 const toolCallCounts = new Map();
                 const MAX_IDENTICAL_TOOL_CALLS = 3;
@@ -6235,14 +6284,14 @@ Use ONE of these patterns instead:
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>fetch:[^<]+<\/TOOL>/gi, '');
                         const urlQ = fetchM[1].trim();
-                        readOnlyTasks.push({ label: `[◉ Lector WEB] ${urlQ}`, fn: () => retryWithBackoff(() => invoke('fetch_url_content', {url: urlQ}), 2, true).then(r => `[FETCH RESULT for '${urlQ}']\n${r}`) });
+                        readOnlyTasks.push({ label: `[◉ Lector WEB] ${urlQ}`, fn: () => _cachedFetch('fetch_url_content', urlQ, () => retryWithBackoff(() => invoke('fetch_url_content', {url: urlQ}), 2, true)).then(r => `[FETCH RESULT for '${urlQ}']\n${r}`) });
                     }
                     const webM = agentResp.match(/<TOOL>search_web:([^<]+)<\/TOOL>/i);
                     if (webM) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<TOOL>search_web:[^<]+<\/TOOL>/gi, '');
                         const webQ = webM[1].trim();
-                        readOnlyTasks.push({ label: `[◉ Web] ${webQ}`, fn: () => retryWithBackoff(() => invoke('search_web', {query: webQ}), 2, true).then(r => `[WEB SEARCH RESULT for '${webQ}']\n${r}`) });
+                        readOnlyTasks.push({ label: `[◉ Web] ${webQ}`, fn: () => _cachedFetch('search_web', webQ, () => retryWithBackoff(() => invoke('search_web', {query: webQ}), 2, true)).then(r => `[WEB SEARCH RESULT for '${webQ}']\n${r}`) });
                     }
                     const rbM = agentResp.match(/<TOOL>search_runbooks:([^<]+)<\/TOOL>/i);
                     if (rbM) {
@@ -7559,6 +7608,35 @@ times the SAME way, switch tool kind entirely.
                     // Same fix as the first-turn extraction above — without this,
                     // facts the model decides to remember mid-loop got dropped.
                     extractAndPersistMemory(agentResp);
+
+                    // v1.7.107 perf #5 — skip-stuck detector. If two
+                    // consecutive turns produce byte-identical responses
+                    // (including the exact same <TOOL>/<THOUGHT>), the
+                    // model is grinding. Bail out with a clear trace so
+                    // we don't burn the rest of MAX_LOOPS.
+                    const _curHash = _hashResp(agentResp);
+                    if (_curHash === _lastAgentRespHash && agentResp && agentResp.length > 0) {
+                        _identicalRespStreak++;
+                        if (_identicalRespStreak >= 1) {
+                            pushTrace({
+                                phase: 'info',
+                                label: `⏹ Skip-stuck: respuesta idéntica al turno previo — bucle interrumpido en step ${loop_i + 2}`,
+                                step: loop_i + 2,
+                                tabId,
+                                detail: `Hash 0x${_curHash.toString(16)} repetido. El modelo está atascado regenerando la misma salida.`,
+                            });
+                            logTaskEvent('agent_loop_block', 'identical_response', null, {
+                                model: _loopModelName, step: loop_i + 2, hash: _curHash,
+                            }, tabId);
+                            stepsHtml += `<span style="opacity:0.7;color:#caa45c">[⏹ Respuesta idéntica detectada — deteniendo el bucle.]</span>\n`;
+                            finishReasoning();
+                            renderAgentTask();
+                            break;
+                        }
+                    } else {
+                        _identicalRespStreak = 0;
+                        _lastAgentRespHash = _curHash;
+                    }
 
                     if (t._cancelled) break;
                     stepsHtml = stepsHtml.replace(/<span.*\[↻ Siguiente turno.*span>\n/, '');

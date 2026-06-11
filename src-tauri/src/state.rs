@@ -193,6 +193,18 @@ pub static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
         .timeout(std::time::Duration::from_secs(300))
         .connect_timeout(std::time::Duration::from_secs(15))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
+        // v1.7.107 perf: TCP keepalive so pooled connections survive
+        // NAT / corporate firewall idle timeouts (default ~5 min on most
+        // boxes). Without this, the second LLM call ~3 min into a long
+        // research session forces a fresh TLS handshake (~80-150ms) even
+        // though the pool intended to reuse the socket.
+        .tcp_keepalive(std::time::Duration::from_secs(45))
+        // v1.7.107 perf: cap idle per host. Default is unlimited, which
+        // builds up garbage sockets across multi-provider sessions
+        // (Gemini + Claude + Ollama all in one chat). 8 covers the
+        // largest realistic concurrent fan-out (parallel read-only tools)
+        // without holding sockets that will never be reused.
+        .pool_max_idle_per_host(8)
         .user_agent(concat!("Lucy/", env!("CARGO_PKG_VERSION")))
         .redirect(ssrf_safe_redirect_policy())
         .build()
