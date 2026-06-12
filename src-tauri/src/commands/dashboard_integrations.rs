@@ -116,9 +116,18 @@ pub async fn dashboard_failed_logins_24h() -> Result<FailedLoginsBrief, String> 
             if ($_.Exception.Message -like '*No events*' -or $_.Exception.Message -like '*returned no results*') { '0' }
             else { 'ERROR:' + $_.Exception.Message }
         }";
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output();
+        // CREATE_NO_WINDOW: without it this PowerShell spawn pops a visible
+        // console window every time the Dashboard loads/refreshes (the "two cmd
+        // windows" the user saw flashing). Gated for Windows because the file
+        // compiles cross-platform even though this branch only runs on Windows.
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(crate::state::CREATE_NO_WINDOW);
+        }
+        let output = cmd.output();
         let raw = match output {
             Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
             Err(e) => return Ok(FailedLoginsBrief {

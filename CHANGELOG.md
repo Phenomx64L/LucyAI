@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.137] — 2026-06-12
+
+### Fix — Dashboard popped visible PowerShell console windows
+
+`dashboard_failed_logins_24h` spawned `powershell` (Get-WinEvent on the Security
+log) **without `CREATE_NO_WINDOW`**, so a console window flashed every time the
+Dashboard mounted and on each 90 s refresh — the "two cmd windows" the user saw.
+Added the flag (gated for Windows). Every other shell spawn in the codebase
+already had it; this was the lone miss.
+
+---
+
 ## [1.7.136] — 2026-06-12
 
 ### Fix — Memory Graph "cage" #2: canvas now fills the panel + pan clamp
