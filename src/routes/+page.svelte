@@ -4212,6 +4212,60 @@ REGLAS DE FORMATO:
             }
         }
 
+        // ── v1.7.127 — /controlar <tarea> + /detener — Phase B local control ──
+        // Lucy CONTROLS the local desktop (mouse + keyboard) behind an explicit
+        // per-invocation confirm() gate. Backend caps at 15 steps and honours
+        // cancel_local_agent(). Events stream live into one chat message.
+        {
+            const _stop = raw.match(/^\/(detener|stop|abortar)\b/i);
+            if (_stop) {
+                try { await invoke('cancel_local_agent'); } catch {}
+                addMsg(tabId, { role: 'system', rawRole: 'Sistema', rawContent: '',
+                    html: `<div class="fa-chip"><span class="fa-icon">⏹</span><span class="fa-label">${isEN ? 'Local control stop requested' : 'Detención del control local solicitada'}</span></div>` });
+                t.isProcessing = false; refresh(); return;
+            }
+            const _ctrl = raw.match(/^\/(controlar|control|usar-equipo)\b\s*([\s\S]*)$/i);
+            if (_ctrl) {
+                const _task = (_ctrl[2] || '').trim();
+                if (!_task) {
+                    addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>Uso: <code>/controlar &lt;qué hacer en pantalla&gt;</code> — p.ej. <code>/controlar abre el bloc de notas y escribe hola</code>` });
+                    t.isProcessing = false; refresh(); return;
+                }
+                const _ok = (typeof window !== 'undefined' && window.confirm)
+                    ? window.confirm(`⚠️ Lucy va a CONTROLAR tu ratón y teclado para:\n\n"${_task}"\n\nTope: 15 pasos. Escribe /detener para abortar.\n\n¿Permitir el control AHORA?`)
+                    : false;
+                if (!_ok) {
+                    addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>Control cancelado por el usuario.` });
+                    t.isProcessing = false; refresh(); return;
+                }
+                const _cid = 'local-agent-' + Date.now();
+                let _log = `<div class="mn">Lucy (Control local)</div><div style="font-size:12px;color:var(--txt2)">Tarea: ${esc(_task)}</div><pre style="font-size:11.5px;white-space:pre-wrap;margin-top:6px">`;
+                addMsg(tabId, { id: _cid, role: 'lucy', html: _log + '</pre>' });
+                const _append = (line) => {
+                    _log += esc(String(line)) + '\n';
+                    const m = getTab(tabId)?.messages.find(x => x.id === _cid);
+                    if (m) { m.html = _log + '</pre>'; refresh(); scrollChat(); }
+                };
+                let _un = null;
+                try {
+                    _un = await listen('local_agent_step', (ev) => {
+                        const p = (ev && ev.payload) || {};
+                        if (p.kind === 'action' || p.kind === 'text') _append((p.detail || '').toString().slice(0, 300));
+                        else if (p.kind === 'done')  _append('✓ ' + (p.detail || 'Listo'));
+                        else if (p.kind === 'error') _append('✗ ' + (p.detail || 'Error'));
+                    });
+                    const _res = await invoke('run_local_agent', { task: _task, model: getEffectiveModel(t), maxSteps: 15, confirm: true });
+                    if (_res) _append('— ' + String(_res).slice(0, 300));
+                } catch (e) {
+                    _append('✗ ' + String(e).slice(0, 300));
+                } finally {
+                    if (_un) { try { _un(); } catch {} }
+                    t.isProcessing = false; refresh();
+                }
+                return;
+            }
+        }
+
         // ── SLASH COMMANDS ──
         if (raw.startsWith('/')) {
             const handled = handleSlashCommand(tabId, raw);

@@ -115,3 +115,301 @@ pub async fn capture_local_screen(max_width: Option<u32>) -> Result<String, Stri
         Err("La captura de pantalla local solo está soportada en Windows por ahora.".into())
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PHASE B — Local desktop CONTROL (Lucy moves the mouse / types)
+//
+//  Reuses the existing Computer-Use provider abstraction + the rdp_agent loop
+//  shape, but captures the LOCAL screen and sends input at ABSOLUTE screen
+//  coordinates (scaled back up from the downscaled screenshot the model saw).
+//
+//  SAFETY (this controls the user's real mouse + keyboard):
+//    • `confirm` MUST be true — the frontend only passes it after an explicit
+//      per-invocation user confirmation. Defends against accidental / model-
+//      triggered runs.
+//    • LOCAL_AGENT_RUNNING blocks concurrent agents.
+//    • LOCAL_AGENT_CANCEL is the kill-switch: checked before every step AND
+//      before every action; cancel_local_agent() flips it from the UI.
+//    • Hard step cap.
+//  The Rust execute_powershell blocklist does NOT gate GUI input, so these
+//  software guards + the explicit confirm are the safety boundary here.
+// ═══════════════════════════════════════════════════════════════════════════
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static LOCAL_AGENT_RUNNING: AtomicBool = AtomicBool::new(false);
+static LOCAL_AGENT_CANCEL:  AtomicBool = AtomicBool::new(false);
+
+/// Kill-switch — the UI calls this to abort an in-flight local agent.
+#[tauri::command]
+pub fn cancel_local_agent() {
+    LOCAL_AGENT_CANCEL.store(true, Ordering::SeqCst);
+}
+
+/// True while a local agent loop is executing (for the UI to show state).
+#[tauri::command]
+pub fn local_agent_running() -> bool {
+    LOCAL_AGENT_RUNNING.load(Ordering::SeqCst)
+}
+
+// ── Win32 input layer — ABSOLUTE screen coordinates ───────────────────────
+#[cfg(windows)]
+mod input {
+    use winapi::um::winuser::{
+        SetCursorPos, mouse_event, keybd_event, SendInput, INPUT, INPUT_KEYBOARD,
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+        MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_WHEEL,
+    };
+    use std::{thread, time::Duration, mem};
+
+    const KEYEVENTF_UNICODE: u32 = 0x0004;
+    const KEYEVENTF_KEYUP:   u32 = 0x0002;
+
+    pub fn mouse_click(x: i32, y: i32, button: &str, double: bool) {
+        unsafe {
+            SetCursorPos(x, y);
+            thread::sleep(Duration::from_millis(70));
+            let (down, up) = match button {
+                "right"  => (MOUSEEVENTF_RIGHTDOWN,  MOUSEEVENTF_RIGHTUP),
+                "middle" => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+                _        => (MOUSEEVENTF_LEFTDOWN,   MOUSEEVENTF_LEFTUP),
+            };
+            mouse_event(down, 0, 0, 0, 0);
+            thread::sleep(Duration::from_millis(50));
+            mouse_event(up, 0, 0, 0, 0);
+            if double {
+                thread::sleep(Duration::from_millis(90));
+                mouse_event(down, 0, 0, 0, 0);
+                thread::sleep(Duration::from_millis(50));
+                mouse_event(up, 0, 0, 0, 0);
+            }
+        }
+    }
+
+    pub fn mouse_move(x: i32, y: i32) { unsafe { SetCursorPos(x, y); } }
+
+    pub fn drag(x0: i32, y0: i32, x1: i32, y1: i32) {
+        unsafe {
+            SetCursorPos(x0, y0);
+            thread::sleep(Duration::from_millis(80));
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+            thread::sleep(Duration::from_millis(70));
+            SetCursorPos(x1, y1);
+            thread::sleep(Duration::from_millis(120));
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        }
+    }
+
+    pub fn scroll(x: i32, y: i32, amount: i32) {
+        unsafe {
+            SetCursorPos(x, y);
+            thread::sleep(Duration::from_millis(50));
+            // 120 = one wheel notch; positive = up.
+            mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (amount * 120) as u32, 0);
+        }
+    }
+
+    pub fn type_text(text: &str) {
+        unsafe {
+            for ch in text.encode_utf16() {
+                let mut dn: INPUT = mem::zeroed();
+                dn.type_ = INPUT_KEYBOARD;
+                { let k = dn.u.ki_mut(); k.wScan = ch; k.dwFlags = KEYEVENTF_UNICODE; }
+                let mut up: INPUT = mem::zeroed();
+                up.type_ = INPUT_KEYBOARD;
+                { let k = up.u.ki_mut(); k.wScan = ch; k.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP; }
+                let inputs = [dn, up];
+                SendInput(2, inputs.as_ptr() as *mut _, mem::size_of::<INPUT>() as i32);
+                thread::sleep(Duration::from_millis(16));
+            }
+        }
+    }
+
+    pub fn send_key(key: &str) {
+        unsafe {
+            let parts: Vec<&str> = key.split('+').collect();
+            let (mods, main) = if parts.len() > 1 {
+                (&parts[..parts.len()-1], parts[parts.len()-1])
+            } else { (&[][..], parts[0]) };
+            for m in mods { let vk = modifier_vk(m); if vk != 0 { keybd_event(vk, 0, 0, 0); } }
+            thread::sleep(Duration::from_millis(40));
+            let vk = named_vk(main);
+            if vk != 0 {
+                keybd_event(vk, 0, 0, 0);
+                thread::sleep(Duration::from_millis(50));
+                keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+            }
+            for m in mods.iter().rev() { let vk = modifier_vk(m); if vk != 0 { keybd_event(vk, 0, KEYEVENTF_KEYUP, 0); } }
+        }
+    }
+
+    fn modifier_vk(name: &str) -> u8 {
+        match name.to_lowercase().as_str() {
+            "ctrl" | "control" => 0x11, "alt" => 0x12, "shift" => 0x10,
+            "win" | "super" => 0x5B, _ => 0,
+        }
+    }
+    fn named_vk(name: &str) -> u8 {
+        match name.to_lowercase().as_str() {
+            "return" | "enter" | "\n" => 0x0D, "escape" | "esc" => 0x1B, "tab" => 0x09,
+            "backspace" => 0x08, "delete" | "del" => 0x2E, "space" => 0x20,
+            "home" => 0x24, "end" => 0x23, "pageup" => 0x21, "pagedown" => 0x22,
+            "left" => 0x25, "up" => 0x26, "right" => 0x27, "down" => 0x28,
+            "f1" => 0x70, "f2" => 0x71, "f3" => 0x72, "f4" => 0x73, "f5" => 0x74, "f6" => 0x75,
+            "f7" => 0x76, "f8" => 0x77, "f9" => 0x78, "f10" => 0x79, "f11" => 0x7A, "f12" => 0x7B,
+            s if s.len() == 1 => s.chars().next().map(|c| c.to_ascii_uppercase() as u8).unwrap_or(0),
+            _ => 0,
+        }
+    }
+}
+
+/// Capture for the agent loop: returns (base64 PNG, scale_x, scale_y) where
+/// scale maps a coordinate in the (downscaled) screenshot back to the real
+/// screen. Windows-only.
+#[cfg(windows)]
+fn capture_for_agent(max_width: u32) -> Result<(String, f64, f64), String> {
+    use winapi::um::winuser::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    let (nw, nh) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let png = capture_primary_screen_png(max_width)?;
+    let shot_w = if max_width > 0 && (nw as u32) > max_width { max_width } else { nw as u32 };
+    let shot_h = if shot_w == nw as u32 { nh as u32 } else { ((nh as u64 * shot_w as u64) / nw as u64).max(1) as u32 };
+    let sx = nw as f64 / shot_w.max(1) as f64;
+    let sy = nh as f64 / shot_h.max(1) as f64;
+    Ok((base64::engine::general_purpose::STANDARD.encode(&png), sx, sy))
+}
+
+#[cfg(windows)]
+fn emit_local(app: &tauri::AppHandle, kind: &str, data: &str, detail: &str) {
+    use tauri::Emitter;
+    let _ = app.emit("local_agent_step", serde_json::json!({
+        "kind": kind, "data": data, "detail": detail,
+    }));
+}
+
+/// Phase B — agentic local-desktop control loop. GATED by `confirm`.
+#[tauri::command]
+pub async fn run_local_agent(
+    task:      String,
+    model:     Option<String>,
+    max_steps: Option<u32>,
+    confirm:   bool,
+    app:       tauri::AppHandle,
+) -> Result<String, String> {
+    if !confirm {
+        return Err("Control local no confirmado por el usuario (gate de seguridad).".into());
+    }
+    #[cfg(not(windows))]
+    { let _ = (task, model, max_steps, app); return Err("Control local solo en Windows por ahora.".into()); }
+
+    #[cfg(windows)]
+    {
+        use crate::commands::computer_use::{create_provider, types::{ComputeConfig, ComputerAction}};
+        use serde_json::{json, Value};
+        use std::{thread, time::Duration};
+
+        // One agent at a time.
+        if LOCAL_AGENT_RUNNING.swap(true, Ordering::SeqCst) {
+            return Err("Ya hay un agente local en ejecución.".into());
+        }
+        LOCAL_AGENT_CANCEL.store(false, Ordering::SeqCst);
+        // RAII-ish guard so the flag clears on every exit path.
+        struct Guard;
+        impl Drop for Guard { fn drop(&mut self) { LOCAL_AGENT_RUNNING.store(false, Ordering::SeqCst); } }
+        let _guard = Guard;
+
+        let model     = model.unwrap_or_else(|| "claude-opus-4-8".into());
+        let max_steps = max_steps.unwrap_or(15);
+        let max_width = 1280u32;
+
+        let provider = create_provider(&model);
+        emit_local(&app, "action", "", &format!("[Agente local] {} — armado, controlando tu equipo", provider.name()));
+        provider.check_credentials().await.map_err(|e| format!("Credenciales: {}", e))?;
+
+        let (init_b64, mut sx, mut sy) = capture_for_agent(max_width)
+            .map_err(|e| format!("Captura inicial: {}", e))?;
+        emit_local(&app, "screenshot", &init_b64, "Pantalla inicial");
+
+        // Screen dims (in screenshot space) for the prompt.
+        let shot_w = (1920.0 / sx).round() as i32; // informational only
+        let _ = shot_w;
+
+        let mut messages: Vec<Value> = vec![json!({
+            "role": "user",
+            "content": [
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": init_b64 } },
+                { "type": "text", "text": format!(
+                    "You are controlling the user's LOCAL Windows desktop. The screenshot is the whole primary screen.\n\
+                     Coordinates you give must be in SCREENSHOT pixels (the image you see).\n\n\
+                     Task: {}\n\n\
+                     Work step by step. When done, say so and STOP.", task) }
+            ]
+        })];
+
+        let config = ComputeConfig {
+            model: model.clone(), api_key: String::new(), task: task.clone(),
+            max_steps, window_width: 1280, window_height: 800,
+        };
+
+        let mut step = 0u32;
+        let mut summary = String::new();
+
+        loop {
+            if LOCAL_AGENT_CANCEL.load(Ordering::SeqCst) {
+                emit_local(&app, "done", "", "Detenido por el usuario.");
+                return Ok("Detenido por el usuario.".into());
+            }
+            if step >= max_steps {
+                emit_local(&app, "done", "", &format!("Límite de {} pasos.", max_steps));
+                break;
+            }
+            step += 1;
+            emit_local(&app, "action", "", &format!("[Agente local] paso {}/{}…", step, max_steps));
+
+            let (shot, nsx, nsy) = capture_for_agent(max_width).unwrap_or((String::new(), sx, sy));
+            sx = nsx; sy = nsy;
+
+            match provider.query_llm(&config, &shot, &messages).await {
+                Ok((actions, text, should_stop)) => {
+                    if !text.is_empty() {
+                        emit_local(&app, "text", "", &text);
+                        summary = text.clone();
+                        messages.push(json!({ "role": "assistant", "content": [{ "type": "text", "text": text }] }));
+                    }
+                    if actions.is_empty() || should_stop {
+                        emit_local(&app, "done", "", &summary);
+                        break;
+                    }
+                    for action in actions {
+                        if LOCAL_AGENT_CANCEL.load(Ordering::SeqCst) {
+                            emit_local(&app, "done", "", "Detenido por el usuario.");
+                            return Ok("Detenido por el usuario.".into());
+                        }
+                        // Map screenshot coords → real screen coords.
+                        let map = |c: [i32; 2]| [ (c[0] as f64 * sx).round() as i32, (c[1] as f64 * sy).round() as i32 ];
+                        match action {
+                            ComputerAction::LeftClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Click ({},{})", p[0], p[1])); input::mouse_click(p[0], p[1], "left", false); }
+                            ComputerAction::RightClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Click derecho ({},{})", p[0], p[1])); input::mouse_click(p[0], p[1], "right", false); }
+                            ComputerAction::DoubleClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Doble click ({},{})", p[0], p[1])); input::mouse_click(p[0], p[1], "left", true); }
+                            ComputerAction::MiddleClick { coordinate } => { let p = map(coordinate); input::mouse_click(p[0], p[1], "middle", false); }
+                            ComputerAction::MouseMove { coordinate } => { let p = map(coordinate); input::mouse_move(p[0], p[1]); }
+                            ComputerAction::LeftClickDrag { start_coordinate, end_coordinate } => { let a = map(start_coordinate); let b = map(end_coordinate); emit_local(&app, "action", "", &format!("Arrastrar ({},{})→({},{})", a[0], a[1], b[0], b[1])); input::drag(a[0], a[1], b[0], b[1]); }
+                            ComputerAction::Type { text } => { emit_local(&app, "action", "", &format!("Escribir: {:.40}", text)); input::type_text(&text); }
+                            ComputerAction::Key { text } => { emit_local(&app, "action", "", &format!("Tecla: {}", text)); for k in text.split_whitespace() { input::send_key(k); thread::sleep(Duration::from_millis(90)); } }
+                            ComputerAction::Screenshot | ComputerAction::CursorPosition => {}
+                        }
+                        thread::sleep(Duration::from_millis(650));
+                        let (after, _, _) = capture_for_agent(max_width).unwrap_or((String::new(), sx, sy));
+                        messages.push(json!({ "role": "user", "content": [{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": after } }] }));
+                        if messages.len() > 8 {
+                            let first = messages[0].clone();
+                            let tail = messages[messages.len()-6..].to_vec();
+                            messages = std::iter::once(first).chain(tail).collect();
+                        }
+                    }
+                }
+                Err(e) => { emit_local(&app, "error", "", &format!("Error: {}", e)); return Err(format!("Agente local: {}", e)); }
+            }
+        }
+        Ok(summary)
+    }
+}

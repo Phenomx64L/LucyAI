@@ -812,6 +812,10 @@ pub fn run() {
             rdp_agent::run_rdp_agent,
             // v1.7.126 — Local desktop computer-use, Phase A (Lucy SEES the screen)
             local_screen::capture_local_screen,
+            // v1.7.127 — Local desktop computer-use, Phase B (Lucy CONTROLS, gated)
+            local_screen::run_local_agent,
+            local_screen::cancel_local_agent,
+            local_screen::local_agent_running,
             indexer::locate_file,
             indexer::start_indexer,
             // Shell local + streaming interactivo
