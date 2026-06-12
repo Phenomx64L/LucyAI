@@ -4246,7 +4246,24 @@ REGLAS DE FORMATO:
                     const m = getTab(tabId)?.messages.find(x => x.id === _cid);
                     if (m) { m.html = _log + '</pre>'; refresh(); scrollChat(); }
                 };
-                let _un = null;
+                // Diagnostics + safety net: the backend now emits staged
+                // progress ("1/3 credenciales", "2/3 captura", "3/3 modelo…").
+                // A watchdog guarantees the terminal frees itself even if the
+                // backend wedges in a place its own timeouts can't reach — and
+                // tells us (and the user) that it never answered.
+                let _un = null, _done = false, _wd = null;
+                const _finish = () => {
+                    if (_done) return; _done = true;
+                    if (_wd) { clearTimeout(_wd); _wd = null; }
+                    if (_un) { try { _un(); } catch {} _un = null; }
+                    t.isProcessing = false; refresh();
+                };
+                _wd = setTimeout(() => {
+                    if (_done) return;
+                    _append('⏱ El backend no respondió en 150s. Cancelo y libero la terminal. (Dime en qué paso — 1/3, 2/3, 3/3 — se quedó.)');
+                    invoke('cancel_local_agent').catch(() => {});
+                    _finish();
+                }, 150000);
                 try {
                     _un = await listen('local_agent_step', (ev) => {
                         const p = (ev && ev.payload) || {};
@@ -4254,13 +4271,13 @@ REGLAS DE FORMATO:
                         else if (p.kind === 'done')  _append('✓ ' + (p.detail || 'Listo'));
                         else if (p.kind === 'error') _append('✗ ' + (p.detail || 'Error'));
                     });
+                    _append('▶ Enviado al backend (run_local_agent). Esperando respuesta…');
                     const _res = await invoke('run_local_agent', { task: _task, model: getEffectiveModel(t), maxSteps: 15, confirm: true });
                     if (_res) _append('— ' + String(_res).slice(0, 300));
                 } catch (e) {
                     _append('✗ ' + String(e).slice(0, 300));
                 } finally {
-                    if (_un) { try { _un(); } catch {} }
-                    t.isProcessing = false; refresh();
+                    _finish();
                 }
                 return;
             }

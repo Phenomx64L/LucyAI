@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.129] — 2026-06-12
+
+### Fix + diagnose — `/controlar` still hung after 1.7.128
+
+The 1.7.128 timeouts wrapped the `.await` points, but the providers read the
+keyring **synchronously before any await**, and the initial screen capture
+wasn't timeout-wrapped — so a stall in either spot was invisible to those
+timeouts and looked identical to the original hang. This release closes those
+gaps and makes the stall location observable:
+
+- **Un-cancellable credential read → bounded.** `provider.check_credentials()`
+  (a synchronous keyring read inside an `async fn`) now runs on a spawned task
+  wrapped in a real 10 s timeout that can actually fire, so a wedged Windows
+  Credential Manager can no longer freeze the agent.
+- **Initial capture → 20 s timeout.** Previously the only un-bounded `.await`.
+- **Staged progress.** The agent now emits `1/3 Verificando credenciales…`,
+  `2/3 Capturando la pantalla…`, `3/3 Consultando al modelo…` so a stall points
+  straight at its cause.
+- **Frontend watchdog.** `/controlar` prints `▶ Enviado al backend…` before the
+  call and frees the terminal after 150 s if the backend never answers (instead
+  of pinning "Procesando…" forever), reporting that it timed out.
+
+---
+
 ## [1.7.128] — 2026-06-12
 
 ### Fix — `/controlar` (local computer-use Phase B) hung forever / did nothing

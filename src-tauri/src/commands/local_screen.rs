@@ -321,25 +321,41 @@ pub async fn run_local_agent(
         let max_steps = max_steps.unwrap_or(15);
         let max_width = 1280u32;
 
-        let provider = create_provider(&model);
+        // Wrap in an Arc so the credential check can run on a BLOCKING thread
+        // (the keyring read is synchronous; if it ever stalls it must not freeze
+        // the async executor — and a JoinHandle is a real future, so the timeout
+        // around it can actually fire).
+        let provider: std::sync::Arc<dyn crate::commands::computer_use::ComputerUseProvider> =
+            std::sync::Arc::from(create_provider(&model));
         emit_local(&app, "action", "", &format!("[Agente local] {} — armado, controlando tu equipo", provider.name()));
 
-        // Credential check with a hard timeout. The keyring read is normally
-        // instant, but we never want a stuck credential backend to freeze the
-        // whole agent with no feedback (the bug this whole block guards against).
-        match tokio::time::timeout(Duration::from_secs(10), provider.check_credentials()).await {
-            Err(_)     => { emit_local(&app, "error", "", "La verificación de credenciales tardó demasiado (timeout 10s)."); return Err("Timeout verificando credenciales.".into()); }
-            Ok(Err(e)) => { emit_local(&app, "error", "", &format!("Credenciales: {}", e)); return Err(format!("Credenciales: {}", e)); }
-            Ok(Ok(()))  => {}
+        // ── Stage 1: credentials ──────────────────────────────────────────────
+        emit_local(&app, "action", "", "1/3 Verificando credenciales del proveedor…");
+        let prov_cc = provider.clone();
+        let cred = tokio::time::timeout(
+            Duration::from_secs(10),
+            tauri::async_runtime::spawn(async move { prov_cc.check_credentials().await }),
+        ).await;
+        match cred {
+            Err(_)         => { emit_local(&app, "error", "", "La verificación de credenciales no respondió en 10s. ¿API key del proveedor configurada en Ajustes?"); return Err("Timeout verificando credenciales (10s).".into()); }
+            Ok(Err(e))     => { emit_local(&app, "error", "", &format!("Fallo interno verificando credenciales: {}", e)); return Err(format!("Credenciales (hilo): {}", e)); }
+            Ok(Ok(Err(e))) => { emit_local(&app, "error", "", &format!("Credenciales: {}", e)); return Err(format!("Credenciales: {}", e)); }
+            Ok(Ok(Ok(()))) => {}
         }
 
-        // Initial capture — OFF the async runtime (GDI + PNG encode is blocking
-        // CPU work; running it inline starves event delivery and the loop).
-        let (init_b64, mut sx, mut sy) = match tauri::async_runtime::spawn_blocking(move || capture_for_agent(max_width)).await {
-            Ok(Ok(v))  => v,
-            Ok(Err(e)) => { emit_local(&app, "error", "", &format!("Captura inicial: {}", e)); return Err(format!("Captura inicial: {}", e)); }
-            Err(e)     => { emit_local(&app, "error", "", &format!("Captura inicial (hilo): {}", e)); return Err(format!("Captura inicial: {}", e)); }
+        // ── Stage 2: initial screenshot (timeout-wrapped this time) ────────────
+        emit_local(&app, "action", "", "2/3 Capturando la pantalla…");
+        let init_cap = tokio::time::timeout(
+            Duration::from_secs(20),
+            tauri::async_runtime::spawn_blocking(move || capture_for_agent(max_width)),
+        ).await;
+        let (init_b64, mut sx, mut sy) = match init_cap {
+            Err(_)             => { emit_local(&app, "error", "", "La captura de pantalla no terminó en 20s (timeout)."); return Err("Timeout en la captura inicial (20s).".into()); }
+            Ok(Err(e))         => { emit_local(&app, "error", "", &format!("Captura inicial (hilo): {}", e)); return Err(format!("Captura inicial: {}", e)); }
+            Ok(Ok(Err(e)))     => { emit_local(&app, "error", "", &format!("Captura inicial: {}", e)); return Err(format!("Captura inicial: {}", e)); }
+            Ok(Ok(Ok(v)))      => v,
         };
+        emit_local(&app, "action", "", "3/3 Pantalla capturada. Consultando al modelo…");
         emit_local(&app, "screenshot", &init_b64, "Pantalla inicial");
 
         // Screen dims (in screenshot space) for the prompt.
