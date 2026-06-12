@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod providers;
 pub mod prompt_sections;
 pub mod rdp_agent;
+pub mod local_screen;
 pub mod shell;
 pub mod system;
 pub mod ui;

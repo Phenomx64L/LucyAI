@@ -52,7 +52,7 @@ mod utils;
 mod commands;
 mod guardrails;
 
-use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry, activity_feed, replay, shell_recording, cve_match, db_backup, support_bundle, inventory_drift, dashboard_integrations, hash_chain, pty};
+use commands::{ai, compliance, config, hosts, inventory, indexer, incident, local, logs, metrics, providers, rdp_agent, local_screen, reflection, shell, system, ui, embeddings, memory, pdf, audit, capacity, diagnostics, notify, log_analysis, state_snapshot, process_lineage, self_healing, causal, threat_scan, object_bridge, runbook_gen, daily_patterns, sandbox_preview, knowledge_graph, incident_detective, frontier_telemetry, activity_feed, replay, shell_recording, cve_match, db_backup, support_bundle, inventory_drift, dashboard_integrations, hash_chain, pty};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -810,6 +810,8 @@ pub fn run() {
             rdp_agent::find_rdp_windows,
             rdp_agent::capture_rdp_screenshot,
             rdp_agent::run_rdp_agent,
+            // v1.7.126 — Local desktop computer-use, Phase A (Lucy SEES the screen)
+            local_screen::capture_local_screen,
             indexer::locate_file,
             indexer::start_indexer,
             // Shell local + streaming interactivo

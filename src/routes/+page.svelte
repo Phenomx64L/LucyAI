@@ -4181,12 +4181,36 @@ REGLAS DE FORMATO:
             t.isListening=false;
         }
         if(window.speechSynthesis) window.speechSynthesis.cancel();
-        const raw=t.inputValue.trim(); if(!raw&&!t.attachedFiles.length) return;
+        let raw=t.inputValue.trim(); if(!raw&&!t.attachedFiles.length) return;
         const doSpeak=t.usedVoice; t.usedVoice=false; t.isProcessing=true; t._procStart = Date.now();
         t._committed='';
         t.inputValue='';
         t._histIdx = undefined;
         if (raw) saveTabHistory(tabId, raw); // Guardar en historial (#19)
+
+        // ── v1.7.126 — /pantalla [pregunta] — Lucy SEES the local screen ──
+        // Phase A of local computer-use: capture the primary monitor and
+        // attach it as an image so the normal vision path sends it to the
+        // model. No mouse/keyboard control yet — that's Phase B (behind an
+        // explicit permission gate). `raw` is rewritten to the question so the
+        // turn proceeds as a normal vision message.
+        {
+            const _sm = raw.match(/^\/(pantalla|screen|ver-pantalla)\b\s*([\s\S]*)$/i);
+            if (_sm) {
+                try {
+                    const _b64 = await invoke('capture_local_screen', { maxWidth: 1280 });
+                    t.attachedFiles.push({
+                        type: 'image', mimeType: 'image/png', content: _b64,
+                        name: 'pantalla.png', previewUrl: `data:image/png;base64,${_b64}`,
+                    });
+                    raw = (_sm[2] || '').trim()
+                        || '¿Qué ves en mi pantalla? Descríbelo brevemente y dime si hay algo importante o accionable.';
+                } catch (e) {
+                    addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>No pude capturar tu pantalla: ${esc(String(e))}`, style: 'border-left-color:#ef4444;' });
+                    t.isProcessing = false; refresh(); return;
+                }
+            }
+        }
 
         // ── SLASH COMMANDS ──
         if (raw.startsWith('/')) {
