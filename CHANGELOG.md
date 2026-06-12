@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.133] — 2026-06-12
+
+### Memory Graph — visual polish (P1) + NexShell micro-animations
+
+The Memory Graph was functionally rich but visually flat (plain discs, thin
+static lines, a flat slab background, snapping straight to a settled layout).
+This pass gives it depth and life without touching the d3-force physics:
+
+- **Node depth** — a soft radial glow in each node's colour painted on the edge
+  canvas, plus a glossy white sheen highlight in SVG. Flat discs now read as lit,
+  dimensional nodes.
+- **Depth vignette** — the flat `#0a0d18` background becomes a radial elevation
+  glow fading to the palette base (`#0d1117`) at the edges.
+- **Staggered entrance** — on load, nodes fade + scale in from their hubs
+  outward (~520 ms, ease-out) instead of appearing pre-settled; labels fade in
+  after their node arrives.
+- **Living edges** — embedding (similarity) links carry a slow flowing dash so
+  the graph reads as an active memory. The flow loop self-pauses while the sim
+  runs and whenever the document is hidden — zero idle CPU off-screen.
+
+NexShell micro-animations:
+- Connected session dot now breathes (soft pulse glow); the live-stream dot
+  gains a breathing halo.
+- New adaptive-watchdog chip on the live-stream header (e.g. `⏱ 30m`) shown only
+  when a command type earns an extended silence window, so it's clear why a long
+  `cargo build` / `apt upgrade` isn't being killed.
+
+---
+
 ## [1.7.132] — 2026-06-12
 
 ### Diagnostic — toast tracers on `/controlar` (still blank for the user)

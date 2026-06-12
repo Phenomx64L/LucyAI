@@ -184,6 +184,29 @@
         // `transform="translate(panX*zoom, panY*zoom) scale(zoom)"`,
         // adjusted for devicePixelRatio so HiDPI displays render sharp.
         ctx.setTransform(zoom * dpr, 0, 0, zoom * dpr, panX * zoom * dpr, panY * zoom * dpr);
+
+        // P1 — Node glow underlay: a soft radial halo in each node's colour
+        // gives the flat circles depth ("neural node" look). Painted on the
+        // canvas (below the crisp SVG nodes) so it costs one fill per node and
+        // never touches the DOM. Grows in with the entrance animation.
+        for (const node of simNodes) {
+            const f = entranceFactor(node);
+            if (f < 0.04) continue;
+            const op = nodeOpacity(node);
+            if (op < 0.05) continue;
+            const r = nodeRadius(node) * (0.3 + 0.7 * f);
+            const glowR = r * 2.6;
+            const col = nodeColor(node);
+            const g = ctx.createRadialGradient(node.x, node.y, r * 0.35, node.x, node.y, glowR);
+            g.addColorStop(0, _hexToRgba(col, 0.36 * op));
+            g.addColorStop(1, _hexToRgba(col, 0));
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, glowR, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
         for (const edge of graph.edges) {
             const a = nodesById.get(edge.source);
             const b = nodesById.get(edge.target);
@@ -193,11 +216,21 @@
             ctx.strokeStyle = edgeStroke(edge);
             ctx.globalAlpha = op;
             ctx.lineWidth = 0.7 + edge.weight * 2.2;
+            // P1 — "alive" edges: embedding (semantic-similarity) links get a
+            // slow flowing dash so the graph reads as a living memory rather
+            // than a static diagram. The dash offset advances in the flow loop.
+            if (edge.kind === 'embedding') {
+                ctx.setLineDash([3, 9]);
+                ctx.lineDashOffset = -(flowPhase * 0.5);
+            } else {
+                ctx.setLineDash([]);
+            }
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.stroke();
         }
+        ctx.setLineDash([]);
         // v1.7.87 — Typed semantic links drawn ON TOP of similarity
         // edges, slightly thicker so they read as the operational layer.
         // Each kind gets its own colour; we render an arrowhead on the
@@ -264,6 +297,65 @@
     let simRunning = false;
     let rafId: number | null = null;
     let ticksSinceLoad = 0;
+
+    // ── Visual polish (P1): staggered entrance + idle edge-flow + node glow ──
+    // entranceT 0→1 drives a fade/scale-in; default 1 so nodes are always
+    // visible if anything short-circuits the animation. The flow loop animates
+    // a subtle dash offset on the "alive" edges once the layout has settled;
+    // it self-pauses while the sim runs and whenever the document is hidden, so
+    // there is no idle CPU cost when the graph isn't on screen.
+    let entranceT = 1;
+    let _entrancePending = false;
+    let entranceOrder = new Map<number, number>(); // id → stagger slot (hubs first)
+    const ENTRANCE_MS = 520;
+    let flowPhase = 0;
+    let flowRafId: number | null = null;
+
+    function _easeOutCubic(x: number): number { const t = 1 - x; return 1 - t * t * t; }
+    /** Per-node entrance progress 0→1, staggered by degree (hubs pop first). */
+    function entranceFactor(n: SimNode): number {
+        if (entranceT >= 1) return 1;
+        const N = Math.max(simNodes.length, 1);
+        const slot = entranceOrder.get(n.id) ?? 0;
+        return _easeOutCubic(Math.max(0, Math.min(1, entranceT * 2 - slot / N)));
+    }
+    /** Parse #rgb / #rrggbb → rgba() string with the given alpha. */
+    function _hexToRgba(hex: string, a: number): string {
+        let h = hex.replace('#', '');
+        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+        const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+        return `rgba(${r},${g},${b},${a})`;
+    }
+    function runEntrance(): void {
+        entranceT = 0;
+        const start = performance.now();
+        const step = () => {
+            entranceT = Math.min(1, (performance.now() - start) / ENTRANCE_MS);
+            simNodes = simNodes;        // re-render with the new factor
+            paintEdges();
+            if (entranceT < 1) requestAnimationFrame(step);
+            else startFlowLoop();
+        };
+        requestAnimationFrame(step);
+    }
+    function startFlowLoop(): void {
+        if (flowRafId != null || simRunning || entranceT < 1) return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        const step = () => {
+            if (simRunning || (typeof document !== 'undefined' && document.hidden)) { flowRafId = null; return; }
+            flowPhase += 1;
+            paintEdges();
+            flowRafId = requestAnimationFrame(step);
+        };
+        flowRafId = requestAnimationFrame(step);
+    }
+    function stopFlowLoop(): void {
+        if (flowRafId != null) { cancelAnimationFrame(flowRafId); flowRafId = null; }
+    }
+    function onVisibilityChange(): void {
+        if (typeof document !== 'undefined' && document.hidden) stopFlowLoop();
+        else if (!simRunning && entranceT >= 1) startFlowLoop();
+    }
 
     // ── V3 — Community palette (8 categorical colors, color-blind friendly)
     // Picked from the Okabe-Ito palette + tweaks for dark backgrounds.
@@ -392,6 +484,11 @@
             };
         });
         nodesById = new Map(simNodes.map((n) => [n.id, n]));
+        // P1 — entrance stagger order: hubs (high degree) pop in first so the
+        // graph "grows" from its backbone outward. Re-armed on every load.
+        const _ordered = [...simNodes].sort((a, b) => b.degree - a.degree);
+        entranceOrder = new Map(_ordered.map((n, i) => [n.id, i]));
+        _entrancePending = true;
         ticksSinceLoad = 0;
         // v1.7.85 — Re-arm the layout-persist one-shot per reload so a
         // threshold change saves the new arrangement once it settles.
@@ -411,6 +508,7 @@
 
     function startSim(): void {
         if (!graph) return;
+        stopFlowLoop();   // the sim's own RAF drives painting while it runs
         // Tear down any prior simulation before building a new one.
         if (sim) { sim.stop(); sim = null; }
 
@@ -498,6 +596,11 @@
         simNodes = simNodes;   // trigger first render with settled positions
         paintEdges();          // v1.7.86 — initial canvas paint after pre-warm
 
+        // P1 — play the staggered entrance once per fresh load (not on the
+        // re-heat startSim that a drag triggers, so dragging never replays it).
+        if (_entrancePending) { _entrancePending = false; runEntrance(); }
+        else { entranceT = 1; }
+
         // Continue the sim for the residual decay + interactivity. With
         // alpha already < 0.002, this loop costs ~0 CPU until the user
         // drags a node, which calls reheat() to wake it up.
@@ -519,6 +622,7 @@
                 // v1.7.85 — Persist final settled layout once the sim
                 // converges, so next open is instant.
                 _persistLayoutIfNeeded();
+                startFlowLoop();   // P1 — hand off to the idle edge-flow shimmer
                 return;
             }
             simNodes = simNodes;   // trigger Svelte re-render
@@ -780,6 +884,9 @@
         // Always show for the actively-engaged node.
         if (hoveredNodeId === n.id) return true;
         if (selectedNode?.id === n.id) return true;
+        // During the entrance animation, labels fade in only once their node
+        // has mostly arrived — avoids text floating over half-sized dots.
+        if (entranceT < 1 && entranceFactor(n) < 0.85) return false;
         // Hide labels of isolated nodes unless zoomed in (they're often
         // noise — auto-saved memories without context). The user can wheel-
         // in to see them.
@@ -824,11 +931,14 @@
     // ── Lifecycle ────────────────────────────────────────────────────────
     onMount(() => {
         window.addEventListener('keydown', onKeyDown);
+        document.addEventListener('visibilitychange', onVisibilityChange);
         viewW = Math.min(window.innerWidth - 80, 1400);
         viewH = Math.min(window.innerHeight - 240, 900);
         loadGraph().then(focusCanvas);
     });
     onDestroy(() => {
+        stopFlowLoop();
+        document.removeEventListener('visibilitychange', onVisibilityChange);
         // v1.7.85 — Persist layout before tearing down. Sync-fire so the
         // bulk write hits the backend before the component unmounts.
         // (Tauri invokes are network-async but the Rust handler enqueues
@@ -987,6 +1097,13 @@
                  viewBox="0 0 {viewW} {viewH}"
                  class:dragging={draggingPan || draggingNode !== null}
                  style="touch-action:none;">
+                <defs>
+                    <radialGradient id="mg-sheen" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%"   stop-color="rgba(255,255,255,0.50)"/>
+                        <stop offset="55%"  stop-color="rgba(255,255,255,0.08)"/>
+                        <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+                    </radialGradient>
+                </defs>
                 <g transform="translate({panX * zoom},{panY * zoom}) scale({zoom})">
                     <!-- v1.7.86 — Edges moved to the <canvas> above for
                          performance (SVG <line> per edge × 60 fps was
@@ -995,8 +1112,9 @@
 
                     <!-- Nodes -->
                     {#each simNodes as node (node.id)}
-                        {@const op = nodeOpacity(node)}
-                        {@const r  = nodeRadius(node)}
+                        {@const f  = entranceFactor(node)}
+                        {@const op = nodeOpacity(node) * f}
+                        {@const r  = nodeRadius(node) * (0.35 + 0.65 * f)}
                         <g class="mg-node" class:pinned={node.pinned}
                            role="button" tabindex="0"
                            aria-label={node.title}
@@ -1010,6 +1128,10 @@
                                     fill={nodeColor(node)}
                                     stroke="rgba(255,255,255,0.55)"
                                     stroke-width="0.9"/>
+                            <!-- P1 — glossy sheen: a white radial highlight offset
+                                 up-left gives the flat disc a lit, dimensional feel. -->
+                            <circle cx={node.x} cy={node.y - r * 0.3} r={r * 0.74}
+                                    fill="url(#mg-sheen)" pointer-events="none"/>
                             <!-- V2 — Label with anti-collision + zoom-counter-scale.
                                  Hidden when a denser neighbor is within ~90px to
                                  avoid the overlap the user reported in
@@ -1077,7 +1199,11 @@
     /* V1 — Opaque background (was rgba(8,10,18,0.97) — bled through) */
     .mg-overlay {
         position: fixed; inset: 0;
-        background: #0a0d18;
+        /* P1 — depth vignette: a faint elevation glow at the cluster's centre
+           fading to the palette base (#0d1117) at the edges, so the graph sits
+           in space instead of on a flat slab. */
+        background:
+            radial-gradient(120% 90% at 50% 34%, #16203a 0%, #0d1117 58%, #090b11 100%);
         backdrop-filter: blur(10px) saturate(140%);
         -webkit-backdrop-filter: blur(10px) saturate(140%);
         display: flex; flex-direction: column;

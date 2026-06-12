@@ -2674,7 +2674,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <div class="rsl-live-block">
                 <div class="rsl-live-hdr">
                   <span class="rsl-live-dot"></span>
-                  <span class="rsl-live-label">En ejecución…</span>
+                  <span class="rsl-live-label">{isEN ? 'Running…' : 'En ejecución…'}</span>
+                  {#if s._streamWatchdogBudget && s._streamWatchdogBudget > 5 * 60000}
+                    <span class="rsl-watchdog"
+                          title={isEN ? 'Adaptive silence watchdog — this command type gets a longer grace window before it is considered hung' : 'Watchdog adaptativo de silencio — este tipo de comando recibe una ventana más larga antes de considerarse colgado'}>⏱ {Math.round(s._streamWatchdogBudget / 60000)}m</span>
+                  {/if}
                   <button class="rsl-live-input-btn"
                     on:click={() => { const sx=getShell(s.id); if(sx){ sx.waitingForInput=!sx.waitingForInput; sx.promptHint='Input'; sx.promptIsPassword=false; rshellSessions=[...rshellSessions]; } }}>⌨ Input</button>
                   <button class="rsl-cancel-btn" on:click={() => cancelarStream(s.id)}>✕ Cancelar</button>
@@ -3433,7 +3437,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .ns-stab-active{ background:var(--bg2);border-color:var(--bdr);border-bottom-color:var(--bg2);color:var(--txt); }
     .ns-stab-ico{ font-size:13px; }
     .ns-stab-name{ max-width:110px;overflow:hidden;text-overflow:ellipsis; }
-    .ns-stab-dot.ok{ color:var(--acc); }
+    .ns-stab-dot.ok{ color:var(--acc); animation:ns-dot-pulse 2.4s ease-in-out infinite; }
+    @keyframes ns-dot-pulse{ 0%,100%{ text-shadow:0 0 0 transparent; opacity:.8 } 50%{ text-shadow:0 0 6px var(--acc); opacity:1 } }
     .ns-stab-dot.wait{ color:var(--amber); }
     .ns-stab-spin{ color:var(--amber);animation:spin 1s linear infinite; }
     .ns-stab-close{ background:none;border:none;color:#475569;cursor:pointer;padding:0 2px;font-size:10px;line-height:1;border-radius:3px;transition:.15s; }
@@ -3673,8 +3678,10 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     /* Streaming */
     .rsl-live-block{display:flex;flex-direction:column;gap:0;border-left:2px solid rgba(16,185,129,.25);margin:2px 0;background:rgba(16,185,129,.02);border-radius:0 4px 4px 0;}
     .rsl-live-hdr{display:flex;align-items:center;gap:7px;padding:4px 10px;background:rgba(16,185,129,.04);border-bottom:1px solid rgba(16,185,129,.08);}
-    .rsl-live-dot{width:7px;height:7px;border-radius:50%;background:var(--acc);animation:stream-blink .7s ease-in-out infinite;flex-shrink:0;}
+    .rsl-live-dot{width:7px;height:7px;border-radius:50%;background:var(--acc);animation:stream-blink .7s ease-in-out infinite, rsl-dot-glow 1.6s ease-in-out infinite;flex-shrink:0;}
+    @keyframes rsl-dot-glow{ 0%,100%{ box-shadow:0 0 4px 0 rgba(16,185,129,.30) } 50%{ box-shadow:0 0 9px 1px rgba(16,185,129,.62) } }
     .rsl-live-label{color:#0d9668;font-size:11px;flex:1;}
+    .rsl-watchdog{font-size:9.5px;color:#0d9668;background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.22);border-radius:7px;padding:1px 6px;flex-shrink:0;font-family:var(--mono);letter-spacing:.3px;}
     .rsl-live-input-btn{background:rgba(100,149,255,.1);border:1px solid rgba(100,149,255,.25);border-radius:4px;color:#6495ff;cursor:pointer;font-size:10px;padding:2px 7px;transition:.15s;flex-shrink:0;}
     .rsl-live-input-btn:hover{background:rgba(100,149,255,.2);}
     .rsl-cancel-btn{background:rgba(255,68,68,.1);border:1px solid rgba(255,68,68,.25);border-radius:4px;color:#ff6464;cursor:pointer;font-size:10px;font-weight:600;padding:2px 8px;transition:.15s;flex-shrink:0;}
