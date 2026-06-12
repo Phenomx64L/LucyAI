@@ -4245,6 +4245,11 @@ REGLAS DE FORMATO:
                     addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>Control cancelado por el usuario.` });
                     t.isProcessing = false; refresh(); return;
                 }
+                // Toast diagnostics — rendered at the document root by
+                // svelte-sonner, so they show no matter what the chat pane /
+                // welcome overlay / tab reactivity is doing. The numbered
+                // prefixes let the user report exactly how far it got.
+                toast(isEN ? '① /controlar confirmed — launching' : '① /controlar confirmado — lanzando', 'info');
                 const _cid = 'local-agent-' + Date.now();
                 let _log = `<div class="mn">Lucy (Control local)</div><div style="font-size:12px;color:var(--txt2)">Tarea: ${esc(_task)}</div><pre style="font-size:11.5px;white-space:pre-wrap;margin-top:6px">`;
                 addMsg(tabId, { id: _cid, role: 'lucy', html: _log + '</pre>' });
@@ -4280,11 +4285,13 @@ REGLAS DE FORMATO:
                     // ever runs — no bubble renders, no finally, "Procesando…"
                     // forever. We don't need it before invoke; the backend's
                     // first emit lands hundreds of ms later. Bonus, not gate.
+                    let _gotEvt = false;
                     listen('local_agent_step', (ev) => {
+                        if (!_gotEvt) { _gotEvt = true; toast(isEN ? '③ Backend is emitting steps' : '③ El backend está emitiendo pasos', 'info'); }
                         const p = (ev && ev.payload) || {};
                         if (p.kind === 'action' || p.kind === 'text') _append((p.detail || '').toString().slice(0, 300));
                         else if (p.kind === 'done')  _append('✓ ' + (p.detail || 'Listo'));
-                        else if (p.kind === 'error') _append('✗ ' + (p.detail || 'Error'));
+                        else if (p.kind === 'error') { _append('✗ ' + (p.detail || 'Error')); toast('✗ ' + (p.detail || 'Error').slice(0, 160), 'error'); }
                     }).then((u) => { if (_done) { try { u(); } catch {} } else { _un = u; } })
                       .catch(() => {});
                     // Use the EXPLICITLY-selected model, never getEffectiveModel
@@ -4293,10 +4300,13 @@ REGLAS DE FORMATO:
                     // and stalls on a local endpoint). Computer-use needs vision.
                     const _ctrlModel = (t.selectedModel && t.selectedModel !== 'nvidia-custom')
                         ? t.selectedModel : getEffectiveModel(t);
+                    toast((isEN ? '② Calling backend · model: ' : '② Llamando al backend · modelo: ') + _ctrlModel, 'info');
                     _append(`▶ Enviado al backend (run_local_agent, modelo: ${esc(_ctrlModel)}). Esperando respuesta…`);
                     const _res = await invoke('run_local_agent', { task: _task, model: _ctrlModel, maxSteps: 15, confirm: true });
+                    toast((isEN ? '④ Backend replied' : '④ El backend respondió') + (_res ? ': ' + String(_res).slice(0, 80) : ''), 'ok');
                     if (_res) _append('— ' + String(_res).slice(0, 300));
                 } catch (e) {
+                    toast('✗ ' + String(e).slice(0, 160), 'error');
                     _append('✗ ' + String(e).slice(0, 300));
                 } finally {
                     _finish();

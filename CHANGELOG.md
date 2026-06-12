@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.132] — 2026-06-12
+
+### Diagnostic — toast tracers on `/controlar` (still blank for the user)
+
+`/controlar` still showed no bubble on 1.7.131, and the chat-pane render path
+has too many moving parts to diagnose blind (per-tab `revStore` is only bumped
+by `bumpTab`, which is dead code; ChatThread re-renders only on prop changes).
+Added document-root toast tracers that bypass the chat pane entirely, so the
+exact stop point is observable on the next run:
+
+- `① /controlar confirmed` — execution passed the confirm gate.
+- `② Calling backend · model: X` — about to `invoke`; shows the resolved model.
+- `③ Backend is emitting steps` — first `local_agent_step` event arrived.
+- `④ Backend replied` / `✗ <error>` — the command settled.
+
+No behavior change beyond the toasts; the in-bubble progress + 150 s watchdog
+remain.
+
+---
+
 ## [1.7.131] — 2026-06-12
 
 ### Fix — ROOT CAUSE: `/controlar` output was hidden behind the welcome screen
