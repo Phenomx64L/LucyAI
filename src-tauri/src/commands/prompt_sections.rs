@@ -130,6 +130,26 @@ pub struct PromptContext<'a> {
     // or below threshold. When Some, the ForkAdviceSection renders a
     // strong directive nudging the LLM to use fork_task + wait_task.
     pub fork_advice:      Option<&'a crate::commands::fork_advisor::ForkAdvice>,
+    // v1.7.124 — model tier. Weak cloud models (Gemini Flash, Haiku, *-mini,
+    // *-lite) are poor instruction-followers and get OVERWHELMED by the full
+    // ~6-8K-token ruleset, defaulting to prose instead of emitting tags. When
+    // true, the advanced/orchestration sections are skipped and a compact,
+    // example-driven core is sent instead. Strong models (Opus/Sonnet/Pro/GPT)
+    // get the full prompt unchanged.
+    pub model_is_weak:    bool,
+}
+
+/// v1.7.124 — classify a model id into the weak instruction-following tier.
+/// Weak = cheap/fast cloud tiers + any small local model. These need the
+/// compact prompt; everything else gets the full ruleset.
+pub fn model_is_weak(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.contains("flash")         // gemini-*-flash / flash-lite
+        || m.contains("haiku")  // claude haiku
+        || m.contains("-mini")  // gpt-4o-mini, o*-mini  (NOT 'mini' alone — "geMINI" would false-match)
+        || m.contains("-lite")
+        || m.contains(":8b") || m.contains(":7b") || m.contains(":3b") || m.contains(":1")
+        || m.starts_with("local-")
 }
 
 // ── Trait ────────────────────────────────────────────────────────────────────
@@ -920,6 +940,31 @@ impl PromptSection for ForkAdviceSection {
     }
 }
 
+// ── v1.7.124 — Few-shot examples for WEAK models ──────────────────────────
+// Weak instruction-followers (Flash, Haiku, *-mini) copy concrete examples
+// far more reliably than they apply abstract rules. These shapes cover the
+// tasks that were stalling: create-then-open, a system-value query, and a
+// read action. Rendered ONLY for weak models — strong models don't need
+// them. Priority 12 = right after the ACTION CONTRACT (IntentDetection, 10)
+// and before SafetyRules (20), so it lands early where the model looks.
+pub struct WeakModelExamplesSection;
+impl PromptSection for WeakModelExamplesSection {
+    fn name(&self) -> &'static str { "WeakModelExamples" }
+    fn relevant(&self, ctx: &PromptContext) -> bool { ctx.model_is_weak }
+    fn priority(&self) -> u32 { 12 }
+    fn render(&self, _ctx: &PromptContext) -> String {
+        "EXAMPLES — copy these shapes EXACTLY. EMIT the tags; never describe the action in prose:\n\
+        [user] crea un archivo notas.txt en mi escritorio y ábrelo\n\
+        [you]  <TOOL>writefile:C:\\Users\\Public\\Desktop\\notas.txt</TOOL><FILECONTENT>Notas.</FILECONTENT>\n\
+               <EXECUTE_CMD>Start-Process \"C:\\Users\\Public\\Desktop\\notas.txt\"</EXECUTE_CMD>\n\
+        [user] ¿qué hora es en mi equipo?\n\
+        [you]  <EXECUTE_CMD>Get-Date -Format \"dddd dd/MM/yyyy HH:mm:ss\"</EXECUTE_CMD>\n\
+        [user] muéstrame los 10 procesos que más memoria usan\n\
+        [you]  <EXECUTE_CMD>Get-Process | Sort-Object WS -Descending | Select-Object -First 10 Name,WS</EXECUTE_CMD>\n\
+        After the system returns the tool result, reply with ONE short confirmation line. Do NOT repeat the tags or rewrite the file.".to_string()
+    }
+}
+
 /// Returns the complete prompt string.
 pub fn build_composable_prompt(ctx: &PromptContext) -> String {
     // Register all sections — cheap stack allocations, no Box<dyn>
@@ -927,6 +972,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &IdentitySection,
         &RunbooksSection,
         &IntentDetectionSection,
+        &WeakModelExamplesSection,   // v1.7.124 — weak-model only (priority 12)
         &ReportGenerationSection,
         &SafetyRulesSection,
         &MemoryRulesSection,
@@ -952,10 +998,26 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &UserInstructionSection,
     ];
 
-    // Filter relevant (+ runtime toggle) and sort by priority
+    // v1.7.124 — for WEAK models (Gemini Flash, Haiku, *-mini/-lite, small
+    // local), drop the advanced/orchestration sections. They roughly DOUBLE
+    // the prompt and describe capabilities a weak instruction-follower can't
+    // use (sub-agents, fork/wait, knowledge graph, multi-phase report
+    // contracts, confidence-tag calibration), which is exactly what makes
+    // Flash default to prose instead of emitting tags. The core a weak model
+    // actually needs — identity, intent + ACTION CONTRACT, safety, memory,
+    // the tag/tool catalog, and file tools — stays. Strong models get every
+    // section (this list is a no-op for them).
+    const WEAK_SKIP_SECTIONS: &[&str] = &[
+        "ReportGeneration", "WebKnowledge", "ConfidenceCalibration",
+        "SubAgents", "ForkAdvice", "McpRegistry", "TieredMemory",
+        "ReactSelfCorrection", "PlanActVerify", "PdfIntelligence",
+        "KnowledgeGraph",
+    ];
+    // Filter relevant (+ runtime toggle + weak-model trim) and sort by priority
     let mut active: Vec<&dyn PromptSection> = sections
         .into_iter()
-        .filter(|s| s.relevant(ctx) && !is_section_disabled(s.name()))
+        .filter(|s| s.relevant(ctx) && !is_section_disabled(s.name())
+            && !(ctx.model_is_weak && WEAK_SKIP_SECTIONS.contains(&s.name())))
         .collect();
     active.sort_by_key(|s| s.priority());
 
@@ -972,6 +1034,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
     const STABLE_SECTIONS: &[&str] = &[
         "Identity",              // user_name + lang — fixed during a session
         "IntentDetection",
+        "WeakModelExamples",     // v1.7.124 — stable per session (model fixed)
         "ReportGeneration",
         "SafetyRules",
         "MemoryRules",
@@ -1029,10 +1092,12 @@ pub fn build_system_prompt_v2(
     prompt: &str,
     working_dir: &str,
     runbooks_dir: Option<&str>,
+    model_is_weak: bool,
 ) -> String {
     build_system_prompt_v2_with_options(
         lang, context, hosts_context, user_name, prompt, working_dir, runbooks_dir,
         /* allow_fork_advice = */ true,
+        model_is_weak,
     )
 }
 
@@ -1047,6 +1112,7 @@ pub fn build_system_prompt_v2_with_options(
     working_dir: &str,
     runbooks_dir: Option<&str>,
     allow_fork_advice: bool,
+    model_is_weak: bool,
 ) -> String {
     let user_profile = std::env::var("USERPROFILE")
         .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
@@ -1075,6 +1141,7 @@ pub fn build_system_prompt_v2_with_options(
         principles: &principles_block,
         extra_context: context,
         fork_advice: advice.as_ref(),
+        model_is_weak,
     };
 
     build_composable_prompt(&ctx)
@@ -1152,6 +1219,41 @@ pub fn build_local_system_prompt(
 mod sig_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn weak_model_classifier() {
+        // Weak tiers
+        assert!(model_is_weak("gemini-2.5-flash"));
+        assert!(model_is_weak("gemini-3.1-flash-lite"));
+        assert!(model_is_weak("claude-haiku-4-5-20251001"));
+        assert!(model_is_weak("gpt-4o-mini"));
+        assert!(model_is_weak("local-qwen2.5-coder:7b"));
+        // Strong tiers — must NOT be weak
+        assert!(!model_is_weak("gemini-3-pro"));
+        assert!(!model_is_weak("claude-opus-4-8"));
+        assert!(!model_is_weak("claude-sonnet-4-6"));
+        assert!(!model_is_weak("gpt-4o"));
+    }
+
+    #[test]
+    fn weak_model_prompt_is_trimmed_and_strong_is_full() {
+        let weak = build_system_prompt_v2(
+            "Respond in Spanish.", "", "", "Ivan", "crea un archivo y abrelo",
+            "C:\\Users\\x", None, /* model_is_weak = */ true,
+        );
+        let strong = build_system_prompt_v2(
+            "Respond in Spanish.", "", "", "Ivan", "crea un archivo y abrelo",
+            "C:\\Users\\x", None, /* model_is_weak = */ false,
+        );
+        // Weak prompt drops the advanced sections → strictly shorter.
+        assert!(weak.len() < strong.len(),
+            "weak prompt ({}) should be shorter than strong ({})", weak.len(), strong.len());
+        // Weak prompt carries the few-shot examples + the ACTION CONTRACT.
+        assert!(weak.contains("EXAMPLES"), "weak prompt should contain few-shot examples");
+        assert!(weak.contains("ACTION CONTRACT"), "weak prompt should keep the action contract");
+        // Strong prompt keeps the advanced sections that weak drops.
+        assert!(strong.contains("EXAMPLES") == false, "strong prompt should NOT carry weak-only examples");
+    }
 
     #[test]
     fn signature_renders_required_and_optional_params() {

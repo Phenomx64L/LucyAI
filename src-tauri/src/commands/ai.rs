@@ -766,9 +766,11 @@ fn build_system_prompt(
     prompt: &str,
     working_dir: &str,
     runbooks_dir: Option<&str>,
+    model_is_weak: bool,
 ) -> String {
     crate::commands::prompt_sections::build_system_prompt_v2(
         lang, context, hosts_context, user_name, prompt, working_dir, runbooks_dir,
+        model_is_weak,
     )
 }
 
@@ -1005,6 +1007,7 @@ pub async fn ask_lucy(
             &prompt,
             &cwd,
             runbooks_dir.as_deref(),
+            crate::commands::prompt_sections::model_is_weak(&model),
         )
     };
 
@@ -1190,6 +1193,7 @@ pub async fn ask_lucy_stream(
             &prompt,
             &cwd,
             runbooks_dir.as_deref(),
+            crate::commands::prompt_sections::model_is_weak(&model),
         )
     };
 
