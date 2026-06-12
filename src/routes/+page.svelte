@@ -7582,6 +7582,41 @@ Use ONE of these patterns instead:
                             _writeCard.diff = { oldStr: _oldContent, newStr: _fileContent };
                             const _summary = `✓ ${String(r).trim()}`;
                             finishToolCard(_writeCard, _summary, true);
+                            // v1.7.122 — DETERMINISTIC create-then-open. Gemini
+                            // Flash reliably WRITES the file but unreliably emits
+                            // a working open command (it rewords/repeats the
+                            // writefile instead), so "crea un fichero y ábrelo"
+                            // stalled for 5 versions of output-parsing patches.
+                            // When the user's goal explicitly asks to open/run
+                            // the file, Lucy opens it HERSELF right after writing
+                            // — once per path — independent of the model's output
+                            // shape. Pushing an [OPEN RESULT] into toolResults
+                            // also tells the model the open is DONE so it stops
+                            // re-trying and delivers a final answer.
+                            try {
+                                // Strip accents (ábrelo→abrelo) so one set of
+                                // patterns covers accented + unaccented input.
+                                const _goalPlain = (originalUserGoal || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+                                const _openIntent = /\b(abrelo|abrela|abre|abrir|open\s+it|open\s+the\s+file|ejecutalo|ejecutar|ejecuta|launch\s+it|run\s+it|muestramelo|muestralo)\b/i.test(_goalPlain);
+                                if (_openIntent) {
+                                    if (!t._autoOpened) t._autoOpened = new Set();
+                                    if (!t._autoOpened.has(_wPath)) {
+                                        t._autoOpened.add(_wPath);
+                                        const _openShort = _wPath.split(/[\\/]/).pop() || _wPath;
+                                        const _openCard = newToolCard('▸', `${isEN ? 'Open' : 'Abrir'} ${_openShort}`, 'system');
+                                        try {
+                                            const _openOut = await invoke('execute_powershell', { script: `Start-Process "${_wPath}"`, bypassToken: null });
+                                            toolResults.push(`[OPEN RESULT] Archivo abierto correctamente: ${_wPath}. ${String(_openOut || '').slice(0, 160)}`);
+                                            stepsHtml += `[▸ ${isEN ? 'Opened' : 'Abierto'}] ${esc(_wPath)}\n`;
+                                            filesMod.add(_wPath);
+                                            finishToolCard(_openCard, isEN ? `Opened ${_wPath}` : `Abierto ${_wPath}`, true);
+                                        } catch (e) {
+                                            toolResults.push(`[OPEN ERROR] No se pudo abrir ${_wPath}: ${e}`);
+                                            finishToolCard(_openCard, String(e), false);
+                                        }
+                                    }
+                                }
+                            } catch {}
                         } catch(e) {
                             // On error: still include the content the agent tried to write so the
                             // user can copy it manually if the failure was just a permission issue.
