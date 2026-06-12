@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.134] — 2026-06-12
+
+### Fix — Memory Graph "green cage" (stray focus ring)
+
+The graph SVG is keyboard-focusable (`role="application" tabindex="0"`) and fills
+the canvas (`inset:0`), so the app-wide `:focus-visible` outline rule
+(`[tabindex]:not([tabindex="-1"]):focus-visible`) traced its entire border — a
+green frame that looked like a cage and made panning feel boxed-in. Suppressed
+the ring on `#mg-canvas` only (higher specificity); keyboard focus + ESC still
+work, panning is unobstructed again.
+
+---
+
 ## [1.7.133] — 2026-06-12
 
 ### Memory Graph — visual polish (P1) + NexShell micro-animations

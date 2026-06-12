@@ -1359,6 +1359,11 @@
     }
     svg { display: block; cursor: grab; outline: none; }
     svg.dragging { cursor: grabbing; }
+    /* The graph SVG is keyboard-focusable (role=application, tabindex=0), so the
+       app-wide :focus-visible ring (app.css) traced the whole canvas and read as
+       a green "cage". Suppress it just here — the higher specificity (#id) wins.
+       Keyboard/ESC still work; only the heavy outline is gone. */
+    #mg-canvas:focus, #mg-canvas:focus-visible { outline: none; box-shadow: none; }
     .mg-node { cursor: pointer; transition: opacity .15s; }
     .mg-node:hover circle { stroke: #fff; stroke-width: 1.6; }
     /* Font-size is set inline per-node so the value reflects current zoom
