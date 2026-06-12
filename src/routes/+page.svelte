@@ -5416,38 +5416,52 @@ Use ONE of these patterns instead:
             // REQUIRES the model to emit the tag explicitly. The Rust
             // execute_powershell guardrails (blocklist + permission rules)
             // remain the backstop regardless.
-            if (!infoIntent && !codeGenIntent && !skillInfoIntent
-                && !/<EXECUTE_CMD\b|<EXECUTE\b|<TOOL>/i.test(resp)) {
-                const _SAFE_CMD_RE = /^\s*(Get-[A-Za-z]+|Test-[A-Za-z]+|Measure-[A-Za-z]+|Resolve-[A-Za-z]+|Select-[A-Za-z]+|Show-[A-Za-z]+|whoami|hostname|systeminfo|ipconfig|ifconfig|date|time|echo|pwd|ver|uptime|nslookup|ping|tracert|Get-Date|Get-TimeZone)\b/i;
-                const _fence = resp.match(/```(?:powershell|pwsh|ps1?|cmd|bat|shell|sh)?\s*\n?([\s\S]*?)```/i);
+            // Helper used for BOTH the first turn (resp) and every continuation
+            // turn (agentResp) — the create-then-open task showed the OPEN step
+            // (Start-Process) arrives in a later turn, so promoting only the
+            // first response wasn't enough.
+            const _autoPromoteSafeCmd = (text) => {
+                if (!text || infoIntent || codeGenIntent || skillInfoIntent) return text;
+                if (/<EXECUTE_CMD\b|<EXECUTE\b|<TOOL>/i.test(text)) return text;
+                // Allow-list of SAFE actionable commands. Two families:
+                //   • read-only inspection (Get-*, Test-*, whoami, ipconfig, …)
+                //   • open / launch / navigate (Start-Process, Invoke-Item, ii,
+                //     explorer, start, notepad, code, Set-Location/cd) — exactly
+                //     what "ábrelo" / "abre la carpeta" / "ve a esa ruta" mean.
+                const _SAFE_CMD_RE = /^\s*(Get-[A-Za-z]+|Test-[A-Za-z]+|Measure-[A-Za-z]+|Resolve-[A-Za-z]+|Select-[A-Za-z]+|Show-[A-Za-z]+|Find-[A-Za-z]+|Format-[A-Za-z]+|Start-Process|Invoke-Item|Set-Location|Push-Location|Pop-Location|whoami|hostname|systeminfo|ipconfig|ifconfig|date|time|echo|pwd|ver|uptime|nslookup|ping|tracert|ii|explorer|start|notepad|code|cd|dir|ls|cat|type)\b/i;
+                // Deny guard — even an allow-listed prefix is NOT auto-promoted
+                // if the line carries a destructive verb, an elevation request,
+                // or a code-download/eval pattern. Those still REQUIRE the model
+                // to emit <EXECUTE_CMD> explicitly (and the Rust blocklist gates
+                // them on top of that).
+                const _DANGER_RE = /-Verb\s+RunAs|\bRemove-|\brm\s|\bdel\s|\brmdir\b|\bformat\b|\bmkfs\b|\bdd\s|\bStop-|\bRestart-Computer\b|\bClear-|\bUninstall-|\bDisable-|\bSet-ExecutionPolicy\b|\bnet\s+user\b|\btakeown\b|\bicacls\b|Invoke-Expression|\biex\b|DownloadString|DownloadFile|-EncodedCommand/i;
+                const _fence = text.match(/```(?:powershell|pwsh|ps1?|cmd|bat|shell|sh)?\s*\n?([\s\S]*?)```/i);
                 let _cand = _fence ? _fence[1].trim() : '';
-                // Also handle the BARE case: the whole cleaned response is just
-                // the command on one line (no fence at all).
                 if (!_cand) {
-                    const _bare = (resp || '')
+                    const _bare = text
                         .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
                         .replace(/<REMEMBER[\s\S]*?<\/REMEMBER>/gi, '')
                         .trim();
-                    if (_SAFE_CMD_RE.test(_bare) && _bare.length <= 200 && !/\n/.test(_bare)) {
+                    if (_SAFE_CMD_RE.test(_bare) && _bare.length <= 300 && !/\n/.test(_bare)) {
                         _cand = _bare;
                     }
                 }
-                // Promote only a SINGLE, short, read-only command line.
-                if (_cand && _cand.length <= 200 && !/\n\s*\n/.test(_cand) && _SAFE_CMD_RE.test(_cand)) {
+                if (_cand && _cand.length <= 300 && !/\n\s*\n/.test(_cand)
+                    && _SAFE_CMD_RE.test(_cand) && !_DANGER_RE.test(_cand)) {
                     const _oneLine = _cand.split('\n')[0].trim();
-                    if (_fence) {
-                        resp = resp.replace(_fence[0], `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`);
-                    } else {
-                        resp = `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`;
-                    }
                     pushTrace({
                         phase: 'info',
-                        label: `Auto-ejecución: el modelo propuso un comando read-only sin tag — lo ejecuto`,
+                        label: `Auto-ejecución: el modelo propuso un comando seguro sin tag — lo ejecuto`,
                         detail: _oneLine.slice(0, 120),
                         tabId,
                     });
+                    return _fence
+                        ? text.replace(_fence[0], `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`)
+                        : `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`;
                 }
-            }
+                return text;
+            };
+            resp = _autoPromoteSafeCmd(resp);
 
             if (FILE_TOOL_RE.test(resp) || NATIVE_TOOL_RE.test(resp) || /<THOUGHT>|<EXECUTE_CMD\b|<EXECUTE\b|<PLAN>/i.test(resp)) {
                 // U2 — Lucy mood: executing while agent loop runs tools
@@ -6149,6 +6163,12 @@ Use ONE of these patterns instead:
                         continue;
                     }
                     let toolResults = [];
+                    // v1.7.118 — auto-promote a safe bare/fenced command to
+                    // execution on EVERY turn (not just the first). The
+                    // create-then-open task emits the OPEN step (Start-Process)
+                    // in a continuation turn; without this it never ran and the
+                    // loop ground into skip-stuck after the file was created.
+                    agentResp = _autoPromoteSafeCmd(agentResp);
                     let toolUsed = false;
                     let lucyText = agentResp;
                     // Detect risky tags in the agent response BEFORE this loop's parsing.
