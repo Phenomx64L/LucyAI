@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.135] — 2026-06-12
+
+### Memory Graph — P2 interaction polish + label anti-collision
+
+- **Hover ripple** — hovering a node emits an expanding ring in its own colour.
+- **Selection halo** — the open node gets a gentle pulsing ring.
+- **Pinned ring** — pinned nodes gain a slow amber breathing ring (on top of the
+  amber canvas glow).
+- The hover white-stroke highlight is now scoped to the node core so it no longer
+  bleeds onto the new rings.
+- **Label anti-collision** now compares approximate label *boxes* (width from
+  character count + line height) instead of node-centre distance, so long titles
+  like `Skill OSINT — Guía de Ejecución` and `CyberArk EPM — REST API…` stop
+  overlapping; the lower-degree node yields its label.
+
+---
+
 ## [1.7.134] — 2026-06-12
 
 ### Fix — Memory Graph "green cage" (stray focus ring)

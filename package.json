@@ -1,6 +1,6 @@
 {
   "name": "lucy-svelte",
-  "version": "1.7.134",
+  "version": "1.7.135",
   "description": "Lucy — Autonomous SysAdmin AI Assistant (Tauri + Svelte + Rust)",
   "type": "module",
   "scripts": {

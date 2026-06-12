@@ -891,19 +891,33 @@
         // noise — auto-saved memories without context). The user can wheel-
         // in to see them.
         if (n.degree === 0 && zoom < 1.3) return false;
-        // Anti-collision: if a node within COLLISION_R has STRICTLY higher
-        // degree, hide this one's label. Ties: lower id wins (stable).
-        const COLLISION_R = 90; // userspace px
+        // Anti-collision using approximate LABEL BOXES, not just node distance.
+        // Long titles overlap horizontally even when their nodes sit far apart
+        // ("Skill OSINT…" over "CyberArk EPM…"), so we compare each label's
+        // actual extent (width from char count, height from line height) and
+        // hide the lower-degree node's label on a real overlap. Ties: lower id.
+        const myHalfW  = _labelHalfWidth(n);
+        const myLabelY = n.y - labelYOffset(nodeRadius(n));
+        const lineH    = labelFontSize * 1.25;
         for (const other of simNodes) {
             if (other.id === n.id) continue;
-            const dx = other.x - n.x;
-            const dy = other.y - n.y;
-            // Cheap squared-distance early-out.
-            if (dx * dx + dy * dy > COLLISION_R * COLLISION_R) continue;
-            if (other.degree > n.degree) return false;
-            if (other.degree === n.degree && other.id < n.id) return false;
+            if (other.degree === 0 && zoom < 1.3) continue; // wouldn't show a label anyway
+            const overlapX = Math.abs(other.x - n.x) < (myHalfW + _labelHalfWidth(other) + 4);
+            const overlapY = Math.abs((other.y - labelYOffset(nodeRadius(other))) - myLabelY) < lineH;
+            if (overlapX && overlapY) {
+                if (other.degree > n.degree) return false;
+                if (other.degree === n.degree && other.id < n.id) return false;
+            }
         }
         return true;
+    }
+
+    /** Approximate half-width of a node's rendered label in userspace px. The
+     *  label font is mono (~0.6 em/char); labelFontSize already counter-scales
+     *  the wheel zoom, so this stays correct at any zoom level. */
+    function _labelHalfWidth(n: SimNode): number {
+        const chars = Math.min(n.title.length, 32);
+        return chars * labelFontSize * 0.30;
     }
 
     /**
@@ -1124,7 +1138,21 @@
                            on:mouseenter={() => { hoveredNodeId = node.id; paintEdges(); }}
                            on:mouseleave={() => { hoveredNodeId = null; paintEdges(); }}
                            on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectedNode = node; } }}>
-                            <circle cx={node.x} cy={node.y} r={r}
+                            <!-- P2 — pinned ring (amber, slow breath) -->
+                            {#if node.pinned}
+                                <circle class="mg-pin-ring" cx={node.x} cy={node.y} r={r + 3}
+                                        fill="none" stroke="#f59e0b" stroke-width="1.3" pointer-events="none"/>
+                            {/if}
+                            <!-- P2 — selection halo (pulsing) on the open node -->
+                            {#if selectedNode?.id === node.id}
+                                <circle class="mg-sel-halo" cx={node.x} cy={node.y} r={r + 4}
+                                        fill="none" stroke="#10b981" stroke-width="1.6" pointer-events="none"/>
+                            {/if}
+                            <!-- P2 — hover ripple: an expanding ring (CSS-animated on
+                                 :hover of the group), in the node's own colour. -->
+                            <circle class="mg-ripple" cx={node.x} cy={node.y} r={r}
+                                    fill="none" stroke={nodeColor(node)} stroke-width="1.3" pointer-events="none"/>
+                            <circle class="mg-node-core" cx={node.x} cy={node.y} r={r}
                                     fill={nodeColor(node)}
                                     stroke="rgba(255,255,255,0.55)"
                                     stroke-width="0.9"/>
@@ -1365,7 +1393,27 @@
        Keyboard/ESC still work; only the heavy outline is gone. */
     #mg-canvas:focus, #mg-canvas:focus-visible { outline: none; box-shadow: none; }
     .mg-node { cursor: pointer; transition: opacity .15s; }
-    .mg-node:hover circle { stroke: #fff; stroke-width: 1.6; }
+    /* Scoped to the core disc so the hover highlight doesn't repaint the
+       ripple / halo / pin rings white. */
+    .mg-node:hover .mg-node-core { stroke: #fff; stroke-width: 1.6; }
+
+    /* P2 — hover ripple: an expanding ring that fades, in the node's colour.
+       transform-box:fill-box anchors the scale to each circle's own centre. */
+    .mg-ripple { transform-box: fill-box; transform-origin: center; opacity: 0; }
+    .mg-node:hover .mg-ripple { animation: mg-ripple .95s ease-out infinite; }
+    @keyframes mg-ripple {
+        0%   { transform: scale(1);   opacity: .5; }
+        100% { transform: scale(2.5); opacity: 0; }
+    }
+    /* P2 — selection halo: a gentle pulse around the open node. */
+    .mg-sel-halo { transform-box: fill-box; transform-origin: center; animation: mg-sel-pulse 1.8s ease-in-out infinite; }
+    @keyframes mg-sel-pulse {
+        0%, 100% { transform: scale(1);    opacity: .45; }
+        50%      { transform: scale(1.16); opacity: .85; }
+    }
+    /* P2 — pinned ring: a slow amber breath (the canvas glow is already amber). */
+    .mg-pin-ring { animation: mg-pin-breath 2.6s ease-in-out infinite; }
+    @keyframes mg-pin-breath { 0%, 100% { opacity: .4; } 50% { opacity: .85; } }
     /* Font-size is set inline per-node so the value reflects current zoom
        (counter-scaled to remain ~11px on screen regardless of zoom level). */
     .mg-node-label {
