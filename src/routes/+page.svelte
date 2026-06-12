@@ -5442,45 +5442,48 @@ Use ONE of these patterns instead:
                 // to emit <EXECUTE_CMD> explicitly (and the Rust blocklist gates
                 // them on top of that).
                 const _DANGER_RE = /-Verb\s+RunAs|\bRemove-|\brm\s|\bdel\s|\brmdir\b|\bformat\b|\bmkfs\b|\bdd\s|\bStop-|\bRestart-Computer\b|\bClear-|\bUninstall-|\bDisable-|\bSet-ExecutionPolicy\b|\bnet\s+user\b|\btakeown\b|\bicacls\b|Invoke-Expression|\biex\b|DownloadString|DownloadFile|-EncodedCommand/i;
-                const _fence = text.match(/```(?:powershell|pwsh|ps1?|cmd|bat|shell|sh)?\s*\n?([\s\S]*?)```/i);
+                // v1.7.121 KEY FIX — scan LINE BY LINE. The old code required
+                // the whole stripped response to be a SINGLE line, so when the
+                // model emitted the command AND a prose sentence together
+                // ("Start-Process …\nHe creado el archivo…") — exactly what
+                // Gemini Flash does — detection failed and the open step never
+                // ran. We now strip scaffolding tags + fence markers (keeping
+                // fenced CONTENT) and look for the FIRST line that is a safe,
+                // invocable command, regardless of surrounding prose.
+                const _detect = text
+                    .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                    .replace(/<REMEMBER[\s\S]*?<\/REMEMBER>/gi, '')
+                    .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                    .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
+                    .replace(/```[a-zA-Z0-9]*/g, '');   // drop fence markers, keep inner lines
+                // A line qualifies only if it starts with a safe verb AND looks
+                // like a real invocation — a hyphenated PowerShell cmdlet
+                // (Start-Process, Get-Date) or it carries a quote / path / flag.
+                // This skips prose that merely begins with an allow-listed
+                // English/Spanish word ("start by…", "date is…", "ping the…").
+                const _looksInvocable = (ln) =>
+                    /^\s*[A-Za-z][A-Za-z0-9]+-[A-Za-z]/.test(ln)
+                    || /["'\\]|\s\/[A-Za-z]|\s-[A-Za-z]/.test(ln);
                 let _cand = '';
-                let _viaFence = false;
-                if (_fence && _SAFE_CMD_RE.test(_fence[1].trim())) {
-                    _cand = _fence[1].trim();
-                    _viaFence = true;
-                } else {
-                    // BARE case — strip ALL scaffolding (thought, remember, AND
-                    // tagged tools like writefile/editfile + their FILECONTENT)
-                    // so a bare command that coexists with a writefile is still
-                    // isolated and detected.
-                    const _bare = text
-                        .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
-                        .replace(/<REMEMBER[\s\S]*?<\/REMEMBER>/gi, '')
-                        .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
-                        .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
-                        .trim();
-                    if (_SAFE_CMD_RE.test(_bare) && _bare.length <= 300 && !/\n/.test(_bare)) {
-                        _cand = _bare;
+                for (const _ln of _detect.split('\n')) {
+                    const _t = _ln.trim();
+                    if (!_t || _t.length > 300) continue;
+                    if (_SAFE_CMD_RE.test(_t) && !_DANGER_RE.test(_t) && _looksInvocable(_t)) {
+                        _cand = _t;
+                        break;
                     }
                 }
-                if (_cand && _cand.length <= 300 && !/\n\s*\n/.test(_cand)
-                    && _SAFE_CMD_RE.test(_cand) && !_DANGER_RE.test(_cand)) {
-                    const _oneLine = _cand.split('\n')[0].trim();
+                if (_cand) {
                     pushTrace({
                         phase: 'info',
                         label: `Auto-ejecución: el modelo propuso un comando seguro sin tag — lo ejecuto`,
-                        detail: _oneLine.slice(0, 120),
+                        detail: _cand.slice(0, 120),
                         tabId,
                     });
-                    if (_viaFence) {
-                        // The fence WAS the command's display → swap it in place.
-                        return text.replace(_fence[0], `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`);
-                    }
-                    // Bare command, possibly coexisting with a writefile/editfile
-                    // tag → APPEND the exec tag so the OTHER tags still run too.
-                    // Loop order (writefile before EXECUTE_CMD) means the file is
-                    // created first, THEN opened — exactly create-then-open.
-                    return text + `\n<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`;
+                    // APPEND the exec tag so any coexisting writefile/editfile
+                    // still runs first (loop order: writefile before EXECUTE_CMD
+                    // = create-then-open in one turn).
+                    return text + `\n<EXECUTE_CMD>${_cand}</EXECUTE_CMD>`;
                 }
                 return text;
             };
