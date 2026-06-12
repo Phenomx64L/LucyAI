@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.131] — 2026-06-12
+
+### Fix — ROOT CAUSE: `/controlar` output was hidden behind the welcome screen
+
+The real reason `/controlar` looked like it "did nothing and stayed Procesando":
+the home/welcome screen is an overlay gated solely on `showWelcome`, and while
+it's up every chat pane is hidden (`class:on={… && !showWelcome}`). **Nothing in
+the send path ever cleared `showWelcome`** — so a command sent from the home
+screen (including `/controlar`, `/pantalla`, or a normal prompt) was added to the
+tab but rendered *behind* the overlay. The agent was running the whole time; its
+bubble and the "Procesando…" state were simply invisible. Normal chats appeared
+to work only because clicking into a tab clears the overlay first.
+
+- `process()` now clears `showWelcome` the moment a message is sent, so the
+  conversation (and the live `/controlar` progress) is always visible.
+
+Also folded in, hardening the `/controlar` path so it can never *look* dead again:
+- The bubble renders **immediately** (before any `await`), with a
+  `· Preparando control local…` line.
+- The `local_agent_step` listener is registered **without `await`** — a stalled
+  event-IPC can no longer block the command before `invoke` even runs.
+
+---
+
 ## [1.7.130] — 2026-06-12
 
 ### Fix — `/controlar` used the routed model, not the one you picked

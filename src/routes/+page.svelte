@@ -4183,6 +4183,13 @@ REGLAS DE FORMATO:
         if(window.speechSynthesis) window.speechSynthesis.cancel();
         let raw=t.inputValue.trim(); if(!raw&&!t.attachedFiles.length) return;
         const doSpeak=t.usedVoice; t.usedVoice=false; t.isProcessing=true; t._procStart = Date.now();
+        // Sending a message IS an interaction → leave the welcome overlay. It's
+        // gated purely on `showWelcome` and, while up, hides every chat pane
+        // (`class:on={… && !showWelcome}`). Without this, anything sent from the
+        // home screen — /controlar, /pantalla, a normal prompt — lands in the
+        // tab but stays hidden behind the overlay (looks like "nothing happened,
+        // stuck Procesando…"). The send path never cleared it before.
+        if (showWelcome) { showWelcome = false; }
         t._committed='';
         t.inputValue='';
         t._histIdx = undefined;
@@ -4241,11 +4248,13 @@ REGLAS DE FORMATO:
                 const _cid = 'local-agent-' + Date.now();
                 let _log = `<div class="mn">Lucy (Control local)</div><div style="font-size:12px;color:var(--txt2)">Tarea: ${esc(_task)}</div><pre style="font-size:11.5px;white-space:pre-wrap;margin-top:6px">`;
                 addMsg(tabId, { id: _cid, role: 'lucy', html: _log + '</pre>' });
+                refresh(); scrollChat();   // render the bubble NOW, before any await
                 const _append = (line) => {
                     _log += esc(String(line)) + '\n';
                     const m = getTab(tabId)?.messages.find(x => x.id === _cid);
                     if (m) { m.html = _log + '</pre>'; refresh(); scrollChat(); }
                 };
+                _append('· Preparando control local…');
                 // Diagnostics + safety net: the backend now emits staged
                 // progress ("1/3 credenciales", "2/3 captura", "3/3 modelo…").
                 // A watchdog guarantees the terminal frees itself even if the
@@ -4265,12 +4274,19 @@ REGLAS DE FORMATO:
                     _finish();
                 }, 150000);
                 try {
-                    _un = await listen('local_agent_step', (ev) => {
+                    // Register the live-progress listener but DO NOT await it.
+                    // `await listen(...)` was the freeze: if Tauri's event IPC
+                    // stalls, awaiting it blocks the whole command before invoke
+                    // ever runs — no bubble renders, no finally, "Procesando…"
+                    // forever. We don't need it before invoke; the backend's
+                    // first emit lands hundreds of ms later. Bonus, not gate.
+                    listen('local_agent_step', (ev) => {
                         const p = (ev && ev.payload) || {};
                         if (p.kind === 'action' || p.kind === 'text') _append((p.detail || '').toString().slice(0, 300));
                         else if (p.kind === 'done')  _append('✓ ' + (p.detail || 'Listo'));
                         else if (p.kind === 'error') _append('✗ ' + (p.detail || 'Error'));
-                    });
+                    }).then((u) => { if (_done) { try { u(); } catch {} } else { _un = u; } })
+                      .catch(() => {});
                     // Use the EXPLICITLY-selected model, never getEffectiveModel
                     // (smart-routing / privacy mode could downgrade GUI control to
                     // a local text model → create_provider falls through to Ollama
