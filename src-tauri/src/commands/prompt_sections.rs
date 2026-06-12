@@ -965,6 +965,34 @@ impl PromptSection for WeakModelExamplesSection {
     }
 }
 
+// ── v1.7.125 — Consolidated CORE PRINCIPLES for WEAK models ───────────────
+// Replaces the 15-rule verbose SafetyRules block (skipped for weak models)
+// with ~10 crisp, positive, principle-based directives — the same philosophy
+// that makes Claude's own instructions work: few principles + judgment, not
+// an enumerated edge-case list. Keeps every SAFETY essential (destructive
+// gate, secret redaction, ambiguity gate, anti-hallucination) in condensed
+// form; the Rust execute_powershell blocklist + bypass-token flow remain the
+// hard backstop regardless. Weak-only; strong models keep full SafetyRules.
+pub struct WeakModelCoreSection;
+impl PromptSection for WeakModelCoreSection {
+    fn name(&self) -> &'static str { "WeakModelCore" }
+    fn relevant(&self, ctx: &PromptContext) -> bool { ctx.model_is_weak }
+    fn priority(&self) -> u32 { 20 } // same slot as SafetyRules (which weak models skip)
+    fn render(&self, _ctx: &PromptContext) -> String {
+        "CORE PRINCIPLES (these replace the long rule list — apply judgment):\n\
+        1. ACT, don't narrate. To DO something, emit the tag (see ACTION CONTRACT + EXAMPLES). Prose without a tag runs nothing.\n\
+        2. DELIVER the result. If the user asked for a file / value / report, it must EXIST or be SHOWN by the end of your turn — never 'I will create it'.\n\
+        3. Files: use native <TOOL>writefile/editfile/readfile</TOOL>. NEVER Get-Content / Set-Content / Out-File for file I/O.\n\
+        4. DESTRUCTIVE actions (delete files, format, clear logs, restart the MACHINE, remove users) → do NOT auto-run. Show the command in a ```powershell``` block for the user to run, or ask first.\n\
+        5. NEVER echo a secret. If the message has a password / API key / token, replace it with [REDACTED] and warn once.\n\
+        6. AMBIGUOUS + irreversible? Ask ONE short clarifying question with 2 options BEFORE acting.\n\
+        7. Don't invent paths, file names, or specific numbers (IDs, counts, sizes). State a value only if it appeared in a REAL tool result this conversation; otherwise say 'probable / likely'.\n\
+        8. Linux commands (sudo, apt, systemctl, chmod) on Windows → show as a ```bash``` block only, NEVER inside <EXECUTE>.\n\
+        9. Match length to the task: a confirmation = 1-2 lines; a question = a short answer; an investigation = as long as needed. No filler phrases.\n\
+        10. Reply in the user's language. Never repeat the user's prompt back to them.".to_string()
+    }
+}
+
 /// Returns the complete prompt string.
 pub fn build_composable_prompt(ctx: &PromptContext) -> String {
     // Register all sections — cheap stack allocations, no Box<dyn>
@@ -973,6 +1001,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         &RunbooksSection,
         &IntentDetectionSection,
         &WeakModelExamplesSection,   // v1.7.124 — weak-model only (priority 12)
+        &WeakModelCoreSection,       // v1.7.125 — weak-model only (priority 20, replaces SafetyRules)
         &ReportGenerationSection,
         &SafetyRulesSection,
         &MemoryRulesSection,
@@ -1008,6 +1037,9 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
     // the tag/tool catalog, and file tools — stays. Strong models get every
     // section (this list is a no-op for them).
     const WEAK_SKIP_SECTIONS: &[&str] = &[
+        // SafetyRules (15 verbose rules) → replaced by the consolidated
+        // WeakModelCore principles block for weak models.
+        "SafetyRules",
         "ReportGeneration", "WebKnowledge", "ConfidenceCalibration",
         "SubAgents", "ForkAdvice", "McpRegistry", "TieredMemory",
         "ReactSelfCorrection", "PlanActVerify", "PdfIntelligence",
@@ -1035,6 +1067,7 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
         "Identity",              // user_name + lang — fixed during a session
         "IntentDetection",
         "WeakModelExamples",     // v1.7.124 — stable per session (model fixed)
+        "WeakModelCore",         // v1.7.125 — stable per session
         "ReportGeneration",
         "SafetyRules",
         "MemoryRules",
@@ -1248,11 +1281,17 @@ mod sig_tests {
         // Weak prompt drops the advanced sections → strictly shorter.
         assert!(weak.len() < strong.len(),
             "weak prompt ({}) should be shorter than strong ({})", weak.len(), strong.len());
-        // Weak prompt carries the few-shot examples + the ACTION CONTRACT.
+        // Weak prompt carries the few-shot examples, ACTION CONTRACT, and the
+        // consolidated CORE PRINCIPLES that replace verbose SafetyRules.
         assert!(weak.contains("EXAMPLES"), "weak prompt should contain few-shot examples");
         assert!(weak.contains("ACTION CONTRACT"), "weak prompt should keep the action contract");
-        // Strong prompt keeps the advanced sections that weak drops.
-        assert!(strong.contains("EXAMPLES") == false, "strong prompt should NOT carry weak-only examples");
+        assert!(weak.contains("CORE PRINCIPLES"), "weak prompt should carry the consolidated principles");
+        // The verbose SafetyRules block (COMPLETION CONTRACT marker) is in the
+        // STRONG prompt only; weak replaces it with CORE PRINCIPLES.
+        assert!(strong.contains("COMPLETION CONTRACT"), "strong prompt should keep verbose SafetyRules");
+        assert!(!weak.contains("COMPLETION CONTRACT"), "weak prompt should drop verbose SafetyRules");
+        assert!(!strong.contains("EXAMPLES"), "strong prompt should NOT carry weak-only examples");
+        assert!(!strong.contains("CORE PRINCIPLES"), "strong prompt should NOT carry weak-only core block");
     }
 
     #[test]
