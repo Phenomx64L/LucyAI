@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.128] — 2026-06-12
+
+### Fix — `/controlar` (local computer-use Phase B) hung forever / did nothing
+
+User-reported: after confirming `/controlar`, the agent sat on "Procesando…"
+indefinitely and never moved the mouse/keyboard. Three independent causes, all
+fixed:
+
+- **Infinite hang → hard-bounded.** `run_local_agent` now wraps the credential
+  check (10 s) and every model call (90 s) in `tokio::time::timeout`. A slow or
+  hung provider surfaces a clear error in chat instead of pinning the UI on
+  "Procesando…" with no feedback. The blocking Win32 work (screen capture, PNG
+  encode, `SetCursorPos`/`SendInput`, inter-key sleeps) now runs via
+  `spawn_blocking` so it can never starve the async loop or event delivery.
+- **Wrong model → use the one you picked.** The Gemini computer-use provider
+  hardcoded `gemini-2.0-flash`; it now resolves and calls the actually-selected
+  model (e.g. `gemini-3.5-flash`), stripping any `::effort` suffix and falling
+  back to a known vision model if the selection isn't a Gemini id.
+- **Silent no-op → tolerant action parsing.** `parse_actions` was strict (bare
+  JSON array only); when a vision model wrapped its output (`{"actions":[…]}`,
+  a single action object, or a ```json fence) zero actions parsed and the agent
+  "did nothing". Parsing now accepts all of those shapes. The default action
+  spec sent to the model is also clearer (explicit schema, "raw JSON only").
+  +5 unit tests.
+
+---
+
 ## [1.7.104] — 2026-06-06
 
 ### Sprint #4 — Performance pre-Linux-port

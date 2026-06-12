@@ -323,10 +323,23 @@ pub async fn run_local_agent(
 
         let provider = create_provider(&model);
         emit_local(&app, "action", "", &format!("[Agente local] {} — armado, controlando tu equipo", provider.name()));
-        provider.check_credentials().await.map_err(|e| format!("Credenciales: {}", e))?;
 
-        let (init_b64, mut sx, mut sy) = capture_for_agent(max_width)
-            .map_err(|e| format!("Captura inicial: {}", e))?;
+        // Credential check with a hard timeout. The keyring read is normally
+        // instant, but we never want a stuck credential backend to freeze the
+        // whole agent with no feedback (the bug this whole block guards against).
+        match tokio::time::timeout(Duration::from_secs(10), provider.check_credentials()).await {
+            Err(_)     => { emit_local(&app, "error", "", "La verificación de credenciales tardó demasiado (timeout 10s)."); return Err("Timeout verificando credenciales.".into()); }
+            Ok(Err(e)) => { emit_local(&app, "error", "", &format!("Credenciales: {}", e)); return Err(format!("Credenciales: {}", e)); }
+            Ok(Ok(()))  => {}
+        }
+
+        // Initial capture — OFF the async runtime (GDI + PNG encode is blocking
+        // CPU work; running it inline starves event delivery and the loop).
+        let (init_b64, mut sx, mut sy) = match tauri::async_runtime::spawn_blocking(move || capture_for_agent(max_width)).await {
+            Ok(Ok(v))  => v,
+            Ok(Err(e)) => { emit_local(&app, "error", "", &format!("Captura inicial: {}", e)); return Err(format!("Captura inicial: {}", e)); }
+            Err(e)     => { emit_local(&app, "error", "", &format!("Captura inicial (hilo): {}", e)); return Err(format!("Captura inicial: {}", e)); }
+        };
         emit_local(&app, "screenshot", &init_b64, "Pantalla inicial");
 
         // Screen dims (in screenshot space) for the prompt.
@@ -365,10 +378,25 @@ pub async fn run_local_agent(
             step += 1;
             emit_local(&app, "action", "", &format!("[Agente local] paso {}/{}…", step, max_steps));
 
-            let (shot, nsx, nsy) = capture_for_agent(max_width).unwrap_or((String::new(), sx, sy));
+            let (shot, nsx, nsy) = match tauri::async_runtime::spawn_blocking(move || capture_for_agent(max_width)).await {
+                Ok(Ok(v)) => v,
+                _ => (String::new(), sx, sy),
+            };
             sx = nsx; sy = nsy;
 
-            match provider.query_llm(&config, &shot, &messages).await {
+            // Per-step timeout: a slow or hung provider call must surface as a
+            // clear error instead of pinning the UI on "Procesando…" forever.
+            let outcome = match tokio::time::timeout(
+                Duration::from_secs(90),
+                provider.query_llm(&config, &shot, &messages),
+            ).await {
+                Ok(inner) => inner,
+                Err(_) => {
+                    emit_local(&app, "error", "", "El modelo no respondió en 90s (timeout). Revisa la API key del proveedor y la conexión.");
+                    return Err("Timeout del modelo (90s).".into());
+                }
+            };
+            match outcome {
                 Ok((actions, text, should_stop)) => {
                     if !text.is_empty() {
                         emit_local(&app, "text", "", &text);
@@ -386,19 +414,25 @@ pub async fn run_local_agent(
                         }
                         // Map screenshot coords → real screen coords.
                         let map = |c: [i32; 2]| [ (c[0] as f64 * sx).round() as i32, (c[1] as f64 * sy).round() as i32 ];
+                        // Win32 input is blocking (SetCursorPos + SendInput +
+                        // sleeps); run each action on the blocking pool so the
+                        // async loop keeps draining cancel checks + events.
                         match action {
-                            ComputerAction::LeftClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Click ({},{})", p[0], p[1])); input::mouse_click(p[0], p[1], "left", false); }
-                            ComputerAction::RightClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Click derecho ({},{})", p[0], p[1])); input::mouse_click(p[0], p[1], "right", false); }
-                            ComputerAction::DoubleClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Doble click ({},{})", p[0], p[1])); input::mouse_click(p[0], p[1], "left", true); }
-                            ComputerAction::MiddleClick { coordinate } => { let p = map(coordinate); input::mouse_click(p[0], p[1], "middle", false); }
-                            ComputerAction::MouseMove { coordinate } => { let p = map(coordinate); input::mouse_move(p[0], p[1]); }
-                            ComputerAction::LeftClickDrag { start_coordinate, end_coordinate } => { let a = map(start_coordinate); let b = map(end_coordinate); emit_local(&app, "action", "", &format!("Arrastrar ({},{})→({},{})", a[0], a[1], b[0], b[1])); input::drag(a[0], a[1], b[0], b[1]); }
-                            ComputerAction::Type { text } => { emit_local(&app, "action", "", &format!("Escribir: {:.40}", text)); input::type_text(&text); }
-                            ComputerAction::Key { text } => { emit_local(&app, "action", "", &format!("Tecla: {}", text)); for k in text.split_whitespace() { input::send_key(k); thread::sleep(Duration::from_millis(90)); } }
+                            ComputerAction::LeftClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Click ({},{})", p[0], p[1])); let _ = tauri::async_runtime::spawn_blocking(move || input::mouse_click(p[0], p[1], "left", false)).await; }
+                            ComputerAction::RightClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Click derecho ({},{})", p[0], p[1])); let _ = tauri::async_runtime::spawn_blocking(move || input::mouse_click(p[0], p[1], "right", false)).await; }
+                            ComputerAction::DoubleClick { coordinate } => { let p = map(coordinate); emit_local(&app, "action", "", &format!("Doble click ({},{})", p[0], p[1])); let _ = tauri::async_runtime::spawn_blocking(move || input::mouse_click(p[0], p[1], "left", true)).await; }
+                            ComputerAction::MiddleClick { coordinate } => { let p = map(coordinate); let _ = tauri::async_runtime::spawn_blocking(move || input::mouse_click(p[0], p[1], "middle", false)).await; }
+                            ComputerAction::MouseMove { coordinate } => { let p = map(coordinate); let _ = tauri::async_runtime::spawn_blocking(move || input::mouse_move(p[0], p[1])).await; }
+                            ComputerAction::LeftClickDrag { start_coordinate, end_coordinate } => { let a = map(start_coordinate); let b = map(end_coordinate); emit_local(&app, "action", "", &format!("Arrastrar ({},{})→({},{})", a[0], a[1], b[0], b[1])); let _ = tauri::async_runtime::spawn_blocking(move || input::drag(a[0], a[1], b[0], b[1])).await; }
+                            ComputerAction::Type { text } => { emit_local(&app, "action", "", &format!("Escribir: {:.40}", text)); let _ = tauri::async_runtime::spawn_blocking(move || input::type_text(&text)).await; }
+                            ComputerAction::Key { text } => { emit_local(&app, "action", "", &format!("Tecla: {}", text)); let _ = tauri::async_runtime::spawn_blocking(move || { for k in text.split_whitespace() { input::send_key(k); thread::sleep(Duration::from_millis(90)); } }).await; }
                             ComputerAction::Screenshot | ComputerAction::CursorPosition => {}
                         }
-                        thread::sleep(Duration::from_millis(650));
-                        let (after, _, _) = capture_for_agent(max_width).unwrap_or((String::new(), sx, sy));
+                        tokio::time::sleep(Duration::from_millis(650)).await;
+                        let (after, _, _) = match tauri::async_runtime::spawn_blocking(move || capture_for_agent(max_width)).await {
+                            Ok(Ok(v)) => v,
+                            _ => (String::new(), sx, sy),
+                        };
                         messages.push(json!({ "role": "user", "content": [{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": after } }] }));
                         if messages.len() > 8 {
                             let first = messages[0].clone();

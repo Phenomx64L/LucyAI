@@ -19,6 +19,20 @@ impl GeminiProvider {
     }
 }
 
+/// Resolve the caller-selected model id into the real Gemini API model name.
+/// Strips any "::effort" suffix, upgrades the legacy alias, and falls back to a
+/// known vision-capable model if the selection isn't a Gemini id (so we never
+/// POST to a non-existent `:generateContent` endpoint and hang/error).
+fn resolve_gemini_model(raw: &str) -> String {
+    let base = raw.split("::").next().unwrap_or(raw).trim();
+    let base = if base == "gemini-3-flash-preview" { "gemini-3.5-flash" } else { base };
+    if base.starts_with("gemini") && !base.is_empty() {
+        base.to_string()
+    } else {
+        "gemini-2.5-flash".to_string()
+    }
+}
+
 #[async_trait]
 impl ComputerUseProvider for GeminiProvider {
     fn name(&self) -> &str {
@@ -133,9 +147,10 @@ impl ComputerUseProvider for GeminiProvider {
             }
         });
 
+        let api_model = resolve_gemini_model(&config.model);
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
-            api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            api_model, api_key
         );
 
         let resp = HTTP_CLIENT
@@ -179,7 +194,12 @@ impl ComputerUseProvider for GeminiProvider {
             }
         }
 
-        let should_stop = actions.is_empty() || text_response.contains("complete") || text_response.contains("done");
+        // Stop only when there's genuinely nothing left to do. The old
+        // substring check on `text_response` ("done"/"complete") was unsafe
+        // here: with response_mime_type=application/json the text IS the action
+        // JSON, so coordinates/keys could trip a false stop. Empty actions =
+        // the model has nothing more to perform → end the turn.
+        let should_stop = actions.is_empty();
 
         Ok((actions, text_response, should_stop))
     }
