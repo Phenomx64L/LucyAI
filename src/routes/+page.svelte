@@ -4271,8 +4271,14 @@ REGLAS DE FORMATO:
                         else if (p.kind === 'done')  _append('✓ ' + (p.detail || 'Listo'));
                         else if (p.kind === 'error') _append('✗ ' + (p.detail || 'Error'));
                     });
-                    _append('▶ Enviado al backend (run_local_agent). Esperando respuesta…');
-                    const _res = await invoke('run_local_agent', { task: _task, model: getEffectiveModel(t), maxSteps: 15, confirm: true });
+                    // Use the EXPLICITLY-selected model, never getEffectiveModel
+                    // (smart-routing / privacy mode could downgrade GUI control to
+                    // a local text model → create_provider falls through to Ollama
+                    // and stalls on a local endpoint). Computer-use needs vision.
+                    const _ctrlModel = (t.selectedModel && t.selectedModel !== 'nvidia-custom')
+                        ? t.selectedModel : getEffectiveModel(t);
+                    _append(`▶ Enviado al backend (run_local_agent, modelo: ${esc(_ctrlModel)}). Esperando respuesta…`);
+                    const _res = await invoke('run_local_agent', { task: _task, model: _ctrlModel, maxSteps: 15, confirm: true });
                     if (_res) _append('— ' + String(_res).slice(0, 300));
                 } catch (e) {
                     _append('✗ ' + String(e).slice(0, 300));

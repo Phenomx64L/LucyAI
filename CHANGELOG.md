@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.130] — 2026-06-12
+
+### Fix — `/controlar` used the routed model, not the one you picked
+
+`/controlar` passed `getEffectiveModel(t)` to the backend, which smart-routing
+or privacy mode can rewrite to a **local text model**. `create_provider` then
+falls through to the Ollama provider, whose credential check hits a local
+endpoint — a strong candidate for the stall, and wrong regardless (GUI control
+needs a vision model). Now it sends the model you explicitly selected (e.g.
+`gemini-3.5-flash`) and prints it in the progress line so the active model is
+visible at a glance.
+
+---
+
 ## [1.7.129] — 2026-06-12
 
 ### Fix + diagnose — `/controlar` still hung after 1.7.128
