@@ -5422,7 +5422,14 @@ Use ONE of these patterns instead:
             // first response wasn't enough.
             const _autoPromoteSafeCmd = (text) => {
                 if (!text || infoIntent || codeGenIntent || skillInfoIntent) return text;
-                if (/<EXECUTE_CMD\b|<EXECUTE\b|<TOOL>/i.test(text)) return text;
+                // v1.7.119 — only bail when a COMMAND-execution tag is already
+                // present. We deliberately do NOT bail on <TOOL> (writefile /
+                // editfile etc.): the model commonly emits a tagged writefile
+                // AND a BARE open command (Start-Process) in the SAME response
+                // — the previous guard saw the writefile's <TOOL> and skipped
+                // promoting the open step, so the file got created but never
+                // opened, looping into skip-stuck.
+                if (/<EXECUTE_CMD\b|<EXECUTE\b/i.test(text)) return text;
                 // Allow-list of SAFE actionable commands. Two families:
                 //   • read-only inspection (Get-*, Test-*, whoami, ipconfig, …)
                 //   • open / launch / navigate (Start-Process, Invoke-Item, ii,
@@ -5436,11 +5443,21 @@ Use ONE of these patterns instead:
                 // them on top of that).
                 const _DANGER_RE = /-Verb\s+RunAs|\bRemove-|\brm\s|\bdel\s|\brmdir\b|\bformat\b|\bmkfs\b|\bdd\s|\bStop-|\bRestart-Computer\b|\bClear-|\bUninstall-|\bDisable-|\bSet-ExecutionPolicy\b|\bnet\s+user\b|\btakeown\b|\bicacls\b|Invoke-Expression|\biex\b|DownloadString|DownloadFile|-EncodedCommand/i;
                 const _fence = text.match(/```(?:powershell|pwsh|ps1?|cmd|bat|shell|sh)?\s*\n?([\s\S]*?)```/i);
-                let _cand = _fence ? _fence[1].trim() : '';
-                if (!_cand) {
+                let _cand = '';
+                let _viaFence = false;
+                if (_fence && _SAFE_CMD_RE.test(_fence[1].trim())) {
+                    _cand = _fence[1].trim();
+                    _viaFence = true;
+                } else {
+                    // BARE case — strip ALL scaffolding (thought, remember, AND
+                    // tagged tools like writefile/editfile + their FILECONTENT)
+                    // so a bare command that coexists with a writefile is still
+                    // isolated and detected.
                     const _bare = text
                         .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
                         .replace(/<REMEMBER[\s\S]*?<\/REMEMBER>/gi, '')
+                        .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                        .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
                         .trim();
                     if (_SAFE_CMD_RE.test(_bare) && _bare.length <= 300 && !/\n/.test(_bare)) {
                         _cand = _bare;
@@ -5455,9 +5472,15 @@ Use ONE of these patterns instead:
                         detail: _oneLine.slice(0, 120),
                         tabId,
                     });
-                    return _fence
-                        ? text.replace(_fence[0], `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`)
-                        : `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`;
+                    if (_viaFence) {
+                        // The fence WAS the command's display → swap it in place.
+                        return text.replace(_fence[0], `<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`);
+                    }
+                    // Bare command, possibly coexisting with a writefile/editfile
+                    // tag → APPEND the exec tag so the OTHER tags still run too.
+                    // Loop order (writefile before EXECUTE_CMD) means the file is
+                    // created first, THEN opened — exactly create-then-open.
+                    return text + `\n<EXECUTE_CMD>${_oneLine}</EXECUTE_CMD>`;
                 }
                 return text;
             };
