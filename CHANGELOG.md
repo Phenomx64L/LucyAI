@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.136] — 2026-06-12
+
+### Fix — Memory Graph "cage" #2: canvas now fills the panel + pan clamp
+
+The green focus ring was gone (1.7.134) but the graph still sat in a box smaller
+than its container: `viewW/viewH` were computed once and **capped at 1400×900**,
+so on a larger screen the SVG/canvas covered only part of the panel and clipped
+the graph when panned right ("the data disappears").
+
+- The drawable area is now **measured from the canvas wrapper** and fills the
+  whole panel, with a `ResizeObserver` that re-fits on window resize. No more
+  inner cage; the cap is gone.
+- Added a **soft pan clamp** so the node cloud can never be dragged entirely
+  off-screen — at least 80 px stays visible on every side. If a graph is larger
+  than the viewport on an axis, that axis stays free for exploration.
+
+---
+
 ## [1.7.135] — 2026-06-12
 
 ### Memory Graph — P2 interaction polish + label anti-collision

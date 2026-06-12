@@ -144,6 +144,10 @@
     // settling and the viewport transform.
     let edgeCanvas: HTMLCanvasElement | null = null;
     let _edgeCtx: CanvasRenderingContext2D | null = null;
+    // The drawable area is measured from this wrapper so the SVG/canvas fill the
+    // whole panel (no smaller "cage" that clips the graph when panned).
+    let canvasWrapEl: HTMLDivElement | null = null;
+    let _resizeObs: ResizeObserver | null = null;
 
     // v1.7.87 — Typed semantic links. Loaded once per graph open
     // alongside the similarity edges. Rendered in the same canvas pass
@@ -699,6 +703,7 @@
             panY += (ev.clientY - lastPy) / zoom;
             lastPx = ev.clientX;
             lastPy = ev.clientY;
+            clampPan();                    // keep the graph from leaving the view
             paintEdges();                  // v1.7.86 — repaint on pan
         }
     }
@@ -731,6 +736,7 @@
         const wyAfter = (ev.clientY - rect.top)  / zoom - panY;
         panX += (wxAfter - wxBefore);
         panY += (wyAfter - wyBefore);
+        clampPan();                        // keep the graph from leaving the view
         paintEdges();                      // v1.7.86 — repaint on zoom
     }
     function onNodeClick(ev: MouseEvent, node: SimNode): void {
@@ -778,6 +784,26 @@
         const bboxCy = (minY + maxY) / 2;
         panX = (viewW / 2 - bboxCx * zoom) / zoom;
         panY = (viewH / 2 - bboxCy * zoom) / zoom;
+    }
+
+    /** Keep the graph from being panned entirely off-screen ("dragging right
+     *  made the data disappear"). Clamps panX/panY so at least MARGIN screen px
+     *  of the node cloud stays inside the viewport on every side. If the graph
+     *  is larger than the viewport on an axis, that axis is left free so the
+     *  user can still explore a big graph. */
+    function clampPan(): void {
+        if (simNodes.length === 0) return;
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const n of simNodes) {
+            if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+        }
+        const MARGIN = 80; // screen px of the graph that must stay visible
+        // screenX = (wx + panX) * zoom  ⇒ solve the visibility bounds for panX.
+        const minPanX = MARGIN / zoom - maxX, maxPanX = (viewW - MARGIN) / zoom - minX;
+        const minPanY = MARGIN / zoom - maxY, maxPanY = (viewH - MARGIN) / zoom - minY;
+        if (minPanX <= maxPanX) panX = Math.max(minPanX, Math.min(maxPanX, panX));
+        if (minPanY <= maxPanY) panY = Math.max(minPanY, Math.min(maxPanY, panY));
     }
 
     /** "Reset view" button — re-fits instead of returning to zoom=1/pan=0,
@@ -943,15 +969,38 @@
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────────
+    /** Match the drawable area (viewW/viewH) to the actual panel size so the
+     *  graph never sits in a smaller box than its container. Returns true if the
+     *  size changed. */
+    function measureViewport(): boolean {
+        if (!canvasWrapEl) return false;
+        const w = canvasWrapEl.clientWidth;
+        const h = canvasWrapEl.clientHeight;
+        if (w > 0 && h > 0 && (w !== viewW || h !== viewH)) {
+            viewW = w; viewH = h;
+            return true;
+        }
+        return false;
+    }
+
     onMount(() => {
         window.addEventListener('keydown', onKeyDown);
         document.addEventListener('visibilitychange', onVisibilityChange);
-        viewW = Math.min(window.innerWidth - 80, 1400);
-        viewH = Math.min(window.innerHeight - 240, 900);
+        // Fill the whole panel (was capped at 1400×900, which left the SVG
+        // smaller than its container on large screens — the "cage" that clipped
+        // the graph when panned). Re-fit on resize.
+        measureViewport();
+        if (typeof ResizeObserver !== 'undefined' && canvasWrapEl) {
+            _resizeObs = new ResizeObserver(() => {
+                if (measureViewport() && graph) { fitToView(); paintEdges(); }
+            });
+            _resizeObs.observe(canvasWrapEl);
+        }
         loadGraph().then(focusCanvas);
     });
     onDestroy(() => {
         stopFlowLoop();
+        if (_resizeObs) { try { _resizeObs.disconnect(); } catch {} _resizeObs = null; }
         document.removeEventListener('visibilitychange', onVisibilityChange);
         // v1.7.85 — Persist layout before tearing down. Sync-fire so the
         // bulk write hits the backend before the component unmounts.
@@ -1060,7 +1109,7 @@
     {/if}
 
     <!-- ── Canvas ──────────────────────────────────────────────────────── -->
-    <div class="mg-canvas-wrap">
+    <div class="mg-canvas-wrap" bind:this={canvasWrapEl}>
         {#if loading && !graph}
             <div class="mg-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
         {:else if error}
