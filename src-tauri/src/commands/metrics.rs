@@ -3992,3 +3992,29 @@ pub async fn update_agent_memory_tags(
         Ok(())
     })
 }
+
+// ── v1.7.120 — Memory Browser bulk-promote UPDATE path ────────────────────
+//
+// MemoryBrowserView's "bulk promote" flow (importance +1) was ALSO calling
+// the non-existent `save_agent_memory_full`, so the button silently did
+// nothing (the per-row catch swallowed "command not found"). Same class of
+// hole as the tags path above. A dedicated importance UPDATE keeps it small
+// and avoids touching save_agent_memory's INSERT/dedup path. Clamped 1..=10
+// to match the frontend's cap.
+#[tauri::command]
+pub async fn update_agent_memory_importance(
+    id:         i64,
+    importance: i64,
+) -> Result<(), String> {
+    let imp = importance.clamp(1, 10);
+    with_db(|conn| {
+        let n = conn.execute(
+            "UPDATE agent_memories SET importance = ?1 WHERE id = ?2",
+            rusqlite::params![imp, id],
+        ).map_err(|e| format!("update_agent_memory_importance: {}", e))?;
+        if n == 0 {
+            return Err(format!("no memory found with id={}", id));
+        }
+        Ok(())
+    })
+}

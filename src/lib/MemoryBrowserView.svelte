@@ -250,7 +250,7 @@
     }
     async function bulkPromote() {
         // Bumps importance +1 on each selected memory (capped at 10).
-        // Uses save_agent_memory_full which is the "update or insert" path.
+        // Uses update_agent_memory_importance (the dedicated UPDATE command).
         if (bulkSelected.size === 0) return;
         bulkBusy = true;
         try {
@@ -260,11 +260,11 @@
                 const newImp = Math.min(10, (m.importance || 1) + 1);
                 if (newImp === m.importance) continue;
                 try {
-                    await invoke('save_agent_memory_full', {
-                        id, title: m.title, content: m.content,
-                        tags: tagList(m.tags), files: tagList(m.files),
-                        importance: newImp, sessionId: m.session_id || '',
-                    });
+                    // v1.7.120 — was calling the non-existent
+                    // `save_agent_memory_full`, so bulk-promote silently did
+                    // nothing (the catch swallowed "command not found"). Now
+                    // uses the dedicated importance UPDATE command.
+                    await invoke('update_agent_memory_importance', { id, importance: newImp });
                 } catch { /* ignore per-row failures */ }
             }
             bulkSelected = new Set();
@@ -288,13 +288,10 @@
                 const existing = tagList(m.tags);
                 if (existing.includes(tagClean)) continue;
                 try {
-                    await invoke('save_agent_memory_full', {
-                        id, title: m.title, content: m.content,
-                        tags: [...existing, tagClean],
-                        files: tagList(m.files),
-                        importance: m.importance,
-                        sessionId: m.session_id || '',
-                    });
+                    // v1.7.120 — was calling the non-existent
+                    // `save_agent_memory_full`; bulk-add-tag silently failed.
+                    // Now uses the existing tags UPDATE command.
+                    await invoke('update_agent_memory_tags', { id, tags: [...existing, tagClean] });
                 } catch { /* keep going */ }
             }
             bulkSelected = new Set();

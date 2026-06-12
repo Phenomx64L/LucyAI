@@ -847,6 +847,7 @@ pub fn run() {
             metrics::increment_skill_usage,
             metrics::save_agent_memory,
             metrics::update_agent_memory_tags,
+            metrics::update_agent_memory_importance,
             metrics::delete_agent_memory,
             metrics::auto_forget_run,
             metrics::crystallize_session,
