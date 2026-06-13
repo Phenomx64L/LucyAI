@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.156] — 2026-06-13
+
+### Polish — NexShell output visual hierarchy (improvement 1 of 4)
+
+First of four requested NexShell improvements. Makes a long wall of green mono
+scannable (pure CSS in `nexshell.css`):
+- **Command anchors** — each executed `$ command` line now sits in an accent
+  left-rail band with a faint wash, so you can see where each command block
+  starts.
+- **Error lines** — `err` log lines get a red left rail + faint red wash, so
+  failures (rpm/dnf locks, permission denied, etc.) jump out instead of blending
+  into the output.
+- **Exit≠0 badge** — the non-zero exit badge is bolder with a soft red glow.
+
+(Follow-ups queued: proactive error fix-chips, header renovation band,
+per-command actions. Also noted: the analysis block still renders Markdown as
+literal `###`/`**` — a separate change to pipe it through the markdown
+renderer.)
+
+---
+
 ## [1.7.155] — 2026-06-13
 
 ### Removed — Conversation minimap (D4)

@@ -189,6 +189,25 @@
 .rsl-info-txt{color:#0f7b5a;flex:1;}
 .rsl-running .rsl-spin{color:#475569;animation:spin .8s linear infinite;display:inline-block;}
 
+/* v1.7.156 — output visual hierarchy. Each executed command becomes a clear
+   "anchor" band (accent left rail), and error lines get a red rail + faint
+   wash so failures (rpm/dnf locks, perms, etc.) are scannable at a glance in a
+   long green wall of mono. */
+.rshell-line.rsl-cmd{
+    margin:4px 0 1px;
+    padding:2px 6px 2px 8px;
+    border-left:2px solid rgba(16,185,129,.5);
+    border-radius:0 5px 5px 0;
+    background:linear-gradient(90deg, rgba(16,185,129,.06), transparent 55%);
+}
+.rshell-line.rsl-cmd .rsl-prompt{color:var(--acc);}
+.rshell-line.rsl-err{
+    padding:2px 6px 2px 8px;
+    border-left:2px solid rgba(239,68,68,.55);
+    border-radius:0 5px 5px 0;
+    background:linear-gradient(90deg, rgba(239,68,68,.07), transparent 70%);
+}
+
 /* Live streaming block */
 .rsl-live-block{display:flex;flex-direction:column;gap:0;border-left:2px solid rgba(16,185,129,.25);margin:2px 0;background:rgba(16,185,129,.02);border-radius:0 4px 4px 0;box-shadow:-2px 0 10px rgba(16,185,129,.06);}
 .rsl-live-hdr{display:flex;align-items:center;gap:7px;padding:4px 10px;background:rgba(16,185,129,.04);border-bottom:1px solid rgba(16,185,129,.08);}
@@ -205,7 +224,7 @@
 .rsl-meta-row{display:flex;align-items:center;gap:10px;padding:3px 0 2px;border-top:1px solid rgba(255,255,255,.04);margin-top:3px;}
 .rsl-exit-badge{font-size:10px;font-weight:700;padding:1px 8px;border-radius:10px;font-family:var(--mono);letter-spacing:.3px;}
 .rsl-exit-badge.ok{color:#10b981;background:rgba(16,185,129,.09);border:1px solid rgba(16,185,129,.2);}
-.rsl-exit-badge.err{color:#ef4444;background:rgba(255,68,68,.09);border:1px solid rgba(255,68,68,.2);}
+.rsl-exit-badge.err{color:#ef4444;background:rgba(255,68,68,.13);border:1px solid rgba(255,68,68,.34);box-shadow:0 0 10px -3px rgba(239,68,68,.5);}
 .rsl-dur{font-size:10px;color:#334155;font-family:var(--mono);}
 
 /* Interactive prompt row */
