@@ -226,7 +226,10 @@
         <div class="modal-content" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <!-- Header -->
             <div class="modal-header">
-                <h2><Settings size={20} /> {lang.title}</h2>
+                <div class="hdr-left">
+                    <span class="prm-hdr-ico"><Settings size={20} strokeWidth={1.8} color="var(--acc, #10b981)" /></span>
+                    <h2>{lang.title}</h2>
+                </div>
                 <button class="close-btn" on:click={closeModal}>✕</button>
             </div>
 
@@ -416,40 +419,65 @@
         right: 0;
         bottom: 0;
         background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(6px) saturate(120%);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: var(--z-modal, 2000);
+        animation: prm-bg-in .18s ease;
     }
+    @keyframes prm-bg-in { from { opacity: 0; } to { opacity: 1; } }
 
     .modal-content {
-        background: #1a1a2e;
-        border: 1px solid #3a3a5c;
-        border-radius: 8px;
-        color: #e0e0e0;
+        /* Depth: faint accent top glow over the base instead of a flat slab. */
+        background:
+            radial-gradient(120% 55% at 50% -6%, rgba(16,185,129,.08) 0%, transparent 56%),
+            var(--bg2, #0d1117);
+        border: 1px solid var(--bdr, #1e2a3a);
+        border-top: 3px solid var(--acc, #10b981);
+        border-radius: 12px;
+        color: var(--txt, #e0e0e0);
         width: 90%;
         max-width: 1000px;
         max-height: 90vh;
         display: flex;
         flex-direction: column;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        box-shadow:
+            0 24px 64px rgba(0, 0, 0, 0.6),
+            0 -1px 28px -10px rgba(16,185,129,.38);
+        animation: prm-box-in .26s cubic-bezier(.16,1,.3,1);
     }
+    @keyframes prm-box-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
 
     .modal-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 1.5rem;
-        border-bottom: 1px solid #3a3a5c;
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--bdr, #1e2a3a);
+    }
+
+    .hdr-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .prm-hdr-ico {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px; height: 40px;
+        border-radius: 12px; flex-shrink: 0;
+        background: rgba(16,185,129,.12);
+        border: 1px solid rgba(16,185,129,.28);
+        box-shadow: 0 0 18px -4px rgba(16,185,129,.5);
     }
 
     .modal-header h2 {
         margin: 0;
-        font-size: 1.3rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        color: #fff;
+        font-size: 1.25rem;
+        color: var(--txt, #fff);
     }
 
     .close-btn {
@@ -499,10 +527,10 @@
 
     /* Form Styles */
     .form-panel {
-        background: #0f3460;
+        background: rgba(255,255,255,.02);
         padding: 1.5rem;
-        border: 1px solid #3a3a5c;
-        border-radius: 6px;
+        border: 1px solid var(--bdr, #1e2a3a);
+        border-radius: 8px;
     }
 
     .form-panel h3 {
@@ -530,12 +558,13 @@
     select {
         width: 100%;
         padding: 0.75rem;
-        background: #1a1a2e;
-        border: 1px solid #3a3a5c;
-        border-radius: 4px;
-        color: #e0e0e0;
+        background: var(--bg, #010409);
+        border: 1px solid var(--bdr, #1e2a3a);
+        border-radius: 6px;
+        color: var(--txt, #e0e0e0);
         font-family: inherit;
         font-size: 0.9rem;
+        transition: border-color .15s, box-shadow .15s;
     }
 
     textarea {
@@ -548,8 +577,8 @@
     textarea:focus,
     select:focus {
         outline: none;
-        border-color: #4a9eff;
-        background: #0f3460;
+        border-color: var(--acc, #10b981);
+        box-shadow: 0 0 0 3px rgba(16,185,129,.18);
     }
 
     .form-row {
@@ -578,9 +607,10 @@
 
     /* Test Section */
     .test-section {
-        background: #16213e;
+        background: rgba(0,0,0,.22);
         padding: 1rem;
-        border-radius: 4px;
+        border: 1px solid var(--bdr, #1e2a3a);
+        border-radius: 6px;
         margin: 1rem 0;
     }
 
@@ -603,16 +633,16 @@
 
     .test-btn {
         padding: 0.75rem 1.5rem;
-        background: #4a9eff;
+        background: var(--acc, #10b981);
         border: none;
-        border-radius: 4px;
-        color: #fff;
+        border-radius: 6px;
+        color: #052e1c;
         cursor: pointer;
-        font-weight: 500;
+        font-weight: 600;
     }
 
     .test-btn:hover {
-        background: #3a8eef;
+        filter: brightness(1.08);
     }
 
     .test-result {
@@ -637,7 +667,7 @@
         justify-content: flex-end;
         margin-top: 1.5rem;
         padding-top: 1rem;
-        border-top: 1px solid #3a3a5c;
+        border-top: 1px solid var(--bdr, #1e2a3a);
     }
 
     .btn-save,
@@ -650,12 +680,13 @@
     }
 
     .btn-save {
-        background: #4a9eff;
-        color: #fff;
+        background: var(--acc, #10b981);
+        color: #052e1c;
     }
 
     .btn-save:hover:not(:disabled) {
-        background: #3a8eef;
+        filter: brightness(1.08);
+        box-shadow: 0 6px 18px -6px rgba(16,185,129,.6);
     }
 
     .btn-save:disabled {
@@ -676,39 +707,39 @@
     .rules-table {
         width: 100%;
         border-collapse: collapse;
-        background: #0f3460;
-        border: 1px solid #3a3a5c;
-        border-radius: 6px;
+        background: rgba(255,255,255,.02);
+        border: 1px solid var(--bdr, #1e2a3a);
+        border-radius: 8px;
         overflow: hidden;
     }
 
     .rules-table thead {
-        background: #16213e;
+        background: rgba(0,0,0,.25);
     }
 
     .rules-table th {
         padding: 1rem;
         text-align: left;
         font-weight: 600;
-        color: #888;
+        color: var(--txt2, #8a9aaa);
         text-transform: uppercase;
         font-size: 0.8rem;
         letter-spacing: 0.5px;
-        border-bottom: 1px solid #3a3a5c;
+        border-bottom: 1px solid var(--bdr, #1e2a3a);
     }
 
     .rules-table td {
         padding: 1rem;
-        border-bottom: 1px solid #1a1a2e;
+        border-bottom: 1px solid rgba(255,255,255,.04);
     }
 
     .rules-table tbody tr:hover {
-        background: #1a3a52;
+        background: rgba(16,185,129,.05);
     }
 
     .pattern {
         font-family: 'Courier New', monospace;
-        color: #4a9eff;
+        color: var(--blue, #3b9eff);
         font-size: 0.85rem;
     }
 
@@ -770,18 +801,20 @@
         align-items: center;
         gap: 0.5rem;
         padding: 0.75rem 1.5rem;
-        background: #4a9eff;
+        background: var(--acc, #10b981);
         border: none;
-        border-radius: 4px;
-        color: #fff;
+        border-radius: 6px;
+        color: #052e1c;
         cursor: pointer;
-        font-weight: 500;
+        font-weight: 600;
         align-self: flex-start;
         margin-top: 1rem;
+        transition: filter .15s, box-shadow .15s;
     }
 
     .btn-add:hover {
-        background: #3a8eef;
+        filter: brightness(1.08);
+        box-shadow: 0 6px 18px -6px rgba(16,185,129,.5);
     }
 
     @media (max-width: 768px) {

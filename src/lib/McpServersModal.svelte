@@ -34,6 +34,7 @@
   import { toast as sonnerToast } from 'svelte-sonner';
   import { invoke } from '@tauri-apps/api/core';
   import ConfirmModal from '$lib/ConfirmModal.svelte';
+  import Plug from '@tabler/icons-svelte/icons/plug';
 
   export let isOpen = false;
   export let isEN = false;
@@ -399,9 +400,12 @@
     <Dialog.Content class="modal-card-wrap">
       <div class="modal-card">
       <header class="hdr">
-        <div>
-          <h2>🔌 {T.title}</h2>
-          <p class="sub">{T.subtitle}</p>
+        <div class="hdr-left">
+          <span class="mcp-hdr-ico"><Plug size={20} strokeWidth={1.8} color="var(--acc, #10b981)" /></span>
+          <div>
+            <h2>{T.title}</h2>
+            <p class="sub">{T.subtitle}</p>
+          </div>
         </div>
         <button class="x" on:click={close} aria-label={T.close}>✕</button>
       </header>
@@ -642,9 +646,11 @@
   :global(.modal-backdrop) {
     position: fixed; inset: 0;
     background: rgba(2, 6, 12, 0.78);
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(6px) saturate(120%);
     z-index: 5000;
+    animation: -global-mcp-bg-in .18s ease;
   }
+  @keyframes -global-mcp-bg-in { from { opacity: 0; } to { opacity: 1; } }
   /* Dialog.Content wraps the actual card and provides the focus trap.
      We use it as the centering flex parent so the card stays middle-
      aligned even when its content is tall (overflow on the inner card). */
@@ -659,17 +665,33 @@
   }
   :global(.modal-card-wrap > .modal-card) { pointer-events: auto; }
   :global(.modal-card) {
-    background: var(--bg2, #0b0e14);
+    /* Depth: faint accent top glow over the base instead of a flat slab. */
+    background:
+      radial-gradient(120% 60% at 50% -6%, rgba(16,185,129,.08) 0%, transparent 56%),
+      var(--bg2, #0b0e14);
     border: 1px solid var(--bdr, #1a2030);
+    border-top: 3px solid var(--acc, #10b981);
     border-radius: 14px;
     width: min(820px, 96vw);
     max-height: 92vh;
     overflow-y: auto;
-    box-shadow: 0 24px 64px rgba(0,0,0,0.7);
+    box-shadow:
+      0 24px 64px rgba(0,0,0,0.7),
+      0 -1px 28px -10px rgba(16,185,129,.38);
     padding: 22px 24px;
     color: var(--txt, #dde3ea);
+    animation: -global-mcp-card-in .26s cubic-bezier(.16,1,.3,1);
   }
+  @keyframes -global-mcp-card-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
   .hdr { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
+  .hdr-left { display: flex; align-items: flex-start; gap: 13px; }
+  .mcp-hdr-ico {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+    background: rgba(16,185,129,.12);
+    border: 1px solid rgba(16,185,129,.28);
+    box-shadow: 0 0 18px -4px rgba(16,185,129,.5);
+  }
   .hdr h2 { margin: 0 0 4px; font-size: 18px; }
   .sub { color: var(--txt2, #7a8a9a); font-size: 12px; margin: 0; line-height: 1.5; }
   .x {

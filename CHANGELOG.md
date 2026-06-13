@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.148] — 2026-06-12
+
+### Polish — MCP Servers + Permission Rules modal renovation
+
+Two more modals brought onto the Lucy design system (logic untouched):
+
+- **MCP Servers** (already green) gets the renovation band: overlay fade +
+  card slide/scale entrance, accent top-glow gradient, 3 px accent top bar,
+  soft outer glow, and a plug icon in a glowing accent chip (replacing the raw
+  🔌 emoji). Keyframes are declared `-global-` so they survive the bits-ui
+  `:global(.modal-card)` portal scoping.
+- **Permission Rules** was still on the **legacy off-brand blue palette**
+  (`#1a1a2e` / `#0f3460` / `#4a9eff`). Full re-brand to the green design tokens:
+  overlay fade + entrance, accent top bar + glow, header icon chip, brand-green
+  primary buttons (Add / Save / Test), brand-green focus rings on every input,
+  token-based surfaces for the form panel / test box / rules table, and a green
+  row-hover. Semantic action colours (allow=green / block=red / ask=yellow)
+  intentionally preserved.
+
+Note: `SkillsManagerModal` (the old user-defined-macro manager) remains
+**retired** (Sprint A #3 / v1.4.1) — its "Execute" was always a no-op. The live
+skill system is the **Skill Browser** in NexShell (multi-phase guarded
+playbooks), which is fully functional. The retired component was left untouched
+(not modernized) since it is dead code.
+
+---
+
 ## [1.7.147] — 2026-06-12
 
 ### Polish — Provider Configuration modal renovation
