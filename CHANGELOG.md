@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.154] — 2026-06-13
+
+### Fix — Remote-command-only replies were mis-flagged as "empty response"
+
+**Reported (right after the v1.7.153 fix restored remote interaction):** asking
+Lucy to "realiza la actualización" on a remote host showed
+`⚡ Preparando un comando remoto…` and then `⚠ Respuesta vacía del modelo`,
+swapping gemini-3.5-flash → claude-haiku-4-5 (both "empty") and running nothing.
+
+**Root cause:** the empty-response guard's `_hadActionableBlock` regex
+(`+page.svelte`) was `/<TOOL>|<EXECUTE\b|<EXECUTE_CMD\b|<PLAN>|…/`. `<EXECUTE\b`
+does **not** match `<EXECUTE_REMOTE>` — `_` is a word character, so there's no
+`\b` boundary after "EXECUTE" — and only `_CMD` was enumerated. A reply that was
+**only** a remote command (no prose) had its block stripped by `_respClean`, so
+both `_respClean` was empty AND the flag was false → the turn bailed into the
+empty-response fallback **before** the `<EXECUTE_REMOTE>` executor ran. The
+models actually returned valid commands; the guard discarded them.
+
+**Fix:** match **any** `<EXECUTE…` variant (REMOTE / CMD / WMIC / NETSH / REG /
+CSCRIPT / plain) — regex changed to `/<TOOL>|<EXECUTE|<PLAN>|<REMEMBER\b|<LEARN>/i`.
+Now a remote-command-only reply is recognized as actionable and reaches the
+executor (which runs it on the host via SSH after the usual confirm).
+
+---
+
 ## [1.7.153] — 2026-06-13
 
 ### Fix — Auto-routed security skills silently disabled ALL command execution

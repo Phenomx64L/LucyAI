@@ -8616,7 +8616,15 @@ times the SAME way, switch tool kind entirely.
             // delegate everything to tools without summarizing. False positive
             // here was triggering "Respuesta vacía del modelo" intermittently
             // on audit/diagnostic prompts (user-reported regression).
-            const _hadActionableBlock = /<TOOL>|<EXECUTE\b|<EXECUTE_CMD\b|<PLAN>|<REMEMBER\b|<LEARN>/i.test(resp || '');
+            // v1.7.154 — `<EXECUTE\b` does NOT match `<EXECUTE_REMOTE>` (the `_`
+            // is a word char, so there's no \b boundary after "EXECUTE"), and
+            // only `_CMD` was enumerated. A reply that was ONLY a remote command
+            // (no prose) therefore looked "empty": _respClean stripped the block
+            // and this flag stayed false, so we bailed into the empty-response
+            // fallback BEFORE the EXECUTE_REMOTE executor ran — the command never
+            // fired and the user saw a false "respuesta vacía" + model swap.
+            // Match ANY <EXECUTE… variant (REMOTE/CMD/WMIC/NETSH/REG/CSCRIPT/plain).
+            const _hadActionableBlock = /<TOOL>|<EXECUTE|<PLAN>|<REMEMBER\b|<LEARN>/i.test(resp || '');
             if (_respClean.length === 0 && !_hadActionableBlock) {
                 // ── Provider auto-fallback (May 2026) ───────────────────────
                 // Before giving up, see if we have another configured provider
