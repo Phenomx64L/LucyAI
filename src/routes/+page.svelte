@@ -114,6 +114,10 @@ import { listen } from '@tauri-apps/api/event';
     import { startKnowledgeGraphLoop } from '$lib/knowledge-graph-loop';
     import { classifyDrop, defaultPromptForKind } from '$lib/universal-drop';
     import SkillPicker from '$lib/SkillPicker.svelte';
+    // v1.7.150 — local launcher for the curated multi-phase Skill Browser
+    // (skill-engine playbooks). Previously only reachable inside NexShell
+    // (remote hosts). Here it targets THIS local machine (Windows).
+    import SkillBrowserModal from '$lib/SkillBrowserModal.svelte';
     import KgMiniViewer from '$lib/KgMiniViewer.svelte';
     import { predictChips, resetDismissed, detectDomain, recordChipClick,
              backendChipToPredictive, mergeChips } from '$lib/predictive-chips';
@@ -972,6 +976,45 @@ import { listen } from '@tauri-apps/api/event';
     let predictiveChips = [];             // U5 — contextual next-action chips above input
     // Sprint 8 — Skill picker + KG mini-viewer modal state
     let showSkillPicker = false;
+    // v1.7.150 — local Skill Browser (curated multi-phase playbooks). The
+    // builtin registry is lazily populated the first time it's opened so the
+    // browser isn't empty when NexShell never mounted this session.
+    let showLocalSkills = false;
+    async function openLocalSkills() {
+        try {
+            const { registerBuiltinSkills } = await import('$lib/skills/builtin/index');
+            registerBuiltinSkills();   // idempotent — keyed Map.set by skill id
+        } catch (e) { console.warn('[skills] builtin register failed:', e); }
+        showLocalSkills = true;
+    }
+    // When a skill is "run" from the local browser we DON'T autonomously drive
+    // the host. We compose a readable playbook prompt and drop it into the
+    // composer (HITL — same convention as onSkillInvoke). The user reviews +
+    // sends; the normal agent loop then executes it locally, gating each
+    // command through the existing guard / danger-confirm modal.
+    function onLocalSkillRun(e) {
+        showLocalSkills = false;
+        const { skill, userInput } = e.detail || {};
+        if (!skill || !activeTabId) return;
+        const t = getTab(activeTabId);
+        if (!t) return;
+        const name  = isEN ? skill.nameEN : skill.name;
+        const desc  = isEN ? skill.descriptionEN : skill.description;
+        const phases = (skill.phases || [])
+            .map((p, i) => `${i + 1}) ${isEN ? p.nameEN : p.name}`)
+            .join('\n');
+        const prompt = isEN
+            ? `Run the "${name}" playbook on THIS local machine (Windows).\nGoal: ${desc}.${userInput ? `\nContext: ${userInput}` : ''}\nPhases:\n${phases}\n\nWork through the phases in order. For each step, propose the PowerShell command and run it with your local tools; wait for my confirmation on sensitive commands. Summarize each phase before moving to the next.`
+            : `Ejecuta el playbook "${name}" en ESTA máquina local (Windows).\nObjetivo: ${desc}.${userInput ? `\nContexto: ${userInput}` : ''}\nFases:\n${phases}\n\nTrabaja las fases en orden. Para cada paso, propón el comando PowerShell y ejecútalo con tus herramientas locales; espera mi confirmación en comandos sensibles. Resume cada fase antes de pasar a la siguiente.`;
+        // HITL — drop into the composer so the user reviews + sends.
+        t.inputValue = prompt;
+        tabs = [...tabs];
+        if (showWelcome) showWelcome = false;
+        setTimeout(() => {
+            const el = document.querySelector('.chat-wrap.on .ibox');
+            if (el instanceof HTMLElement) el.focus();
+        }, 30);
+    }
     let kgViewerOpen = false;
     let kgViewerPath = '';
     let kgViewerNeighbors = [];           // KgNeighborNode[]
@@ -4498,6 +4541,8 @@ REGLAS DE FORMATO:
             getForkAdviceBypass: (id) => !!_forkBypassByTab.get(id),
             // Sprint 8 — openers for floating modals
             openSkillPicker: () => { showSkillPicker = true; },
+            // v1.7.150 — local curated multi-phase Skill Browser launcher.
+            openLocalSkills: () => { openLocalSkills(); },
             // v1.6.1 — ECC skill preset picker (distinct surface from the
             // legacy executable-script picker above).
             openSkillPresetPicker: () => { showSkillPresetPicker = true; },
@@ -13285,6 +13330,18 @@ if (Test-Path $src) {
     on:close={() => showSkillPicker = false}
     on:invoke={onSkillInvoke}
   />
+
+  <!-- v1.7.150 — local Skill Browser (curated multi-phase playbooks).
+       Targets THIS machine (Windows). `run` composes a playbook prompt into
+       the composer (HITL) instead of autonomously driving the host. -->
+  {#if showLocalSkills}
+    <SkillBrowserModal
+      {isEN}
+      hostType="windows"
+      on:run={onLocalSkillRun}
+      on:close={() => showLocalSkills = false}
+    />
+  {/if}
 
   <!-- Sprint 8 — KG mini-viewer modal -->
   {#if kgViewerOpen}

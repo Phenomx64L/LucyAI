@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.150] — 2026-06-13
+
+### Feature — Skill Browser surfaced for the LOCAL machine
+
+The curated multi-phase **Skill Browser** (skill-engine playbooks: DNS
+troubleshooting, SSL check, disk cleanup, service health, firewall audit — all
+`os: 'both'`) was previously reachable **only inside NexShell** (remote SSH
+hosts). It now has a first-level launcher that targets **this local Windows
+machine**:
+
+- **`/playbooks`** slash command (aliases `/playbook`, `/skill-run`) opens the
+  browser; also listed in the `/` discovery menu under **Skills**.
+- The builtin registry is **lazily registered on open** (idempotent) so the
+  browser is never empty even if NexShell never mounted this session.
+- **Safe-by-design execution (HITL):** picking a skill does *not* autonomously
+  drive the machine. It composes a readable, phase-by-phase playbook prompt and
+  drops it into the composer for review; sending it runs through the **normal
+  agent loop**, so every command it proposes still passes the existing command
+  guard / danger-confirm gate. Mirrors the established `onSkillInvoke`
+  "never auto-execute" convention.
+
+This closes the gap noted in v1.7.148: the live skill system was powerful but
+buried in remote sessions, with no way to run a curated playbook against the
+operator's own box.
+
+Wiring: `SkillBrowserModal` instance + `showLocalSkills` state + `openLocalSkills()` /
+`onLocalSkillRun()` in `+page.svelte`; `openLocalSkills` opener + `playbook`/
+`playbooks`/`skill-run` cases in `slash-commands.ts`.
+
+---
+
 ## [1.7.149] — 2026-06-12
 
 ### Polish — Profiles + Scheduled Tasks modal renovation

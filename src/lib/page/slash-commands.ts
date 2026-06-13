@@ -38,6 +38,11 @@ export interface SlashCtx {
     lucyConfig: { name: string };
     /** Sprint 8 — open the floating skill picker. Wired by the page. */
     openSkillPicker?: () => void;
+    /** v1.7.150 — open the local curated multi-phase Skill Browser
+     *  (skill-engine playbooks) targeting THIS machine. Distinct from
+     *  openSkillPicker (executable scripts) and openSkillPresetPicker
+     *  (behavioural framing). */
+    openLocalSkills?: () => void;
     /** v1.6.1 — open the ECC-adapted system-prompt skill preset picker.
      *  Distinct from openSkillPicker (which lists executable scripts);
      *  this one selects a behavioural framing prepended to the prompt. */
@@ -124,6 +129,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
             {
                 title: isEN ? 'Skills' : 'Skills',
                 items: [
+                    { cmd: '/playbooks',    desc: isEN ? 'Curated multi-phase playbooks on THIS machine' : 'Playbooks multi-fase curados en ESTA máquina' },
                     { cmd: '/skills',       desc: isEN ? 'Executable skill picker (user runbook-style)' : 'Picker de skills ejecutables (runbook-style del usuario)' },
                     { cmd: '/preset',       desc: isEN ? 'ECC-style behavioural presets (AD, Hyper-V, SQL, IIS…)' : 'Presets de framing (AD, Hyper-V, SQL, IIS…)' },
                     { cmd: '/sec-skill',    desc: isEN ? 'Anthropic security / forensic catalog (200+)' : 'Catálogo de security / forensics de Anthropic (200+)' },
@@ -1031,6 +1037,19 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 ctx.openSkillPicker();
             } else {
                 sysMsg('Skill picker UI not wired in this context.', 'var(--amber)');
+            }
+            return true;
+        }
+        // ── v1.7.150: local curated multi-phase Skill Browser ────────────
+        // Opens the same playbook browser used inside NexShell, but targeting
+        // THIS local machine. Picking a skill drops a playbook prompt into the
+        // composer (HITL) — the agent loop then drives it with the usual
+        // command guard / confirmation.
+        case 'playbook': case 'playbooks': case 'skill-run': {
+            if (ctx.openLocalSkills) {
+                ctx.openLocalSkills();
+            } else {
+                sysMsg('Skill Browser not wired in this context.', 'var(--amber)');
             }
             return true;
         }
