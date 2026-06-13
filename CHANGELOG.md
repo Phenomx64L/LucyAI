@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.158] — 2026-06-13
+
+### Polish — NexShell host header renovation band (improvement 3 of 4)
+
+The per-host session header gets the same renovation language as the modals
+(NexShellView CSS):
+- **Host icon chip** — the server-type icon now sits in a glowing accent rounded
+  chip instead of a bare glyph.
+- **Header band** — a subtle accent top-line (inset) + top-lit gradient wash, and
+  a quick fade/slide-in when a host session opens.
+- **Toolbar polish** — feature buttons lift slightly on hover; the destructive
+  "clear terminal" button now hovers **red** so it reads as distinct from the
+  benign tools.
+
+---
+
 ## [1.7.157] — 2026-06-13
 
 ### Feature — NexShell proactive error fix-chips (improvement 2 of 4)

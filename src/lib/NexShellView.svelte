@@ -2525,7 +2525,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <!-- ── Group 1: Terminal view (search, clear, logs) ───────────── -->
               <button class="rshell-feat-btn" title="{isEN ? 'Search output (Ctrl+F)' : 'Buscar en salida (Ctrl+F)'}"
                 on:click={() => nsSearchOpen(s.id)}>⌕</button>
-              <button class="rshell-feat-btn" title="{isEN ? 'Clear terminal' : 'Limpiar terminal'}"
+              <button class="rshell-feat-btn rs-feat-danger" title="{isEN ? 'Clear terminal' : 'Limpiar terminal'}"
                 on:click={() => rsClearHistory(s.id)}><Trash2 size={13}/></button>
               <button class="rshell-feat-btn" title="{isEN ? 'Download debug logs' : 'Descargar logs de depuración'}"
                 on:click={() => downloadDebugLogs()}><FileText size={13}/></button>
@@ -3584,7 +3584,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     /* Shell wrap inside workspace */
     .ns-shell-wrap{ flex:1;display:flex;flex-direction:column;overflow:hidden; }
-    .ns-shell-hdr{ display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--bdr);flex-shrink:0; }
+    .ns-shell-hdr{ display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:linear-gradient(180deg, rgba(16,185,129,.05), transparent 60%),var(--bg2);border-bottom:1px solid var(--bdr);box-shadow:inset 0 2px 0 rgba(16,185,129,.45);flex-shrink:0;animation:ns-hdr-in .26s cubic-bezier(.16,1,.3,1); }
+    @keyframes ns-hdr-in{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
 
     /* ── RDP Copilot styles ─────────────────────────────────────────────── */
     .rshell-badge.rdp{background:rgba(99,102,241,.18);color:#818cf8;border:1px solid rgba(99,102,241,.3);}
@@ -3765,7 +3766,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     /* ── REMOTE SHELL STYLES ─────────────────────────────────────────────── */
     .rshell-hdr-left{display:flex;align-items:center;gap:12px;}
-    .rshell-ico{font-size:20px;}
+    .rshell-ico{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;flex-shrink:0;color:var(--acc);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.28);box-shadow:0 0 18px -4px rgba(16,185,129,.5);}
     .rshell-title{font-size:14px;font-weight:600;color:white;}
     .rshell-sub{font-size:11px;color:#475569;font-family:var(--mono);margin-top:2px;display:flex;align-items:center;gap:8px;}
     .rshell-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
@@ -3785,7 +3786,8 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     /* Feature buttons */
     .rshell-toolbar-sep{display:inline-block;width:1px;height:18px;background:rgba(255,255,255,.08);margin:0 4px;flex-shrink:0;}
     .rshell-feat-btn{background:rgba(255,255,255,.04);border:1px solid #1a2030;border-radius:5px;color:#0f7b5a;cursor:pointer;font-size:13px;padding:3px 7px;transition:.15s;line-height:1;}
-    .rshell-feat-btn:hover{background:rgba(16,185,129,.08);border-color:rgba(16,185,129,.2);color:var(--acc);}
+    .rshell-feat-btn:hover{background:rgba(16,185,129,.08);border-color:rgba(16,185,129,.2);color:var(--acc);transform:translateY(-1px);}
+    .rshell-feat-btn.rs-feat-danger:hover{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:#f87171;}
     .rs-feat-active{background:rgba(16,185,129,.1)!important;border-color:rgba(16,185,129,.3)!important;color:var(--acc)!important;}
 
     /* Autocomplete suggestion */
