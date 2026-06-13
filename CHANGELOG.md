@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.141] — 2026-06-12
+
+### Fix — Danger-confirm countdown frozen (couldn't approve risky commands)
+
+The high/critical-risk confirmation modal (e.g. for `reboot`) was stuck on
+"Espera 3s…" forever, so the user could only cancel. Cause: the reactive init
+block read `countdown`, so each `countdown--` from the timer re-triggered the
+block, which reset `countdown` back to 3/5 and restarted the interval — an
+infinite reset loop. Guarded the init to run only when a *new* assessment
+arrives (tracked by reference), so the countdown actually decrements and the
+"Execute anyway" button enables.
+
+---
+
 ## [1.7.140] — 2026-06-12
 
 ### Fix — NexShell live stream closed mid-command + no auto-scroll

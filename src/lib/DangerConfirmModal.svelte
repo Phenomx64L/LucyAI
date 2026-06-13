@@ -15,13 +15,22 @@
     let countdown   = 0;
     let canConfirm  = false;
     let timer       = null;
+    // Guard so the init only runs when a NEW assessment arrives — NOT on every
+    // countdown change. The old block read `countdown`, so each `countdown--`
+    // in the interval re-triggered it, reset countdown back to 3/5, and
+    // restarted the timer → the counter was stuck forever and the confirm
+    // button never enabled (the "Espera 3s…" freeze the user reported).
+    let _lastAssessment = null;
 
-    $: if (assessment) {
+    $: if (assessment && assessment !== _lastAssessment) {
+        _lastAssessment = assessment;
         // Critical: 5s wait, High: 3s, else immediate
         countdown = assessment.level === 'critical' ? 5 : assessment.level === 'high' ? 3 : 0;
         canConfirm = countdown === 0;
         if (countdown > 0) startCountdown();
     }
+    // Reset the guard when the modal closes so re-opening always re-arms.
+    $: if (!assessment) _lastAssessment = null;
 
     function startCountdown() {
         canConfirm = false;
