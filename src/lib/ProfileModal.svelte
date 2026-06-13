@@ -112,7 +112,8 @@
 <div class="pm-overlay" on:click|self={close}>
   <div class="pm-modal">
     <div class="pm-hdr">
-      <span class="pm-title">{isEN ? '◈ Manage Profiles' : '◈ Gestionar Perfiles'}</span>
+      <span class="pm-hdr-ico"><User size={16} strokeWidth={1.9} color="var(--acc, #10b981)"/></span>
+      <span class="pm-title">{isEN ? 'Manage Profiles' : 'Gestionar Perfiles'}</span>
       <div style="display:flex;gap:6px;margin-left:auto;">
         <button class="pm-btn sm" on:click={exportProfiles} title="Export JSON">⬇ JSON</button>
         <label class="pm-btn sm" title="Import JSON">
@@ -188,9 +189,23 @@
 </div>
 
 <style>
-    .pm-overlay{position:fixed;inset:0;z-index:var(--z-modal, 2000);background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
-    .pm-modal{background:var(--bg2,#0f1724);border:1px solid var(--bdr);border-radius:12px;width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);}
+    .pm-overlay{position:fixed;inset:0;z-index:var(--z-modal, 2000);background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px) saturate(120%);animation:pm-bg-in .18s ease;}
+    @keyframes pm-bg-in{from{opacity:0;}to{opacity:1;}}
+    .pm-modal{
+        /* Depth: faint accent top glow over the base instead of a flat slab. */
+        background:
+            radial-gradient(120% 60% at 50% -8%, rgba(16,185,129,.09) 0%, transparent 58%),
+            var(--bg2,#0f1724);
+        border:1px solid var(--bdr);
+        border-top:3px solid var(--acc, #10b981);
+        border-radius:12px;width:min(560px,92vw);max-height:80vh;
+        display:flex;flex-direction:column;overflow:hidden;
+        box-shadow:0 24px 64px rgba(0,0,0,.6), 0 -1px 28px -10px rgba(16,185,129,.4);
+        animation:pm-box-in .26s cubic-bezier(.16,1,.3,1);
+    }
+    @keyframes pm-box-in{from{opacity:0;transform:translateY(14px) scale(.985);}to{opacity:1;transform:none;}}
     .pm-hdr{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--bdr);flex-shrink:0;}
+    .pm-hdr-ico{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;flex-shrink:0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.28);box-shadow:0 0 14px -4px rgba(16,185,129,.5);}
     .pm-title{font-size:14px;font-weight:700;color:var(--txt);}
     .pm-close{background:none;border:none;color:#4a5a6a;font-size:16px;cursor:pointer;padding:4px;margin-left:8px;}
     .pm-close:hover{color:var(--txt);}

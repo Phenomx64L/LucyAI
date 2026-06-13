@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.149] — 2026-06-12
+
+### Polish — Profiles + Scheduled Tasks modal renovation
+
+Two more modals get the renovation band, each respecting its own identity
+colour (logic untouched):
+
+- **Manage Profiles** (green identity) — overlay fade + box slide/scale
+  entrance, accent top-glow gradient, 3 px accent top bar, soft green outer
+  glow, and a `User` icon in a glowing accent chip (replacing the bare `◈`
+  glyph in the title). Light-mode override preserved.
+- **Scheduled Tasks** (amber identity — the scheduler/clock theme) — already
+  had entrance + blur; added an amber top bar, an amber top-glow gradient, a
+  proper amber outer glow (upgrading the faint 1 px ring), and a `Clock` icon
+  in a glowing amber chip. Amber semantic tags (cron / one-shot / ok / error)
+  preserved.
+
+---
+
 ## [1.7.148] — 2026-06-12
 
 ### Polish — MCP Servers + Permission Rules modal renovation

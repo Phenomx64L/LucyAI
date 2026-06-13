@@ -169,7 +169,7 @@
              use:focusTrap on:click|stopPropagation>
             <div class="st-hdr">
                 <div class="st-hdr-l">
-                    <Clock size={18} strokeWidth={2} />
+                    <span class="st-hdr-ico"><Clock size={18} strokeWidth={2} /></span>
                     <div>
                         <h3>{t.title}</h3>
                         <span class="st-sub">{t.subtitle}</span>
@@ -279,13 +279,17 @@
         animation: fade-in 200ms ease-out;
     }
     .st-box {
-        background: var(--bg-card, #161b22);
+        /* Depth: faint amber top glow (scheduler identity) over the base. */
+        background:
+            radial-gradient(120% 55% at 50% -6%, rgba(245,158,11,.08) 0%, transparent 56%),
+            var(--bg-card, #161b22);
         border: 1px solid var(--border-light, #334155);
+        border-top: 3px solid #fbbf24;
         border-radius: 12px;
         width: 720px; max-width: 92vw; max-height: 86vh;
         display: flex; flex-direction: column;
         box-shadow: 0 24px 64px rgba(0,0,0,0.6),
-                    0 0 0 1px rgba(245,158,11,.10);
+                    0 -1px 28px -10px rgba(245,158,11,.45);
         outline: none;
         animation: st-pop 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
     }
@@ -299,6 +303,13 @@
         border-bottom: 1px solid var(--border-color, #1e293b);
     }
     .st-hdr-l { display: flex; align-items: center; gap: 10px; color: #fbbf24; }
+    .st-hdr-ico {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 36px; height: 36px; border-radius: 11px; flex-shrink: 0;
+        background: rgba(245,158,11,.12);
+        border: 1px solid rgba(245,158,11,.28);
+        box-shadow: 0 0 16px -4px rgba(245,158,11,.5);
+    }
     .st-hdr h3 { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--text-bright, #f1f5f9); }
     .st-sub { font-size: 10.5px; color: var(--text-muted, #94a3b8); }
     .st-close {
