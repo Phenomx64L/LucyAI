@@ -68,14 +68,21 @@
         }
     }
 
+    // De-dupe guard: on open this fires twice (onMount + the host-init reactive
+    // below), which used to spawn the Get-WinEvent PowerShell twice (the "two
+    // windows"). Skip the redundant concurrent call.
+    let _flInFlight = false;
     async function refreshFailedLogins() {
         // Only meaningful for local host today (no remote Get-WinEvent yet).
         if (dashSelectedHost !== 'local') {
             failedLogins = { available: false, count_24h: 0, note: 'Local only' };
             return;
         }
+        if (_flInFlight) return;
+        _flInFlight = true;
         try { failedLogins = await invoke('dashboard_failed_logins_24h'); }
         catch (e) { failedLogins = { available: false, count_24h: 0, note: String(e) }; }
+        finally { _flInFlight = false; }
     }
 
     async function refreshProcessLineage(topProcesses) {

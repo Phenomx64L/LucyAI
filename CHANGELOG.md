@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.139] — 2026-06-12
+
+### Fix — Dashboard ran the failed-logins PowerShell twice on open
+
+Root-cause follow-up to the "two cmd windows": `refreshFailedLogins()` fires
+twice when the Dashboard opens — once from `onMount` and once from the
+host-init reactive — so the Get-WinEvent PowerShell was spawned twice (hence
+*two* windows, not one). v1.7.137 already made them invisible
+(`CREATE_NO_WINDOW`); this adds an in-flight guard so the redundant concurrent
+call is skipped — only one Security-log query runs per open. Verified no other
+command on the Dashboard-open path spawns a process.
+
+---
+
 ## [1.7.138] — 2026-06-12
 
 ### Dashboard — actionable processes + failed-logins drill-down
