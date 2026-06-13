@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.155] — 2026-06-13
+
+### Removed — Conversation minimap (D4)
+
+The right-edge **conversation minimap** (the vertical tick strip + viewport
+bar, v1.7.98) is no longer mounted — the user found it noisy / low-value on
+typical thread lengths. The `<ConversationMinimap>` usage + import were removed
+from `+page.svelte`; the component file (`$lib/ConversationMinimap.svelte`) is
+kept in the repo so it can be re-mounted later if wanted.
+
+---
+
 ## [1.7.154] — 2026-06-13
 
 ### Fix — Remote-command-only replies were mis-flagged as "empty response"

@@ -145,10 +145,8 @@ import { listen } from '@tauri-apps/api/event';
     import MissionStrip    from '$lib/MissionStrip.svelte';
     import Sidebar         from '$lib/Sidebar.svelte';
     import ChatThread      from '$lib/ChatThread.svelte';
-    // v1.7.98 — Option D4 (conversation minimap) + D5 (accent swatches).
-    // Both are standalone components; ConversationMinimap observes the
-    // ChatThread DOM through selectors so no coupling to its internals.
-    import ConversationMinimap from '$lib/ConversationMinimap.svelte';
+    // v1.7.98 — Option D5 (accent swatches). Standalone component.
+    // (D4 conversation minimap removed in v1.7.155 — user found it noisy.)
     import AccentSwatches      from '$lib/AccentSwatches.svelte';
     // v1.7.99 — D2: ambient overlay that fires when housekeeping/
     // crystal_promo emits the `memory:consolidated` Tauri event. Self
@@ -11208,11 +11206,9 @@ if (Test-Path $src) {
               on:citeclick={(e) => onCiteClick(e.detail.kind, e.detail.value)}
               on:fixclick={(e) => { if (window._lucyRunFix) window._lucyRunFix(e.detail.key); }}
             />
-            <!-- v1.7.98 — D4: Conversation minimap. Sibling of ChatThread so
-                 its absolute positioning inside `.chat-wrap` works without
-                 disturbing chat layout. Auto-hides for short conversations
-                 (<8 turns). -->
-            <ConversationMinimap {tab} isActiveTab={activeTabId === tab.id} {isEN} />
+            <!-- v1.7.155 — D4 Conversation minimap removed (user found it
+                 noisy / low-value on short threads). Component file kept at
+                 $lib/ConversationMinimap.svelte if it's ever wanted back. -->
             <!-- U5 — Predictive next-action chips. Only renders when there are chips for the active tab. -->
             {#if activeTabId === tab.id && predictiveChips.length > 0}
               <PredictiveChipStrip chips={predictiveChips}
