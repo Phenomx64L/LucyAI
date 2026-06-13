@@ -7,6 +7,7 @@
     import { listen }               from '@tauri-apps/api/event';
     import { createEventDispatcher, onMount, onDestroy } from 'svelte';
     import ConfirmModal              from '$lib/ConfirmModal.svelte';
+    import FileText                  from '@tabler/icons-svelte/icons/file-text';
 
     export let isEN = false;
 
@@ -179,7 +180,7 @@
     <!-- Header -->
     <div class="pdf-header">
         <div class="hd-left">
-            <span class="hd-icon">📄</span>
+            <span class="hd-icon"><FileText size={15} strokeWidth={1.9} color="#818cf8"/></span>
             <span class="hd-title">{t('Documentos PDF', 'PDF Documents')}</span>
             {#if docs.length > 0}
                 <span class="hd-badge">{docs.length}</span>
@@ -324,7 +325,13 @@
     }
     .hd-left  { display: flex; align-items: center; gap: 8px; }
     .hd-actions { display: flex; align-items: center; gap: 4px; }
-    .hd-icon  { font-size: 15px; }
+    .hd-icon  {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 28px; height: 28px; border-radius: 9px; flex-shrink: 0;
+        background: rgba(99,102,241,.14);
+        border: 1px solid rgba(99,102,241,.30);
+        box-shadow: 0 0 14px -4px rgba(99,102,241,.55);
+    }
     .hd-title { font-weight: 600; font-size: 13px; }
     .hd-badge {
         font-size: 10px; padding: 2px 7px;

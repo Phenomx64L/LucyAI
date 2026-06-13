@@ -115,7 +115,7 @@
 <aside class="trace-panel" aria-label="Live agent trace">
     <header class="tp-head">
         <div class="tp-title">
-            <Activity size={14} stroke={2.2}/>
+            <span class="tp-ico"><Activity size={14} stroke={2.2}/></span>
             <span>{isEN ? 'Agent trace' : 'Telemetría'}</span>
             <span class="tp-count">{visible.length}</span>
         </div>
@@ -209,13 +209,20 @@
         background: rgba(10, 14, 22, 0.96);
         backdrop-filter: blur(8px);
         border: 1px solid rgba(255,255,255,.08);
+        border-top: 3px solid #60a5fa;      /* telemetry identity accent bar */
         border-radius: 10px;
-        box-shadow: 0 12px 40px -8px rgba(0,0,0,.6), 0 0 0 1px rgba(96,165,250,.10) inset;
+        box-shadow: 0 12px 40px -8px rgba(0,0,0,.6),
+                    0 0 0 1px rgba(96,165,250,.10) inset,
+                    0 -1px 24px -10px rgba(96,165,250,.5);
         display: flex; flex-direction: column;
         z-index: 9000;
         font-size: 11px;
         color: var(--txt);
+        /* Honour the "slide-in panel from the right edge" the header docs
+           describe — it was never actually animated. */
+        animation: tp-slide-in .28s cubic-bezier(.16,1,.3,1);
     }
+    @keyframes tp-slide-in { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: none; } }
     .tp-head {
         display: flex; align-items: center; justify-content: space-between;
         padding: 8px 10px;
@@ -223,6 +230,14 @@
         flex-shrink: 0;
     }
     .tp-title { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--txt); }
+    .tp-ico {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0;
+        color: #60a5fa;
+        background: rgba(96,165,250,.12);
+        border: 1px solid rgba(96,165,250,.28);
+        box-shadow: 0 0 12px -4px rgba(96,165,250,.5);
+    }
     .tp-count {
         background: rgba(96,165,250,.15); color: var(--accent);
         padding: 1px 6px; border-radius: 8px; font-size: 9px; font-family: var(--mono);

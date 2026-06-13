@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.152] — 2026-06-13
+
+### Polish — PDF + Live Trace docked-panel renovation
+
+The last two surfaces — both **docked corner/edge panels**, not centered
+modals — get a format-appropriate treatment (slide-in + accent bar + header
+icon chip), each keeping its own identity colour (logic untouched):
+
+- **PDF Documents panel** (indigo identity, bottom-right dock) — `.pdf-panel-overlay`
+  gains a slide-up entrance + an indigo top accent bar + a soft indigo glow; the
+  header `📄` emoji becomes a `FileText` icon in a glowing indigo chip.
+- **Agent Trace / Live Trace panel** (blue identity, right-edge dock) — finally
+  **slides in from the right** (the header docs always claimed it was a "slide-in
+  panel" but it never animated); added a blue top accent bar + glow and put the
+  `Activity` icon in a glowing blue chip.
+
+This completes the UI modernization campaign: every modal dialog **and** docked
+panel now shares the renovation language (entrance, accent bar, glow, header
+icon chip), each tuned to its identity colour and its format.
+
+---
+
 ## [1.7.151] — 2026-06-13
 
 ### Polish — Principles + Skill Browser modal renovation
