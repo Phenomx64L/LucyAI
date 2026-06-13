@@ -471,6 +471,29 @@
         }, 30);
     }
 
+    // ── v1.7.159 — per-command actions (copy / re-run / explain) ────────────
+    // Re-run reuses nsApplyFix (prefill the direct box, HITL). Explain prefills
+    // the Lucy IA box with a question scoped to that command (HITL — Lucy
+    // already has the command's output in its session context).
+    let _nsCopiedId = null;
+    function nsCmdCopy(entryId, cmd) {
+        try { navigator.clipboard.writeText(cmd); } catch { /* clipboard denied */ }
+        _nsCopiedId = entryId;
+        setTimeout(() => { if (_nsCopiedId === entryId) _nsCopiedId = null; }, 1200);
+    }
+    function nsCmdExplain(shellId, cmd) {
+        const s = getShell(shellId);
+        if (!s) return;
+        s.lucyIn = (isEN
+            ? 'Explain what this command did and whether it errored (check its output above): '
+            : 'Explícame qué hizo este comando y si tuvo algún error (revisa su salida arriba): ') + '`' + cmd + '`';
+        rshellSessions = [...rshellSessions];
+        setTimeout(() => {
+            const el = document.getElementById(`ns-lucy-${shellId}`);
+            if (el instanceof HTMLElement) el.focus();
+        }, 30);
+    }
+
     // ── Interactive prompt patterns ─────────────────────────────────────────
     const RS_PROMPT_PATTERNS = [
         { re: /\[sudo\]\s*password\s+for\s+\S+\s*:/i,    hint: 'Contraseña sudo',   mask: true  },
@@ -2747,6 +2770,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 id={_sm ? `ns-m-${s.id}-${_i}` : undefined}>
                 {#if entry.type === 'cmd'}
                   <span class="rsl-prompt">$</span><span class="rsl-cmd">{entry.text.replace(/^\$ /,'')}</span>
+                  <span class="ns-cmd-acts">
+                    <button class="ns-cmd-act" type="button" title={isEN ? 'Copy command' : 'Copiar comando'}
+                      on:click={() => nsCmdCopy(entry.id, entry.text.replace(/^\$ /,''))}>{_nsCopiedId === entry.id ? '✓' : '⧉'}</button>
+                    <button class="ns-cmd-act" type="button" title={isEN ? 'Re-run (prefills the box)' : 'Re-ejecutar (lo deja en la barra)'}
+                      on:click={() => nsApplyFix(s.id, entry.text.replace(/^\$ /,''))}>↻</button>
+                    <button class="ns-cmd-act" type="button" title={isEN ? 'Ask Lucy to explain this' : 'Pide a Lucy que lo explique'}
+                      on:click={() => nsCmdExplain(s.id, entry.text.replace(/^\$ /,''))}>?</button>
+                  </span>
                 {:else if entry.type === 'lucy-in'}
                   <span class="rsl-prompt">→</span><span class="rsl-lucy-in">{entry.text}</span>
                 {:else if entry.type === 'lucy-out'}
@@ -2969,6 +3000,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <div class="rshell-input-row" style="align-items:flex-end;">
                 <span class="rsi-prompt" style="color:var(--acc);padding-bottom:9px;">Lucy &gt;</span>
                 <textarea class="rsi-box rs-lucy-box rs-lucy-ta" rows="1"
+                  id={`ns-lucy-${s.id}`}
                   placeholder={s.rdpMode
                     ? (isEN ? 'Ask Lucy, describe what you see, or paste a screenshot…' : 'Pregunta a Lucy, describe lo que ves, o pega una captura…')
                     : (isEN ? '/fix [problem] for auto-troubleshoot · or ask Lucy anything...' : '/fix [problema] para auto-diagnostico · o pregunta lo que sea a Lucy...')}

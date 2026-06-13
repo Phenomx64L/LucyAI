@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.159] — 2026-06-13
+
+### Feature — NexShell per-command actions (improvement 4 of 4)
+
+Hovering any executed `$ command` line in the NexShell log now reveals three
+inline actions (completes the 4-part NexShell improvement set):
+- **⧉ Copy** — copies the command to the clipboard (shows a ✓ for ~1.2 s).
+- **↻ Re-run** — prefills the direct-command box with it (HITL — review + Enter
+  → runs through the guard).
+- **? Explain** — prefills the Lucy IA box with a question scoped to that command
+  (Lucy already has its output in session context); user presses Enter to ask.
+
+(`nsCmdCopy` / `nsCmdExplain` + the existing `nsApplyFix` for re-run; ids added
+to the direct + Lucy inputs for precise focus; hover-reveal styles in
+`nexshell.css`.)
+
+---
+
 ## [1.7.158] — 2026-06-13
 
 ### Polish — NexShell host header renovation band (improvement 3 of 4)

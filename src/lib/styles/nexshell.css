@@ -201,6 +201,11 @@
     background:linear-gradient(90deg, rgba(16,185,129,.06), transparent 55%);
 }
 .rshell-line.rsl-cmd .rsl-prompt{color:var(--acc);}
+/* v1.7.159 — per-command actions (copy / re-run / explain), shown on hover */
+.ns-cmd-acts{display:inline-flex;gap:3px;align-items:center;flex-shrink:0;margin-left:6px;opacity:0;transition:opacity .12s ease;}
+.rshell-line.rsl-cmd:hover .ns-cmd-acts{opacity:1;}
+.ns-cmd-act{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:4px;color:#94a3b8;cursor:pointer;font-size:11px;line-height:1;padding:2px 6px;font-family:var(--mono);transition:.12s;}
+.ns-cmd-act:hover{background:rgba(16,185,129,.13);border-color:rgba(16,185,129,.32);color:var(--acc);}
 .rshell-line.rsl-err{
     padding:2px 6px 2px 8px;
     border-left:2px solid rgba(239,68,68,.55);
