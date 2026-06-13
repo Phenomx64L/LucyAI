@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.160] — 2026-06-13
+
+### Polish — NexShell renders Lucy's analysis as Markdown
+
+The pending follow-up from the NexShell pass. Lucy's prose/analysis in the
+NexShell log (`lucy-out` lines — e.g. the "Análisis detallado" block) was shown
+as **plain text**, so Markdown leaked through as literal `###`, `**`, `---`.
+It's now rendered through the shared `renderMd` (marked + DOMPurify, cached,
+chips off) — headings, bold, lists, code blocks, tables and rules display
+properly. Status lines like `◎ **Turn-Loop [1/3]**` also bold correctly now.
+Markdown child styles added to `nexshell.css`; output stays sanitized so echoed
+command text can't inject HTML.
+
+---
+
 ## [1.7.159] — 2026-06-13
 
 ### Feature — NexShell per-command actions (improvement 4 of 4)

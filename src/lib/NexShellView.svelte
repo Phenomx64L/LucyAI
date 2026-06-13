@@ -34,6 +34,9 @@
         extractCommand as skExtractCommand, extractVerdict as skExtractVerdict, cleanResponse as skCleanResponse
     } from '$lib/skills/skill-engine';
     import { registerBuiltinSkills } from '$lib/skills/builtin/index';
+    // v1.7.160 — render Lucy's prose/analysis as sanitized Markdown (marked +
+    // DOMPurify, cached) instead of showing literal ###/** in the log.
+    import { renderMd } from '$lib/md-render';
     // Debug logs subsystem extracted to its own module (May 2026 audit).
     // addDebugLog + downloadDebugLogs preserve the original API so call sites
     // throughout this file are unchanged. The buffer + window globals live
@@ -2781,7 +2784,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 {:else if entry.type === 'lucy-in'}
                   <span class="rsl-prompt">→</span><span class="rsl-lucy-in">{entry.text}</span>
                 {:else if entry.type === 'lucy-out'}
-                  <span class="rsl-prompt lucy-dot">●</span><span class="rsl-lucy-out">{entry.text}</span>
+                  <span class="rsl-prompt lucy-dot">●</span><span class="rsl-lucy-out">{@html renderMd(entry.text, { chips: false })}</span>
                 {:else if entry.type === 'reasoning'}
                   <div class="ns-reasoning {entry.active ? 'nr-active' : 'nr-done'} {entry.collapsed ? 'nr-collapsed' : ''}">
                     <button type="button" class="nr-head" on:click={() => { entry.collapsed = !entry.collapsed; rshellSessions = [...rshellSessions]; }}>

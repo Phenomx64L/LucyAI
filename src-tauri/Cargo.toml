@@ -1,6 +1,6 @@
 [package]
 name = "lucy-svelte"
-version = "1.7.159"
+version = "1.7.160"
 description = "Lucy SysAdmin Assistant"
 authors = ["Edd Luna"]
 edition = "2021"
