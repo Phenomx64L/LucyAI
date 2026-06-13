@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.151] — 2026-06-13
+
+### Polish — Principles + Skill Browser modal renovation
+
+Two more modals get the renovation band, each in its own identity colour
+(logic untouched):
+
+- **Behavioral Principles** (violet identity — `#a78bfa`, the "memory/rules"
+  tertiary) — already had entrance + blur; added a violet top bar, a violet
+  top-glow gradient, a proper violet outer glow (upgrading the faint 1 px
+  ring), and a `Bookmark` icon in a glowing violet chip. Scope/priority tags
+  preserved.
+- **Skill Browser** (green identity — now reachable locally via `/playbooks`)
+  — overlay fade + modal slide/scale entrance, accent top bar, accent
+  top-glow gradient, soft green outer glow, and a `Books` icon in a glowing
+  accent chip (replacing the raw 📚 emoji).
+
+---
+
 ## [1.7.150] — 2026-06-13
 
 ### Feature — Skill Browser surfaced for the LOCAL machine

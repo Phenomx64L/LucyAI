@@ -1,5 +1,6 @@
 <script>
     import { createEventDispatcher } from 'svelte';
+    import Books from '@tabler/icons-svelte/icons/books';
     import { getAllSkills, getSkillsByCategory, searchSkills, categoryIcon, categoryLabel } from '$lib/skills/skill-engine';
 
     const dispatch = createEventDispatcher();
@@ -53,7 +54,7 @@
   <div class="sk-modal">
     <!-- Header -->
     <div class="sk-hdr">
-      <span class="sk-hdr-ico">📚</span>
+      <span class="sk-hdr-ico"><Books size={18} strokeWidth={1.9} color="var(--acc, #10b981)"/></span>
       <span class="sk-hdr-title">{isEN ? 'Skill Browser' : 'Explorador de Skills'}</span>
       <button class="sk-close" on:click={close}>✕</button>
     </div>
@@ -156,11 +157,22 @@
 </div>
 
 <style>
-    .sk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:900;backdrop-filter:blur(4px);}
-    .sk-modal{background:var(--bg2,#0d1117);border:1px solid var(--bdr,#1e2a3a);border-radius:12px;width:640px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.5);}
+    .sk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:900;backdrop-filter:blur(6px) saturate(120%);animation:sk-bg-in .18s ease;}
+    @keyframes sk-bg-in{from{opacity:0;}to{opacity:1;}}
+    .sk-modal{
+      /* Depth: faint accent top glow over the base instead of a flat slab. */
+      background:radial-gradient(120% 55% at 50% -6%, rgba(16,185,129,.08) 0%, transparent 56%),var(--bg2,#0d1117);
+      border:1px solid var(--bdr,#1e2a3a);
+      border-top:3px solid var(--acc,#10b981);
+      border-radius:12px;width:640px;max-width:90vw;max-height:80vh;
+      display:flex;flex-direction:column;overflow:hidden;
+      box-shadow:0 24px 64px rgba(0,0,0,.5),0 -1px 28px -10px rgba(16,185,129,.4);
+      animation:sk-modal-in .26s cubic-bezier(.16,1,.3,1);
+    }
+    @keyframes sk-modal-in{from{opacity:0;transform:translateY(14px) scale(.985);}to{opacity:1;transform:none;}}
 
     .sk-hdr{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--bdr);}
-    .sk-hdr-ico{font-size:18px;}
+    .sk-hdr-ico{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;flex-shrink:0;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.28);box-shadow:0 0 16px -4px rgba(16,185,129,.5);}
     .sk-hdr-title{font-weight:700;font-size:14px;color:var(--txt);flex:1;}
     .sk-close{background:none;border:none;color:#4a5a6a;font-size:16px;cursor:pointer;padding:4px 8px;border-radius:4px;}
     .sk-close:hover{color:var(--txt);background:rgba(255,255,255,.06);}
