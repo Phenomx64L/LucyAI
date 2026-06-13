@@ -412,7 +412,12 @@
             }
         }
         rshellSessions = [...rshellSessions];
-        rsScrollBottom(id);
+        // Force-follow the bottom during live streaming. The sticky "only if
+        // near bottom" check failed on bursty output: a multi-line chunk grows
+        // scrollHeight by more than the 80px threshold in one tick, so the
+        // auto-scroll bailed and the user had to scroll manually. While a
+        // command is actively streaming we pin to the bottom like a terminal.
+        rsScrollBottom(id, true);
     }
 
     // ── Cancel active stream ────────────────────────────────────────────────
@@ -452,6 +457,16 @@
         }));
         const finalOut = s.streamOut || '';
         if (finalOut.trim()) rsLogTo(id, 'out', finalOut, { exitCode, durationMs });
+        // SSH exit 255 = connection-level failure (drop / keepalive timeout),
+        // NOT the remote command's own exit code. With a PTY the command was
+        // SIGHUP'd, but long rpm/apt transactions survive on the host — so this
+        // "done" does NOT mean the task finished. Warn loudly so neither the
+        // user nor the agent assumes success.
+        if (exitCode === 255) {
+            rsLogTo(id, 'err', isEN
+                ? '⚠ SSH connection closed (exit 255) — NOT a clean finish. The command may STILL be running on the remote host. Reconnect and verify before assuming it completed.'
+                : '⚠ La conexión SSH se cerró (exit 255) — NO es una finalización limpia. El comando PUEDE seguir ejecutándose en el host remoto. Reconéctate y verifica antes de darlo por terminado.');
+        }
         // Log to audit trail
         const lastCmd = [...(s.history || [])].reverse().find(h => h.type === 'cmd' || h.type === 'lucy-in');
         if (lastCmd) {

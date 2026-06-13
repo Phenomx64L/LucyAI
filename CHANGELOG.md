@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.140] — 2026-06-12
+
+### Fix — NexShell live stream closed mid-command + no auto-scroll
+
+User report: a long remote command (e.g. `dnf upgrade -y`) closed the live
+panel before finishing, Lucy assumed it was done, yet the task kept running on
+the host; and the live output needed manual scrolling.
+
+- **SSH keep-alive hardening (root cause).** The SSH stream set
+  `ServerAliveInterval=10` but left `ServerAliveCountMax` at its default of 3, so
+  ~30 s of unanswered keep-alives (common while a heavy rpm/apt transaction or
+  kernel scriptlet briefly stalls I/O) dropped the connection. With `-tt` that
+  SIGHUPs the remote command, but rpm/dpkg transactions survive — so the UI saw
+  "done" while the host kept upgrading. Now `ServerAliveCountMax=12` +
+  `TCPKeepAlive=yes` → 120 s of grace before the connection is declared dead.
+- **Honest "done" on a dropped connection.** When the stream ends with SSH exit
+  255 (a connection-level failure, not the command's own exit), the shell now
+  logs a clear warning that the command may STILL be running on the remote host
+  — so neither the user nor the agent treats it as a clean success.
+- **Live output auto-follows the bottom.** The sticky "only scroll if near the
+  bottom" check bailed on bursty output (a multi-line chunk grew past the 80 px
+  threshold in one tick). While a command is actively streaming the view now
+  pins to the bottom like a terminal.
+
+---
+
 ## [1.7.139] — 2026-06-12
 
 ### Fix — Dashboard ran the failed-logins PowerShell twice on open

@@ -534,7 +534,16 @@ pub async fn stream_shell_cmd(
             cmd.arg("-tt")
                .arg("-o").arg("StrictHostKeyChecking=accept-new")
                .arg("-o").arg("ConnectTimeout=10")
+               // Keep-alive hardening: ServerAliveInterval was set but
+               // ServerAliveCountMax defaulted to 3, so ~30s of unanswered
+               // keepalives (common while a heavy rpm/apt transaction or kernel
+               // scriptlet briefly stalls I/O) dropped the connection. With
+               // -tt that SIGHUPs the remote command, but rpm transactions
+               // survive and keep running — so the UI saw "done" while the host
+               // kept upgrading. 10s × 12 = 120s of grace before giving up.
                .arg("-o").arg("ServerAliveInterval=10")
+               .arg("-o").arg("ServerAliveCountMax=12")
+               .arg("-o").arg("TCPKeepAlive=yes")
                .arg("-o").arg("LogLevel=ERROR")
                .arg("-p").arg(&port_str);
             if let Some(ref kp) = key_path_clone { if !kp.is_empty() { cmd.arg("-i").arg(kp); } }
