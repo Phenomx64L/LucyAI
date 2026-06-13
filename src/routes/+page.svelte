@@ -4315,6 +4315,61 @@ REGLAS DE FORMATO:
             }
         }
 
+        // ── /selftest — safe, read-only health probes of Lucy's own paths ──
+        // Exercises the backend commands the UI depends on (metrics, capture,
+        // memory graph, etc.) WITHOUT touching the user's systems — no shell
+        // execution, no remote hosts, no destructive ops. A broken/renamed
+        // command surfaces here as ✗ instead of as a silent UI failure.
+        {
+            const _st = raw.match(/^\/(selftest|autotest|diag-lucy|diagnostico-lucy)\b/i);
+            if (_st) {
+                const _cid = 'selftest-' + Date.now();
+                let _log = `<div class="mn">Lucy (Self-test)</div><pre style="font-size:11.5px;white-space:pre-wrap;margin-top:4px">`;
+                addMsg(tabId, { id: _cid, role: 'lucy', html: _log + '</pre>' });
+                refresh(); scrollChat();
+                const _put = (line) => {
+                    _log += esc(String(line)) + '\n';
+                    const m = getTab(tabId)?.messages.find(x => x.id === _cid);
+                    if (m) { m.html = _log + '</pre>'; refresh(); scrollChat(); }
+                };
+                const _probe = async (label, name, args) => {
+                    const t0 = performance.now();
+                    try {
+                        const r = await Promise.race([
+                            invoke(name, args || {}),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 15s')), 15000)),
+                        ]);
+                        const ms = Math.round(performance.now() - t0);
+                        let hint = '';
+                        if (r == null) hint = '(vacío)';
+                        else if (typeof r === 'string') hint = r.length + ' chars';
+                        else if (Array.isArray(r)) hint = r.length + ' items';
+                        else if (typeof r === 'object') hint = Object.keys(r).length + ' campos';
+                        _put(`✓ ${label} · ${ms}ms · ${hint}`);
+                        return true;
+                    } catch (e) {
+                        const ms = Math.round(performance.now() - t0);
+                        _put(`✗ ${label} · ${ms}ms · ${String(e).slice(0, 90)}`);
+                        return false;
+                    }
+                };
+                _put(isEN ? 'Read-only probes (does NOT touch your systems)…' : 'Pruebas de solo lectura (NO toca tus sistemas)…');
+                let ok = 0, total = 0;
+                const run = async (l, n, a) => { total++; if (await _probe(l, n, a)) ok++; };
+                await run('System health (JSON)', 'get_system_health_json');
+                await run('System health (text)', 'get_system_health');
+                await run('Screen capture', 'capture_local_screen', { maxWidth: 640 });
+                await run('Memory graph', 'memory_graph', { limit: 50, minImportance: 0, tagThreshold: 0.3, contentThreshold: 0.25, embeddingThreshold: 0.65, useEmbeddings: true });
+                await run('Failed logins (24h)', 'dashboard_failed_logins_24h');
+                await run('Local agent state', 'local_agent_running');
+                await run('CPU SIMD info', 'simd_info');
+                _put(`— ${ok}/${total} ${isEN ? 'probes OK' : 'pruebas OK'} —`);
+                if (ok < total) _put(isEN ? '⚠ A ✗ above means that backend command is broken or renamed — share it with me.' : '⚠ Un ✗ arriba significa que ese comando del backend está roto o renombrado — compártemelo.');
+                t.isProcessing = false; refresh();
+                return;
+            }
+        }
+
         // ── SLASH COMMANDS ──
         if (raw.startsWith('/')) {
             const handled = handleSlashCommand(tabId, raw);

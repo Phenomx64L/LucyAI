@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.142] — 2026-06-12
+
+### Add — `/selftest` safe health probes + proactive bug-hunt pass
+
+- **`/selftest`** (aliases `/autotest`, `/diag-lucy`): runs read-only probes of
+  the backend commands the UI depends on — system health (JSON + text), screen
+  capture, memory graph, failed-logins, local-agent state, CPU SIMD — each with
+  a 15 s timeout, and reports ✓/✗ + latency per probe. Touches **nothing** on
+  the user's systems (no shell, no remote hosts, no destructive ops), so it's a
+  safe regression catcher: a broken or renamed command shows as ✗ instead of a
+  silent UI failure.
+- Proactive audit of the recurring bug classes (timer leaks, Svelte
+  reactive-loops): every `setInterval` in the components has a matching
+  `clearInterval`, and the danger-confirm countdown was the lone reactive-loop
+  instance (already fixed in 1.7.141) — not a repeated pattern.
+
+---
+
 ## [1.7.141] — 2026-06-12
 
 ### Fix — Danger-confirm countdown frozen (couldn't approve risky commands)
