@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.143] — 2026-06-12
+
+### Polish — New/Edit Host modal visual renovation
+
+Same treatment as the other modernized surfaces, logic untouched:
+- **Entrance animation** — overlay fades, the box slides + scales in (ease-out).
+- **Depth** — a faint top-lit gradient over the base instead of a flat slab, plus
+  a soft outer glow.
+- **Host-colour theming** — the chosen "Host Color" now tints the modal: a 3 px
+  top accent bar, the header icon chip, and the box glow all follow it, so the
+  picker visibly connects to the host's identity.
+- **Header** — icon moved into a colored rounded chip + a live subtitle showing
+  the protocol and address as you type.
+- **Inputs** — focus now adds a soft accent ring (not just a border colour).
+- **Color swatches** — bigger, with a ✓ on the selected one and a cleaner ring.
+
+---
+
 ## [1.7.142] — 2026-06-12
 
 ### Add — `/selftest` safe health probes + proactive bug-hunt pass

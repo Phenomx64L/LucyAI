@@ -233,14 +233,15 @@
 
 {#if show}
 <div class="hm-bg">
-  <div class="hm-box" use:focusTrap>
+  <div class="hm-box" use:focusTrap style="--host-color:{hostForm.color};">
 
     <!-- Header -->
     <div class="hm-hdr">
-      <h2 class="hm-title">
-        <span style="color:var(--blue);display:flex;align-items:center;">{#if editingHost}<Pencil size={14}/>{:else}<Plus size={14}/>{/if}</span>
-        {editingHost ? (isEN ? 'Edit Host' : 'Editar Host') : (isEN ? 'New Remote Host' : 'Nuevo Host Remoto')}
-      </h2>
+      <span class="hm-hdr-ico">{#if editingHost}<Pencil size={16}/>{:else}<Plus size={16}/>{/if}</span>
+      <div class="hm-hdr-text">
+        <h2 class="hm-title">{editingHost ? (isEN ? 'Edit Host' : 'Editar Host') : (isEN ? 'New Remote Host' : 'Nuevo Host Remoto')}</h2>
+        <span class="hm-subtitle">{(protocolHint?.label || hostForm.protocol)} · {hostForm.host || (isEN ? 'no address yet' : 'sin dirección aún')}</span>
+      </div>
       <button class="hm-close" on:click={cancel}><X size={15}/></button>
     </div>
 
@@ -336,9 +337,11 @@
           {#each ['#10b981','#ef4444','#3b82f6','#f59e0b','#a78bfa','#ff6eb4','#00d4ff','#ff8c00'] as c}
           <button class="hm-swatch" class:active={hostForm.color === c}
             style="background:{c};box-shadow:{hostForm.color === c
-              ? `0 0 0 2px #fff,0 0 0 4px ${c}`
+              ? `0 0 0 2px var(--bg2,#0b0e14),0 0 0 4px ${c},0 0 12px -2px ${c}`
               : 'none'};"
-            on:click={() => hostForm.color = c} title={c}></button>
+            on:click={() => hostForm.color = c} title={c} aria-label={c}>
+            {#if hostForm.color === c}<span class="hm-swatch-check">✓</span>{/if}
+          </button>
           {/each}
         </div>
       </div>
@@ -465,19 +468,45 @@
   /* ── Overlay ────────────────────────────────────────────────────────────── */
   .hm-bg {
     position: fixed; inset: 0; z-index: 9999;
-    background: rgba(4,8,14,.85); backdrop-filter: blur(4px);
+    background: rgba(4,8,14,.85); backdrop-filter: blur(6px) saturate(120%);
     display: flex; align-items: center; justify-content: center;
+    animation: hm-bg-in .18s ease;
   }
+  @keyframes hm-bg-in { from { opacity: 0; } to { opacity: 1; } }
   .hm-box {
-    background: var(--bg2, #0b0e14);
+    position: relative;
+    /* Depth: faint top-lit gradient over the base instead of a flat slab. */
+    background:
+      radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--host-color,#10b981) 9%, transparent) 0%, transparent 60%),
+      var(--bg2, #0b0e14);
     border: 1px solid var(--bdr, #1a2030);
+    /* The chosen host colour themes the top edge — ties the "Host Color"
+       picker to the modal's identity. */
+    border-top: 3px solid var(--host-color, var(--acc, #10b981));
     border-radius: 12px; padding: 22px 20px;
     width: 520px; max-width: 94vw; max-height: 90vh; overflow-y: auto;
-    box-shadow: 0 24px 64px rgba(0,0,0,.7);
+    box-shadow:
+      0 24px 64px rgba(0,0,0,.7),
+      0 0 0 1px color-mix(in srgb, var(--host-color,#10b981) 10%, transparent),
+      0 -1px 30px -10px color-mix(in srgb, var(--host-color,#10b981) 40%, transparent);
+    animation: hm-box-in .26s var(--ease-out, cubic-bezier(.16,1,.3,1));
   }
+  @keyframes hm-box-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
 
   /* ── Header ─────────────────────────────────────────────────────────────── */
-  .hm-hdr   { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .hm-hdr   { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; }
+  .hm-hdr-ico {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+    color: var(--host-color, var(--acc, #10b981));
+    background: color-mix(in srgb, var(--host-color,#10b981) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--host-color,#10b981) 28%, transparent);
+  }
+  .hm-hdr-text { flex: 1; min-width: 0; }
+  .hm-subtitle {
+    display: block; font-size: 11px; color: var(--txt2, #7a8a9a);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px;
+  }
   .hm-title { color: var(--txt, #dde3ea); font-size: 15px; font-weight: 600; margin: 0; }
   .hm-close {
     background: transparent; border: none; color: var(--txt2, #7a8a9a);
@@ -496,16 +525,19 @@
     outline: none; font-family: inherit; font-size: 13px;
     transition: border-color .15s; box-sizing: border-box;
   }
-  .hm-inp:focus { border-color: var(--acc, #10b981); }
+  .hm-inp:focus { border-color: var(--acc, #10b981); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc,#10b981) 18%, transparent); }
   .hm-mono  { font-family: var(--mono, monospace) !important; font-size: 12px !important; }
 
   /* ── Color swatches ─────────────────────────────────────────────────────── */
-  .hm-swatches { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 2px; }
+  .hm-swatches { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 4px; }
   .hm-swatch   {
-    width: 22px; height: 22px; border-radius: 50%; border: none;
-    cursor: pointer; transition: transform .1s; flex-shrink: 0;
+    width: 24px; height: 24px; border-radius: 50%; border: none; padding: 0;
+    cursor: pointer; transition: transform .12s var(--ease-out, ease); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
   }
-  .hm-swatch:hover, .hm-swatch.active { transform: scale(1.25); }
+  .hm-swatch:hover  { transform: scale(1.18); }
+  .hm-swatch.active { transform: scale(1.15); }
+  .hm-swatch-check  { color: #fff; font-size: 12px; font-weight: 800; line-height: 1; text-shadow: 0 1px 2px rgba(0,0,0,.55); }
 
   /* ── SSH key path ───────────────────────────────────────────────────────── */
   .hm-keypath     { margin-bottom: 14px; }
