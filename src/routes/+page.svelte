@@ -4238,9 +4238,18 @@ REGLAS DE FORMATO:
                     addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>Uso: <code>/controlar &lt;qué hacer en pantalla&gt;</code> — p.ej. <code>/controlar abre el bloc de notas y escribe hola</code>` });
                     t.isProcessing = false; refresh(); return;
                 }
-                const _ok = (typeof window !== 'undefined' && window.confirm)
-                    ? window.confirm(`⚠️ Lucy va a CONTROLAR tu ratón y teclado para:\n\n"${_task}"\n\nTope: 15 pasos. Escribe /detener para abortar.\n\n¿Permitir el control AHORA?`)
-                    : false;
+                // In-app confirm (NOT native window.confirm — that renders the
+                // ugly "localhost:1420 dice…" browser box).
+                const _ok = await lucyConfirm(
+                    isEN ? 'Lucy is about to CONTROL your mouse & keyboard' : 'Lucy va a CONTROLAR tu ratón y teclado',
+                    {
+                        description: isEN
+                            ? `Task: "${_task}" · max 15 steps · type /detener to abort.`
+                            : `Tarea: "${_task}" · tope 15 pasos · escribe /detener para abortar.`,
+                        tone: 'warning',
+                        confirmLabel: isEN ? 'Allow control now' : 'Permitir control AHORA',
+                        cancelLabel:  isEN ? 'Cancel' : 'Cancelar',
+                    });
                 if (!_ok) {
                     addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>Control cancelado por el usuario.` });
                     t.isProcessing = false; refresh(); return;

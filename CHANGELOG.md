@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.144] — 2026-06-12
+
+### Fix — last two native browser dialogs ("localhost:1420 dice…") removed
+
+Swept the whole frontend for native `window.confirm/alert/prompt`. Two real
+calls remained (both added in recent features): the `/controlar` permission gate
+and the Dashboard "end task" confirm. Both now use the in-app `lucyConfirm`
+dialog (rendered by the already-mounted DialogHost), matching the rest of the
+app. No native browser dialog leaks the dev URL anymore — every confirm/alert/
+prompt is in-app and on-brand.
+
+---
+
 ## [1.7.143] — 2026-06-12
 
 ### Polish — New/Edit Host modal visual renovation

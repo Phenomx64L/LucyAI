@@ -5,6 +5,7 @@
     import { onMount, onDestroy, createEventDispatcher } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
     import { countUp } from '$lib/actions';
+    import { lucyConfirm } from '$lib/dialog-service';
     import BarChart3 from '@tabler/icons-svelte/icons/chart-bar';
 
     import Bell from '@tabler/icons-svelte/icons/bell';
@@ -518,8 +519,16 @@
     async function killProc(p) {
         closeProcMenu();
         if (!p?.pid) return;
-        if (typeof window !== 'undefined' && window.confirm &&
-            !window.confirm(isEN ? `End "${p.name}" (PID ${p.pid})? This may cause data loss in that app.` : `¿Finalizar "${p.name}" (PID ${p.pid})? Puede causar pérdida de datos en esa app.`)) return;
+        // In-app confirm (not native window.confirm → no "localhost dice…" box).
+        const _ok = await lucyConfirm(
+            isEN ? `End "${p.name}"?` : `¿Finalizar "${p.name}"?`,
+            {
+                description: isEN ? `PID ${p.pid} · this may cause data loss in that app.` : `PID ${p.pid} · puede causar pérdida de datos en esa app.`,
+                tone: 'danger',
+                confirmLabel: isEN ? 'End task' : 'Finalizar',
+                cancelLabel:  isEN ? 'Cancel' : 'Cancelar',
+            });
+        if (!_ok) return;
         try { await invoke('kill_process', { pid: Number(p.pid) }); toast(isEN ? `Ended ${p.name}` : `Finalizado ${p.name}`, 'info'); refreshDash(); }
         catch (e) { toast('✗ ' + String(e).slice(0, 140), 'warn'); }
     }
