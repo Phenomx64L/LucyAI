@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.153] — 2026-06-13
+
+### Fix — Auto-routed security skills silently disabled ALL command execution
+
+**Reported:** "ya no puedo darle órdenes a Lucy que ejecute en la terminal" —
+Lucy printed the command (e.g. an `apt-get/dnf/yum` one-liner for "verifica si
+hay updates en mi servidor PROD-LINUX") but never ran it. A small grey chip
+`manual·(active framing)` sat above every reply, and `/preset clear` didn't
+help.
+
+**Root cause (3-link chain):**
+1. `unified-context.ts` auto-**activated** a security skill whenever the
+   prompt keyword/embedding/LLM-matched one (a SysAdmin asking about
+   "servidor / updates / verifica" matched a patch/vuln skill), persisting it
+   to `localStorage`.
+2. `+page.svelte` then injected that skill's **"DEFAULT MODE = EXPLAIN, NOT
+   EXECUTE"** framing into every turn, and
+3. `skillInfoIntent` downgraded **every `<EXECUTE>` to a non-running code
+   fence**.
+
+So any active security skill globally disabled execution — and `/preset clear`
+couldn't stick because the next turn's auto-router re-activated it. Worse, the
+routed skill arrived with empty `meta` (rendered as the `(active framing)`
+"zombie"), so it never even named itself.
+
+**Fix:**
+- `unified-context.ts` — **auto-activation removed**. Security skills now
+  activate **only** via an explicit `/sec-skill use <id>` (where info-only mode
+  is intended). Auto-route still computes the route for the chip /
+  `/route-status` / token estimate.
+- `security-skill-bridge.ts` — `peekActiveSecuritySkill()` **self-heals**: an
+  active entry whose `meta` has neither `id` nor `name` is purged and treated
+  as inactive, so the stuck "zombie" clears itself on next load and execution
+  is restored.
+
+**Immediate workaround (no reinstall):** `/sec-skill auto off` then
+`/preset clear`, and retry.
+
+---
+
 ## [1.7.152] — 2026-06-13
 
 ### Polish — PDF + Live Trace docked-panel renovation

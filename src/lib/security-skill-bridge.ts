@@ -73,7 +73,20 @@ export function clearActiveSecuritySkill(): void {
 
 /** Synchronous peek for prompt builders. */
 export function peekActiveSecuritySkill(): SecuritySkillFull | null {
-    return get(activeSecuritySkill);
+    const s = get(activeSecuritySkill);
+    if (!s) return null;
+    // v1.7.153 — defensive self-heal. A stale/corrupt entry whose meta has
+    // neither `id` nor `name` is a "zombie": it renders as "(active framing)"
+    // in the route chip and silently forces info-only mode (every <EXECUTE>
+    // downgraded to a non-running code fence + an "EXPLAIN, NOT EXECUTE"
+    // prompt framing) on EVERY turn — and it survived `/preset clear`. Treat
+    // it as inactive and purge it so command execution is restored.
+    const m = s.meta;
+    if (!m || (!m.id && !m.name)) {
+        clearActiveSecuritySkill();
+        return null;
+    }
+    return s;
 }
 
 /** Render the active security skill as a prompt prefix matching the

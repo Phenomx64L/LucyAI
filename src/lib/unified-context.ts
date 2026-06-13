@@ -39,7 +39,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { LLM } from '$lib/llm-models';
 import { resolveTierWithBreaker } from '$lib/tier-health';
-import { peekActiveSecuritySkill, setSecuritySkillAsPreset, type SecuritySkillFull } from '$lib/security-skill-bridge';
+import { peekActiveSecuritySkill, type SecuritySkillFull } from '$lib/security-skill-bridge';
 import { peekActivePreset } from '$lib/skill-preset-store';
 import { safeGetLS, safeSetLSString } from '$lib/safe-ls';
 
@@ -335,14 +335,19 @@ export async function buildUnifiedContext(
         Promise.resolve(rankMcpTools(userPrompt, mcpServers, 8)),
     ]);
 
-    // Activate the auto-routed skill so the existing prompt-builder
-    // injection picks it up. We DON'T touch the bridge if method is
-    // 'manual' / 'preset' / 'none' — those are already in the right
-    // state.
-    if ((route.method === 'keyword' || route.method === 'embedding' || route.method === 'llm')
-        && route.skill) {
-        setSecuritySkillAsPreset(route.skill);
-    }
+    // v1.7.153 — Auto-ACTIVATION of the routed security skill is DISABLED.
+    // Persisting an auto-routed skill silently flipped Lucy into
+    // "explain, don't execute" mode for ALL subsequent turns:
+    // renderSecuritySkillForPrompt() injects a "DEFAULT MODE = EXPLAIN, NOT
+    // EXECUTE" framing AND +page.svelte's `skillInfoIntent` downgrades every
+    // <EXECUTE> to a non-running code fence. A SysAdmin asking "verifica
+    // updates en mi servidor" matched a patch/vuln skill and lost command
+    // execution entirely — with a stale skill stuck in localStorage that even
+    // survived /preset clear (this function re-activated it each turn).
+    // Security skills now activate ONLY via an explicit `/sec-skill use <id>`.
+    // `route` is still returned below for the chip, /route-status and the
+    // token estimate.
+    //   (was: if (keyword|embedding|llm && route.skill) setSecuritySkillAsPreset(route.skill); )
 
     const est_tokens = Math.ceil(
         ((route.skill?.body.length || 0) + (mcp.length * 200)) / 4
