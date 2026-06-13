@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.157] — 2026-06-13
+
+### Feature — NexShell proactive error fix-chips (improvement 2 of 4)
+
+When a command finishes, NexShell now scans its output for well-known failure
+fingerprints and surfaces a one-click **fix chip** (amber card) right in the
+log:
+- **Package-manager lock** (rpm `/.rpm.lock`, dnf/PackageKit/apt lock) — fires
+  even on exit 0 (the Fedora scriptlet case from the screenshot).
+- **command not found**, **permission denied / needs root**, **systemd service
+  failed**, **no space left on device**, **address/port already in use**.
+
+Each chip shows what happened, a one-line hint, and the suggested command. The
+suggestions are **diagnostic / safe** (`ps`, `journalctl -xeu`, `df`+`du`,
+`ss -ltnp`, `dnf provides`) — never a blind destructive action (e.g. it
+identifies *who holds* the rpm lock; it does not `rm` the lock). Clicking
+**"Aplicar fix"** is **HITL**: it only prefills the direct-command box (focused)
+so the user reviews and runs it through the existing guard. Light dedup so a
+repeating turn-loop command doesn't stack chips. (`nsDetectCommonError` +
+`nsApplyFix` in NexShellView; amber chip styles in `nexshell.css`.)
+
+---
+
 ## [1.7.156] — 2026-06-13
 
 ### Polish — NexShell output visual hierarchy (improvement 1 of 4)

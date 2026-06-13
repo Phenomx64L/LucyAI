@@ -372,6 +372,105 @@
         }
     }
 
+    // ── v1.7.157 — Proactive common-error detection ─────────────────────────
+    // Scans a finished command's output for well-known failure fingerprints
+    // and returns a one-click "fix chip" descriptor. The suggested commands
+    // are DIAGNOSTIC / safe (ps, journalctl, df, ss, dnf provides) — never a
+    // blind destructive action (e.g. we identify who holds the rpm lock, we do
+    // NOT rm the lock file). The chip is HITL: clicking it only prefills the
+    // direct-command box so the user reviews + runs it through the guard.
+    function nsDetectCommonError(text, exitCode, hostType) {
+        if (!text) return null;
+        const linux = hostType !== 'windows';
+        // 1) rpm / dnf lock held by another process (fires even on exit 0 — the
+        //    Fedora scriptlet case where the transaction "completes" but the
+        //    lock errors flood the scriptlet output).
+        if (/\.rpm\.lock|recurso no disponible temporalmente|resource temporarily unavailable|another app is currently holding|waiting for process with pid|existing lock .* is held|could not get lock .*(?:dpkg|apt)/i.test(text)) {
+            return {
+                id: 'pkg-lock', icon: '🔒',
+                title: isEN ? 'Package manager is locked' : 'Gestor de paquetes bloqueado',
+                hint: isEN
+                    ? 'Another dnf/PackageKit/apt process holds the lock. Identify it first — don\'t delete the lock blindly.'
+                    : 'Otro proceso (dnf/PackageKit/apt) tiene el lock. Identifícalo primero — no borres el lock a ciegas.',
+                fixCmd: linux
+                    ? 'ps -eo pid,user,etime,cmd | grep -E "dnf|packagekit|rpm|apt" | grep -v grep'
+                    : 'Get-Process msiexec,TrustedInstaller -ErrorAction SilentlyContinue',
+            };
+        }
+        // 2) command not found
+        const cnf = text.match(/([\w.\-]+):\s*(?:command not found|orden no encontrada|no se encontró la orden)/i)
+                 || text.match(/(?:bash|zsh|sh):\s*([\w.\-]+):/i);
+        if (cnf && /command not found|orden no encontrada|no se encontró la orden/i.test(text)) {
+            const miss = cnf[1];
+            return {
+                id: 'cmd-not-found', icon: '❓',
+                title: (isEN ? 'Command not found: ' : 'Comando no encontrado: ') + miss,
+                hint: isEN ? 'Find which package provides it.' : 'Busca qué paquete lo provee.',
+                fixCmd: linux
+                    ? `dnf provides ${miss} 2>/dev/null | head -20 || apt-cache search ${miss} 2>/dev/null | head -20`
+                    : `Get-Command ${miss} -ErrorAction SilentlyContinue`,
+            };
+        }
+        // 3) permission denied / needs root
+        if (/permission denied|acceso denegado|operation not permitted|operación no permitida|must be (?:root|superuser)|debe ser (?:root|superusuario)|are you root\??/i.test(text)) {
+            return {
+                id: 'perm-denied', icon: '⛔',
+                title: isEN ? 'Permission denied' : 'Permiso denegado',
+                hint: isEN ? 'Retry the previous command with elevated privileges.' : 'Reintenta el comando anterior con privilegios elevados.',
+                fixCmd: linux ? 'sudo !!' : 'Start-Process powershell -Verb RunAs',
+            };
+        }
+        // 4) systemd service failed to start
+        if (/job for .+ failed|failed to start|active:\s*failed|unit .+\.service .* failed/i.test(text)) {
+            const svc = (text.match(/job for ([\w.@\-]+)\.service/i)
+                      || text.match(/unit ([\w.@\-]+)\.service/i) || [])[1];
+            return {
+                id: 'svc-failed', icon: '🚨',
+                title: isEN ? 'Service failed to start' : 'El servicio falló al arrancar',
+                hint: isEN ? 'Inspect the journal for the root cause.' : 'Revisa el journal para ver la causa raíz.',
+                fixCmd: svc ? `journalctl -xeu ${svc}.service --no-pager | tail -40` : 'journalctl -xe --no-pager | tail -40',
+            };
+        }
+        // 5) disk full
+        if (/no space left on device|no queda espacio en el dispositivo|disk quota exceeded/i.test(text)) {
+            return {
+                id: 'disk-full', icon: '💽',
+                title: isEN ? 'No space left on device' : 'Sin espacio en disco',
+                hint: isEN ? 'Find what is filling the disk.' : 'Identifica qué está llenando el disco.',
+                fixCmd: linux
+                    ? 'df -h; echo "── biggest dirs ──"; du -xh / 2>/dev/null | sort -rh | head -20'
+                    : 'Get-PSDrive -PSProvider FileSystem | Select Name,Used,Free',
+            };
+        }
+        // 6) port / address already in use
+        if (/address already in use|dirección ya está en uso|port .* is already allocated/i.test(text)) {
+            const pm = text.match(/:(\d{2,5})\b/);
+            const p = pm ? pm[1] : '';
+            return {
+                id: 'port-in-use', icon: '🔌',
+                title: isEN ? 'Address already in use' : 'Dirección/puerto ya en uso',
+                hint: isEN ? 'Find which process owns the port.' : 'Identifica qué proceso tiene el puerto.',
+                fixCmd: linux
+                    ? `ss -ltnp ${p ? `| grep ':${p}'` : ''}`.trim()
+                    : `Get-NetTCPConnection ${p ? `-LocalPort ${p}` : ''}`.trim(),
+            };
+        }
+        return null;
+    }
+
+    /** Apply a fix chip: prefill the direct-command box (HITL) + focus it.
+     *  Never auto-runs — the user reviews and presses Enter (→ guardCheck). */
+    function nsApplyFix(shellId, cmd) {
+        const s = getShell(shellId);
+        if (!s) return;
+        s.directIn = cmd;
+        rshellSessions = [...rshellSessions];
+        setTimeout(() => {
+            const el = document.getElementById(`ns-direct-${shellId}`);
+            if (el instanceof HTMLElement) { el.focus(); }
+        }, 30);
+    }
+
     // ── Interactive prompt patterns ─────────────────────────────────────────
     const RS_PROMPT_PATTERNS = [
         { re: /\[sudo\]\s*password\s+for\s+\S+\s*:/i,    hint: 'Contraseña sudo',   mask: true  },
@@ -457,6 +556,17 @@
         }));
         const finalOut = s.streamOut || '';
         if (finalOut.trim()) rsLogTo(id, 'out', finalOut, { exitCode, durationMs });
+        // v1.7.157 — proactive fix chip for well-known failures (rpm lock,
+        // command-not-found, perms, service-failed, disk-full, port-in-use).
+        // Light dedup so a repeating turn-loop command doesn't stack chips.
+        if (finalOut.trim()) {
+            try {
+                const _fix = nsDetectCommonError(finalOut, exitCode, s.host?.type);
+                if (_fix && !s.history.slice(-6).some(h => h.type === 'fix-chip' && h.fix?.id === _fix.id)) {
+                    rsLogTo(id, 'fix-chip', _fix.title, { fix: _fix });
+                }
+            } catch { /* detection is best-effort */ }
+        }
         // SSH exit 255 = connection-level failure (drop / keepalive timeout),
         // NOT the remote command's own exit code. With a PTY the command was
         // SIGHUP'd, but long rpm/apt transactions survive on the host — so this
@@ -2667,6 +2777,18 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                       <pre class="ntc-body">{entry.output.length > 4000 ? entry.output.slice(0,4000) + '\n… [truncated]' : entry.output}</pre>
                     {/if}
                   </details>
+                {:else if entry.type === 'fix-chip' && entry.fix}
+                  <div class="ns-fixchip">
+                    <span class="nfx-ico">{entry.fix.icon}</span>
+                    <div class="nfx-body">
+                      <div class="nfx-title">{entry.fix.title}</div>
+                      <div class="nfx-hint">{entry.fix.hint}</div>
+                      <code class="nfx-cmd">{entry.fix.fixCmd}</code>
+                    </div>
+                    <button class="nfx-btn" type="button" on:click={() => nsApplyFix(s.id, entry.fix.fixCmd)}>
+                      {isEN ? 'Apply fix' : 'Aplicar fix'}
+                    </button>
+                  </div>
                 {:else if entry.type === 'err'}
                   <span class="rsl-err-txt">{entry.text}</span>
                 {:else if entry.type === 'info'}
@@ -2813,6 +2935,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                     </div>
                   {/if}
                   <input class="rsi-box rs-direct-box"
+                    id={`ns-direct-${s.id}`}
                     placeholder="systemctl restart sshd · whoami · ls -la ..."
                     bind:value={s.directIn}
                     on:keydown={(e) => rsKeyDirect(e, s.id)}
