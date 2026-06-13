@@ -767,6 +767,8 @@ pub fn run() {
             // Sistema local
             system::get_system_health,
             system::get_system_health_json,
+            system::kill_process,
+            ui::reveal_in_explorer,
             system::get_tavily_api_key_status,
             system::set_tavily_api_key,
             // Hosts remotos
@@ -1011,6 +1013,7 @@ pub fn run() {
             dashboard_integrations::dashboard_open_incidents,
             dashboard_integrations::dashboard_process_lineage_brief,
             dashboard_integrations::dashboard_failed_logins_24h,
+            dashboard_integrations::dashboard_failed_logins_detail,
             hash_chain::verify_incident_chain,
             memory::memory_working_append,
             memory::memory_working_list,

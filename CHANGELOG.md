@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.138] — 2026-06-12
+
+### Dashboard — actionable processes + failed-logins drill-down
+
+- **Process table is now interactive.** Sortable columns (process / CPU / RAM /
+  PID), and a right-click menu per process: ask Lucy about it (prefills the
+  Terminal composer), open file location (Explorer), copy PID, and **end task**
+  (with a confirm). Lucy's own process is highlighted. New backend commands
+  `kill_process` (refuses system PIDs 0–4) and `reveal_in_explorer`; processes
+  now carry their exe `path`.
+- **Failed-logins drill-down.** The "Logins fallidos (24h)" card is clickable
+  when there are events → opens a modal listing the actual 4625 events (time,
+  user, source IP, workstation, logon type) for threat hunting. New
+  `dashboard_failed_logins_detail` command.
+- **Disk low-space marker.** Volumes under 10% free get a `⚠ low` badge and show
+  free GB. (Multi-disk rendering, unified severity colors, and the
+  configurable-threshold alert system already existed.)
+
+---
+
 ## [1.7.137] — 2026-06-12
 
 ### Fix — Dashboard popped visible PowerShell console windows

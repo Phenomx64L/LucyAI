@@ -11195,6 +11195,15 @@ if (Test-Path $src) {
         <DashboardView
           hosts={$hosts} {hostName} {lucyConfig} {userLang} {isEN}
           on:toast={e => toast(e.detail.msg, e.detail.type)}
+          on:askLucy={e => {
+              // Dashboard → process right-click → "Ask Lucy": prefill the
+              // composer in the Terminal view (don't auto-send — let the user
+              // review/edit first).
+              const _t = getTab(activeTabId);
+              if (_t) { _t.inputValue = e.detail.text; refresh(); }
+              setView('terminal');
+              tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+          }}
         />
         {/if}
 

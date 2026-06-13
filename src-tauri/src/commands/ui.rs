@@ -26,6 +26,24 @@ pub fn copy_to_clipboard(text: String) -> Result<(), String> {
     }
 }
 
+/// Open Windows Explorer with the given file highlighted — Dashboard → process
+/// table → "open file location". GUI app, so no console window appears.
+#[tauri::command]
+pub fn reveal_in_explorer(path: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("Ruta vacía.".into());
+    }
+    if !std::path::Path::new(&path).exists() {
+        return Err("La ruta ya no existe en disco.".into());
+    }
+    Command::new("explorer")
+        .arg(format!("/select,{}", path))
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("No se pudo abrir el explorador: {}", e))?;
+    Ok(())
+}
+
 // ── VENTANA ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]

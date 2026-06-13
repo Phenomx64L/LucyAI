@@ -488,6 +488,62 @@
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
+    // ── Process table: sortable + right-click actions (D-Proc) ───────────────
+    let procSortKey = 'mem_mb';   // 'name' | 'cpu' | 'mem_mb' | 'pid'
+    let procSortDir = -1;         // 1 asc, -1 desc
+    let procMenu = null;          // { x, y, proc } | null
+    const SELF_PROC = 'lucy-svelte.exe';
+
+    $: sortedProcs = (() => {
+        const list = [...(dashMetrics?.top_processes ?? [])];
+        list.sort((a, b) => {
+            if (procSortKey === 'name') return procSortDir * String(a.name||'').localeCompare(String(b.name||''));
+            return procSortDir * ((Number(a[procSortKey])||0) - (Number(b[procSortKey])||0));
+        });
+        return list;
+    })();
+    function setProcSort(key) {
+        if (procSortKey === key) procSortDir = -procSortDir;
+        else { procSortKey = key; procSortDir = key === 'name' ? 1 : -1; }
+    }
+    function openProcMenu(ev, p) { ev.preventDefault(); procMenu = { x: ev.clientX, y: ev.clientY, proc: p }; }
+    function closeProcMenu() { procMenu = null; }
+    async function killProc(p) {
+        closeProcMenu();
+        if (!p?.pid) return;
+        if (typeof window !== 'undefined' && window.confirm &&
+            !window.confirm(isEN ? `End "${p.name}" (PID ${p.pid})? This may cause data loss in that app.` : `¿Finalizar "${p.name}" (PID ${p.pid})? Puede causar pérdida de datos en esa app.`)) return;
+        try { await invoke('kill_process', { pid: Number(p.pid) }); toast(isEN ? `Ended ${p.name}` : `Finalizado ${p.name}`, 'info'); refreshDash(); }
+        catch (e) { toast('✗ ' + String(e).slice(0, 140), 'warn'); }
+    }
+    async function revealProc(p) {
+        closeProcMenu();
+        if (!p?.path) { toast(isEN ? 'No file path for this process' : 'Sin ruta de archivo para este proceso', 'warn'); return; }
+        try { await invoke('reveal_in_explorer', { path: p.path }); }
+        catch (e) { toast('✗ ' + String(e).slice(0, 140), 'warn'); }
+    }
+    function askLucyAboutProc(p) {
+        closeProcMenu();
+        dispatch('askLucy', { text: isEN
+            ? `What is the process "${p.name}" (PID ${p.pid})? Is it safe, and is its CPU/RAM usage normal?`
+            : `¿Qué es el proceso "${p.name}" (PID ${p.pid})? ¿Es seguro y su uso de CPU/RAM es normal?` });
+    }
+    async function copyProcPid(p) {
+        closeProcMenu();
+        try { await invoke('copy_to_clipboard', { text: String(p.pid) }); toast(isEN ? 'PID copied' : 'PID copiado', 'info'); } catch {}
+    }
+
+    // ── Failed-logins drill-down (D-Login) ───────────────────────────────────
+    let flDetailOpen = false;
+    let flDetail = [];
+    let flDetailLoading = false;
+    async function openFlDetail() {
+        flDetailOpen = true; flDetailLoading = true; flDetail = [];
+        try { flDetail = await invoke('dashboard_failed_logins_detail'); }
+        catch (e) { toast('✗ ' + String(e).slice(0, 140), 'warn'); }
+        flDetailLoading = false;
+    }
+
     onMount(() => {
         metricsHistory = safeParseLS('lucy_metrics_history', {});
         alertRules     = safeParseLS('lucy_alert_rules', []);
@@ -778,7 +834,12 @@
       {#if failedLogins.available || (failedLogins.note && failedLogins.note !== 'Local only')}
         {@const _fl = failedLogins}
         {@const _color = _fl.count_24h >= 10 ? 'var(--red)' : _fl.count_24h >= 5 ? 'var(--amber)' : 'var(--acc)'}
-        <div class="dash-card lucy-card-hover">
+        {@const _flClickable = _fl.available && _fl.count_24h > 0}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <div class="dash-card lucy-card-hover" class:dash-card-clickable={_flClickable}
+             role={_flClickable ? 'button' : undefined} tabindex={_flClickable ? 0 : undefined}
+             on:click={() => { if (_flClickable) openFlDetail(); }}
+             on:keydown={(e) => { if (_flClickable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openFlDetail(); } }}>
           <div class="dc-label">
             {isEN ? 'Failed logins (24h)' : 'Logins fallidos (24h)'}
             <span class="dc-hint" title={isEN
@@ -790,9 +851,11 @@
               <span use:countUp={{ target: _fl.count_24h, duration: 900 }}></span>
             </div>
             <div class="dc-sub">
-              {_fl.count_24h === 0
-                ? (isEN ? 'No failed attempts' : 'Sin intentos fallidos')
-                : (isEN ? 'Event ID 4625' : 'Event ID 4625')}
+              {#if _fl.count_24h === 0}
+                {isEN ? 'No failed attempts' : 'Sin intentos fallidos'}
+              {:else}
+                <span class="fl-drill">{isEN ? 'Event ID 4625 · click to inspect →' : 'Event ID 4625 · clic para ver detalle →'}</span>
+              {/if}
             </div>
           {:else}
             <div class="dc-value" style="font-size:13px;color:var(--txt2);">—</div>
@@ -865,6 +928,54 @@
       </div>
     {/if}
 
+    <!-- D-Proc — process right-click menu -->
+    {#if procMenu}
+      <button class="proc-menu-backdrop" aria-label={isEN ? 'Close menu' : 'Cerrar menú'} on:click={closeProcMenu} on:contextmenu|preventDefault={closeProcMenu}></button>
+      <div class="proc-menu" role="menu"
+           style="left:{Math.min(procMenu.x, (typeof window!=='undefined'?window.innerWidth:9999) - 230)}px;top:{Math.min(procMenu.y, (typeof window!=='undefined'?window.innerHeight:9999) - 180)}px;">
+        <div class="proc-menu-hdr">{procMenu.proc.name} · PID {procMenu.proc.pid}</div>
+        <button class="proc-menu-item" on:click={() => askLucyAboutProc(procMenu.proc)}>🔎 {isEN ? 'Ask Lucy about this' : 'Preguntar a Lucy'}</button>
+        {#if procMenu.proc.path}
+          <button class="proc-menu-item" on:click={() => revealProc(procMenu.proc)}>📁 {isEN ? 'Open file location' : 'Abrir ubicación'}</button>
+        {/if}
+        <button class="proc-menu-item" on:click={() => copyProcPid(procMenu.proc)}>⧉ {isEN ? 'Copy PID' : 'Copiar PID'}</button>
+        <button class="proc-menu-item proc-menu-danger" on:click={() => killProc(procMenu.proc)}>⛔ {isEN ? 'End task' : 'Finalizar tarea'}</button>
+      </div>
+    {/if}
+
+    <!-- D-Login — failed-logins drill-down -->
+    {#if flDetailOpen}
+      <button class="fl-modal-backdrop" aria-label={isEN ? 'Close' : 'Cerrar'} on:click={() => flDetailOpen = false}></button>
+      <div class="fl-modal" role="dialog" aria-label="Failed logins detail">
+        <div class="fl-modal-hdr">
+          <strong>{isEN ? 'Failed logins — last 24h' : 'Logins fallidos — últimas 24h'}</strong>
+          <button class="fl-modal-x" on:click={() => flDetailOpen = false}>✕</button>
+        </div>
+        {#if flDetailLoading}
+          <div class="fl-modal-empty">{isEN ? 'Loading…' : 'Cargando…'}</div>
+        {:else if flDetail.length === 0}
+          <div class="fl-modal-empty">{isEN ? 'No detailed events (needs admin to read the Security log).' : 'Sin eventos detallados (requiere admin para leer el Security log).'}</div>
+        {:else}
+          <div class="fl-modal-body">
+            <table class="fl-table">
+              <thead><tr><th>{isEN ? 'Time' : 'Hora'}</th><th>{isEN ? 'User' : 'Usuario'}</th><th>{isEN ? 'Source IP' : 'IP origen'}</th><th>{isEN ? 'Workstation' : 'Equipo'}</th><th>{isEN ? 'Type' : 'Tipo'}</th></tr></thead>
+              <tbody>
+                {#each flDetail as ev}
+                  <tr>
+                    <td>{ev.time}</td>
+                    <td>{ev.user || '—'}</td>
+                    <td class="fl-ip">{ev.source_ip && ev.source_ip !== '-' ? ev.source_ip : '—'}</td>
+                    <td>{ev.workstation || '—'}</td>
+                    <td>{ev.logon_type || '—'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     <!-- Sprint E D11 — Section toolbar (reset layout) appears only if user
          has customized order or hidden anything. Drag handles live inside
          each section header below. -->
@@ -919,22 +1030,34 @@
             />
           {:else if sectionKey === 'storage'}
             {#each dashMetrics.disks as disk}
-              <div class="disk-row">
-                <div class="disk-name">{disk.name||disk.mount}</div>
+              {@const _low = disk.percent >= 90}
+              <div class="disk-row" class:disk-low={_low}>
+                <div class="disk-name">
+                  {disk.name||disk.mount}
+                  {#if _low}<span class="disk-low-tag" title={isEN ? 'Less than 10% free' : 'Menos del 10% libre'}>⚠ {isEN ? 'low' : 'poco'}</span>{/if}
+                </div>
                 <div class="disk-bar-wrap"><div class="disk-bar-fill" style="width:{disk.percent}%;background:{diskSevVar(disk.percent)}"></div></div>
                 <div class="disk-pct" style="color:{disk.percent >= 75 ? diskSevVar(disk.percent) : 'var(--txt2)'}">{disk.percent}%</div>
-                <div class="disk-size">{disk.used_gb}G / {disk.total_gb}G</div>
+                <div class="disk-size">{disk.used_gb}G / {disk.total_gb}G{#if disk.free_gb != null} · {disk.free_gb}G {isEN ? 'free' : 'libre'}{/if}</div>
               </div>
             {/each}
           {:else if sectionKey === 'processes'}
             <table class="proc-table">
-              <thead><tr><th>{isEN ? 'Process' : 'Proceso'}</th><th>CPU %</th><th>RAM MB</th><th>PID</th></tr></thead>
+              <thead><tr>
+                <th class="proc-th" on:click={() => setProcSort('name')}>{isEN ? 'Process' : 'Proceso'}{procSortKey==='name'?(procSortDir<0?' ▾':' ▴'):''}</th>
+                <th class="proc-th proc-th-num" on:click={() => setProcSort('cpu')}>CPU %{procSortKey==='cpu'?(procSortDir<0?' ▾':' ▴'):''}</th>
+                <th class="proc-th proc-th-num" on:click={() => setProcSort('mem_mb')}>RAM MB{procSortKey==='mem_mb'?(procSortDir<0?' ▾':' ▴'):''}</th>
+                <th class="proc-th proc-th-num" on:click={() => setProcSort('pid')}>PID{procSortKey==='pid'?(procSortDir<0?' ▾':' ▴'):''}</th>
+              </tr></thead>
               <tbody>
-                {#each dashMetrics.top_processes as p}
+                {#each sortedProcs as p}
                   {@const _lineage = processLineage.get(Number(p.pid))}
-                <tr>
+                <tr class="proc-row" class:proc-self={p.name === SELF_PROC}
+                    on:contextmenu={(e) => openProcMenu(e, p)}
+                    title={isEN ? 'Right-click for actions (end task, open location, ask Lucy)' : 'Clic derecho para acciones (finalizar, abrir ubicación, preguntar a Lucy)'}>
                   <td style="font-family:var(--mono);font-size:11px;color:var(--txt);">
                     {p.name}
+                    {#if p.name === SELF_PROC}<span class="proc-self-tag">Lucy</span>{/if}
                     {#if _lineage?.is_new_24h}
                       <span class="dc-pid-new-badge"
                             title={isEN
@@ -946,7 +1069,7 @@
                   </td>
                   <td style="color:{sevVar(Number(p.cpu) || 0, 'var(--txt2)')}">{p.cpu}</td>
                   <td style="color:var(--blue)">{typeof p.mem_mb==='number'?p.mem_mb.toLocaleString():p.mem_mb}</td>
-                  <td style="color:#334155">{p.pid||'-'}</td>
+                  <td style="color:#64748b">{p.pid||'-'}</td>
                 </tr>
                 {/each}
               </tbody>
@@ -1242,4 +1365,39 @@
         0%, 100% { opacity: 0.85; }
         50%      { opacity: 1; }
     }
+
+    /* ── D-Proc — sortable headers, self-highlight, right-click menu ── */
+    .proc-th{cursor:pointer;user-select:none;transition:color .12s;}
+    .proc-th:hover{color:var(--acc);}
+    .proc-th-num{text-align:left;}
+    .proc-row{transition:background .12s;}
+    .proc-row:hover{background:rgba(255,255,255,.035);}
+    .proc-self{background:rgba(16,185,129,.06);}
+    .proc-self-tag{font-size:8.5px;font-weight:700;color:var(--acc);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.25);border-radius:6px;padding:0 4px;margin-left:4px;letter-spacing:.3px;vertical-align:middle;}
+    .proc-menu-backdrop{position:fixed;inset:0;z-index:9998;background:transparent;border:0;padding:0;cursor:default;}
+    .proc-menu{position:fixed;z-index:9999;min-width:210px;background:var(--bg3,#161b22);border:1px solid var(--bdr);border-radius:8px;padding:4px;box-shadow:0 10px 34px -8px rgba(0,0,0,.6);}
+    .proc-menu-hdr{font-size:10px;color:var(--txt2);padding:5px 8px 6px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:3px;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;}
+    .proc-menu-item{display:block;width:100%;text-align:left;background:none;border:0;color:var(--txt);font:inherit;font-size:12px;padding:6px 9px;border-radius:5px;cursor:pointer;transition:background .1s;}
+    .proc-menu-item:hover{background:rgba(255,255,255,.07);}
+    .proc-menu-danger{color:#ff6b6b;}
+    .proc-menu-danger:hover{background:rgba(239,68,68,.14);}
+
+    /* ── disk low-space marker ── */
+    .disk-low-tag{font-size:8.5px;font-weight:700;color:var(--red,#ef4444);background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.28);border-radius:6px;padding:0 4px;margin-left:5px;vertical-align:middle;}
+
+    /* ── D-Login — failed-logins drill-down ── */
+    .dash-card-clickable{cursor:pointer;}
+    .dash-card-clickable:hover{border-color:rgba(16,185,129,.3);}
+    .fl-drill{color:var(--acc);}
+    .fl-modal-backdrop{position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.45);border:0;padding:0;cursor:default;}
+    .fl-modal{position:fixed;z-index:9999;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,92vw);max-height:78vh;display:flex;flex-direction:column;background:var(--bg3,#161b22);border:1px solid var(--bdr);border-radius:12px;box-shadow:0 16px 48px -10px rgba(0,0,0,.65);overflow:hidden;}
+    .fl-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--bdr);font-size:13px;}
+    .fl-modal-x{background:none;border:0;color:var(--txt2);font-size:14px;cursor:pointer;padding:2px 6px;border-radius:5px;}
+    .fl-modal-x:hover{background:rgba(239,68,68,.15);color:#ef4444;}
+    .fl-modal-empty{padding:32px 16px;text-align:center;color:var(--txt2);font-size:12px;}
+    .fl-modal-body{overflow-y:auto;}
+    .fl-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+    .fl-table th{position:sticky;top:0;background:var(--bg4);color:#7a9ab5;padding:7px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;}
+    .fl-table td{padding:6px 12px;border-bottom:1px solid rgba(26,32,48,.4);font-family:var(--mono);color:var(--txt);white-space:nowrap;}
+    .fl-table .fl-ip{color:var(--amber,#f59e0b);}
 </style>

@@ -171,6 +171,82 @@ pub async fn dashboard_failed_logins_24h() -> Result<FailedLoginsBrief, String> 
     .map_err(|e| format!("Task join: {}", e))?
 }
 
+// ── Failed-logins DRILL-DOWN — the actual 4625 events for threat hunting ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FailedLoginEvent {
+    pub time:        String,
+    pub user:        String,
+    pub source_ip:   String,
+    pub workstation: String,
+    pub logon_type:  String,
+}
+
+/// Return the last (up to 50) Security 4625 events in the past 24h with the
+/// fields a SysAdmin actually wants: when, which account was targeted, the
+/// source IP and workstation, and the logon type. Windows-only; empty list
+/// elsewhere or on access-denied.
+#[tauri::command]
+pub async fn dashboard_failed_logins_detail() -> Result<Vec<FailedLoginEvent>, String> {
+    if !cfg!(target_os = "windows") {
+        return Ok(vec![]);
+    }
+    tokio::task::spawn_blocking(|| {
+        // Parse each event's XML so we can pull TargetUserName / IpAddress /
+        // WorkstationName / LogonType, then emit compact JSON for Rust to read.
+        let script = r#"try {
+            $ev = Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 50 -ErrorAction Stop
+            $rows = foreach ($e in $ev) {
+                $x = [xml]$e.ToXml(); $d = @{}
+                foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = $n.'#text' }
+                [pscustomobject]@{
+                    time        = $e.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')
+                    user        = [string]$d['TargetUserName']
+                    source_ip   = [string]$d['IpAddress']
+                    workstation = [string]$d['WorkstationName']
+                    logon_type  = [string]$d['LogonType']
+                }
+            }
+            if ($rows) { $rows | ConvertTo-Json -Compress } else { '[]' }
+        } catch { '[]' }"#;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(crate::state::CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().map_err(|e| format!("PowerShell spawn: {}", e))?;
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let txt = raw.trim();
+        if txt.is_empty() || txt == "[]" {
+            return Ok(vec![]);
+        }
+        // ConvertTo-Json emits a bare object (not an array) when there's exactly
+        // one row — handle both shapes.
+        let val: serde_json::Value = serde_json::from_str(txt)
+            .map_err(|e| format!("JSON parse: {}", e))?;
+        let arr = match val {
+            serde_json::Value::Array(a) => a,
+            v @ serde_json::Value::Object(_) => vec![v],
+            _ => vec![],
+        };
+        let pick = |v: &serde_json::Value, k: &str| {
+            v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+        };
+        let events: Vec<FailedLoginEvent> = arr.iter().map(|v| FailedLoginEvent {
+            time:        pick(v, "time"),
+            user:        pick(v, "user"),
+            source_ip:   pick(v, "source_ip"),
+            workstation: pick(v, "workstation"),
+            logon_type:  pick(v, "logon_type"),
+        }).collect();
+        Ok(events)
+    })
+    .await
+    .map_err(|e| format!("Task join: {}", e))?
+}
+
 // ── D18 — Process lineage badges: "new in last N hours" ──────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -139,7 +139,9 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
             "name":   p.name().to_string(),
             "cpu":    (p.cpu_usage() as f64 * 10.0).round() / 10.0,
             "mem_mb": p.memory() / 1_048_576,
-            "pid":    p.pid().as_u32()
+            "pid":    p.pid().as_u32(),
+            // D-Proc: exe path so the Dashboard can "open file location".
+            "path":   p.exe().map(|x| x.display().to_string()),
         })).collect();
 
         let per_core: Vec<f64> = sys.cpus().iter().take(12)
@@ -288,4 +290,29 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
             "top_processes": top_procs
         }))
     }).await.map_err(|e| format!("Error interno sysinfo: {}", e))?
+}
+
+/// Terminate a process by PID — local-machine SysAdmin action invoked from the
+/// Dashboard's process table (right-click → end task). Refuses the low system
+/// PIDs (0 = System Idle, 4 = System) so a misclick can't try to kill the
+/// kernel. Returns a clear error if the OS denies it (needs admin) or the
+/// process already exited.
+#[tauri::command]
+pub async fn kill_process(pid: u32) -> Result<(), String> {
+    if pid <= 4 {
+        return Err("PID protegido del sistema — no se puede terminar.".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut sys = System::new();
+        sys.refresh_processes();
+        match sys.process(sysinfo::Pid::from_u32(pid)) {
+            Some(p) => {
+                if p.kill() { Ok(()) }
+                else { Err("No se pudo terminar el proceso (¿requiere ejecutar Lucy como administrador?).".to_string()) }
+            }
+            None => Err("Proceso no encontrado (quizá ya terminó).".to_string()),
+        }
+    })
+    .await
+    .map_err(|e| format!("Error interno: {}", e))?
 }
