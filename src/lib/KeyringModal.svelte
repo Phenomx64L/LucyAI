@@ -76,7 +76,7 @@
         <button class="kr-close" on:click={() => dispatch('close')}>✕</button>
 
         <div class="kr-hdr">
-            <Key size={32} color="var(--acc)" style="margin-bottom:8px" />
+            <span class="kr-hdr-ico"><Key size={24} color="var(--acc, #10b981)"/></span>
             <h2 class="kr-title">{isEN ? 'Secure Keyring Vault' : 'Bóveda de Seguridad DPAPI'}</h2>
             <p class="kr-sub">
                 {isEN 
@@ -161,29 +161,46 @@
 <style>
     .kr-bg {
         position: fixed; inset: 0; z-index: 10000;
-        background: rgba(0,0,0,0.85); backdrop-filter: blur(5px);
+        background: rgba(0,0,0,0.85); backdrop-filter: blur(6px) saturate(120%);
         display: flex; align-items: center; justify-content: center;
+        animation: kr-bg-in .18s ease;
     }
+    @keyframes kr-bg-in { from { opacity: 0; } to { opacity: 1; } }
     .kr-box {
-        background: var(--bg2, #0f141e);
+        /* Depth: a faint vault-green top glow over the base instead of a flat slab. */
+        background:
+            radial-gradient(120% 80% at 50% -10%, rgba(16,185,129,.10) 0%, transparent 60%),
+            var(--bg2, #0f141e);
         border: 1px solid var(--bdr, #1a2030);
+        border-top: 3px solid var(--acc, #10b981);
         border-radius: 12px;
         width: 440px; max-width: 95vw;
         color: #fff;
         position: relative;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+        box-shadow:
+            0 24px 64px rgba(0,0,0,.8),
+            0 -1px 28px -10px rgba(16,185,129,.4);
+        animation: kr-box-in .26s var(--ease-out, cubic-bezier(.16,1,.3,1));
     }
+    @keyframes kr-box-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
     .kr-close {
         position: absolute; top: 12px; right: 12px;
         background: none; border: none; color: #888;
-        font-size: 16px; cursor: pointer; transition: 0.2s;
+        font-size: 16px; cursor: pointer; transition: 0.2s; border-radius: 5px; padding: 2px 6px;
     }
-    .kr-close:hover { color: #fff; }
-    
+    .kr-close:hover { color: #fff; background: rgba(255,255,255,.06); }
+
     .kr-hdr {
-        padding: 30px 24px 20px;
+        padding: 26px 24px 18px;
         border-bottom: 1px solid rgba(255,255,255,0.05);
         text-align: center;
+    }
+    .kr-hdr-ico {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 46px; height: 46px; border-radius: 13px; margin-bottom: 10px;
+        background: rgba(16,185,129,.12);
+        border: 1px solid rgba(16,185,129,.28);
+        box-shadow: 0 0 18px -4px rgba(16,185,129,.5);
     }
     .kr-title { margin: 0 0 5px; font-size: 18px; font-weight: 600; }
     .kr-sub { margin: 0; font-size: 12px; color: #7a8a9a; }
@@ -221,7 +238,7 @@
         background: #000; border: 1px solid #333; border-radius: 6px;
         color: #fff; font-family: monospace; outline: none; transition: 0.2s;
     }
-    .kr-input-grp input:focus { border-color: var(--acc); }
+    .kr-input-grp input:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(16,185,129,.18); }
 
     .kr-btn {
         width: 100%; padding: 12px;
@@ -231,7 +248,7 @@
         display: flex; align-items: center; justify-content: center; gap: 8px;
         transition: 0.2s;
     }
-    .kr-btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+    .kr-btn:hover:not(:disabled) { opacity: 0.95; transform: translateY(-1px); box-shadow: 0 6px 18px -6px rgba(16,185,129,.6); }
     .kr-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .kr-error { color: #ff5555; background: rgba(255,0,0,0.1); padding: 10px; border-radius: 6px; font-size: 13px; margin-bottom: 15px; border: 1px solid rgba(255,0,0,0.2); }

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.145] — 2026-06-12
+
+### Polish — DPAPI Keyring Vault modal renovation
+
+Same modern treatment as HostModal, logic untouched:
+- **Entrance animation** (overlay fade + box slide/scale-in) — it was flat before
+  (the only `@keyframes` was the button spinner).
+- **Depth + vault-green identity** — a faint green top-lit gradient, a 3 px green
+  top accent bar, and a soft green outer glow, fitting its "secure vault" role.
+- **Header** — the key icon sits in a glowing green rounded chip.
+- **Inputs** — focus adds a green accent ring (not just a border colour); the
+  close button gets a hover background.
+- **Save button** — gains a green glow on hover.
+
+---
+
 ## [1.7.144] — 2026-06-12
 
 ### Fix — last two native browser dialogs ("localhost:1420 dice…") removed
