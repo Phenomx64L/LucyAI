@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.147] — 2026-06-12
+
+### Polish — Provider Configuration modal renovation
+
+`ProviderConfigModal` ("Configuración de Proveedores" — the multi-tab API-key
+manager: Anthropic / Gemini / OpenAI / NVIDIA / Ollama / Tavily / Guardrails)
+gets the same modern treatment as the Vault and HostModal, logic untouched
+(pure CSS + a header icon chip):
+- **Entrance animation** — overlay fade + box slide/scale-in (it was flat before).
+- **Depth + accent identity** — a faint accent top-glow gradient over the base, a
+  3 px accent top bar, and a soft accent outer glow.
+- **Header** — the key icon now sits in a glowing rounded accent chip next to the
+  title.
+- **Inputs** — focus ring bumped to the brand green (`rgba(16,185,129,.18)`).
+- **Primary button** — hover lifts (`translateY(-1px)`) with a softer green glow.
+- **Active tab** — brand-green fill aligned with the rest of the palette.
+
+---
+
 ## [1.7.146] — 2026-06-12
 
 ### Polish — Settings (Configuración) modal renovation

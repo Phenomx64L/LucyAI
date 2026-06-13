@@ -334,8 +334,11 @@
         <div class="modal-content" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header">
                 <div class="header-content">
-                    <h2>{l.title}</h2>
-                    <p class="subtitle">{l.subtitle}</p>
+                    <span class="pcm-hdr-ico"><Key size={22} strokeWidth={1.8} color="var(--acc, #10b981)" /></span>
+                    <div class="header-text">
+                        <h2>{l.title}</h2>
+                        <p class="subtitle">{l.subtitle}</p>
+                    </div>
                 </div>
                 <button class="close-btn" on:click={() => dispatch('close')}>✕</button>
             </div>
@@ -696,23 +699,34 @@
         right: 0;
         bottom: 0;
         background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(6px) saturate(120%);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 1000;
+        animation: pcm-bg-in .18s ease;
     }
+    @keyframes pcm-bg-in { from { opacity: 0; } to { opacity: 1; } }
 
     .modal-content {
-        background: var(--bg);
+        /* Depth: a faint accent top glow over the base instead of a flat slab. */
+        background:
+            radial-gradient(120% 70% at 50% -8%, rgba(16,185,129,.09) 0%, transparent 58%),
+            var(--bg);
         border: 1px solid var(--bd);
+        border-top: 3px solid var(--acc, #10b981);
         border-radius: 12px;
         width: 90%;
         max-width: 600px;
         max-height: 85vh;
         display: flex;
         flex-direction: column;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        box-shadow:
+            0 24px 64px rgba(0, 0, 0, 0.55),
+            0 -1px 28px -10px rgba(16,185,129,.4);
+        animation: pcm-box-in .26s var(--ease-out, cubic-bezier(.16,1,.3,1));
     }
+    @keyframes pcm-box-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
 
     .modal-header {
         padding: 24px;
@@ -720,6 +734,25 @@
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
+    }
+
+    .header-content {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+    }
+
+    .pcm-hdr-ico {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        flex-shrink: 0;
+        background: rgba(16,185,129,.12);
+        border: 1px solid rgba(16,185,129,.28);
+        box-shadow: 0 0 18px -4px rgba(16,185,129,.5);
     }
 
     .header-content h2 {
@@ -797,7 +830,7 @@
     .tab.active {
         color: var(--acc);
         border-bottom-color: var(--acc);
-        background: rgba(52, 211, 153, 0.05);
+        background: rgba(16, 185, 129, 0.07);
     }
 
     .tab-content {
@@ -917,7 +950,7 @@
         outline: none;
         border-color: var(--acc);
         background: var(--bg);
-        box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
+        box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
     }
 
     .hint {
@@ -1033,7 +1066,8 @@
 
     .btn-primary:hover:not(:disabled) {
         background: #059669;
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        transform: translateY(-1px);
+        box-shadow: 0 6px 18px -6px rgba(16, 185, 129, 0.6);
     }
 
     button:disabled {
