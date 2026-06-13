@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.146] — 2026-06-12
+
+### Polish — Settings (Configuración) modal renovation
+
+The settings modal (Appearance / AI / MCP / System) gets the same modern
+treatment, scoped to `.settings-modal` so the other shared `.mbox` modals are
+untouched, and logic-free (pure CSS):
+- **Entrance animation** — slide + scale-in.
+- **Depth** — a faint accent top-glow gradient layered over the theme background
+  (kept from `.mbox`, so light mode still works), an accent top bar, and an outer
+  accent glow.
+- **Active tab** — the selected tab gains a soft accent fill + glow on top of its
+  underline.
+
+(Dark mode — the default — gets the full treatment; light mode degrades cleanly
+to the standard modal.)
+
+---
+
 ## [1.7.145] — 2026-06-12
 
 ### Polish — DPAPI Keyring Vault modal renovation
