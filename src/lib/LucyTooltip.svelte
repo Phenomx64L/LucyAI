@@ -18,6 +18,9 @@
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
     import { Tooltip } from 'bits-ui';
+    // v1.7.167 — styles externalized (portaled bits-ui template has no
+    // scopable elements; imported CSS is global, which is what .lt-content needs).
+    import './LucyTooltip.css';
     export let text    = '';
     export let side    = 'top';      // 'top' | 'right' | 'bottom' | 'left'
     export let delayMs = 350;
@@ -39,29 +42,4 @@
     </Tooltip.Provider>
 {/if}
 
-<style>
-    :global(.lt-trigger){
-        all: unset;
-        display: contents;        /* Don't introduce a wrapper box. */
-    }
-    :global(.lt-content){
-        background: var(--bg2, #0b0e14);
-        color: var(--txt, #dde3ea);
-        border: 1px solid var(--bdr, #1a2030);
-        border-radius: 6px;
-        padding: 5px 9px;
-        font-size: 11.5px;
-        line-height: 1.3;
-        max-width: 280px;
-        box-shadow: 0 6px 20px rgba(0,0,0,.45);
-        z-index: 8500;
-        animation: lt-pop .12s ease-out;
-    }
-    @keyframes lt-pop {
-        from { opacity: 0; transform: translateY(2px) scale(.96); }
-        to   { opacity: 1; transform: none; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        :global(.lt-content){ animation: none; }
-    }
-</style>
+<!-- styles moved to ./LucyTooltip.css (imported above) -->

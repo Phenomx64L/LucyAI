@@ -200,6 +200,9 @@ mod input {
         }
     }
 
+    // Local computer-use input primitive — kept ready for Phase B (scroll
+    // control); not wired into a command yet, so silence the dead-code warn.
+    #[allow(dead_code)]
     pub fn scroll(x: i32, y: i32, amount: i32) {
         unsafe {
             SetCursorPos(x, y);

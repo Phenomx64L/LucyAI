@@ -436,8 +436,9 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         //   /proactive       → list current open insights
         //   /proactive scan  → force a fresh detector tick now
         //   /proactive clear → dismiss all open insights
-        case 'proactive':
-        case 'insights': {
+        // (note: bare `/insights` is handled earlier by runInsightsList; here
+        // we only own `/proactive [scan|clear]`.)
+        case 'proactive': {
             const a = (arg || '').trim().toLowerCase();
             (async () => {
                 try {

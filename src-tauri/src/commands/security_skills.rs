@@ -175,11 +175,6 @@ fn skills_dirs() -> Vec<(PathBuf, &'static str)> {
     ]
 }
 
-/// Back-compat shim — `cache_path()` and a couple of other call sites
-/// still expect a `skills_dir()` returning the bundled location for
-/// disk operations. Keep returning that.
-fn skills_dir() -> PathBuf { bundled_skills_dir() }
-
 /// Walk every skills directory and parse every `*/SKILL.md`. Returned
 /// list is sorted by id, with user-dir skills overriding bundled ones
 /// when ids collide. Cached lazily; `reload()` clears the cache.

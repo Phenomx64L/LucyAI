@@ -1,3 +1,7 @@
+/* ── FUENTE: Inter desde Google Fonts. @import MUST precede all rules (CSS
+   spec), so it lives at the very top of the global stylesheet. ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
 /* ── OPSCENTER DESIGN SYSTEM — High-density data visualization tokens ────────
    Military-grade information density for SRE dashboards, process tables,
    network views, and metric panels. Used by enriched output widgets.
@@ -60,8 +64,6 @@
 }
 
 /* ── LIVE TRACE floating panel + FAB toggle ── */
-/* ── FUENTE: Inter desde Google Fonts ──────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 /* ── VARIABLES ─────────────────────────────── */
 :root{--bg:#0f111a;--bg2:#161822;--bg3:#1e2030;--bg4:#262838;--acc:#10b981;--acc-d:rgba(16,185,129,0.08);--acc-b:rgba(16,185,129,0.18);--txt:#e2e8f0;--txt1:#e2e8f0;--txt2:#94a3b8;--txt3:#475569;--bdr:#1e293b;--bdr2:#334155;--blue:#60a5fa;--purple:#a78bfa;--amber:#f59e0b;--red:#ef4444;--mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
   /* ── Z-INDEX LAYERS (single source of truth) ──────────────────────────

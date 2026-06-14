@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.167] — 2026-06-14
+
+### Chore — Clear all dev-mode build warnings
+
+Cleaned up every warning that showed during `npm run tauri dev`:
+- **Rust dead code** — removed the unused `skills_dir()` back-compat shim
+  (`security_skills.rs`; callers use `skills_dirs()` now); marked the
+  Phase-B-only `scroll()` input primitive `#[allow(dead_code)]`
+  (`local_screen.rs`).
+- **CSS `@import` order** — moved the Google Fonts `@import` to the very top of
+  `page.css` (CSS spec: `@import` must precede all other rules).
+- **Svelte "no scopable elements"** — `LucyContextMenu` and `LucyTooltip` are
+  all-portaled bits-ui templates, so their `:global`-only `<style>` blocks
+  warned. Extracted them to `LucyContextMenu.css` / `LucyTooltip.css` imported
+  from the component scripts (the official fix).
+- **Duplicate case clause** — `slash-commands.ts` had `case 'insights'` in two
+  switch arms; the second (under `/proactive`) was unreachable (bare
+  `/insights` is handled earlier by `runInsightsList`). Removed the dead alias.
+
+No behavior change — purely warning hygiene.
+
+---
+
 ## [1.7.166] — 2026-06-14
 
 ### Polish — Tutorial content rewrite (all 30 steps reviewed)
