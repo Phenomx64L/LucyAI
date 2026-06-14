@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.165] — 2026-06-14
+
+### Fix + Polish — Welcome screen & tutorial refresh
+
+- **Fix: "Lucy vundefined"** — the tutorial intro showed `vundefined`. Cause:
+  `LUCY_VERSION` was assigned via a `$:` reactive statement that runs *after* the
+  synchronous `const STEPS = […]` is built, so every `v${LUCY_VERSION}` in the
+  steps interpolated `undefined`. Props are bound before the body runs, so it's
+  now a plain `const LUCY_VERSION = currentVersion || '1.7'` — the real running
+  version (e.g. `v1.7.165`) shows in time.
+- **Tutorial intro** — dropped the dated "closes a 15-version arc / v1.7.58-66"
+  framing for an evergreen one-liner (operations console: persistent memory,
+  local + remote SSH/WinRM execution, own visual identity).
+- **Welcome screen** — retitled the flagship card from "what v1.7 adds on top of
+  v1.4" to "highlights", and added two current headline features at the top:
+  **remote execution + local `/playbooks`** and **proactive NexShell fix-chips**.
+
+---
+
 ## [1.7.164] — 2026-06-14
 
 ### Polish — Micro-interactions & motion (visual pass 4 of 4)

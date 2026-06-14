@@ -24,7 +24,12 @@
     // who instantiates the overlay in isolation (e.g. Storybook, test
     // harness) doesn't see a stale version label.
     export let currentVersion = '1.7.66';
-    $: LUCY_VERSION = currentVersion;
+    // v1.7.165 — BUG FIX: this was `$: LUCY_VERSION = currentVersion`, a reactive
+    // statement that runs AFTER the synchronous `const STEPS = [...]` below is
+    // built. So every `v${LUCY_VERSION}` in STEPS interpolated `undefined` →
+    // "Lucy vundefined". Props are bound before the body runs, so a plain const
+    // reads the real running version in time for STEPS.
+    const LUCY_VERSION = currentVersion || '1.7';
 
     // ── Steps — ordered top→bottom following the UI layout ─────────────────
     // tip: 'bottom'|'top'|'right'|'left'  where to place the tooltip callout
@@ -39,8 +44,8 @@
             welcome: true,
             tES: `✦ Bienvenido a Lucy v${LUCY_VERSION} — Operations Console`,
             tEN: `✦ Welcome to Lucy v${LUCY_VERSION} — Operations Console`,
-            dES: `Hola Iván — Lucy v${LUCY_VERSION} cierra un arco de 15 versiones que la convirtió de "chat AI con tools de sysadmin" a una <b>consola operacional</b> con su propia identidad visual.<br><br>` +
-                `<b>🛰 Operations Console UI (v1.7.58-66)</b><br>` +
+            dES: `Hola Iván — Lucy v${LUCY_VERSION} es una <b>consola operacional</b> de administración de sistemas: memoria persistente, ejecución local y remota (SSH/WinRM con shell streaming) y su propia identidad visual.<br><br>` +
+                `<b>🛰 Operations Console UI</b><br>` +
                 `• <b>Mission Strip</b> arriba siempre visible — ● local · ⚯ hosts · ⚠ alertas · ⊕ guard · HH:MM · postura 5-dot.<br>` +
                 `• <b>Tabs por propósito</b> — incidente rojo · ejecutando violeta · investigación ámbar · referencia azul · chat verde.<br>` +
                 `• <b>Code blocks como terminal recordings</b> — traffic lights, hostname, engine glyph (⚡PS · ▶cmd · $bash), timestamp, exit code.<br>` +
@@ -64,8 +69,8 @@
                 `• <b>persistirNow</b> — cerrar Lucy inmediatamente después de cualquier edit (close tab, rename) nunca pierde el cambio.<br>` +
                 `• <b>One-click DB repair</b> — backfill + REINDEX + verify desde el panel Diagnóstico sin SQL ni DB Browser.<br><br>` +
                 `Vamos a recorrer la nueva interfaz — empezamos por la franja superior, lo más distintivo.`,
-            dEN: `Hi Iván — Lucy v${LUCY_VERSION} closes a 15-version arc that took her from "AI chat with sysadmin tools" to a full <b>operations console</b> with her own visual identity.<br><br>` +
-                `<b>🛰 Operations Console UI (v1.7.58-66)</b><br>` +
+            dEN: `Hi Iván — Lucy v${LUCY_VERSION} is a full SysAdmin <b>operations console</b>: persistent memory, local and remote execution (SSH/WinRM with streaming shell) and her own visual identity.<br><br>` +
+                `<b>🛰 Operations Console UI</b><br>` +
                 `• <b>Mission Strip</b> always-on top band — ● local · ⚯ hosts · ⚠ alerts · ⊕ guard · HH:MM · 5-dot posture.<br>` +
                 `• <b>Per-tab purpose tint</b> — incident red · executing violet · investigation amber · reference blue · chat green.<br>` +
                 `• <b>Terminal-recording code blocks</b> — traffic lights, hostname, engine glyph (⚡PS · ▶cmd · $bash), timestamp, exit code.<br>` +

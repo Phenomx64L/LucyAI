@@ -11007,9 +11007,11 @@ if (Test-Path $src) {
 
             <!-- CARD 5: Operations Console (v1.7) — flagship surfaces -->
             <div class="empty-section ec5" style="grid-column:1 / -1;border-color:rgba(167,139,250,.25);background:rgba(167,139,250,.04);">
-              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'Operations Console — what v1.7 adds on top of v1.4' : 'Operations Console — lo que v1.7 suma sobre v1.4'}</span></div>
+              <div class="esec-hdr" style="color:#a78bfa;border-color:rgba(167,139,250,.18);"><span class="esec-ico"><Sparkles size={16} /></span><span>{isEN ? 'Operations Console — highlights' : 'Operations Console — lo más destacado'}</span></div>
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
                 <ul class="esec-list">
+                  <li><b>{isEN ? 'Remote execution + local playbooks' : 'Ejecución remota + playbooks locales'}</b> — {isEN ? 'run commands on SSH/WinRM hosts straight from chat;' : 'corre comandos en hosts SSH/WinRM desde el chat;'} <code>/playbooks</code> {isEN ? 'runs curated multi-phase skills on this machine' : 'ejecuta skills multi-fase curados en esta máquina'}</li>
+                  <li><b>{isEN ? 'Proactive fix-chips (NexShell)' : 'Fix-chips proactivos (NexShell)'}</b> — {isEN ? 'a failed command (rpm lock, perms, port in use…) surfaces a one-click diagnostic fix' : 'un comando fallido (lock de rpm, permisos, puerto en uso…) muestra un fix diagnóstico de un clic'}</li>
                   <li><b>{isEN ? 'Mission Strip' : 'Mission Strip'}</b> — {isEN ? 'always-on band: local heartbeat · remote hosts · alerts · guard skill · clock · 5-dot posture' : 'banda siempre visible: heartbeat local · hosts remotos · alertas · guard skill · reloj · postura 5 puntos'}</li>
                   <li><b>{isEN ? 'Per-tab purpose tint' : 'Tinte de propósito por tab'}</b> — {isEN ? 'top border colours tabs: red incident · violet executing · amber investigation · blue reference' : 'borde superior tiñe tabs: rojo incidente · violeta ejecutando · ámbar investigación · azul referencia'}</li>
                   <li><b>{isEN ? 'Terminal-recording blocks' : 'Bloques estilo terminal-recording'}</b> — {isEN ? 'traffic lights, hostname chip, engine glyph, timestamp, exit-code pill' : 'semáforo, chip de hostname, glyph del motor, timestamp, badge de exit code'}</li>
