@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.164] — 2026-06-14
+
+### Polish — Micro-interactions & motion (visual pass 4 of 4)
+
+Closes the 4-part whole-UI visual polish. Two app-wide "feels alive" layers in
+`page.css`, both deliberately low-risk:
+- **Accent focus ring** — a consistent green `:focus-visible` outline on
+  buttons / links / role-buttons for keyboard users. Mouse clicks are
+  unaffected (so it never fights hover styles); text inputs are excluded
+  because they already carry their own box-shadow focus rings.
+- **Press feedback** — buttons dim slightly on `:active` (filter brightness),
+  so clicks feel physical. No transform, so it can't shift layout or fight
+  positioned UI. Honors `prefers-reduced-motion`.
+
+Note: the **per-message slide-in entrance** that was deferred from pass 2 was
+found to already exist in `ChatThread` (`.msg-enter` → `msgSlideIn`, gated by a
+`noAnimate` flag so it plays on append, not on virtualized scroll) — so that
+item was already satisfied. Also discovered: the chat **bubble** styles
+(`.msg-user`/`.msg-lucy` gradients + shadows) live in ChatThread's scoped
+`<style>` (which wins the cascade), not `chat-thread.css`; they were already
+refined, so pass 2's bubble edits in chat-thread.css were inert (the typography
++ spacing edits did land).
+
+---
+
 ## [1.7.163] — 2026-06-14
 
 ### Polish — Depth & cohesion: layered chrome (visual pass 3 of 4)

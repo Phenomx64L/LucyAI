@@ -2157,3 +2157,31 @@ body.density-compact .chat{gap:2px !important;}
     50%      { opacity: .45; transform: scale(.82); }
 }
 .lt-fab-txt { letter-spacing: .4px; }
+
+/* ── v1.7.164 — global micro-interactions (visual pass 4/4) ───────────────
+   Two app-wide "feels alive" layers, both deliberately low-risk:
+     1) a consistent ACCENT FOCUS RING for keyboard users — `:focus-visible`
+        only, so mouse clicks are unaffected and it never fights hover styles.
+        (Chromium follows each element's own border-radius, so no shape change.)
+     2) a subtle PRESS feedback on buttons via filter:brightness — no layout
+        shift and no transform that could fight existing positioned UI.
+   The per-message slide-in entrance already lives in ChatThread (.msg-enter).
+   ───────────────────────────────────────────────────────────────────────── */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[tabindex="0"]:focus-visible {
+    /* Inputs/textareas/selects are intentionally excluded — they manage their
+       own focus rings (box-shadow) in the renovated modals; adding an outline
+       there would double-ring them. */
+    outline: 2px solid color-mix(in srgb, var(--acc, #10b981) 65%, transparent);
+    outline-offset: 2px;
+}
+button:active:not(:disabled),
+[role="button"]:active:not([aria-disabled="true"]) {
+    filter: brightness(.9);
+}
+@media (prefers-reduced-motion: reduce) {
+    button:active:not(:disabled),
+    [role="button"]:active:not([aria-disabled="true"]) { filter: none; }
+}
