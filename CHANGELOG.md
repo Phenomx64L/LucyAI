@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.161] — 2026-06-14
+
+### Polish — Premium sidebar (visual pass 1 of 4)
+
+First of a 4-part "make the whole UI feel like a modern IDE/desktop app" visual
+pass. The left navigation moves to the **inset rounded-pill** pattern used by
+Linear / Zed / Cursor (sidebar.css):
+- Items now have a side gutter + 7 px radius, so hover and the active state read
+  as a **contained chip** instead of an edge-to-edge stripe.
+- **Active item** — crisper label (dropped the blurry text-shadow), kept a soft
+  inset hairline + faint drop glow; concept tint (AI green / memory cyan /
+  security amber / infra blue / automation violet) + left accent rail preserved.
+- **Hover** — a subtle neutral fill with brighter text (less "everything tinted
+  green"), more like a pro editor.
+
+---
+
 ## [1.7.160] — 2026-06-13
 
 ### Polish — NexShell renders Lucy's analysis as Markdown
