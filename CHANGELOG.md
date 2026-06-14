@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.163] — 2026-06-14
+
+### Polish — Depth & cohesion: layered chrome (visual pass 3 of 4)
+
+Makes the window feel like one layered piece — the chrome brackets the content
+(tab-strip.css + status-bar.css):
+- **Titlebar** casts a soft downward shadow, so it reads as a chrome layer
+  floating above the workspace.
+- **Status bar** mirrors it with an upward shadow — top and bottom bars now
+  bracket the content symmetrically (both already shared the `#0b0d14` chrome
+  tone).
+- **Active tab** gets a faint top-lit wash so it reads as "lifted" out of the
+  strip (neutral highlight, so per-purpose tab tints are untouched).
+
+Both bars use a low `z-index` so modals/overlays still sit above them.
+
+---
+
 ## [1.7.162] — 2026-06-14
 
 ### Polish — Chat bubbles & typography (visual pass 2 of 4)

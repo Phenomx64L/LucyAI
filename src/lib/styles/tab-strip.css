@@ -27,6 +27,11 @@
     user-select: none;
     -webkit-app-region: drag;
     flex-shrink: 0;
+    /* v1.7.163 — elevate the titlebar so it reads as a chrome layer floating
+       above the content (paired with the status bar's upward shadow). */
+    position: relative;
+    z-index: 5;
+    box-shadow: 0 2px 10px -5px rgba(0, 0, 0, .6);
 }
 #tabs-list,
 .win-btn,
@@ -141,7 +146,9 @@
     color: #94a3b8;
 }
 .tab.active {
-    background: var(--bg2);
+    /* v1.7.163 — faint top-lit wash so the active tab reads as "lifted" out of
+       the strip (neutral highlight, purpose-agnostic). */
+    background: linear-gradient(180deg, rgba(255, 255, 255, .035), transparent 55%), var(--bg2);
     color: var(--acc);
     border-color: var(--bdr);
     border-top: 2px solid var(--acc);

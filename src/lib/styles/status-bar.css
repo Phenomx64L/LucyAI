@@ -32,6 +32,11 @@
     font-size: 10px;
     color: var(--txt3);
     flex-shrink: 0;
+    /* v1.7.163 — mirror the titlebar elevation so the chrome brackets the
+       content: titlebar casts down, status bar casts up. */
+    position: relative;
+    z-index: 5;
+    box-shadow: 0 -2px 10px -5px rgba(0, 0, 0, .55);
 }
 /* View-transitions: makes the footer slide smoothly between routes
    when the new ViewTransition API is available. Originally in page.css
