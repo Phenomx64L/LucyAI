@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.166] — 2026-06-14
+
+### Polish — Tutorial content rewrite (all 30 steps reviewed)
+
+Went through every tutorial step. Most were accurate and well-written, so this
+is a de-stale + accuracy pass rather than a blind reword (which would have lost
+quality):
+- **Dropped stale "NEW/NUEVO" labels** — Anomaly Detection, Cost Predictor,
+  Status Indicator titles; "NEW in v1.4.0" (Terminal), "NEW in v1.4.1" (Data),
+  and the false "NEW in v1.7.x" density-shortcut claim.
+- **Fixed factual drift** — the MCP step said "there is no persistent server
+  manager", but the **MCP Servers** modal now registers servers persistently;
+  rewritten to describe both the persistent registry and the on-demand spawn.
+- **Added current capabilities** — the Terminal step now mentions local +
+  remote (SSH/WinRM) execution; the NexShell step now covers per-command
+  actions, proactive fix-chips, and `/playbooks`.
+- **Intro de-changelog'd** — trimmed the version-range tags from the section
+  headers (Intelligence / Streaming / Performance / Reliability) so the opening
+  slide reads as "what Lucy does" rather than a v1.6→v1.7 changelog.
+
+Step spotlight targets (selectors/views) were left untouched.
+
+---
+
 ## [1.7.165] — 2026-06-14
 
 ### Fix + Polish — Welcome screen & tutorial refresh

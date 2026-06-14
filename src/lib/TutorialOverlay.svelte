@@ -53,19 +53,19 @@
                 `• <b>Evidence pills</b> — citas inline color-coded por origen: memoria cyan · file verde · URL azul · tool ámbar.<br>` +
                 `• <b>Composer ops</b> — prompt λ, dot grid en focus, slash-command ámbar, caret tipo bloque.<br>` +
                 `• <b>Self-Diagnóstico con repair de un click</b> — Diagnóstico te muestra issues + botón "🔧 Reparar" para los conocidos.<br><br>` +
-                `<b>🤖 Intelligence (v1.6.0-v1.7.50)</b><br>` +
+                `<b>🤖 Intelligence</b><br>` +
                 `• <b>Grounding</b> — cada memoria tiene confidence (0..1) driven by evidence; contradicciones la bajan, refuerzos la suben.<br>` +
                 `• <b>Skill presets curados</b> (v1.6.1) — 18+ presets ECC listos para usar (cost-aware, security-review, hypothesis-driven-debug…).<br>` +
                 `• <b>Multi-intent + RULE 0b</b> (v1.7.49-50) — prompts tipo "genera un reporte detallado del estado de mi maquina, depositalo en el escritorio" siempre se convierten en plan multi-paso con writefile real.<br>` +
                 `• <b>Centralised model catalog + tier health</b> (v1.7.0-v1.7.5) — un único source of truth para todos los modelos soportados, con health check al boot.<br><br>` +
-                `<b>⚡ Streaming overhaul (v1.7.42-57)</b><br>` +
+                `<b>⚡ Streaming</b><br>` +
                 `• <b>morphdom DOM diffing</b> (v1.7.56) — el texto fluye sin parpadeo. Indistinguible de ChatGPT/Claude.ai.<br>` +
                 `• <b>Aura Gemini-style</b> (v1.7.57) — text-shadow pulsante mientras Lucy escribe + fade-in por token.<br>` +
                 `• <b>Open-tag placeholder</b> (v1.7.47) — "◌ Lucy está razonando…" en lugar de bubble vacío cuando emite &lt;THOUGHT&gt;.<br><br>` +
-                `<b>🔧 Performance (v1.7.42-44)</b><br>` +
+                `<b>🔧 Performance</b><br>` +
                 `• <b>GPU vendor hints</b> — Lucy se asigna a la dGPU en laptops Optimus/PowerXpress automáticamente.<br>` +
                 `• <b>Idle saver</b> — todas las animaciones se pausan tras 8s sin input. GPU idle ~1-3%.<br><br>` +
-                `<b>💾 Reliability (v1.7.51-65)</b><br>` +
+                `<b>💾 Reliability</b><br>` +
                 `• <b>persistirNow</b> — cerrar Lucy inmediatamente después de cualquier edit (close tab, rename) nunca pierde el cambio.<br>` +
                 `• <b>One-click DB repair</b> — backfill + REINDEX + verify desde el panel Diagnóstico sin SQL ni DB Browser.<br><br>` +
                 `Vamos a recorrer la nueva interfaz — empezamos por la franja superior, lo más distintivo.`,
@@ -78,19 +78,19 @@
                 `• <b>Evidence pills</b> — inline citations colour-coded by origin: memory cyan · file green · URL blue · tool amber.<br>` +
                 `• <b>Composer ops aesthetic</b> — λ prompt, focus-only dot grid, amber slash-command mode, block-shape caret.<br>` +
                 `• <b>Self-diagnostics with one-click repair</b> — Diagnostics panel ships repair buttons for known issues.<br><br>` +
-                `<b>🤖 Intelligence (v1.6.0-v1.7.50)</b><br>` +
+                `<b>🤖 Intelligence</b><br>` +
                 `• <b>Grounding</b> — every memory carries a confidence score (0..1) driven by evidence accumulation.<br>` +
                 `• <b>Curated skill presets</b> (v1.6.1) — 18+ ready-to-use ECC presets (cost-aware, security-review, hypothesis-driven-debug…).<br>` +
                 `• <b>Multi-intent + RULE 0b</b> (v1.7.49-50) — prompts like "generate a detailed report of my machine state, save to desktop" always become a multi-step plan with real writefile.<br>` +
                 `• <b>Centralised model catalog + tier health</b> (v1.7.0-v1.7.5) — single source of truth across providers, boot-time health check.<br><br>` +
-                `<b>⚡ Streaming overhaul (v1.7.42-57)</b><br>` +
+                `<b>⚡ Streaming</b><br>` +
                 `• <b>morphdom DOM diffing</b> (v1.7.56) — text flows without flicker. Indistinguishable from ChatGPT/Claude.ai.<br>` +
                 `• <b>Gemini-style aura</b> (v1.7.57) — soft text-shadow pulse while Lucy writes + per-token fade-in.<br>` +
                 `• <b>Open-tag placeholder</b> (v1.7.47) — "◌ Lucy is reasoning…" instead of a blank bubble during &lt;THOUGHT&gt;.<br><br>` +
-                `<b>🔧 Performance (v1.7.42-44)</b><br>` +
+                `<b>🔧 Performance</b><br>` +
                 `• <b>GPU vendor hints</b> — auto-binds to the dGPU on Optimus / PowerXpress laptops.<br>` +
                 `• <b>Idle saver</b> — every infinite animation pauses after 8 s of no input. Idle GPU drops to ~1-3%.<br><br>` +
-                `<b>💾 Reliability (v1.7.51-65)</b><br>` +
+                `<b>💾 Reliability</b><br>` +
                 `• <b>persistirNow</b> — closing Lucy right after any structural edit (close tab, rename) never loses the change.<br>` +
                 `• <b>One-click DB repair</b> — backfill + REINDEX + verify from Diagnostics, no SQL or DB Browser needed.<br><br>` +
                 `Let's walk through the new interface — starting with the top band, the most distinctive piece.`,
@@ -128,8 +128,8 @@
             view: 'terminal',
             tES: '↗ Terminal IA — Bucle Agéntico',
             tEN: '↗ AI Terminal — Agentic Loop',
-            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea. Incluye <b>PLAN/VERIFY/ROLLBACK</b> — para cambios riesgosos Lucy propone un plan, verifica el resultado y revierte automáticamente si falla. <br><br><b>NUEVO en v1.4.0</b>: empieza a escribir <code>rm -</code> o <code>find . -</code> y verás autocompletado inline de flags (Tab/Enter). Los destructivos van al final con ⚠.',
-            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and auto-execute</b> commands until the task is complete. Includes <b>PLAN/VERIFY/ROLLBACK</b> — for risky changes Lucy proposes a plan, verifies the outcome, and auto-rolls back if it fails. <br><br><b>NEW in v1.4.0</b>: start typing <code>rm -</code> or <code>find . -</code> and you get inline flag autocomplete (Tab/Enter). Destructive flags go last with ⚠.',
+            dES: 'El corazón de Lucy. Escribe tu instrucción y la IA no solo te contestará, sino que <b>evaluará, verificará y ejecutará</b> automáticamente hasta completar la tarea — <b>local</b> (PowerShell) o <b>remoto</b> en tus hosts SSH/WinRM. Incluye <b>PLAN/VERIFY/ROLLBACK</b>: para cambios riesgosos Lucy propone un plan, verifica el resultado y revierte si falla, siempre tras tu confirmación. <br><br>Autocompletado inline de flags: empieza a escribir <code>rm -</code> o <code>find . -</code> (Tab/Enter); los destructivos van al final con ⚠.',
+            dEN: 'The core of Lucy. Type an instruction and the AI will not only reply, but <b>evaluate, verify and execute</b> automatically until the task is complete — <b>locally</b> (PowerShell) or <b>remotely</b> on your SSH/WinRM hosts. Includes <b>PLAN/VERIFY/ROLLBACK</b>: for risky changes Lucy proposes a plan, verifies the outcome, and rolls back if it fails, always after your confirmation. <br><br>Inline flag autocomplete: start typing <code>rm -</code> or <code>find . -</code> (Tab/Enter); destructive flags go last with ⚠.',
         },
         {
             sel: ['.sidebar .sb-it[title*="NexShell"]', '.sidebar .sb-it[title*="exShell"]'],
@@ -138,8 +138,8 @@
             view: 'nexshell',
             tES: '⊟ NexShell — Infraestructura',
             tEN: '⊟ NexShell — Infrastructure',
-            dES: 'Conecta servidores por SSH, WinRM, Bases de Datos o clústeres Kubernetes de forma nativa. Incluye <b>Ghost Text en tiempo real</b> y <b>host preflight</b>: antes de ejecutar un comando remoto Lucy verifica conectividad TCP y falla rápido si el host no responde, sin esperar 15 s a un timeout WinRM críptico.',
-            dEN: 'Native SSH, WinRM, Database, or Kubernetes connectivity. Features real-time <b>Ghost Text suggestions</b> and <b>host preflight</b>: before any remote command Lucy tests TCP reachability and fails fast when a host is down — no more cryptic 15 s WinRM timeouts.',
+            dES: 'Conecta servidores por SSH, WinRM, Bases de Datos o clústeres Kubernetes de forma nativa, con <b>Ghost Text en tiempo real</b> y <b>host preflight</b> (verifica conectividad TCP y falla rápido si el host no responde). Cada comando del log expone <b>acciones</b> (copiar · re-ejecutar · explícame), un <b>chip de fix proactivo</b> cuando algo falla (lock de rpm, permisos, puerto en uso…), y puedes lanzar <b>playbooks multi-fase</b> con el botón 📚 — o <code>/playbooks</code> para correrlos en tu máquina local.',
+            dEN: 'Native SSH, WinRM, Database, or Kubernetes connectivity, with real-time <b>Ghost Text</b> and <b>host preflight</b> (tests TCP reachability and fails fast when a host is down). Every command in the log exposes <b>actions</b> (copy · re-run · explain), a proactive <b>fix chip</b> when something fails (rpm lock, perms, port in use…), and you can run <b>multi-phase playbooks</b> from the 📚 button — or <code>/playbooks</code> to run them on your local machine.',
         },
         {
             sel: ['.sidebar .sb-it[title*="Log Viewer"]', '.sidebar .sb-it[title*="og Viewer"]'],
@@ -332,12 +332,12 @@
             sel: ['body'], fallback: 'body', tip: 'top', view: 'terminal', welcome: true,
             tES: '⚙ Configuración · Datos (Backup, Restore, Support Bundle)',
             tEN: '⚙ Settings · Data (Backup, Restore, Support Bundle)',
-            dES: `<b>Sub-módulo: Datos & Soporte — NUEVO en v1.4.1</b><br><br>` +
+            dES: `<b>Sub-módulo: Datos & Soporte</b><br><br>` +
                 `<b>📦 DB Backup</b> — copia atómica de toda la base SQLite (memorias, audit chain, incidents, snapshots, embeddings) usando <code>VACUUM INTO</code>. Genera un archivo <code>.lucydb</code> en la ruta que elijas (file picker nativo). Es atómico: no produce archivos corruptos aunque crashee a la mitad.<br><br>` +
                 `<b>♻ DB Restore</b> — carga un <code>.lucydb</code>. Antes de sobrescribir crea un <b>safety backup</b> de tu DB actual. La restauración valida que el archivo contenga las tablas marker (<code>agent_memories</code> + <code>audit_chain</code>) — rechaza archivos que no sean de Lucy.<br><br>` +
                 `<b>📤 Support Bundle</b> — exporta una carpeta con manifest, audit CSV, incidents JSON, system snapshot, token usage CSV y diagnostics. Adjúntala a un ticket de soporte. <b>NUNCA</b> incluye API keys ni contenido completo de memorias.<br><br>` +
                 `<i>Recomendación</i>: backup semanal a un disco externo + bundle solo si reportas un bug.`,
-            dEN: `<b>Sub-module: Data & Support — NEW in v1.4.1</b><br><br>` +
+            dEN: `<b>Sub-module: Data & Support</b><br><br>` +
                 `<b>📦 DB Backup</b> — atomic copy of the entire SQLite DB (memories, audit chain, incidents, snapshots, embeddings) using <code>VACUUM INTO</code>. Writes a <code>.lucydb</code> file at the path you pick (native file picker). Atomic: no corrupt files even if it crashes mid-flight.<br><br>` +
                 `<b>♻ DB Restore</b> — loads a <code>.lucydb</code>. Before overwriting, creates a <b>safety backup</b> of your current DB. Restore validates the file contains marker tables (<code>agent_memories</code> + <code>audit_chain</code>) — rejects non-Lucy files.<br><br>` +
                 `<b>📤 Support Bundle</b> — exports a folder with manifest, audit CSV, incidents JSON, system snapshot, token usage CSV and diagnostics. Attach to a support ticket. <b>NEVER</b> includes API keys or full memory contents.<br><br>` +
@@ -348,7 +348,7 @@
             tES: '⚙ Configuración · MCP — Model Context Protocol',
             tEN: '⚙ Settings · MCP — Model Context Protocol',
             dES: `<b>Sub-módulo: MCP — cómo extender Lucy hoy</b><br><br>` +
-                `<b>MCP (Model Context Protocol)</b> es el estándar abierto de Anthropic para que Lucy hable con <b>herramientas externas</b> (filesystem, GitHub, Postgres, Brave Search, Slack…) sin recompilar. En Lucy v${LUCY_VERSION} la integración es <b>on-demand</b>: no hay un "Manager de servers" persistente — Lucy arranca el server como subproceso JSON-RPC cuando lo invoca, recupera lo que necesita y lo cierra.<br><br>` +
+                `<b>MCP (Model Context Protocol)</b> es el estándar abierto de Anthropic para que Lucy hable con <b>herramientas externas</b> (filesystem, GitHub, Postgres, Brave Search, Slack…) sin recompilar. Puedes <b>registrar servers de forma persistente</b> en el modal <b>Servidores MCP</b> (Configuración → MCP): los nombras una vez, eliges qué secretos inyectarles y Lucy los invoca por nombre, cacheando sus tools. También funciona <b>on-demand</b>: arranca el server como subproceso JSON-RPC, recupera lo que necesita y lo cierra.<br><br>` +
                 `<b>🔧 Flujo real en Lucy</b><br>` +
                 `<b>1. Guarda las variables/API keys en Configuración</b><br>` +
                 `Configuración → sección "<b>Variables / API Keys para MCP</b>". Añade pares clave-valor (ej. <code>GITHUB_TOKEN</code> = <code>ghp_xxx</code>, <code>BRAVE_API_KEY</code> = <code>BSA…</code>). Se persisten en <b>Windows Credential Manager</b> (OS Keyring) — nunca en localStorage. Lucy las inyecta como variables de entorno al spawnear el server.<br><br>` +
@@ -361,7 +361,7 @@
                 `<b>Servers útiles (npm)</b>: <code>@modelcontextprotocol/server-filesystem</code>, <code>-server-github</code>, <code>-server-postgres</code>, <code>-server-brave-search</code>, <code>-server-slack</code>, <code>-server-puppeteer</code>.<br><br>` +
                 `<i>Tip</i>: requiere Node + <code>npx</code> en PATH (o sustituye por el comando que arranque tu server local).`,
             dEN: `<b>Sub-module: MCP — how to extend Lucy today</b><br><br>` +
-                `<b>MCP (Model Context Protocol)</b> is Anthropic's open standard so Lucy can talk to <b>external tools</b> (filesystem, GitHub, Postgres, Brave Search, Slack…) without recompiling. In Lucy v${LUCY_VERSION} the integration is <b>on-demand</b>: there is no persistent "server manager" — Lucy spawns the server as a JSON-RPC subprocess when it invokes it, gets what it needs, and closes it.<br><br>` +
+                `<b>MCP (Model Context Protocol)</b> is Anthropic's open standard so Lucy can talk to <b>external tools</b> (filesystem, GitHub, Postgres, Brave Search, Slack…) without recompiling. You can <b>register servers persistently</b> in the <b>MCP Servers</b> modal (Settings → MCP): name them once, pick which secrets to inject, and Lucy invokes them by name, caching their tools. It also works <b>on-demand</b>: spawn the server as a JSON-RPC subprocess, get what it needs, and close it.<br><br>` +
                 `<b>🔧 Real flow in Lucy</b><br>` +
                 `<b>1. Save vars/API keys in Settings</b><br>` +
                 `Settings → "<b>Variables / API Keys for MCP</b>" section. Add key-value pairs (e.g. <code>GITHUB_TOKEN</code> = <code>ghp_xxx</code>, <code>BRAVE_API_KEY</code> = <code>BSA…</code>). Persisted in <b>Windows Credential Manager</b> (OS Keyring) — never in localStorage. Lucy injects them as env vars when spawning the server.<br><br>` +
@@ -426,8 +426,8 @@
             fallback: '.dash-scroll',
             tip: 'top',
             view: 'dashboard',
-            tES: '✦ NUEVO — Detección de Anomalías',
-            tEN: '✦ NEW — Anomaly Detection',
+            tES: '✦ Detección de Anomalías',
+            tEN: '✦ Anomaly Detection',
             dES: 'Las cards de CPU y RAM ahora muestran un <b>badge σ</b> (sigma) cuando un valor se desvía estadísticamente del promedio reciente del host. Solo aparece para anomalías <b>fuertes</b> (≥3σ) o <b>extremas</b> (≥4σ) — sin alarmismo. Detecta picos sospechosos sin necesidad de configurar umbrales fijos.',
             dEN: 'CPU & RAM cards now show a <b>σ badge</b> (sigma) when a value deviates statistically from the host\'s recent average. Surfaces only on <b>strong</b> (≥3σ) or <b>extreme</b> (≥4σ) anomalies — no false alarms. Catches suspicious spikes without hand-tuning fixed thresholds.',
         },
@@ -440,8 +440,8 @@
             fallback: '.ibar',
             tip: 'top',
             view: 'terminal',
-            tES: '✦ NUEVO — Predictor de Costo',
-            tEN: '✦ NEW — Cost Predictor',
+            tES: '✦ Predictor de Costo',
+            tEN: '✦ Cost Predictor',
             dES: 'Mientras escribes en el input, Lucy estima cuántos <b>tokens</b> y cuánto <b>USD</b> costará tu prompt antes de enviarlo. Útil para elegir un modelo más barato cuando la tarea es exploratoria. Aparece junto al modelo activo cuando el prompt supera ~8 caracteres.',
             dEN: 'While you type in the input, Lucy estimates how many <b>tokens</b> and how much <b>USD</b> your prompt will cost before sending. Useful for picking a cheaper model when the task is exploratory. Shown next to the active model when the prompt exceeds ~8 characters.',
         },
@@ -456,8 +456,8 @@
             tip: 'top',
             view: 'terminal',
             padY: 6,
-            tES: '✦ NUEVO — Indicador de Estado',
-            tEN: '✦ NEW — Status Indicator',
+            tES: '✦ Indicador de Estado',
+            tEN: '✦ Status Indicator',
             dES: 'En la <b>esquina inferior derecha del footer</b> verás un punto que respira con el estado de Lucy: <br>• <span style="color:#10b981;">●</span> verde lento → inactiva, lista<br>• <span style="color:#3b9eff;">●</span> azul rápido → pensando<br>• <span style="color:#f59e0b;">●</span> ámbar con arco → ejecutando<br>• <span style="color:#ef4444;">●</span> rojo flash → error reciente<br><br>El borde del input también adopta el color del estado.',
             dEN: 'In the <b>bottom-right of the footer</b> you\'ll see a dot that breathes with Lucy\'s state: <br>• <span style="color:#10b981;">●</span> slow green → idle, ready<br>• <span style="color:#3b9eff;">●</span> fast blue → thinking<br>• <span style="color:#f59e0b;">●</span> amber with arc → executing<br>• <span style="color:#ef4444;">●</span> red flash → recent error<br><br>The input border also adopts the state color.',
         },
@@ -469,8 +469,8 @@
             welcome: true,
             tES: '✦ Atajos esenciales',
             tEN: '✦ Essential shortcuts',
-            dES: '<b>Ctrl+P</b> · Paleta de comandos (busca cualquier vista, host o acción) — incluye <b>Exportar pestaña como Notebook</b>.<br><b>Ctrl+T</b> · Nueva terminal.<br><b>Ctrl+L</b> · Limpiar sesión actual.<br><b>Ctrl+F</b> · Buscar en NexShell.<br><b>Ctrl+Shift+Enter</b> · Ejecutar en background.<br><b>Tab</b> · Autocompletar comandos.<br><b>Esc</b> · Cancelar el agente o cerrar modal.<br><br><b>NUEVO en v' + LUCY_VERSION + '</b>: <b>Ctrl+1/2/3</b> para alternar densidad (Focus / Explore / War Room).',
-            dEN: '<b>Ctrl+P</b> · Command palette (find any view, host or action) — includes <b>Export tab as Notebook</b>.<br><b>Ctrl+T</b> · New terminal.<br><b>Ctrl+L</b> · Clear current session.<br><b>Ctrl+F</b> · Find in NexShell.<br><b>Ctrl+Shift+Enter</b> · Run in background.<br><b>Tab</b> · Autocomplete commands.<br><b>Esc</b> · Cancel the agent or close modal.<br><br><b>NEW in v' + LUCY_VERSION + '</b>: <b>Ctrl+1/2/3</b> to toggle density (Focus / Explore / War Room).',
+            dES: '<b>Ctrl+P</b> · Paleta de comandos (busca cualquier vista, host o acción) — incluye <b>Exportar pestaña como Notebook</b>.<br><b>Ctrl+T</b> · Nueva terminal.<br><b>Ctrl+L</b> · Limpiar sesión actual.<br><b>Ctrl+F</b> · Buscar en NexShell.<br><b>Ctrl+Shift+Enter</b> · Ejecutar en background.<br><b>Tab</b> · Autocompletar comandos.<br><b>Esc</b> · Cancelar el agente o cerrar modal.<br><b>Ctrl+1/2/3</b> · Alternar densidad (Focus / Explore / War Room).<br><br><i>Tip</i>: escribe <code>/</code> en el chat para ver todos los comandos disponibles.',
+            dEN: '<b>Ctrl+P</b> · Command palette (find any view, host or action) — includes <b>Export tab as Notebook</b>.<br><b>Ctrl+T</b> · New terminal.<br><b>Ctrl+L</b> · Clear current session.<br><b>Ctrl+F</b> · Find in NexShell.<br><b>Ctrl+Shift+Enter</b> · Run in background.<br><b>Tab</b> · Autocomplete commands.<br><b>Esc</b> · Cancel the agent or close modal.<br><b>Ctrl+1/2/3</b> · Toggle density (Focus / Explore / War Room).<br><br><i>Tip</i>: type <code>/</code> in chat to see every available command.',
         },
         {
             // ── Comandos internos / Internal commands ──
