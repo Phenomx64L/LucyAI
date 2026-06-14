@@ -44,10 +44,10 @@
 .chat-area {
     flex: 1;
     overflow-y: auto;
-    padding: 16px 22px;
+    padding: 18px 24px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     min-height: 0;
 }
 
@@ -59,25 +59,30 @@
 }
 
 /* ── Message bubbles ─────────────────────────────────────────────── */
+/* v1.7.162 — softer, deeper bubbles: rounder corners, a gentle vertical
+   gradient on the user bubble, a subtle drop shadow for depth (chat/IDE feel),
+   and a touch more padding. */
 .msg-user {
     align-self: flex-end;
-    background: #1e212b;
-    border: 1px solid rgba(96, 165, 250, .08);
+    background: linear-gradient(180deg, #21252f 0%, #1b1e27 100%);
+    border: 1px solid rgba(96, 165, 250, .12);
     border-right: 2px solid var(--blue);
-    border-radius: 10px 10px 0 10px;
-    padding: 10px 14px;
+    border-radius: 12px 12px 3px 12px;
+    padding: 11px 15px;
     max-width: 78%;
     white-space: pre-wrap;
+    box-shadow: 0 2px 12px -5px rgba(0, 0, 0, .55);
 }
 .msg-lucy {
     align-self: flex-start;
     background: rgba(16, 185, 129, 0.05);
-    border: 1px solid rgba(16, 185, 129, .10);
+    border: 1px solid rgba(16, 185, 129, .13);
     border-left: 2px solid #10b981;
-    border-radius: 0 10px 10px 10px;
-    padding: 10px 14px;
+    border-radius: 3px 12px 12px 12px;
+    padding: 11px 15px;
     max-width: 88%;
     line-height: 1.6;
+    box-shadow: 0 2px 14px -6px rgba(0, 0, 0, .55);
 }
 .msg-user, .msg-lucy { position: relative; }
 .msg-pinned { border-left: 2px solid #fbbf24 !important; }
@@ -198,16 +203,16 @@
 }
 .msg-lucy th {
     background: var(--bg4);
-    color: white;
+    color: #e2e8f0;
     font-size: 11px;
     font-weight: 600;
 }
 .msg-lucy ul, .msg-lucy ol { padding-left: 18px; margin: 6px 0; }
 .msg-lucy li { margin-bottom: 3px; }
-.msg-lucy h1 { font-size: 15px; color: white; margin: 10px 0 5px; font-weight: 600; }
-.msg-lucy h2 { font-size: 14px; color: white; margin:  8px 0 4px; font-weight: 600; }
-.msg-lucy h3 { font-size: 13px; color: white; margin:  6px 0 3px; font-weight: 600; }
-.msg-lucy strong { color: white; font-weight: 600; }
+.msg-lucy h1 { font-size: 15px; color: #e8edf2; margin: 11px 0 5px; font-weight: 650; letter-spacing: .1px; }
+.msg-lucy h2 { font-size: 14px; color: #e8edf2; margin:  9px 0 4px; font-weight: 650; letter-spacing: .1px; }
+.msg-lucy h3 { font-size: 13px; color: #e8edf2; margin:  7px 0 3px; font-weight: 650; }
+.msg-lucy strong { color: #e2e8f0; font-weight: 650; }
 
 /* ── Pin button (top-right of every bubble) ──────────────────────── */
 .msg-pin {

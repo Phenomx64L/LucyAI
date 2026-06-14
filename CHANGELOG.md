@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.162] — 2026-06-14
+
+### Polish — Chat bubbles & typography (visual pass 2 of 4)
+
+Refines the primary surface — the chat (chat-thread.css):
+- **Bubbles** — rounder corners (12 px with a soft 3 px tail), a subtle drop
+  shadow for depth, a gentle vertical gradient on the user bubble, and a touch
+  more padding. Reads like a modern chat/IDE card instead of a flat box.
+- **Typography** — headings, bold and table headers move off pure `white` to a
+  softer off-white (`#e8edf2` / `#e2e8f0`) with a hair more weight + letter
+  spacing — crisp but easier on the eyes over long sessions.
+- **Rhythm** — a bit more space between messages and inside the scroll area.
+
+(Subtle per-message entrance animation deferred to pass 4 — done via a Svelte
+transition so it plays on append, not on every virtualized scroll re-paint.)
+
+---
+
 ## [1.7.161] — 2026-06-14
 
 ### Polish — Premium sidebar (visual pass 1 of 4)
