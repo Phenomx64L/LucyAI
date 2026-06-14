@@ -118,6 +118,9 @@ import { listen } from '@tauri-apps/api/event';
     // (skill-engine playbooks). Previously only reachable inside NexShell
     // (remote hosts). Here it targets THIS local machine (Windows).
     import SkillBrowserModal from '$lib/SkillBrowserModal.svelte';
+    // v1.7.168 — manage the loaded security/forensic skill catalogue
+    // (list / view / activate / delete user skills).
+    import SkillCatalogModal from '$lib/SkillCatalogModal.svelte';
     import KgMiniViewer from '$lib/KgMiniViewer.svelte';
     import { predictChips, resetDismissed, detectDomain, recordChipClick,
              backendChipToPredictive, mergeChips } from '$lib/predictive-chips';
@@ -978,6 +981,8 @@ import { listen } from '@tauri-apps/api/event';
     // builtin registry is lazily populated the first time it's opened so the
     // browser isn't empty when NexShell never mounted this session.
     let showLocalSkills = false;
+    // v1.7.168 — Skills Manager modal (security/forensic catalogue governance).
+    let showSkillCatalog = false;
     async function openLocalSkills() {
         try {
             const { registerBuiltinSkills } = await import('$lib/skills/builtin/index');
@@ -4541,6 +4546,8 @@ REGLAS DE FORMATO:
             openSkillPicker: () => { showSkillPicker = true; },
             // v1.7.150 — local curated multi-phase Skill Browser launcher.
             openLocalSkills: () => { openLocalSkills(); },
+            // v1.7.168 — Skills Manager (security/forensic catalogue).
+            openSkillCatalog: () => { showSkillCatalog = true; },
             // v1.6.1 — ECC skill preset picker (distinct surface from the
             // legacy executable-script picker above).
             openSkillPresetPicker: () => { showSkillPresetPicker = true; },
@@ -13347,6 +13354,11 @@ if (Test-Path $src) {
       on:run={onLocalSkillRun}
       on:close={() => showLocalSkills = false}
     />
+  {/if}
+
+  <!-- v1.7.168 — Skills Manager (list / view / activate / delete user skills). -->
+  {#if showSkillCatalog}
+    <SkillCatalogModal isOpen={true} {isEN} on:close={() => showSkillCatalog = false} />
   {/if}
 
   <!-- Sprint 8 — KG mini-viewer modal -->

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.168] — 2026-06-14
+
+### Feature — Skills Manager (govern the loaded skill catalogue)
+
+A real management surface for Lucy's loaded **security/forensic skills** (the
+`/sec-skill` catalogue) — list, view, activate, and delete:
+- **`SkillCatalogModal`** — opens via `/skills-manager` (aliases
+  `/skill-manager`, `/manage-skills`, `/skills-admin`; listed in the `/` menu).
+  Lists every loaded skill (`security_skills_list`) with search + domain filter,
+  each row showing its domain, MITRE ATT&CK codes, a **bundled/user** badge, and
+  an **ACTIVE** badge. Per skill: **view** (rendered Markdown body), **activate**
+  (`security_skills_get` → bridge), and **delete** — shown only for **user**
+  skills. Header has open-folder + reload; footer explains how to add (drop a
+  `SKILL.md` / `/sec-skill new`). Renovation band + sanitized markdown preview.
+- **`security_skills_delete`** (new Rust command) — removes a **user** skill's
+  folder from `%LOCALAPPDATA%\Lucy\security-skills`, validating the id to
+  kebab-case (no path traversal) and refusing bundled (shipped, read-only)
+  skills; invalidates the index + embedding caches like install/reload.
+
+This closes the gap noted in the discussion: previously you could list/search/add
+skills via `/sec-skill` but deletion was manual (delete the file + reload), with
+no unified UI.
+
+---
+
 ## [1.7.167] — 2026-06-14
 
 ### Chore — Clear all dev-mode build warnings

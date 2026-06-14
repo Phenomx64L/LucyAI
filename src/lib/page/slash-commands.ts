@@ -43,6 +43,9 @@ export interface SlashCtx {
      *  openSkillPicker (executable scripts) and openSkillPresetPicker
      *  (behavioural framing). */
     openLocalSkills?: () => void;
+    /** v1.7.168 — open the Skills Manager (governance for the loaded
+     *  security/forensic skill catalogue: list / view / activate / delete). */
+    openSkillCatalog?: () => void;
     /** v1.6.1 — open the ECC-adapted system-prompt skill preset picker.
      *  Distinct from openSkillPicker (which lists executable scripts);
      *  this one selects a behavioural framing prepended to the prompt. */
@@ -133,6 +136,7 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                     { cmd: '/skills',       desc: isEN ? 'Executable skill picker (user runbook-style)' : 'Picker de skills ejecutables (runbook-style del usuario)' },
                     { cmd: '/preset',       desc: isEN ? 'ECC-style behavioural presets (AD, Hyper-V, SQL, IIS…)' : 'Presets de framing (AD, Hyper-V, SQL, IIS…)' },
                     { cmd: '/sec-skill',    desc: isEN ? 'Anthropic security / forensic catalog (200+)' : 'Catálogo de security / forensics de Anthropic (200+)' },
+                    { cmd: '/skills-manager', desc: isEN ? 'Manage loaded skills: view, activate, delete' : 'Gestionar skills cargadas: ver, activar, eliminar' },
                     { cmd: '/capabilities', desc: isEN ? 'Self-introspection: every skill, MCP, framework loaded' : 'Auto-introspección: skills, MCPs y frameworks cargados' },
                 ],
             },
@@ -1051,6 +1055,17 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
                 ctx.openLocalSkills();
             } else {
                 sysMsg('Skill Browser not wired in this context.', 'var(--amber)');
+            }
+            return true;
+        }
+        // ── v1.7.168: Skills Manager — govern the loaded security skill
+        // catalogue (list / view / activate / delete user skills). Distinct
+        // from /sec-skill (chat search) and /skills (executable scripts).
+        case 'skills-manager': case 'skill-manager': case 'manage-skills': case 'skills-admin': {
+            if (ctx.openSkillCatalog) {
+                ctx.openSkillCatalog();
+            } else {
+                sysMsg('Skills Manager not wired in this context.', 'var(--amber)');
             }
             return true;
         }

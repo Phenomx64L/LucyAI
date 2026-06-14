@@ -722,6 +722,7 @@ pub fn run() {
             commands::security_skills::security_skills_reload,
             commands::security_skills::security_skills_template,
             commands::security_skills::security_skills_install,
+            commands::security_skills::security_skills_delete,
             // v1.7.16 — pre-delivery script syntax verification.
             commands::script_verify::verify_script,
             // v1.7.19 — SIMD backend introspection (cosine hot path).

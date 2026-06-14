@@ -1081,6 +1081,43 @@ pub async fn security_skills_install(req: SkillInstallRequest) -> Result<SkillIn
     })
 }
 
+/// v1.7.168 — Delete a USER skill from the user skills directory
+/// (`%LOCALAPPDATA%\Lucy\security-skills\<id>`). Bundled skills shipped with
+/// Lucy are READ-ONLY and cannot be deleted — the command refuses if the id
+/// doesn't exist as a user-dir folder. The id is validated to kebab-case so
+/// it can never traverse outside the user dir (no `/`, `\`, or `..`).
+/// Invalidates the index + embedding caches and returns the new total count.
+#[tauri::command]
+pub async fn security_skills_delete(id: String) -> Result<usize, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("empty id".into());
+    }
+    if id.chars().any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+        return Err(format!("id '{}' contains invalid chars — refusing to delete", id));
+    }
+    let dir = user_skills_dir_path().join(id);
+    if !dir.exists() {
+        return Err(format!(
+            "'{}' is not a user skill — bundled skills are read-only and can't be deleted",
+            id
+        ));
+    }
+    std::fs::remove_dir_all(&dir)
+        .map_err(|e| format!("delete skill dir: {}", e))?;
+
+    // Invalidate the in-memory + embedding caches so the deleted skill drops
+    // out of the index on the next read (mirrors install/reload).
+    if let Ok(mut w) = INDEX.write() { *w = None; }
+    {
+        let mut w = EMBED_CACHE.write().await;
+        *w = None;
+    }
+    let _ = tokio::fs::remove_file(cache_path()).await;
+    let n = load_index().len();
+    Ok(n)
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
