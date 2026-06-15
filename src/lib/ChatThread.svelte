@@ -814,8 +814,9 @@
     :global(:root.light) .reasoning-header{color:#334155;}
     :global(:root.light) .reasoning-body{color:#475569;}
     :global(.streaming-active){position:relative;}
-    :global(.streaming-active) :global(p:last-of-type),:global(.streaming-active) :global(li:last-of-type),:global(.streaming-active) :global(pre:last-of-type){animation:streamReveal .15s ease-out;}
-    @keyframes streamReveal{from{transform:translateY(2px);}to{transform:none;}}
+    /* v1.7.180 — streamReveal removed. Its `:last-of-type` slide re-fired on the
+       actively-streaming line on every chunk, reading as a tremble. morphdom
+       mutates the trailing text in place, so no entrance animation is needed. */
     :global(:root.light .msg-lucy){background:#ffffff !important;border:1px solid rgba(0,168,107,.22) !important;border-left:2px solid var(--acc) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:0 1px 6px rgba(0,0,0,.07);}
     :global(:root.light .msg-user){background:rgba(213,228,250,.9) !important;border:1px solid rgba(59,130,246,.18) !important;border-right:2px solid var(--blue) !important;backdrop-filter:none !important;color:var(--txt) !important;}
     :global(:root.light .msg-lucy .mn){color:var(--acc);}

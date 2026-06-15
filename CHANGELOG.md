@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.180] — 2026-06-14
+
+### Fix — Calmer streaming render + accurate Dashboard CPU per-core
+
+Two user-reported follow-ups.
+
+**1. Streaming text no longer trembles.** After v1.7.179 removed the
+opacity-hide, a residual 2 px entrance slide remained — `streamReveal` on the
+`:last-of-type` line (re-fired every chunk) and `lucy-token-in` on each new
+token. On every chunk those slid, reading as a constant "tremble" while Lucy
+writes. Both removed: morphdom already mutates the trailing text in place, so
+streamed text now appears perfectly stable (and cheaper to composite — no
+per-element animation on each chunk).
+
+**2. Dashboard CPU per-core now matches Task Manager.** `get_system_health_json`
+did `System::new_all()` + a single `refresh_all()`, then read per-core %.
+sysinfo derives CPU usage from the **delta between two refreshes**; back-to-back
+samples give a ~0 ms window, so the per-core (and per-process) numbers were
+noise that didn't track Task Manager. Now it refreshes CPU + processes again
+after `MINIMUM_CPU_UPDATE_INTERVAL` (+50 ms) so the deltas cover a real ~250 ms
+window. Also raised the hard-coded `.take(12)` core cap to 64 — a 16-thread i9
+was showing only C0–C11; all logical cores now render. (The sleep runs inside
+the existing `spawn_blocking`, so the UI thread is untouched.)
+
+Note: instantaneous per-core % is inherently volatile, so Lucy and Task Manager
+still won't be identical frame-to-frame — but they now sample real windows and
+land in the same ballpark instead of diverging.
+
+---
+
 ## [1.7.179] — 2026-06-14
 
 ### Fix — Streamed reply text no longer disappears while Lucy writes

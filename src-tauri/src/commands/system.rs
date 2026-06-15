@@ -114,6 +114,20 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(|| {
         let mut sys = System::new_all();
         sys.refresh_all();
+        // ── CPU sampling accuracy (v1.7.180) ─────────────────────────────
+        // sysinfo derives CPU usage from the DELTA between two refreshes. The
+        // refresh above lands microseconds after `new_all()`'s internal sample,
+        // so per-core (and per-process) % is computed over a ~0 ms window —
+        // noise that doesn't track Task Manager. Refresh CPU + processes again
+        // after the documented minimum interval so the deltas reflect a real
+        // ~250 ms window and line up with what Task Manager reports. (Runs in
+        // spawn_blocking, so the extra sleep never touches the UI thread.)
+        std::thread::sleep(
+            sysinfo::MINIMUM_CPU_UPDATE_INTERVAL
+                .saturating_add(std::time::Duration::from_millis(50)),
+        );
+        sys.refresh_cpu();
+        sys.refresh_processes();
 
         let disks_data: Vec<serde_json::Value> = sysinfo::Disks::new_with_refreshed_list()
             .iter()
@@ -144,7 +158,10 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
             "path":   p.exe().map(|x| x.display().to_string()),
         })).collect();
 
-        let per_core: Vec<f64> = sys.cpus().iter().take(12)
+        // v1.7.180 — was `.take(12)`, which truncated to 12 logical cores and
+        // hid the rest on higher-thread CPUs (e.g. a 16-thread i9 showed only
+        // C0–C11). Cap raised to 64 purely as a UI-flood guard for big servers.
+        let per_core: Vec<f64> = sys.cpus().iter().take(64)
             .map(|c| (c.cpu_usage() as f64 * 10.0).round() / 10.0)
             .collect();
 
