@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.177] — 2026-06-14
+
+### Perf — Gate the last always-on poller + close the perf backlog
+
+Finishes the performance pass. Gated the one remaining always-on ungated
+poller: the **proactive-insights detector** (`pollProactiveInsights`, every
+2 min) now uses `gatedInterval`, so it skips its IPC while the window is hidden
+and refreshes on re-show — same treatment the chrome pollers got in v1.7.174.
+
+The other two backlog items were assessed and **deliberately left as-is**:
+- **Syntax highlighting (#3)** — already well-handled: `applyShikiToHtml` bakes
+  Shiki into the HTML string *before* first paint (no flash), one-time at
+  promotion; `addCopyBtns` skips already-highlighted blocks. Deferring it to
+  idle would risk reintroducing the flash v1.7.55 fixed, for no real gain.
+- **Sequential IPC chains (#5)** — the main per-turn chain (auto-route) was
+  parallelised in v1.7.176; the remaining view-level `invoke`s are either
+  independent (separate widget loads, already concurrent) or genuinely
+  dependent (credential → remote-health). No clean, safe target remained.
+
+Boot probes (#6) were already deferred + 6 h-cached (`pingAllTiersIfStale` is
+fire-and-forget), so only the proactive poll needed gating.
+
+---
+
 ## [1.7.176] — 2026-06-14
 
 ### Perf — Auto-route no longer blocks time-to-first-token (latency #4)

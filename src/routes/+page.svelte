@@ -240,6 +240,8 @@ import { listen } from '@tauri-apps/api/event';
     // stops compositing dozens of `@keyframes ... infinite` rules while
     // the user is reading or away. Resumes instantly on any input.
     import { startIdleDetector } from '$lib/idle-detector';
+    // v1.7.177 — visibility-gated polling helper (skip IPC while hidden).
+    import { gatedInterval } from '$lib/poll';
     // v1.7.29 — Knowledge Graph as a first-class surface (was buried under
     // MemoryBrowser → Grafo → Visual). Mounted at root so sidebar items,
     // slash commands, palette and the empty-state hero can all open it.
@@ -2003,7 +2005,9 @@ import { listen } from '@tauri-apps/api/event';
         // 90 s (let the backend's own 60 s warmup finish) then every 2 min.
         setTimeout(() => {
             pollProactiveInsights();
-            setInterval(pollProactiveInsights, 120_000);
+            // v1.7.177 — gated: the proactive-insights detector poll skips its
+            // IPC while the window is hidden, and refreshes once on re-show.
+            gatedInterval(pollProactiveInsights, 120_000);
         }, 90_000);
         // v1.7.44 — Wire up the idle detector FIRST so the `.app-hidden`
         // and `.lucy-quiescent` classes start tracking the window/user
