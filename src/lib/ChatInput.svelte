@@ -5,7 +5,7 @@
     // .heavy-nudge*, .cost-predict*, .chat-search-bar/.cs-*). Same
     // duplicate-selector trap rationale as tab-strip (v1.4.20).
     import '$lib/styles/composer.css';
-    import { createEventDispatcher, onMount, tick } from 'svelte';
+    import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
     import Paperclip from '@tabler/icons-svelte/icons/paperclip';
 
     import Mic from '@tabler/icons-svelte/icons/microphone';
@@ -100,7 +100,7 @@
     // so a new user finds Ctrl+P / Tab / Esc without having to read docs.
     let _ifocused = false;
     $: _showShortcutHints = !_ifocused
-        && !tab?.inputValue
+        && !_draft
         && !tab?.pendingMessage
         && !tab?.isProcessing;
 
@@ -115,8 +115,8 @@
     // the $ + time of a bad run.
     export let smartRoutingEnabled: boolean = false;
     $: _isFastModel = !!tab?.selectedModel && /^(gemini.*flash|gemini-3.*lite|claude-haiku|local-)/i.test(tab.selectedModel);
-    $: _heavyReason = (!smartRoutingEnabled && _isFastModel && tab?.inputValue)
-        ? detectHeavyPrompt(String(tab.inputValue), Math.ceil(String(tab.inputValue).length / 3.6))
+    $: _heavyReason = (!smartRoutingEnabled && _isFastModel && _draft)
+        ? detectHeavyPrompt(_draft, Math.ceil(_draft.length / 3.6))
         : null;
     let _nudgeDismissed = false;
     function _dispatchUpgrade() {
@@ -138,6 +138,43 @@
         _textareaEl.style.overflowY = sh > CAP_PX ? 'auto' : 'hidden';
     }
 
+    // ── v1.7.178 — Local draft decoupled from the tabs array ──────────────
+    // PROBLEM: `bind:value={tab.inputValue}` on a member of the `{#each tabs}`
+    // iteration object makes Svelte invalidate the WHOLE `tabs` array on every
+    // keystroke (~40×/s while typing — see the cost-predictor memo in
+    // +page.svelte). That forces a full reactive re-eval + template re-diff of
+    // the ~10k-line +page.svelte per keystroke, which starves paint: the typed
+    // text only becomes visible once you STOP typing (the reported bug).
+    //
+    // FIX: the textarea binds to a LOCAL `_draft` — instant native paint that a
+    // parent re-render can never reset. `_draft` is mirrored to `tab.inputValue`
+    // on a trailing debounce (so the cost preview still updates) and flushed
+    // SYNCHRONOUSLY before send / on blur, so the parent always has the final
+    // value when it acts on it.
+    let _draft: string = (tab?.inputValue ?? '');
+    let _lastSync: string = _draft;
+    let _pushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function _flushDraft(): void {
+        if (_pushTimer !== null) { clearTimeout(_pushTimer); _pushTimer = null; }
+        if (tab && (tab.inputValue ?? '') !== _draft) {
+            tab.inputValue = _draft;   // ONE invalidation, not one per keystroke
+            _lastSync = _draft;
+        }
+    }
+    function _schedulePush(): void {
+        if (_pushTimer !== null) clearTimeout(_pushTimer);
+        _pushTimer = setTimeout(_flushDraft, 120);
+    }
+    // Pull EXTERNAL changes (slash insert, clear-session, voice, tab restore)
+    // into the local draft. Our own debounced writes set _lastSync first so
+    // they don't bounce back through here.
+    $: if (tab && (tab.inputValue ?? '') !== _lastSync) {
+        _draft = (tab.inputValue ?? '');
+        _lastSync = _draft;
+    }
+    onDestroy(() => { if (_pushTimer !== null) clearTimeout(_pushTimer); });
+
     // ── Reactive on tab.inputValue (with cached-last-value guard) ──
     // Svelte 4 compiles `$:` reactives by tracking ALL identifiers read.
     // `tab.inputValue` makes `tab` a dep, and the parent does
@@ -155,7 +192,7 @@
     let _lastInputValueSeen = '';
     $: {
         if (_textareaEl && tab) {
-            const cur = typeof tab.inputValue === 'string' ? tab.inputValue : '';
+            const cur = _draft;
             if (cur !== _lastInputValueSeen) {
                 _lastInputValueSeen = cur;
                 tick().then(autoResize);
@@ -183,7 +220,8 @@
         const line = _textareaEl.value;
         const pos  = _textareaEl.selectionStart ?? 0;
         const { line: newLine, cursor } = applyFlagCompletion(line, pos, flag);
-        tab.inputValue = newLine;
+        _draft = newLine;
+        _flushDraft();
         // Defer caret update until Svelte applies the bind:value
         requestAnimationFrame(() => {
             if (_textareaEl) {
@@ -323,7 +361,7 @@
          grid background on focus via CSS; the `class:islash` toggle below
          tints the prompt amber when the buffer starts with `/` to hint at
          slash-command mode. Purely cosmetic — no behavioural change. -->
-    <div class="igrp" class:islash={(tab.inputValue || '').trimStart().startsWith('/')} style="position:relative;">
+    <div class="igrp" class:islash={_draft.trimStart().startsWith('/')} style="position:relative;">
         <span class="iprompt" aria-hidden="true">λ</span>
         <!-- v1.7.91 — Slash typeahead overlay. Bound via _slashTypeaheadEl
              so on:keydown below can route arrows/Enter/Tab/Esc to it
@@ -332,11 +370,12 @@
              re-focuses the textarea. -->
         <SlashTypeahead
             bind:this={_slashTypeaheadEl}
-            value={tab.inputValue || ''}
+            value={_draft}
             focused={_ifocused}
             {isEN}
             on:select={(e) => {
-                tab.inputValue = e.detail.cmd + ' ';
+                _draft = e.detail.cmd + ' ';
+                _flushDraft();
                 tick().then(() => {
                     autoResize();
                     if (_textareaEl) {
@@ -354,19 +393,22 @@
                 : tab.isProcessing
                     ? (isEN ? 'Type here — will send when Lucy finishes…' : 'Escribe aquí — se enviará cuando Lucy termine…')
                     : cmdPlaceholder}
-            bind:value={tab.inputValue}
+            bind:value={_draft}
             bind:this={_textareaEl}
             on:focus={() => _ifocused = true}
-            on:input={(e) => { autoResize(); refreshFlagSuggestions(); dispatch('inputchange', { event: e }); }}
+            on:input={(e) => { autoResize(); refreshFlagSuggestions(); _schedulePush(); dispatch('inputchange', { event: e }); }}
             on:paste={() => tick().then(autoResize)}
             on:cut={() => tick().then(autoResize)}
             on:keydown={(e) => {
                 // v1.7.91 — slash typeahead first claim on arrow/Enter/Tab/Esc.
                 if (_slashTypeaheadEl && _slashTypeaheadEl.handleKey(e)) return;
                 if (handleSuggestionKey(e)) return;
+                // v1.7.178 — the parent's onKey reads tab.inputValue to send on
+                // Enter, so commit the debounced draft before it acts.
+                if (e.key === 'Enter') _flushDraft();
                 dispatch('keydown', { event: e });
             }}
-            on:blur={() => { _ifocused = false; setTimeout(() => { _flagSuggestions = []; }, 120); }}
+            on:blur={() => { _ifocused = false; _flushDraft(); setTimeout(() => { _flagSuggestions = []; }, 120); }}
             disabled={!!tab.pendingMessage}></textarea>
 
         <!-- v1.5.5 — Empty-state shortcut hints row hidden per user
@@ -521,8 +563,8 @@
             </svg>
         </button>
     {:else}
-        <button class="sbtn" on:click={() => dispatch('send')}
-            disabled={!tab.inputValue?.trim() && !tab.attachedFiles?.length}>▶</button>
+        <button class="sbtn" on:click={() => { _flushDraft(); dispatch('send'); }}
+            disabled={!_draft.trim() && !tab.attachedFiles?.length}>▶</button>
     {/if}
 </div>
 

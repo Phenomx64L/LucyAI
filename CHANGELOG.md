@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.178] — 2026-06-14
+
+### Fix — Composer text no longer vanishes while typing (paint-starvation)
+
+Reported bug: typing in the chat box made the text disappear and only reappear
+once you stopped. **Root cause:** the textarea used `bind:value={tab.inputValue}`
+where `tab` is an iteration member of `{#each tabs as tab (tab.id)}`. In Svelte
+that writes back through the array, so **every keystroke invalidated the whole
+`tabs` array** — forcing a full reactive re-evaluation + template re-diff of the
+~10 000-line `+page.svelte` on each character (~40×/s, as the cost-predictor memo
+note already observed). That starves the browser's paint, so the native textarea
+contents weren't repainted until the keystroke burst ended.
+
+**Fix (`ChatInput.svelte`):** the textarea now binds to a **local `_draft`** —
+instant native paint that a parent re-render can never reset. `_draft` is
+mirrored to `tab.inputValue` on a trailing 120 ms debounce (so the cost preview
+still updates) and **flushed synchronously** before send, on Enter, and on blur,
+so the parent always has the final value. Everything that needs the live value
+(slash typeahead, `/`-tint, heavy-prompt nudge, send-enabled, shortcut hints)
+reads `_draft`; external writes (slash insert, clear-session, voice, restore)
+are pulled back into `_draft` via a guarded reactive. svelte-check 0/0.
+
+**Note:** the NexShell input boxes (`directIn`, `lucyIn`, `interactiveInput`,
+`rdpResultIn`, `rdpAgentTask`) bind to `shells`-array members the same way, so
+they share this root cause — fixing them is a separate, careful pass (each has
+its own run/ask flow to preserve).
+
+---
+
 ## [1.7.177] — 2026-06-14
 
 ### Perf — Gate the last always-on poller + close the perf backlog
