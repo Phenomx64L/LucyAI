@@ -154,7 +154,7 @@ body[data-state="error"] .igrp {
     caret-color: var(--acc, #10b981);
     caret-shape: block;
 }
-.ibox::placeholder { color: #334155; }
+.ibox::placeholder { color: var(--txt3); }
 
 /* ── Right-side action cluster ───────────────────────────────────── */
 .iside {
@@ -169,7 +169,7 @@ body[data-state="error"] .igrp {
 .ia-btn {
     background: none;
     border: none;
-    color: #475569;
+    color: var(--txt3);
     cursor: pointer;
     padding: 5px 7px;
     border-radius: 6px;
@@ -205,7 +205,7 @@ body[data-state="error"] .igrp {
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    color: #475569;
+    color: var(--txt3);
     padding: 3px 8px;
     border: 1px solid var(--bdr);
     border-radius: 5px;
@@ -224,7 +224,7 @@ body[data-state="error"] .igrp {
 .mbdg option   { background: #131825; color: var(--txt); }
 .mbdg optgroup {
     background: #060a0f;
-    color: #475569;
+    color: var(--txt3);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: .3px;
@@ -242,7 +242,7 @@ body[data-state="error"] .igrp {
     width: auto;
     cursor: text;
 }
-.nvidia-custom-input::placeholder { color: #476; font-style: italic; }
+.nvidia-custom-input::placeholder { color: var(--txt3); font-style: italic; }
 .nvidia-custom-input:focus { color: var(--txt); }
 
 /* ── Ollama runtime status dot (next to model badge) ─────────────── */
@@ -395,7 +395,7 @@ body[data-state="error"] .igrp {
 .chip:disabled { opacity: .3; cursor: not-allowed; }
 .chip-user        { background: rgba(59, 130, 246, .06); border-color: rgba(59, 130, 246, .15); color: #4a7aaa; }
 .chip-user:hover  { background: rgba(59, 130, 246, .12); }
-.chip-add         { background: transparent; border-color: rgba(255, 255, 255, .08); color: #475569; padding: 3px 8px; }
+.chip-add         { background: transparent; border-color: rgba(255, 255, 255, .08); color: var(--txt3); padding: 3px 8px; }
 .chip-add:hover   { border-color: var(--acc-b); color: var(--acc); }
 .chip-wrap {
     position: relative;

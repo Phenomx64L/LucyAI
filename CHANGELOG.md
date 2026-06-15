@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.172] — 2026-06-14
+
+### Fix — Composer: finish the P0 contrast sweep (design-pass #1)
+
+A dedicated design pass over the chat composer — the highest-traffic surface —
+found it already well-built (state-reactive border + glow, prompt glyph,
+focus dot-grid, block caret, full light-theme overrides), so no redesign was
+warranted. What it *did* surface was **residual P0 contrast** that the v1.7.169
+sweep missed in `composer.css`: the textarea placeholder (`#334155`, ~1.8:1),
+the action-button / model-badge / add-chip muted text (`#475569`, ~2.5:1), and
+the NVIDIA-model placeholder (`#476`) were all hardcoded below WCAG AA. Routed
+them through `var(--txt3)` (now AA-compliant and theme-aware), matching the
+rest of the app.
+
+---
+
 ## [1.7.171] — 2026-06-14
 
 ### Polish — Status bar emoji → tinted Tabler icons (UI/UX audit P2)
