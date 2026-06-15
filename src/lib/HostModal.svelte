@@ -518,7 +518,7 @@
   .hm-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
   .hm-full  { grid-column: 1 / -1; }
   .hm-label { color: var(--txt2, #7a8a9a); font-size: 12px; font-weight: 600; display: block; margin-bottom: 5px; }
-  .hm-sub   { color: #475569; font-weight: 400; }
+  .hm-sub   { color: var(--txt3); font-weight: 400; }
   .hm-inp   {
     width: 100%; background: rgba(0,0,0,.3); border: 1px solid var(--bdr2, #222c3a);
     color: var(--txt, #dde3ea); padding: 8px 10px; border-radius: 6px;

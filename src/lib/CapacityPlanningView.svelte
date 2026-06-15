@@ -197,7 +197,7 @@
     .cp-range-btn.active{background:rgba(16,185,129,.10);border-color:rgba(16,185,129,.35);color:var(--acc);}
 
     .cp-error{padding:12px 16px;color:var(--red);font-size:12px;background:rgba(239,68,68,.06);border-bottom:1px solid var(--bdr);}
-    .cp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:#475569;gap:12px;text-align:center;font-size:13px;}
+    .cp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:var(--txt3);gap:12px;text-align:center;font-size:13px;}
 
     .cp-body{flex:1;overflow-y:auto;padding:16px;}
 
@@ -205,28 +205,28 @@
     .cp-proj-card{flex:1;min-width:160px;background:rgba(0,0,0,.2);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:4px;}
     .cp-proj-card.critical{border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.06);}
     .cp-proj-card.warning{border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.04);}
-    .cp-proj-label{font-size:9.5px;font-weight:700;letter-spacing:1px;color:#475569;text-transform:uppercase;}
+    .cp-proj-label{font-size:9.5px;font-weight:700;letter-spacing:1px;color:var(--txt3);text-transform:uppercase;}
     .cp-proj-value{font-size:18px;font-weight:800;color:var(--txt);font-family:var(--mono);}
-    .cp-proj-sub{font-size:10px;color:#475569;font-family:var(--mono);}
+    .cp-proj-sub{font-size:10px;color:var(--txt3);font-family:var(--mono);}
     .cp-proj-card.critical .cp-proj-value{color:var(--red);}
     .cp-proj-card.warning .cp-proj-value{color:var(--amber);}
 
     .cp-current{display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;}
     .cp-metric{flex:1;min-width:120px;background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;}
-    .cp-met-label{font-size:10px;font-weight:700;letter-spacing:.8px;color:#475569;text-transform:uppercase;display:block;margin-bottom:4px;}
+    .cp-met-label{font-size:10px;font-weight:700;letter-spacing:.8px;color:var(--txt3);text-transform:uppercase;display:block;margin-bottom:4px;}
     .cp-met-val{font-size:22px;font-weight:800;font-family:var(--mono);display:block;}
-    .cp-met-avg{font-size:10px;color:#475569;font-family:var(--mono);display:block;margin-top:2px;}
+    .cp-met-avg{font-size:10px;color:var(--txt3);font-family:var(--mono);display:block;margin-top:2px;}
 
     .cp-charts{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
     .cp-chart-row{display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.12);border:1px solid var(--bdr);border-radius:6px;padding:6px 12px;}
-    .cp-chart-label{font-size:10px;font-weight:700;letter-spacing:.5px;color:#475569;text-transform:uppercase;width:50px;flex-shrink:0;}
+    .cp-chart-label{font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--txt3);text-transform:uppercase;width:50px;flex-shrink:0;}
     .cp-spark{flex:1;height:40px;}
 
     .cp-table-wrap{background:rgba(0,0,0,.12);border:1px solid var(--bdr);border-radius:8px;overflow:hidden;}
-    .cp-table-title{font-size:11px;font-weight:700;letter-spacing:.5px;color:#475569;text-transform:uppercase;padding:10px 14px;border-bottom:1px solid var(--bdr);}
+    .cp-table-title{font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--txt3);text-transform:uppercase;padding:10px 14px;border-bottom:1px solid var(--bdr);}
     .cp-table-scroll{max-height:300px;overflow-y:auto;}
     .cp-table{width:100%;border-collapse:collapse;font-size:11px;font-family:var(--mono);}
-    .cp-table th{text-align:left;padding:6px 10px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--bdr);position:sticky;top:0;background:rgba(2,4,8,.8);}
+    .cp-table th{text-align:left;padding:6px 10px;font-size:10px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--bdr);position:sticky;top:0;background:rgba(2,4,8,.8);}
     .cp-table td{padding:5px 10px;border-bottom:1px solid rgba(26,32,48,.2);color:var(--txt2);}
-    .cp-td-ts{font-size:10px;color:#475569;}
+    .cp-td-ts{font-size:10px;color:var(--txt3);}
 </style>

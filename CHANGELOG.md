@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.169] — 2026-06-14
+
+### Fix — Accessibility: legible muted text + keyboard focus rings (UI/UX audit P0)
+
+First fix lot from a UI/UX audit pass (criteria modelled on the
+`ui-ux-pro-max` design skill: contrast, interaction-state completeness,
+token consistency). All P0 — real defects, not taste:
+
+- **Muted text was below WCAG AA.** The tertiary-text token `--txt3` was
+  `#475569` (~2.5:1 on `--bg`), and ~80 places hardcoded `#334155` (~1.8:1)
+  or even `#1e293b` (the **border** colour, ~1.3:1 — effectively invisible,
+  e.g. NexShell command timestamps `.rsl-time`). Bumped `--txt3` to `#7c8aa3`
+  (~5.5:1, dark) / `#64748b` (light), and swept the hardcoded dark-mode muted
+  text to `var(--txt3)` across chat (`.sys-msg`/`.msg-time`/`.thinking-label`),
+  NexShell, the dashboard, and the data views (Inventory, Compliance, Logs,
+  Audit, Capacity, Command Palette, Host modal). `:root.light` overrides were
+  left untouched (dark-on-light there already contrasts).
+- **Same hardcoded greys also broke light mode** — being literal hex, they
+  never flipped with the theme; routing them through `--txt3` fixes both
+  themes at once.
+- **Keyboard focus rings for form controls.** The v1.7.164 global
+  `:focus-visible` ring deliberately skipped inputs, but several
+  (NexShell direct/Lucy boxes, search fields) only changed `border-color` on
+  `:focus` — a near-invisible keyboard state. Added a `:focus-visible` outline
+  for `input`/`textarea`/`select`, excluding `.modal-card` descendants (the
+  renovated modals already box-shadow their inputs, so no double-ring).
+
+No behavioural changes; CSS/token only. svelte-check 0/0.
+
+---
+
 ## [1.7.168] — 2026-06-14
 
 ### Feature — Skills Manager (govern the loaded skill catalogue)

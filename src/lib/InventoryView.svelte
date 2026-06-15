@@ -550,7 +550,7 @@
     {/if}
   </div>
   {:else if !scanning}
-  <div class="view-loading"><span style="color:#334155">{isEN ? 'Select a host and click Scan' : 'Selecciona un host y haz clic en Escanear'}</span></div>
+  <div class="view-loading"><span style="color:var(--txt3)">{isEN ? 'Select a host and click Scan' : 'Selecciona un host y haz clic en Escanear'}</span></div>
   {:else}
   <div class="view-loading"><span style="color:var(--acc)">↻ {isEN ? 'Scanning...' : 'Escaneando...'}</span></div>
   {/if}
@@ -581,7 +581,7 @@
     .inv-scroll{flex:1;overflow-y:auto;padding:0 16px 16px;}
 
     .inv-table{width:100%;border-collapse:collapse;font-size:12px;}
-    .inv-table th{background:rgba(0,0,0,.15);color:#475569;padding:6px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;position:sticky;top:0;z-index:1;}
+    .inv-table th{background:rgba(0,0,0,.15);color:var(--txt3);padding:6px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;position:sticky;top:0;z-index:1;}
     .inv-table td{padding:5px 10px;border-bottom:1px solid rgba(26,32,48,.3);color:var(--txt2);}
     .inv-table tr:hover td{background:rgba(16,185,129,.02);}
     .mono{font-family:var(--mono);font-size:11px;}
@@ -591,7 +591,7 @@
     .badge.sev-high{background:rgba(245,158,11,.16);color:#f59e0b;border:1px solid rgba(245,158,11,.30);}
     .badge.sev-med {background:rgba(96,165,250,.14);color:#60a5fa;border:1px solid rgba(96,165,250,.25);}
     .badge.sev-low {background:rgba(148,163,184,.14);color:#94a3b8;}
-    .empty{text-align:center;color:#334155;padding:20px!important;font-style:italic;}
+    .empty{text-align:center;color:var(--txt3);padding:20px!important;font-style:italic;}
     .cve-meta{padding:4px 0 10px;font-size:10px;color:#64748b;letter-spacing:0.3px;}
     /* Sprint B #2 — Drift visualization */
     .drift-meta{padding:6px 10px 10px;font-size:11px;color:var(--txt2);display:flex;gap:6px;align-items:center;flex-wrap:wrap;}

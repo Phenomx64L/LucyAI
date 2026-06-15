@@ -1105,7 +1105,7 @@
     {/each}
   </div>
   {:else}
-    <div class="view-loading"><span style="color:#334155">{isEN ? 'Select a host to view metrics' : 'Selecciona un host para ver métricas'}</span></div>
+    <div class="view-loading"><span style="color:var(--txt3)">{isEN ? 'Select a host to view metrics' : 'Selecciona un host para ver métricas'}</span></div>
   {/if}
 </div>
 
@@ -1120,7 +1120,7 @@
     .view-btn:hover{background:var(--bdr2);color:var(--txt);}
     .view-btn:disabled{opacity:.35;cursor:not-allowed;}
     .view-error{margin:12px 16px;padding:10px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px;font-size:12px;color:var(--red);}
-    .view-loading{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:#334155;}
+    .view-loading{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:var(--txt3);}
 
     /* ── Dashboard auto-refresh badge ────────────── */
     .dash-auto-badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--acc);background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:2px 8px;white-space:nowrap;}
@@ -1153,7 +1153,7 @@
     /* D2/D4/D1 — Coverage cards (Page file / Temperatures / Network) */
     .dc-hint {
         display:inline-block;width:14px;height:14px;line-height:14px;
-        text-align:center;font-size:10px;color:#475569;
+        text-align:center;font-size:10px;color:var(--txt3);
         border:1px solid #2a3a4a;border-radius:50%;
         cursor:help;margin-left:4px;vertical-align:middle;
     }
@@ -1179,7 +1179,7 @@
     .dash-section[draggable="true"]:active{box-shadow:0 6px 20px -6px rgba(16,185,129,.30);}
     .ds-title{font-size:11px;color:#7a9ab5;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px;}
     .ds-drag-handle{
-        color:#475569;cursor:grab;user-select:none;
+        color:var(--txt3);cursor:grab;user-select:none;
         font-size:14px;letter-spacing:-2px;
         opacity:0.5;transition:opacity .12s, color .12s;
     }
@@ -1188,7 +1188,7 @@
     .ds-title-text{flex:1;}
     .ds-hide-btn{
         background:transparent;border:0;padding:0;margin-left:auto;
-        color:#475569;font-size:13px;cursor:pointer;
+        color:var(--txt3);font-size:13px;cursor:pointer;
         opacity:0.4;transition:opacity .12s, color .12s;
     }
     .ds-hide-btn:hover{opacity:1;color:var(--amber, #f59e0b);}
@@ -1258,7 +1258,7 @@
     /* Sprint C D14 — Threshold editor button + modal */
     .dc-thr-btn {
         background: transparent; border: 0; padding: 0;
-        color: #475569; font-size: 11px; cursor: pointer;
+        color: var(--txt3); font-size: 11px; cursor: pointer;
         margin-left: 4px; opacity: 0.6; transition: opacity .12s, color .12s;
     }
     .dc-thr-btn:hover { opacity: 1; color: var(--acc, #10b981); }

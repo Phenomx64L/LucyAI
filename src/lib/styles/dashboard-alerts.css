@@ -98,20 +98,20 @@
 .dash-auto-badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--acc);background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:2px 8px;white-space:nowrap;}
 .dash-pulse{width:6px;height:6px;border-radius:50%;background:var(--acc);animation:dash-pulse-anim 2s ease-in-out infinite;}
 @keyframes dash-pulse-anim{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(.7);}}
-.dash-last-update{font-size:10px;color:#475569;white-space:nowrap;}
+.dash-last-update{font-size:10px;color:var(--txt3);white-space:nowrap;}
 
 /* Main dashboard layout */
 .dash-scroll{flex:1;overflow-y:auto;padding:16px;}
 .dash-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;}
 .dash-card{background:rgba(0,0,0,.2);border:1px solid var(--bdr);border-radius:10px;padding:14px 16px;}
-.dc-label{font-size:10px;color:#334155;letter-spacing:.5px;text-transform:uppercase;font-weight:700;margin-bottom:6px;}
+.dc-label{font-size:10px;color:var(--txt3);letter-spacing:.5px;text-transform:uppercase;font-weight:700;margin-bottom:6px;}
 .dc-value{font-size:28px;font-weight:400;margin-bottom:6px;line-height:1;}
 .dc-bar{height:3px;background:var(--bdr);border-radius:2px;margin-bottom:6px;overflow:hidden;}
 .dc-bar-fill{height:100%;border-radius:2px;transition:width .8s cubic-bezier(.4,0,.2,1);}
-.dc-sub{font-size:11px;color:#475569;margin-top:2px;}
+.dc-sub{font-size:11px;color:var(--txt3);margin-top:2px;}
 .dc-sparkline{opacity:.85;flex-shrink:0;align-self:flex-end;margin-bottom:2px;}
 .dash-section{background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;margin-bottom:12px;}
-.ds-title{font-size:11px;color:#475569;font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;}
+.ds-title{font-size:11px;color:var(--txt3);font-weight:700;letter-spacing:.3px;text-transform:uppercase;margin-bottom:10px;}
 
 /* CPU cores grid */
 .core-grid{display:flex;gap:6px;flex-wrap:wrap;}
@@ -128,11 +128,11 @@
 .disk-bar-wrap{height:6px;background:var(--bdr);border-radius:3px;overflow:hidden;}
 .disk-bar-fill{height:100%;border-radius:3px;transition:width .4s ease;}
 .disk-pct{font-size:11px;font-weight:600;text-align:right;}
-.disk-size{font-size:10px;color:#334155;font-family:var(--mono);}
+.disk-size{font-size:10px;color:var(--txt3);font-family:var(--mono);}
 
 /* Process table */
 .proc-table{width:100%;border-collapse:collapse;font-size:12px;}
-.proc-table th{background:var(--bg4);color:#475569;padding:5px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
+.proc-table th{background:var(--bg4);color:var(--txt3);padding:5px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
 .proc-table td{padding:5px 10px;border-bottom:1px solid rgba(26,32,48,.4);}
 .proc-table tr:last-child td{border-bottom:none;}
 

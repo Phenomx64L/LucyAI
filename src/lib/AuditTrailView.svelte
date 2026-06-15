@@ -252,7 +252,7 @@
     </div>
     {/each}
     {#if !entries.length}
-    <div style="text-align:center;color:#334155;padding:40px;font-size:13px;">
+    <div style="text-align:center;color:var(--txt3);padding:40px;font-size:13px;">
       {isEN ? 'No audit entries yet. Commands executed in NexShell and Terminal will appear here.' : 'Sin entradas. Los comandos ejecutados en NexShell y Terminal aparecerán aquí.'}
     </div>
     {/if}
@@ -308,11 +308,11 @@
     .at-entry:hover{border-color:rgba(255,255,255,.06);}
     .at-entry.fail{border-left:2px solid var(--red);background:rgba(255,68,68,.02);}
     .at-entry-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;}
-    .at-ts{font-size:10px;color:#475569;font-family:var(--mono);}
+    .at-ts{font-size:10px;color:var(--txt3);font-family:var(--mono);}
     .at-host{font-size:10px;color:var(--blue);font-weight:600;}
     .at-source{font-size:10px;color:#4a5a6a;}
     .at-exit{font-size:10px;font-weight:700;font-family:var(--mono);}
-    .at-dur{font-size:10px;color:#475569;font-family:var(--mono);}
+    .at-dur{font-size:10px;color:var(--txt3);font-family:var(--mono);}
     .at-cmd{font-size:12px;color:var(--txt);font-family:var(--mono);word-break:break-all;line-height:1.5;}
     .at-output{margin-top:4px;}
     .at-output summary{font-size:10px;color:#4a5a6a;cursor:pointer;}

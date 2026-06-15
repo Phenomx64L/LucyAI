@@ -65,7 +65,7 @@
 
 /* ── LIVE TRACE floating panel + FAB toggle ── */
 /* ── VARIABLES ─────────────────────────────── */
-:root{--bg:#0f111a;--bg2:#161822;--bg3:#1e2030;--bg4:#262838;--acc:#10b981;--acc-d:rgba(16,185,129,0.08);--acc-b:rgba(16,185,129,0.18);--txt:#e2e8f0;--txt1:#e2e8f0;--txt2:#94a3b8;--txt3:#475569;--bdr:#1e293b;--bdr2:#334155;--blue:#60a5fa;--purple:#a78bfa;--amber:#f59e0b;--red:#ef4444;--mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
+:root{--bg:#0f111a;--bg2:#161822;--bg3:#1e2030;--bg4:#262838;--acc:#10b981;--acc-d:rgba(16,185,129,0.08);--acc-b:rgba(16,185,129,0.18);--txt:#e2e8f0;--txt1:#e2e8f0;--txt2:#94a3b8;--txt3:#7c8aa3;--bdr:#1e293b;--bdr2:#334155;--blue:#60a5fa;--purple:#a78bfa;--amber:#f59e0b;--red:#ef4444;--mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
   /* ── Z-INDEX LAYERS (single source of truth) ──────────────────────────
      900  rshell side panel     1200 tab-picker dropdown
     2000  primary modals        3000 command palette
@@ -599,7 +599,7 @@ body.density-compact .chat{gap:2px !important;}
 .cancel-exec-btn{flex-shrink:0;padding:2px 9px;font-size:11px;font-weight:600;font-family:inherit;background:rgba(255,68,68,.08);color:#f87171;border:1px solid rgba(255,68,68,.2);border-radius:4px;cursor:pointer;transition:.15s;margin-left:8px;}
 .cancel-exec-btn:hover{background:rgba(255,68,68,.18);border-color:rgba(255,68,68,.4);}
 /* ── U4: truncation hint ── */
-.trunc-hint{font-style:italic;color:#475569;font-size:10px;}
+.trunc-hint{font-style:italic;color:var(--txt3);font-size:10px;}
 /* ── U5: security block banner ── */
 /* v1.4.23 — .sec-banner* family moved to src/lib/styles/composer.css. */
 /* ── WORKSPACES ────────────────────────────── */
@@ -609,7 +609,7 @@ body.density-compact .chat{gap:2px !important;}
 .empty-header{text-align:center;margin-bottom:24px;}
 .empty-ico{font-size:36px;color:var(--acc);opacity:.4;margin-bottom:10px;}
 .empty-title{color:#94a3b8;font-size:22px;font-weight:400;margin:0 0 8px;}
-.empty-subtitle{color:#475569;font-size:13px;max-width:540px;margin:0 auto;line-height:1.6;}
+.empty-subtitle{color:var(--txt3);font-size:13px;max-width:540px;margin:0 auto;line-height:1.6;}
 /* Grid de secciones 2×2 */
 .empty-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;width:100%;max-width:1000px;margin-bottom:14px;}
 .empty-row2{width:100%;max-width:1000px;margin-bottom:14px;}
@@ -671,8 +671,8 @@ body.density-compact .chat{gap:2px !important;}
 .tip-label{font-size:11px;font-weight:700;color:#0d9668;display:block;margin-bottom:4px;letter-spacing:.3px;}
 /* .empty-tips b — removed (unused) */
 /* Footer */
-.empty-credit{font-size:11px;color:#334155;font-style:italic;text-align:center;line-height:1.7;}
-.empty-credit b{color:#475569;font-style:normal;}
+.empty-credit{font-size:11px;color:var(--txt3);font-style:italic;text-align:center;line-height:1.7;}
+.empty-credit b{color:var(--txt2);font-style:normal;}
 /* ── Animaciones de entrada escalonadas — welcome screen ─────────── */
 @keyframes wCard{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
 .empty-header{animation:wCard .38s ease both;}
@@ -824,7 +824,7 @@ body.density-compact .chat{gap:2px !important;}
     letter-spacing:.3px;
 }
 
-.wb-time{color:#475569;font-size:10px;flex-shrink:0;font-variant-numeric:tabular-nums;}
+.wb-time{color:var(--txt3);font-size:10px;flex-shrink:0;font-variant-numeric:tabular-nums;}
 
 /* v1.7.60 — Exit-code badge. Replaces the old single-character ✓/✗ with a
    `exit 0` / `exit ≠0` pill. Sysadmins read return codes constantly; this
@@ -849,8 +849,8 @@ body.density-compact .chat{gap:2px !important;}
     border:1px solid rgba(239,68,68,.35);
 }
 
-.wb-lbl{color:#475569;font-size:10px;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.wb-toggle{background:none;border:none;color:#475569;cursor:pointer;font-size:10px;padding:0 2px;line-height:1;flex-shrink:0;transition:.1s;}
+.wb-lbl{color:var(--txt3);font-size:10px;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wb-toggle{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:10px;padding:0 2px;line-height:1;flex-shrink:0;transition:.1s;}
 .wb-toggle:hover{color:var(--txt2);}
 .wb-out{background:#0a0c15;padding:8px 10px;font-size:11px;color:#94a3b8;overflow-x:auto;margin:0;border-top:1px solid rgba(255,255,255,.04);max-height:300px;overflow-y:auto;transition:max-height .3s ease,padding .2s ease,opacity .2s ease;}
 .wb-empty{font-style:italic;color:#4ade80;opacity:0.75;font-size:10.5px;letter-spacing:0.2px;}
@@ -1422,7 +1422,7 @@ body.density-compact .chat{gap:2px !important;}
 .view-btn:hover{background:var(--bdr2);color:var(--txt);}
 .view-btn:disabled{opacity:.35;cursor:not-allowed;}
 .view-error{margin:12px 16px;padding:10px 14px;background:rgba(255,68,68,.08);border:1px solid rgba(255,68,68,.2);border-radius:6px;font-size:12px;color:var(--red);}
-.view-loading{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:#334155;}
+.view-loading{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:var(--txt3);}
 .vl-spinner{width:20px;height:20px;border:2px solid #1e293b;border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite;}
 
 /* ── DASHBOARD ──────────────────────────────
@@ -1459,7 +1459,7 @@ body.density-compact .chat{gap:2px !important;}
 .rb-run-done{background:rgba(16,185,129,.05);border-color:rgba(16,185,129,.15);}
 .rb-run-error{background:rgba(255,68,68,.06);border-color:rgba(255,68,68,.18);}
 .rb-run-ico{width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;font-weight:700;}
-.rb-run-pending .rb-run-ico{color:#475569;}
+.rb-run-pending .rb-run-ico{color:var(--txt3);}
 .rb-run-running .rb-run-ico{color:var(--amber);}
 .rb-run-done .rb-run-ico{color:var(--acc);}
 .rb-run-error .rb-run-ico{color:var(--red);}
@@ -1500,7 +1500,7 @@ body.density-compact .chat{gap:2px !important;}
 /* ── UX: LIGHT THEME ────────────────────────────── */
 :root.light{
     --bg:#f0f4f8;--bg2:#e8edf3;--bg3:#dde3ea;--bg4:#c8d4de;
-    --txt:#1a2234;--txt1:#1a2234;--txt2:#4a5568;--txt3:#94a3b8;
+    --txt:#1a2234;--txt1:#1a2234;--txt2:#4a5568;--txt3:#64748b;
     --bdr:#c0ccd8;--bdr2:#a8b8c8;
     --acc:#00a86b;--blue:#2563eb;--purple:#7c3aed;--red:#dc2626;--amber:#d97706;
     --acc-d:rgba(0,168,107,0.1);--acc-b:rgba(0,168,107,0.2);
@@ -2173,12 +2173,23 @@ button:focus-visible,
 a:focus-visible,
 [role="button"]:focus-visible,
 [tabindex="0"]:focus-visible {
-    /* Inputs/textareas/selects are intentionally excluded — they manage their
-       own focus rings (box-shadow) in the renovated modals; adding an outline
-       there would double-ring them. */
     outline: 2px solid color-mix(in srgb, var(--acc, #10b981) 65%, transparent);
     outline-offset: 2px;
 }
+/* v1.7.169 — keyboard focus ring for form controls too. Several inputs
+   (NexShell direct/Lucy boxes, search fields) only changed border-color on
+   :focus, leaving keyboard users with a near-invisible focus state. The
+   renovated modals already box-shadow their inputs, so we exclude
+   `.modal-card` descendants to avoid double-ringing them. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--acc, #10b981) 55%, transparent);
+    outline-offset: 1px;
+}
+.modal-card input:focus-visible,
+.modal-card textarea:focus-visible,
+.modal-card select:focus-visible { outline: none; }
 button:active:not(:disabled),
 [role="button"]:active:not([aria-disabled="true"]) {
     filter: brightness(.9);

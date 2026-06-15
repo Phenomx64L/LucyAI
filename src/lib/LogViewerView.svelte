@@ -230,12 +230,12 @@
         {isEN ? 'Hide Analysis' : 'Ocultar'}
     </button>
     {/if}
-    <span style="font-size:10px;color:#334155;margin-left:auto;white-space:nowrap;">{filteredLog.length} {isEN ? 'lines' : 'líneas'}{logFilter?` / ${logLines.length} total`:''}</span>
+    <span style="font-size:10px;color:var(--txt3);margin-left:auto;white-space:nowrap;">{filteredLog.length} {isEN ? 'lines' : 'líneas'}{logFilter?` / ${logLines.length} total`:''}</span>
   </div>
   {#if logError}<div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {logError}</div>{/if}
   <div class="log-lines" bind:this={logLinesEl}>
     {#if !logLines.length && !logLoading}
-      <div style="padding:30px;text-align:center;color:#334155;font-style:italic;font-size:12px;">
+      <div style="padding:30px;text-align:center;color:var(--txt3);font-style:italic;font-size:12px;">
         {logPath.trim() ? (isEN ? 'Click ▶ Open to tail log' : 'Haz clic en ▶ Abrir para cargar el log') : (isEN ? 'Enter log file path and click ▶ Open' : 'Introduce la ruta del archivo de log y pulsa ▶ Abrir')}
       </div>
     {:else}
@@ -245,7 +245,7 @@
         <span class="log-txt">{line}</span>
       </div>
       {/each}
-      {#if logLoading}<div class="log-line" style="color:#334155;font-style:italic;">{isEN ? 'Updating...' : 'Actualizando...'}</div>{/if}
+      {#if logLoading}<div class="log-line" style="color:var(--txt3);font-style:italic;">{isEN ? 'Updating...' : 'Actualizando...'}</div>{/if}
     {/if}
   </div>
 
@@ -360,7 +360,7 @@
     /* ── Log Analysis Panel (P0 Feature 2) ── */
     .la-panel{border-top:1px solid var(--bdr);background:rgba(2,4,8,.5);max-height:45vh;overflow-y:auto;flex-shrink:0;}
     .la-hdr{display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:12px;font-weight:700;color:var(--txt);border-bottom:1px solid var(--bdr);position:sticky;top:0;background:rgba(2,4,8,.9);z-index:1;}
-    .la-meta{font-size:10px;font-weight:400;color:#475569;font-family:var(--mono);margin-left:auto;}
+    .la-meta{font-size:10px;font-weight:400;color:var(--txt3);font-family:var(--mono);margin-left:auto;}
     .la-close{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:3px;margin-left:4px;}
     .la-close:hover{background:rgba(255,255,255,.06);color:var(--txt);}
 
@@ -368,7 +368,7 @@
     .la-level-chip{font-size:11px;font-weight:600;font-family:var(--mono);padding:2px 8px;border-radius:4px;background:rgba(0,0,0,.2);border:1px solid var(--bdr);}
 
     .la-section{padding:8px 14px;border-bottom:1px solid rgba(26,32,48,.2);}
-    .la-section-title{font-size:9.5px;font-weight:700;letter-spacing:1px;color:#475569;text-transform:uppercase;margin-bottom:6px;}
+    .la-section-title{font-size:9.5px;font-weight:700;letter-spacing:1px;color:var(--txt3);text-transform:uppercase;margin-bottom:6px;}
     .la-sources{display:flex;gap:8px;flex-wrap:wrap;}
     .la-source{font-size:11px;color:var(--txt2);font-family:var(--mono);}
     .la-source strong{color:var(--acc);}
@@ -380,7 +380,7 @@
     .la-cluster-level{font-size:10px;font-weight:600;font-family:var(--mono);}
     .la-cluster-pattern{color:var(--txt2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .la-cluster-sample{font-size:10px;color:#6a7a8a;font-family:var(--mono);background:rgba(0,0,0,.2);padding:4px 6px;border-radius:3px;margin-top:4px;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow-y:auto;}
-    .la-cluster-meta{font-size:9px;color:#475569;font-family:var(--mono);margin-top:2px;}
+    .la-cluster-meta{font-size:9px;color:var(--txt3);font-family:var(--mono);margin-top:2px;}
 
     .la-timeline{display:flex;align-items:flex-end;gap:1px;height:32px;padding:2px 0;}
     .la-tl-bucket{flex:1;display:flex;align-items:flex-end;min-width:3px;}

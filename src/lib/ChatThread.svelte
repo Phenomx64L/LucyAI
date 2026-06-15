@@ -638,11 +638,11 @@
         border:1px solid color-mix(in srgb, var(--bdr, #1a2030) 80%, transparent);
     }
     @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
-    :global(.sys-msg){align-self:center;color:#334155;font-size:11px;font-style:italic;}
+    :global(.sys-msg){align-self:center;color:var(--txt3);font-size:11px;font-style:italic;}
     :global(.mn){font-size:11px;font-weight:700;margin-bottom:5px;}
     :global(.msg-user .mn){color:var(--blue);}
     :global(.msg-lucy .mn){color:var(--acc);}
-    :global(.msg-time){font-size:10px;color:#334155;text-align:right;margin-top:4px;}
+    :global(.msg-time){font-size:10px;color:var(--txt3);text-align:right;margin-top:4px;}
     :global(.msg-btn){display:inline-flex;align-items:center;gap:5px;margin-top:10px;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,170,0,.3);background:rgba(255,170,0,.1);color:var(--amber);transition:.15s;font-family:inherit;}
     :global(.msg-btn:hover){background:rgba(255,170,0,.2);}
     :global(.msg-btn:disabled){opacity:.4;cursor:not-allowed;}
@@ -790,7 +790,7 @@
     .thinking-dots span:nth-child(2){animation-delay:.2s;}
     .thinking-dots span:nth-child(3){animation-delay:.4s;}
     @keyframes td{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:1;transform:scale(1.3)}}
-    .thinking-label{font-size:11px;color:#334155;font-style:italic;}
+    .thinking-label{font-size:11px;color:var(--txt3);font-style:italic;}
     .msg-reasoning{align-self:flex-start;max-width:88%;margin:6px 0 4px;border-radius:8px;background:rgba(167,139,250,.04);border:1px solid rgba(167,139,250,.14);border-left:2px solid transparent;overflow:hidden;transition:background .25s,border-color .25s;}
     .msg-reasoning.reasoning-active{background:radial-gradient(circle at 0% 50%,rgba(167,139,250,.18) 0%,transparent 25%),linear-gradient(110deg,rgba(167,139,250,.06) 0%,rgba(99,102,241,.14) 50%,rgba(167,139,250,.06) 100%),rgba(99,102,241,.04);background-size:100% 100%,250% 100%,100% 100%;background-repeat:no-repeat;animation:reasonShimmer 3.2s linear infinite,reasonGlow 4s ease-in-out infinite;border-left-color:#a78bfa;box-shadow:0 0 0 1px rgba(167,139,250,.10),0 4px 18px -8px rgba(99,102,241,.35),inset 0 0 30px -10px rgba(167,139,250,.08);position:relative;}
     .msg-reasoning.reasoning-active::before{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(110deg,transparent 45%,rgba(167,139,250,.08) 50%,transparent 55%);background-size:250% 100%;animation:reasonScan 2.4s ease-in-out infinite;}

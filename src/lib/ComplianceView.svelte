@@ -237,11 +237,11 @@
     </div>
     {/each}
     {#if !filteredResults.length}
-    <div style="text-align:center;color:#334155;padding:30px;font-size:13px;">{isEN ? 'No results match filters' : 'Sin resultados con estos filtros'}</div>
+    <div style="text-align:center;color:var(--txt3);padding:30px;font-size:13px;">{isEN ? 'No results match filters' : 'Sin resultados con estos filtros'}</div>
     {/if}
   </div>
   {:else if !scanning}
-  <div class="view-loading"><span style="color:#334155">{isEN ? 'Select a host and run a CIS Benchmark scan' : 'Selecciona un host y ejecuta un escaneo CIS Benchmark'}</span></div>
+  <div class="view-loading"><span style="color:var(--txt3)">{isEN ? 'Select a host and run a CIS Benchmark scan' : 'Selecciona un host y ejecuta un escaneo CIS Benchmark'}</span></div>
   {:else}
   <div class="view-loading"><span style="color:var(--acc)">↻ {isEN ? 'Running compliance checks...' : 'Ejecutando checks de compliance...'}</span></div>
   {/if}
@@ -267,7 +267,7 @@
     .comp-stat{font-size:12px;color:var(--txt2);}
     .comp-stat.pass{color:var(--acc);}
     .comp-stat.fail{color:var(--red);}
-    .comp-stat.total{font-size:10px;color:#475569;}
+    .comp-stat.total{font-size:10px;color:var(--txt3);}
     .comp-filters{display:flex;gap:6px;margin-left:auto;}
 
     /* Results list */
@@ -282,7 +282,7 @@
     .comp-item-title{font-size:12px;color:var(--txt);display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
     .comp-id{font-size:10px;color:var(--blue);font-weight:700;font-family:var(--mono);}
     .comp-sev{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-left:auto;}
-    .comp-cat{font-size:9px;color:#475569;background:rgba(255,255,255,.04);padding:1px 5px;border-radius:4px;}
+    .comp-cat{font-size:9px;color:var(--txt3);background:rgba(255,255,255,.04);padding:1px 5px;border-radius:4px;}
     .comp-item-rem{font-size:11px;color:var(--amber);margin-top:4px;line-height:1.5;}
     .comp-item-detail{margin-top:4px;}
     .comp-item-detail summary{font-size:10px;color:#4a5a6a;cursor:pointer;}

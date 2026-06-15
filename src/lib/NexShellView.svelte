@@ -2870,12 +2870,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <!-- Guard evaluando / conectando — gap visual entre enviar y primer chunk -->
               <div class="rshell-line rsl-pending">
                 <span class="rsl-spin" style="opacity:0.5;">◌</span>
-                <span style="color:#334155;font-size:11px;">{isEN ? 'Checking…' : 'Verificando…'}</span>
+                <span style="color:var(--txt3);font-size:11px;">{isEN ? 'Checking…' : 'Verificando…'}</span>
               </div>
             {:else if s.lucyRunning}
               <div class="rshell-line rsl-running">
                 <span class="rsl-spin">◌</span>
-                <span style="color:#475569;font-size:11px;">Lucy procesando...</span>
+                <span style="color:var(--txt3);font-size:11px;">Lucy procesando...</span>
               </div>
             {/if}
           </div><!-- /rshell-out -->
@@ -3047,7 +3047,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         </div>
       </div>
       {:else}
-      <p style="color:#475569;font-size:12px;">No hay playbooks guardados para este host.</p>
+      <p style="color:var(--txt3);font-size:12px;">No hay playbooks guardados para este host.</p>
       {/each}
       <div style="border-top:1px solid var(--bdr);padding-top:12px;">
         <div style="margin-bottom:8px;">
@@ -3089,7 +3089,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         </button>
       </div>
 
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,0,0,.3);border-radius:6px;font-size:11px;color:#475569;">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,0,0,.3);border-radius:6px;font-size:11px;color:var(--txt3);">
         {#if ftDirection === 'upload'}
           <span style="color:var(--txt2);display:flex;align-items:center;gap:4px;"><Monitor size={12}/> Tu PC</span>
           <span style="flex:1;text-align:center;color:var(--acc);">──── <Upload size={11} style="display:inline;vertical-align:middle"/> ────→</span>
@@ -3614,7 +3614,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     @keyframes ns-dot-pulse{ 0%,100%{ text-shadow:0 0 0 transparent; opacity:.8 } 50%{ text-shadow:0 0 6px var(--acc); opacity:1 } }
     .ns-stab-dot.wait{ color:var(--amber); }
     .ns-stab-spin{ color:var(--amber);animation:spin 1s linear infinite; }
-    .ns-stab-close{ background:none;border:none;color:#475569;cursor:pointer;padding:0 2px;font-size:10px;line-height:1;border-radius:3px;transition:.15s; }
+    .ns-stab-close{ background:none;border:none;color:var(--txt3);cursor:pointer;padding:0 2px;font-size:10px;line-height:1;border-radius:3px;transition:.15s; }
     .ns-stab-close:hover{ background:rgba(255,107,107,.2);color:#ff6b6b; }
 
     /* Shell wrap inside workspace */
@@ -3766,7 +3766,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .rdp-clip-cmd{flex:1;font-family:var(--mono);font-size:11px;color:#c7d2fe;background:rgba(0,0,0,.3);border:1px solid rgba(99,102,241,.2);border-radius:4px;padding:3px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .rdp-clip-copy{background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);border-radius:5px;color:#818cf8;cursor:pointer;font-size:11px;font-weight:700;padding:3px 10px;white-space:nowrap;transition:.12s;flex-shrink:0;}
     .rdp-clip-copy:hover{background:rgba(99,102,241,.35);}
-    .rdp-clip-dismiss{background:none;border:none;color:#334155;cursor:pointer;font-size:13px;padding:0 3px;flex-shrink:0;}
+    .rdp-clip-dismiss{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:13px;padding:0 3px;flex-shrink:0;}
     .rdp-clip-dismiss:hover{color:var(--red);}
     /* Result paste input */
     .rdp-result-wrap{border-top:1px solid rgba(99,102,241,.2)!important;}
@@ -3774,14 +3774,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     /* ── Ctrl+F search bar ──────────────────────────────────────────────── */
     .ns-search-bar{display:flex;align-items:center;gap:6px;padding:5px 10px;background:#0a0d14;border-bottom:1px solid #1e3a5f;flex-shrink:0;}
-    .ns-search-ico{color:#334155;font-size:13px;flex-shrink:0;}
+    .ns-search-ico{color:var(--txt3);font-size:13px;flex-shrink:0;}
     .ns-search-input{flex:1;background:#070a10;border:1px solid #1e293b;border-radius:4px;color:var(--txt);font-size:12px;font-family:var(--mono);padding:3px 8px;outline:none;min-width:0;}
     .ns-search-input:focus{border-color:#1e4a7f;box-shadow:0 0 0 2px rgba(30,74,127,0.25);}
-    .ns-search-count{font-size:11px;color:#475569;white-space:nowrap;flex-shrink:0;font-family:var(--mono);}
+    .ns-search-count{font-size:11px;color:var(--txt3);white-space:nowrap;flex-shrink:0;font-family:var(--mono);}
     .ns-search-count.ns-search-zero{color:var(--red);}
-    .ns-search-nav{background:none;border:1px solid #1e293b;border-radius:3px;color:#475569;cursor:pointer;font-size:11px;padding:1px 6px;transition:.12s;}
+    .ns-search-nav{background:none;border:1px solid #1e293b;border-radius:3px;color:var(--txt3);cursor:pointer;font-size:11px;padding:1px 6px;transition:.12s;}
     .ns-search-nav:hover{background:rgba(255,255,255,0.04);color:var(--txt2);}
-    .ns-search-close{background:none;border:none;color:#334155;cursor:pointer;font-size:13px;padding:0 3px;transition:.12s;flex-shrink:0;}
+    .ns-search-close{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:13px;padding:0 3px;transition:.12s;flex-shrink:0;}
     .ns-search-close:hover{color:var(--red);}
     /* ── Match highlights ───────────────────────────────────────────────── */
     .rsl-search-match{background:rgba(251,191,36,0.07);border-left:2px solid rgba(251,191,36,0.4)!important;padding-left:6px;}
@@ -3803,7 +3803,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .rshell-hdr-left{display:flex;align-items:center;gap:12px;}
     .rshell-ico{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;flex-shrink:0;color:var(--acc);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.28);box-shadow:0 0 18px -4px rgba(16,185,129,.5);}
     .rshell-title{font-size:14px;font-weight:600;color:white;}
-    .rshell-sub{font-size:11px;color:#475569;font-family:var(--mono);margin-top:2px;display:flex;align-items:center;gap:8px;}
+    .rshell-sub{font-size:11px;color:var(--txt3);font-family:var(--mono);margin-top:2px;display:flex;align-items:center;gap:8px;}
     .rshell-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
     .rshell-badge.ok{color:#10b981;background:rgba(16,185,129,.1);}
     .rshell-badge.err{color:#ef4444;background:rgba(255,68,68,.1);}
@@ -3848,7 +3848,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .rsl-out-txt{color:#7a8a9a;flex:1;margin:0;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;}
     .rsl-err-txt{color:#ef4444;flex:1;white-space:pre-wrap;}
     .rsl-info-txt{color:#0f7b5a;flex:1;}
-    .rsl-running .rsl-spin{color:#475569;animation:spin .8s linear infinite;display:inline-block;}
+    .rsl-running .rsl-spin{color:var(--txt3);animation:spin .8s linear infinite;display:inline-block;}
 
     /* Streaming */
     .rsl-live-block{display:flex;flex-direction:column;gap:0;border-left:2px solid rgba(16,185,129,.25);margin:2px 0;background:rgba(16,185,129,.02);border-radius:0 4px 4px 0;}
@@ -4002,19 +4002,19 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     .rshell-input-wrap{padding:10px 14px;border-bottom:1px solid #0e1520;}
     .rs-direct{background:rgba(0,0,0,.3);}
     .rs-lucy{background:rgba(16,185,129,.02);}
-    .rshell-input-label{display:flex;align-items:center;gap:6px;font-size:10px;color:#334155;margin-bottom:6px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;}
+    .rshell-input-label{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--txt3);margin-bottom:6px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;}
     .rs-label-ico{font-size:11px;color:#0f7b5a;background:rgba(0,0,0,.4);padding:1px 5px;border-radius:3px;}
     .rs-lucy .rs-label-ico{color:var(--acc);}
     .rs-hint{margin-left:auto;font-size:10px;color:#1a2030;font-weight:400;text-transform:none;letter-spacing:0;}
     .rshell-input-row{display:flex;align-items:center;gap:8px;}
-    .rsi-prompt{font-family:var(--mono);font-size:11px;color:#334155;flex-shrink:0;}
+    .rsi-prompt{font-family:var(--mono);font-size:11px;color:var(--txt3);flex-shrink:0;}
     .rsi-box{flex:1;background:rgba(0,0,0,.5);border:1px solid #1a2030;border-radius:6px;color:white;font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;transition:.15s;}
     .rsi-box:focus{border-color:#2a3a5a;}
     .rs-lucy-box{font-family:var(--font-sans);font-size:12px;}
     .rs-lucy-box:focus{border-color:rgba(16,185,129,.2);}
     .rs-lucy-ta{resize:none;min-height:34px;max-height:140px;line-height:1.45;overflow-y:auto;}
     .rsi-box:disabled{opacity:.4;cursor:not-allowed;}
-    .rsi-send{background:rgba(255,255,255,.06);border:1px solid var(--bdr);border-radius:6px;color:#475569;cursor:pointer;font-size:12px;padding:6px 10px;transition:.15s;flex-shrink:0;}
+    .rsi-send{background:rgba(255,255,255,.06);border:1px solid var(--bdr);border-radius:6px;color:var(--txt3);cursor:pointer;font-size:12px;padding:6px 10px;transition:.15s;flex-shrink:0;}
     .rsi-send:hover:not(:disabled){background:rgba(255,255,255,.1);color:white;}
     .rsi-send:disabled{opacity:.3;cursor:not-allowed;}
     .rs-lucy-send:not(:disabled){border-color:rgba(16,185,129,.2);color:var(--acc);}
@@ -4030,14 +4030,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     /* Playbooks */
     .pb-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;padding:10px 12px;}
     .pb-name{font-size:12px;font-weight:600;color:var(--acc);margin-bottom:4px;}
-    .pb-cmds{font-size:10px;color:#475569;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .pb-cmds{font-size:10px;color:var(--txt3);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
     /* Tail log presets */
-    .rs-log-preset{background:rgba(255,255,255,.04);border:1px solid #1a2030;border-radius:4px;color:#475569;cursor:pointer;font-size:10px;font-family:var(--mono);padding:3px 8px;transition:.1s;}
+    .rs-log-preset{background:rgba(255,255,255,.04);border:1px solid #1a2030;border-radius:4px;color:var(--txt3);cursor:pointer;font-size:10px;font-family:var(--mono);padding:3px 8px;transition:.1s;}
     .rs-log-preset:hover{background:rgba(16,185,129,.06);color:var(--acc);border-color:rgba(16,185,129,.2);}
 
     /* Spin animation */
-    .rsl-spin{color:#475569;animation:spin .8s linear infinite;display:inline-block;font-size:12px;}
+    .rsl-spin{color:var(--txt3);animation:spin .8s linear infinite;display:inline-block;font-size:12px;}
     @keyframes spin{to{transform:rotate(360deg);}}
 
     /* ── Modal styles (scoped) ───────────────────────────────────────────── */
@@ -4095,7 +4095,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     :global(:root.light) .rsl-prompt       { color:#00784e; }
     :global(:root.light) .rsl-cmd          { color:#0b6045; }
     :global(:root.light) .rsl-lucy-out     { color:#1e3a5a; }
-    :global(:root.light) .rsl-out-txt      { color:#475569; }
+    :global(:root.light) .rsl-out-txt      { color:var(--txt3); }
     :global(:root.light) .rshell-inputs    { border-top-color:var(--bdr); }
     :global(:root.light) .rshell-input-wrap{ border-bottom-color:var(--bdr); background:#fcfcfc; }
     :global(:root.light) .rsi-box          { background:#fff; border-color:var(--bdr); color:var(--txt); }
