@@ -1303,27 +1303,27 @@ body.density-compact .chat{gap:2px !important;}
 
    prefers-reduced-motion disables both. */
 .stream-body{
-  animation: lucy-stream-aura 2.4s ease-in-out infinite;
-}
-@keyframes lucy-stream-aura {
-  0%, 100% { text-shadow: 0 0 12px color-mix(in srgb, var(--acc, #10b981) 12%, transparent); }
-  50%      { text-shadow: 0 0 22px color-mix(in srgb, var(--acc, #10b981) 30%, transparent); }
+  /* v1.7.179 — was an infinite text-shadow PULSE. text-shadow is a PAINT
+     property (not compositor), so pulsing it repainted the entire growing
+     message every frame — a continuous cost on modest hardware exactly while
+     the stream is trying to keep up. A single static glow keeps the "actively
+     writing" cue with zero per-frame paint. */
+  text-shadow: 0 0 14px color-mix(in srgb, var(--acc, #10b981) 15%, transparent);
 }
 
 .stream-body .lucy-new-token {
   animation: lucy-token-in 280ms cubic-bezier(.16, 1, .3, 1) both;
 }
 @keyframes lucy-token-in {
-  from {
-    opacity: 0;
-    filter: blur(2px);
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 1;
-    filter: blur(0);
-    transform: translateY(0);
-  }
+  /* v1.7.179 — `opacity:0` + `blur(2px)` removed. On a modest machine the
+     stream arrives FASTER than these fades complete (and `.stream-body *`
+     holds `animation-fill-mode:both`), so freshly-written text stayed
+     transparent/blurred until Lucy finished — the reported "text disappears
+     while the AI writes, appears once it's done". A transform-only slide keeps
+     a hint of motion while the text is ALWAYS fully visible, and drops the
+     per-token blur repaint (a real cost on weak GPUs mid-stream). */
+  from { transform: translateY(2px); }
+  to   { transform: translateY(0); }
 }
 
 /* Settled bubbles have no aura and no animation on previously-streaming

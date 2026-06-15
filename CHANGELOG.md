@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.179] — 2026-06-14
+
+### Fix — Streamed reply text no longer disappears while Lucy writes
+
+Follow-up to v1.7.178. The user clarified the flicker happens while **Lucy
+streams her reply** ("the AI writes faster than the interface can print"), not
+while typing. Root cause: streamed text is hidden by **fade-in-from-`opacity:0`
+animations** that can't keep up with the token rate on modest hardware —
+- `lucy-token-in` (page.css): each new element starts at `opacity:0` + `blur(2px)`
+  for 280 ms;
+- `streamReveal` (ChatThread): the last paragraph starts at `opacity:0` for
+  150 ms, **re-triggered every chunk** via `:last-of-type`;
+- `.stream-body * { animation-fill-mode: both }` holds that `opacity:0` start
+  state while the element waits its turn.
+
+When chunks arrive faster than those animations finish, the freshly-written
+text lives at opacity 0 / blurred until the response ends — then snaps to full
+("appears once finished"). Fixes:
+- `lucy-token-in` and `streamReveal` are now **transform-only** (a 2 px slide) —
+  streamed text is **always at full opacity and unblurred**, with a hint of
+  motion preserved. Also drops the per-token `blur()` repaint (costly on weak
+  GPUs mid-stream).
+- The `.stream-body` "writing aura" changed from an **infinite text-shadow
+  pulse** (a per-frame *paint* on the whole growing message) to a single static
+  glow — same cue, zero per-frame cost.
+
+CSS-only; the morphdom stable-substrate render (v1.7.56) still gives the smooth
+"types itself" effect without the opacity fade that was hiding the text.
+
+---
+
 ## [1.7.178] — 2026-06-14
 
 ### Fix — Composer text no longer vanishes while typing (paint-starvation)
