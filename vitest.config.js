@@ -27,7 +27,15 @@ export default defineConfig({
         // lifecycle_function_unavailable. The `conditions` array tells the
         // resolver to prefer browser exports when both are advertised by a
         // package's `exports` field.
-        conditions: ['browser'],
+        //
+        // v1.7.171 — `svelte` added. Setting `conditions` explicitly REPLACES
+        // the condition list the svelte plugin would otherwise contribute, so
+        // packages whose `exports` only advertise a `svelte` entry for their
+        // subpaths (e.g. `@tabler/icons-svelte/icons/*`) failed to resolve in
+        // the test env with "No known conditions" — even though production
+        // (sveltekit plugin sets `svelte`) resolved them fine. Listing both
+        // keeps the browser-build preference AND restores svelte-source resolution.
+        conditions: ['browser', 'svelte'],
     },
     test: {
         include: ['src/lib/**/*.test.ts'],

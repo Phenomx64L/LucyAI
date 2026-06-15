@@ -12,6 +12,13 @@
     import LucyTooltip from '$lib/LucyTooltip.svelte';
     // v1.7.27 — Inline sparkline for the stream-t/s chip.
     import Sparkline from '$lib/Sparkline.svelte';
+    // v1.7.171 — Tabler icons replace the chrome's colour emoji (🛡/🧠/⚡/⚠),
+    // which render full-colour on Windows and clash with the monochrome ops
+    // palette. SVG icons inherit currentColor so they tint correctly.
+    import Shield        from '@tabler/icons-svelte/icons/shield';
+    import Brain         from '@tabler/icons-svelte/icons/brain';
+    import Bolt          from '@tabler/icons-svelte/icons/bolt';
+    import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
     // v1.4.21 — StatusBar layout CSS extracted to a single global stylesheet
     // so the same duplicate-selector trap that bit the tab strip
     // (v1.4.17 → v1.4.19) doesn't recur here.
@@ -268,7 +275,7 @@
             title={isEN
                 ? `Active incident alerts. Click to open Dashboard.`
                 : `Alertas de incidente activas. Click para abrir Dashboard.`}>
-        <span class="sb-ms-glyph">⚠</span>
+        <span class="sb-ms-glyph"><AlertTriangle size={12} stroke={2} /></span>
         <span class={alertsTone}>{activeAlerts}</span>
         <span class="sb-ms-unit">{isEN ? 'alerts' : 'alertas'}</span>
     </button>
@@ -408,13 +415,13 @@
              title={isEN
                 ? `Prompt cache (this session): ${cacheStats.calls_with_cache_activity}/${cacheStats.calls_total_anthropic} Anthropic calls used the cache. Read: ${cacheStats.cache_read_total.toLocaleString()} tokens at 0.1× price. Write: ${cacheStats.cache_creation_total.toLocaleString()} tokens at 1.25× price.`
                 : `Cache de prompt (esta sesión): ${cacheStats.calls_with_cache_activity}/${cacheStats.calls_total_anthropic} llamadas Anthropic usaron caché. Leído: ${cacheStats.cache_read_total.toLocaleString()} tokens a 0.1× precio. Escrito: ${cacheStats.cache_creation_total.toLocaleString()} tokens a 1.25×.`}>
-            <span>⚡</span><span class={cacheHitTier(cacheHitPct)} data-testid="cache-badge-pct">{cacheHitPct.toFixed(0)}% {isEN ? 'cached' : 'caché'}</span>
+            <span class="sb-cache-glyph"><Bolt size={12} stroke={2} /></span><span class={cacheHitTier(cacheHitPct)} data-testid="cache-badge-pct">{cacheHitPct.toFixed(0)}% {isEN ? 'cached' : 'caché'}</span>
         </div>
     {/if}
 
     {#if !keyringOk}
         <div class="bi" title={isEN ? 'Keyring unavailable — credentials cannot be saved securely' : 'Keyring no disponible — las credenciales no se pueden guardar de forma segura'}>
-            <span>⚠</span><span class="cr">{isEN ? 'Keyring failed' : 'Keyring falló'}</span>
+            <span class="cr sb-cache-glyph"><AlertTriangle size={12} stroke={2} /></span><span class="cr">{isEN ? 'Keyring failed' : 'Keyring falló'}</span>
         </div>
     {/if}
 
@@ -432,7 +439,7 @@
     <div class="bi sb-guard" title={isEN
         ? 'Guardrail layer active — S1 destructive · S2 bypass shapes · S5 prompt injection · S8 force-execute · S10 UAC elevation'
         : 'Guardrails activos — S1 destructivo · S2 bypass · S5 prompt-injection · S8 force-execute · S10 elevación UAC'}>
-        <span class="sb-guard-glyph">🛡</span>
+        <span class="sb-guard-glyph"><Shield size={13} stroke={2} /></span>
         <span class="sb-guard-dots" aria-hidden="true">
             <span class="sb-led sb-led-ok" data-layer="S1"></span>
             <span class="sb-led sb-led-ok" data-layer="S2"></span>
@@ -452,7 +459,7 @@
                        :  mlStatus === 'model_missing' || mlStatus === 'runtime_missing' ? 'warn'
                        :  'crit'}
         <div class="bi sb-ml" title={mlBadge.tip}>
-            <span class="sb-ml-glyph">🧠</span>
+            <span class="sb-ml-glyph"><Brain size={13} stroke={2} /></span>
             <span class="sb-led sb-led-{_mlTone}" aria-hidden="true"></span>
             <span class="sb-ml-label">ML</span>
         </div>
@@ -534,6 +541,11 @@
         font-size: 12px;
         line-height: 1;
         filter: drop-shadow(0 0 6px color-mix(in srgb, var(--acc, #10b981) 40%, transparent));
+    }
+    /* v1.7.171 — Tabler SVG glyphs centre-align in the 22px bar (the former
+       emoji sat on the text baseline; inline SVG needs an explicit flex). */
+    .sb-guard-glyph, .sb-ml-glyph, .sb-ms-glyph, .sb-cache-glyph {
+        display: inline-flex; align-items: center;
     }
     .sb-guard-dots {
         display: inline-flex; align-items: center; gap: 3px;

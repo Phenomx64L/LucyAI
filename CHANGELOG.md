@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.171] — 2026-06-14
+
+### Polish — Status bar emoji → tinted Tabler icons (UI/UX audit P2)
+
+The footer mixed colour emoji (🛡 GUARD, 🧠 ML, ⚡ cache, ⚠ alerts/keyring)
+with the otherwise monochrome ops palette — on Windows those render as
+full-colour Segoe emoji, ignoring the green/amber/red tinting around them and
+breaking the "ops console" look (and the project's own *no emoji as primary
+iconography* convention). Swapped them for Tabler SVG icons
+(`Shield`/`Brain`/`Bolt`/`AlertTriangle`, direct-import per convention) that
+inherit `currentColor`, so the shield tints green, the keyring warning tints
+red, etc. The geometric terminal glyphs (⊕ ◷ ⚯ ◉ ▦ ◫) were kept — they render
+monochrome and already fit the aesthetic.
+
+Scoped to the chrome only. The radii-scale and tiny-label P2 items were
+assessed and left as-is: 6-vs-8px radius differences are imperceptible, and
+10px labels read fine now that the P0 contrast fix landed.
+
+---
+
 ## [1.7.170] — 2026-06-14
 
 ### Polish — Status bar reads as zones, not a picket fence (UI/UX audit P1)
