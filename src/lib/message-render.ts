@@ -364,6 +364,38 @@ export async function addCopyBtns(opts: AddCopyBtnsOpts): Promise<void> {
             }
         }
 
+        // v1.7.181 — the markdown renderer (md-render.ts) now emits the
+        // Gemini-style wrapper (header + lang + copy) directly in the HTML, so
+        // it's already present — even mid-stream. If this <pre> is inside one,
+        // don't build a second wrapper/header; only add the run button to the
+        // existing header for runnable commands.
+        const _existingWrap = pre.closest('.code-wrap');
+        if (_existingWrap) {
+            if (isRunnable) {
+                const _hdr = _existingWrap.querySelector('.code-header');
+                if (_hdr && !_hdr.querySelector('.run-inline-btn')) {
+                    const runBtn = document.createElement('button');
+                    runBtn.className = 'run-inline-btn';
+                    runBtn.title = isEN ? 'Run this command' : 'Ejecutar este comando';
+                    runBtn.textContent = `▶ ${langLabel}`;
+                    runBtn.onclick = (ev) => {
+                        ev.stopPropagation();
+                        const tabId = getActiveTabId();
+                        if (!tabId) return;
+                        const tab = getTab(tabId);
+                        if (tab && !tab.isProcessing) {
+                            const prevEngine = tab.execEngine;
+                            setTabsExecEngine(tabId, execTypeInline);
+                            setTabInputValue(tabId, rawText);
+                            runProcess(tabId).finally(() => setTabsExecEngine(tabId, prevEngine));
+                        }
+                    };
+                    _hdr.appendChild(runBtn);
+                }
+            }
+            return;
+        }
+
         const header = document.createElement('div');
         header.className = 'code-header';
 

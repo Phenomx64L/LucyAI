@@ -2009,6 +2009,30 @@ import { listen } from '@tauri-apps/api/event';
             // IPC while the window is hidden, and refreshes once on re-show.
             gatedInterval(pollProactiveInsights, 120_000);
         }, 90_000);
+        // v1.7.181 — delegated copy for the Gemini-style code-block header the
+        // markdown renderer emits. Delegation (not a per-element onclick)
+        // because morphdom would strip an inline handler on the next chunk.
+        document.addEventListener('click', (ev) => {
+            const tgt = ev.target;
+            const btn = (tgt && tgt.closest) ? tgt.closest('.copy-btn[data-copy]') : null;
+            if (!btn) return;
+            const wrap = btn.closest('.code-wrap');
+            const codeEl = wrap ? wrap.querySelector('pre code') : null;
+            const text = codeEl ? (codeEl.innerText || codeEl.textContent || '') : '';
+            if (!text) return;
+            navigator.clipboard.writeText(text).then(() => {
+                const ico = btn.querySelector('.copy-ico');
+                const lbl = btn.querySelector('.copy-lbl');
+                btn.classList.add('copy-ok');
+                if (ico) ico.textContent = '✓';
+                if (lbl) lbl.textContent = 'Copiado';
+                setTimeout(() => {
+                    btn.classList.remove('copy-ok');
+                    if (ico) ico.textContent = '⧉';
+                    if (lbl) lbl.textContent = 'Copiar';
+                }, 1500);
+            }).catch(() => {});
+        });
         // v1.7.44 — Wire up the idle detector FIRST so the `.app-hidden`
         // and `.lucy-quiescent` classes start tracking the window/user
         // state from the very first frame. Idempotent on HMR.

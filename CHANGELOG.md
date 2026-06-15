@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.181] — 2026-06-14
+
+### Feature — Gemini-style code blocks: language header + copy, live while streaming
+
+Lucy's fenced code/command blocks now render like the Gemini web UI: a header
+bar with the **language label** and a **copy button**, present from the instant
+a ``` fence opens **mid-stream** — not bolted on only after the reply finishes.
+
+Previously `addCopyBtns` added the header as a post-render DOM pass that ran only
+at promotion (end of stream), so while Lucy wrote, command blocks looked like raw
+text with no way to copy. Now the header is emitted **inside the Markdown HTML
+string** (a `marked` `code` renderer override in `md-render.ts`), so it:
+- appears during streaming, and
+- survives the morphdom diff each chunk (morphdom leaves the unchanged header
+  in place and only grows the code text).
+
+Copy is wired by a **delegated** click listener on `.copy-btn[data-copy]`
+(`+page.svelte`) — a per-element `onclick` would be morphed away on the next
+chunk — and shows a ✓ Copiado confirmation. `addCopyBtns` was reconciled to
+detect the renderer's wrapper and, instead of double-wrapping, just append the
+**▶ Run** button to the existing header for runnable commands (PowerShell / CMD /
+WMIC / netsh / reg / VBScript). The inner `<pre><code class="language-X">` shape
+is unchanged, so Shiki highlighting (`applyShikiToHtml`) still applies at
+promotion. svelte-check 0/0.
+
+---
+
 ## [1.7.180] — 2026-06-14
 
 ### Fix — Calmer streaming render + accurate Dashboard CPU per-core

@@ -40,6 +40,39 @@ function _configureMarked() {
             tokenizer: {
                 del(_src: string) { return undefined; },
             },
+            renderer: {
+                // v1.7.181 — Gemini-style fenced code blocks. The language
+                // header + copy button are emitted INTO the HTML string (not
+                // bolted on post-render by addCopyBtns), so they appear the
+                // instant a ``` fence opens DURING streaming and survive the
+                // morphdom diff. Copy is wired by a delegated listener on
+                // `.copy-btn[data-copy]` in +page.svelte (a per-element onclick
+                // would be morphed away on the next chunk). The inner
+                // `<pre><code class="language-X">` shape is kept verbatim so
+                // applyShikiToHtml's regex and addCopyBtns' run-button pass
+                // still work unchanged.
+                code(codeOrToken: any, maybeInfo?: string) {
+                    const isTok = codeOrToken && typeof codeOrToken === 'object';
+                    const rawCode = String(isTok ? (codeOrToken.text ?? '') : (codeOrToken ?? ''));
+                    const info = String(isTok ? (codeOrToken.lang ?? '') : (maybeInfo ?? '')).trim();
+                    const langRaw = info.split(/\s+/)[0].toLowerCase();
+                    const lang = /^[a-z0-9+#.\-]{1,24}$/.test(langRaw) ? langRaw : '';
+                    const esc = rawCode
+                        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const langClass = lang ? ` class="language-${lang}"` : '';
+                    const label = lang || 'texto';
+                    return '<div class="code-wrap" data-cw="1">'
+                        +    '<div class="code-header">'
+                        +      `<span class="code-lang">${label}</span>`
+                        +      '<button class="copy-btn" type="button" data-copy title="Copiar al portapapeles" aria-label="Copiar">'
+                        +        '<span class="copy-ico" aria-hidden="true">⧉</span>'
+                        +        '<span class="copy-lbl">Copiar</span>'
+                        +      '</button>'
+                        +    '</div>'
+                        +    `<pre><code${langClass}>${esc}</code></pre>`
+                        +  '</div>';
+                },
+            },
         });
     } catch (e) {
         // eslint-disable-next-line no-console
