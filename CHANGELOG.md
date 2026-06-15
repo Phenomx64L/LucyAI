@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.174] — 2026-06-14
+
+### Perf — Visibility-gated background polling (fluidity #2)
+
+The always-mounted chrome pollers kept crossing the Tauri IPC boundary (and
+hitting SQLite on the Rust side) every few seconds **even when the window was
+hidden behind another app** — work nobody could see, competing with foreground
+rendering. The `idle-detector` only pauses CSS animations, not these JS timers;
+the `*-loop.ts` schedulers already gate on `visibilityState`, but the
+component-level pollers did not.
+
+- New `gatedInterval()` helper (`src/lib/poll.ts`) — runs its callback only
+  while the document is visible (the timer keeps ticking, but the expensive IPC
+  body is skipped when hidden) and fires once on regaining visibility so the
+  revealed UI isn't stale.
+- Migrated the always-on chrome pollers: **StatusBar** (8 s prompt-cache stats,
+  60 s monthly-cost aggregate) and **LatencySparkline** (30 s latency samples).
+
+Net effect: a backgrounded Lucy stops doing this telemetry IPC entirely, freeing
+CPU for the foreground when the user returns. The helper is now the standard
+pattern for future component pollers.
+
+---
+
 ## [1.7.173] — 2026-06-14
 
 ### Fix — Complete the P0 contrast sweep (design-pass #2 redirect)

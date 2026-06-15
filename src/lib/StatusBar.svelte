@@ -19,6 +19,8 @@
     import Brain         from '@tabler/icons-svelte/icons/brain';
     import Bolt          from '@tabler/icons-svelte/icons/bolt';
     import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
+    // v1.7.174 — visibility-gated polling (skip IPC while the window is hidden).
+    import { gatedInterval } from '$lib/poll';
     // v1.4.21 — StatusBar layout CSS extracted to a single global stylesheet
     // so the same duplicate-selector trap that bit the tab strip
     // (v1.4.17 → v1.4.19) doesn't recur here.
@@ -164,13 +166,15 @@
             try { cacheStats = await invoke('get_cache_stats'); } catch {}
         };
         refreshCache();
-        const cacheTimer = setInterval(refreshCache, 8000);
-        // v1.7.31 — cost-by-day refresh every 60s. Cheap (single SQL agg).
-        const costTimer = setInterval(refreshCostByDay, 60_000);
+        // v1.7.174 — gated so the 8 s cache poll and 60 s cost aggregate don't
+        // cross the IPC boundary (and hit SQLite) while the window is hidden;
+        // both refresh once on re-show so the revealed UI isn't stale.
+        const stopCache = gatedInterval(refreshCache, 8000);
+        const stopCost  = gatedInterval(refreshCostByDay, 60_000);
         return () => {
             window.removeEventListener('focus', onFocus);
-            clearInterval(cacheTimer);
-            clearInterval(costTimer);
+            stopCache();
+            stopCost();
         };
     });
 

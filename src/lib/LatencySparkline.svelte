@@ -24,6 +24,8 @@
 <script lang="ts">
     import { onMount, onDestroy, tick } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    // v1.7.174 — visibility-gated polling (skip IPC while window hidden).
+    import { gatedInterval } from '$lib/poll';
 
     /** Optional focus: when set, the named model is highlighted and others
      *  fade. Otherwise every model is drawn at full intensity. */
@@ -49,7 +51,7 @@
 
     let canvas: HTMLCanvasElement;
     let series: Series[] = [];
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let stopPoll: (() => void) | null = null;
     let hovering = false;
     let tipText = '';
 
@@ -186,7 +188,7 @@
 
     onMount(() => {
         refresh();
-        pollTimer = setInterval(refresh, POLL_MS);
+        stopPoll = gatedInterval(refresh, POLL_MS);
         // Redraw on container resize so the sparkline always uses
         // the full canvas width. jsdom (vitest) doesn't ship
         // ResizeObserver — guard so the StatusBar unit tests stay green.
@@ -197,7 +199,7 @@
     });
 
     onDestroy(() => {
-        if (pollTimer) clearInterval(pollTimer);
+        if (stopPoll) stopPoll();
     });
 
     // Redraw when focus changes (highlight different model).
