@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.176] — 2026-06-14
+
+### Perf — Auto-route no longer blocks time-to-first-token (latency #4)
+
+Every message awaited `buildUnifiedContext()` before the response stream
+started. That call ran the security-skill **auto-route** — a backend embedding
+search over the skill catalogue **plus a full skill-body load** — on each turn.
+But since v1.7.153 the route no longer activates anything: `route.skill` is
+never injected into the LLM context (confirmed — the only injected piece is the
+cheap, synchronous `mcp_tools` block). The route now only feeds a decorative
+Context-Strip label, a token estimate, and `/route-status`. So Lucy was paying
+embedding-search + file-read latency on the critical path for purely cosmetic
+output.
+
+Reworked `buildUnifiedContext` (all in `unified-context.ts`, no agent-loop
+changes):
+- `mcp_tools` (the only injected part) is computed synchronously and kept on the
+  hot path.
+- A new `routeGuards()` resolves the **cheap** route cases (manual skill, active
+  preset, auto-route off, prompt too short) synchronously — a manually-active
+  skill keeps its exact `est_tokens` because that body *is* injected.
+- The **expensive** case (backend embedding tier) now runs in the **background**:
+  the turn starts immediately and `/route-status` is updated via
+  `persistLastRoute()` when it resolves.
+
+Net: time-to-first-token drops by the auto-route's cost (embedding query + ANN
+over the catalogue + skill-body read) on every turn where no skill/preset is
+manually active. No behavioural change to what reaches the LLM.
+
+---
+
 ## [1.7.175] — 2026-06-14
 
 ### Perf — Decouple streaming markdown re-render from the frame rate (fluidity #1)

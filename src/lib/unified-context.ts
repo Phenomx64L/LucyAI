@@ -119,35 +119,38 @@ interface BackendAutoRoute {
 }
 
 /**
+ * Synchronous, zero-IPC route resolution for the cheap cases: a manually
+ * active skill, an active preset, auto-route disabled, or a prompt too short to
+ * route. Returns null ONLY when the expensive backend embedding tier would be
+ * needed — that path is the one worth keeping off the hot turn path (v1.7.176).
+ */
+function routeGuards(userPrompt: string): UnifiedRouteResult | null {
+    const empty: UnifiedRouteResult = {
+        method: 'none', skill: null, score: 0,
+        candidates: [], embeddings_available: false, elapsed_ms: 0,
+    };
+    const manualSkill = peekActiveSecuritySkill();
+    if (manualSkill) return { ...empty, method: 'manual', skill: manualSkill, score: 1.0 };
+    if (peekActivePreset()) return { ...empty, method: 'preset', score: 1.0 };
+    if (!isAutoRouteEnabled()) return { ...empty };
+    if (!userPrompt || userPrompt.trim().length < 8) return { ...empty };
+    return null;
+}
+
+/**
  * Full hybrid auto-router. Tiers 1+2 happen in Rust; tier 3 (LLM
  * disambiguation) happens here because it spends an `ask_lucy` call
  * and the frontend already coordinates LLM budget.
  */
 export async function autoRouteSkill(userPrompt: string): Promise<UnifiedRouteResult> {
     const t0 = performance.now();
+    const guard = routeGuards(userPrompt);
+    if (guard) return { ...guard, elapsed_ms: performance.now() - t0 };
+
     const empty: UnifiedRouteResult = {
         method: 'none', skill: null, score: 0,
-        candidates: [], embeddings_available: false,
-        elapsed_ms: 0,
+        candidates: [], embeddings_available: false, elapsed_ms: 0,
     };
-
-    // Respect the user's manual choice if a skill or preset is already active.
-    const manualSkill = peekActiveSecuritySkill();
-    if (manualSkill) {
-        return { ...empty, method: 'manual', skill: manualSkill, score: 1.0,
-                 elapsed_ms: performance.now() - t0 };
-    }
-    if (peekActivePreset()) {
-        return { ...empty, method: 'preset', score: 1.0,
-                 elapsed_ms: performance.now() - t0 };
-    }
-    if (!isAutoRouteEnabled()) {
-        return { ...empty, elapsed_ms: performance.now() - t0 };
-    }
-    if (!userPrompt || userPrompt.trim().length < 8) {
-        // Too short to route reliably.
-        return { ...empty, elapsed_ms: performance.now() - t0 };
-    }
 
     let raw: BackendAutoRoute;
     try {
@@ -330,10 +333,26 @@ export async function buildUnifiedContext(
     userPrompt: string,
     mcpServers: Array<{ name: string; tools_cache?: any[]; enabled?: boolean }>,
 ): Promise<UnifiedContextPlan> {
-    const [route, mcp] = await Promise.all([
-        autoRouteSkill(userPrompt),
-        Promise.resolve(rankMcpTools(userPrompt, mcpServers, 8)),
-    ]);
+    // v1.7.176 — only `mcp_tools` is injected into the LLM context (see
+    // renderMcpToolsBlock at the call site); it's a cheap synchronous keyword
+    // rank, so it stays on the hot turn path.
+    const mcp = rankMcpTools(userPrompt, mcpServers, 8);
+
+    // The route is decorative since v1.7.153 (see note below). Resolve the
+    // cheap route cases synchronously — a manually-active skill keeps its exact
+    // est_tokens because that body IS injected. The EXPENSIVE case (backend
+    // embedding search + full skill-body load) used to be awaited here, adding
+    // its latency to every turn's time-to-first-token; now it runs in the
+    // BACKGROUND so the turn starts immediately, and `/route-status` still gets
+    // the freshest route via persistLastRoute() when it resolves.
+    const guard = routeGuards(userPrompt);
+    const route: UnifiedRouteResult = guard ?? {
+        method: 'none', skill: null, score: 0,
+        candidates: [], embeddings_available: false, elapsed_ms: 0,
+    };
+    if (!guard) {
+        void autoRouteSkill(userPrompt).then(persistLastRoute).catch(() => { /* observability only */ });
+    }
 
     // v1.7.153 — Auto-ACTIVATION of the routed security skill is DISABLED.
     // Persisting an auto-routed skill silently flipped Lucy into
@@ -353,7 +372,14 @@ export async function buildUnifiedContext(
         ((route.skill?.body.length || 0) + (mcp.length * 200)) / 4
     );
 
-    // Persist the last route for the chip and `/route-status` slash cmd.
+    // Persist the (synchronously-known) route for the chip and `/route-status`.
+    persistLastRoute(route);
+
+    return { route, mcp_tools: mcp, est_tokens };
+}
+
+/** Persist the last route for the chip and the `/route-status` slash command. */
+function persistLastRoute(route: UnifiedRouteResult): void {
     try {
         safeSetLSString(LS_KEY_LAST_ROUTE, JSON.stringify({
             method: route.method,
@@ -363,8 +389,6 @@ export async function buildUnifiedContext(
             ts: Date.now(),
         }));
     } catch { /* quota */ }
-
-    return { route, mcp_tools: mcp, est_tokens };
 }
 
 export function peekLastRoute(): { method: string; skill_id: string | null; score: number; elapsed_ms: number; ts: number } | null {
