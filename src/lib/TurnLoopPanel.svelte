@@ -128,7 +128,7 @@
 
     .tl-phases{display:flex;align-items:center;padding:10px 12px;gap:0;overflow-x:auto;}
     .tl-phase{display:flex;align-items:center;gap:3px;flex-shrink:0;}
-    .tl-phase-dot{width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;color:#475569;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);flex-shrink:0;font-weight:700;}
+    .tl-phase-dot{width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--txt3);background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);flex-shrink:0;font-weight:700;}
     .tl-phase.current .tl-phase-dot{color:var(--acc);border-color:var(--acc);background:rgba(16,185,129,.1);animation:tl-pulse 1.5s ease infinite;}
     .tl-phase.done .tl-phase-dot{color:var(--acc);border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.12);}
     .tl-phase.failed .tl-phase-dot{color:var(--red);border-color:rgba(255,68,68,.3);background:rgba(255,68,68,.1);}

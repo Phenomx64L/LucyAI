@@ -197,7 +197,7 @@
     .sk-card-meta{display:flex;gap:4px;flex-wrap:wrap;}
     .sk-tag{font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(255,255,255,.04);color:#4a5a6a;border:1px solid rgba(255,255,255,.04);}
 
-    .sk-empty{text-align:center;color:#475569;font-size:12px;padding:24px 0;}
+    .sk-empty{text-align:center;color:var(--txt3);font-size:12px;padding:24px 0;}
 
     /* Detail view */
     .sk-detail{flex:1;overflow-y:auto;padding:12px 16px 16px;}

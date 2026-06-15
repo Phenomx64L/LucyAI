@@ -354,7 +354,7 @@ html.lucy-quiescent .tab[data-purpose="incident"] {
 }
 .tab-picker-header {
     font-size: 10px;
-    color: #334155;
+    color: var(--txt3);
     letter-spacing: 1px;
     text-transform: uppercase;
     font-weight: 700;
@@ -393,7 +393,7 @@ html.lucy-quiescent .tab[data-purpose="incident"] {
 }
 .tpi-num {
     font-size: 10px;
-    color: #334155;
+    color: var(--txt3);
     min-width: 14px;
     text-align: center;
     flex-shrink: 0;

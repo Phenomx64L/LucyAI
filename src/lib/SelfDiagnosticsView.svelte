@@ -234,10 +234,10 @@
     .view-btn:hover{background:var(--bdr2);color:var(--txt);}
 
     .sd-overall{font-size:12px;font-weight:700;font-family:var(--mono);letter-spacing:.5px;}
-    .sd-elapsed{font-size:10px;color:#475569;font-family:var(--mono);}
+    .sd-elapsed{font-size:10px;color:var(--txt3);font-family:var(--mono);}
 
     .sd-error{padding:12px 16px;color:var(--red);font-size:12px;background:rgba(239,68,68,.06);border-bottom:1px solid var(--bdr);}
-    .sd-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;color:#475569;gap:12px;}
+    .sd-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;color:var(--txt3);gap:12px;}
     .sd-spinner{width:24px;height:24px;border:2px solid rgba(255,255,255,.08);border-top-color:var(--acc);border-radius:50%;animation:spin 0.7s linear infinite;}
     @keyframes spin{to{transform:rotate(360deg);}}
 
@@ -250,7 +250,7 @@
     .sd-banner-time{margin-left:auto;font-size:10px;font-weight:400;font-family:var(--mono);opacity:.7;}
 
     .sd-group{margin-bottom:16px;}
-    .sd-group-hdr{font-size:10px;font-weight:700;letter-spacing:1.2px;color:#475569;text-transform:uppercase;padding:0 0 6px;border-bottom:1px solid rgba(26,32,48,.3);margin-bottom:6px;}
+    .sd-group-hdr{font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--txt3);text-transform:uppercase;padding:0 0 6px;border-bottom:1px solid rgba(26,32,48,.3);margin-bottom:6px;}
 
     .sd-check{background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:6px;padding:8px 12px;margin-bottom:6px;transition:.15s;}
     .sd-check.err{border-left:2px solid var(--red);background:rgba(239,68,68,.03);}
@@ -260,7 +260,7 @@
     .sd-check-top{display:flex;align-items:center;gap:8px;margin-bottom:3px;}
     .sd-check-icon{font-size:13px;font-weight:700;}
     .sd-check-name{font-size:12px;font-weight:600;color:var(--txt);}
-    .sd-check-ms{margin-left:auto;font-size:10px;color:#475569;font-family:var(--mono);}
+    .sd-check-ms{margin-left:auto;font-size:10px;color:var(--txt3);font-family:var(--mono);}
 
     /* v1.7.64 — Repair button. Compact pill that sits to the right of the
        elapsed-time chip on the same row as the check name. Hidden by

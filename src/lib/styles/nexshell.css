@@ -46,7 +46,7 @@
 }
 .bc-host-ico  { font-size: 13px; }
 .bc-host-name { font-weight: 600; color: #c0d0e0; flex: 1; }
-.bc-host-addr { font-size: 10px; color: #475569; font-family: var(--mono); }
+.bc-host-addr { font-size: 10px; color: var(--txt3); font-family: var(--mono); }
 
 /* ── Per-host result rows (after broadcast fires) ─────────────────── */
 .bc-results {
@@ -289,7 +289,7 @@
 .rshell-input-label{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--txt3);margin-bottom:6px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;}
 .rs-label-ico{font-size:11px;color:#0f7b5a;background:rgba(0,0,0,.4);padding:1px 5px;border-radius:3px;}
 .rs-lucy .rs-label-ico{color:var(--acc);}
-.rs-hint{margin-left:auto;font-size:10px;color:#1e293b;font-weight:400;text-transform:none;letter-spacing:0;}
+.rs-hint{margin-left:auto;font-size:10px;color:var(--txt3);font-weight:400;text-transform:none;letter-spacing:0;}
 .rshell-input-row{display:flex;align-items:center;gap:8px;}
 .rsi-prompt{font-family:var(--mono);font-size:11px;color:var(--txt3);flex-shrink:0;}
 .rsi-box{flex:1;background:rgba(0,0,0,.5);border:1px solid #1e293b;border-radius:6px;color:white;font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;transition:.15s;}

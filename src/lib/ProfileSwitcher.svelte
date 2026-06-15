@@ -79,7 +79,7 @@
     .ps-btn:hover{border-color:var(--acc-b);color:var(--txt);}
     .ps-icon{font-size:13px;}
     .ps-name{max-width:100px;overflow:hidden;text-overflow:ellipsis;}
-    .ps-caret{font-size:9px;color:#475569;}
+    .ps-caret{font-size:9px;color:var(--txt3);}
 
     .ps-backdrop{position:fixed;inset:0;z-index:900;}
     .ps-dropdown{position:absolute;top:calc(100% + 4px);right:0;background:var(--bg2,#161822);border:1px solid var(--bdr);border-radius:8px;min-width:200px;z-index:901;box-shadow:0 8px 24px rgba(0,0,0,.4);overflow:hidden;}
@@ -89,10 +89,10 @@
     .ps-opt.active{background:rgba(16,185,129,.08);color:var(--acc);}
     .ps-opt-icon{font-size:14px;flex-shrink:0;}
     .ps-opt-name{flex:1;overflow:hidden;text-overflow:ellipsis;}
-    .ps-opt-count{font-size:9px;color:#475569;font-family:var(--mono);}
-    .ps-add{border-top:1px solid var(--bdr);color:#475569;}
+    .ps-opt-count{font-size:9px;color:var(--txt3);font-family:var(--mono);}
+    .ps-add{border-top:1px solid var(--bdr);color:var(--txt3);}
     .ps-add:hover{color:var(--acc);}
-    .ps-empty{padding:12px;text-align:center;font-size:10px;color:#475569;}
+    .ps-empty{padding:12px;text-align:center;font-size:10px;color:var(--txt3);}
 
     :global(:root.light) .ps-dropdown{background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.12);}
 </style>

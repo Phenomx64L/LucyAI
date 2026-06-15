@@ -179,7 +179,7 @@
       {/each}
       {#if $profiles.length === 0 && !showForm}
       <div class="pm-empty">
-        <div style="font-size:32px;margin-bottom:8px;display:flex;justify-content:center;"><User size={32} strokeWidth={1.5} style="color:#334155"/></div>
+        <div style="font-size:32px;margin-bottom:8px;display:flex;justify-content:center;"><User size={32} strokeWidth={1.5} style="color:var(--txt3)"/></div>
         <div>{isEN ? 'No profiles yet. Create one to group your hosts.' : 'Sin perfiles. Crea uno para agrupar tus hosts.'}</div>
         <button class="pm-btn accent" style="margin-top:12px;" on:click={openNew}>+ {isEN ? 'Create Profile' : 'Crear Perfil'}</button>
       </div>
@@ -232,7 +232,7 @@
     .pm-host-btn{background:rgba(0,0,0,.15);border:1px solid var(--bdr);border-radius:5px;padding:4px 8px;font-size:11px;color:var(--txt2);cursor:pointer;transition:.15s;white-space:nowrap;}
     .pm-host-btn:hover{border-color:rgba(255,255,255,.1);}
     .pm-host-btn.sel{border-color:var(--acc);background:rgba(16,185,129,.08);color:var(--acc);}
-    .pm-nohosts{font-size:11px;color:#475569;font-style:italic;}
+    .pm-nohosts{font-size:11px;color:var(--txt3);font-style:italic;}
     .pm-form-actions{display:flex;gap:8px;justify-content:flex-end;}
 
     .pm-list{flex:1;overflow-y:auto;padding:8px 16px 16px;}
@@ -243,7 +243,7 @@
     .pm-item-name{font-size:13px;font-weight:600;color:var(--txt);}
     .pm-item-meta{font-size:10px;color:#4a5a6a;margin-top:2px;}
 
-    .pm-empty{text-align:center;padding:40px 20px;color:#475569;font-size:12px;}
+    .pm-empty{text-align:center;padding:40px 20px;color:var(--txt3);font-size:12px;}
 
     :global(:root.light) .pm-modal{background:#fff;}
     :global(:root.light) .pm-item{background:#fff;}

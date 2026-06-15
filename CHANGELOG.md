@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.173] — 2026-06-14
+
+### Fix — Complete the P0 contrast sweep (design-pass #2 redirect)
+
+Design-pass #2 was scoped as "add light-theme support to the chrome" — but on
+inspection **that was already comprehensive**: `page.css` carries `:root.light`
+overrides for the titlebar (`.tb`), tab strip, sidebar, status bar (`.bbar`),
+dropdowns, etc. So the premise was wrong, and the honest move was to redirect
+the effort to the real residual: **dark-mode muted text still below WCAG AA**
+that the v1.7.169/172 sweeps missed (notably the `color: #475569` *with a
+space* and `#1e293b` variants my no-space replace-all didn't catch).
+
+Routed to `var(--txt3)` across 10 files: `tab-strip.css` (`.tab-picker-header`,
+`.tpi-num`), `nexshell.css` (`.bc-host-addr`, `.rs-hint`), `sidebar.css`,
+`ProfileSwitcher`, `ProfileModal`, `SelfDiagnosticsView`, `Sidebar`,
+`SkillBrowserModal`, `TurnLoopPanel`. `:root.light` overrides and the retired
+`SkillsManagerModal` (dead code) were left untouched; two transient
+error-analysis inline styles in `+page.svelte` remain (low-visibility, the file
+is build-flagged binary).
+
+The muted-text token `--txt3` is now the single, AA-compliant, theme-aware
+source for tertiary text across the entire app.
+
+---
+
 ## [1.7.172] — 2026-06-14
 
 ### Fix — Composer: finish the P0 contrast sweep (design-pass #1)

@@ -251,7 +251,7 @@
     {#if runbooksOpen || sidebarCollapsed}
     <div class="sb-accordion-body" data-section="runbooks">
     {#if !$runbooks.length && !sidebarCollapsed}
-        <div style="padding:4px 14px 8px;font-size:11px;color:#334155;font-style:italic;">{isEN ? 'No runbooks' : 'Sin runbooks'}</div>
+        <div style="padding:4px 14px 8px;font-size:11px;color:var(--txt3);font-style:italic;">{isEN ? 'No runbooks' : 'Sin runbooks'}</div>
     {/if}
     {#each $runbooks as rb}
     <div class="sb-it sb-action-item" role="button" tabindex="0"

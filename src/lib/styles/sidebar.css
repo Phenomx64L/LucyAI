@@ -398,7 +398,7 @@
 .sb-accordion-hdr:hover { color: var(--txt); }
 .sb-accordion-arrow {
     font-size: 9px;
-    color: #475569;
+    color: var(--txt3);
     transition: transform .15s;
 }
 .sb-accordion-body {
