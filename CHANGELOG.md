@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.175] — 2026-06-14
+
+### Perf — Decouple streaming markdown re-render from the frame rate (fluidity #1)
+
+During a streamed reply the chat re-parsed the **entire accumulated message**
+(`renderLucyMarkdown` → marked + DOMPurify) on every rAF tick (~60 fps). Because
+the text grows each tick, total parse cost is roughly **O(N²)** over a long
+response — the main reason long answers felt laggy. (The DOM update was already
+optimised via morphdom; the *parse* was not.)
+
+`askLucyStream`'s `flushChunk` now splits the two costs:
+- **Cheap telemetry** (TTFT / tokens-per-second + `refresh()`) stays at the full
+  rAF rate, so the t/s chip keeps its live feel.
+- **The expensive markdown re-parse** (`onChunk`) is throttled to ~12 fps
+  (`RENDER_THROTTLE_MS = 80`) — visually smooth but ~5× fewer parses. The final
+  flush forces a render so the complete message always lands.
+
+Also fixed a latent footgun surfaced by the change: `requestAnimationFrame(flushChunk)`
+passed rAF's timestamp as the new `force` argument; wrapped it as
+`() => flushChunk()` so the throttle isn't bypassed every frame.
+
+---
+
 ## [1.7.174] — 2026-06-14
 
 ### Perf — Visibility-gated background polling (fluidity #2)

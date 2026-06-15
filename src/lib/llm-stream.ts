@@ -263,10 +263,18 @@ export async function askLucyStream(
     let _pendingChunk = false;
     let _lastTpsAt = 0;
     let _cachedTps = 0;
+    // v1.7.175 — decouple the expensive markdown re-render from the rAF rate.
+    // onChunk() re-parses the FULL accumulated text (marked + DOMPurify) on
+    // every call; at 60 fps that grows ~O(N²) over a long response and is the
+    // main source of streaming jank. Cap the render cadence to ~12 fps — still
+    // smooth to the eye, ~5× fewer parses. The cheap telemetry (TTFT/TPS +
+    // refresh) stays at the full rAF rate so the t/s chip keeps its live feel.
+    let _lastRenderAt = 0;
+    const RENDER_THROTTLE_MS = 80;
 
-    const flushChunk = () => {
+    const flushChunk = (force = false) => {
         _rafScheduled = false;
-        if (!_pendingChunk) return;
+        if (!_pendingChunk && !force) return;
         _pendingChunk = false;
         const nowPerf = performance.now();
         if (nowPerf - _lastTpsAt > 500) {
@@ -282,7 +290,13 @@ export async function askLucyStream(
                 opts.refresh();
             }
         }
-        onChunk(accumulated);
+        // Expensive path (full markdown re-parse) — throttled. The final flush
+        // passes force=true so the complete message always renders even if the
+        // last chunk landed inside the throttle window.
+        if (force || nowPerf - _lastRenderAt >= RENDER_THROTTLE_MS) {
+            _lastRenderAt = nowPerf;
+            onChunk(accumulated);
+        }
     };
 
     // Register listener BEFORE invoke to not lose initial chunks
@@ -293,7 +307,9 @@ export async function askLucyStream(
         _pendingChunk = true;
         if (!_rafScheduled) {
             _rafScheduled = true;
-            requestAnimationFrame(flushChunk);
+            // Wrap so rAF's timestamp arg isn't passed as `force` (which would
+            // be truthy and defeat the render throttle).
+            requestAnimationFrame(() => flushChunk());
         }
     });
     streamState.unlisten = unlisten;
@@ -301,8 +317,9 @@ export async function askLucyStream(
 
     try {
         const result = await invoke('ask_lucy_stream', { ...params, requestId });
-        // Final flush so last chunk reaches onChunk before return
-        if (_pendingChunk) flushChunk();
+        // Final flush (force) so the complete message renders even if the last
+        // rAF was inside the render-throttle window.
+        flushChunk(true);
         if (streamState.cancelled) return accumulated || '';
         return result as string;
     } catch (e) {
