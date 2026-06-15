@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.170] — 2026-06-14
+
+### Polish — Status bar reads as zones, not a picket fence (UI/UX audit P1)
+
+The bottom status bar packs ~12+ cells, each previously separated by a crisp
+`1px solid var(--bdr)` divider — a uniform "picket fence" with no grouping.
+Grouped it into three scannable zones with CSS only (no markup change):
+- **Left ops cluster** (host · remote hosts · alerts · guard skill · posture ·
+  clock) and the **right security/observability cluster** (GUARD · ML · LLM)
+  are glyph-led and self-delimit, so their per-chip dividers were dropped.
+- The **centre metric cells** (Rate / Cost / Stream / Cache) keep a divider,
+  now softened (`color-mix(... var(--bdr) 70% ...)`).
+
+Result: the eye parses three groups instead of a dozen fenced cells. All in
+`status-bar.css` (the single source of truth for the footer).
+
+Note: the broader "token-fallback drift" audit item (inconsistent
+`var(--bg2, #…)` fallback hexes) was assessed and **deliberately skipped** —
+those fallbacks only fire if `:root` fails to define the token, which never
+happens in practice, so normalising ~60 of them across ~40 files is churn with
+no runtime effect.
+
+---
+
 ## [1.7.169] — 2026-06-14
 
 ### Fix — Accessibility: legible muted text + keyboard focus rings (UI/UX audit P0)

@@ -54,11 +54,25 @@
     gap: 4px;
     padding-right: 10px;
     margin-right: 10px;
-    border-right: 1px solid var(--bdr);
+    /* v1.7.170 — softened divider (was a crisp solid var(--bdr) line on
+       every cell, which read as a picket fence). */
+    border-right: 1px solid color-mix(in srgb, var(--bdr) 70%, transparent);
     white-space: nowrap;
 }
 .bi:last-child { border-right: none; margin-right: 0; }
 .bi.r { margin-left: auto; }
+
+/* v1.7.170 — visual grouping (UI/UX audit P1). The glyph-led chips
+   self-delimit, so per-chip dividers there are pure noise. Dropping them
+   collapses the footer into three readable zones — left ops cluster
+   (host + mission chips + clock), centre metrics (Rate / Cost / Stream /
+   Cache, which keep the softened divider), and the right security /
+   observability cluster (GUARD / ML / LLM) — instead of ~12 uniform fences. */
+.sb-host, .sb-ms-chip, .sb-ms-clock,
+.sb-guard, .sb-ml, .sb-llm-rings, .th-chip {
+    border-right: none;
+    margin-right: 3px;
+}
 
 /* ── Tier color helpers used by all kinds of footer values ──────── */
 .cok { color: var(--acc); }
