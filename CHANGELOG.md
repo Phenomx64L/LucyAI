@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.183] — 2026-06-14
+
+### Feature — Optional markitdown for richer PDF ingestion
+
+PDF ingestion (`pdf_ingest`) used only `pdf-extract` — pure-Rust **plain-text**
+extraction that drops tables/headings/lists and rejects scanned (image-only)
+PDFs outright. Now Lucy prefers Microsoft's **`markitdown`** CLI when it's
+installed (`pip install markitdown`):
+- **Structure-preserving Markdown** (headings, tables, lists) → much better
+  retrieval chunks for documentation/manuals.
+- **OCR for scanned PDFs** when the markitdown OCR plugin is present (pdf-extract
+  can't do this at all).
+
+Fully optional and graceful: if `markitdown` isn't on PATH, fails, or yields
+nothing, Lucy transparently falls back to `pdf-extract` — same behaviour as
+before. The subprocess runs in `spawn_blocking` (never stalls the async
+runtime), the PDF path is passed as a single argv entry (no shell injection;
+the caller already validates it), and `LUCY_DISABLE_MARKITDOWN` is an escape
+hatch. The ingest progress now reports which extractor ran (`markitdown` vs
+`pdf-extract`).
+
+No new bundled dependency — markitdown is a user-installed external tool, so
+Lucy stays a single Rust binary. cargo check passes.
+
+---
+
 ## [1.7.182] — 2026-06-14
 
 ### Observability — `/memory-health` to diagnose why memory "doesn't stick" or "isn't used"

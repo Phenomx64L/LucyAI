@@ -72,6 +72,44 @@ fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
     chunks
 }
 
+// ── External converter (optional) ───────────────────────────────────────────
+
+/// Try converting the PDF to Markdown via Microsoft's `markitdown` CLI when it
+/// is installed (`pip install markitdown`). Unlike the built-in `pdf-extract`
+/// (plain text only), markitdown preserves document STRUCTURE — headings,
+/// tables, lists — which yields far better retrieval chunks; with its OCR
+/// plugin it can also read scanned PDFs that pdf-extract rejects outright.
+///
+/// Returns `None` (caller falls back to pdf-extract) when:
+///   • the `LUCY_DISABLE_MARKITDOWN` env var is set,
+///   • `markitdown` isn't on PATH / fails to spawn,
+///   • it exits non-zero, or
+///   • it produces empty output.
+///
+/// SECURITY: `path` is passed as a single argv entry (no shell), and the caller
+/// has already validated it (no `..`, must end in `.pdf`, must exist). v1.7.183.
+fn try_markitdown(path: &str) -> Option<String> {
+    if std::env::var("LUCY_DISABLE_MARKITDOWN").is_ok() {
+        return None;
+    }
+    let out = std::process::Command::new("markitdown")
+        .arg(path)
+        .output()
+        .ok()?; // None when the binary isn't found / spawn fails
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        eprintln!(
+            "[pdf] markitdown exited {:?}: {}",
+            out.status.code(),
+            err.lines().next().unwrap_or("")
+        );
+        return None;
+    }
+    let md = String::from_utf8_lossy(&out.stdout);
+    let trimmed = md.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+}
+
 // ── Tauri commands ─────────────────────────────────────────────────────────
 
 /// Ingest a PDF file into Lucy's memory and embedding systems.
@@ -118,19 +156,35 @@ pub async fn pdf_ingest(
         message: format!("Extracting text from {}…", filename),
     });
 
-    let raw_text = pdf_extract::extract_text(p)
-        .map_err(|e| format!(
-            "PDF text extraction failed for '{}': {}. \
-             Tip: scanned/image-only PDFs have no text layer — \
-             use OCR software first.",
-            filename, e
-        ))?;
+    // v1.7.183 — prefer markitdown (structure-preserving Markdown + optional
+    // OCR) when installed; fall back to the built-in pure-Rust extractor. The
+    // subprocess runs in spawn_blocking so it never stalls the async runtime.
+    let (raw_text, extractor) = {
+        let p_owned = path.clone();
+        let via_md = tauri::async_runtime::spawn_blocking(move || try_markitdown(&p_owned))
+            .await
+            .ok()
+            .flatten();
+        match via_md {
+            Some(md) => (md, "markitdown"),
+            None => {
+                let txt = pdf_extract::extract_text(p).map_err(|e| format!(
+                    "PDF text extraction failed for '{}': {}. \
+                     Tip: scanned/image-only PDFs have no text layer — add one with \
+                     OCR software, or install `markitdown` with its OCR plugin first.",
+                    filename, e
+                ))?;
+                (txt, "pdf-extract")
+            }
+        }
+    };
 
     if raw_text.trim().is_empty() {
         return Err(format!(
             "'{}' appears to be image-only or empty. \
              Text extraction requires a text-layer PDF. \
-             Use OCR software (e.g. Adobe Acrobat, Tesseract) to add a text layer first.",
+             Use OCR (Adobe Acrobat / Tesseract) or install `markitdown` with its \
+             OCR plugin to read scanned documents.",
             filename
         ));
     }
@@ -143,6 +197,15 @@ pub async fn pdf_ingest(
         .join("\n");
 
     let total_chars = clean.len();
+
+    // Surface which extractor ran so the user can tell whether markitdown's
+    // structure-preserving path kicked in (vs the plain pdf-extract fallback).
+    let _ = app.emit("pdf_progress", PdfProgress {
+        doc_id: doc_id.clone(), current: 0, total: 0,
+        phase: "extracting".into(),
+        message: format!("Texto extraído con {} ({} caracteres)", extractor, total_chars),
+    });
+
     let chunks      = chunk_text(&clean, csize, CHUNK_OVERLAP);
     let total       = chunks.len() as u32;
 
