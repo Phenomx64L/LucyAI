@@ -371,6 +371,42 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         //   /link list             — list current links
         //   /link kinds            — show allowed kinds
         //   /link rm <link_id>     — remove a link
+        // v1.7.182 — /memory-health: confirm-with-data why ingested docs aren't
+        // used (embedding coverage) and why new saves don't stick (dedup).
+        case 'memory-health':
+        case 'mem-health':
+        case 'memoria-salud': {
+            (async () => {
+                try {
+                    const h = await invoke('memory_health') as any;
+                    const pc  = h.pdf_chunks ?? 0;
+                    const pce = h.pdf_chunks_embedded ?? 0;
+                    const cov = pc > 0 ? Math.round((pce / pc) * 100) : 100;
+                    const byType = h.embeddings_by_type || {};
+                    const typeRows = Object.keys(byType).map((k) =>
+                        `<span style="font-family:var(--mono);font-size:11px;">${String(k).replace(/</g, '&lt;')}: <b>${byType[k]}</b></span>`
+                    ).join(' · ') || '<span style="opacity:.6;">(ninguno)</span>';
+                    const pdfWarn = (pc > 0 && pce === 0)
+                        ? `<div style="margin-top:6px;color:var(--amber);font-size:11px;">⚠ Tienes ${pc} fragmentos de PDF pero <b>0 embebidos</b> → la búsqueda semántica NO los encuentra. Causa típica: Ollama/Gemini no estaba disponible al ingestar. Re-ingesta el PDF con Ollama corriendo (o configura una API key de Gemini).</div>`
+                        : '';
+                    const dh = h.dedup_hits_session ?? 0;
+                    const dedupNote = dh > 0
+                        ? `<div style="margin-top:6px;color:var(--amber);font-size:11px;">⚠ <b>${dh}</b> guardado(s) esta sesión fueron <b>colapsados por dedup</b> en una memoria existente (no se insertaron como nuevos). Si esperabas hechos distintos, el dedup los está plegando. Detalle por memoria en el log (prefijo <code>[memory] dedup</code>).</div>`
+                        : `<div style="margin-top:6px;color:var(--txt2);font-size:11px;">Dedup colapsó 0 guardados esta sesión.</div>`;
+                    sysMsg(`<div class="mn" style="color:#22d3ee;">⌬ Salud de memoria</div>
+                        <div style="font-family:var(--mono);font-size:11px;line-height:1.7;">
+                          Memorias episódicas: <b>${h.episodic_count ?? 0}</b><br>
+                          Fragmentos de PDF: <b>${pc}</b> · embebidos: <b>${pce}</b> (${cov}% cobertura)<br>
+                          Embeddings totales: <b>${h.embeddings_total ?? 0}</b><br>
+                          Por tipo: ${typeRows}<br>
+                          Umbral de inyección por decaimiento: <b>${h.decay_inject_threshold ?? 0.30}</b>
+                        </div>${pdfWarn}${dedupNote}`, '#22d3ee');
+                } catch (e) {
+                    sysMsg(`<div class="mn">⚠ memory_health falló: ${String(e).replace(/</g, '&lt;')}</div>`, 'var(--red)');
+                }
+            })();
+            return true;
+        }
         case 'link':
         case 'memlink': {
             const parts = arg.split(/\s+/).filter(Boolean);

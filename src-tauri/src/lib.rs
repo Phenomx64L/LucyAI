@@ -1020,6 +1020,7 @@ pub fn run() {
             memory::memory_working_list,
             memory::memory_working_clear,
             memory::memory_stats,
+            memory::memory_health,
             // Fork persistence — Parallel Agents (Sprint 4 Pillar 1)
             metrics::fork_save,
             metrics::fork_update,

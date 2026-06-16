@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "lucy-svelte"
-version = "1.7.180"
+version = "1.7.181"
 dependencies = [
  "aho-corasick",
  "async-trait",

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.182] — 2026-06-14
+
+### Observability — `/memory-health` to diagnose why memory "doesn't stick" or "isn't used"
+
+Step 1 of the memory audit: make the silent gates visible so the two reported
+symptoms can be confirmed with data instead of guessed.
+
+- **New `/memory-health` slash command** (`memory-health` / `mem-health` /
+  `memoria-salud`) → calls the new `memory_health` backend command and prints a
+  report to the chat:
+  - **Embedding coverage** — episodic count, **PDF chunks vs PDF chunks
+    embedded** (+ % coverage), total embeddings, and a per-`entity_type`
+    breakdown. If you have PDF chunks but 0 embedded, it warns explicitly: the
+    semantic recall can't find that ingested documentation because Ollama/Gemini
+    was unavailable at ingest time — that's the "Lucy doesn't use what she
+    ingested" cause.
+  - **Dedup collapses** — how many saves this session the FTS/embedding dedup
+    folded into an existing memory instead of inserting (the "Lucy can't save
+    new things" cause), plus the decay-injection threshold.
+- **`save_agent_memory` now logs every dedup collapse** (`[memory] dedup S1/S2 →
+  new save collapsed into existing #id`) and counts them in a process-session
+  atomic that `/memory-health` reads.
+
+No behavioural change to saving/recall — this only surfaces what the gates are
+already doing, so the next step (hybrid recall / threshold tuning) can be driven
+by real numbers. cargo check + svelte-check pass.
+
+---
+
 ## [1.7.181] — 2026-06-14
 
 ### Feature — Gemini-style code blocks: language header + copy, live while streaming

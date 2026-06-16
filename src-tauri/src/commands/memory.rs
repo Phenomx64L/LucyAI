@@ -504,6 +504,63 @@ pub async fn memory_stats() -> Result<MemoryStats, String> {
     })
 }
 
+/// v1.7.182 — Memory health diagnostic (surfaced via `/memory-health`).
+///
+/// Confirms-with-data the two gates the user reported as confusing:
+///   • Embedding COVERAGE — does ingested documentation actually have vectors?
+///     If `pdf_chunks > 0` but `pdf_chunks_embedded == 0`, semantic recall can't
+///     find those docs (Ollama/Gemini was unavailable when they were ingested),
+///     which is why "Lucy doesn't use what she ingested".
+///   • Dedup COLLAPSES — how many saves the FTS/embedding dedup folded into an
+///     existing memory this session, which is why "Lucy can't save new things".
+#[tauri::command]
+pub async fn memory_health() -> Result<serde_json::Value, String> {
+    let dedup_hits = crate::commands::metrics::memory_dedup_hits_session();
+    shared_db(|conn| {
+        let episodic: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agent_memories", [], |r| r.get(0))
+            .unwrap_or(0);
+        let pdf_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_memories WHERE session_id LIKE 'pdf:%'",
+                [], |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let embeddings_total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))
+            .unwrap_or(0);
+        let pdf_embedded: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embeddings WHERE entity_type = 'pdf_chunk'",
+                [], |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let mut by_type = serde_json::Map::new();
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT entity_type, COUNT(*) FROM embeddings GROUP BY entity_type ORDER BY 2 DESC",
+        ) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    by_type.insert(row.0, serde_json::json!(row.1));
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "episodic_count":         episodic,
+            "pdf_chunks":             pdf_chunks,
+            "pdf_chunks_embedded":    pdf_embedded,
+            "embeddings_total":       embeddings_total,
+            "embeddings_by_type":     by_type,
+            "dedup_hits_session":     dedup_hits,
+            "decay_inject_threshold": 0.30,
+        }))
+    })
+}
+
 // ── Sprint 1, AI-2 — Memory consolidation ─────────────────────────────────
 //
 // Why: long-term users accumulate near-duplicate memories ("the prod server

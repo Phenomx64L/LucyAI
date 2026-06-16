@@ -945,6 +945,22 @@ pub struct SaveMemoryResult {
 static SAVE_MEMORY_DEDUP_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
     once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
 
+// v1.7.182 — observability. Counts saves that the dedup gates collapsed into an
+// existing memory this process session, so `/memory-health` can show whether
+// "Lucy can't save new things" is really the dedup folding distinct facts
+// together (vs the agent never emitting <REMEMBER>).
+pub(crate) static MEMORY_DEDUP_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+/// Saves collapsed by Stage-1/2 dedup since process start.
+pub fn memory_dedup_hits_session() -> u64 {
+    MEMORY_DEDUP_HITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+fn _note_dedup(stage: &str, id: i64, title: &str) {
+    MEMORY_DEDUP_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t: String = title.chars().take(60).collect();
+    eprintln!("[memory] dedup {} → new save collapsed into existing #{} (title='{}')", stage, id, t);
+}
+
 #[tauri::command]
 pub async fn save_agent_memory(
     title:      String,
@@ -986,6 +1002,7 @@ pub async fn save_agent_memory(
     // without any serialization cost. Most duplicate saves are caught here.
     let stage1_result = with_db(|conn| stage1_fts_dedup(conn, &title, &content))?;
     if let Some(dup) = stage1_result {
+        _note_dedup("S1(FTS)", dup.id, &title);
         return Ok(dup);
     }
 
@@ -1002,6 +1019,7 @@ pub async fn save_agent_memory(
     // row + embedding, so our probe now sees it and dedups correctly.
     let stage2_result = stage2_embedding_dedup(&title, &content).await;
     if let Ok(Some(dup)) = stage2_result {
+        _note_dedup("S2(embedding)", dup.id, &title);
         return Ok(dup);
     }
 
@@ -1025,6 +1043,7 @@ pub async fn save_agent_memory(
         if let Some(dup) = stage1_fts_dedup(&tx, &title, &content)? {
             // stage1_fts_dedup already incremented access_count via its
             // own UPDATE. Commit so that counter persists.
+            _note_dedup("S1-reprobe", dup.id, &title);
             tx.commit().map_err(|e| format!("save_agent_memory tx commit (dup): {}", e))?;
             return Ok(dup);
         }
