@@ -110,6 +110,123 @@ fn try_markitdown(path: &str) -> Option<String> {
     if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }
 
+// ── Structure-aware chunking (v1.7.184, native — no external tool) ───────────
+//
+// The plain char-window `chunk_text` cuts every ~2500 chars regardless of
+// content, splitting sentences/paragraphs mid-stream → incoherent retrieval
+// chunks. This native-Rust pass instead:
+//   • groups text into blocks on blank lines (paragraphs), or single lines when
+//     the PDF has no blank-line structure, so chunks break on natural
+//     boundaries — never mid-word;
+//   • detects section HEADINGS (Markdown `#`, numbered "3.1 Title", ALL-CAPS)
+//     and PREPENDS the active heading to each chunk as `[Section]` context, so a
+//     retrieved fragment carries the section it belongs to.
+// Captures most of markitdown's structure benefit for the common text-PDF case
+// without bundling Python. (Scanned PDFs / complex tables still want markitdown.)
+
+/// Prepend the active section heading as `[Section]` context, unless the body
+/// already begins with it.
+fn heading_context(section: &Option<String>, body: &str) -> String {
+    let b = body.trim();
+    match section {
+        Some(h) if !b.starts_with(h.as_str()) => format!("[{}]\n{}", h, b),
+        _ => b.to_string(),
+    }
+}
+
+/// Heuristic: does this block look like a section heading? Conservative on
+/// purpose — a wrong guess only mislabels a chunk's `[Section]` prefix, which is
+/// low-harm. Returns the heading text (without `#`) when it matches.
+fn detect_heading(block: &str) -> Option<String> {
+    let trimmed = block.trim();
+    let first = trimmed.lines().next().unwrap_or("").trim();
+    if first.is_empty() || first.chars().count() > 80 { return None; }
+    let ends_sentence = first.ends_with(|c: char| matches!(c, '.' | ',' | ';' | ':'));
+
+    // 1. Markdown ATX heading (markitdown emits these).
+    if let Some(rest) = first.strip_prefix('#') {
+        let h = rest.trim_start_matches('#').trim();
+        if !h.is_empty() { return Some(h.to_string()); }
+    }
+    // A multi-line block is a paragraph, not a plain-text heading.
+    if trimmed.lines().filter(|l| !l.trim().is_empty()).count() > 1 { return None; }
+
+    // 2. Numbered section ("3", "3.1", "3.1.2") + Capitalized title.
+    let fb = first.as_bytes();
+    if fb.first().map_or(false, |c| c.is_ascii_digit()) {
+        let mut i = 0;
+        while i < fb.len() && (fb[i].is_ascii_digit() || fb[i] == b'.') { i += 1; }
+        let rest = first[i..].trim();
+        if i > 0 && !rest.is_empty()
+            && rest.chars().next().map_or(false, |c| c.is_uppercase())
+            && !ends_sentence
+        {
+            return Some(first.to_string());
+        }
+    }
+
+    // 3. ALL-CAPS short line ("INSTALLATION", "SYSTEM REQUIREMENTS").
+    let letters: Vec<char> = first.chars().filter(|c| c.is_alphabetic()).collect();
+    if letters.len() >= 3 && letters.iter().all(|c| c.is_uppercase()) && !ends_sentence {
+        return Some(first.to_string());
+    }
+    None
+}
+
+fn chunk_structured(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
+    let mut blocks: Vec<String> = text
+        .split("\n\n")
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .collect();
+    if blocks.len() <= 1 {
+        // No paragraph (blank-line) structure — split on lines so chunks at
+        // least break on line boundaries rather than mid-word.
+        blocks = text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    }
+    if blocks.len() <= 1 {
+        // Truly unstructured (one giant line) — fall back to the char window.
+        return chunk_text(text, chunk_size, overlap);
+    }
+
+    let mut chunks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut section: Option<String> = None;       // most recent heading seen
+    let mut cur_section: Option<String> = None;   // heading active when `cur` began
+
+    for block in &blocks {
+        if let Some(h) = detect_heading(block) {
+            section = Some(h);
+        }
+        // A single oversized block: flush, then hard-split just that block.
+        if block.len() > chunk_size {
+            if !cur.trim().is_empty() {
+                chunks.push(heading_context(&cur_section, &cur));
+                cur.clear();
+            }
+            for piece in chunk_text(block, chunk_size, overlap) {
+                chunks.push(heading_context(&section, &piece));
+            }
+            continue;
+        }
+        // Adding this block would overflow → flush the current chunk first.
+        if !cur.is_empty() && cur.len() + 1 + block.len() > chunk_size {
+            chunks.push(heading_context(&cur_section, &cur));
+            cur.clear();
+        }
+        if cur.is_empty() {
+            cur_section = section.clone();
+        } else {
+            cur.push('\n');
+        }
+        cur.push_str(block);
+    }
+    if !cur.trim().is_empty() {
+        chunks.push(heading_context(&cur_section, &cur));
+    }
+    chunks
+}
+
 // ── Tauri commands ─────────────────────────────────────────────────────────
 
 /// Ingest a PDF file into Lucy's memory and embedding systems.
@@ -206,7 +323,7 @@ pub async fn pdf_ingest(
         message: format!("Texto extraído con {} ({} caracteres)", extractor, total_chars),
     });
 
-    let chunks      = chunk_text(&clean, csize, CHUNK_OVERLAP);
+    let chunks      = chunk_structured(&clean, csize, CHUNK_OVERLAP);
     let total       = chunks.len() as u32;
 
     if total == 0 {

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.184] — 2026-06-14
+
+### Feature — Native structure-aware PDF chunking (no external tool)
+
+The "give me markitdown's benefit without installing anything" path. PDF
+ingestion chunked text in blind 2 500-char windows, which split sentences and
+paragraphs mid-stream and produced incoherent retrieval chunks. New native-Rust
+`chunk_structured` (in `pdf.rs`, bundled — no Python) replaces that:
+
+- **Boundary-aware chunking** — groups text into blocks on blank lines
+  (paragraphs), or single lines when the PDF has no blank-line structure, and
+  packs whole blocks up to the size limit. Chunks now break on natural
+  boundaries, **never mid-word**. A single oversized block still falls back to
+  the char window; a truly unstructured one-line dump falls back entirely.
+- **Section-heading context** — detects headings (Markdown `#`, numbered
+  "3.1 Title", ALL-CAPS) and **prepends the active heading to each chunk** as
+  `[Section]`, so a retrieved fragment carries the section it came from — better
+  embeddings and better answers about which part of a manual a fact lives in.
+
+Pairs with v1.7.183: markitdown (if installed) yields clean Markdown that makes
+this chunker shine, but even the built-in `pdf-extract` path now produces
+coherent, section-tagged chunks. cargo check + contract tests pass.
+
+---
+
 ## [1.7.183] — 2026-06-14
 
 ### Feature — Optional markitdown for richer PDF ingestion
