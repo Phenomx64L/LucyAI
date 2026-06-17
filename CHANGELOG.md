@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.188] — 2026-06-17
+
+### Fixed — Agent loop "spins in circles" on file-edit tasks (no-progress guard)
+
+User report: asking Lucy to change a file makes it loop endlessly (even on
+Gemini 3.1 Pro) — reading and searching repeatedly, logging the same
+`[⊟ Contexto comprimido] … (Phase 1+2)` line dozens of times, and finishing
+with only read/analysis ops without ever editing.
+
+**Root cause (the spin):** the loop's completion check
+([+page.svelte](src/routes/+page.svelte)) kept iterating whenever the model's
+`<THOUGHT>` merely *stated* intent ("voy a editar el archivo…") even when it
+emitted **no** `<TOOL>`/`<EXECUTE>` tag. The model could re-narrate "I'll edit
+this" every turn without acting, riding the loop to `MAX_LOOPS` (60). The
+byte-identical skip-stuck guard missed it because the wording varied each turn.
+
+**Fix:** added a no-progress counter for "intent-only" turns. The 1st injects a
+hard corrective nudge ("emit the actual `<TOOL>editfile>`/`writefile` tag now,
+or deliver your final answer — describing is not doing"); the 2nd consecutive
+intent-only turn stops the loop and delivers the best-available answer. Resets
+on any real tool execution.
+
+**Fix (perf):** `compressContext`'s Phase-2 LLM compression
+(`gemini-2.5-flash-lite`) re-ran on **every** loop iteration once context
+crossed 20KB — but the rolling-window already caps `agentCtx` at 35KB before it
+runs, so it kept re-compressing a steady context and discarding the result (one
+wasted LLM round-trip per turn; the repeated identical "9038 chars saved"
+lines). Now memoized: Phase 2 is skipped unless the input grew >3KB since its
+last run.
+
 ## [1.7.187] — 2026-06-17
 
 ### Added — Claude Opus 4.8 + refreshed Anthropic effort tiers

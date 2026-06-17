@@ -5826,6 +5826,16 @@ Use ONE of these patterns instead:
                 // that briefly re-asserts a status line doesn't trip it.
                 let _lastAgentRespHash = '';
                 let _identicalRespStreak = 0;
+                // v1.7.188 — no-progress guard for "intent-only" turns. The
+                // model can keep the loop alive by merely STATING intent in
+                // <THOUGHT> ("voy a editar el archivo…") without ever emitting
+                // an actual <TOOL>/<EXECUTE> tag. The byte-identical skip-stuck
+                // above misses it because the wording varies each turn, so the
+                // loop spins to MAX_LOOPS re-reading/re-compacting and never
+                // edits. We count consecutive turns that continued ONLY on
+                // stated intent (no tool ran): the 1st gets a hard corrective
+                // nudge, the 2nd stops the loop and delivers the best answer.
+                let _intentOnlyStreak = 0;
                 const _hashResp = (s) => {
                     let h = 5381;
                     const str = String(s || '').trim();
@@ -6145,6 +6155,13 @@ Use ONE of these patterns instead:
                 };
 
                 // ── Reactive Compact: 2-phase context compression ──
+                // v1.7.188 — remember the input size of the last Phase-2 LLM run.
+                // The rolling-window cap (35KB on agentCtx) holds the context
+                // roughly steady across turns, so Phase 2 used to re-run the SAME
+                // gemini-flash-lite compression every loop and throw it away — a
+                // redundant LLM round-trip per turn. Skip it when the input hasn't
+                // grown meaningfully since the last Phase-2 run.
+                let _lastPhase2InputLen = -1;
                 const compressContext = async (fullCtx, agentModel, loop_i = 0) => {
                     let ctx = fullCtx;
                     const origLen = ctx.length;
@@ -6174,8 +6191,12 @@ Use ONE of these patterns instead:
                         });
                     }
 
-                    // Phase 2: LLM compression for very large contexts (>20KB, iter 4+)
-                    if (ctx.length > 20000 && loop_i >= 4) {
+                    // Phase 2: LLM compression for very large contexts (>20KB, iter 4+).
+                    // Skip when the input is ~the same size as the last Phase-2 run
+                    // (steady context held by the rolling window → re-compressing
+                    // would just redo identical work and burn an LLM call).
+                    if (ctx.length > 20000 && loop_i >= 4 && Math.abs(origLen - _lastPhase2InputLen) > 3000) {
+                        _lastPhase2InputLen = origLen;
                         // Compress ALL steps except last 2 using lightweight model
                         const cutoff = loop_i - 2;
                         const earlySteps = [];
@@ -8143,13 +8164,41 @@ Use ONE of these patterns instead:
 
                     // ── Smart task completion detection ──
                     let shouldContinue = toolUsed;
+                    let _continuedOnIntentOnly = false;
                     if (!shouldContinue) {
                         // Only continue if there are CONCRETE tool/execute tags or specific intent in THOUGHT
                         const hasConcreteIntent = /<TOOL>|<EXECUTE|<EXECUTE_CMD/i.test(agentResp);
                         const thoughtText = (agentResp.match(/<THOUGHT>([\s\S]*?)<\/THOUGHT>/i) || [])[1] || '';
                         const thoughtSignalsWork = thoughtText.length > 20 &&
                             /\b(voy a (ejecutar|editar|escribir|leer|crear|modificar|usar)|let me (run|edit|write|read|create|use|check)|I('ll| will) (run|edit|write|read|create|use|check|fix))\b/i.test(thoughtText);
+                        // "Intent only" = the model SAYS it will act but emitted no
+                        // tag this turn. We still allow it (the model sometimes
+                        // narrates then acts), but the streak guard below stops the
+                        // "voy a editar…" spin instead of riding it to MAX_LOOPS.
+                        _continuedOnIntentOnly = !hasConcreteIntent && thoughtSignalsWork;
                         shouldContinue = hasConcreteIntent || thoughtSignalsWork;
+                    }
+
+                    // v1.7.188 — no-progress guard. Count consecutive turns that
+                    // continued ONLY on stated-but-unexecuted intent (no real tool
+                    // ran). 1st: inject a hard "emit the tag" nudge. 2nd: stop the
+                    // loop and deliver the best-available answer — this is what kills
+                    // the read→search→"I'll edit…"→re-compact spin the user saw.
+                    if (shouldContinue && _continuedOnIntentOnly) {
+                        _intentOnlyStreak++;
+                        if (_intentOnlyStreak >= 2) {
+                            pushTrace({ phase: 'info', label: `⏹ Sin progreso: ${_intentOnlyStreak} turnos declarando intención sin emitir herramienta — finalizando`, step: loop_i + 1, tabId, detail: 'El modelo dijo que actuaría (editar/escribir/ejecutar) pero nunca emitió <TOOL>/<EXECUTE>. Se corta el bucle.' });
+                            logTaskEvent('agent_loop_block', 'intent_only_no_tool', null, { model: _loopModelName, streak: _intentOnlyStreak, step: loop_i + 1 }, tabId);
+                            stepsHtml += `<span style="opacity:0.7;color:#caa45c">[⏹ Declaró intención sin ejecutar ${_intentOnlyStreak} veces — deteniendo el bucle.]</span>\n`;
+                            shouldContinue = false; // fall through to the final-answer / verifier path
+                        } else {
+                            // First intent-only turn — nudge the model to emit a REAL
+                            // tag next turn instead of re-narrating the same plan.
+                            agentCtx += `\n\n[!! ACCIÓN REQUERIDA — dijiste que ibas a actuar (editar/escribir/ejecutar) pero NO emitiste ninguna etiqueta <TOOL> o <EXECUTE>, así que NO pasó nada. Haz UNA de estas cosas AHORA:\n  • Emite la etiqueta real, p.ej. <TOOL>editfile:RUTA|||TEXTO_VIEJO|||TEXTO_NUEVO</TOOL>, <TOOL>writefile:RUTA|||CONTENIDO</TOOL>, o <EXECUTE_CMD>...</EXECUTE_CMD>.\n  • Si no puedes continuar, entrega tu respuesta FINAL en Markdown SIN etiquetas.\nDescribir el cambio NO es hacerlo.]`;
+                            pushTrace({ phase: 'info', label: `⚠ Turno solo-intención — inyectando recordatorio "emite la etiqueta" (step ${loop_i + 1})`, step: loop_i + 1, tabId });
+                        }
+                    } else if (toolUsed) {
+                        _intentOnlyStreak = 0; // real progress — reset the streak
                     }
 
                     if (!shouldContinue) {
