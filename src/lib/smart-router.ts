@@ -443,7 +443,7 @@ function needForIntent(intent: RoutingContext['detectedIntent']): LocalNeed {
 }
 
 const HEAVY_MODEL_DEFAULT = 'claude-sonnet-4-6';  // strong reasoning, less $ than Opus
-const HEAVY_MODEL_PEAK    = 'claude-opus-4-7';    // flagship — for extreme contexts (>3000 tokens)
+const HEAVY_MODEL_PEAK    = 'claude-opus-4-8';    // flagship — for extreme contexts (>3000 tokens)
 const FAST_MODEL_DEFAULT  = 'gemini-3.1-flash-lite';  // May 2026 cheapest frontier — $0.25/$1.50 per M tok
 
 // ── Recent-failure tracking ──────────────────────────────────────────────

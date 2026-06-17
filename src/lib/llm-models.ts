@@ -117,12 +117,13 @@ const CONTEXT_WINDOWS: Record<string, number> = {
     'gemini-2.5-flash':                1_000_000,
     'gemini-2.5-pro':                  2_000_000,
     'gemini-2.5-flash-lite-preview':   1_000_000,
-    // Claude 4.x — 200k input window
-    'claude-4-7-opus':                 200_000,
-    'claude-4-6-sonnet':               200_000,
-    'claude-4-5-sonnet':               200_000,
-    'claude-opus-4-7':                 200_000,
-    'claude-sonnet-4-6':               200_000,
+    // Claude 4.x — Opus 4.8/4.7 & Sonnet 4.6 are 1M input; Haiku/older are 200k.
+    'claude-opus-4-8':                 1_000_000,
+    'claude-opus-4-7':                 1_000_000,
+    'claude-sonnet-4-6':               1_000_000,
+    'claude-haiku-4-5':                  200_000,
+    'claude-opus-4-5':                   200_000,
+    'claude-sonnet-4-5':                 200_000,
 };
 
 /** Resolve the context-window (input tokens) for a model id. Strips

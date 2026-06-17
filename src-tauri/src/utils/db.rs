@@ -793,6 +793,7 @@ fn model_prices(model: &str) -> (f64, f64) {
 
     match base {
         // ── Anthropic Claude ──
+        "claude-opus-4-8"   |
         "claude-opus-4-7"   |
         "claude-opus-4-6"   |
         "claude-opus-4-5"     => (0.015,   0.075),

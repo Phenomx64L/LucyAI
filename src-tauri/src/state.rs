@@ -247,10 +247,16 @@ pub const ALLOWED_MODELS: &[&str] = &[
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "gemini-2.5-flash-lite-preview",
-    // ── Anthropic Claude (May 2026 lineup) ──
+    // ── Anthropic Claude (June 2026 lineup) ──
     // Effort suffix "::low|::medium|::high|::xhigh|::max" is supported by
     // resolve_anthropic_model() in ai.rs and stripped before the API call.
-    "claude-opus-4-7",                  // flagship — 1M ctx
+    "claude-opus-4-8",                  // flagship (June 2026) — 1M ctx
+    "claude-opus-4-8::low",
+    "claude-opus-4-8::medium",
+    "claude-opus-4-8::high",
+    "claude-opus-4-8::xhigh",
+    "claude-opus-4-8::max",
+    "claude-opus-4-7",                  // previous gen — 1M ctx
     "claude-opus-4-7::low",
     "claude-opus-4-7::medium",
     "claude-opus-4-7::high",

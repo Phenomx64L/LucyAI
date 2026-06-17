@@ -101,9 +101,11 @@ export const LLM_GROUPS = [
         provider: "anthropic",
         credential_key: "anthropic_api_key",
         options: [
-            // May 2026 lineup — Opus 4.7 / Sonnet 4.6 / Haiku 4.5 (1M ctx on Opus & Sonnet)
+            // June 2026 lineup — Opus 4.8 (flagship) / Opus 4.7 (prev gen) /
+            // Sonnet 4.6 / Haiku 4.5. Opus & Sonnet are 1M ctx.
             //
             // Effort levels (from platform.claude.com/docs/en/build-with-claude/effort):
+            //   • Opus 4.8    supports low/medium/high/xhigh/max  (same surface as 4.7)
             //   • Opus 4.7    supports low/medium/high/xhigh/max  (xhigh is exclusive)
             //   • Sonnet 4.6  supports low/medium/high/max        (docs recommend medium default)
             //   • Haiku 4.5   does NOT support effort (lightweight tier)
@@ -123,11 +125,13 @@ export const LLM_GROUPS = [
             // Effort-suffix variants share the same shape — the tier ratio
             // is what matters at a glance, the effort level is in the text.
             //
-            // ── Opus 4.7 — start with xhigh for coding/agentic (per docs) ──
-            { id: "claude-opus-4-7::xhigh",  icon: "◆", nameEn: "Claude Opus 4.7 — Extra High (coding/agentic)", nameEs: "Claude Opus 4.7 — Extra Alto (coding/agéntico)" },
-            { id: "claude-opus-4-7::high",   icon: "◆", nameEn: "Claude Opus 4.7 — High (default)",              nameEs: "Claude Opus 4.7 — Alto (predeterminado)" },
-            { id: "claude-opus-4-7::medium", icon: "◆", nameEn: "Claude Opus 4.7 — Medium (cost-sensitive)",     nameEs: "Claude Opus 4.7 — Medio (sensible al costo)" },
-            { id: "claude-opus-4-7::max",    icon: "◆", nameEn: "Claude Opus 4.7 — Max (frontier problems)",     nameEs: "Claude Opus 4.7 — Max (problemas frontera)" },
+            // ── Opus 4.8 (flagship, June 2026) — start with xhigh for coding/agentic ──
+            { id: "claude-opus-4-8::xhigh",  icon: "◆", nameEn: "Claude Opus 4.8 — Extra High (coding/agentic)", nameEs: "Claude Opus 4.8 — Extra Alto (coding/agéntico)" },
+            { id: "claude-opus-4-8::high",   icon: "◆", nameEn: "Claude Opus 4.8 — High (default)",              nameEs: "Claude Opus 4.8 — Alto (predeterminado)" },
+            { id: "claude-opus-4-8::medium", icon: "◆", nameEn: "Claude Opus 4.8 — Medium (cost-sensitive)",     nameEs: "Claude Opus 4.8 — Medio (sensible al costo)" },
+            { id: "claude-opus-4-8::max",    icon: "◆", nameEn: "Claude Opus 4.8 — Max (frontier problems)",     nameEs: "Claude Opus 4.8 — Max (problemas frontera)" },
+            // ── Opus 4.7 — previous generation, kept for parity / pinning ──
+            { id: "claude-opus-4-7::high",   icon: "◇", nameEn: "Claude Opus 4.7 — High (previous gen)",         nameEs: "Claude Opus 4.7 — Alto (generación anterior)" },
             // ── Sonnet 4.6 — docs recommend medium as default ──
             { id: "claude-sonnet-4-6::medium", icon: "◇", nameEn: "Claude Sonnet 4.6 — Medium (recommended default)", nameEs: "Claude Sonnet 4.6 — Medio (predeterminado recomendado)" },
             { id: "claude-sonnet-4-6::low",    icon: "◇", nameEn: "Claude Sonnet 4.6 — Low (speed-sensitive)",        nameEs: "Claude Sonnet 4.6 — Bajo (sensible a latencia)" },

@@ -18,7 +18,7 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new() -> Self {
         Self {
-            model: "claude-opus-4-7".into(),
+            model: "claude-opus-4-8".into(),
         }
     }
 }

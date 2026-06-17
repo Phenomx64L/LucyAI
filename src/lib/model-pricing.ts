@@ -51,6 +51,7 @@ const EFFORT_FACTOR: Record<string, number> = {
 // When in doubt err HIGH so the cost indicator doesn't surprise the user.
 export const MODEL_PRICING: Record<string, ModelPricing> = {
     // ── Anthropic Claude ──────────────────────────────────────────────
+    'claude-opus-4-8':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
     'claude-opus-4-7':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
     'claude-opus-4-6':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
     'claude-opus-4-5':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },

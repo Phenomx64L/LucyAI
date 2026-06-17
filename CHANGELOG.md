@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.187] — 2026-06-17
+
+### Added — Claude Opus 4.8 + refreshed Anthropic effort tiers
+
+Updated Lucy's Claude lineup to the current June 2026 flagship. **Claude Opus
+4.8** (`claude-opus-4-8`) is now the default Anthropic option in the model
+picker, with the full effort grammar (low/medium/high/xhigh/max) — the same
+request surface as 4.7, so it's a drop-in: Lucy's payload only sends
+`model`/`max_tokens`/`system`/`messages` + `output_config.effort` (no
+`temperature`/`thinking`, which 4.7/4.8 reject). Opus 4.7 is kept as a
+selectable "previous generation" entry; Sonnet 4.6 / Haiku 4.5 unchanged.
+
+Touched: `models.js` (picker), `state.rs::ALLOWED_MODELS` (backend whitelist),
+`ai.rs::resolve_anthropic_model` (effort resolver + test), `db.rs` +
+`model-pricing.ts` (cost tables, Opus-family rate), `llm-models.ts`
+(context-window map — corrected Opus 4.8/4.7 & Sonnet 4.6 to their real **1M**
+input window, Haiku/legacy stay 200k), `computer_use/anthropic.rs` &
+`rdp_agent.rs` (native/RDP computer-use default), `smart-router.ts`
+(`HEAVY_MODEL_PEAK`).
+
+> Note: this does **not** address the reported `401 invalid x-api-key` — that
+> is an authentication error (the stored Anthropic key is invalid/expired, not
+> a model problem). Re-enter a valid Anthropic API key in Settings; the same
+> key would 401 on any Claude model, 4.7 or 4.8.
+
 ## [1.7.186] — 2026-06-14
 
 ### Chore — Apply clippy machine-applicable idiom fixes (integrity-audit cleanup)

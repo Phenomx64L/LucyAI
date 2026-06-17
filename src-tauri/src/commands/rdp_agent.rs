@@ -384,7 +384,7 @@ pub async fn run_rdp_agent(
     app:       AppHandle,
 ) -> Result<String, String> {
 
-    let model     = model.unwrap_or_else(|| "claude-opus-4-7".into());
+    let model     = model.unwrap_or_else(|| "claude-opus-4-8".into());
     let max_steps = max_steps.unwrap_or(20);
 
     // Get window dimensions

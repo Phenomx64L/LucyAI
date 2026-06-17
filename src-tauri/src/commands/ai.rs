@@ -354,6 +354,7 @@ fn apply_gemini_generation_config(payload: &mut serde_json::Value, cfg: Option<s
 ///      model doesn't support effort, the suffix is missing, or it's invalid
 ///
 /// Per platform.claude.com/docs/en/build-with-claude/effort:
+///   • Opus 4.8    accepts: low | medium | high | xhigh | max  (same surface as 4.7)
 ///   • Opus 4.7    accepts: low | medium | high | xhigh | max
 ///   • Sonnet 4.6  accepts: low | medium | high | max     (no xhigh)
 ///   • Opus 4.5    accepts: low | medium | high | max
@@ -378,6 +379,7 @@ fn resolve_anthropic_model(raw_model: &str) -> (String, Option<&'static str>) {
     };
     // Per-model whitelist of accepted effort values.
     let supported: &[&str] = match base {
+        "claude-opus-4-8"   => &["low", "medium", "high", "xhigh", "max"],
         "claude-opus-4-7"   => &["low", "medium", "high", "xhigh", "max"],
         "claude-sonnet-4-6" => &["low", "medium", "high",          "max"],
         "claude-opus-4-5"   => &["low", "medium", "high",          "max"],
@@ -1665,6 +1667,16 @@ mod anthropic_resolver_tests {
         let (id, eff) = resolve_anthropic_model("claude-opus-4-7::xhigh");
         assert_eq!(id, "claude-opus-4-7");
         assert_eq!(eff, Some("xhigh"));
+    }
+
+    #[test]
+    fn opus_48_all_five_levels_accepted() {
+        // Opus 4.8 (flagship, June 2026) shares the 4.7 effort surface.
+        for level in ["low", "medium", "high", "xhigh", "max"] {
+            let (id, eff) = resolve_anthropic_model(&format!("claude-opus-4-8::{}", level));
+            assert_eq!(id, "claude-opus-4-8");
+            assert_eq!(eff, Some(level), "expected effort {} to pass for Opus 4.8", level);
+        }
     }
 
     #[test]
