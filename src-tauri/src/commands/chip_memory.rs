@@ -206,7 +206,7 @@ pub async fn chip_stats_summary(days: Option<i64>) -> Result<ChipStatsSummary, S
         }).map_err(|e| format!("chip_stats_summary query: {}", e))?;
 
         let mut rows: Vec<ChipStatRow> = Vec::new();
-        for r in iter { if let Ok(row) = r { rows.push(row); } }
+        for row in iter.flatten() { rows.push(row); }
         rows.sort_by(|a, b| b.net.partial_cmp(&a.net).unwrap_or(std::cmp::Ordering::Equal));
         rows.truncate(20);
 
@@ -249,7 +249,7 @@ pub async fn suggest_memory_chips(
             })
         }).map_err(|e| format!("suggest_memory_chips query: {}", e))?;
         let mut out = Vec::new();
-        for r in iter { if let Ok(row) = r { out.push(row); } }
+        for row in iter.flatten() { out.push(row); }
         Ok::<_, String>(out)
     })?;
 

@@ -175,7 +175,7 @@ impl AnthropicProvider {
         let coord = input.get("coordinate")
             .and_then(|c| c.as_array())
             .map(|arr| [
-                arr.get(0).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                arr.first().and_then(|v| v.as_i64()).unwrap_or(0) as i32,
                 arr.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             ])
             .unwrap_or([0, 0]);
@@ -186,7 +186,7 @@ impl AnthropicProvider {
         input.get(key)
             .and_then(|c| c.as_array())
             .map(|arr| [
-                arr.get(0).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                arr.first().and_then(|v| v.as_i64()).unwrap_or(0) as i32,
                 arr.get(1).and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             ])
             .unwrap_or([0, 0])

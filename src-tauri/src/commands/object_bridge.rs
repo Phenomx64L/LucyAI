@@ -126,7 +126,7 @@ pub async fn obj_bridge_store(args: StoreArgs) -> Result<StoredObject, String> {
     let arr = rows.as_array().ok_or("rows is not an array")?.clone();
     let row_count = arr.len();
     // Field discovery from first record
-    let fields: Vec<String> = arr.iter().next()
+    let fields: Vec<String> = arr.first()
         .and_then(|v| v.as_object())
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();

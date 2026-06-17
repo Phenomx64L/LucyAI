@@ -608,9 +608,7 @@ impl PromptSection for McpRegistrySection {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
             }).map_err(|e| e.to_string())?;
             let mut out = Vec::new();
-            for r in iter {
-                if let Ok(t) = r { out.push(t); }
-            }
+            for t in iter.flatten() { out.push(t); }
             Ok::<_, String>(out)
         }).unwrap_or_default();
 

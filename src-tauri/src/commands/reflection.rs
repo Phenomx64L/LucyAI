@@ -38,6 +38,7 @@ pub enum RiskLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct WorkingMemorySnapshot {
     /// Current working directory for path validation
     pub current_cwd: Option<String>,
@@ -49,16 +50,6 @@ pub struct WorkingMemorySnapshot {
     pub last_commands: Vec<String>,
 }
 
-impl Default for WorkingMemorySnapshot {
-    fn default() -> Self {
-        Self {
-            current_cwd: None,
-            recent_paths: Vec::new(),
-            last_outputs: Vec::new(),
-            last_commands: Vec::new(),
-        }
-    }
-}
 
 // ── Compiled patterns (static, compiled once) ────────────────────────────────
 

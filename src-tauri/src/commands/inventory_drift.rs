@@ -118,7 +118,7 @@ pub async fn inventory_get_baseline(host_id: String) -> Result<Option<InventoryB
             None => Ok(None),
             Some((hid, label, snap_str, created_at, updated_at)) => {
                 let snapshot: Value = serde_json::from_str(&snap_str)
-                    .unwrap_or_else(|_| Value::Null);
+                    .unwrap_or(Value::Null);
                 Ok(Some(InventoryBaseline {
                     host_id: hid, label, snapshot, created_at, updated_at,
                 }))

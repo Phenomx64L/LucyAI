@@ -60,11 +60,11 @@ pub fn reranker_status() -> StatusInfo {
 
     #[cfg(not(feature = "ml-reranker"))]
     {
-        return StatusInfo {
+        StatusInfo {
             status: Status::FeatureDisabled,
             model_path: path_str,
             note: Some("Build without `ml-reranker` feature — RRF-only ranking active. Rebuild with `cargo build --features ml-reranker` to enable.".to_string()),
-        };
+        }
     }
 
     #[cfg(feature = "ml-reranker")]

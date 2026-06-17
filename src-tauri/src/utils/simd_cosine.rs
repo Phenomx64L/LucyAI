@@ -404,7 +404,7 @@ pub struct SimdInfo {
 pub fn simd_info() -> SimdInfo {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        return SimdInfo {
+        SimdInfo {
             backend:      backend().name(),
             has_avx512f:  std::arch::is_x86_feature_detected!("avx512f"),
             has_avx512dq: std::arch::is_x86_feature_detected!("avx512dq"),
@@ -412,7 +412,7 @@ pub fn simd_info() -> SimdInfo {
             has_avx2:     std::arch::is_x86_feature_detected!("avx2"),
             has_fma:      std::arch::is_x86_feature_detected!("fma"),
             arch:         if cfg!(target_arch = "x86_64") { "x86_64" } else { "x86" },
-        };
+        }
     }
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     SimdInfo {

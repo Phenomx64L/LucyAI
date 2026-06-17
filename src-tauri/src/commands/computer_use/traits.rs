@@ -107,7 +107,7 @@ fn strip_code_fences(s: &str) -> String {
     let t = s.trim();
     if let Some(rest) = t.strip_prefix("```") {
         // Drop the optional language tag on the first line (e.g. ```json).
-        let after_lang = rest.splitn(2, '\n').nth(1).unwrap_or(rest);
+        let after_lang = rest.split_once('\n').map(|x| x.1).unwrap_or(rest);
         let body = after_lang.strip_suffix("```").unwrap_or(after_lang);
         return body.trim().to_string();
     }

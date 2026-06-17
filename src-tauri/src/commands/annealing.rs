@@ -341,7 +341,7 @@ fn score_inner(conn: &Connection) -> Result<AnnealingReport, String> {
 /// Read-only — no graph mutations in this release.
 #[tauri::command]
 pub async fn memory_annealing_report() -> Result<AnnealingReport, String> {
-    shared_db(|c| score_inner(c))
+    shared_db(score_inner)
 }
 
 /// Inspect a single cluster by tag name, for the UI drill-down.

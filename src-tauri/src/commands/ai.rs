@@ -508,13 +508,13 @@ fn strip_html_tags(html: &str) -> String {
         if c == '<' {
             in_tag = true;
             let remain = &html[i..];
-            if remain.get(..7).map_or(false, |s| s.eq_ignore_ascii_case("<script")) {
+            if remain.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("<script")) {
                 in_script = true;
-            } else if remain.get(..8).map_or(false, |s| s.eq_ignore_ascii_case("</script")) {
+            } else if remain.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("</script")) {
                 in_script = false;
-            } else if remain.get(..6).map_or(false, |s| s.eq_ignore_ascii_case("<style")) {
+            } else if remain.get(..6).is_some_and(|s| s.eq_ignore_ascii_case("<style")) {
                 in_style = true;
-            } else if remain.get(..7).map_or(false, |s| s.eq_ignore_ascii_case("</style")) {
+            } else if remain.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("</style")) {
                 in_style = false;
             }
         } else if c == '>' {
@@ -1499,7 +1499,7 @@ REGLAS:
     } else {
         // Surface common API errors with actionable hints
         let hint = if status.as_u16() == 401 || status.as_u16() == 403 {
-            format!(" → API Key inválida o sin permisos. Configúrala en Settings → API Key.")
+            " → API Key inválida o sin permisos. Configúrala en Settings → API Key.".to_string()
         } else if status.as_u16() == 429 {
             " → Rate limit alcanzado. Espera un momento o cambia de modelo.".to_string()
         } else if status.as_u16() >= 500 {

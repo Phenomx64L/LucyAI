@@ -140,7 +140,7 @@ impl ComputerUseProvider for OllamaProvider {
     async fn check_credentials(&self) -> Result<(), String> {
         let endpoint = Self::get_endpoint();
         let resp = HTTP_CLIENT
-            .get(&format!("{}/api/tags", endpoint))
+            .get(format!("{}/api/tags", endpoint))
             .send()
             .await;
 
@@ -272,7 +272,7 @@ impl ComputerUseProvider for OllamaProvider {
         // ── First attempt ─────────────────────────────────────────────────────
         async fn call_ollama(endpoint: &str, body: &Value) -> Result<String, String> {
             let resp = HTTP_CLIENT
-                .post(&format!("{}/api/chat", endpoint))
+                .post(format!("{}/api/chat", endpoint))
                 .header("content-type", "application/json")
                 .json(body)
                 .send()

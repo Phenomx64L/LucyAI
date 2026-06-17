@@ -357,7 +357,7 @@ fn extract_list_items(prompt: &str) -> Vec<String> {
     if let Some(colon_pos) = prompt.find(':') {
         let tail = &prompt[colon_pos + 1..];
         let items: Vec<String> = tail
-            .split(|c| c == ',' || c == ';')
+            .split([',', ';'])
             .map(|s| s.trim().trim_end_matches('.').to_string())
             .filter(|s| !s.is_empty() && s.len() <= 60)
             .collect();

@@ -506,7 +506,7 @@ fn vec_to_blob(v: &[f32]) -> Vec<u8> {
 
 /// Inverse of vec_to_blob. Returns None if length isn't a multiple of 4.
 fn blob_to_vec(b: &[u8]) -> Option<Vec<f32>> {
-    if b.len() % 4 != 0 { return None; }
+    if !b.len().is_multiple_of(4) { return None; }
     let mut out = Vec::with_capacity(b.len() / 4);
     for chunk in b.chunks_exact(4) {
         let arr = [chunk[0], chunk[1], chunk[2], chunk[3]];

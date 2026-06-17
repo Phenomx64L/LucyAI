@@ -558,7 +558,6 @@ pub async fn semantic_search(
         };
         let knn_res = shared_db(|conn| {
             super::vec_search::knn_filtered(conn, &qvec, limit, filter, 5)
-                .map_err(|e| e)
         });
         if let Ok(rows) = knn_res {
             if !rows.is_empty() {
@@ -705,7 +704,7 @@ pub async fn backfill_embeddings(
             Ok((vecs, used_model)) => {
                 // Bulk-insert under a single tx for the chunk — fewer DB locks.
                 let chunk_owned: Vec<(String, String, Vec<f32>)> = chunk.iter()
-                    .zip(vecs.into_iter())
+                    .zip(vecs)
                     .map(|((id, text), v)| (id.clone(), text.clone(), v))
                     .collect();
                 let used_model_clone = used_model.clone();

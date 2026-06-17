@@ -322,7 +322,7 @@ where
 {
     let pool = POOL.get().ok_or_else(|| "Metrics DB not initialized".to_string())?;
     let conn = pool.get().map_err(|e| format!("DB pool exhausted: {}", e))?;
-    f(&*conn)
+    f(&conn)
 }
 
 /// Crate-visible alias so sibling modules (e.g. incident.rs) can reuse the
@@ -1239,7 +1239,7 @@ pub async fn search_agent_memories(query: String, limit: Option<i64>) -> Result<
         let rows = stmt.query_map(rusqlite::params![safe_q, n], |r| r.get::<_, i64>(0))
             .map_err(|e| format!("bm25 query: {}", e))?;
         let mut ids = Vec::with_capacity(FETCH_N);
-        for r in rows { if let Ok(id) = r { ids.push(id); } }
+        for id in rows.flatten() { ids.push(id); }
         Ok(ids)
     })?;
 
@@ -1469,7 +1469,7 @@ fn bm25_search_one(query: &str, limit: usize) -> Result<Vec<i64>, String> {
         let rows = stmt.query_map(rusqlite::params![safe_q, n], |r| r.get::<_, i64>(0))
             .map_err(|e| format!("bm25 query: {}", e))?;
         let mut ids = Vec::with_capacity(limit);
-        for r in rows { if let Ok(id) = r { ids.push(id); } }
+        for id in rows.flatten() { ids.push(id); }
         Ok(ids)
     })
 }
@@ -2761,7 +2761,7 @@ pub fn list_crystals(
             created_at:     row.get(8)?,
         })).map_err(|e| format!("list_crystals query: {}", e))?;
         let mut out = Vec::new();
-        for r in rows { if let Ok(c) = r { out.push(c); } }
+        for c in rows.flatten() { out.push(c); }
         Ok(out)
     })
 }
@@ -3309,9 +3309,9 @@ pub async fn reflect_run(dry_run: Option<bool>) -> Result<ReflectReport, String>
             })
         }).map_err(|e| format!("reflect query: {}", e))?;
         let mut out = Vec::new();
-        for r in rows { if let Ok(e) = r {
+        for e in rows.flatten() {
             if e.tags.len() >= 2 { out.push(e); }
-        }}
+        }
         Ok(out)
     })?;
 
@@ -3502,7 +3502,7 @@ pub fn list_insights(limit: Option<i64>) -> Result<Vec<AgentInsight>, String> {
             updated_at:         row.get(9)?,
         })).map_err(|e| format!("list_insights query: {}", e))?;
         let mut out = Vec::new();
-        for r in rows { if let Ok(i) = r { out.push(i); } }
+        for i in rows.flatten() { out.push(i); }
         Ok(out)
     })
 }
@@ -3579,7 +3579,7 @@ pub fn graph_rebuild_edges_run() -> Result<GraphRebuildReport, String> {
             })
         }).map_err(|e| format!("graph fetch query: {}", e))?;
         let mut out = Vec::new();
-        for r in rows { if let Ok(n) = r { out.push(n); } }
+        for n in rows.flatten() { out.push(n); }
         Ok(out)
     })?;
 
@@ -3773,7 +3773,7 @@ pub fn graph_neighbors(
                 row.get::<_, f64>(3)?,
             ))).map_err(|e| format!("graph BFS query: {}", e))?;
             let mut out = Vec::new();
-            for r in rows { if let Ok(e) = r { out.push(e); } }
+            for e in rows.flatten() { out.push(e); }
             Ok(out)
         })?;
 
@@ -3847,7 +3847,7 @@ pub fn graph_neighbors(
             created_at: row.get(7)?,
         })).map_err(|e| format!("graph mem query: {}", e))?;
         let mut m = HashMap::new();
-        for r in rows { if let Ok(am) = r { m.insert(am.id, am); } }
+        for am in rows.flatten() { m.insert(am.id, am); }
         Ok(m)
     })?;
 

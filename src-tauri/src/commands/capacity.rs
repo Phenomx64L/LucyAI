@@ -538,7 +538,7 @@ where
     }
 
     let days_to_threshold = (threshold - current_y) / slope;
-    if days_to_threshold > 365.0 || days_to_threshold < 0.0 {
+    if !(0.0..=365.0).contains(&days_to_threshold) {
         None
     } else {
         Some((days_to_threshold * 10.0).round() / 10.0)

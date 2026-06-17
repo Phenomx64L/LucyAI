@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.186] — 2026-06-14
+
+### Chore — Apply clippy machine-applicable idiom fixes (integrity-audit cleanup)
+
+Follow-up to the whole-codebase integrity verification. `cargo clippy` reported
+113 warnings — all idiom/style, **zero correctness bugs** (the few "identical if
+blocks" are intentional: model tiers that share a max-token value). Applied the
+machine-applicable subset via `cargo clippy --fix` across ~28 Rust files:
+`clamp()` for manual min/max chains, `sort_by_key`, `.first()` over `.get(0)`,
+`is_some_and`, `matches!`, `flatten` over `if let Ok`, `split_once`, removed
+redundant `return`/`format!`/closures, etc. Semantically equivalent
+(MachineApplicable), validated by cargo check + the full Rust + frontend test
+suites.
+
+The remaining ~58 warnings are non-auto-fixable design notes (a few functions
+with 8–12 args, `manual_clamp` cases clippy won't auto-rewrite because `clamp`
+panics if max < min) — left for a deliberate pass, not blindly rewritten.
+
+Audit conclusion (no code impact): no exploitable vulnerabilities. The 2
+`cargo audit` advisories (`sqlx 0.8.0`, `rsa 0.9.10`) are transitive via
+`tauri-plugin-sql` in the MySQL/Postgres binary-protocol path that Lucy's
+local-SQLite usage never executes; bumping `sqlx` is blocked by a
+`libsqlite3-sys` native-link conflict with `rusqlite 0.31` (needs a coordinated
+DB-stack bump). npm advisories are all dev-only tooling (vite/esbuild/vitest).
+
+---
+
 ## [1.7.185] — 2026-06-14
 
 ### Fix — Lucy now knows ingested PDFs live in memory (stop hunting them on disk)

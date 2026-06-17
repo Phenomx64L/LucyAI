@@ -317,7 +317,7 @@ pub async fn verify_script(language: String, content: String) -> Result<VerifyRe
             format!("spawn_blocking failed: {}", e), None, 0)),
         Err(_) => Ok(VerifyResult::err(&lang_label,
             format!("verify timed out after {}s", PROC_TIMEOUT_SECS + 1), None,
-            ((PROC_TIMEOUT_SECS + 1) * 1000) as u64)),
+            (PROC_TIMEOUT_SECS + 1) * 1000)),
     }
 }
 

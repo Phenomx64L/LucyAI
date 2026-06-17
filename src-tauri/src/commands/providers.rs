@@ -188,7 +188,7 @@ async fn check_ollama_health() -> Result<ProviderHealth, String> {
         .unwrap_or_else(|_| "http://localhost:11434".to_string());
 
     let resp = HTTP_CLIENT
-        .get(&format!("{}/api/tags", endpoint))
+        .get(format!("{}/api/tags", endpoint))
         .send()
         .await;
 

@@ -379,10 +379,8 @@ pub async fn execute_wmic(query: String) -> Result<String, String> {
         "path win32_", "qfe ",
     ];
     if !allowed_prefixes.iter().any(|p| lower.starts_with(p)) {
-        return Err(format!(
-            "Query WMIC no permitida. Aliases seguros: cpu, os, diskdrive, memorychip, \
-             nic, process, service, bios, csproduct, qfe, path Win32_*."
-        ));
+        return Err("Query WMIC no permitida. Aliases seguros: cpu, os, diskdrive, memorychip, \
+             nic, process, service, bios, csproduct, qfe, path Win32_*.".to_string());
     }
     // SECURITY: extended blocklist. Beyond /node (remote exec), delete and call:
     //   - /format:<url>  → loads remote XSL transform = arbitrary code execution
@@ -1234,26 +1232,24 @@ pub async fn list_directory(path: String) -> Result<Vec<serde_json::Value>, Stri
     let read_dir = std::fs::read_dir(&path)
         .map_err(|e| format!("Error al listar directorio: {}", e))?;
 
-    for entry in read_dir.take(500) {
-        if let Ok(e) = entry {
-            let meta = e.metadata().ok();
-            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-            let modified = meta.as_ref()
-                .and_then(|m| m.modified().ok())
-                .map(|t| {
-                    let dt: chrono::DateTime<chrono::Local> = t.into();
-                    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-                })
-                .unwrap_or_default();
+    for e in read_dir.take(500).flatten() {
+        let meta = e.metadata().ok();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified = meta.as_ref()
+            .and_then(|m| m.modified().ok())
+            .map(|t| {
+                let dt: chrono::DateTime<chrono::Local> = t.into();
+                dt.format("%Y-%m-%d %H:%M:%S").to_string()
+            })
+            .unwrap_or_default();
 
-            entries.push(json!({
-                "name": e.file_name().to_string_lossy(),
-                "is_dir": is_dir,
-                "size": size,
-                "modified": modified
-            }));
-        }
+        entries.push(json!({
+            "name": e.file_name().to_string_lossy(),
+            "is_dir": is_dir,
+            "size": size,
+            "modified": modified
+        }));
     }
 
     entries.sort_by(|a, b| {
@@ -1318,7 +1314,7 @@ pub async fn search_files(
     // `results` is filled inside spawn_blocking further down — declared but
     // not initialized here so we don't have a wasted Vec::new() allocation
     // when the worker takes over.
-    let results: Vec<String>;
+    
 
     fn walk(
         dir: &Path, ac: &AhoCorasick, glob_ext: &Option<Vec<String>>,
@@ -1375,7 +1371,7 @@ pub async fn search_files(
     let dir_owned = dir.to_path_buf();
     let glob_ext_owned = glob_ext.clone();
     let ac_owned = ac.clone();
-    results = tokio::task::spawn_blocking(move || {
+    let results: Vec<String> = tokio::task::spawn_blocking(move || {
         let mut r = Vec::new();
         walk(&dir_owned, &ac_owned, &glob_ext_owned, &mut r, max, 0);
         r
@@ -1882,15 +1878,15 @@ fn parse_ddg_lite(
     for i in 0..pairs {
         let (url, title) = &links[i];
         let snip = &snippets[i];
-        let title_clean = decode(&tag_strip.replace_all(title, "").trim());
-        let snip_clean  = decode(&tag_strip.replace_all(snip,  "").trim());
+        let title_clean = decode(tag_strip.replace_all(title, "").trim());
+        let snip_clean  = decode(tag_strip.replace_all(snip,  "").trim());
         out.push(format!("* {} — {}\n  {}", title_clean, url, snip_clean));
     }
     // Even when snippet/title counts don't match exactly (rare), return
     // whatever we got — partial > nothing.
     if out.is_empty() && !links.is_empty() {
         for (url, title) in links.iter().take(5) {
-            let title_clean = decode(&tag_strip.replace_all(title, "").trim());
+            let title_clean = decode(tag_strip.replace_all(title, "").trim());
             out.push(format!("* {} — {}", title_clean, url));
         }
     }
@@ -1935,8 +1931,8 @@ fn parse_ddg_html(
     for i in 0..snippets.len().min(5).min(urls.len().max(1)) {
         let snip_raw = snippets.get(i).cloned().unwrap_or_default();
         let url_raw  = urls.get(i).cloned().unwrap_or_else(|| "(no url)".to_string());
-        let snip = decode(&tag_strip.replace_all(&snip_raw, "").trim());
-        let url  = decode(&tag_strip.replace_all(&url_raw, "").trim());
+        let snip = decode(tag_strip.replace_all(&snip_raw, "").trim());
+        let url  = decode(tag_strip.replace_all(&url_raw, "").trim());
         out.push(format!("* {}: {}", url, snip));
     }
     out

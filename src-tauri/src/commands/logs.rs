@@ -97,7 +97,7 @@ pub async fn read_remote_log_linux(
            .arg("-o").arg("ConnectTimeout=10")
            .arg("-p").arg(&port_str);
     if let Some(ref kp) = key_path { if !kp.is_empty() { ssh_cmd.arg("-i").arg(kp); } }
-    ssh_cmd.arg(&format!("{}@{}", username, host))
+    ssh_cmd.arg(format!("{}@{}", username, host))
            .arg(&cmd);
     ssh_cmd.creation_flags(CREATE_NO_WINDOW);
     let output = tokio::task::spawn_blocking(move || ssh_cmd.output())

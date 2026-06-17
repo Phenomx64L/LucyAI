@@ -194,7 +194,7 @@ fn sanitize_title(raw: &str) -> String {
     // Now strip remaining surrounding quotes / inline backticks.
     s = s.trim().trim_matches('"').trim_matches('\'').trim_matches('`').trim().to_string();
     // Trailing punctuation that adds nothing to a tab title.
-    s = s.trim_end_matches(|c: char| c == '.' || c == ',' || c == ':' || c == ';').to_string();
+    s = s.trim_end_matches(['.', ',', ':', ';']).to_string();
     // Drop a "Title:" prefix some models slip in.
     if let Some(rest) = s.strip_prefix("Title:").or_else(|| s.strip_prefix("title:")) {
         s = rest.trim().to_string();

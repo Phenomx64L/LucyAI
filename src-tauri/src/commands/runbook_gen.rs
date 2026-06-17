@@ -160,7 +160,7 @@ pub async fn runbook_scan(days: Option<i64>, top_k: Option<usize>) -> Result<Run
                         .map(|(_, c)| c.as_str())
                         .collect::<Vec<_>>()
                         .join(&sep.to_string());
-                    let entry = counts.entry(key).or_insert_with(Vec::new);
+                    let entry = counts.entry(key).or_default();
                     entry.push(window[0].0); // first ts of the window
                 }
             }

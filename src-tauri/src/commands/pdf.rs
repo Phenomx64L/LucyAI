@@ -141,7 +141,7 @@ fn detect_heading(block: &str) -> Option<String> {
     let trimmed = block.trim();
     let first = trimmed.lines().next().unwrap_or("").trim();
     if first.is_empty() || first.chars().count() > 80 { return None; }
-    let ends_sentence = first.ends_with(|c: char| matches!(c, '.' | ',' | ';' | ':'));
+    let ends_sentence = first.ends_with(['.', ',', ';', ':']);
 
     // 1. Markdown ATX heading (markitdown emits these).
     if let Some(rest) = first.strip_prefix('#') {
@@ -153,12 +153,12 @@ fn detect_heading(block: &str) -> Option<String> {
 
     // 2. Numbered section ("3", "3.1", "3.1.2") + Capitalized title.
     let fb = first.as_bytes();
-    if fb.first().map_or(false, |c| c.is_ascii_digit()) {
+    if fb.first().is_some_and(|c| c.is_ascii_digit()) {
         let mut i = 0;
         while i < fb.len() && (fb[i].is_ascii_digit() || fb[i] == b'.') { i += 1; }
         let rest = first[i..].trim();
         if i > 0 && !rest.is_empty()
-            && rest.chars().next().map_or(false, |c| c.is_uppercase())
+            && rest.chars().next().is_some_and(|c| c.is_uppercase())
             && !ends_sentence
         {
             return Some(first.to_string());

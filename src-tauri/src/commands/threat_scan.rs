@@ -373,9 +373,7 @@ pub async fn threat_scan(
                        else { "benign" };
 
             let mut reasons = Vec::new();
-            for opt in [r_path, r_parent, r_cmd, r_name, r_nov, r_time, r_short] {
-                if let Some(r) = opt { reasons.push(r); }
-            }
+            for r in [r_path, r_parent, r_cmd, r_name, r_nov, r_time, r_short].into_iter().flatten() { reasons.push(r); }
 
             let cmdline_preview = if r.cmdline.len() > 200 {
                 format!("{}…", &r.cmdline[..200])

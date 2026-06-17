@@ -245,7 +245,7 @@ fn try_insert(conn: &rusqlite::Connection, hit: &DetectionHit) -> Result<bool, S
 // ── Individual detectors ────────────────────────────────────────────────
 
 /// > 100 expired memories pending cleanup → memory pipeline is falling
-/// behind. Suggests `/diagnostico` to use the v1.7.70 repair button.
+/// > behind. Suggests `/diagnostico` to use the v1.7.70 repair button.
 fn detect_expired_memory_buildup(conn: &rusqlite::Connection) -> Option<DetectionHit> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM agent_memories WHERE expires_at > 0 AND expires_at < strftime('%s','now')",
@@ -267,7 +267,7 @@ fn detect_expired_memory_buildup(conn: &rusqlite::Connection) -> Option<Detectio
 }
 
 /// > 20 entries in STREAM_SESSIONS = likely leak (real usage stays well
-/// under 5 even with many tabs).
+/// > under 5 even with many tabs).
 fn detect_stream_session_leak(_conn: &rusqlite::Connection) -> Option<DetectionHit> {
     let n = crate::state::STREAM_SESSIONS.lock().map(|m| m.len()).unwrap_or(0);
     if n < 20 { return None; }
@@ -351,7 +351,7 @@ fn detect_db_integrity_alarm(conn: &rusqlite::Connection) -> Option<DetectionHit
 }
 
 /// > 20 audit_trail entries with severity = 'critical' or 'error' in
-/// the last 24 h → an operational pattern that warrants attention.
+/// > the last 24 h → an operational pattern that warrants attention.
 fn detect_repeated_command_failure(conn: &rusqlite::Connection) -> Option<DetectionHit> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM audit_trail \
