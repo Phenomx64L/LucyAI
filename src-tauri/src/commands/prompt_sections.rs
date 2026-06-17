@@ -753,9 +753,37 @@ impl PromptSection for PdfIntelligenceSection {
     fn relevant(&self, _ctx: &PromptContext) -> bool { true }
     fn priority(&self) -> u32 { 75 }
     fn render(&self, _ctx: &PromptContext) -> String {
-        "RULE 7 — PDF GENERATION: Use Edge Headless. NEVER call 'msedge' as bare command — use full path with & operator.\n\
-        RULE 26 — PDF INTELLIGENCE: Users can ingest PDF manuals using the PDF panel (sidebar). When ingested, content is stored as episodic memories AND semantic vectors. \
-        Search with: (1) <TOOL>memoria_buscar:terms</TOOL> for FTS, (2) <TOOL>pdf_search:question</TOOL> for semantic. Cite document name and section.".to_string()
+        // v1.7.185 — list the PDFs that are ALREADY ingested so Lucy treats them
+        // as memory she can query, not files to hunt for on disk. Weak/cheap
+        // models (e.g. Gemini Flash) otherwise read "the PDF I loaded" as a
+        // filesystem task and run Get-ChildItem looking for the file.
+        let docs: Vec<(String, i64)> = crate::commands::metrics::shared_db(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT filename, chunk_count FROM pdf_documents \
+                 WHERE status = 'done' ORDER BY ingested_at DESC LIMIT 20",
+            ).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .map_err(|e| e.to_string())?;
+            Ok(rows.flatten().collect())
+        }).unwrap_or_default();
+
+        let mut s = String::from(
+            "RULE 7 — PDF GENERATION: Use Edge Headless. NEVER call 'msedge' as bare command — use full path with & operator.\n        \
+            RULE 26 — PDF INTELLIGENCE: Ingested PDFs live in YOUR MEMORY (episodic memories + semantic vectors) — they are NOT files to locate on disk. \
+            When the user references a PDF they uploaded / loaded / ingested (e.g. \"the PDF I gave you\", \"save the PDF to memory\", or any question about its topic), ANSWER FROM MEMORY: \
+            <TOOL>pdf_search:question</TOOL> (semantic) or <TOOL>memoria_buscar:terms</TOOL> (keyword). \
+            NEVER run Get-ChildItem / dir / find or any filesystem search to \"locate\" an ingested PDF — the content is already in memory; cite the document name + section."
+        );
+        if docs.is_empty() {
+            s.push_str("\n        Currently ingested PDFs: (none yet — the user can drop a PDF in the PDF panel).");
+        } else {
+            s.push_str("\n        ALREADY INGESTED PDFs in your memory (query with pdf_search — do NOT look on disk):");
+            for (name, chunks) in &docs {
+                s.push_str(&format!("\n          • {} ({} chunks)", name, chunks));
+            }
+        }
+        s
     }
 }
 

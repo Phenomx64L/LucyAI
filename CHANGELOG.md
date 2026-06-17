@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.185] — 2026-06-14
+
+### Fix — Lucy now knows ingested PDFs live in memory (stop hunting them on disk)
+
+Reported: after ingesting a PDF in the PDF panel, asking Lucy to "save the PDF
+to your memory / it's about CrowdStrike" made her run **`Get-ChildItem`** to
+locate the file on disk instead of querying the chunks she already ingested.
+
+Root cause: the PDF-intelligence prompt rule (`PdfIntelligenceSection`) was
+static and generic — it said PDFs *can* be searched but never listed which ones
+were actually ingested, and didn't forbid a filesystem hunt. A cheap model
+(Gemini Flash) reads "the PDF I loaded" as a file-location task.
+
+The rule now (in `prompt_sections.rs`):
+- **Lists the currently-ingested PDFs** (`filename` + chunk count, queried live
+  from `pdf_documents`), so Lucy sees `lucy_..._Export.pdf (307 chunks)` is
+  already in her memory.
+- States plainly that **ingested PDF content is memory, not a file on disk**,
+  and that referencing an uploaded PDF (or "save the PDF to memory") means
+  **answer from memory** via `pdf_search` / `memoria_buscar`.
+- **Explicitly forbids** `Get-ChildItem` / `dir` / `find` to "locate" an
+  ingested PDF.
+
+cargo check + contract tests pass.
+
+---
+
 ## [1.7.184] — 2026-06-14
 
 ### Feature — Native structure-aware PDF chunking (no external tool)
