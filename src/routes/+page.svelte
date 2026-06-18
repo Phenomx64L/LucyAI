@@ -5427,12 +5427,27 @@ Use ONE of these patterns instead:
                     const _displayBalanced = (_fenceMatches && _fenceMatches.length % 2 === 1)
                         ? display + '\n```'
                         : display;
-                    const withBadges = renderConfidenceTags(_displayBalanced);
-                    const parsed = withBadges ? renderMd(withBadges) : '';
-                    // Cursor no longer injected as a sibling span; it's a
-                    // CSS pseudo on .stream-body that's owned by the
-                    // parent bubble and persists across innerHTML rewrites.
-                    msg.html = `<div class="mn">Lucy</div><div class="stream-body">${parsed}</div>`;
+                    // v1.7.193 — wrap the markdown parse + render. marked +
+                    // DOMPurify can THROW on PARTIAL streaming markdown (an
+                    // unbalanced tag/fence mid-token, a stray surrogate, etc.).
+                    // Before, that exception escaped the rAF callback, msg.html
+                    // never got set, and the bubble stayed BLANK for the rest of
+                    // the stream — intermittent by nature since it depends on the
+                    // exact tokens in flight ("el texto no carga, es aleatorio").
+                    // On error, fall back to an escaped plain-text render so the
+                    // user always sees the text; the next tick / the guaranteed
+                    // final render upgrades it back to formatted markdown.
+                    try {
+                        const withBadges = renderConfidenceTags(_displayBalanced);
+                        const parsed = withBadges ? renderMd(withBadges) : '';
+                        // Cursor no longer injected as a sibling span; it's a
+                        // CSS pseudo on .stream-body that's owned by the
+                        // parent bubble and persists across innerHTML rewrites.
+                        msg.html = `<div class="mn">Lucy</div><div class="stream-body">${parsed}</div>`;
+                    } catch (_e) {
+                        try { debug.log(`[stream-render] markdown parse failed mid-stream, plain fallback: ${String(_e).slice(0, 120)}`); } catch {}
+                        msg.html = `<div class="mn">Lucy</div><div class="stream-body">${escapeHtml(_displayBalanced)}</div>`;
+                    }
                     refresh(); scrollChat();
                 });
             };
@@ -5470,6 +5485,29 @@ Use ONE of these patterns instead:
             // Parar drain y vaciar cola restante
             if (_drainTimer) { clearInterval(_drainTimer); _drainTimer = null; }
             if (_tokenQ.length > 0) { _revealed += _tokenQ.join(''); _tokenQ = []; renderRevealed(); }
+            // v1.7.193 — GUARANTEED synchronous final render. The live render
+            // (renderRevealed) is rAF-gated + drain-throttled + anti-flicker
+            // skipped; under timing races — slow TTFT, a backgrounded webview
+            // that paused rAF, or a late drain tick — the streaming bubble could
+            // reach the end of the stream still EMPTY even though tokens
+            // arrived (the "el texto no carga, es aleatorio" symptom). Force the
+            // full revealed text into the bubble NOW, synchronously, bypassing
+            // the rAF + the length-equality skip, so content is never lost.
+            try {
+                const _ft = getTab(tabId);
+                const _fmsg = _ft?.messages.find(m => m.id === streamMsgId);
+                if (_fmsg && _fmsg.role === 'streaming') {
+                    const _fdisp = cleanStreamDisplay(_revealed);
+                    if (_fdisp && _fdisp.length > (_fmsg.rawContent || '').length) {
+                        _lastRenderedLen = _fdisp.length;
+                        _fmsg.rawContent = _fdisp;
+                        const _ff = _fdisp.match(/^```/gm);
+                        const _fbal = (_ff && _ff.length % 2 === 1) ? _fdisp + '\n```' : _fdisp;
+                        _fmsg.html = `<div class="mn">Lucy</div><div class="stream-body">${renderMd(renderConfidenceTags(_fbal))}</div>`;
+                        refresh();
+                    }
+                }
+            } catch (_e) { /* render is best-effort — promotion below still runs */ }
             // Guard: si fue cancelado mientras esperábamos, no procesar
             if (t._cancelled) { fin(tabId); return; }
             // Doble-check: si ya no está procesando (cancel concurrente), salir
@@ -9687,6 +9725,12 @@ if (Test-Path $src) {
         let _pendingChunk = false;
         let _lastTpsAt   = 0;
         let _cachedTps   = 0;
+        // v1.7.193 — fallback timer. THIS local askLucyStream (not the
+        // llm-stream.ts copy) is the function the chat actually calls, and it
+        // scheduled the flush via requestAnimationFrame ONLY. When the webview
+        // backgrounds/occludes the window it pauses rAF, freezing the stream
+        // render until a repaint. The timer keeps the flush running regardless.
+        let _fallbackTimer = null;
         const flushChunk = () => {
             _rafScheduled = false;
             if (!_pendingChunk) return;
@@ -9730,7 +9774,13 @@ if (Test-Path $src) {
             _pendingChunk = true;
             if (!_rafScheduled) {
                 _rafScheduled = true;
-                requestAnimationFrame(flushChunk);
+                // v1.7.193 — rAF for smooth 60fps when visible + a setTimeout
+                // fallback that still fires when the webview paused rAF in the
+                // background. flushChunk is idempotent (clears _pendingChunk),
+                // so whichever runs first wins and the other is a no-op.
+                const _run = () => { if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; } flushChunk(); };
+                if (typeof document === 'undefined' || document.visibilityState !== 'hidden') requestAnimationFrame(_run);
+                _fallbackTimer = setTimeout(_run, 200);
             }
         });
         streamState.unlisten = unlisten;
@@ -9739,6 +9789,7 @@ if (Test-Path $src) {
         try {
             const result = await invoke('ask_lucy_stream', { ...params, requestId });
             // Force a final flush so the closing chunk reaches onChunk before we return.
+            if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
             if (_pendingChunk) flushChunk();
             // Si fue cancelado mientras esperábamos, devolver lo acumulado hasta ahora
             if (streamState.cancelled) return accumulated || '';

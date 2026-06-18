@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.193] — 2026-06-18
+
+### Fixed — Streamed answer randomly renders blank (text never loads)
+
+User report: intermittently, the stream is clearly running (t/s + TTFT counters
+and the sparkline move) but **no answer text appears** — "muy aleatorio, algo
+entre backend y frontend impide cargar la UI".
+
+Root-cause investigation surfaced three real defects in the streaming render
+path, all hardened here:
+
+1. **No try/catch around the live markdown parse.** `renderRevealed()` ran
+   `marked` + DOMPurify on the PARTIAL accumulated text every frame. Partial
+   markdown (an unbalanced tag/fence mid-token, a split surrogate, …) can make
+   the parser THROW; the exception escaped the rAF callback, `msg.html` was
+   never set, and the bubble stayed blank for the rest of the stream —
+   intermittent by nature since it depends on the exact tokens in flight. Now
+   wrapped: on parse error it falls back to an escaped plain-text render (and
+   logs to debug), then upgrades back to markdown on the next tick.
+
+2. **No guaranteed final render.** The live render is rAF-gated + drain-
+   throttled + anti-flicker-skipped, so a race could leave the bubble empty at
+   end of stream. Added a synchronous, skip-bypassing final render right after
+   the drain so the full text always lands.
+
+3. **Real stream path used rAF only.** The chat calls a LOCAL `askLucyStream`
+   (in `+page.svelte`), not the `llm-stream.ts` copy the earlier v1.7.190 fix
+   touched — so that fix never applied here. Ported the rAF + `setTimeout`
+   fallback to the local function so the flush survives a backgrounded webview.
+
 ## [1.7.192] — 2026-06-18
 
 ### Added — Instant repaint on regaining focus (no more "hover to refresh")
