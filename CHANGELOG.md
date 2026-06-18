@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.194] — 2026-06-18
+
+### Diagnostics — Stream heartbeat + DevTools to pin the intermittent blank/freeze
+
+The blank/frozen-stream symptom kept recurring and is not yielding to static
+code reading (the render races found in v1.7.193 are hardened, but this one is
+different). Rather than keep guessing, this release instruments the live path so
+the next reproduction tells us EXACTLY where it stalls:
+
+- **Stream heartbeat** in the real `askLucyStream` (`+page.svelte`): every 1.5s
+  while a response is in flight it logs `[lucy-stream-hb]` with `acc` (bytes
+  received), `rendered` (bytes painted), `pending`, `raf`, `cancelled`,
+  `elapsedMs`. Interpretation:
+  - heartbeat **stops logging** → main JS thread blocked (a long synchronous task)
+  - `acc` **stops growing** → backend stopped sending (model/network stall)
+  - `acc` grows but `rendered` flat → frontend render stuck
+- **DevTools enabled** (`tauri` `devtools` feature) so the operator can open the
+  console in a release build (right-click → Inspect, or F12) and read the
+  heartbeat + any thrown errors.
+
+No behaviour change to the chat itself; this is purely observability so the
+actual root cause can be fixed instead of patched speculatively.
+
 ## [1.7.193] — 2026-06-18
 
 ### Fixed — Streamed answer randomly renders blank (text never loads)

@@ -9786,6 +9786,29 @@ if (Test-Path $src) {
         streamState.unlisten = unlisten;
         if (tabId) _activeStreams.set(tabId, streamState);
 
+        // v1.7.194 — stream heartbeat (diagnostic). Logs the live stream state
+        // every 1.5s while a response is in flight. Reading it in DevTools tells
+        // us EXACTLY where an intermittent "blank / frozen" stream stalls:
+        //   • heartbeat STOPS logging        → main JS thread is blocked
+        //   • `acc` stops growing            → backend stopped sending chunks
+        //   • `acc` grows but `rendered` flat → frontend render is stuck
+        // Cheap (one console line / 1.5s) and cleared the instant the stream ends.
+        const _hbTimer = setInterval(() => {
+            try {
+                const _tt = tabId ? getTab(tabId) : null;
+                const _sm = _tt?.messages?.find(m => m.role === 'streaming');
+                // eslint-disable-next-line no-console
+                console.warn('[lucy-stream-hb]', JSON.stringify({
+                    acc: accumulated.length,
+                    rendered: _sm ? (_sm.rawContent || '').length : -1,
+                    pending: _pendingChunk,
+                    raf: _rafScheduled,
+                    cancelled: streamState.cancelled,
+                    elapsedMs: Math.round(performance.now() - t0),
+                }));
+            } catch (_e) { /* heartbeat must never throw */ }
+        }, 1500);
+
         try {
             const result = await invoke('ask_lucy_stream', { ...params, requestId });
             // Force a final flush so the closing chunk reaches onChunk before we return.
@@ -9838,6 +9861,8 @@ if (Test-Path $src) {
             if (streamState.cancelled) return accumulated || '';
             throw e;
         } finally {
+            clearInterval(_hbTimer);
+            if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
             unlisten();
             if (tabId) _activeStreams.delete(tabId);
         }
