@@ -1993,7 +1993,22 @@ import { listen } from '@tauri-apps/api/event';
         }
     }
 
+    // v1.7.192 — repaint/catch-up handler (registered in onMount, removed in
+    // onDestroy). If the OS/WebView2 suspended background rendering during a
+    // stream, the DOM could stay stale until a mouse-move forced a paint
+    // ("tenía que pasar el mouse para que apareciera"). Firing refresh() on
+    // focus / visibilitychange forces an instant reactive re-render + repaint
+    // the moment Lucy comes back to the foreground — no hover required.
+    let _focusRepaintHandler = null;
+
     onMount(async () => {
+        // v1.7.192 — instant repaint when Lucy regains focus/visibility.
+        _focusRepaintHandler = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+            try { refresh(); } catch {}
+        };
+        window.addEventListener('focus', _focusRepaintHandler);
+        document.addEventListener('visibilitychange', _focusRepaintHandler);
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
         // v1.7.98 — D5: restore the operator's accent choice before first
@@ -2477,6 +2492,11 @@ import { listen } from '@tauri-apps/api/event';
         if (_scheduledTickInterval){ clearInterval(_scheduledTickInterval); _scheduledTickInterval = null; }
         if (_footerCostInterval)   { clearInterval(_footerCostInterval); _footerCostInterval = null; }
         // ── Document-level listeners ──
+        if (_focusRepaintHandler) {
+            try { window.removeEventListener('focus', _focusRepaintHandler); } catch {}
+            try { document.removeEventListener('visibilitychange', _focusRepaintHandler); } catch {}
+            _focusRepaintHandler = null;
+        }
         if (_clickHandler)   document.removeEventListener('click', _clickHandler);
         if (typeof handlePlanButtonClick === 'function') {
             try { document.removeEventListener('click', handlePlanButtonClick); } catch {}

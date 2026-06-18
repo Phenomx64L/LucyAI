@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.192] — 2026-06-18
+
+### Added — Instant repaint on regaining focus (no more "hover to refresh")
+
+Follow-up to v1.7.190/191. After the WebView2 anti-suspension flags, the main
+answer streams live in the background, but the "Pensando…" (reasoning) bubble's
+elapsed-time ticker could still freeze if the renderer was suspended for that
+request (its 250 ms `setInterval` stops with the rest of background JS).
+
+Belt-and-suspenders, independent of the webview flags: a `focus` /
+`visibilitychange` listener now forces an immediate reactive re-render the
+moment Lucy returns to the foreground, so a stale frame catches up instantly
+**without needing a mouse-move over the window** ("tenía que pasar el mouse").
+Cleaned up in `onDestroy`.
+
+The real "keep rendering while in the background" fix is the v1.7.191 webview
+flags — but those only bind when WebView2 creates a fresh environment, i.e.
+after a **clean rebuild and full relaunch** (a hot-reload or restart that
+reuses the running webview won't pick them up).
+
 ## [1.7.191] — 2026-06-18
 
 ### Fixed — Background streaming freeze, real root cause (WebView2 suspension)
