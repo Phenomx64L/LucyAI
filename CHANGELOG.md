@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.191] — 2026-06-18
+
+### Fixed — Background streaming freeze, real root cause (WebView2 suspension)
+
+The v1.7.190 rAF→timer fallback was not enough: with Lucy unfocused, the text
+still only appeared once generation finished. The reason is that WebView2 /
+Chromium doesn't just throttle the background window — it **suspends the whole
+renderer** (renderer backgrounding + native-window occlusion detection), which
+freezes `requestAnimationFrame` AND `setTimeout` together, so no frontend-side
+scheduler can keep rendering.
+
+**Fix:** pass Chromium flags to the webview via `additionalBrowserArgs` in
+`tauri.conf.json` so the renderer is never backgrounded/suspended while Lucy is
+out of focus:
+`--disable-renderer-backgrounding`, `--disable-backgrounding-occluded-windows`,
+`--disable-background-timer-throttling`, and
+`--disable-features=…,CalculateNativeWinOcclusion` (Tauri's default
+`msWebOOUI,msPdfOOUI,msSmartScreenProtection` are kept). The v1.7.190 timer
+fallback stays as defense-in-depth.
+
+Trade-off: Lucy now keeps rendering at full rate even when minimized/occluded,
+so it uses slightly more CPU in the background — an intentional choice so
+streaming never freezes. Requires a full rebuild (it's a webview init flag).
+
 ## [1.7.190] — 2026-06-18
 
 ### Fixed — Streaming text freezes when Lucy's window is unfocused
