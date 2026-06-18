@@ -261,6 +261,10 @@ export async function askLucyStream(
     // rAF-throttled chunk dispatch: coalesces ~100 chunks/sec into 60fps updates
     let _rafScheduled = false;
     let _pendingChunk = false;
+    // v1.7.190 — fallback timer handle (see the chunk listener below). rAF is
+    // paused by the webview when the window is unfocused/occluded; the timer is
+    // the safety net that keeps streaming text rendering in the background.
+    let _fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let _lastTpsAt = 0;
     let _cachedTps = 0;
     // v1.7.175 — decouple the expensive markdown re-render from the rAF rate.
@@ -307,9 +311,29 @@ export async function askLucyStream(
         _pendingChunk = true;
         if (!_rafScheduled) {
             _rafScheduled = true;
-            // Wrap so rAF's timestamp arg isn't passed as `force` (which would
-            // be truthy and defeat the render throttle).
-            requestAnimationFrame(() => flushChunk());
+            // v1.7.190 — schedule the flush via rAF AND a setTimeout fallback.
+            // When Lucy's window is unfocused/occluded (the user clicks the
+            // Windows taskbar), the WebView2/Chromium compositor throttles or
+            // fully PAUSES requestAnimationFrame, so an rAF-only flush never
+            // runs and the streaming text freezes mid-write until a mouse event
+            // forces a repaint ("la información desaparece hasta pasar el
+            // mouse"). A timer keeps firing in the background (Chromium clamps
+            // it to ~1s when the page is hidden, full rate when merely
+            // unfocused), so the DOM keeps updating. flushChunk is idempotent
+            // (it clears _pendingChunk and no-ops without one), so whichever
+            // path fires first wins and the other is a cheap no-op.
+            // Wrap so rAF's timestamp arg isn't passed as `force` (truthy →
+            // would defeat the render throttle).
+            const _run = () => {
+                if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
+                flushChunk();
+            };
+            // Skip the rAF entirely when the page is hidden — it would never
+            // fire and the queued callbacks would pile up until refocus.
+            if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+                requestAnimationFrame(_run);
+            }
+            _fallbackTimer = setTimeout(_run, 200);
         }
     });
     streamState.unlisten = unlisten;
@@ -327,6 +351,7 @@ export async function askLucyStream(
         throw e;
     } finally {
         unlisten();
+        if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
         if (tabId) _activeStreams.delete(tabId);
     }
 }

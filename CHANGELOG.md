@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.190] — 2026-06-18
+
+### Fixed — Streaming text freezes when Lucy's window is unfocused
+
+User report: while Lucy is writing a reply, clicking the Windows taskbar (so
+Lucy becomes an inactive/background window) makes the streaming text stop
+appearing; moving the mouse back over Lucy makes it pop in.
+
+**Root cause:** the streaming chunk flush in `llm-stream.ts` was driven
+**only** by `requestAnimationFrame`. When the window is unfocused/occluded the
+WebView2/Chromium compositor throttles or fully pauses rAF, so `flushChunk()`
+never ran — `onChunk()` never updated the DOM — until a mouse event forced a
+repaint and the queued rAF fired.
+
+**Fix:** schedule each flush via rAF **and** a `setTimeout(…, 200)` fallback.
+rAF still drives smooth 60fps updates when the window is visible; the timer
+keeps firing in the background (Chromium clamps it to ~1s when the page is
+hidden, full rate when merely unfocused) so the text keeps rendering. The rAF
+is skipped entirely when `document.visibilityState === 'hidden'` to avoid
+piling up callbacks until refocus. `flushChunk` is idempotent, so whichever
+path fires first wins; the timer is cleared on stream end/cancel.
+
 ## [1.7.189] — 2026-06-17
 
 ### Fixed — Claude couldn't see attached/pasted images
