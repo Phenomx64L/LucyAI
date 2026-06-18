@@ -423,8 +423,36 @@ fn build_anthropic_payload_with_cache(
     max_tokens: u32,
     final_prompt: &str,
     stream: bool,
+    images: Option<&[serde_json::Value]>,
 ) -> serde_json::Value {
     use crate::commands::prompt_sections::LUCY_CACHE_BOUNDARY;
+
+    // v1.7.189 — build the user message content. Anthropic's Messages API
+    // accepts the user `content` as either a plain string OR an array of
+    // content blocks. When the user attached image(s) we MUST use the array
+    // form with `image` blocks — otherwise Claude never sees the attachment
+    // (the "no puedo ver la imagen / no los has pegado" bug: the streaming
+    // Anthropic path used to send text only and silently dropped `images`).
+    // The frontend sends each image as { mimeType, data(base64) }; Anthropic
+    // wants { type:"image", source:{ type:"base64", media_type, data } }.
+    let user_content = |text: &str| -> serde_json::Value {
+        match images {
+            Some(imgs) if !imgs.is_empty() => {
+                let mut blocks = vec![serde_json::json!({ "type": "text", "text": text })];
+                for img in imgs {
+                    let data = img.get("data").and_then(|v| v.as_str()).unwrap_or("");
+                    if data.is_empty() { continue; }
+                    let media_type = img.get("mimeType").and_then(|v| v.as_str()).unwrap_or("image/png");
+                    blocks.push(serde_json::json!({
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": media_type, "data": data }
+                    }));
+                }
+                serde_json::Value::Array(blocks)
+            }
+            _ => serde_json::Value::String(text.to_string()),
+        }
+    };
 
     // Find the boundary. split() returns 1 elem if absent — handle that case.
     if let Some(idx) = final_prompt.find(LUCY_CACHE_BOUNDARY) {
@@ -450,7 +478,7 @@ fn build_anthropic_payload_with_cache(
                     }
                 ],
                 "messages": [
-                    { "role": "user", "content": dynamic }
+                    { "role": "user", "content": user_content(dynamic) }
                 ]
             });
         }
@@ -474,7 +502,7 @@ fn build_anthropic_payload_with_cache(
         "max_tokens": max_tokens,
         "stream": stream,
         "messages": [
-            { "role": "user", "content": final_prompt }
+            { "role": "user", "content": user_content(final_prompt) }
         ]
     })
 }
@@ -1063,7 +1091,7 @@ pub async fn ask_lucy(
             // and the dynamic half (memories + working dir + user prompt)
             // lands in `messages`. Anthropic charges cache writes 1.25× and
             // hits 0.1× — break-even at 2nd use, big savings on long sessions.
-            let mut payload = build_anthropic_payload_with_cache(&clean_model, max_tok, &final_prompt, false);
+            let mut payload = build_anthropic_payload_with_cache(&clean_model, max_tok, &final_prompt, false, images.as_deref());
             apply_anthropic_output_config(&mut payload, effort);
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
@@ -1244,7 +1272,7 @@ pub async fn ask_lucy_stream(
             let max_tok = get_max_tokens(&clean_model, max_tokens_override);
             // Sprint 1, AI-1 — Same cache-boundary split for streaming.
             // The "stream": true field is added inside the helper.
-            let mut payload = build_anthropic_payload_with_cache(&clean_model, max_tok, &final_prompt, true);
+            let mut payload = build_anthropic_payload_with_cache(&clean_model, max_tok, &final_prompt, true, images.as_deref());
             apply_anthropic_output_config(&mut payload, effort);
             HTTP_CLIENT.post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", api_key)
@@ -1658,6 +1686,7 @@ mod anthropic_resolver_tests {
     use super::{
         apply_anthropic_output_config,
         resolve_anthropic_model,
+        build_anthropic_payload_with_cache,
         get_cache_stats,
         extract_tokens_anthropic,
     };
@@ -1667,6 +1696,35 @@ mod anthropic_resolver_tests {
         let (id, eff) = resolve_anthropic_model("claude-opus-4-7::xhigh");
         assert_eq!(id, "claude-opus-4-7");
         assert_eq!(eff, Some("xhigh"));
+    }
+
+    #[test]
+    fn anthropic_payload_embeds_attached_images() {
+        // Regression: the streaming Anthropic path used to send text only and
+        // drop `images`, so Claude never saw pasted screenshots. The user
+        // message content must become an array with an `image` block in
+        // Anthropic's base64 source format.
+        let imgs = vec![serde_json::json!({ "mimeType": "image/png", "data": "QUJD" })];
+        let payload = build_anthropic_payload_with_cache(
+            "claude-opus-4-8", 1024, "describe esta imagen", false, Some(&imgs),
+        );
+        let content = &payload["messages"][0]["content"];
+        assert!(content.is_array(), "content must be an array when images are present");
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr[0]["type"], "text");
+        let img = arr.iter().find(|b| b["type"] == "image").expect("an image block");
+        assert_eq!(img["source"]["type"], "base64");
+        assert_eq!(img["source"]["media_type"], "image/png");
+        assert_eq!(img["source"]["data"], "QUJD");
+    }
+
+    #[test]
+    fn anthropic_payload_stays_string_without_images() {
+        // No attachments → keep the plain-string content (cheaper, unchanged).
+        let payload = build_anthropic_payload_with_cache(
+            "claude-opus-4-8", 1024, "hola", false, None,
+        );
+        assert!(payload["messages"][0]["content"].is_string());
     }
 
     #[test]

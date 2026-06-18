@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.189] — 2026-06-17
+
+### Fixed — Claude couldn't see attached/pasted images
+
+User report: after attaching files, Lucy says she can't see them ("no los has
+pegado"). Root cause: the **streaming Anthropic path silently dropped image
+attachments**. `ask_lucy_stream` (and `ask_lucy`) built the Claude payload via
+`build_anthropic_payload_with_cache`, which only put the prompt **text** in the
+user message and never included the `images` argument — so Claude received no
+image at all. (The Gemini branch already forwarded images as `inlineData`.)
+
+**Fix:** `build_anthropic_payload_with_cache` now takes the images and, when
+present, builds the user `content` as an array of blocks — a `text` block plus
+one Anthropic `image` block per attachment
+(`{type:"image", source:{type:"base64", media_type, data}}`). The frontend
+already captured pastes/drops/picks into `attachedFiles` and passed them as
+`{mimeType, data}`; only the Anthropic payload builder was ignoring them. No
+change when there are no attachments (content stays a plain string). Covered by
+two new unit tests.
+
+> Note: images are attached on the FIRST turn of a request (agent-loop
+> continuation turns don't re-send them). For "look at this screenshot"
+> questions that's the turn that matters.
+
 ## [1.7.188] — 2026-06-17
 
 ### Fixed — Agent loop "spins in circles" on file-edit tasks (no-progress guard)
