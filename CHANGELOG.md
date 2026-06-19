@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.195] — 2026-06-18
+
+### Fixed — Frozen "Pensando…" zombie bubble (the intermittent blank/freeze)
+
+Root cause found, matching the reported screenshot exactly: a reasoning
+("Pensando…") bubble whose elapsed timer was stuck (e.g. "2.3s") while
+"Procesando" kept counting and the answer area stayed blank.
+
+When the model errors mid-turn (timeout / rate-limit / network — hence "muy
+aleatorio"), `runAI` takes the **provider-fallback retry** path, and its
+`finally` also runs on any early return/throw/cancel. Both places did
+`clearInterval(_reasoningTickerRef)` **without** setting `reasoningMsg.active =
+false`. Result: the bubble's 250 ms ticker was dead but `active` stayed `true`,
+so the UI rendered a permanently-frozen "Pensando…" while the (slow) retry ran
+with no content yet — read by the user as "la información no carga".
+
+Fix: new `_deactivateStaleReasoning(tabId)` helper called at both clear sites.
+It settles any still-active reasoning bubble (collapse + final duration) and
+drops empty ones, so no code path can leave a zombie "Pensando…" behind. Pairs
+with the v1.7.193 guaranteed final render and the v1.7.194 heartbeat (kept for
+confirming any residual stalls in DevTools).
+
 ## [1.7.194] — 2026-06-18
 
 ### Diagnostics — Stream heartbeat + DevTools to pin the intermittent blank/freeze

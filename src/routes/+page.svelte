@@ -724,6 +724,36 @@ import { listen } from '@tauri-apps/api/event';
     // unused (harmless) cache entry. THOUGHT regions are stripped first so the
     // model weighing options inside its reasoning ("I could fetch A or B")
     // never triggers a real network call. `specSet` dedups per stream.
+    // v1.7.195 — Force any still-"active" reasoning ("Pensando…") bubble in a
+    // tab to settle. Several paths (provider fallback + retry, early returns,
+    // cancel, a throw) cleared the reasoning ticker setInterval but never set
+    // msg.active = false, so the "Pensando… 2.3s" label froze on screen forever
+    // (dead ticker + active=true) while the turn continued or retried — the
+    // exact frozen-bubble + blank-content symptom users reported. Settling here
+    // guarantees no code path can leave a zombie reasoning bubble behind.
+    function _deactivateStaleReasoning(tabId) {
+        try {
+            const t = getTab(tabId);
+            if (!t || !Array.isArray(t.messages)) return;
+            let changed = false;
+            const next = [];
+            for (const m of t.messages) {
+                if (m.role === 'reasoning' && m.active) {
+                    // Drop bubbles that never accumulated any reasoning text;
+                    // settle (collapse) the ones that did so they read
+                    // "Pensó durante Xs" instead of a frozen "Pensando…".
+                    if (!m.content || !m.content.trim()) { changed = true; continue; }
+                    m.active = false;
+                    m.collapsed = true;
+                    if (typeof m.startTs === 'number') m.duration = (Date.now() - m.startTs) / 1000;
+                    changed = true;
+                }
+                next.push(m);
+            }
+            if (changed) { t.messages = next; tabs = [...tabs]; }
+        } catch (_e) { /* best-effort — never throw from cleanup */ }
+    }
+
     function _speculateReadOnlyFromStream(accumulated, specSet) {
         if (!accumulated || accumulated.indexOf('</TOOL>') === -1) return;
         // Drop closed AND unclosed-trailing THOUGHT regions — only action-level
@@ -9378,6 +9408,7 @@ times the SAME way, switch tool kind entirely.
                     // Stop the current run before recursing — fin() flushes
                     // the streaming bubble + clears _activeStreams.
                     if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+                    _deactivateStaleReasoning(tabId); // v1.7.195 — don't leave a frozen "Pensando…" during the retry
                     fin(tabId);
                     return await runAI(tabId, raw, doSpeak, retryCount + 1);
                 }
@@ -9388,6 +9419,9 @@ times the SAME way, switch tool kind entirely.
             // Belt-and-braces: stop the reasoning ticker even if finishReasoning()
             // wasn't reached (early throw, cancellation, etc.).
             if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+            // v1.7.195 — clearing the ticker alone froze the "Pensando…" label
+            // (active stayed true). Settle/drop any zombie reasoning bubble.
+            _deactivateStaleReasoning(tabId);
             // v1.7.111 H4 — same guarantee for the streaming drain timer. If the
             // stream threw or was cancelled, the inline clearInterval after the
             // await never ran; clear it here so it can't keep firing.
