@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.199] — 2026-06-18
+
+### Refactor — +page.svelte Phase 3 (start): pure leaf out of the agent loop
+
+Phase 3 touches `runAI` / the agent loop — the ~4,700-line hot path where the
+recent intermittent bugs lived. To honour "reduce failures", Phase 3 is
+deliberately conservative: extract ONLY provably-pure leaf helpers (no closure /
+DOM / control-flow), one at a time, each pinned by tests. No restructuring of
+the loop or the streaming/reasoning lifecycle.
+
+First leaf — `_hashResp`, the djb2 hash behind the skip-stuck detector (which
+compares consecutive turns to bail when the model grinds the same output). Now
+`hashResp` in `$lib/agent-loop-util.ts`, with **5 tests** including a
+bit-for-bit match against the original implementation (the streak comparison
+must never drift). Imported aliased to `_hashResp`; call sites unchanged.
+
+> Honest scope note: a wholesale "un-nest the agent loop into a module" would
+> mean threading dozens of closure variables through and re-validating the
+> whole streaming pipeline — high regression risk that can't be safely covered
+> by unit tests alone. Phase 3 therefore proceeds as small, tested, pure-leaf
+> extractions rather than a structural rewrite.
+
 ## [1.7.198] — 2026-06-18
 
 ### Refactor — +page.svelte Phase 2 (start): extract pure cores from stateful fns

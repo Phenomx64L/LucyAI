@@ -267,6 +267,8 @@ import { listen } from '@tauri-apps/api/event';
     import { getProviderForModel as _getProviderForModel, getDefaultModelForProvider as _getDefaultModelForProvider, isRetryableProviderError as _isRetryableProviderError } from '$lib/provider-fallback';
     import { detectElevationError as _detectElevationError, detectPlanLogicalFailure as _detectPlanLogicalFailure } from '$lib/plan-detect';
     import { selectMessagesWithinBudget } from '$lib/tab-budget';
+    // v1.7.199 Phase-3 — pure agent-loop leaf helpers (tested).
+    import { hashResp as _hashResp } from '$lib/agent-loop-util';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
@@ -5786,12 +5788,7 @@ Use ONE of these patterns instead:
                 // stated intent (no tool ran): the 1st gets a hard corrective
                 // nudge, the 2nd stops the loop and delivers the best answer.
                 let _intentOnlyStreak = 0;
-                const _hashResp = (s) => {
-                    let h = 5381;
-                    const str = String(s || '').trim();
-                    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
-                    return h >>> 0;
-                };
+                // _hashResp extracted to $lib/agent-loop-util.ts (v1.7.199, imported above, tested).
                 // ── Generic anti-loop: counts identical tool calls by hash(kind+args) ──
                 const toolCallCounts = new Map();
                 const MAX_IDENTICAL_TOOL_CALLS = 3;
