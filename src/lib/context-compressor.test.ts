@@ -5,6 +5,7 @@ import {
     shouldCompact,
     recordCompactionRatio,
     compressToolResults,
+    localDedupAgentContext,
     type ToolResult,
 } from './context-compressor';
 
@@ -127,5 +128,37 @@ describe('context-compressor / compressToolResults end-to-end', () => {
         expect(out.after).toBeLessThanOrEqual(out.before);
         expect(out.ratio).toBeGreaterThanOrEqual(0);
         expect(out.ratio).toBeLessThanOrEqual(1);
+    });
+});
+
+describe('context-compressor / localDedupAgentContext (raw-string Phase 1)', () => {
+    it('returns input unchanged below the size/loop gate', () => {
+        expect(localDedupAgentContext('small ctx', 5)).toBe('small ctx');
+        const big = 'x'.repeat(9000);
+        expect(localDedupAgentContext(big, 1)).toBe(big); // loop_i < 2 → off
+    });
+
+    it('collapses duplicate >=200-char lines (keeps the first)', () => {
+        const dup = 'A'.repeat(250);
+        const ctx = `${dup}\n${dup}\n` + 'z'.repeat(8000);
+        const out = localDedupAgentContext(ctx, 2); // gate on; keepRecent=1 → no step-trim
+        expect(out).toContain('[... duplicate block omitted]');
+        expect(out.split(dup).length - 1).toBe(1);   // only one full copy remains
+    });
+
+    it('trims old TOOL RESULTS step blocks beyond 600 chars', () => {
+        const body = 'B'.repeat(800);
+        const ctx =
+            `--- TOOL RESULTS (step 1) ---\n${body}\n` +
+            `--- TOOL RESULTS (step 2) ---\nshort recent body\n` +
+            'p'.repeat(8000);
+        const out = localDedupAgentContext(ctx, 4); // keepRecent=2 → trims step 1
+        expect(out).toContain('--- TOOL RESULTS (step 1, trimmed) ---');
+        expect(out).toMatch(/\d+ chars omitted/);
+        expect(out).not.toContain(body);            // full 800-char body gone
+    });
+
+    it('does not throw on empty input', () => {
+        expect(localDedupAgentContext('', 5)).toBe('');
     });
 });

@@ -277,7 +277,7 @@ import { listen } from '@tauri-apps/api/event';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { ICON_PALETTE, ICON_MAP, cmdRapidos, mapeoApps } from '$lib/quick-cmds';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
-    import { compressToolResults, shouldCompact, recordCompactionRatio } from '$lib/context-compressor';
+    import { compressToolResults, shouldCompact, recordCompactionRatio, localDedupAgentContext } from '$lib/context-compressor';
     import { observe as skillFactoryObserve, getProposals as skillFactoryGetProposals, markAccepted as skillFactoryMarkAccepted, dismissProposal as skillFactoryDismiss } from '$lib/skill-factory';
     import { parseDesignMd, formatTokensForPrompt as designTokensForPrompt } from '$lib/design-md';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
@@ -6067,30 +6067,10 @@ Use ONE of these patterns instead:
                     let ctx = fullCtx;
                     const origLen = ctx.length;
 
-                    // Phase 1: Local dedup (free, no API call) — from 8KB + iter 2
-                    if (ctx.length > 8000 && loop_i >= 2) {
-                        // Trim old steps (keep only 600 chars each, except recent 2)
-                        const keepRecent = Math.max(1, loop_i - 2);
-                        for (let s = 1; s < keepRecent; s++) {
-                            const stepRe = new RegExp(`--- TOOL RESULTS \\(step ${s}\\) ---\\n([\\s\\S]*?)(?=--- TOOL RESULTS \\(step ${s+1}\\)|$)`);
-                            ctx = ctx.replace(stepRe, (full, body) => {
-                                if (body.length <= 600) return full;
-                                return `--- TOOL RESULTS (step ${s}, trimmed) ---\n${body.substring(0,600)}\n[... ${body.length - 600} chars omitted]\n`;
-                            });
-                        }
-                        // Remove duplicate large blocks (>200 chars identical lines)
-                        const seen = new Map();
-                        ctx = ctx.replace(/^(.{200,})$/gm, (line) => {
-                            const key = line.trim().substring(0, 300);
-                            if (seen.has(key)) return '[... duplicate block omitted]';
-                            seen.set(key, true);
-                            return line;
-                        });
-                        // Truncate very long EXECUTION RESULTs (>4KB)
-                        ctx = ctx.replace(/(\[EXECUTION RESULT\]\n)([\s\S]{4000,?})(?=\n\n---|$)/g, (_, prefix, body) => {
-                            return prefix + body.substring(0, 4000) + '\n[... output truncated for context compression]';
-                        });
-                    }
+                    // Phase 1: Local dedup (free, no API call) — extracted to
+                    // $lib/context-compressor.ts (localDedupAgentContext, tested).
+                    // Gate (>8KB && loop_i>=2) lives inside the helper.
+                    ctx = localDedupAgentContext(ctx, loop_i);
 
                     // Phase 2: LLM compression for very large contexts (>20KB, iter 4+).
                     // Skip when the input is ~the same size as the last Phase-2 run

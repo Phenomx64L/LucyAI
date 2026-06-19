@@ -181,3 +181,40 @@ export function compressToolResults(
     const ratio     = before > 0 ? Math.max(0, (before - after) / before) : 0;
     return { joined, before, after, ratio };
 }
+
+/**
+ * Phase-1 LOCAL dedup for the RAW agent-context string (was the inline Phase 1
+ * of `compressContext` in +page.svelte, v1.7.202). Free — no LLM call:
+ *   • trims old `--- TOOL RESULTS (step N) ---` blocks to 600 chars,
+ *   • collapses duplicate ≥200-char lines,
+ *   • truncates very long `[EXECUTION RESULT]` bodies.
+ * Only runs once the context is large (>8 KB) AND the loop has a few steps
+ * (loop_i ≥ 2); otherwise returns the input unchanged. Faithful extraction —
+ * behaviour (incl. quirks) preserved bit-for-bit.
+ */
+export function localDedupAgentContext(ctx: string, loop_i: number): string {
+    if (!(ctx.length > 8000 && loop_i >= 2)) return ctx;
+    let out = ctx;
+    // Trim old steps (keep only 600 chars each, except recent 2).
+    const keepRecent = Math.max(1, loop_i - 2);
+    for (let s = 1; s < keepRecent; s++) {
+        const stepRe = new RegExp(`--- TOOL RESULTS \\(step ${s}\\) ---\\n([\\s\\S]*?)(?=--- TOOL RESULTS \\(step ${s + 1}\\)|$)`);
+        out = out.replace(stepRe, (full: string, body: string) => {
+            if (body.length <= 600) return full;
+            return `--- TOOL RESULTS (step ${s}, trimmed) ---\n${body.substring(0, 600)}\n[... ${body.length - 600} chars omitted]\n`;
+        });
+    }
+    // Remove duplicate large blocks (>200 chars identical lines).
+    const seen = new Map<string, boolean>();
+    out = out.replace(/^(.{200,})$/gm, (line: string) => {
+        const key = line.trim().substring(0, 300);
+        if (seen.has(key)) return '[... duplicate block omitted]';
+        seen.set(key, true);
+        return line;
+    });
+    // Truncate very long EXECUTION RESULTs (>4KB).
+    out = out.replace(/(\[EXECUTION RESULT\]\n)([\s\S]{4000,?})(?=\n\n---|$)/g, (_m: string, prefix: string, body: string) => {
+        return prefix + body.substring(0, 4000) + '\n[... output truncated for context compression]';
+    });
+    return out;
+}

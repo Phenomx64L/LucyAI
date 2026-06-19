@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.202] — 2026-06-19
+
+### Refactor — +page.svelte Phase 3 (cont.): compressContext Phase-1 → tested $lib
+
+Fourth pure-leaf out of the agent loop. `compressContext`'s Phase-1 LOCAL dedup
+— the free (no-LLM) pass that trims old `TOOL RESULTS` step blocks to 600 chars,
+collapses duplicate ≥200-char lines and truncates long `[EXECUTION RESULT]`
+bodies — is now `localDedupAgentContext(ctx, loop_i)` in the existing
+`$lib/context-compressor.ts`, with **4 new tests** (gate off below 8 KB / loop
+< 2, line dedup, step-block trim). The size/loop gate moved inside the helper;
+`compressContext` keeps its Phase-2 (LLM) path and the "Contexto comprimido"
+telemetry. ~25 lines off the hot path, replaced by one call.
+
+Faithful extraction — behaviour (including the trailing-newline off-by-one in
+the "N chars omitted" message and the latent `{4000,?}` quantifier quirk) kept
+bit-for-bit. svelte-check 0 errors + pre-commit green.
+
 ## [1.7.201] — 2026-06-19
 
 ### Refactor — +page.svelte Phase 3 (cont.): safe-command auto-promote detector
