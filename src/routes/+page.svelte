@@ -270,6 +270,7 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.199 Phase-3 — pure agent-loop leaf helpers (tested).
     import { hashResp as _hashResp } from '$lib/agent-loop-util';
     import { classifyToolResults } from '$lib/tool-result-classify';
+    import { detectPromotableSafeCmd } from '$lib/auto-promote';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
@@ -5642,72 +5643,24 @@ Use ONE of these patterns instead:
             // turn (agentResp) — the create-then-open task showed the OPEN step
             // (Start-Process) arrives in a later turn, so promoting only the
             // first response wasn't enough.
+            // v1.7.201 Phase-3 — the SAFE/DANGER detection moved to
+            // $lib/auto-promote.ts (detectPromotableSafeCmd, tested). This wrapper
+            // keeps the intent gate (don't promote when the user only wanted the
+            // command / code / a skill) + the trace + the tag append.
             const _autoPromoteSafeCmd = (text) => {
                 if (!text || infoIntent || codeGenIntent || skillInfoIntent) return text;
-                // v1.7.119 — only bail when a COMMAND-execution tag is already
-                // present. We deliberately do NOT bail on <TOOL> (writefile /
-                // editfile etc.): the model commonly emits a tagged writefile
-                // AND a BARE open command (Start-Process) in the SAME response
-                // — the previous guard saw the writefile's <TOOL> and skipped
-                // promoting the open step, so the file got created but never
-                // opened, looping into skip-stuck.
-                if (/<EXECUTE_CMD\b|<EXECUTE\b/i.test(text)) return text;
-                // Allow-list of SAFE actionable commands. Two families:
-                //   • read-only inspection (Get-*, Test-*, whoami, ipconfig, …)
-                //   • open / launch / navigate (Start-Process, Invoke-Item, ii,
-                //     explorer, start, notepad, code, Set-Location/cd) — exactly
-                //     what "ábrelo" / "abre la carpeta" / "ve a esa ruta" mean.
-                const _SAFE_CMD_RE = /^\s*(Get-[A-Za-z]+|Test-[A-Za-z]+|Measure-[A-Za-z]+|Resolve-[A-Za-z]+|Select-[A-Za-z]+|Show-[A-Za-z]+|Find-[A-Za-z]+|Format-[A-Za-z]+|Start-Process|Invoke-Item|Set-Location|Push-Location|Pop-Location|whoami|hostname|systeminfo|ipconfig|ifconfig|date|time|echo|pwd|ver|uptime|nslookup|ping|tracert|ii|explorer|start|notepad|code|cd|dir|ls|cat|type)\b/i;
-                // Deny guard — even an allow-listed prefix is NOT auto-promoted
-                // if the line carries a destructive verb, an elevation request,
-                // or a code-download/eval pattern. Those still REQUIRE the model
-                // to emit <EXECUTE_CMD> explicitly (and the Rust blocklist gates
-                // them on top of that).
-                const _DANGER_RE = /-Verb\s+RunAs|\bRemove-|\brm\s|\bdel\s|\brmdir\b|\bformat\b|\bmkfs\b|\bdd\s|\bStop-|\bRestart-Computer\b|\bClear-|\bUninstall-|\bDisable-|\bSet-ExecutionPolicy\b|\bnet\s+user\b|\btakeown\b|\bicacls\b|Invoke-Expression|\biex\b|DownloadString|DownloadFile|-EncodedCommand/i;
-                // v1.7.121 KEY FIX — scan LINE BY LINE. The old code required
-                // the whole stripped response to be a SINGLE line, so when the
-                // model emitted the command AND a prose sentence together
-                // ("Start-Process …\nHe creado el archivo…") — exactly what
-                // Gemini Flash does — detection failed and the open step never
-                // ran. We now strip scaffolding tags + fence markers (keeping
-                // fenced CONTENT) and look for the FIRST line that is a safe,
-                // invocable command, regardless of surrounding prose.
-                const _detect = text
-                    .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
-                    .replace(/<REMEMBER[\s\S]*?<\/REMEMBER>/gi, '')
-                    .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
-                    .replace(/<FILECONTENT>[\s\S]*?<\/FILECONTENT>/gi, '')
-                    .replace(/```[a-zA-Z0-9]*/g, '');   // drop fence markers, keep inner lines
-                // A line qualifies only if it starts with a safe verb AND looks
-                // like a real invocation — a hyphenated PowerShell cmdlet
-                // (Start-Process, Get-Date) or it carries a quote / path / flag.
-                // This skips prose that merely begins with an allow-listed
-                // English/Spanish word ("start by…", "date is…", "ping the…").
-                const _looksInvocable = (ln) =>
-                    /^\s*[A-Za-z][A-Za-z0-9]+-[A-Za-z]/.test(ln)
-                    || /["'\\]|\s\/[A-Za-z]|\s-[A-Za-z]/.test(ln);
-                let _cand = '';
-                for (const _ln of _detect.split('\n')) {
-                    const _t = _ln.trim();
-                    if (!_t || _t.length > 300) continue;
-                    if (_SAFE_CMD_RE.test(_t) && !_DANGER_RE.test(_t) && _looksInvocable(_t)) {
-                        _cand = _t;
-                        break;
-                    }
-                }
-                if (_cand) {
-                    pushTrace({
-                        phase: 'info',
-                        label: `Auto-ejecución: el modelo propuso un comando seguro sin tag — lo ejecuto`,
-                        detail: _cand.slice(0, 120),
-                        tabId,
-                    });
-                    // APPEND the exec tag so any coexisting writefile/editfile
-                    // still runs first (loop order: writefile before EXECUTE_CMD
-                    // = create-then-open in one turn).
-                    return text + `\n<EXECUTE_CMD>${_cand}</EXECUTE_CMD>`;
-                }
-                return text;
+                const _cand = detectPromotableSafeCmd(text);
+                if (!_cand) return text;
+                pushTrace({
+                    phase: 'info',
+                    label: `Auto-ejecución: el modelo propuso un comando seguro sin tag — lo ejecuto`,
+                    detail: _cand.slice(0, 120),
+                    tabId,
+                });
+                // APPEND the exec tag so any coexisting writefile/editfile still
+                // runs first (loop order: writefile before EXECUTE_CMD =
+                // create-then-open in one turn).
+                return text + `\n<EXECUTE_CMD>${_cand}</EXECUTE_CMD>`;
             };
             resp = _autoPromoteSafeCmd(resp);
 

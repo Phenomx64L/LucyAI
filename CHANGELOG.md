@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.201] — 2026-06-19
+
+### Refactor — +page.svelte Phase 3 (cont.): safe-command auto-promote detector
+
+Third pure-leaf out of the agent loop, and a security-relevant one: the
+allow/deny logic that decides whether a model response contains a SAFE bare
+command worth auto-executing (e.g. Gemini Flash answering "ábrelo" with a bare
+`Start-Process …` and no `<EXECUTE_CMD>` tag). Now `detectPromotableSafeCmd` in
+`$lib/auto-promote.ts` — the SAFE_CMD allow-list, the DANGER deny-list, the
+line-by-line scan and the "looks invocable" heuristic — covered by **9 tests**.
+
+The component wrapper keeps the intent gate (don't promote when the user only
+wanted the command / code / a skill) + the trace + the `<EXECUTE_CMD>` append.
+~50 lines off the hot path, replaced by ~10.
+
+Writing the tests surfaced a pre-existing quirk (preserved, NOT changed here):
+the deny-list `\bformat\b` (meant for disk `format`) also blocks the benign
+`-Format` flag / `Format-Table`, so those read-only commands aren't
+auto-promoted. Flagged for a possible follow-up; the refactor keeps behaviour
+identical. Verified: 9 vitest cases + svelte-check (0 errors) + pre-commit.
+
 ## [1.7.200] — 2026-06-19
 
 ### Refactor — +page.svelte Phase 3 (cont.): tool-result triage → tested $lib
