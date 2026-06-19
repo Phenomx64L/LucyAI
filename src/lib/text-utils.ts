@@ -74,3 +74,26 @@ export function formatTokens(n: number): string {
     if (n < 1_000_000) return Math.round(n / 1000) + 'k';
     return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
 }
+
+/**
+ * Render a byte count as a human-friendly size (was `_fmtBytes` in
+ * +page.svelte). Null/undefined → "—".
+ */
+export function fmtBytes(n: number | null | undefined): string {
+    if (n == null) return '—';
+    if (n < 1024)               return `${n} B`;
+    if (n < 1024 * 1024)        return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+/**
+ * Truncate `text` to `max` chars, appending an inline "+N chars" hint span
+ * (was `truncarConHint` in +page.svelte). Returns HTML, so the caller must
+ * already trust / escape `text`.
+ */
+export function truncateWithHint(text: string, max: number): string {
+    if (!text || text.length <= max) return text || '';
+    const restantes = text.length - max;
+    return `${text.substring(0, max)}<span class="trunc-hint"> … [+${restantes} chars — ver Audit Log para salida completa]</span>`;
+}

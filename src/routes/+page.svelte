@@ -264,7 +264,9 @@ import { listen } from '@tauri-apps/api/event';
     import { makeThoughtStreamer as _makeThoughtStreamer } from '$lib/stream-parse';
     import { providerFamily as _providerFamily } from '$lib/model-routing';
     import { artifactCandidateOf as _artifactCandidateOf } from '$lib/artifacts';
-    import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens } from '$lib/text-utils';
+    import { getProviderForModel as _getProviderForModel, getDefaultModelForProvider as _getDefaultModelForProvider, isRetryableProviderError as _isRetryableProviderError } from '$lib/provider-fallback';
+    import { detectElevationError as _detectElevationError, detectPlanLogicalFailure as _detectPlanLogicalFailure } from '$lib/plan-detect';
+    import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
@@ -399,13 +401,7 @@ import { listen } from '@tauri-apps/api/event';
     let _dbError = '';
     let _dbMsg   = '';
 
-    function _fmtBytes(n) {
-        if (n == null) return '—';
-        if (n < 1024)        return `${n} B`;
-        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-        if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-        return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-    }
+    // _fmtBytes extracted to $lib/text-utils.ts (v1.7.197, imported above, tested).
 
     async function refreshDbInfo() {
         try { _dbInfo = await invoke('db_info'); }
@@ -3785,29 +3781,8 @@ import { listen } from '@tauri-apps/api/event';
     // configured provider instead of showing the user a dead-end error.
     // Heuristics for provider detection are string-prefix based — same
     // convention used everywhere else in ai.rs.
-    function _getProviderForModel(model) {
-        if (!model) return 'unknown';
-        const m = String(model).toLowerCase();
-        if (m.startsWith('local-'))       return 'local';
-        if (m.startsWith('gemini'))       return 'gemini';
-        if (m.startsWith('claude'))       return 'anthropic';
-        if (m.startsWith('gpt') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('o4')) return 'openai';
-        if (m.includes('/') && !m.startsWith('local-')) return 'nvidia'; // NIM model ids contain '/'
-        return 'unknown';
-    }
-    // Fast, cheap default model per provider — used when we fall back from a
-    // failing primary. Picks the most-reliable model in each lineup so the
-    // user always gets *some* response rather than a hard error.
-    function _getDefaultModelForProvider(provider) {
-        switch (provider) {
-            case 'gemini':    return 'gemini-2.5-flash';      // GA, 1M ctx, cheap
-            case 'anthropic': return 'claude-haiku-4-5';      // fastest Claude
-            case 'openai':    return 'gpt-4o-mini';           // cheap OpenAI
-            case 'nvidia':    return 'meta/llama-3.3-70b-instruct'; // free NIM
-            case 'local':     return null; // requires user's actual installed model
-            default:          return null;
-        }
-    }
+    // _getProviderForModel + _getDefaultModelForProvider extracted to
+    // $lib/provider-fallback.ts (v1.7.197, imported above, tested).
     // Returns the model id to try as a fallback, or null if none available.
     // Walks `configuredProviders` skipping the current model's provider and
     // any provider that already failed earlier in this same send (caller
@@ -3832,10 +3807,7 @@ import { listen } from '@tauri-apps/api/event';
     // request — quota exhausted, persistent 5xx, network down. These warrant
     // a fallback attempt. Other errors (auth, malformed payload, user cancel)
     // should fail loud rather than silently degrading to a different model.
-    function _isRetryableProviderError(err) {
-        const s = String(err || '').toLowerCase();
-        return /tras\s+\d+\s+intentos|http\s+(429|5\d\d)|rate.?limit|quota|overload|tiempo de espera|timeout|econnrefused|enotfound|network|fetch failed/i.test(s);
-    }
+    // _isRetryableProviderError extracted to $lib/provider-fallback.ts (v1.7.197, tested).
 
     // ── PLAN/ACT/VERIFY (opus-4-7 #3) ──────────────────────────────────────────
     const _pendingPlans = new Map(); // planId -> { ...plan, tabId, doSpeak, createdAt }
@@ -3883,39 +3855,9 @@ import { listen } from '@tauri-apps/api/event';
     /// Match common Windows/PowerShell error fingerprints that mean "this needed
     /// admin privileges". Both Spanish and English variants because PS localizes
     /// its error strings based on the Windows display language.
-    function _detectElevationError(text) {
-        if (!text) return false;
-        return /PermissionDenied|Acceso\s+denegado|Access\s+is\s+denied|Access\s+denied|requires?\s+elevation|UnauthorizedAccess|No\s+se\s+puede\s+abrir\s+el\s+servicio.*en\s+el\s+equipo|CouldNot(Stop|Start|Set|Restart|Pause|Resume)Service|necesita.*admin|Run\s+as\s+administrator/i.test(String(text));
-    }
+    // _detectElevationError extracted to $lib/plan-detect.ts (v1.7.197, tested).
 
-    /// Compare CMD intent against VERIFY output to catch the case where the
-    /// command "succeeded" (no exception) but didn't actually do what was asked.
-    /// Returns a human-readable diagnostic string, or null if no mismatch found.
-    function _detectPlanLogicalFailure(cmd, verifyOut) {
-        if (!cmd || !verifyOut) return null;
-        const c = String(cmd).toLowerCase();
-        const v = String(verifyOut).toLowerCase();
-
-        // Service control mismatches
-        if (/\bstop-service\b|\bstop-process\b/.test(c) && /\brunning\b/.test(v)) {
-            return 'El comando intentó DETENER pero VERIFY muestra que sigue ACTIVO.';
-        }
-        if (/\bstart-service\b/.test(c) && /\bstopped\b/.test(v) && !/running/.test(v)) {
-            return 'El comando intentó ARRANCAR pero VERIFY muestra que sigue DETENIDO.';
-        }
-        if (/\brestart-service\b/.test(c) && /\bstopped\b/.test(v) && !/running/.test(v)) {
-            return 'El comando intentó REINICIAR pero VERIFY muestra el servicio DETENIDO (sólo paró, no arrancó).';
-        }
-        // Disable / Enable mismatches
-        if (/\bdisable-/.test(c) && /\benabled\s*:\s*true\b|\bstatus\s*:\s*enabled\b/i.test(verifyOut)) {
-            return 'El comando intentó DESHABILITAR pero VERIFY muestra que sigue HABILITADO.';
-        }
-        // File deletion mismatches (when VERIFY uses Test-Path)
-        if (/\bremove-item\b|\bdel\s/.test(c) && /\btest-path/i.test(cmd + ' ' + verifyOut) && /\btrue\b/.test(v)) {
-            return 'El comando intentó BORRAR pero VERIFY muestra que el archivo/carpeta sigue existiendo.';
-        }
-        return null;
-    }
+    // _detectPlanLogicalFailure extracted to $lib/plan-detect.ts (v1.7.197, tested).
 
     /// Lazy LLM follow-up — launches ask_lucy with a focused interpretation
     /// prompt and renders the response as a normal Lucy message. Only called
@@ -9503,11 +9445,7 @@ times the SAME way, switch tool kind entirely.
 
     // ── SECURITY BLOCK BANNER — U5 ───────────────────────────────────────────
     /** Devuelve texto truncado con hint si supera max caracteres — U4 */
-    function truncarConHint(text, max) {
-        if (!text || text.length <= max) return text || '';
-        const restantes = text.length - max;
-        return `${text.substring(0, max)}<span class="trunc-hint"> … [+${restantes} chars — ver Audit Log para salida completa]</span>`;
-    }
+    // truncarConHint extracted to $lib/text-utils.ts as truncateWithHint (v1.7.197, tested).
     function limpiarSecurityBlock() { pendingSecurityBlock = null; }
     async function autorizarSecurityBlock() {
         if (!pendingSecurityBlock) return;

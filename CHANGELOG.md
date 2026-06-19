@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.197] — 2026-06-18
+
+### Refactor — +page.svelte Phase 1 (cont.): more pure helpers → tested $lib
+
+Second safe batch. Five more PURE helpers moved out of the component, behaviour
+unchanged, call sites aliased to the old names:
+
+- `$lib/provider-fallback.ts` — `getProviderForModel`, `getDefaultModelForProvider`,
+  `isRetryableProviderError` (were `_getProviderForModel` / `_getDefaultModelForProvider`
+  / `_isRetryableProviderError`). The async picker `_findFallbackModel` stays in
+  the component but now builds on these tested pieces. **6 tests.**
+- `$lib/plan-detect.ts` — `detectElevationError`, `detectPlanLogicalFailure`
+  (PLAN/ACT/VERIFY mismatch + elevation detectors). **6 tests.**
+- `$lib/text-utils.ts` (existing) gained `fmtBytes` (was `_fmtBytes`) and
+  `truncateWithHint` (was `truncarConHint`). **5 tests.**
+
++page.svelte: 13,617 → 13,499 lines across Phase 1; 8 helpers now isolated and
+covered by 31 unit tests total. Verified: 17 new vitest cases + svelte-check
+(0 errors — confirms no dangling references) + full pre-commit suite. Phase 1
+done; next is Phase 2 (state-coupled clusters: DB backup, themes, presets, …).
+
 ## [1.7.196] — 2026-06-18
 
 ### Refactor — +page.svelte Phase 1: extract pure helpers to tested $lib modules
