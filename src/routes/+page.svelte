@@ -260,6 +260,10 @@ import { listen } from '@tauri-apps/api/event';
     import { safeParseLS, safeSetLS, safeSetLSString, safeGetLS, safeRemoveLS } from '$lib/safe-ls';
     import { debug } from '$lib/debug';
     import { renderMd } from '$lib/md-render';
+    // v1.7.196 refactor — pure helpers extracted to $lib (each unit-tested).
+    import { makeThoughtStreamer as _makeThoughtStreamer } from '$lib/stream-parse';
+    import { providerFamily as _providerFamily } from '$lib/model-routing';
+    import { artifactCandidateOf as _artifactCandidateOf } from '$lib/artifacts';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
@@ -328,29 +332,7 @@ import { listen } from '@tauri-apps/api/event';
         _artifactOpen = true;
         return id;
     }
-    /** Light heuristic — does this chat message look worth promoting?
-     *  Used by ChatThread to render the "Open as artifact" affordance
-     *  only when there's actually something substantial. */
-    function _artifactCandidateOf(rawContent) {
-        if (!rawContent) return null;
-        const s = String(rawContent);
-        // Fenced code block ≥ 30 lines is the primary trigger.
-        const codeFence = s.match(/```([a-zA-Z0-9_-]*)\n([\s\S]+?)```/);
-        if (codeFence) {
-            const lang = codeFence[1];
-            const body = codeFence[2];
-            if (body.split('\n').length >= 30) {
-                return { kind: 'code', language: lang || '', content: body.trim(), title: (lang || 'code') + ' block' };
-            }
-        }
-        // Markdown body > 1500 chars (after stripping common tags) qualifies.
-        const stripped = s.replace(/<[A-Z_]+>[\s\S]*?<\/[A-Z_]+>/g, '').trim();
-        if (stripped.length >= 1500 && /^#{1,3}\s|\n#{1,3}\s|\n\s*[-*]\s/.test(stripped)) {
-            const firstH = stripped.match(/^#\s+(.+)/m);
-            return { kind: 'markdown', language: '', content: stripped, title: firstH ? firstH[1] : 'Document' };
-        }
-        return null;
-    }
+    // _artifactCandidateOf extracted to $lib/artifacts.ts (v1.7.196, imported above, tested).
     // Tier B #1 — Session-wide accumulated savings (USD). Reset at app start;
     // not persisted (this is "since you opened Lucy", not "all time").
     let _economySavingsUsd = 0;
@@ -780,40 +762,10 @@ import { listen } from '@tauri-apps/api/event';
             _speculativePrefetch('search_web', webQ, () => invoke('search_web', { query: webQ }));
         }
     }
-    // v1.7.113 audit M6 — stateful <THOUGHT> streamer. The old per-chunk
-    // `acc.match(/<THOUGHT>([\s\S]*?)(?:<\/THOUGHT>|$)/)` re-ran a backtracking
-    // regex over the ENTIRE growing accumulator on every streamed chunk — and
-    // kept doing so even AFTER </THOUGHT> closed, when there was nothing left
-    // to extract. On a 50KB response streamed in thousands of chunks that's
-    // O(n²) wasted CPU during the hottest UI path.
-    //
-    // This factory returns a per-stream callback that:
-    //   • finds the <THOUGHT> open tag once (cached index),
-    //   • uses cheap native indexOf (no regex backtracking),
-    //   • STOPS all work permanently once </THOUGHT> is seen — every later
-    //     chunk in the stream becomes a single boolean check.
-    // `emit(delta)` receives only the newly-revealed reasoning text.
-    function _makeThoughtStreamer(emit) {
-        let startIdx = -1;   // index just past "<THOUGHT>"
-        let lastLen = 0;     // chars of thought already emitted
-        let closed = false;  // </THOUGHT> seen → done forever
-        return (acc) => {
-            if (closed || !acc) return;
-            if (startIdx === -1) {
-                const open = acc.search(/<THOUGHT>/i);
-                if (open === -1) return;            // no thought yet
-                startIdx = open + '<THOUGHT>'.length;
-            }
-            const closeAt = acc.indexOf('</THOUGHT>', startIdx);
-            const end = closeAt === -1 ? acc.length : closeAt;
-            const cur = acc.slice(startIdx, end);
-            if (cur.length > lastLen) {
-                emit(cur.slice(lastLen));
-                lastLen = cur.length;
-            }
-            if (closeAt !== -1) closed = true;      // nothing more to stream
-        };
-    }
+    // v1.7.113 audit M6 — stateful <THOUGHT> streamer (extracted v1.7.196).
+    // Now lives in $lib/stream-parse.ts (`makeThoughtStreamer`, imported above
+    // as `_makeThoughtStreamer`) with its own unit tests. See that file for the
+    // O(n²)-avoidance rationale.
     // v1.4.15 — Keyboard cheatsheet modal. Opened with Shift+?, closed by Esc.
     let showCheatsheet = false;
     // v1.6.1 — ECC-style skill preset picker. Opened via composer chip
@@ -888,15 +840,7 @@ import { listen } from '@tauri-apps/api/event';
     // two models' failure modes are uncorrelated — the core of real
     // cross-validation. Falls back to pickSubAgentModel when no cross-family
     // option is configured (one-provider setups keep working unchanged).
-    function _providerFamily(modelId) {
-        const m = (modelId || '').toLowerCase();
-        if (m.startsWith('local-') || m.startsWith('ollama')) return 'ollama';
-        if (m.startsWith('gemini') || m.startsWith('models/')) return 'gemini';
-        if (m.startsWith('claude') || m.startsWith('anthropic')) return 'anthropic';
-        if (m.startsWith('gpt') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('openai')) return 'openai';
-        if (m.startsWith('meta/') || m.startsWith('nvidia')) return 'nvidia';
-        return 'unknown';
-    }
+    // _providerFamily extracted to $lib/model-routing.ts (v1.7.196, imported above).
     function pickCrossVerifierModel(mainModel) {
         // Respect any explicit verifier model / non-auto mode unchanged.
         if (verifierModel && verifierModel !== 'auto') {

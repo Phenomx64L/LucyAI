@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.196] — 2026-06-18
+
+### Refactor — +page.svelte Phase 1: extract pure helpers to tested $lib modules
+
+First, lowest-risk batch of the gradual +page.svelte refactor (the `<script>`
+alone is ~10.8k lines / ~193 top-level functions). Pulled three PURE helpers
+out of the component into small, unit-tested modules — no behaviour change, and
+the logic that historically caused subtle streaming bugs is now isolated and
+covered by tests:
+
+- `$lib/stream-parse.ts` — `makeThoughtStreamer` (was `_makeThoughtStreamer`),
+  the stateful streamed-`<THOUGHT>` parser. **6 tests.**
+- `$lib/model-routing.ts` — `providerFamily` (was `_providerFamily`), model-id
+  → provider-family classifier used by the cross-model verifier. **3 tests.**
+- `$lib/artifacts.ts` — `artifactCandidateOf` (was `_artifactCandidateOf`), the
+  "is this worth promoting to an artifact" heuristic. **5 tests.**
+
+Call sites are unchanged — the imports are aliased to the old underscore names.
+Verified: 14 new vitest cases + svelte-check (0 errors) + full pre-commit suite.
+Next batches: parameterise state-coupled helpers (Phase 2), then the agent loop
+(Phase 3).
+
 ## [1.7.195] — 2026-06-18
 
 ### Fixed — Frozen "Pensando…" zombie bubble (the intermittent blank/freeze)
