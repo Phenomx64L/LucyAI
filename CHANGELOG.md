@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.200] — 2026-06-19
+
+### Refactor — +page.svelte Phase 3 (cont.): tool-result triage → tested $lib
+
+Second pure-leaf out of the agent loop. The anti-hallucination tool-result
+classification (count how many of a turn's tool outputs were empty / errored /
+hit a PowerShell parse error) is now `classifyToolResults` + `stripFraming` in
+`$lib/tool-result-classify.ts`, covered by **9 tests**. This logic had real bug
+history ("Lucy invents results when the command returned no output"), so the
+tests directly guard against regressions.
+
+The component keeps the guard-injection (the bits that mutate `agentCtx` /
+`pushTrace` when all results are empty or 2+ parse errors pile up); only the
+pure counting moved out. ~40 lines removed from the hot path, replaced by one
+call. svelte-check 0 errors + pre-commit suite green.
+
 ## [1.7.199] — 2026-06-18
 
 ### Refactor — +page.svelte Phase 3 (start): pure leaf out of the agent loop

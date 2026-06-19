@@ -269,6 +269,7 @@ import { listen } from '@tauri-apps/api/event';
     import { selectMessagesWithinBudget } from '$lib/tab-budget';
     // v1.7.199 Phase-3 — pure agent-loop leaf helpers (tested).
     import { hashResp as _hashResp } from '$lib/agent-loop-util';
+    import { classifyToolResults } from '$lib/tool-result-classify';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
@@ -8382,47 +8383,11 @@ Use ONE of these patterns instead:
                     // have data to draw conclusions from. Prevents the
                     // "Get-Service returned nothing → Lucy invents detailed
                     // service list" failure mode that bit the user.
-                    const _emptyMarkers = [/\(sin salida\)/i, /\(no output\)/i, /\bempty\b/i, /no se encontraron/i, /not found/i, /no results/i, /returned no output/i, /no se devolvieron/i];
-                    const _errorMarkers = [/^\[.*ERROR\]/im, /\[stderr warnings\]/i, /Reg Error/i, /ParserError/i, /CommandNotFoundException/i, /FullyQualifiedErrorId/i, /Acceso denegado|Access is denied/i, /POWERSHELL ERROR/i];
-                    /** Strip the boilerplate framing that wraps tool outputs
-                     *  ("[EXECUTION RESULT — step N]", header rows of the
-                     *  warpBlock, etc.) so the BODY can be inspected for
-                     *  actual content vs just headers. */
-                    function _stripFraming(s) {
-                        return String(s || '')
-                            .replace(/^\[[^\]]+\]\s*\n?/gm, '')        // bracket-headers
-                            .replace(/^---[^\n]*---\s*\n?/gm, '')      // markdown rules
-                            .replace(/^PS\s*>\s*[^\n]*\n?/gm, '')      // PS prompt lines
-                            .trim();
-                    }
-                    const totalToolCalls = toolResults.length;
+                    // v1.7.200 Phase-3 — empty/error/PS-parse counting extracted to
+                    // $lib/tool-result-classify.ts (tested). The guards below (which
+                    // mutate agentCtx) stay here.
+                    const { totalToolCalls, emptyCount, errorCount, psParseErrorCount } = classifyToolResults(toolResults);
                     if (totalToolCalls > 0) {
-                        let emptyCount = 0;
-                        let errorCount = 0;
-                        // v1.4.4: counter for PowerShell-parse-error specifically.
-                        // The script-rewrite loop (multiple writefile retries fixing
-                        // malformed @{} hash literals or missing Catch blocks) often
-                        // means the LLM is trying to fix a script that's too complex.
-                        // Two parse errors in a row → inject a specific hint to
-                        // split into smaller scripts instead of patching.
-                        let psParseErrorCount = 0;
-                        const _PS_PARSE_RE = /El literal de hash estaba incompleto|hash literal was incomplete|Token .* inesperado|Unexpected token|Falta un bloque (Catch|Finally)|Missing (Catch|Finally) block|sintaxis no es válida|is not a valid (script|syntax)/i;
-                        for (const r of toolResults) {
-                            const raw = String(r || '').trim();
-                            // Cheap-path empties: completely blank or trivially short
-                            if (!raw || raw.length < 30) { emptyCount++; continue; }
-                            // Strip framing then re-measure — catches the case where
-                            // the wrapper text is verbose but the actual command
-                            // output is empty/(sin salida).
-                            const body = _stripFraming(raw);
-                            if (!body || body.length < 25) { emptyCount++; continue; }
-                            if (_emptyMarkers.some(re => re.test(raw))) { emptyCount++; continue; }
-                            if (_errorMarkers.some(re => re.test(raw))) {
-                                errorCount++;
-                                if (_PS_PARSE_RE.test(raw)) psParseErrorCount++;
-                                continue;
-                            }
-                        }
                         // PowerShell parse-error guard: if we've seen 2+ parse errors
                         // in this iteration's tool results, inject a strong hint to
                         // stop patching and split the script. Cheap insurance —
