@@ -266,6 +266,7 @@ import { listen } from '@tauri-apps/api/event';
     import { artifactCandidateOf as _artifactCandidateOf } from '$lib/artifacts';
     import { getProviderForModel as _getProviderForModel, getDefaultModelForProvider as _getDefaultModelForProvider, isRetryableProviderError as _isRetryableProviderError } from '$lib/provider-fallback';
     import { detectElevationError as _detectElevationError, detectPlanLogicalFailure as _detectPlanLogicalFailure } from '$lib/plan-detect';
+    import { selectMessagesWithinBudget } from '$lib/tab-budget';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
@@ -3704,46 +3705,21 @@ import { listen } from '@tauri-apps/api/event';
     // separately in fin() so it never blocks message rendering.
     const MAX_TAB_TOKENS    = 60_000;   // ~60% of typical 100k Gemini Flash window
     const KEEP_RECENT_MSGS  = 16;       // never drop the most recent N messages
+    // v1.7.198 refactor — the pure budgeting decision lives in $lib/tab-budget.ts
+    // (selectMessagesWithinBudget, tested). This wrapper applies the result:
+    // mutate the tab, flag a digest, log. Returns early when no change is needed.
     function pruneTabForBudget(tab) {
         if (!tab?.messages?.length) return;
-        let total = 0;
-        for (const m of tab.messages) total += m.tokens || 0;
-        if (total <= MAX_TAB_TOKENS) return;
-
-        // Always keep recent KEEP_RECENT_MSGS verbatim so the active dialog
-        // makes sense. Drop from the OLDEST end forward.
-        const recent = tab.messages.slice(-KEEP_RECENT_MSGS);
-        let recentTokens = 0;
-        for (const m of recent) recentTokens += m.tokens || 0;
-
-        const olderBudget = MAX_TAB_TOKENS - recentTokens;
-        if (olderBudget <= 0) {
-            // Pathological: even the recent block exceeds budget. Keep just it.
-            const dropped = tab.messages.length - recent.length;
-            tab.messages = recent;
-            debug.warn(`[memory-v2] tab ${tab.id}: recent block exceeded budget; dropped ${dropped} older messages`);
-            tab.workingMemory ||= {};
-            tab.workingMemory._needsDigest = true;
-            return;
-        }
-
-        // Walk older messages from newest→oldest, keeping until budget runs out.
-        const older = tab.messages.slice(0, -KEEP_RECENT_MSGS);
-        const keptOlder = [];
-        let used = 0;
-        for (let i = older.length - 1; i >= 0; i--) {
-            const t = older[i].tokens || 0;
-            if (used + t > olderBudget) break;
-            used += t;
-            keptOlder.unshift(older[i]);
-        }
-        const droppedCount = older.length - keptOlder.length;
-        if (droppedCount === 0) return;
-
-        tab.messages = [...keptOlder, ...recent];
+        const res = selectMessagesWithinBudget(tab.messages, MAX_TAB_TOKENS, KEEP_RECENT_MSGS);
+        if (!res) return;
+        tab.messages = res.kept;
         tab.workingMemory ||= {};
         tab.workingMemory._needsDigest = true;
-        debug.log(`[memory-v2] tab ${tab.id}: pruned ${droppedCount} old messages (was ${total} tokens, now ~${used + recentTokens})`);
+        if (res.overflowedRecent) {
+            debug.warn(`[memory-v2] tab ${tab.id}: recent block exceeded budget; dropped ${res.droppedCount} older messages`);
+        } else {
+            debug.log(`[memory-v2] tab ${tab.id}: pruned ${res.droppedCount} old messages (was ${res.totalTokens} tokens, now ~${res.keptTokens})`);
+        }
     }
 
     // Persist user/lucy turns to SQLite for cross-session FTS search.

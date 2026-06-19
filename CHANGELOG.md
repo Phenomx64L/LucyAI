@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.198] — 2026-06-18
+
+### Refactor — +page.svelte Phase 2 (start): extract pure cores from stateful fns
+
+Phase 2 pattern: where a state-coupled function wraps a chunk of pure logic,
+move the LOGIC to a tested `$lib` module and leave a thin wrapper that does the
+side effects (mutation, logging, toasts).
+
+First target — `pruneTabForBudget` (token-aware history pruning, the code that
+keeps long chats from dying). The pure decision "which messages survive a token
+budget" is now `selectMessagesWithinBudget` in `$lib/tab-budget.ts`, covered by
+**5 tests** including the pathological "recent block alone exceeds budget" edge
+case. The component function shrank from ~40 lines to ~12 (mutate tab + flag
+digest + log).
+
+Note: the originally-listed Phase-2 clusters (DB backup, themes, presets, MCP)
+turned out to be thin UI glue over logic ALREADY in `$lib` (theme-loader,
+presets, mcp-secrets) — extracting them would add indirection without real
+gain, so Phase 2 instead targets functions with genuine extractable logic.
+Verified: 5 new vitest cases + svelte-check (0 errors) + pre-commit suite.
+
 ## [1.7.197] — 2026-06-18
 
 ### Refactor — +page.svelte Phase 1 (cont.): more pure helpers → tested $lib
