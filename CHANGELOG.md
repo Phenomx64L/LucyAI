@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.203] — 2026-06-19
+
+### Fixed — auto-promote deny-list no longer false-blocks `-Format` / `Format-Table`
+
+Follow-up to the quirk the v1.7.201 refactor tests surfaced. The safe-command
+auto-promotion deny-list (`$lib/auto-promote.ts`) used `\bformat\b` to block
+disk `format` — but that also matched the benign `-Format` flag and the
+`Format-Table`/`Format-List` cmdlets, so harmless read-only commands like
+`Get-Date -Format o` or `Get-ChildItem | Format-Table` were never auto-executed
+(the model had to emit `<EXECUTE_CMD>` explicitly).
+
+Narrowed the pattern to the genuinely destructive shapes — `Format-Volume`, or
+`format` followed by a drive letter / `/FS:`-style flag. Everything else on the
+deny-list is unchanged, and the disk-format cases stay blocked. 2 new tests
+assert both directions (benign now promotes, destructive still blocked); 10
+total in the suite. svelte-check 0 errors + pre-commit green.
+
 ## [1.7.202] — 2026-06-19
 
 ### Refactor — +page.svelte Phase 3 (cont.): compressContext Phase-1 → tested $lib

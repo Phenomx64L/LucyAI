@@ -8,10 +8,16 @@ describe('detectPromotableSafeCmd', () => {
         expect(detectPromotableSafeCmd('Get-Process -Name explorer')).toBe('Get-Process -Name explorer');
     });
 
-    it('quirk preserved: the deny-list "format" also blocks the benign -Format flag', () => {
-        // \bformat\b (meant for disk `format`) collides with `-Format` — existing
-        // behaviour, kept faithfully by the extraction (not a refactor change).
-        expect(detectPromotableSafeCmd('Get-Date -Format o')).toBeNull();
+    it('v1.7.203 — promotes benign -Format / Format-Table (no longer false-blocked)', () => {
+        expect(detectPromotableSafeCmd('Get-Date -Format o')).toBe('Get-Date -Format o');
+        expect(detectPromotableSafeCmd('Get-ChildItem | Format-Table')).toBe('Get-ChildItem | Format-Table');
+    });
+
+    it('v1.7.203 — still blocks destructive disk format shapes', () => {
+        // Format-Volume and `format <drive>` / `format /FS:` stay on the deny-list.
+        expect(detectPromotableSafeCmd('Get-Disk 0 | Format-Volume -DriveLetter D')).toBeNull();
+        expect(detectPromotableSafeCmd('Start-Process cmd -ArgumentList "format C:"')).toBeNull();
+        expect(detectPromotableSafeCmd('Invoke-Item "x"; format /FS:NTFS D:')).toBeNull();
     });
 
     it('finds the command even when surrounded by prose (line-by-line)', () => {

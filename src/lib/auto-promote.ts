@@ -23,7 +23,12 @@ const SAFE_CMD_RE = /^\s*(Get-[A-Za-z]+|Test-[A-Za-z]+|Measure-[A-Za-z]+|Resolve
 // carries a destructive verb, an elevation request, or a code-download/eval
 // pattern. Those still REQUIRE the model to emit <EXECUTE_CMD> explicitly (and
 // the Rust blocklist gates them on top of that).
-const DANGER_RE = /-Verb\s+RunAs|\bRemove-|\brm\s|\bdel\s|\brmdir\b|\bformat\b|\bmkfs\b|\bdd\s|\bStop-|\bRestart-Computer\b|\bClear-|\bUninstall-|\bDisable-|\bSet-ExecutionPolicy\b|\bnet\s+user\b|\btakeown\b|\bicacls\b|Invoke-Expression|\biex\b|DownloadString|DownloadFile|-EncodedCommand/i;
+// v1.7.203 — the disk-`format` guard was `\bformat\b`, which also matched the
+// benign `-Format` flag and `Format-Table`/`Format-List`, so harmless read-only
+// commands (`Get-Date -Format o`, `… | Format-Table`) were never auto-promoted.
+// Narrowed to the genuinely destructive shapes: `Format-Volume`, or `format`
+// followed by a drive letter / `/FS:` style flag. Everything else unchanged.
+const DANGER_RE = /-Verb\s+RunAs|\bRemove-|\brm\s|\bdel\s|\brmdir\b|\bFormat-Volume\b|\bformat\s+(?:\/|[A-Za-z]:)|\bmkfs\b|\bdd\s|\bStop-|\bRestart-Computer\b|\bClear-|\bUninstall-|\bDisable-|\bSet-ExecutionPolicy\b|\bnet\s+user\b|\btakeown\b|\bicacls\b|Invoke-Expression|\biex\b|DownloadString|DownloadFile|-EncodedCommand/i;
 
 // A line qualifies only if it starts with a safe verb AND looks like a real
 // invocation — a hyphenated PowerShell cmdlet (Start-Process, Get-Date) or it
