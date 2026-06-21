@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.205] — 2026-06-19
+
+### Performance — chat render: compute the visible-message list once per frame
+
+Tier-1 perf pass. On inspection the chat thread is already heavily optimized
+(`content-visibility:auto` skips paint/layout for off-screen bubbles, morphdom
+diffs streaming text, `msg.html` is cached, per-tab `revStore` reactivity, shiki
+lazy+eager with hljs fallback) — so JS virtualization would be low-ROI and high
+risk over the just-stabilized streaming path, and was deliberately NOT done.
+
+The one safe, real win: `ChatThread.svelte` called `visibleMessages()` (an O(N)
+`.filter` allocating a new array) **twice per render** — once for the empty-state
+check and once for the `{#each}`. Consolidated into a single reactive
+(`visibleMsgs`) with explicit deps (tabRev / chatSearch / isActiveTab /
+tab.messages) → halves the per-frame filtering during streaming in long chats,
+behaviour identical. svelte-check 0 errors + 246 vitest passing.
+
 ## [1.7.204] — 2026-06-19
 
 ### Fixed — deep-audit: revive the dead `[EXECUTION RESULT]` truncation transform

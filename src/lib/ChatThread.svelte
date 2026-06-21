@@ -52,6 +52,15 @@
     $: revStore = tab?.id ? getTabRevStore(tab.id) : null;
     $: tabRev = revStore ? $revStore : 0;
 
+    // v1.7.205 perf — compute the filtered message list ONCE per render and
+    // reuse it (empty-state check + the {#each} below both called
+    // visibleMessages() separately → two O(N) filters per frame, which adds up
+    // during streaming in long chats). Deps listed explicitly so the reactive
+    // re-runs on a streaming tick (tabRev), a structural change (tab.messages),
+    // or a search/active-tab change — matching the prior inline behaviour.
+    $: visibleMsgs = (void tabRev, void chatSearch, void isActiveTab,
+        visibleMessages(Array.isArray(tab?.messages) ? tab.messages : []));
+
     const dispatch = createEventDispatcher<{
         pinmessage: { msg: any };
         branchmessage: { msg: any };
@@ -182,13 +191,13 @@
     <!-- v1.7.26 — Empty state hero. Renders when the tab has no real
          turns (filters out system/hidden/thinking helpers so a tab with
          only a "Welcome" toast still counts as empty). -->
-    {#if visibleMessages(tab.messages).filter(m => m.role === 'user' || m.role === 'lucy' || m.role === 'streaming').length === 0}
+    {#if visibleMsgs.filter(m => m.role === 'user' || m.role === 'lucy' || m.role === 'streaming').length === 0}
         <ChatEmptyState
             userName={userName}
             isEN={isEN}
             on:suggest={(e) => dispatch('emptySuggest', { prompt: e.detail })} />
     {/if}
-    {#each (void tabRev, visibleMessages(tab.messages)) as msg (msg.id)}
+    {#each visibleMsgs as msg (msg.id)}
         {#if msg.role === 'thinking'}
             <div class="msg-thinking">
                 <div class="thinking-dots">
