@@ -158,6 +158,26 @@ describe('context-compressor / localDedupAgentContext (raw-string Phase 1)', () 
         expect(out).not.toContain(body);            // full 800-char body gone
     });
 
+    it('v1.7.204 — truncates oversized [EXECUTION RESULT] bodies (was a dead no-op)', () => {
+        const ctx =
+            '[EXECUTION RESULT]\n' + 'x'.repeat(5000) +
+            '\n\n--- TOOL RESULTS (step 9) ---\n' + 'p'.repeat(8000);
+        const out = localDedupAgentContext(ctx, 3);
+        expect(out).toContain('[... output truncated for context compression]');
+        expect(out).not.toContain('x'.repeat(5000)); // full 5000-char body gone (capped to 4000)
+    });
+
+    it('leaves a short [EXECUTION RESULT] body untouched (< 4000 chars to end/next block)', () => {
+        // Padding lives BEFORE the result so the body has < 4000 chars to the
+        // string end → the {4000,}? minimum can't be met → no truncation.
+        const ctx =
+            'q'.repeat(8000) + '\n\n--- TOOL RESULTS (step 1) ---\n' +
+            '[EXECUTION RESULT]\n' + 'y'.repeat(120) + '\n\n--- end ---';
+        const out = localDedupAgentContext(ctx, 3);
+        expect(out).toContain('y'.repeat(120));
+        expect(out).not.toContain('output truncated for context compression');
+    });
+
     it('does not throw on empty input', () => {
         expect(localDedupAgentContext('', 5)).toBe('');
     });

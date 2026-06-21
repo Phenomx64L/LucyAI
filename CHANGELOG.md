@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.204] — 2026-06-19
+
+### Fixed — deep-audit: revive the dead `[EXECUTION RESULT]` truncation transform
+
+Deep code inspection (clippy / cargo-audit / npm-audit / svelte-check / vitest +
+manual review) came back healthy — no correctness bugs from the linters, and the
+dependency advisories (DOMPurify, rsa, sqlx, GTK) are all non-exploitable in
+Lucy's usage (string sanitize only; SQLite not MySQL/Postgres; Linux-only deps).
+
+The one concrete code finding: in `localDedupAgentContext`
+(`$lib/context-compressor.ts`), the Phase-1 transform meant to truncate very
+long `[EXECUTION RESULT]` bodies used the quantifier `{4000,?}` — an INVALID
+quantifier JS treats as a literal, so the transform **never fired** (confirmed
+in node: a 6 000-char body was unchanged). Low impact (other caps — the 12 KB
+per-result cap + the 35 KB rolling window — already bound context size), which
+is why it went unnoticed.
+
+Corrected to `{4000,}?` (lazy "4000 or more") so it truncates oversized
+execution output as designed, with 2 new tests (oversized truncated; short
+left intact). 19 tests in `context-compressor.test.ts`; svelte-check 0 errors +
+pre-commit green.
+
 ## [1.7.203] — 2026-06-19
 
 ### Fixed — auto-promote deny-list no longer false-blocks `-Format` / `Format-Table`

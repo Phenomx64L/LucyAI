@@ -213,7 +213,11 @@ export function localDedupAgentContext(ctx: string, loop_i: number): string {
         return line;
     });
     // Truncate very long EXECUTION RESULTs (>4KB).
-    out = out.replace(/(\[EXECUTION RESULT\]\n)([\s\S]{4000,?})(?=\n\n---|$)/g, (_m: string, prefix: string, body: string) => {
+    // v1.7.204 — fixed a latent dead-no-op: the quantifier was `{4000,?}`, an
+    // INVALID quantifier that JS treats as a literal, so this transform never
+    // fired (audit-confirmed). Corrected to `{4000,}?` (lazy "4000 or more") so
+    // it actually truncates oversized execution output as the comment promised.
+    out = out.replace(/(\[EXECUTION RESULT\]\n)([\s\S]{4000,}?)(?=\n\n---|$)/g, (_m: string, prefix: string, body: string) => {
         return prefix + body.substring(0, 4000) + '\n[... output truncated for context compression]';
     });
     return out;
