@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.217] — 2026-06-22
+
+### Security — deep scan of `ai.rs`: change_agent_dir blocklist bypass (Windows)
+
+Audited `commands/ai.rs` (LLM core). The SSRF guard (`fetch_url_content` →
+`scan_url` string check + `host_resolves_to_internal` DNS resolve + the
+per-hop `ssrf_safe_redirect_policy`), the capped JSON parse, the saturating
+casts and the retry helper are all solid. One real bug:
+
+**`change_agent_dir` could `cd` into blocked system directories on Windows.**
+The sensitive-dir blocklist compared the canonicalized path against plain
+`c:\windows`-style prefixes with `starts_with` — but `std::fs::canonicalize`
+on Windows returns an extended-length *verbatim* path (`\\?\C:\Windows`), so
+`starts_with("c:\\windows")` never matched and the block was bypassable
+(`change_agent_dir("C:\\Windows")` succeeded). Extracted the check into a pure
+`is_blocked_agent_dir()` that strips the `\\?\` prefix before comparing, with
+3 unit tests pinning the verbatim-path cases (the bug), plain paths, and
+normal user dirs. (Lower severity than exec — `cd` only moves the agent's
+working dir — but the policy was simply not enforced.)
+
+331→334 Rust tests; svelte-check 0 errors.
+
 ## [1.7.216] — 2026-06-22
 
 ### Refactor — runAI de-monolith, Batch 4: read-only dispatch now 100% table-driven

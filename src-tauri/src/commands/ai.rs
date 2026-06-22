@@ -736,6 +736,26 @@ pub async fn search_runbooks(dir_path: Option<String>, query: String) -> Result<
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// True if `canonical` (a `Path::canonicalize` output) lands inside a sensitive
+/// system directory that the agent must not `cd` into.
+///
+/// SEC FIX (v1.7.217): `std::fs::canonicalize` on Windows returns an extended-
+/// length "verbatim" path prefixed with `\\?\` (e.g. `\\?\C:\Windows`). The
+/// blocklist is written as plain `c:\…` paths, so the old `starts_with` check
+/// silently failed to match and the block was BYPASSABLE
+/// (`change_agent_dir("C:\\Windows")` → `\\?\C:\Windows`, which does not start
+/// with `c:\windows`). We strip the prefix before comparing.
+fn is_blocked_agent_dir(canonical: &str) -> bool {
+    let norm = canonical.strip_prefix(r"\\?\").unwrap_or(canonical);
+    let lower = norm.to_ascii_lowercase();
+    const BLOCKED: &[&str] = &[
+        r"c:\windows", r"c:\program files", r"c:\program files (x86)",
+        r"c:\programdata\microsoft", r"c:\$recycle.bin",
+        r"c:\system volume information",
+    ];
+    BLOCKED.iter().any(|bd| lower.starts_with(bd))
+}
+
 #[tauri::command]
 pub async fn change_agent_dir(path: String) -> Result<String, String> {
     // SEC-2 FIX: reject path traversal (..) and sensitive directories.
@@ -749,16 +769,8 @@ pub async fn change_agent_dir(path: String) -> Result<String, String> {
     // Canonicalize and validate against sensitive directory blocklist.
     let canonical = p.canonicalize()
         .map_err(|e| format!("No se pudo resolver el directorio: {}", e))?;
-    let canon_lower = canonical.to_string_lossy().to_ascii_lowercase();
-    let blocked_dirs: &[&str] = &[
-        r"c:\windows", r"c:\program files", r"c:\program files (x86)",
-        r"c:\programdata\microsoft", r"c:\$recycle.bin",
-        r"c:\system volume information",
-    ];
-    for bd in blocked_dirs {
-        if canon_lower.starts_with(bd) {
-            return Err(format!("Directorio bloqueado por política de seguridad: {}", canonical.display()));
-        }
+    if is_blocked_agent_dir(&canonical.to_string_lossy()) {
+        return Err(format!("Directorio bloqueado por política de seguridad: {}", canonical.display()));
     }
     if let Ok(mut cwd) = crate::state::GLOBAL_CWD.write() {
         *cwd = canonical.to_string_lossy().to_string();
@@ -1885,5 +1897,35 @@ mod anthropic_resolver_tests {
         let body = serde_json::json!({ "usage": { "output_tokens": 50 } });
         let r = extract_tokens_anthropic(&body);
         assert!(r.is_none(), "missing input_tokens must return None, not panic");
+    }
+}
+
+#[cfg(test)]
+mod change_dir_tests {
+    use super::is_blocked_agent_dir;
+
+    #[test]
+    fn blocks_windows_verbatim_canonical_paths() {
+        // The bug (v1.7.217): canonicalize() returns `\\?\C:\…`, which the old
+        // `starts_with("c:\\windows")` check missed → block was bypassable.
+        assert!(is_blocked_agent_dir(r"\\?\C:\Windows"));
+        assert!(is_blocked_agent_dir(r"\\?\C:\Windows\System32\drivers"));
+        assert!(is_blocked_agent_dir(r"\\?\c:\Program Files (x86)\app"));
+        assert!(is_blocked_agent_dir(r"\\?\C:\$Recycle.Bin"));
+    }
+
+    #[test]
+    fn blocks_plain_paths_too() {
+        assert!(is_blocked_agent_dir(r"C:\Windows"));
+        assert!(is_blocked_agent_dir(r"c:\programdata\microsoft\crypto"));
+    }
+
+    #[test]
+    fn allows_normal_user_dirs() {
+        assert!(!is_blocked_agent_dir(r"\\?\C:\Users\eleue\projects\lucy"));
+        assert!(!is_blocked_agent_dir(r"C:\Rust_Projects\lucy-svelte"));
+        assert!(!is_blocked_agent_dir(r"\\?\D:\work"));
+        // a folder merely containing "windows" lower in the path is fine
+        assert!(!is_blocked_agent_dir(r"C:\Users\me\windows-notes"));
     }
 }
