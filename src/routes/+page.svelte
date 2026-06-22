@@ -274,6 +274,9 @@ import { listen } from '@tauri-apps/api/event';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
     import { safeHtml } from '$lib/safe-html';
     import { isDestructiveCmd, normalizeCmd as _normalizeCmd } from '$lib/security';
+    // v1.7.212 — canonical tool taxonomy (single source of truth; replaces the
+    // regexes/predicates that were duplicated inline in runAI and had diverged).
+    import { FILE_TOOL_RE, NATIVE_TOOL_RE, hasToolResponse, isMultiStepResponse } from '$lib/agent-tools';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { ICON_PALETTE, ICON_MAP, cmdRapidos, mapeoApps } from '$lib/quick-cmds';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
@@ -5498,7 +5501,7 @@ Use ONE of these patterns instead:
             // If the prose-before-tags portion was substantial (>20 chars),
             // we still promote it to a permanent Lucy turn unchanged — the
             // user reads it as Lucy's preamble before the tool output.
-            const _hasToolResp = resp.includes('<TOOL>') || resp.includes('<EXECUTE') || /<THOUGHT>/i.test(resp);
+            const _hasToolResp = hasToolResponse(resp); // $lib/agent-tools (v1.7.212)
             if (_hasToolResp) {
                 const _streamMsg = t.messages.find(m => m.id === streamMsgId);
                 if (_streamMsg) {
@@ -5572,7 +5575,7 @@ Use ONE of these patterns instead:
             // "checa specs y busca tweaks" → Lucy ejecutaba TOOL>sysinfo y se detenía,
             // dejando la búsqueda colgada. Ahora: detectamos multi-intent y caemos al
             // agent loop completo para que la respuesta del tool se reinyecte como contexto.
-            const _isMultiStep = /<THOUGHT>/i.test(resp) || (resp.includes('<TOOL>') && resp.includes('<EXECUTE'));
+            const _isMultiStep = isMultiStepResponse(resp); // $lib/agent-tools (v1.7.212)
             const _userMultiIntent = isMultiIntentPrompt(raw);
             // v1.7.49 — Belt-and-braces guard: even when `isMultiIntentPrompt`
             // misses a pattern (it's heuristic, not exhaustive), if the user's
@@ -5607,8 +5610,7 @@ Use ONE of these patterns instead:
             }
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
-            const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search|principle_set|principle_delete|schedule_create|schedule_list):/i;
-            const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|state_diff:|process_lineage:|process_ancestry:|diagnose_spike|healing_find:|threat_scan|obj_query:|runbook_scan|daily_patterns|sandbox_preview:|kg_neighbors:|kg_recent|kg_ext_summary|incident_detective|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
+            // FILE_TOOL_RE / NATIVE_TOOL_RE imported from $lib/agent-tools (v1.7.212).
             // BUG FIX (v1.4.4): the entry condition used to only recognize
             // TOOL or THOUGHT tags. When the LLM emitted ONLY <EXECUTE_CMD>
             // blocks (raw PowerShell, common in audit/diagnostic prompts),

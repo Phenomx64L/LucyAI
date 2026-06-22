@@ -4,6 +4,8 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+// v1.7.212 — tool taxonomy unified into the canonical agent-tools module.
+import { FILE_TOOL_RE, NATIVE_TOOL_RE } from './agent-tools';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -16,11 +18,11 @@ export const MAX_IDENTICAL_TOOL_CALLS = 3;
 /** Token drain interval for progressive reveal (ms) */
 export const DRAIN_MS = 30;
 
-/** Tool regex for file/agent tools that enter the agent loop */
-export const FILE_TOOL_RE = /<TOOL>(readfile|readlines|writefile|listdir|searchfiles|editfile|locate_file|start_indexer|analyze_code|mcp_query|graphify|memoria_guardar|memoria_buscar|memoria_eliminar|memoria_consolidar|memory_core_set|memory_core_delete|fork_task|wait_task|cd|pdf_search|principle_set|principle_delete|schedule_create|schedule_list):/i;
-
-/** Tool regex for native tools that may short-circuit */
-export const NATIVE_TOOL_RE = /<TOOL>(sysinfo|netconn|tasklist|eventlog:|registry:|system_diff:|search_runbooks:|search_web:|semantic:|fetch:|mcp_discover:)/i;
+// FILE_TOOL_RE / NATIVE_TOOL_RE now live in agent-tools.ts (single source of
+// truth — this NATIVE_TOOL_RE had silently diverged, missing ~14 native tools).
+// Re-exported so any importer of these names from llm-stream keeps working, and
+// so needsAgentLoop() below uses the COMPLETE list.
+export { FILE_TOOL_RE, NATIVE_TOOL_RE };
 
 // ── Tag types emitted by the LLM ────────────────────────────────────────────
 

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.212] — 2026-06-22
+
+### Refactor — runAI de-monolithing, Batch 1: canonical tool taxonomy
+
+First foundation step of breaking up `+page.svelte`'s ~4,600-line `runAI()`.
+Conservative + fully test-gated; behaviour unchanged on the live path.
+
+The `<TOOL>` detection regexes (`FILE_TOOL_RE`, `NATIVE_TOOL_RE`) and predicates
+(`hasToolResponse`, `needsAgentLoop`, `isMultiStepResponse`) existed in THREE
+places — inline in `runAI`, in `llm-stream.ts`, and imported-but-unused. They had
+**already diverged**: `llm-stream.ts`'s `NATIVE_TOOL_RE` listed only 11 native
+tools while the live inline copy listed ~25, so `llm-stream`'s `needsAgentLoop()`
+silently failed to recognise ~14 native tools (`process_lineage`, `threat_scan`,
+`kg_*`, `incident_detective`, …) — a latent bug.
+
+- New `src/lib/agent-tools.ts` = the single source of truth (complete regexes +
+  predicates + a `detectToolKind()` primitive for the upcoming handler registry),
+  with `agent-tools.test.ts` (11 cases) locking in the previously-divergent
+  native tools so the drift can't recur.
+- `llm-stream.ts` now imports + re-exports the regexes from `agent-tools` (its
+  stale copy is gone; `needsAgentLoop` uses the complete list).
+- `+page.svelte` imports the regexes/predicates from `agent-tools` and drops the
+  inline duplicates.
+
+Behaviour parity verified: the live chat path already used the complete inline
+regex, and the predicates are byte-identical to what they replaced. svelte-check
+0 errors, vitest **270 passing** (was 259). Next batches migrate the ~30 tool
+handlers onto the `detectToolKind` registry — that's where the big line cut lands.
+
 ## [1.7.211] — 2026-06-22
 
 ### Security — deep-scan pass #3: destructive-command deny-list gap (HITL)
