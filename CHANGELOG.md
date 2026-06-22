@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.211] — 2026-06-22
+
+### Security — deep-scan pass #3: destructive-command deny-list gap (HITL)
+
+Auditing the agent's `<EXECUTE>` dispatch in `+page.svelte` (the HITL boundary):
+non-destructive commands auto-run; destructive ones are supposed to pop the
+confirmation modal, gated by `isDestructiveCmd()` from `$lib/security`. That
+deny-list (`DESTRUCTIVE_RE`) covered PowerShell mutators, `rm -rf`,
+`Format-Volume`, `reg delete`, `shutdown`, etc. — but **missed the everyday
+Windows cmd delete verbs**: `del`, `erase`, `rmdir /s /q`, `rd /s`. It also
+missed `vssadmin delete shadows` (the classic anti-recovery / ransomware move),
+`Clear-Disk` / `diskpart` (disk wipe), and `cipher /w` (secure free-space wipe).
+So an agent turn emitting `<EXECUTE_CMD>del /f /s /q C:\…` or `rd /s /q` would
+**auto-execute without the confirmation modal**.
+
+Added those patterns to `DESTRUCTIVE_RE`. The new `del`/`erase` matcher requires
+the verb + whitespace (`\b(?:del|erase)\s`) so a file named `del.log` or a path
+segment `\del\` in a *read* command is not mistaken for a delete; `vssadmin
+delete` matches only the delete subcommand (not `vssadmin list shadows`).
+
+Also added `src/lib/security.test.ts` (13 cases) — the deny-list had **no test
+coverage** before. Locks in the new verbs, the pre-existing patterns, the
+no-false-positive cases, and the obfuscation-defeat (backtick/caret/concat/env)
+path. Note: this is the frontend HITL nudge; backend `shell.rs` + permission
+rules remain the real enforcement layer.
+
+vitest 259 passing (was 246), svelte-check 0 errors.
+
 ## [1.7.210] — 2026-06-22
 
 ### Fixed — deep-scan pass #2 on `+page.svelte` (agent loop + streaming)

@@ -56,7 +56,14 @@ export function normalizeCmd(cmd: string): string {
  * Curated regex of commands that mutate the system in ways the user should
  * confirm before executing. Order doesn't matter — alternatives are independent.
  */
-export const DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b)/i;
+// v1.7.211 — added the Windows cmd delete verbs (del / erase / rmdir / rd /s),
+// shadow-copy deletion (vssadmin delete — the classic ransomware/anti-recovery
+// move), disk wipe (Clear-Disk / diskpart), and secure free-space wipe
+// (cipher /w). These were a real gap: the agent's exec dispatch in +page.svelte
+// auto-runs anything isDestructiveCmd() returns false for, so `del /f /s /q C:\…`
+// or `rd /s /q` were executing WITHOUT the confirmation modal. Backslashes that
+// precede a slash flag are escaped (\/) for clarity.
+export const DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|Clear-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b|\b(?:del|erase)\s|\brmdir\b|\brd\s+\/|vssadmin\s+delete|\bdiskpart\b|\bcipher\s+\/w)/i;
 
 /**
  * True if `cmd` looks destructive after normalization. Use this to gate
