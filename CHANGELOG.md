@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.213] — 2026-06-22
+
+### Refactor — runAI de-monolith, Batch 2: native read-only handlers → registry
+
+Second extraction step. The agent loop carried ~19 inline
+`const xM = agentResp.match(...); if (xM) { toolUsed = true;
+lucyText = lucyText.replace(...); readOnlyTasks.push({label, fn}) }` blocks, one
+per native read-only tool — byte-for-byte uniform boilerplate.
+
+Lifted the **12 "pure" handlers** (those whose `fn` needs nothing from runAI's
+closure beyond `invoke` + the regex match) into a table in
+`src/lib/agent-tools-native.ts`: `state_diff`, `process_lineage`,
+`process_ancestry`, `diagnose_spike`, `threat_scan`, `runbook_scan`,
+`daily_patterns`, `sandbox_preview`, `kg_recent`, `kg_neighbors`,
+`kg_ext_summary`, `incident_detective`. runAI now iterates
+`NATIVE_READONLY_HANDLERS` instead of hand-maintaining each block.
+
+Result: **−428 lines from `+page.svelte`** (13,397 → 12,969). The `fn` bodies
+and regexes moved verbatim (parity preserved); `agent-tools-native.test.ts`
+(14 cases) asserts every handler's matchRe/stripRe/build so a transcription typo
+can't slip through. Handlers that need runAI closures stay inline for a later
+batch (`system_diff`/`mcp_discover`/`fetch`/`search_web`/`search_runbooks` via
+retryWithBackoff/_cachedFetch/config, `obj_query` via the tab, `graphify`).
+
+svelte-check 0 errors, vitest **284 passing** (was 270).
+
 ## [1.7.212] — 2026-06-22
 
 ### Refactor — runAI de-monolithing, Batch 1: canonical tool taxonomy
