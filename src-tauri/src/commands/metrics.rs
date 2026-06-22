@@ -1060,7 +1060,13 @@ pub async fn save_agent_memory(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                now + d * 86_400
+                // ttl_days is agent-controlled (e.g. a <REMEMBER ttl=…> tag).
+                // Clamp to ~100 years and use saturating math: release builds
+                // are panic=abort + overflow-checks=on, so a raw `d * 86_400`
+                // on an absurd value would overflow → panic → abort the whole
+                // app. Saturating keeps it a (very far) future timestamp.
+                let days = d.min(36_500);
+                now.saturating_add(days.saturating_mul(86_400))
             }
             _ => 0,
         };
@@ -1163,17 +1169,31 @@ async fn stage2_embedding_dedup(
         Err(_) => return Ok(None),  // entity_id wasn't a memory row id — skip
     };
 
-    // Touch the existing row, then return the dup result.
-    let _ = with_db(|conn| {
+    // Touch the existing row — and use the UPDATE's row count as a LIVENESS
+    // CHECK. The in-memory vec_index (vec_index.rs) exposes only search(); it
+    // is never pruned when a memory is deleted or superseded. So a hit here
+    // can point at a row that no longer qualifies as a dedup target. The
+    // WHERE clause (`id = ?1 AND superseded_by IS NULL`) only matches a live,
+    // non-superseded row, so:
+    //   • touched == 1 → genuine duplicate, collapse into it.
+    //   • touched == 0 → the matched row was deleted or superseded (stale
+    //     index entry). Treating that as a duplicate would DROP the new
+    //     memory into a dangling id (the "memory isn't saved" symptom), so we
+    //     fall through to a normal insert instead.
+    // A DB error also yields 0 → fall through and insert (never lose a save).
+    let touched = with_db(|conn| {
         conn.execute(
             "UPDATE agent_memories
              SET access_count = access_count + 1,
                  last_accessed_at = strftime('%s','now')
              WHERE id = ?1 AND superseded_by IS NULL",
             rusqlite::params![dup_id],
-        ).map_err(|e| format!("touch failed: {}", e))?;
-        Ok::<(), String>(())
-    });
+        ).map_err(|e| format!("touch failed: {}", e))
+    }).unwrap_or(0);
+
+    if touched == 0 {
+        return Ok(None);
+    }
 
     Ok(Some(SaveMemoryResult {
         id: dup_id,

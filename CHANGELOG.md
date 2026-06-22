@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.209] — 2026-06-22
+
+### Fixed — deep-scan pass #1 on `metrics.rs` (memory save core)
+
+Two real bugs found reading the #1 scan hotspot (`commands/metrics.rs`, 4039 LOC).
+
+**1. Stage-2 dedup silently dropped new memories (the "no guarda" symptom).**
+`stage2_embedding_dedup` matches against the in-memory `vec_index`, which
+exposes only `search()` — it is **never pruned** when a memory is deleted
+(`delete_agent_memory`) or superseded (`supersede_memory`). So a semantic hit
+could point at a row that no longer qualifies. The "touch" UPDATE was already
+scoped `WHERE id = ? AND superseded_by IS NULL`, but its row count was
+discarded (`let _ =`) and the function returned `Ok(Some(dup))` regardless — so
+a new fact similar to a deleted/superseded memory got collapsed into a dangling
+id and lost. Now the UPDATE's row count is the liveness check: `touched == 0`
+→ stale index entry → fall through to a normal INSERT instead of dropping the
+save. (A DB error also yields 0 → insert; we never lose a memory.)
+
+**2. Agent-controlled TTL could crash the app (panic → abort).**
+`save_agent_memory` computed `now + ttl_days * 86_400` with no clamp. `ttl_days`
+comes from the agent (e.g. a `<REMEMBER ttl=…>` tag); release builds are
+`panic = "abort"` + `overflow-checks = on`, so an absurd value overflowed i64 →
+panic → the whole app aborted. Now clamps to ~100 years and uses saturating
+arithmetic.
+
+Scan note: a sweep of the other `* 86400` / `days - 1` sites confirmed they are
+all guarded by `.clamp(...)` first (e.g. `get_cost_by_day`, `loop_block_stats`)
+— TTL was the lone unclamped path. 331 Rust tests still green.
+
 ## [1.7.208] — 2026-06-22
 
 ### Fixed — "info disappears until I move the mouse" + reasoning box clipped
