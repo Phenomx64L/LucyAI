@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.207] — 2026-06-21
+
+### Fixed — PGO binary launched in dev mode (blank/ERR_CONNECTION_REFUSED)
+
+The v1.7.206 PGO binary opened to Edge's "localhost rechazó la conexión"
+(`ERR_CONNECTION_REFUSED`) instead of Lucy's UI. Root cause, confirmed in
+Tauri's own `build.rs`:
+
+```rust
+let custom_protocol = has_feature("custom-protocol");
+let dev = !custom_protocol;     // dev unless custom-protocol is on
+```
+
+`tauri::is_dev()` is `!custom_protocol`. The `tauri build` CLI turns the feature
+on for you; a raw `cargo build` (which `build-pgo.ps1` uses) does not — so the
+app ran in DEV mode and the webview navigated to `devUrl`
+(`http://localhost:1420`), which isn't listening for a standalone launch.
+
+`build-pgo.ps1` now:
+- runs `npm run build` up front so `frontendDist` (`../build`) is current, and
+- passes `--features tauri/custom-protocol` to **every** cargo build (gen + use)
+  so the instrumented and optimized binaries both embed the frontend and run in
+  prod mode.
+
+Verified by screenshot: the optimized `release-pgo-use` binary now boots
+straight into Lucy's UI. Bonus: because the instrumented binary now loads the
+real frontend during boot-training, the profile got much richer — the merged
+profile went from 179M to **3.09 BILLION execution counts** (165,433 functions)
+as the UI's invoke-handler hot paths now execute too. Final binary 16.91 MB
+(embeds the frontend; the earlier 14.3 MB dev-mode binary did not).
+
 ## [1.7.206] — 2026-06-21
 
 ### Performance — PGO pipeline made runnable + headless boot-training

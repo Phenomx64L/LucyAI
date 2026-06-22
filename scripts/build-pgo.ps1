@@ -116,6 +116,22 @@ if ($CleanFirst) {
     New-Item -ItemType Directory -Force -Path $ProfilesDir | Out-Null
 }
 
+# ── Frontend bundle (required for a RUNNABLE binary) ────────────────────────
+# Tauri embeds `frontendDist` (../build) at COMPILE time, but the binary only
+# LOADS those embedded assets when built with the `custom-protocol` feature.
+# Per tauri's build.rs: `let dev = !custom_protocol;`. Without it the app runs
+# in DEV mode and navigates to `devUrl` (http://localhost:1420) — which isn't
+# running for a standalone launch, so you get ERR_CONNECTION_REFUSED. The
+# `tauri build` CLI enables this feature for you; a raw `cargo build` does not.
+# So we (a) build the frontend now and (b) pass `--features tauri/custom-protocol`
+# to every cargo build below — making BOTH the instrumented training binary and
+# the final optimized binary real, runnable, prod-mode Lucy (and the training
+# then also exercises the frontend-init + invoke-handler hot paths).
+Write-Host "[*] Building frontend bundle (npm run build)..." -ForegroundColor Cyan
+npm run build
+if ($LASTEXITCODE -ne 0) { throw "frontend build (npm run build) failed" }
+Write-Host ""
+
 if (-not $SkipTrain) {
     if ($NonInteractive) {
         # ── Phase 1 (headless): build the instrumented APP binary ──────────
@@ -124,7 +140,7 @@ if (-not $SkipTrain) {
         $env:LLVM_PROFILE_FILE = (Join-Path $ProfilesDir "lucy-%p-%m.profraw")
         Push-Location src-tauri
         try {
-            cargo build --profile release-pgo-gen
+            cargo build --profile release-pgo-gen --features tauri/custom-protocol
             if ($LASTEXITCODE -ne 0) { throw "instrumented app build failed" }
         } finally { Pop-Location }
 
@@ -161,7 +177,7 @@ if (-not $SkipTrain) {
         $env:RUSTFLAGS = "-Cprofile-generate=$ProfilesDir"
         Push-Location src-tauri
         try {
-            cargo build --profile release-pgo-gen
+            cargo build --profile release-pgo-gen --features tauri/custom-protocol
             if ($LASTEXITCODE -ne 0) { throw "instrumented build failed" }
         } finally { Pop-Location }
         Remove-Item Env:\RUSTFLAGS
@@ -227,7 +243,7 @@ Write-Host "[4/4] Building optimized binary (release-pgo-use)..." -ForegroundCol
 $env:RUSTFLAGS = "-Cprofile-use=$MergedProfile -Cllvm-args=-pgo-warn-missing-function"
 Push-Location src-tauri
 try {
-    cargo build --profile release-pgo-use
+    cargo build --profile release-pgo-use --features tauri/custom-protocol
     if ($LASTEXITCODE -ne 0) { throw "optimized build failed" }
 } finally { Pop-Location }
 Remove-Item Env:\RUSTFLAGS
