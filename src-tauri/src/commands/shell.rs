@@ -140,8 +140,21 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
     }
 
     if !was_blocked_but_bypassed {
+        // v1.7.218 SEC — also match the blocklist against a DE-OBFUSCATED form.
+        // The raw `script_lower` let `remove-item`` ` ``-recurse` (a PowerShell
+        // backtick escape) slip past the substring check; the backtick was then
+        // stripped below (clean_script) and the destructive command executed
+        // WITHOUT the HITL bypass-token prompt. The guardrail layer intentionally
+        // does NOT block destructive verbs (scanner.rs), so this blocklist is the
+        // sole gate. Strip backticks + collapse whitespace so the obfuscated form
+        // matches the same entry the literal form would.
+        let script_norm: String = script_lower
+            .replace('`', "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         for blocked in blocklist.iter() {
-            if script_lower.contains(blocked) {
+            if script_lower.contains(blocked) || script_norm.contains(blocked) {
                 // Token criptográficamente seguro (256 bits OsRng) con TTL 5 min
                 let new_token = crate::state::generate_secure_token();
                 let expiry = std::time::Instant::now()

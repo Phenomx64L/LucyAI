@@ -79,11 +79,31 @@ pub(crate) fn enforce_sensitive_path(raw: &str, for_write: bool) -> Result<std::
         }
     };
 
-    // 4. Sensitive-directory blocklist. Match against the canonical path.
-    let canon_lower = canonical.to_string_lossy().to_ascii_lowercase();
+    // 4. Sensitive-directory blocklist (pure + tested helper — see below).
+    let userprofile = std::env::var("USERPROFILE").unwrap_or_default().to_ascii_lowercase();
+    if let Some(reason) = sensitive_path_block_reason(&canonical.to_string_lossy(), &userprofile, for_write) {
+        return Err(reason);
+    }
+
+    Ok(canonical)
+}
+
+/// Pure blocklist check over an already-canonicalized path string.
+///
+/// SEC FIX (v1.7.218): `std::fs::canonicalize` on Windows returns an extended-
+/// length "verbatim" path prefixed with `\\?\` (e.g. `\\?\C:\Windows\...`). The
+/// blocklist is written as plain `c:\…` rules, so the old `starts_with` checks
+/// silently failed to match and the entire sensitive-path block — system dirs
+/// AND the credential stores (.ssh, .aws, DPAPI, Lucy's own secret store) — was
+/// BYPASSABLE: a normal input like `C:\Windows\System32\x` (which passes the
+/// raw-input `\\?\` reject above) canonicalizes to `\\?\C:\Windows\System32\x`,
+/// which does not start with `c:\windows\`. We strip the prefix before matching.
+fn sensitive_path_block_reason(canonical_display: &str, userprofile_lower: &str, for_write: bool) -> Option<String> {
+    let norm = canonical_display.strip_prefix(r"\\?\").unwrap_or(canonical_display);
+    let canon_lower = norm.to_ascii_lowercase();
 
     // Windows system directories
-    let system_blocklist: &[&str] = &[
+    const SYSTEM_BLOCKLIST: &[&str] = &[
         r"c:\windows\",
         r"c:\program files\",
         r"c:\program files (x86)\",
@@ -91,16 +111,13 @@ pub(crate) fn enforce_sensitive_path(raw: &str, for_write: bool) -> Result<std::
         r"c:\$recycle.bin\",
         r"c:\system volume information\",
     ];
-    for blocked in system_blocklist {
-        if canon_lower.starts_with(blocked) {
-            return Err(format!("Path bloqueado por política: {} (área de sistema)", canonical.display()));
-        }
+    if SYSTEM_BLOCKLIST.iter().any(|b| canon_lower.starts_with(b)) {
+        return Some(format!("Path bloqueado por política: {} (área de sistema)", canonical_display));
     }
 
     // User-secret directories — read OR write blocked.
-    let userprofile = std::env::var("USERPROFILE").unwrap_or_default().to_ascii_lowercase();
-    if !userprofile.is_empty() {
-        let secret_subpaths: &[&str] = &[
+    if !userprofile_lower.is_empty() {
+        const SECRET_SUBPATHS: &[&str] = &[
             r"\.ssh\",                // SSH private keys
             r"\.aws\credentials",     // AWS keys
             r"\.azure\",              // Azure tokens
@@ -110,23 +127,20 @@ pub(crate) fn enforce_sensitive_path(raw: &str, for_write: bool) -> Result<std::
             r"\appdata\local\microsoft\vault\",
             r"\appdata\roaming\lucy\",               // Our own secret store!
         ];
-        for sub in secret_subpaths {
-            let full = format!("{}{}", userprofile, sub);
+        for sub in SECRET_SUBPATHS {
+            let full = format!("{}{}", userprofile_lower, sub);
             if canon_lower.starts_with(&full) {
-                return Err(format!(
-                    "Path bloqueado por política: {} (almacén de credenciales)",
-                    canonical.display()
-                ));
+                return Some(format!("Path bloqueado por política: {} (almacén de credenciales)", canonical_display));
             }
         }
     }
 
     // Windows hosts file — read OK (legitimate), write blocked (rootkit-style modification)
     if for_write && canon_lower.ends_with(r"\drivers\etc\hosts") {
-        return Err("Escritura bloqueada: archivo HOSTS del sistema.".to_string());
+        return Some("Escritura bloqueada: archivo HOSTS del sistema.".to_string());
     }
 
-    Ok(canonical)
+    None
 }
 
 // ── HELPER DE PARSEO DE ARGUMENTOS (Para soportar comillas) ──────────────────
@@ -2171,5 +2185,39 @@ mod tests {
         assert_eq!(r["is_file"], false);
         assert_eq!(r["is_dir"], false);
         assert_eq!(r["size"], 0);
+    }
+
+    // ── sensitive_path_block_reason (v1.7.218 — \\?\ verbatim-prefix bypass) ──
+    #[test]
+    fn block_reason_catches_windows_verbatim_system_paths() {
+        // The bug: canonicalize() returns `\\?\C:\…`, which the old
+        // starts_with("c:\\windows\\") check missed → block was bypassed.
+        let up = r"c:\users\eleue";
+        assert!(sensitive_path_block_reason(r"\\?\C:\Windows\System32\drivers\x.sys", up, true).is_some());
+        assert!(sensitive_path_block_reason(r"\\?\C:\Program Files\app\x.dll", up, false).is_some());
+        assert!(sensitive_path_block_reason(r"C:\Windows\System32\x", up, false).is_some()); // plain still blocked
+    }
+
+    #[test]
+    fn block_reason_catches_credential_stores_even_with_verbatim_prefix() {
+        let up = r"c:\users\eleue";
+        for p in [
+            r"\\?\C:\Users\eleue\.ssh\id_rsa",
+            r"\\?\C:\Users\eleue\.aws\credentials",
+            r"\\?\C:\Users\eleue\AppData\Roaming\Lucy\secrets.json",
+            r"\\?\C:\Users\eleue\AppData\Roaming\Microsoft\Protect\masterkey",
+        ] {
+            assert!(sensitive_path_block_reason(p, up, false).is_some(), "should block: {p}");
+        }
+    }
+
+    #[test]
+    fn block_reason_allows_normal_project_paths() {
+        let up = r"c:\users\eleue";
+        assert!(sensitive_path_block_reason(r"\\?\C:\Rust_Projects\lucy\src\main.rs", up, true).is_none());
+        assert!(sensitive_path_block_reason(r"\\?\C:\Users\eleue\Documents\note.txt", up, true).is_none());
+        // HOSTS file: read ok, write blocked
+        assert!(sensitive_path_block_reason(r"\\?\D:\drivers\etc\hosts", up, true).is_some());
+        assert!(sensitive_path_block_reason(r"\\?\D:\drivers\etc\hosts", up, false).is_none());
     }
 }

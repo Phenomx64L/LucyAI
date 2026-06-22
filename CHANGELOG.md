@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.218] — 2026-06-22
+
+### Security — deep scan of the execution layer (local.rs + shell.rs): 2 real bugs
+
+**1. `enforce_sensitive_path` blocklist bypass on Windows (`\\?\` prefix).** The
+file-op security gate that protects system dirs AND credential stores (`.ssh`,
+`.aws`, DPAPI master keys, Lucy's own secret store) compared the canonicalized
+path against plain `c:\…` rules with `starts_with`. But `std::fs::canonicalize`
+on Windows returns an extended-length verbatim path (`\\?\C:\…`), so a normal
+input like `C:\Windows\System32\x` (which passes the upfront raw-input `\\?\`
+reject) canonicalized to `\\?\C:\Windows\System32\x` and matched none of the
+rules — the entire blocklist was bypassable for reads AND writes. Extracted a
+pure `sensitive_path_block_reason()` that strips the prefix before matching,
+with 3 unit tests pinning system dirs, credential stores, and normal user paths.
+(Same class as the v1.7.217 change_agent_dir fix, but this gate covers real
+file I/O — higher severity.)
+
+**2. `execute_powershell` destructive-command blocklist bypass via backtick.**
+The 23-pattern deny-list (`remove-item -recurse`, `rm -rf`, `format-volume`,
+`-verb runas`, …) matched the *raw* lowercased script, then a later
+`clean_script` pass stripped PowerShell backtick escapes before execution. So
+``remove-item` -recurse`` did not contain the literal substring
+`remove-item -recurse` → slipped past the blocklist → executed WITHOUT the HITL
+bypass-token prompt. The guardrail layer deliberately does NOT block destructive
+verbs (it's a SysAdmin tool), so this blocklist is the sole gate. Now also
+matches a de-obfuscated form (backticks stripped + whitespace collapsed), so the
+obfuscated and literal forms both trip the same entry.
+
+340 Rust tests (was 337). The `prompt_sections.rs` scan found no bugs — it's
+declarative prompt text with guarded formatting helpers.
+
 ## [1.7.217] — 2026-06-22
 
 ### Security — deep scan of `ai.rs`: change_agent_dir blocklist bypass (Windows)
