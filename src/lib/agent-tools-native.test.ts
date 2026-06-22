@@ -38,6 +38,15 @@ const DEPS_SAMPLES: Record<string, string> = {
     searchfiles:      '<TOOL>searchfiles:C:\\proj|||*.rs</TOOL>',
     locate_file:      '<TOOL>locate_file:msedge.exe</TOOL>',
     start_indexer:    '<TOOL>start_indexer:C:\\proj</TOOL>',
+    // Batch 4 (v1.7.216): remaining read-only file-read + basic native tools.
+    readlines:        '<TOOL>readlines:/a/b.ts:10:20</TOOL>',
+    listdir:          '<TOOL>listdir:C:\\proj</TOOL>',
+    analyze_code:     '<TOOL>analyze_code:/a/b.rs</TOOL>',
+    sysinfo:          '<TOOL>sysinfo</TOOL>',
+    netconn:          '<TOOL>netconn</TOOL>',
+    tasklist:         '<TOOL>tasklist</TOOL>',
+    eventlog:         '<TOOL>eventlog:System:100</TOOL>',
+    registry:         '<TOOL>registry:HKLM|Software\\X|Value</TOOL>',
 };
 
 const mockDeps: NativeHandlerDeps = {
@@ -60,10 +69,10 @@ describe('agent-tools-native / pure registry shape', () => {
 });
 
 describe('agent-tools-native / deps registry shape', () => {
-    it('exports the 9 closure-coupled handlers, each with a unique kind', () => {
-        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(9);
+    it('exports the 17 closure-coupled handlers, each with a unique kind', () => {
+        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(17);
         const kinds = NATIVE_READONLY_HANDLERS_DEPS.map(h => h.kind);
-        expect(new Set(kinds).size).toBe(9);
+        expect(new Set(kinds).size).toBe(17);
         expect(new Set(kinds)).toEqual(new Set(Object.keys(DEPS_SAMPLES)));
     });
     it('pure and deps kinds do not overlap', () => {

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.216] — 2026-06-22
+
+### Refactor — runAI de-monolith, Batch 4: read-only dispatch now 100% table-driven
+
+Extracted the last `readOnlyTasks`-style handlers from `runAI`: the file reads
+(`readlines`, `listdir`, `analyze_code`) and the basic native tools (`sysinfo`,
+`netconn`, `tasklist`, `eventlog`, `registry`). They join
+`NATIVE_READONLY_HANDLERS_DEPS` (now 17); `agent-tools-native.ts` imports
+`isSensitiveRegistry` directly so the `registry` handler keeps its
+sensitive-path block.
+
+**Every read-only tool the agent loop can fire is now a tested registry entry.**
+−68 more lines (`+page.svelte` 12,820 → 12,752). `agent-tools-native.test.ts`
+now **35 cases**; svelte-check 0 errors, vitest **305 passing**.
+
+What stays inline is there **by design, not as debt**: `readfile` (its
+`checkToolLoop` guard branches between `toolResults` and `readOnlyTasks`), and
+the **state-mutating** handlers — `writefile`/`editfile` (write `filesMod` + tool
+cards), `cd` (changes the working dir), `fork_task`/`wait_task` (launch + join
+background sub-agents), `memoria_*`/`memory_core_*`/`principle_*`/`schedule_*`/
+`mcp_query` (sequential writes to `toolResults`), and `graphify`. These are
+genuine orchestration that needs runAI's context; moving them behind a deps
+bundle would add indirection without removing complexity.
+
+Net across the whole de-monolith (v1.7.212–216): **−645 lines** from
+`+page.svelte` (13,397 → 12,752), 31 read-only tools extracted into two tested
+registries, and the ~22-block inline dispatch chain replaced by two loops.
+
 ## [1.7.215] — 2026-06-22
 
 ### Refactor — runAI de-monolith, Batch 3: read-only file tools

@@ -19,6 +19,7 @@
 // dynamic property access on Rust command payloads. Faithful = same behaviour.
 
 import { invoke } from '@tauri-apps/api/core';
+import { isSensitiveRegistry } from './page/agent-checkpoints';
 
 /** A deferred read-only tool call: a label for the UI + an async producer of a
  *  result string. Mirrors the inline `readOnlyTasks` shape in runAI. */
@@ -715,5 +716,110 @@ export const NATIVE_READONLY_HANDLERS_DEPS: NativeHandlerWithDeps[] = [
             label: `[⊞ Indexer] ${m[1].trim()}`,
             fn: () => d.retryWithBackoff(() => invoke('start_indexer', { path: m[1].trim() }), 2, true).then((r: any) => `[INDEXER INICIADO]\n${r}`),
         }),
+    },
+
+    // ── Read-only FILE-read + basic NATIVE tools (Batch 4, v1.7.216) ────────
+    // The last readOnlyTasks-style handlers: file reads + the basic system
+    // tools. readfile stays inline (its checkToolLoop guard branches between
+    // toolResults and readOnlyTasks — genuine runAI coupling).
+    {
+        kind: 'readlines',
+        matchRe: /<TOOL>readlines:([^<:]+):(\d+):(\d+)<\/TOOL>/i,
+        stripRe: /<TOOL>readlines:[^<]+<\/TOOL>/gi,
+        build: (m, d) => ({
+            label: `[· Rango] ${m[1].trim()} (${m[2]}-${parseInt(m[2]) + parseInt(m[3])})`,
+            fn: () => d.retryWithBackoff(() => invoke('read_file_lines', { path: m[1].trim(), start: parseInt(m[2]), count: parseInt(m[3]) }), 2, true).then((c: any) => `[FILE LINES: ${m[1].trim()} (${m[2]}-${parseInt(m[2]) + parseInt(m[3])})]\n${c}`),
+        }),
+    },
+
+    {
+        kind: 'listdir',
+        matchRe: /<TOOL>listdir:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>listdir:[^<]+<\/TOOL>/gi,
+        build: (m, d) => ({
+            label: `[⊞ Directorio] ${m[1].trim()}`,
+            fn: () => d.retryWithBackoff(() => invoke('list_directory', { path: m[1].trim() }), 2, true).then((entries: any) => { const rows = entries.slice(0, 100).map((e: any) => `${e.is_dir ? 'DIR' : '   '} ${e.name}`).join('\n'); return `[DIRECTORY: ${m[1].trim()}]\n${rows}`; }),
+        }),
+    },
+
+    {
+        kind: 'analyze_code',
+        matchRe: /<TOOL>analyze_code:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>analyze_code:[^<]+<\/TOOL>/gi,
+        build: (m, d) => ({
+            label: `[⊕ AST] ${m[1].trim()}`,
+            fn: () => d.retryWithBackoff(() => invoke('analyze_code', { path: m[1].trim() }), 2, true).then((c: any) => `[AST RESULT: ${m[1].trim()}]\n${c}`),
+        }),
+    },
+
+    {
+        kind: 'sysinfo',
+        matchRe: /<TOOL>sysinfo<\/TOOL>/i,
+        stripRe: /<TOOL>sysinfo<\/TOOL>/gi,
+        build: (_m, d) => ({
+            label: '[⊡ SysInfo] Hardware report',
+            fn: () => d.retryWithBackoff(() => invoke('get_system_health'), 2, true).then((r: any) => `[SYSINFO RESULT]\n${r}`),
+        }),
+    },
+
+    {
+        kind: 'netconn',
+        matchRe: /<TOOL>netconn<\/TOOL>/i,
+        stripRe: /<TOOL>netconn<\/TOOL>/gi,
+        build: (_m, d) => ({
+            label: '[◉ Red] Conexiones de red',
+            fn: () => d.retryWithBackoff(() => invoke('get_network_connections'), 2, true).then((conns: any) => {
+                const limit = 50;
+                const isTruncated = conns.length > limit;
+                const rows = conns.slice(0, limit).map((c: any) => `${c.protocol.padEnd(4)} ${(c.local_addr + ':' + c.local_port).padEnd(22)} ${(c.remote_addr ? c.remote_addr + ':' + c.remote_port : '').padEnd(22)} ${c.state} (PID ${c.pid ?? '-'})`).join('\n');
+                const result = `[NETWORK CONNECTIONS (${conns.length} total)]\n${rows || 'Sin conexiones activas.'}`;
+                return isTruncated ? result + `\n\n! Mostradas primeras ${limit} de ${conns.length} conexiones. Usa 'netsh interface ipv4 show tcpconnections' si necesitas más.` : result;
+            }),
+        }),
+    },
+
+    {
+        kind: 'tasklist',
+        matchRe: /<TOOL>tasklist<\/TOOL>/i,
+        stripRe: /<TOOL>tasklist<\/TOOL>/gi,
+        build: (_m, d) => ({
+            label: '[≡ Procesos] Lista de procesos',
+            fn: () => d.retryWithBackoff(() => invoke('get_tasklist'), 2, true).then((tasks: any) => { const rows = tasks.slice(0, 30).map((t: any) => `${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb / 1024).toFixed(1)} MB`).join('\n'); return `[TASKLIST RESULT]\n${rows}`; }),
+        }),
+    },
+
+    {
+        kind: 'eventlog',
+        matchRe: /<TOOL>eventlog:([^<:]+):(\d+)(?::([^<]+))?<\/TOOL>/i,
+        stripRe: /<TOOL>eventlog:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const requestedCount = parseInt(m[2]);
+            const safeCount = Math.min(requestedCount, 500);
+            const countWarning = requestedCount > 500 ? `\n! Límite de consulta reducido: ${requestedCount} → 500 eventos (protección contra DOS).` : '';
+            return {
+                label: `[· EventLog] ${m[1]}`,
+                fn: () => d.retryWithBackoff(() => invoke('get_event_log', { logName: m[1], count: safeCount, level: m[3] || null }), 2, true).then((events: any) => { const rows = events.map((e: any) => `[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n'); return `[EVENTLOG: ${m[1]}]\n${rows || 'Sin eventos.'}${countWarning}`; }),
+            };
+        },
+    },
+
+    {
+        kind: 'registry',
+        matchRe: /<TOOL>registry:([^|<]+)\|([^|<]+)\|([^<]*)<\/TOOL>/i,
+        stripRe: /<TOOL>registry:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const hive = m[1].toUpperCase();
+            const keyPath = m[2];
+            if (isSensitiveRegistry(keyPath)) {
+                return {
+                    label: `[⊗ Registro] BLOCKED: ${m[2]}`,
+                    fn: () => Promise.resolve(`[REGISTRY BLOCKED]\n! Access denied to sensitive registry path: ${hive}\\\\${keyPath}\nAllowed: HKLM\\\\Software\\\\*, HKLM\\\\System\\\\CurrentControlSet\\\\Services\\\\*`),
+                };
+            }
+            return {
+                label: `[⊕ Registro] ${m[2]}`,
+                fn: () => d.retryWithBackoff(() => invoke('read_registry_value', { hive: m[1], keyPath: m[2], valueName: m[3] || '' }), 2, true).then((val: any) => `[REGISTRY: ${m[1]}\\\\${m[2]}\\\\${m[3] || '(Default)'}] = ${val}`),
+            };
+        },
     },
 ];
