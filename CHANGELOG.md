@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.210] — 2026-06-22
+
+### Fixed — deep-scan pass #2 on `+page.svelte` (agent loop + streaming)
+
+Audited the #2 scan hotspot (`routes/+page.svelte`, 13.4k LOC). The streaming
+pipeline (`askLucyStream`) and anti-stuck loop guards were verified clean; the
+recurring "freeze" was the WebView2 occlusion/throttle already fixed in v1.7.208
+(this JS's 200ms fallback timer actually *depends* on that flag). One real bug:
+
+**Timer leak on provider-fallback retry.** When the LLM stream throws a critical
+error and `runAI` recovers by switching models, it `return await runAI(…)`-recurses
+from inside the `catch`. It cleared `_reasoningTickerRef` before recursing, but
+not `_drainTimer` (the DRAIN_MS token-reveal interval) or `_cardTicker` (the agent
+card's elapsed clock). Those are cleared in the `finally` — but `finally` runs
+*after* the recursive call resolves, so for the entire retry the outer frame's
+drain timer kept firing into the just-flushed bubble and a phantom card ticker
+kept ticking. (The inline clears after the stream `await` were skipped precisely
+because the stream threw.) Now both are stopped before the recursion, matching
+the existing `_reasoningTickerRef` cleanup intent.
+
+svelte-check 0 errors, 246 vitest green.
+
 ## [1.7.209] — 2026-06-22
 
 ### Fixed — deep-scan pass #1 on `metrics.rs` (memory save core)

@@ -9165,6 +9165,15 @@ times the SAME way, switch tool kind entirely.
                     // Stop the current run before recursing — fin() flushes
                     // the streaming bubble + clears _activeStreams.
                     if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
+                    // v1.7.210 — also stop the drain + card tickers BEFORE recursing.
+                    // The finally below clears them too, but it only runs AFTER the
+                    // recursive runAI() resolves (the `return await` here), so without
+                    // this they keep firing for the WHOLE retry: a stale DRAIN_MS drain
+                    // timer rendering into the just-flushed bubble + a phantom card
+                    // ticker. (The inline clears after the stream await were skipped —
+                    // the stream threw, which is why we're in this catch.)
+                    if (_drainTimer) { clearInterval(_drainTimer); _drainTimer = null; }
+                    if (_cardTicker) { clearInterval(_cardTicker); _cardTicker = null; }
                     _deactivateStaleReasoning(tabId); // v1.7.195 — don't leave a frozen "Pensando…" during the retry
                     fin(tabId);
                     return await runAI(tabId, raw, doSpeak, retryCount + 1);
