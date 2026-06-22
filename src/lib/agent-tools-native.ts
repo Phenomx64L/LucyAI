@@ -675,4 +675,45 @@ export const NATIVE_READONLY_HANDLERS_DEPS: NativeHandlerWithDeps[] = [
             };
         },
     },
+
+    // ── Read-only FILE tools (Batch 3, v1.7.215) ────────────────────────────
+    // Semantically file tools, but mechanically identical to the read-only
+    // natives above: parse args → readOnlyTasks.push({label, fn}) with
+    // retryWithBackoff. (The mutating file tools — readfile/writefile/editfile/
+    // listdir/analyze_code/pdf_search/memoria_* — are a separate, heavier batch:
+    // they write toolResults/filesMod/cards, not readOnlyTasks.)
+    {
+        kind: 'searchfiles',
+        matchRe: /<TOOL>searchfiles:([\s\S]+?)<\/TOOL>/i,
+        stripRe: /<TOOL>searchfiles:[\s\S]+?<\/TOOL>/gi,
+        build: (m, d) => {
+            const parts = m[1].split('|||');
+            const directory = parts[0].trim();
+            const pattern = parts[1] ? parts[1].trim() : '';
+            return {
+                label: `[◎ Búsqueda] ${directory} (${pattern})`,
+                fn: () => d.retryWithBackoff(() => invoke('search_files', { directory: directory, pattern: pattern, fileGlob: null, maxResults: 80 }), 2, true).then((r: any) => `[SEARCH RESULT] ${r}`),
+            };
+        },
+    },
+
+    {
+        kind: 'locate_file',
+        matchRe: /<TOOL>locate_file:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>locate_file:[^<]+<\/TOOL>/gi,
+        build: (m, d) => ({
+            label: `[⚡ Locate] ${m[1].trim()}`,
+            fn: () => d.retryWithBackoff(() => invoke('locate_file', { name: m[1].trim() }), 2, true).then((r: any) => `[LOCATE RESULT]\n${r}`),
+        }),
+    },
+
+    {
+        kind: 'start_indexer',
+        matchRe: /<TOOL>start_indexer:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>start_indexer:[^<]+<\/TOOL>/gi,
+        build: (m, d) => ({
+            label: `[⊞ Indexer] ${m[1].trim()}`,
+            fn: () => d.retryWithBackoff(() => invoke('start_indexer', { path: m[1].trim() }), 2, true).then((r: any) => `[INDEXER INICIADO]\n${r}`),
+        }),
+    },
 ];

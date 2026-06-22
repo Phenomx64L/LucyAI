@@ -27,7 +27,7 @@ const SAMPLES: Record<string, string> = {
     semantic:            '<TOOL>semantic:dns failures</TOOL>',
 };
 
-// Closure-coupled (v1.7.214 / Batch 2b).
+// Closure-coupled (v1.7.214 Batch 2b + v1.7.215 Batch 3 read-only file tools).
 const DEPS_SAMPLES: Record<string, string> = {
     system_diff:      '<TOOL>system_diff:services</TOOL>',
     obj_query:        '<TOOL>obj_query:$_.Name -eq "x"</TOOL>',
@@ -35,6 +35,9 @@ const DEPS_SAMPLES: Record<string, string> = {
     fetch:            '<TOOL>fetch:https://example.com</TOOL>',
     search_web:       '<TOOL>search_web:powershell winrm</TOOL>',
     search_runbooks:  '<TOOL>search_runbooks:dns reset</TOOL>',
+    searchfiles:      '<TOOL>searchfiles:C:\\proj|||*.rs</TOOL>',
+    locate_file:      '<TOOL>locate_file:msedge.exe</TOOL>',
+    start_indexer:    '<TOOL>start_indexer:C:\\proj</TOOL>',
 };
 
 const mockDeps: NativeHandlerDeps = {
@@ -57,10 +60,10 @@ describe('agent-tools-native / pure registry shape', () => {
 });
 
 describe('agent-tools-native / deps registry shape', () => {
-    it('exports the 6 closure-coupled handlers, each with a unique kind', () => {
-        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(6);
+    it('exports the 9 closure-coupled handlers, each with a unique kind', () => {
+        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(9);
         const kinds = NATIVE_READONLY_HANDLERS_DEPS.map(h => h.kind);
-        expect(new Set(kinds).size).toBe(6);
+        expect(new Set(kinds).size).toBe(9);
         expect(new Set(kinds)).toEqual(new Set(Object.keys(DEPS_SAMPLES)));
     });
     it('pure and deps kinds do not overlap', () => {

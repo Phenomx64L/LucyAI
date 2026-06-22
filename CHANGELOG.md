@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.215] — 2026-06-22
+
+### Refactor — runAI de-monolith, Batch 3: read-only file tools
+
+The file tools split into two shapes. The read-only ones (`searchfiles`,
+`locate_file`, `start_indexer`) are mechanically identical to the read-only
+natives — parse args → `readOnlyTasks.push({label, fn})` with
+`retryWithBackoff` — so they joined `NATIVE_READONLY_HANDLERS_DEPS` (now 9) and
+their inline blocks were removed from `runAI`.
+
+The **mutating** file tools (`readfile`, `writefile`, `editfile`, `listdir`,
+`analyze_code`, `pdf_search`, `memoria_*`, `schedule_*`, `principle_*`, `cd`)
+are deliberately left for a separate, heavier batch — they run sequentially and
+write `toolResults` / `filesMod` / tool cards / `editCountsByPath`, so they need
+a richer deps bundle or a structured-result contract, not the simple
+`readOnlyTasks` shape.
+
+−24 more lines from `+page.svelte` (12,844 → 12,820). `agent-tools-native.test.ts`
+now **27 cases**. svelte-check 0 errors, vitest **297 passing**.
+
 ## [1.7.214] — 2026-06-22
 
 ### Refactor — runAI de-monolith, Batch 2b: remaining native handlers

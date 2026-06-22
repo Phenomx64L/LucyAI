@@ -6394,30 +6394,6 @@ Use ONE of these patterns instead:
                     // Tools de lectura se ejecutan en paralelo con Promise.allSettled
                     const readOnlyTasks = [];
 
-                    const sfM = agentResp.match(/<TOOL>searchfiles:([\s\S]+?)<\/TOOL>/i);
-                    if (sfM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>searchfiles:[\s\S]+?<\/TOOL>/gi, '');
-                        const parts = sfM[1].split('|||');
-                        const directory = parts[0].trim();
-                        const pattern = parts[1] ? parts[1].trim() : '';
-                        readOnlyTasks.push({ label: `[◎ Búsqueda] ${directory} (${pattern})`, fn: () => retryWithBackoff(() => invoke('search_files', {directory:directory, pattern:pattern, fileGlob:null, maxResults:80}), 2, true).then(r => `[SEARCH RESULT] ${r}`) });
-                    }
-
-                    const lfM = agentResp.match(/<TOOL>locate_file:([^<]+)<\/TOOL>/i);
-                    if (lfM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>locate_file:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[⚡ Locate] ${lfM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('locate_file', {name:lfM[1].trim()}), 2, true).then(r => `[LOCATE RESULT]\n${r}`) });
-                    }
-                    
-                    const idxM = agentResp.match(/<TOOL>start_indexer:([^<]+)<\/TOOL>/i);
-                    if (idxM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>start_indexer:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[⊞ Indexer] ${idxM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('start_indexer', {path:idxM[1].trim()}), 2, true).then(r => `[INDEXER INICIADO]\n${r}`) });
-                    }
-
                     // -- Native read-only tools, table-driven (v1.7.213/214).
                     // 14 pure handlers + 6 closure-coupled ones live in
                     // $lib/agent-tools-native.ts. Only graphify stays inline (it
