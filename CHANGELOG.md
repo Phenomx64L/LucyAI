@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.208] — 2026-06-22
+
+### Fixed — "info disappears until I move the mouse" + reasoning box clipped
+
+Two user-reported rendering bugs, both in the chat/streaming path.
+
+**1. Frozen UI until a mouse move (WebView2 occlusion/throttle).**
+The streaming tokens landed in the DOM but the screen wasn't repainted until
+an input event forced a composite — so a bubble looked frozen and "jumped" up
+to date on hover. Root cause: WebView2/Chromium pauses compositing when it
+thinks the window is occluded, and throttles `setInterval`/`rAF` (the streaming
+drain's own fallback) when the window is backgrounded. The app only set GPU
+flags; the rendering-continuity flags were missing. Added to
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (`src-tauri/src/lib.rs`):
+`--disable-features=CalculateNativeWinOcclusion`,
+`--disable-background-timer-throttling`,
+`--disable-backgrounding-occluded-windows`,
+`--disable-renderer-backgrounding`.
+
+**2. "Pensando…" box didn't show what Lucy was writing.**
+The reasoning body (`overflow-y:auto; max-height:340px`) stayed scrolled at the
+top while new THOUGHT text streamed in below the fold, so the user saw stale
+reasoning. `morphHtml` now pins a scrollable host to the bottom after each
+update — but only when the host actually overflows AND the user hadn't scrolled
+up to read (manual scroll-back is respected). No effect on the `display:contents`
+message bodies, which aren't scroll containers.
+
+Note: the occlusion/throttle fix changes Chromium launch flags, so it can only
+be confirmed in a real run (start Lucy, let it stream, click away to another
+window). svelte-check 0 errors + 246 vitest still green.
+
 ## [1.7.207] — 2026-06-21
 
 ### Fixed — PGO binary launched in dev mode (blank/ERR_CONNECTION_REFUSED)

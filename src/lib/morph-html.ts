@@ -71,6 +71,19 @@ export function morphHtml(node: HTMLElement, initialHtml: string | null | undefi
     return {
         update(newHtml: string | null | undefined) {
             const safe = newHtml ?? '';
+            // v1.7.208 — Pin-to-bottom for scrollable hosts (the reasoning
+            // bubble's .reasoning-body is `overflow-y:auto; max-height:340px`).
+            // The streaming THOUGHT kept landing BELOW the fold while the box
+            // stayed scrolled at the top, so the user saw frozen old reasoning
+            // and "couldn't see what Lucy was writing". We capture whether the
+            // host was scrolled near its bottom BEFORE morphing, then re-pin it
+            // AFTER — but only when the host is itself an overflowing scroll
+            // container (display:contents message bodies have no scrollHeight,
+            // so this is a no-op for them) and only when the user hadn't
+            // scrolled up to read (respect manual scroll-back).
+            const isScrollable = node.scrollHeight > node.clientHeight + 4;
+            const wasNearBottom = isScrollable &&
+                (node.scrollHeight - node.scrollTop - node.clientHeight) < 40;
             // morphdom needs a single root element to morph FROM and TO.
             // We clone the host's shallow shape (same tag, no children) and
             // populate it with the desired new HTML. Then we ask morphdom
@@ -117,6 +130,10 @@ export function morphHtml(node: HTMLElement, initialHtml: string | null | undefi
                     return addedNode as Node;
                 },
             });
+            // Re-pin to the latest content if the user was following along.
+            if (wasNearBottom) {
+                node.scrollTop = node.scrollHeight;
+            }
         },
         destroy() {
             // No event listeners or external state to clean up — morphdom's

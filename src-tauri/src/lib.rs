@@ -81,7 +81,33 @@ pub fn run() {
     // can override from the shell for debugging.
     #[cfg(windows)]
     {
-        const GPU_FLAGS: &str = "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist";
+        // ── v1.7.208 — RENDERING CONTINUITY (fixes "info disappears until I
+        // move the mouse") ────────────────────────────────────────────────
+        // WebView2/Chromium pauses or throttles compositing + timers when it
+        // believes the window is occluded or backgrounded. The symptom: the
+        // DOM updates (streaming tokens land) but the screen is NOT repainted
+        // until an input event (mouse move) forces a composite — so the user
+        // sees a frozen bubble that "jumps" up to date on hover. The
+        // streaming render's own setInterval fallback ALSO gets throttled to
+        // ~1/min under background-timer-throttling, so it can't save us.
+        //
+        //   --disable-features=CalculateNativeWinOcclusion
+        //       Stop Chromium from marking the window "occluded" and halting
+        //       paints. This is the single most important flag for the bug.
+        //   --disable-background-timer-throttling
+        //       Keep setInterval/rAF fallbacks ticking at full rate even when
+        //       the window loses focus — the streaming drain depends on it.
+        //   --disable-backgrounding-occluded-windows
+        //   --disable-renderer-backgrounding
+        //       Don't deprioritize / freeze the renderer process when the
+        //       window is behind another or unfocused.
+        const GPU_FLAGS: &str = concat!(
+            "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist ",
+            "--disable-features=CalculateNativeWinOcclusion ",
+            "--disable-background-timer-throttling ",
+            "--disable-backgrounding-occluded-windows ",
+            "--disable-renderer-backgrounding"
+        );
         if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
             std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", GPU_FLAGS);
         }
