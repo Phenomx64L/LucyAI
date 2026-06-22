@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.206] — 2026-06-21
+
+### Performance — PGO pipeline made runnable + headless boot-training
+
+Brought the Profile-Guided Optimization pipeline (`scripts/build-pgo.ps1`) from
+"never actually ran on this machine" to "produces a genuinely-trained,
+shippable binary unattended."
+
+Three blocking bugs in `build-pgo.ps1` are fixed:
+- **PowerShell 7-only syntax** — the script used `??` (null-coalescing) and
+  `?.` (null-conditional), which are parse errors under Windows PowerShell 5.1.
+  This box has no `pwsh`, so the script aborted before doing anything. Rewritten
+  with 5.1-compatible `if/else` and a null-checked `Get-Command`.
+- **UTF-8 without BOM** — the file's box-drawing/✓/→ glyphs were mis-decoded by
+  PS 5.1 as Windows-1252 (byte `0x94` reads as a quote), corrupting string
+  parsing. Re-saved as UTF-8 **with BOM**.
+- Also installed the missing `llvm-tools-preview` component (no `llvm-profdata`
+  → the merge phase could never run).
+
+New `-NonInteractive` mode for unattended / CI builds: it launches the
+instrumented **app** binary, lets the boot hot paths run for `-BootTrainSeconds`
+(45s default), then closes the window gracefully (WM_CLOSE) so the profile is
+flushed. Verified end-to-end — the merged profile captured **145,866 functions /
+179.1M execution counts**, and the resulting `release-pgo-use` binary boots and
+runs cleanly (14.3 MB vs the 16.4 MB standard release).
+
+Note on scope: this is a **boot/startup** profile (DB open + migrations, model
+catalog, semantic recall, embeddings init, Tokio runtime, serde). The
+interactive streaming + tool-loop paths are NOT covered by a 45s boot — for a
+full-workload profile, use the interactive training mode (`build-pgo.ps1` with
+no flags) and drive Lucy for a few minutes. Phase 3 now prints an
+`llvm-profdata show` coverage summary so a hollow profile can never be shipped
+unnoticed.
+
+We deliberately do **not** train via `cargo test`: on this crate
+(`crate-type = staticlib + cdylib + rlib`) the instrumented unit-test harness
+fails to load on Windows MSVC with `STATUS_ENTRYPOINT_NOT_FOUND` (a colliding
+`lucy_svelte_lib.dll` with mismatched instrumented exports). The real app binary
+links cleanly, so training runs on it.
+
+### Fixed
+- **Broken doctest** in `src-tauri/src/commands/local.rs`: a TypeScript usage
+  snippet sat in a 4-space-indented doc block, so rustc compiled it as Rust and
+  `cargo test --doc` failed with `unterminated character literal` (the `'$lib/…'`
+  quote). Fenced it as ` ```ts ` so it is documentation, not a doctest.
+
 ## [1.7.205] — 2026-06-19
 
 ### Performance — chat render: compute the visible-message list once per frame

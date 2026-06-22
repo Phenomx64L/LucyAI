@@ -853,8 +853,10 @@ fn parse_wevtutil_text(text: &str) -> Result<Vec<EventEntry>, String> {
 /// `cargo test export_bindings_taskentry` to write a typed `.ts` file to
 /// `src/lib/types/`. Frontend then imports the type via:
 ///
-///     import type { TaskEntry } from '$lib/types/TaskEntry';
-///     const tasks = await invokeTyped<TaskEntry[]>('get_tasklist');
+/// ```ts
+/// import type { TaskEntry } from '$lib/types/TaskEntry';
+/// const tasks = await invokeTyped<TaskEntry[]>('get_tasklist');
+/// ```
 ///
 /// To apply this to every Tauri-returned struct, repeat the derive pattern.
 /// The `chrono-impl` ts-rs feature handles DateTime fields automatically.

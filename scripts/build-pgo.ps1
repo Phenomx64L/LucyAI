@@ -1,4 +1,4 @@
-# ── build-pgo.ps1 — Profile-Guided Optimization pipeline (v1.7.86) ─────────
+﻿# ── build-pgo.ps1 — Profile-Guided Optimization pipeline (v1.7.86) ─────────
 #
 # Builds Lucy with PGO in four phases:
 #
@@ -31,18 +31,44 @@
 # turn but rarely benchmarked.
 #
 # Usage:
-#   .\scripts\build-pgo.ps1               # full cycle
-#   .\scripts\build-pgo.ps1 -SkipTrain    # rebuild with existing profile
-#   .\scripts\build-pgo.ps1 -CleanFirst   # wipe old profile data
+#   .\scripts\build-pgo.ps1                  # full cycle (interactive GUI training)
+#   .\scripts\build-pgo.ps1 -NonInteractive  # headless boot-training (no operator)
+#   .\scripts\build-pgo.ps1 -SkipTrain       # rebuild with existing profile
+#   .\scripts\build-pgo.ps1 -CleanFirst      # wipe old profile data
+#
+# -NonInteractive (v1.7.206):
+#   Replaces the operator-driven GUI run + ENTER prompt with an automated
+#   boot-training pass: it launches the instrumented APP binary (NOT a test
+#   harness — see note below), lets it run for -BootTrainSeconds so the boot
+#   hot paths execute (DB open + migrations, model-catalog load, pre-loop
+#   semantic recall, embeddings init, prompt scaffolding), then closes it
+#   GRACEFULLY (WM_CLOSE, never /F) so profile-generate's atexit handler
+#   flushes the .profraw. No window interaction required → CI-friendly.
+#
+#   This is a BOOT profile, lighter than a live interactive session driving
+#   streaming + tool loops. For the richest profile, prefer the interactive
+#   mode with a real workload when a human is at the keyboard.
+#
+#   WHY the app binary and not `cargo test`: on this crate
+#   (crate-type = staticlib + cdylib + rlib) the instrumented *unit-test*
+#   harness fails to load on Windows MSVC with STATUS_ENTRYPOINT_NOT_FOUND
+#   (0xc0000139) — the test exe resolves the colliding lucy_svelte_lib.dll
+#   with mismatched instrumented exports. The real app binary links cleanly,
+#   so we train on it instead.
 #
 # Prerequisites:
 #   - rustup component add llvm-tools-preview
 #   - The directory you run this from must be the project root.
+#   - For -NonInteractive: an interactive desktop session, and no other Lucy
+#     instance running (the single-instance plugin would focus-and-exit the
+#     training launch, producing no profile).
 
 [CmdletBinding()]
 param(
     [switch]$CleanFirst,
     [switch]$SkipTrain,
+    [switch]$NonInteractive,
+    [int]$BootTrainSeconds = 45,
     [string]$ProfilesDir = ".\target\pgo-profiles"
 )
 
@@ -50,8 +76,14 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"
 
 # Resolve absolute paths up front — RUSTFLAGS needs them.
-$ProfilesDir = (Resolve-Path -LiteralPath $ProfilesDir -ErrorAction SilentlyContinue) `
-    ?? (New-Item -ItemType Directory -Force -Path $ProfilesDir).FullName
+# NOTE: Windows PowerShell 5.1-compatible (no `??` / `?.` — those are pwsh 7+
+# only, and this box may not have pwsh installed). v1.7.206.
+$resolved = Resolve-Path -LiteralPath $ProfilesDir -ErrorAction SilentlyContinue
+if ($resolved) {
+    $ProfilesDir = $resolved.Path
+} else {
+    $ProfilesDir = (New-Item -ItemType Directory -Force -Path $ProfilesDir).FullName
+}
 
 $MergedProfile = Join-Path $ProfilesDir "merged.profdata"
 
@@ -61,7 +93,8 @@ Write-Host "Merged file  : $MergedProfile"
 Write-Host ""
 
 # ── Sanity: llvm-tools-preview installed? ──────────────────────────────────
-$llvmProfdata = (Get-Command llvm-profdata.exe -ErrorAction SilentlyContinue)?.Source
+$llvmCmd = Get-Command llvm-profdata.exe -ErrorAction SilentlyContinue
+$llvmProfdata = if ($llvmCmd) { $llvmCmd.Source } else { $null }
 if (-not $llvmProfdata) {
     # Try the rustup-managed copy.
     $sysroot = (& rustc --print sysroot).Trim()
@@ -84,37 +117,77 @@ if ($CleanFirst) {
 }
 
 if (-not $SkipTrain) {
-    # ── Phase 1: instrumented build ────────────────────────────────────────
-    Write-Host "[1/4] Building instrumented binary (release-pgo-gen)..." -ForegroundColor Cyan
-    $env:RUSTFLAGS = "-Cprofile-generate=$ProfilesDir"
-    Push-Location src-tauri
-    try {
-        cargo build --profile release-pgo-gen
-        if ($LASTEXITCODE -ne 0) { throw "instrumented build failed" }
-    } finally { Pop-Location }
-    Remove-Item Env:\RUSTFLAGS
+    if ($NonInteractive) {
+        # ── Phase 1 (headless): build the instrumented APP binary ──────────
+        Write-Host "[1/4] Building instrumented app binary (release-pgo-gen)..." -ForegroundColor Cyan
+        $env:RUSTFLAGS = "-Cprofile-generate=$ProfilesDir"
+        $env:LLVM_PROFILE_FILE = (Join-Path $ProfilesDir "lucy-%p-%m.profraw")
+        Push-Location src-tauri
+        try {
+            cargo build --profile release-pgo-gen
+            if ($LASTEXITCODE -ne 0) { throw "instrumented app build failed" }
+        } finally { Pop-Location }
 
-    # ── Phase 2: training run ──────────────────────────────────────────────
-    Write-Host ""
-    Write-Host "[2/4] Training run." -ForegroundColor Cyan
-    Write-Host "  - Lucy will launch now."
-    Write-Host "  - Use her for 5-10 minutes of representative work:"
-    Write-Host "      * open Memory Browser, run a few recall queries"
-    Write-Host "      * open the Memory Graph, drag a couple of nodes"
-    Write-Host "      * send 3-5 prompts of different sizes"
-    Write-Host "      * trigger an auto-route (security keyword)"
-    Write-Host "      * run /diagnostico"
-    Write-Host "  - Close Lucy normally when done."
-    Write-Host "  - Then press ENTER here to continue."
-    Write-Host ""
+        # ── Phase 2 (headless): boot-train, then close gracefully ──────────
+        # Launch the real instrumented binary, let the boot hot paths run,
+        # then send WM_CLOSE (CloseMainWindow) so profile-generate's atexit
+        # handler flushes .profraw. We do NOT /F-kill on the happy path — a
+        # forced TerminateProcess skips atexit and would drop the profile.
+        Write-Host "[2/4] Headless boot-training for $BootTrainSeconds s..." -ForegroundColor Cyan
+        $binary = ".\src-tauri\target\release-pgo-gen\lucy-svelte.exe"
+        if (-not (Test-Path $binary)) {
+            Write-Host "ERROR: instrumented binary not at $binary" -ForegroundColor Red
+            exit 1
+        }
+        $proc = Start-Process -FilePath $binary -WorkingDirectory (Get-Location) -PassThru
+        Start-Sleep -Seconds $BootTrainSeconds
+        if (-not $proc.HasExited) {
+            Write-Host "  Boot window settled — sending graceful close (WM_CLOSE)..."
+            $null = $proc.CloseMainWindow()
+            for ($w = 0; $w -lt 10 -and -not $proc.HasExited; $w++) { Start-Sleep -Seconds 1 }
+            if (-not $proc.HasExited) {
+                Write-Host "  Did not exit on WM_CLOSE — force-killing (profile may be partial)." -ForegroundColor Yellow
+                $proc | Stop-Process -Force
+            }
+        } else {
+            Write-Host "  WARNING: instrumented Lucy exited before training window — another" -ForegroundColor Yellow
+            Write-Host "           instance may have absorbed it (single-instance plugin)." -ForegroundColor Yellow
+        }
+        Remove-Item Env:\RUSTFLAGS
+        Remove-Item Env:\LLVM_PROFILE_FILE
+    } else {
+        # ── Phase 1: instrumented build ────────────────────────────────────
+        Write-Host "[1/4] Building instrumented binary (release-pgo-gen)..." -ForegroundColor Cyan
+        $env:RUSTFLAGS = "-Cprofile-generate=$ProfilesDir"
+        Push-Location src-tauri
+        try {
+            cargo build --profile release-pgo-gen
+            if ($LASTEXITCODE -ne 0) { throw "instrumented build failed" }
+        } finally { Pop-Location }
+        Remove-Item Env:\RUSTFLAGS
 
-    $binary = ".\src-tauri\target\release-pgo-gen\lucy-svelte.exe"
-    if (-not (Test-Path $binary)) {
-        Write-Host "ERROR: instrumented binary not at $binary" -ForegroundColor Red
-        exit 1
+        # ── Phase 2: training run ──────────────────────────────────────────
+        Write-Host ""
+        Write-Host "[2/4] Training run." -ForegroundColor Cyan
+        Write-Host "  - Lucy will launch now."
+        Write-Host "  - Use her for 5-10 minutes of representative work:"
+        Write-Host "      * open Memory Browser, run a few recall queries"
+        Write-Host "      * open the Memory Graph, drag a couple of nodes"
+        Write-Host "      * send 3-5 prompts of different sizes"
+        Write-Host "      * trigger an auto-route (security keyword)"
+        Write-Host "      * run /diagnostico"
+        Write-Host "  - Close Lucy normally when done."
+        Write-Host "  - Then press ENTER here to continue."
+        Write-Host ""
+
+        $binary = ".\src-tauri\target\release-pgo-gen\lucy-svelte.exe"
+        if (-not (Test-Path $binary)) {
+            Write-Host "ERROR: instrumented binary not at $binary" -ForegroundColor Red
+            exit 1
+        }
+        Start-Process -FilePath $binary -WorkingDirectory (Get-Location)
+        Read-Host "Press ENTER after the training session is complete"
     }
-    Start-Process -FilePath $binary -WorkingDirectory (Get-Location)
-    Read-Host "Press ENTER after the training session is complete"
 
     # ── Phase 3: merge profiles ────────────────────────────────────────────
     Write-Host ""
@@ -129,6 +202,17 @@ if (-not $SkipTrain) {
     & $llvmProfdata merge -o $MergedProfile $ProfilesDir\*.profraw
     if ($LASTEXITCODE -ne 0) { throw "profdata merge failed" }
     Write-Host "  Merged → $MergedProfile"
+
+    # Coverage sanity: surface how much the profile actually captured. A merged
+    # profile with a near-zero "Total count" means training exercised almost no
+    # real code (e.g. the binary exited immediately) — the optimized build would
+    # then be PGO in name only. We print the summary so a hollow profile is
+    # visible rather than silently shipped.
+    Write-Host "  Profile coverage summary:"
+    $summary = & $llvmProfdata show $MergedProfile 2>$null |
+        Select-String -Pattern 'Total functions|Maximum function count|Maximum internal block count|Total count'
+    if ($summary) { $summary | ForEach-Object { Write-Host "    $($_.Line.Trim())" } }
+    else { Write-Host "    (llvm-profdata show produced no summary)" -ForegroundColor Yellow }
 } else {
     Write-Host "[1-3/4] SKIPPED via -SkipTrain — reusing existing $MergedProfile" -ForegroundColor Yellow
     if (-not (Test-Path $MergedProfile)) {
