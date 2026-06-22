@@ -486,4 +486,193 @@ export const NATIVE_READONLY_HANDLERS: NativeHandler[] = [
             };
         },
     },
+
+    // F4 Frontier — self-healing: find similar fix from memory
+    {
+        kind: 'healing_find',
+        matchRe: /<TOOL>healing_find:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>healing_find:[^<]+<\/TOOL>/gi,
+        build: (m) => {
+            const symptom = m[1].trim().slice(0, 200);
+            return {
+                label: `[💊 Healing recall] ${symptom.slice(0, 32)}`,
+                fn: async () => {
+                    try {
+                        const patterns: any = await invoke('healing_find_similar', { symptom, topK: 5 });
+                        if (!patterns || patterns.length === 0) {
+                            return `[HEALING] No prior fix patterns matched "${symptom}". This appears to be a new problem — investigate fresh.`;
+                        }
+                        const out = [`[HEALING MEMORY — ${patterns.length} prior fix(es) for "${symptom}"]`];
+                        for (const p of patterns) {
+                            const conf = (p.confidence * 100).toFixed(0);
+                            out.push('');
+                            out.push(`• ${p.title} — confidence ${conf}%, used ${p.success_count}× (last ${p.age_days}d ago)`);
+                            if (p.symptom) out.push(`  symptom: ${p.symptom}`);
+                            if (p.fix_description) out.push(`  fix: ${p.fix_description}`);
+                        }
+                        out.push('');
+                        out.push('Propose the top one to the user with HITL confirmation before applying.');
+                        return out.join('\n');
+                    } catch (e) {
+                        return `[HEALING ERROR] ${String(e)}`;
+                    }
+                },
+            };
+        },
+    },
+
+    // semantic — vector search over skills + memories
+    {
+        kind: 'semantic',
+        matchRe: /<TOOL>semantic:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>semantic:[^<]+<\/TOOL>/gi,
+        build: (m) => {
+            const semQ = m[1].trim();
+            return {
+                label: `[◈ Semántica] ${semQ}`,
+                fn: () => invoke('semantic_search', { query: semQ, entityType: null, limit: 6, minScore: 0.3, model: null })
+                    .then((hits: any) => {
+                        if (!Array.isArray(hits) || hits.length === 0) return `[SEMANTIC SEARCH] Sin resultados relevantes para "${semQ}". Prueba search_web o search_runbooks.`;
+                        const lines = hits.map((h: any) => `• ${h.entity_type}:${h.entity_id} (score=${h.score.toFixed(3)})\n  ${h.text.replace(/\s+/g, ' ').slice(0, 220)}`);
+                        return `[SEMANTIC SEARCH RESULT for '${semQ}']\n${lines.join('\n')}`;
+                    })
+                    .catch((e: any) => `[SEMANTIC SEARCH UNAVAILABLE] ${String(e).slice(0, 180)}. Skills/memories indexing requires a local Ollama with an embedding model (e.g. 'ollama pull nomic-embed-text').`),
+            };
+        },
+    },
+];
+
+// ── Closure-coupled native handlers (Batch 2b, v1.7.214) ────────────────────
+// These need values from runAI's closure (retryWithBackoff, the fetch cache, the
+// MCP server list + secrets, the runbooks dir, the tab id). The agent loop hands
+// them over in a NativeHandlerDeps bundle so the handlers themselves stay pure.
+
+export interface NativeHandlerDeps {
+    retryWithBackoff: (fn: () => Promise<any>, tries: number, flag: boolean) => Promise<any>;
+    cachedFetch: (cmd: string, query: string, producer: () => Promise<any>) => Promise<any>;
+    mcpServers: any[];
+    mcpSecrets: any;
+    loadMcpServers: () => Promise<any>;
+    runbooksDir: string;
+    tabId: string;
+}
+
+export interface NativeHandlerWithDeps {
+    kind: string;
+    matchRe: RegExp;
+    stripRe: RegExp;
+    build: (m: RegExpMatchArray, d: NativeHandlerDeps) => ReadOnlyTask;
+}
+
+export const NATIVE_READONLY_HANDLERS_DEPS: NativeHandlerWithDeps[] = [
+    {
+        kind: 'system_diff',
+        matchRe: /<TOOL>system_diff:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>system_diff:[^<]+<\/TOOL>/gi,
+        build: (m, d) => ({
+            label: `[◑ Diff] ${m[1].trim()}`,
+            fn: () => d.retryWithBackoff(() => invoke('system_diff', { category: m[1].trim() }), 2, true).then((r: any) => `[SYSTEM DIFF RESULT]\n${r}`),
+        }),
+    },
+
+    // F6 Frontier — object bridge: query stored PS objects
+    {
+        kind: 'obj_query',
+        matchRe: /<TOOL>obj_query:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>obj_query:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const expression = m[1].trim().slice(0, 400);
+            const sessionId = d.tabId;
+            return {
+                label: `[⊞ Obj query] ${expression.slice(0, 32)}`,
+                fn: async () => {
+                    try {
+                        const r: any = await invoke('obj_bridge_query', { args: { sessionId, expression } });
+                        if (r.is_count_only) {
+                            return `[OBJ QUERY · ${r.key}] count = ${r.count}`;
+                        }
+                        const rows = Array.isArray(r.rows) ? r.rows : [];
+                        const out = [`[OBJ QUERY · ${r.key} from ${r.source}] returned ${r.returned_rows}/${r.original_rows} rows`];
+                        const preview = rows.slice(0, 15);
+                        for (const row of preview) {
+                            out.push(`  ${JSON.stringify(row).slice(0, 220)}`);
+                        }
+                        if (rows.length > 15) out.push(`  … (${rows.length - 15} more)`);
+                        return out.join('\n');
+                    } catch (e) {
+                        return `[OBJ QUERY ERROR] ${String(e)}\n(Hint: usa el TOOL después de un comando PS — Lucy debe guardar el resultado primero via obj_bridge_store.)`;
+                    }
+                },
+            };
+        },
+    },
+
+    {
+        kind: 'mcp_discover',
+        matchRe: /<TOOL>mcp_discover:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>mcp_discover:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const mcpSrv = m[1].trim();
+            // Dual resolution: if the argument matches a registered server NAME,
+            // call the registry command (caches result + updates status).
+            // Otherwise fall back to the legacy raw-command path.
+            const isRegistered = d.mcpServers.some((s: any) => s.name === mcpSrv);
+            return {
+                label: `[◎ MCP Scanner] ${mcpSrv}`,
+                fn: () => d.retryWithBackoff(() => isRegistered
+                    ? invoke('mcp_server_discover', { name: mcpSrv, env: d.mcpSecrets }).then((s: any) => JSON.stringify(s.tools_cache, null, 2))
+                    : invoke('discover_mcp_tools', { serverName: mcpSrv, env: d.mcpSecrets })
+                , 2, true).then((r: any) => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`)
+                    .then((r: any) => { if (isRegistered) d.loadMcpServers().catch(() => {}); return r; }),
+            };
+        },
+    },
+
+    {
+        kind: 'fetch',
+        matchRe: /<TOOL>fetch:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>fetch:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const urlQ = m[1].trim();
+            return {
+                label: `[◉ Lector WEB] ${urlQ}`,
+                fn: () => d.cachedFetch('fetch_url_content', urlQ, () => d.retryWithBackoff(() => invoke('fetch_url_content', { url: urlQ }), 2, true)).then((r: any) => `[FETCH RESULT for '${urlQ}']\n${r}`),
+            };
+        },
+    },
+
+    {
+        kind: 'search_web',
+        matchRe: /<TOOL>search_web:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>search_web:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const webQ = m[1].trim();
+            return {
+                label: `[◉ Web] ${webQ}`,
+                fn: () => d.cachedFetch('search_web', webQ, () => d.retryWithBackoff(() => invoke('search_web', { query: webQ }), 2, true)).then((r: any) => `[WEB SEARCH RESULT for '${webQ}']\n${r}`),
+            };
+        },
+    },
+
+    {
+        kind: 'search_runbooks',
+        matchRe: /<TOOL>search_runbooks:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>search_runbooks:[^<]+<\/TOOL>/gi,
+        build: (m, d) => {
+            const rbQuery = m[1].trim();
+            const rbDir = (d.runbooksDir || '').trim();
+            if (!rbDir) {
+                // Short-circuit: no runbooks dir configured → don't burn a Rust roundtrip
+                // and give the agent actionable guidance instead of "directory not found".
+                return {
+                    label: `[≡ Runbooks] ${rbQuery}`,
+                    fn: () => Promise.resolve(`[RUNBOOK SEARCH RESULT]\nNo runbooks directory is configured. The user has not set lucyConfig.runbooksDir yet. Inform the user that they need to configure a runbooks directory in Settings → Runbooks Directory before search_runbooks can work, and proceed with the rest of the task using alternative sources (search_web, semantic, or built-in skills).`),
+                };
+            }
+            return {
+                label: `[≡ Runbooks] ${rbQuery}`,
+                fn: () => d.retryWithBackoff(() => invoke('search_runbooks', { dirPath: rbDir, query: rbQuery }), 2, true).then((r: any) => `[RUNBOOK SEARCH RESULT]\n${r}`),
+            };
+        },
+    },
 ];

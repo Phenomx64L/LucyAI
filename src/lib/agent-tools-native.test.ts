@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { NATIVE_READONLY_HANDLERS } from './agent-tools-native';
+import {
+    NATIVE_READONLY_HANDLERS,
+    NATIVE_READONLY_HANDLERS_DEPS,
+    type NativeHandlerDeps,
+} from './agent-tools-native';
 
 // One representative sample per handler kind. The parity tests assert that each
 // handler's matchRe detects its tag, its stripRe removes it, and build() yields
 // a well-formed { label, fn } task — catching any regex transcription typo from
-// the v1.7.213 extraction without needing to run the (Tauri-invoking) fn.
+// the v1.7.213 / v1.7.214 extraction without running the (Tauri-invoking) fn.
 const SAMPLES: Record<string, string> = {
+    // pure (v1.7.213 + healing_find/semantic from 2b)
     state_diff:          '<TOOL>state_diff:60</TOOL>',
     process_lineage:     '<TOOL>process_lineage:chrome</TOOL>',
     process_ancestry:    '<TOOL>process_ancestry:1234</TOOL>',
@@ -18,47 +23,92 @@ const SAMPLES: Record<string, string> = {
     kg_neighbors:        '<TOOL>kg_neighbors:/a/b.ts</TOOL>',
     kg_ext_summary:      '<TOOL>kg_ext_summary</TOOL>',
     incident_detective:  '<TOOL>incident_detective</TOOL>',
+    healing_find:        '<TOOL>healing_find:winrm cert error</TOOL>',
+    semantic:            '<TOOL>semantic:dns failures</TOOL>',
 };
 
-describe('agent-tools-native / registry shape', () => {
-    it('exports exactly the 12 extracted handlers, each with a unique kind', () => {
-        expect(NATIVE_READONLY_HANDLERS).toHaveLength(12);
+// Closure-coupled (v1.7.214 / Batch 2b).
+const DEPS_SAMPLES: Record<string, string> = {
+    system_diff:      '<TOOL>system_diff:services</TOOL>',
+    obj_query:        '<TOOL>obj_query:$_.Name -eq "x"</TOOL>',
+    mcp_discover:     '<TOOL>mcp_discover:filesystem</TOOL>',
+    fetch:            '<TOOL>fetch:https://example.com</TOOL>',
+    search_web:       '<TOOL>search_web:powershell winrm</TOOL>',
+    search_runbooks:  '<TOOL>search_runbooks:dns reset</TOOL>',
+};
+
+const mockDeps: NativeHandlerDeps = {
+    retryWithBackoff: (fn) => fn(),
+    cachedFetch: (_c, _q, producer) => producer(),
+    mcpServers: [],
+    mcpSecrets: {},
+    loadMcpServers: async () => {},
+    runbooksDir: '',
+    tabId: 'test-tab',
+};
+
+describe('agent-tools-native / pure registry shape', () => {
+    it('exports the 14 pure handlers, each with a unique kind', () => {
+        expect(NATIVE_READONLY_HANDLERS).toHaveLength(14);
         const kinds = NATIVE_READONLY_HANDLERS.map(h => h.kind);
-        expect(new Set(kinds).size).toBe(12);
+        expect(new Set(kinds).size).toBe(14);
         expect(new Set(kinds)).toEqual(new Set(Object.keys(SAMPLES)));
     });
 });
 
-describe('agent-tools-native / per-handler parity (match + strip + build)', () => {
+describe('agent-tools-native / deps registry shape', () => {
+    it('exports the 6 closure-coupled handlers, each with a unique kind', () => {
+        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(6);
+        const kinds = NATIVE_READONLY_HANDLERS_DEPS.map(h => h.kind);
+        expect(new Set(kinds).size).toBe(6);
+        expect(new Set(kinds)).toEqual(new Set(Object.keys(DEPS_SAMPLES)));
+    });
+    it('pure and deps kinds do not overlap', () => {
+        const pure = new Set(NATIVE_READONLY_HANDLERS.map(h => h.kind));
+        for (const h of NATIVE_READONLY_HANDLERS_DEPS) {
+            expect(pure.has(h.kind), `${h.kind} is in both registries`).toBe(false);
+        }
+    });
+});
+
+describe('agent-tools-native / pure per-handler parity', () => {
     for (const h of NATIVE_READONLY_HANDLERS) {
-        it(`${h.kind}: matches its tag, strips it, and builds a task`, () => {
+        it(`${h.kind}: matches, strips, builds`, () => {
             const sample = SAMPLES[h.kind];
             expect(sample, `no sample for ${h.kind}`).toBeTruthy();
-
-            // 1. matchRe detects the tag inside a larger response.
-            const m = (`bla bla ${sample} tail`).match(h.matchRe);
-            expect(m, `${h.kind} matchRe did not match`).not.toBeNull();
-
-            // 2. stripRe removes the tag completely (global flag).
+            const m = (`bla ${sample} tail`).match(h.matchRe);
+            expect(m, `${h.kind} matchRe failed`).not.toBeNull();
             const stripped = `before ${sample} after`.replace(h.stripRe, '');
-            expect(stripped.includes('<TOOL>'), `${h.kind} stripRe left a <TOOL> tag`).toBe(false);
-            expect(stripped).toBe('before  after');
-
-            // 3. build() yields a { label:string, fn:()=>Promise } task.
+            expect(stripped.includes('<TOOL>'), `${h.kind} stripRe left a tag`).toBe(false);
             const task = h.build(m as RegExpMatchArray);
             expect(typeof task.label).toBe('string');
             expect(task.label.length).toBeGreaterThan(0);
             expect(typeof task.fn).toBe('function');
         });
     }
+});
 
-    it('optional-arg handlers also match WITHOUT an argument', () => {
-        // diagnose_spike / threat_scan / runbook_scan / daily_patterns / kg_recent
-        // / kg_ext_summary / incident_detective accept a bare <TOOL>name</TOOL>.
-        const optional = ['diagnose_spike', 'threat_scan', 'runbook_scan', 'daily_patterns', 'kg_recent', 'kg_ext_summary', 'incident_detective'];
-        for (const kind of optional) {
-            const h = NATIVE_READONLY_HANDLERS.find(x => x.kind === kind)!;
-            expect(`<TOOL>${kind}</TOOL>`.match(h.matchRe), `${kind} should match bare form`).not.toBeNull();
-        }
+describe('agent-tools-native / deps per-handler parity', () => {
+    for (const h of NATIVE_READONLY_HANDLERS_DEPS) {
+        it(`${h.kind}: matches, strips, builds with deps`, () => {
+            const sample = DEPS_SAMPLES[h.kind];
+            expect(sample, `no sample for ${h.kind}`).toBeTruthy();
+            const m = (`bla ${sample} tail`).match(h.matchRe);
+            expect(m, `${h.kind} matchRe failed`).not.toBeNull();
+            const stripped = `before ${sample} after`.replace(h.stripRe, '');
+            expect(stripped.includes('<TOOL>'), `${h.kind} stripRe left a tag`).toBe(false);
+            const task = h.build(m as RegExpMatchArray, mockDeps);
+            expect(typeof task.label).toBe('string');
+            expect(task.label.length).toBeGreaterThan(0);
+            expect(typeof task.fn).toBe('function');
+        });
+    }
+
+    it('search_runbooks returns the "not configured" guidance task when runbooksDir is empty', async () => {
+        const h = NATIVE_READONLY_HANDLERS_DEPS.find(x => x.kind === 'search_runbooks')!;
+        const m = '<TOOL>search_runbooks:x</TOOL>'.match(h.matchRe)!;
+        const task = h.build(m, { ...mockDeps, runbooksDir: '' });
+        const out = await task.fn();
+        expect(out).toContain('No runbooks directory is configured');
     });
 });

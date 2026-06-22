@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.214] — 2026-06-22
+
+### Refactor — runAI de-monolith, Batch 2b: remaining native handlers
+
+Finishes the native read-only tool extraction started in v1.7.213. Moved the
+last inline handlers out of `runAI`:
+
+- The two pure stragglers (`healing_find`, `semantic`) joined the pure registry
+  (`NATIVE_READONLY_HANDLERS`, now 14).
+- The six **closure-coupled** ones (`system_diff`, `obj_query`, `mcp_discover`,
+  `fetch`, `search_web`, `search_runbooks`) moved to a new
+  `NATIVE_READONLY_HANDLERS_DEPS` registry whose `build(m, deps)` receives a
+  `NativeHandlerDeps` bundle — `runAI` hands over `retryWithBackoff`, the fetch
+  cache, the MCP server list/secrets, the runbooks dir and the tab id, so the
+  handlers stay pure functions in the module.
+
+`runAI` now runs two small loops (pure + deps) instead of ~19 hand-maintained
+`if (xM) { … }` blocks. Only `graphify` stays inline (it writes
+`toolResults`/`stepsHtml`, not `readOnlyTasks`).
+
+Result: **another −129 lines** from `+page.svelte`. Combined with Batch 2 the
+agent-loop dispatch shed **~553 lines** (13,397 → 12,844). fn bodies + regexes
+moved verbatim; `agent-tools-native.test.ts` now has **24 cases** (both
+registries' match/strip/build, no-kind-overlap, and the search_runbooks
+"unconfigured" branch). svelte-check 0 errors, vitest **294 passing**.
+
 ## [1.7.213] — 2026-06-22
 
 ### Refactor — runAI de-monolith, Batch 2: native read-only handlers → registry

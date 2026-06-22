@@ -277,8 +277,8 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.212 — canonical tool taxonomy (single source of truth; replaces the
     // regexes/predicates that were duplicated inline in runAI and had diverged).
     import { FILE_TOOL_RE, NATIVE_TOOL_RE, hasToolResponse, isMultiStepResponse } from '$lib/agent-tools';
-    // v1.7.213 — native read-only tool handlers (table-driven; Batch 2).
-    import { NATIVE_READONLY_HANDLERS } from '$lib/agent-tools-native';
+    // v1.7.213/214 — native read-only tool handlers (table-driven; Batch 2/2b).
+    import { NATIVE_READONLY_HANDLERS, NATIVE_READONLY_HANDLERS_DEPS } from '$lib/agent-tools-native';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
     import { ICON_PALETTE, ICON_MAP, cmdRapidos, mapeoApps } from '$lib/quick-cmds';
     import { predictCost as _libPredictCost } from '$lib/cost-predictor';
@@ -6418,18 +6418,14 @@ Use ONE of these patterns instead:
                         readOnlyTasks.push({ label: `[⊞ Indexer] ${idxM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('start_indexer', {path:idxM[1].trim()}), 2, true).then(r => `[INDEXER INICIADO]\n${r}`) });
                     }
 
-                    const diffM = agentResp.match(/<TOOL>system_diff:([^<]+)<\/TOOL>/i);
-                    if (diffM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>system_diff:[^<]+<\/TOOL>/gi, '');
-                        readOnlyTasks.push({ label: `[◑ Diff] ${diffM[1].trim()}`, fn: () => retryWithBackoff(() => invoke('system_diff', {category:diffM[1].trim()}), 2, true).then(r => `[SYSTEM DIFF RESULT]\n${r}`) });
-                    }
-
-                    // -- Native read-only tools, table-driven (v1.7.213, Batch 2).
-                    // 12 handlers (state_diff..incident_detective) live in
-                    // $lib/agent-tools-native.ts. system_diff / obj_query /
-                    // mcp_discover / fetch / search_web / search_runbooks /
-                    // graphify stay inline (they need runAI closures).
+                    // -- Native read-only tools, table-driven (v1.7.213/214).
+                    // 14 pure handlers + 6 closure-coupled ones live in
+                    // $lib/agent-tools-native.ts. Only graphify stays inline (it
+                    // writes toolResults/stepsHtml directly, not readOnlyTasks).
+                    const _nativeDeps = {
+                        retryWithBackoff, cachedFetch: _cachedFetch, mcpServers, mcpSecrets,
+                        loadMcpServers, runbooksDir: (lucyConfig.runbooksDir || ''), tabId: (t.id || 'global'),
+                    };
                     for (const _h of NATIVE_READONLY_HANDLERS) {
                         const _m = agentResp.match(_h.matchRe);
                         if (_m) {
@@ -6438,134 +6434,13 @@ Use ONE of these patterns instead:
                             readOnlyTasks.push(_h.build(_m));
                         }
                     }
-
-                    // F6 Frontier — object bridge: query stored PS objects
-                    const oqM = agentResp.match(/<TOOL>obj_query:([^<]+)<\/TOOL>/i);
-                    if (oqM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>obj_query:[^<]+<\/TOOL>/gi, '');
-                        const expression = oqM[1].trim().slice(0, 400);
-                        const sessionId = (t.id || 'global');
-                        readOnlyTasks.push({
-                            label: `[⊞ Obj query] ${expression.slice(0, 32)}`,
-                            fn: async () => {
-                                try {
-                                    const r = await invoke('obj_bridge_query', { args: { sessionId, expression } });
-                                    if (r.is_count_only) {
-                                        return `[OBJ QUERY · ${r.key}] count = ${r.count}`;
-                                    }
-                                    const rows = Array.isArray(r.rows) ? r.rows : [];
-                                    const out = [`[OBJ QUERY · ${r.key} from ${r.source}] returned ${r.returned_rows}/${r.original_rows} rows`];
-                                    const preview = rows.slice(0, 15);
-                                    for (const row of preview) {
-                                        out.push(`  ${JSON.stringify(row).slice(0, 220)}`);
-                                    }
-                                    if (rows.length > 15) out.push(`  … (${rows.length - 15} more)`);
-                                    return out.join('\n');
-                                } catch (e) {
-                                    return `[OBJ QUERY ERROR] ${String(e)}\n(Hint: usa el TOOL después de un comando PS — Lucy debe guardar el resultado primero via obj_bridge_store.)`;
-                                }
-                            }
-                        });
-                    }
-
-                    // F4 Frontier — self-healing: find similar fix from memory
-                    const hfM = agentResp.match(/<TOOL>healing_find:([^<]+)<\/TOOL>/i);
-                    if (hfM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>healing_find:[^<]+<\/TOOL>/gi, '');
-                        const symptom = hfM[1].trim().slice(0, 200);
-                        readOnlyTasks.push({
-                            label: `[💊 Healing recall] ${symptom.slice(0, 32)}`,
-                            fn: async () => {
-                                try {
-                                    const patterns = await invoke('healing_find_similar', { symptom, topK: 5 });
-                                    if (!patterns || patterns.length === 0) {
-                                        return `[HEALING] No prior fix patterns matched "${symptom}". This appears to be a new problem — investigate fresh.`;
-                                    }
-                                    const out = [`[HEALING MEMORY — ${patterns.length} prior fix(es) for "${symptom}"]`];
-                                    for (const p of patterns) {
-                                        const conf = (p.confidence * 100).toFixed(0);
-                                        out.push('');
-                                        out.push(`• ${p.title} — confidence ${conf}%, used ${p.success_count}× (last ${p.age_days}d ago)`);
-                                        if (p.symptom) out.push(`  symptom: ${p.symptom}`);
-                                        if (p.fix_description) out.push(`  fix: ${p.fix_description}`);
-                                    }
-                                    out.push('');
-                                    out.push('Propose the top one to the user with HITL confirmation before applying.');
-                                    return out.join('\n');
-                                } catch (e) {
-                                    return `[HEALING ERROR] ${String(e)}`;
-                                }
-                            }
-                        });
-                    }
-
-                    const mdM = agentResp.match(/<TOOL>mcp_discover:([^<]+)<\/TOOL>/i);
-                    if (mdM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>mcp_discover:[^<]+<\/TOOL>/gi, '');
-                        const mcpSrv = mdM[1].trim();
-                        // Dual resolution: if the argument matches a registered server NAME,
-                        // call the registry command (caches result + updates status).
-                        // Otherwise fall back to the legacy raw-command path.
-                        const isRegistered = mcpServers.some(s => s.name === mcpSrv);
-                        readOnlyTasks.push({
-                            label: `[◎ MCP Scanner] ${mcpSrv}`,
-                            fn: () => retryWithBackoff(() => isRegistered
-                                ? invoke('mcp_server_discover', { name: mcpSrv, env: mcpSecrets }).then(s => JSON.stringify(s.tools_cache, null, 2))
-                                : invoke('discover_mcp_tools', { serverName: mcpSrv, env: mcpSecrets })
-                            , 2, true).then(r => `[MCP DISCOVERY FOR '${mcpSrv}']\n${r}`)
-                                .then(r => { if (isRegistered) loadMcpServers().catch(() => {}); return r; })
-                        });
-                    }
-                    const fetchM = agentResp.match(/<TOOL>fetch:([^<]+)<\/TOOL>/i);
-                    if (fetchM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>fetch:[^<]+<\/TOOL>/gi, '');
-                        const urlQ = fetchM[1].trim();
-                        readOnlyTasks.push({ label: `[◉ Lector WEB] ${urlQ}`, fn: () => _cachedFetch('fetch_url_content', urlQ, () => retryWithBackoff(() => invoke('fetch_url_content', {url: urlQ}), 2, true)).then(r => `[FETCH RESULT for '${urlQ}']\n${r}`) });
-                    }
-                    const webM = agentResp.match(/<TOOL>search_web:([^<]+)<\/TOOL>/i);
-                    if (webM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>search_web:[^<]+<\/TOOL>/gi, '');
-                        const webQ = webM[1].trim();
-                        readOnlyTasks.push({ label: `[◉ Web] ${webQ}`, fn: () => _cachedFetch('search_web', webQ, () => retryWithBackoff(() => invoke('search_web', {query: webQ}), 2, true)).then(r => `[WEB SEARCH RESULT for '${webQ}']\n${r}`) });
-                    }
-                    const rbM = agentResp.match(/<TOOL>search_runbooks:([^<]+)<\/TOOL>/i);
-                    if (rbM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>search_runbooks:[^<]+<\/TOOL>/gi, '');
-                        const rbQuery = rbM[1].trim();
-                        const rbDir = (lucyConfig.runbooksDir || '').trim();
-                        if (!rbDir) {
-                            // Short-circuit: no runbooks dir configured → don't burn a Rust roundtrip
-                            // and give the agent actionable guidance instead of "directory not found".
-                            readOnlyTasks.push({
-                                label: `[≡ Runbooks] ${rbQuery}`,
-                                fn: () => Promise.resolve(`[RUNBOOK SEARCH RESULT]\nNo runbooks directory is configured. The user has not set lucyConfig.runbooksDir yet. Inform the user that they need to configure a runbooks directory in Settings → Runbooks Directory before search_runbooks can work, and proceed with the rest of the task using alternative sources (search_web, semantic, or built-in skills).`)
-                            });
-                        } else {
-                            readOnlyTasks.push({ label: `[≡ Runbooks] ${rbQuery}`, fn: () => retryWithBackoff(() => invoke('search_runbooks', {dirPath:rbDir, query:rbQuery}), 2, true).then(r => `[RUNBOOK SEARCH RESULT]\n${r}`) });
+                    for (const _hd of NATIVE_READONLY_HANDLERS_DEPS) {
+                        const _md = agentResp.match(_hd.matchRe);
+                        if (_md) {
+                            toolUsed = true;
+                            lucyText = lucyText.replace(_hd.stripRe, '');
+                            readOnlyTasks.push(_hd.build(_md, _nativeDeps));
                         }
-                    }
-                    // ── semantic: vector search over skills + memories (Sprint 2) ──
-                    const semM = agentResp.match(/<TOOL>semantic:([^<]+)<\/TOOL>/i);
-                    if (semM) {
-                        toolUsed = true;
-                        lucyText = lucyText.replace(/<TOOL>semantic:[^<]+<\/TOOL>/gi, '');
-                        const semQ = semM[1].trim();
-                        readOnlyTasks.push({
-                            label: `[◈ Semántica] ${semQ}`,
-                            fn: () => invoke('semantic_search', { query: semQ, entityType: null, limit: 6, minScore: 0.3, model: null })
-                                .then(hits => {
-                                    if (!Array.isArray(hits) || hits.length === 0) return `[SEMANTIC SEARCH] Sin resultados relevantes para "${semQ}". Prueba search_web o search_runbooks.`;
-                                    const lines = hits.map(h => `• ${h.entity_type}:${h.entity_id} (score=${h.score.toFixed(3)})\n  ${h.text.replace(/\s+/g,' ').slice(0, 220)}`);
-                                    return `[SEMANTIC SEARCH RESULT for '${semQ}']\n${lines.join('\n')}`;
-                                })
-                                .catch(e => `[SEMANTIC SEARCH UNAVAILABLE] ${String(e).slice(0, 180)}. Skills/memories indexing requires a local Ollama with an embedding model (e.g. 'ollama pull nomic-embed-text').`)
-                        });
                     }
 
                     // ── graphify: no implementado — redirigir a analyze_code ──
