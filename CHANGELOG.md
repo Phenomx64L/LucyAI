@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.220] — 2026-06-22
+
+### Robustness — deep scan of the memory vector backend (embeddings.rs / vec_search.rs)
+
+The subsystem is solid: every dimension boundary is guarded (no crash path —
+`simd_cosine::cosine` returns 0.0 on length mismatch, `vec_search::knn` and
+`upsert_vec` reject/skip non-768 dims, the vec0 upsert is transaction-wrapped,
+the embed cache is bounded and leak-free). Two real, lower-severity issues fixed:
+
+**1. `semantic_search` silently dropped dimension-mismatched memories (no signal).**
+The linear-scan path `SELECT`ed the stored `dims` column but ignored it (`_dims`)
+and leaned on `cosine()` returning 0.0 for vectors of a different dimension. If
+the user switches embedding model (e.g. nomic-embed-text 768 → mxbai 1024), every
+old memory scores 0.0, falls under `min_score`, and vanishes from recall with NO
+diagnostic — exactly the documented "no usa lo ingestado" failure. Now the scan
+skips mismatched rows explicitly (also saving a blob decode + cosine) and emits a
+single WARN naming the count so the operator knows to re-embed via
+`backfill_embeddings`. Extracted a pure `dim_mismatch_warning()` (unit-tested).
+
+**2. `backfill_embeddings` over-reported its created count.** Both the batch and
+per-text insert paths did `n += 1` per `execute()` regardless of the
+`ON CONFLICT(entity_type, entity_id) DO NOTHING` outcome, so a row already present
+(TOCTOU vs a concurrent writer) counted as newly created. Now both paths add the
+actual rows-affected from `execute()` (0 on conflict, 1 on insert); the per-text
+path also stops swallowing a DB error silently.
+
+**Noted, not fixed (architectural, pre-existing):** Ollama (nomic) and Gemini
+(text-embedding-004) embeddings are BOTH 768-dim but live in different embedding
+spaces — when the Gemini fallback stores a vector, it later gets cosine-compared
+against nomic vectors as if comparable. The `model` column is recorded but recall
+doesn't namespace by it. Real but edge-case (requires a provider flip), and a
+proper fix (per-model namespacing of the index/cache) is a design change deferred
+out of this surgical pass. First test module for `embeddings.rs` (5 tests):
+`dim_mismatch_warning` thresholds, blob↔vec roundtrip + partial-tail tolerance,
+and `_embed_key` determinism/model-sensitivity. 350 Rust tests (was 345).
+
+---
+
 ## [1.7.219] — 2026-06-22
 
 ### Security — deep scan of mcp.rs: bounded JSON-RPC line reader (memory-DoS hardening)

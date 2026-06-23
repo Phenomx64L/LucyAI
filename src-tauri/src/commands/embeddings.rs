@@ -511,6 +511,22 @@ pub async fn delete_embedding(entity_type: String, entity_id: String) -> Result<
 ///
 /// Uses HNSW index (vec_index) when corpus > 500 rows for O(log n) search.
 /// Falls back to linear scan for smaller corpora or filtered queries.
+/// Build the one-line WARN emitted when `semantic_search`'s linear scan
+/// skips stored vectors whose dimension differs from the query. Returns
+/// `None` when nothing was skipped. Pure, so the threshold logic is unit
+/// tested without a DB. (v1.7.220)
+fn dim_mismatch_warning(skipped: usize, total: usize, query_dim: usize) -> Option<String> {
+    if skipped == 0 {
+        return None;
+    }
+    Some(format!(
+        "semantic_search: {}/{} stored embeddings have a dimension ≠ {} \
+         (embedding model changed?). They are invisible to recall until \
+         re-embedded — run backfill_embeddings.",
+        skipped, total, query_dim
+    ))
+}
+
 #[tauri::command]
 pub async fn semantic_search(
     query: String,
@@ -620,8 +636,21 @@ pub async fn semantic_search(
     }
 
     // Score every row, partial-sort by cosine desc, filter by threshold.
+    // v1.7.220 — honor the stored `dims`. A vector whose dimension differs
+    // from the query lives in a DIFFERENT embedding space (the user switched
+    // embedding models), so cosine() silently returns 0.0 and the row would
+    // vanish from recall with no signal — the documented "no usa lo
+    // ingestado" failure. Skip those explicitly (also saves the blob decode
+    // + cosine) and surface one diagnostic so the operator knows to re-embed.
+    let qdim = qvec.len();
+    let total_rows = rows.len();
+    let mut dim_skips = 0usize;
     let mut scored: Vec<SemanticHit> = rows.into_iter()
-        .filter_map(|(et, eid, text, blob, _dims)| {
+        .filter_map(|(et, eid, text, blob, dims)| {
+            if dims as usize != qdim {
+                dim_skips += 1;
+                return None;
+            }
             let v = blob_to_vec(&blob);
             let s = cosine(&qvec, &v);
             if s >= min_score {
@@ -629,6 +658,9 @@ pub async fn semantic_search(
             } else { None }
         })
         .collect();
+    if let Some(msg) = dim_mismatch_warning(dim_skips, total_rows, qdim) {
+        crate::utils::logging::write_app_log("WARN", &msg);
+    }
 
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
@@ -722,8 +754,12 @@ pub async fn backfill_embeddings(
                             let blob = vec_to_blob(v);
                             let dims = v.len() as i64;
                             let row_id = generate_id();
-                            stmt.execute(params![row_id, entity_type_inner, id, text, blob, dims, used_model_clone]).map_err(|e| format!("insert: {}", e))?;
-                            n += 1;
+                            // execute() returns rows changed: 0 when ON CONFLICT
+                            // DO NOTHING skips a row already present (TOCTOU vs a
+                            // concurrent writer), 1 on a real insert. Count actual
+                            // inserts so the returned total isn't inflated. (v1.7.220)
+                            n += stmt.execute(params![row_id, entity_type_inner, id, text, blob, dims, used_model_clone])
+                                .map_err(|e| format!("insert: {}", e))? as u32;
                         }
                     }
                     tx.commit().map_err(|e| format!("commit: {}", e))?;
@@ -741,16 +777,18 @@ pub async fn backfill_embeddings(
                             let blob = vec_to_blob(&v);
                             let dims = v.len() as i64;
                             let row_id = generate_id();
-                            let _ = shared_db(|conn| {
-                                conn.execute(
+                            // Count actual inserts (0 on conflict) and stop
+                            // swallowing a DB error silently. (v1.7.220)
+                            let inserted = shared_db(|conn| {
+                                let changed = conn.execute(
                                     "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
                                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                                      ON CONFLICT(entity_type, entity_id) DO NOTHING",
                                     params![row_id, &entity_type, id, text, blob, dims, used_model],
                                 ).map_err(|e| format!("insert: {}", e))?;
-                                Ok(())
-                            });
-                            new_count += 1;
+                                Ok::<usize, String>(changed)
+                            }).unwrap_or(0);
+                            new_count += inserted as u32;
                         }
                         Err(e) => {
                             eprintln!("[embeddings] backfill skip {} / {}: {}", entity_type, id, e);
@@ -764,4 +802,49 @@ pub async fn backfill_embeddings(
         }
     }
     Ok(new_count)
+}
+
+#[cfg(test)]
+mod embed_tests {
+    use super::*;
+
+    #[test]
+    fn dim_warning_none_when_no_skips() {
+        assert!(dim_mismatch_warning(0, 100, 768).is_none());
+    }
+
+    #[test]
+    fn dim_warning_reports_counts() {
+        let msg = dim_mismatch_warning(7, 100, 768).expect("should warn");
+        assert!(msg.contains("7/100"), "msg = {msg}");
+        assert!(msg.contains("768"), "msg = {msg}");
+        assert!(msg.contains("backfill_embeddings"), "msg = {msg}");
+    }
+
+    #[test]
+    fn blob_vec_roundtrip() {
+        let v = vec![0.0_f32, 1.5, -2.25, 3.125];
+        let blob = vec_to_blob(&v);
+        assert_eq!(blob.len(), v.len() * 4);
+        assert_eq!(blob_to_vec(&blob), v);
+    }
+
+    #[test]
+    fn blob_to_vec_drops_partial_trailing_bytes() {
+        // chunks_exact(4) ignores a non-multiple-of-4 tail instead of panicking.
+        let mut blob = vec_to_blob(&[1.0_f32, 2.0]);
+        blob.push(0xAB); // stray byte → not a full f32
+        assert_eq!(blob_to_vec(&blob), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn embed_key_is_deterministic_and_model_sensitive() {
+        let a = _embed_key("hello world", Some("nomic-embed-text"));
+        let b = _embed_key("hello world", Some("nomic-embed-text"));
+        let c = _embed_key("hello world", Some("text-embedding-004"));
+        let d = _embed_key("hello world", None);
+        assert_eq!(a, b, "same (text, model) must hash identically");
+        assert_ne!(a, c, "different model must change the key");
+        assert_ne!(a, d, "Some(model) vs None must differ");
+    }
 }
