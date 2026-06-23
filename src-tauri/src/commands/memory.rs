@@ -854,6 +854,29 @@ const TAG_EDGE_THRESHOLD_DEFAULT: f32 = 0.30;
 const CONTENT_EDGE_THRESHOLD_DEFAULT: f32 = 0.25;
 const EMBEDDING_EDGE_THRESHOLD_DEFAULT: f32 = 0.65;
 
+/// Decode a little-endian f32 BLOB from the `embeddings` table into a vector,
+/// returning `None` when the stored `dims` is implausible or doesn't match the
+/// blob length. The `dims` bounds are checked BEFORE any `dims * 4` arithmetic
+/// so a corrupt/huge `dims` (e.g. near i64::MAX from a tampered/corrupt DB row)
+/// can't overflow `usize` — which would PANIC under the release profile's
+/// `overflow-checks = true`, and `panic = "abort"` turns that into an app
+/// crash. Same defensive class as the v1.7.209 metrics TTL fix. (v1.7.222)
+fn decode_embedding_blob(blob: &[u8], dims: i64) -> Option<Vec<f32>> {
+    if dims <= 0 || dims > 4096 {
+        return None;
+    }
+    let expected = (dims as usize) * 4; // safe: dims ∈ [1, 4096] → ≤ 16384
+    if blob.len() != expected {
+        return None;
+    }
+    let mut vec = Vec::with_capacity(dims as usize);
+    for chunk in blob.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().unwrap_or([0; 4]);
+        vec.push(f32::from_le_bytes(arr));
+    }
+    Some(vec)
+}
+
 /// Build the memory graph for visualization.
 ///
 /// Memory Graph 2.0 — Backend additions (sprint largo):
@@ -973,18 +996,9 @@ pub async fn memory_graph(
                     for row in rows.flatten() {
                         let (eid_str, blob, dims) = row;
                         if let Ok(eid) = eid_str.parse::<i64>() {
-                            // BLOB is little-endian f32. Decode safely:
-                            // bail if length doesn't match expected dims.
-                            let expected = (dims as usize) * 4;
-                            if blob.len() != expected || dims <= 0 || dims > 4096 {
-                                continue;
+                            if let Some(vec) = decode_embedding_blob(&blob, dims) {
+                                emb_map.insert(eid, vec);
                             }
-                            let mut vec = Vec::with_capacity(dims as usize);
-                            for chunk in blob.chunks_exact(4) {
-                                let arr: [u8; 4] = chunk.try_into().unwrap_or([0;4]);
-                                vec.push(f32::from_le_bytes(arr));
-                            }
-                            emb_map.insert(eid, vec);
                         }
                     }
                 }
@@ -1209,7 +1223,7 @@ mod graph_tests {
 
 #[cfg(test)]
 mod consolidation_tests {
-    use super::{jaccard, tokens_for_similarity};
+    use super::{jaccard, tokens_for_similarity, decode_embedding_blob};
     use std::collections::HashSet;
 
     #[test]
@@ -1269,5 +1283,37 @@ mod consolidation_tests {
         let b = tokens_for_similarity("MSSQL database backup schedule weekly");
         let score = jaccard(&a, &b);
         assert!(score < 0.35, "Unrelated memories should NOT cluster, got {}", score);
+    }
+
+    // ── decode_embedding_blob: dims-bounds BEFORE the *4 multiply (v1.7.222) ──
+
+    #[test]
+    fn decode_blob_valid_roundtrips() {
+        let v = vec![1.0_f32, -2.5, 3.25];
+        let blob: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let out = decode_embedding_blob(&blob, 3).expect("valid blob decodes");
+        assert_eq!(out, v);
+    }
+
+    #[test]
+    fn decode_blob_rejects_length_mismatch() {
+        // 3 floats of data but dims says 4 → reject (no partial decode).
+        let blob: Vec<u8> = [1.0_f32, 2.0, 3.0].iter().flat_map(|f| f.to_le_bytes()).collect();
+        assert!(decode_embedding_blob(&blob, 4).is_none());
+    }
+
+    #[test]
+    fn decode_blob_rejects_nonpositive_dims() {
+        assert!(decode_embedding_blob(&[], 0).is_none());
+        assert!(decode_embedding_blob(&[1, 2, 3, 4], -1).is_none());
+    }
+
+    #[test]
+    fn decode_blob_rejects_oversize_dims_without_overflow_panic() {
+        // The regression: a corrupt `dims` near i64::MAX must be rejected by the
+        // bounds check BEFORE `(dims as usize) * 4` runs — otherwise that multiply
+        // overflows usize and panics (overflow-checks=true → panic=abort = crash).
+        assert!(decode_embedding_blob(&[1, 2, 3, 4], i64::MAX).is_none());
+        assert!(decode_embedding_blob(&[1, 2, 3, 4], 4097).is_none());
     }
 }

@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.221] — 2026-06-22
+## [1.7.222] — 2026-06-23
+
+### Robustness — deep scan of memory.rs (Tier 1-3 pipeline): 1 latent overflow→crash
+
+The Tier 1-3 memory pipeline is well-built: `compute_decay_score` guards both
+divide-by-zero (`half_life.max(1.0)`) and clock skew (future `updated_at` →
+`.max(0)` → score 1.0); the `render_core_sync` injection gate (`DECAY_INJECT_
+THRESHOLD = 0.30`) is intentional and degrades gracefully (when every fact is
+stale it emits a "ask the user to confirm" hint instead of nothing, and always
+reports the skipped count); `memory_core_reinforce`'s whole-word matcher is
+panic-safe on byte boundaries; the cosine/jaccard math and graph caps are
+already unit-tested.
+
+**One real latent bug:** `memory_graph`'s embedding-BLOB decoder computed
+`let expected = (dims as usize) * 4` BEFORE the `dims <= 0 || dims > 4096` bounds
+check. `dims` is read straight from the `embeddings.dims` column — a corrupt or
+tampered row holding a value near `i64::MAX` would overflow `usize` on that
+multiply, and because the release profile sets `overflow-checks = true` with
+`panic = "abort"`, that's a hard app crash, not a silent wrap (same class as the
+v1.7.209 metrics TTL fix). Extracted a pure `decode_embedding_blob(blob, dims)`
+that checks the bounds FIRST (so `dims * 4` only ever runs on `dims ∈ [1, 4096]`)
+and returns `None` on any implausible/mismatched input. 4 new unit tests pin the
+valid roundtrip, length mismatch, non-positive dims, and the `i64::MAX`
+no-panic regression. 354 Rust tests (was 350).
 
 ### Fix — NexShell paint starvation: the five shell inputs no longer freeze while typing
 
