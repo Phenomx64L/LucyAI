@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.219] — 2026-06-22
+
+### Security — deep scan of mcp.rs: bounded JSON-RPC line reader (memory-DoS hardening)
+
+**Unbounded `read_line` on MCP server stdout → OOM from a hostile/buggy server.**
+All four JSON-RPC read loops (`spawn_and_initialize` handshake, `list_tools`,
+`call_tool`, and the pooled `pool_call_tool_on_session`) read responses with
+`reader.read_line(&mut buf)` wrapped in a 15s/45s timeout. But `read_line` grows
+its buffer until it sees `\n` or EOF with NO size limit — the timeout caps
+*wall-clock time*, not *bytes*. An MCP server is a third-party npm/Python package
+(`npx -y some-mcp-package`), i.e. the documented MCP supply-chain threat model: a
+compromised or buggy server could stream gigabytes on stdout with no newline and
+exhaust memory / crash Lucy *before* the timeout fired.
+
+Added `read_line_capped` (generic over `AsyncBufRead`, delegating to a
+`read_line_capped_with(cap)` inner form), a drop-in replacement that refuses to
+accumulate more than 16 MiB per line and returns an `InvalidData` error on breach
+— each caller's existing error path (evict the session, or treat as EOF and stop)
+handles it cleanly. Bytes are buffered raw and decoded once via `from_utf8_lossy`,
+so a multi-byte UTF-8 sequence split across two `fill_buf` chunks is never
+corrupted. All four sites swapped; the per-call timeouts are unchanged.
+
+5 new unit tests drive the helper against an in-memory reader (normal line, EOF,
+unterminated final line, over-cap rejection, exact-fit terminated line) — no
+subprocess needed. 345 Rust tests (was 340).
+
+**Noted, not fixed (lower severity):** the same read loops have no overall
+iteration/deadline bound, so a server that streams a flood of valid JSON frames
+with the *wrong* JSON-RPC id keeps the loop spinning (CPU only, recoverable,
+requires sustained active malice) — distinct from the OOM and deferred to keep
+this fix surgical. `parse_command` (shlex + `Command::args`, no shell),
+`filter_env` (secrets scoped to the server's declared keys), and the session
+pool were reviewed and are sound.
+
+---
+
 ## [1.7.218] — 2026-06-22
 
 ### Security — deep scan of the execution layer (local.rs + shell.rs): 2 real bugs

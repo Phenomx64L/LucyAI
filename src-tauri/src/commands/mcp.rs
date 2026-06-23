@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, ChildStderr, Command};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -159,6 +159,76 @@ mod parse_command_tests {
     }
 }
 
+/// Max bytes Lucy will buffer for a SINGLE JSON-RPC line from an MCP
+/// server. Well-behaved servers emit compact newline-delimited frames;
+/// even a large tool result fits far under 16 MiB (≈4M tokens — already
+/// beyond any LLM context). The cap matters because
+/// `AsyncBufReadExt::read_line` grows its buffer until it sees `\n` or
+/// EOF, with NO size limit — a malicious or buggy server (MCP servers are
+/// third-party npm / Python packages, i.e. the supply-chain threat model)
+/// could stream endless bytes with no newline and OOM Lucy *before* the
+/// per-read timeout fires. Bounding the line turns that into a clean
+/// per-call error instead of a process-wide crash.
+const MCP_MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Drop-in replacement for `reader.read_line(&mut buf)` that refuses to
+/// accumulate more than `MCP_MAX_LINE_BYTES`. Returns the number of bytes
+/// appended (0 on EOF, matching `read_line`). On cap breach it returns an
+/// `InvalidData` error so each caller's existing error path (evict the
+/// session, or treat as EOF and stop) kicks in — never an unbounded alloc.
+///
+/// Generic over the reader so it can be exercised against an in-memory
+/// buffer in tests; production callers pass `BufReader<ChildStdout>`.
+async fn read_line_capped<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut String,
+) -> std::io::Result<usize> {
+    read_line_capped_with(reader, buf, MCP_MAX_LINE_BYTES).await
+}
+
+/// Inner form with an explicit byte cap so tests can drive the over-limit
+/// branch without allocating 16 MiB. Bytes are accumulated raw and decoded
+/// once at the end via `from_utf8_lossy`, so a multi-byte UTF-8 sequence
+/// split across two `fill_buf` chunks is never corrupted (and a stray
+/// non-UTF-8 byte from a misbehaving server degrades gracefully instead of
+/// erroring like std `read_line` would).
+async fn read_line_capped_with<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut String,
+    max_bytes: usize,
+) -> std::io::Result<usize> {
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            break; // EOF
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                raw.extend_from_slice(&available[..=pos]); // include the '\n'
+                reader.consume(pos + 1);
+                break;
+            }
+            None => {
+                let take = available.len();
+                raw.extend_from_slice(available);
+                reader.consume(take);
+                if raw.len() > max_bytes {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "MCP response line exceeded cap",
+                    ));
+                }
+            }
+        }
+    }
+    if raw.is_empty() {
+        return Ok(0);
+    }
+    buf.push_str(&String::from_utf8_lossy(&raw));
+    Ok(raw.len())
+}
+
 /// Spawn a subprocess for an MCP server and run the JSON-RPC handshake
 /// (initialize + notifications/initialized). Returns the live process
 /// handles ready for tools/list or tools/call.
@@ -208,7 +278,7 @@ async fn spawn_and_initialize(
     let mut stderr = stderr; // moved into the loop below
     loop {
         buf.clear();
-        let read = tokio::time::timeout(Duration::from_secs(15), reader.read_line(&mut buf)).await;
+        let read = tokio::time::timeout(Duration::from_secs(15), read_line_capped(&mut reader, &mut buf)).await;
         match read {
             Ok(Ok(0)) | Err(_) => {
                 let mut err_str = String::new();
@@ -258,7 +328,7 @@ async fn list_tools(
     let mut buf = String::new();
     loop {
         buf.clear();
-        let n = tokio::time::timeout(Duration::from_secs(15), reader.read_line(&mut buf))
+        let n = tokio::time::timeout(Duration::from_secs(15), read_line_capped(reader, &mut buf))
             .await
             .unwrap_or(Ok(0))
             .unwrap_or(0);
@@ -302,7 +372,7 @@ async fn call_tool(
     let mut result_output = String::new();
     loop {
         buf.clear();
-        let n = tokio::time::timeout(Duration::from_secs(45), reader.read_line(&mut buf))
+        let n = tokio::time::timeout(Duration::from_secs(45), read_line_capped(reader, &mut buf))
             .await
             .unwrap_or(Ok(0))
             .unwrap_or(0);
@@ -534,7 +604,7 @@ async fn pool_call_tool_on_session(
     let mut result_output = String::new();
     loop {
         buf.clear();
-        let n = tokio::time::timeout(Duration::from_secs(45), session.reader.read_line(&mut buf))
+        let n = tokio::time::timeout(Duration::from_secs(45), read_line_capped(&mut session.reader, &mut buf))
             .await
             .map_err(|_| "pool: read timeout".to_string())?
             .map_err(|e| format!("pool stdout: {}", e))?;
@@ -1085,6 +1155,74 @@ mod tests {
         let (base, args) = parse_command("python -m my_server --port 9000");
         assert_eq!(base, "python");
         assert_eq!(args, vec!["-m", "my_server", "--port", "9000"]);
+    }
+
+    // ── read_line_capped: bounded JSON-RPC line reader (v1.7.219) ──
+    // Guards against a hostile/buggy MCP server streaming an endless line
+    // (no '\n') and OOM-ing Lucy. Driven against an in-memory reader so no
+    // subprocess / Python is needed.
+
+    #[tokio::test]
+    async fn capped_reads_one_line_including_newline() {
+        let data: &[u8] = b"hello\nworld\n";
+        let mut reader = BufReader::new(data);
+        let mut buf = String::new();
+        let n = read_line_capped(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 6);
+        assert_eq!(buf, "hello\n");
+        buf.clear();
+        let n2 = read_line_capped(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n2, 6);
+        assert_eq!(buf, "world\n");
+    }
+
+    #[tokio::test]
+    async fn capped_eof_returns_zero() {
+        let data: &[u8] = b"";
+        let mut reader = BufReader::new(data);
+        let mut buf = String::new();
+        let n = read_line_capped(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 0);
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn capped_unterminated_final_line_then_eof() {
+        let data: &[u8] = b"partial"; // no trailing newline
+        let mut reader = BufReader::new(data);
+        let mut buf = String::new();
+        let n = read_line_capped(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 7);
+        assert_eq!(buf, "partial");
+        buf.clear();
+        let n2 = read_line_capped(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n2, 0);
+    }
+
+    #[tokio::test]
+    async fn capped_rejects_line_over_limit() {
+        // 10 bytes, no newline, cap of 4 → must error, not buffer it all.
+        let data: &[u8] = b"abcdefghij";
+        let mut reader = BufReader::new(data);
+        let mut buf = String::new();
+        let err = read_line_capped_with(&mut reader, &mut buf, 4)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn capped_allows_exact_fit_terminated_line() {
+        // A newline-terminated line at the cap is fine — the cap only fires
+        // on the unbounded (no-newline) path, never on a complete frame.
+        let data: &[u8] = b"abc\n";
+        let mut reader = BufReader::new(data);
+        let mut buf = String::new();
+        let n = read_line_capped_with(&mut reader, &mut buf, 4)
+            .await
+            .unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(buf, "abc\n");
     }
 
     // ── Pool key tests ──
