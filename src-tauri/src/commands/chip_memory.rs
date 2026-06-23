@@ -67,10 +67,29 @@ fn cache_lookup(key: &str) -> Option<String> {
         .and_then(|g| g.as_ref().and_then(|m| m.get(key).cloned()))
 }
 
+/// Hard cap on the polarity-classification cache. The event-kind vocabulary
+/// is tiny in normal use (canonical kinds bypass this cache entirely), but
+/// `event_kind` is supplied by the frontend via `log_chip_event`, so a buggy
+/// or hostile caller could feed unbounded distinct strings and grow the map
+/// without limit. Cap it like the embeddings cache (v1.7.83). (v1.7.223)
+const POLARITY_CACHE_MAX: usize = 4096;
+
+/// Insert into a classification map with a size bound. When full, clear the
+/// map before inserting a NEW key — the values are cheap to recompute via
+/// polarity, so a coarse reset is fine and keeps memory bounded. Re-storing
+/// an EXISTING key never triggers a clear (it doesn't grow the map). Pure so
+/// the bound is unit-testable without touching the process-wide static.
+fn bounded_cache_insert(m: &mut HashMap<String, String>, key: String, val: String, cap: usize) {
+    if m.len() >= cap && !m.contains_key(&key) {
+        m.clear();
+    }
+    m.insert(key, val);
+}
+
 fn cache_store(key: String, val: String) {
     if let Ok(mut g) = EVENT_POLARITY_CACHE.write() {
         let m = g.get_or_insert_with(HashMap::new);
-        m.insert(key, val);
+        bounded_cache_insert(m, key, val, POLARITY_CACHE_MAX);
     }
 }
 
@@ -552,5 +571,32 @@ mod tests {
         // Case-folded on parse so set ops are insensitive.
         let s = parse_json_array("[\"FOO\"]");
         assert!(s.contains("foo"));
+    }
+
+    // ── bounded polarity cache (v1.7.223) ──
+
+    #[test]
+    fn polarity_cache_stays_bounded_under_flood() {
+        // 10k distinct keys (the hostile/buggy frontend case) must never grow
+        // the map past the cap — it resets coarsely instead.
+        let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for i in 0..10_000 {
+            bounded_cache_insert(&mut m, format!("kind-{i}"), "click".into(), 4096);
+        }
+        assert!(m.len() <= 4096, "cache grew past cap: {}", m.len());
+    }
+
+    #[test]
+    fn polarity_cache_clears_only_on_new_key_at_cap() {
+        let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        bounded_cache_insert(&mut m, "a".into(), "click".into(), 2);
+        bounded_cache_insert(&mut m, "b".into(), "dismiss".into(), 2); // now at cap (2)
+        bounded_cache_insert(&mut m, "c".into(), "click".into(), 2);   // new key at cap → clear+insert
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.get("c"), Some(&"click".to_string()));
+        // Re-storing an EXISTING key at cap overwrites, never clears.
+        bounded_cache_insert(&mut m, "c".into(), "dismiss".into(), 2);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.get("c"), Some(&"dismiss".to_string()));
     }
 }

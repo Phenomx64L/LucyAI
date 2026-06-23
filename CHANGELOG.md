@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.222] — 2026-06-23
+## [1.7.223] — 2026-06-23
+
+### Robustness — deep scan of chip_memory.rs + vec_index.rs: 1 unbounded cache
+
+`vec_index.rs` (the in-memory HNSW-ish ANN index) is clean: `cosine_fast`
+delegates to the length-guarded SIMD `cosine` (no panic on a mixed-dimension
+corpus — just 0.0, the documented cross-model behavior), the multi-start search
+indexes `hash % n` only after `is_valid()` guarantees `n ≥ INDEX_THRESHOLD > 0`
+(no divide-by-zero), and traversal is bounded by `EF_SEARCH`.
+`chip_memory.rs`'s `score_candidates` is also clean (clock-skew guarded via
+`.max(0)`, all divisors constant, NaN-safe sort, heavily unit-tested).
+
+**One real issue:** the `EVENT_POLARITY_CACHE` (maps a free-form event-kind
+string → "click"/"dismiss" so each unknown kind is classified via polarity only
+once) grew without bound — `cache_store` inserted with no cap. `event_kind` is
+supplied by the frontend through the `log_chip_event` command, so a buggy or
+hostile caller feeding distinct strings could grow the map indefinitely (a slow
+memory leak). Canonical kinds bypass the cache entirely, so normal use is
+unaffected, but the embeddings cache (v1.7.83) is bounded and this one wasn't.
+Added a pure `bounded_cache_insert(map, key, val, cap)` (cap 4096) that coarsely
+resets when full on a NEW key — values are cheap to recompute — and never clears
+when re-storing an existing key. 2 unit tests (10k-key flood stays ≤ cap;
+clear-only-on-new-key-at-cap). 356 Rust tests (was 354).
 
 ### Robustness — deep scan of memory.rs (Tier 1-3 pipeline): 1 latent overflow→crash
 
