@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.220] — 2026-06-22
+## [1.7.221] — 2026-06-22
+
+### Fix — NexShell paint starvation: the five shell inputs no longer freeze while typing
+
+**Reported symptom: "the text disappears while typing and only reappears when I
+stop."** The five per-shell inputs (`directIn` / `lucyIn` / `interactiveInput` /
+`rdpResultIn` / `rdpAgentTask`) lived ON the session object and bound via
+`bind:value={s.field}`. But `rshellSessions` is a `bind:` PROP that also drives a
+large `{#each}` in this component AND the 12k-line parent (`+page.svelte`) — so
+every keystroke reassigned/invalidated that whole tree (child each-body + parent
+reactive graph), starving the WebView2 paint. The same class of bug the
+v1.7.178 ChatInput `_draft` fix solved, and the architecture notes flagged these
+five as still pending.
+
+Moved the five inputs into a SEPARATE per-shell map `nsInput[shellId]` — exactly
+the pattern the Ctrl+F search bar (`nsSearch`) already used safely. Typing now
+only invalidates `nsInput` (a handful of inputs), never the session array or the
+parent. Accessor helpers `nsInputInit/Get/Set` keep the ~30 read/write sites
+uniform; `abrirRShell` seeds the entry and `cerrarShell` drops it. Also guarded
+`rsHandleDirectInput` (the direct box's `on:input`) so it only reassigns
+`rshellSessions` when it actually clears a stale AI ghost — previously it did so
+on EVERY keystroke, a second per-key invalidation independent of the binding.
+
+Mechanical, behavior-preserving: every `s.<field>` / `sx.<field>` reference
+migrated (grep-verified zero remain), all five `bind:value` now target
+`nsInput[s.id].<field>`, and the live consumers (ghost autocomplete, AI
+suggestion, send-enabled state) read through `nsInputGet`. svelte-check: 0
+errors / 0 warnings. No other component references these fields.
 
 ### Robustness — deep scan of the memory vector backend (embeddings.rs / vec_search.rs)
 

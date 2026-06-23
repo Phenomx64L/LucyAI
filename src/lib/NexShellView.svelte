@@ -137,6 +137,27 @@
     let showSkillBrowser       = false;
     let skillBrowserShellId    = null;
 
+    // ── Per-shell input drafts (v1.7.221) ───────────────────────────────────
+    // The five shell inputs (directIn / lucyIn / interactiveInput /
+    // rdpResultIn / rdpAgentTask) used to live ON the session object and bind
+    // via `bind:value={s.field}`. But `rshellSessions` is a `bind:` PROP that
+    // also drives a huge {#each} here AND the 12k-line parent — so every
+    // keystroke invalidated that whole tree → paint starvation ("the text
+    // disappears while typing"). These now live in a SEPARATE map keyed by
+    // shell id (exactly like nsSearch below), so typing only invalidates
+    // `nsInput` — a handful of inputs, not the session array.
+    let nsInput = {};   // { [shellId]: { directIn, lucyIn, interactiveInput, rdpResultIn, rdpAgentTask } }
+    function _nsInputBlank() {
+        return { directIn: '', lucyIn: '', interactiveInput: '', rdpResultIn: '', rdpAgentTask: '' };
+    }
+    function nsInputInit(id) { nsInput[id] = _nsInputBlank(); nsInput = nsInput; }
+    function nsInputGet(id, field) { return nsInput[id]?.[field] ?? ''; }
+    function nsInputSet(id, field, val) {
+        if (!nsInput[id]) nsInput[id] = _nsInputBlank();
+        nsInput[id][field] = val;
+        nsInput = nsInput;   // trigger reactivity for the template readers
+    }
+
     // ── Output search (Ctrl+F) ──────────────────────────────────────────────
     let nsSearch = {};   // { [shellId]: { query, currentIdx, open } }
 
@@ -466,8 +487,7 @@
     function nsApplyFix(shellId, cmd) {
         const s = getShell(shellId);
         if (!s) return;
-        s.directIn = cmd;
-        rshellSessions = [...rshellSessions];
+        nsInputSet(shellId, 'directIn', cmd);
         setTimeout(() => {
             const el = document.getElementById(`ns-direct-${shellId}`);
             if (el instanceof HTMLElement) { el.focus(); }
@@ -487,10 +507,9 @@
     function nsCmdExplain(shellId, cmd) {
         const s = getShell(shellId);
         if (!s) return;
-        s.lucyIn = (isEN
+        nsInputSet(shellId, 'lucyIn', (isEN
             ? 'Explain what this command did and whether it errored (check its output above): '
-            : 'Explícame qué hizo este comando y si tuvo algún error (revisa su salida arriba): ') + '`' + cmd + '`';
-        rshellSessions = [...rshellSessions];
+            : 'Explícame qué hizo este comando y si tuvo algún error (revisa su salida arriba): ') + '`' + cmd + '`');
         setTimeout(() => {
             const el = document.getElementById(`ns-lucy-${shellId}`);
             if (el instanceof HTMLElement) el.focus();
@@ -555,7 +574,7 @@
         s.isStreaming = false;
         s.running = false;
         s.waitingForInput = false;
-        s.interactiveInput = '';
+        nsInputSet(id, 'interactiveInput', '');
         s._streamResolve = null;
         rshellSessions = [...rshellSessions];
         if (partial) rsLogTo(id, 'out', partial);
@@ -633,7 +652,7 @@
         s.running = false;
         s.waitingForInput = false;
         s.promptHint = '';
-        s.interactiveInput = '';
+        nsInputSet(id, 'interactiveInput', '');
         rshellSessions = [...rshellSessions];
         if (s._streamResolve) {
             const resolve = s._streamResolve;
@@ -647,9 +666,9 @@
     async function rsEnviarInput(id) {
         const s = getShell(id);
         if (!s || !s.waitingForInput) return;
-        const input = s.interactiveInput;
+        const input = nsInputGet(id, 'interactiveInput');
         s.waitingForInput = false;
-        s.interactiveInput = '';
+        nsInputSet(id, 'interactiveInput', '');
         const display = s.promptIsPassword ? '••••••\n' : input + '\n';
         s.streamOut = (s.streamOut || '') + display;
         rshellSessions = [...rshellSessions];
@@ -1118,7 +1137,7 @@
         s.streamOut = '';
         s.waitingForInput = false;
         s.promptHint = '';
-        s.interactiveInput = '';
+        nsInputSet(s.id, 'interactiveInput', '');
         rshellSessions = [...rshellSessions];
         return new Promise((resolve) => {
             s._streamResolve = resolve;
@@ -1194,19 +1213,16 @@
             connected: isRdp, // RDP sessions are always "connected" in clipboard mode
             rdpMode: isRdp,
             rdpClipboardCmd: null,   // last <EXECUTE> extracted for clipboard
-            rdpResultIn: '',         // textarea for pasting RDP output
             // ── RDP Computer-Use agent ──────────────────────────────────────
             rdpAgentRunning: false,
             rdpAgentLog: [],         // [{kind, data, detail, ts}]
             rdpAgentScreenshot: null,// base64 PNG of latest frame
-            rdpAgentTask: '',
             rdpAgentPanel: false,
             rdpAgentHwnd: null,
             rdpAgentProvider: 'anthropic',    // fixed: Claude only for RDP Computer Use
             rdpAgentModel: 'claude-sonnet-4-5', // fixed: best for Computer Use (OSWorld-optimized)
             rdpAgentProviderStatus: null,     // 'ok' | 'error' | null
             history: _restoredConv,
-            directIn: '', lucyIn: '',
             running: false, lucyRunning: false, minimized: false,
             bootstrap: null,
             streamOut: '',
@@ -1214,7 +1230,6 @@
             waitingForInput: false,
             promptIsPassword: false,
             promptHint: '',
-            interactiveInput: '',
             _streamResolve: null,
             _unlisten: null,
             _aiSugg: '',
@@ -1228,6 +1243,7 @@
             incidentPhase: null,       // cached phase for quick prompt lookup
             incidentPanelOpen: false,  // UI visibility toggle
         }];
+        nsInputInit(id);
         activeShellId = id;
 
         // ── RDP mode: launch mstsc.exe and skip WinRM connection ──────────────
@@ -1392,6 +1408,8 @@
             try { clearTimeout(dying._aiSuggTimer); } catch {}
             dying._aiSuggTimer = null;
         }
+        // v1.7.221 — drop the per-shell input drafts (see nsInput above).
+        if (nsInput[id]) { delete nsInput[id]; nsInput = nsInput; }
         rshellSessions = rshellSessions.filter(s => s.id !== id);
         if (activeShellId === id) {
             const otra = rshellSessions.find(s => !s.minimized) || rshellSessions[rshellSessions.length-1];
@@ -1414,9 +1432,9 @@
     async function rsEnviarDirecto(id) {
         const s = getShell(id);
         if (!s) return;
-        const cmd = s.directIn.trim();
+        const cmd = nsInputGet(id, 'directIn').trim();
         if (!cmd || s.running || s.isStreaming) return;
-        s.directIn = ''; s._histIdx = undefined;
+        nsInputSet(id, 'directIn', ''); s._histIdx = undefined;
         s.running = true;                          // activa spinner "Verificando…" inmediatamente
         rshellSessions = [...rshellSessions];
         rsSaveHistory(s.host.id, cmd);
@@ -1513,13 +1531,13 @@
     async function rsEnviarLucy(id) {
         const s = getShell(id);
         if (!s) return;
-        const raw = s.lucyIn.trim();
+        const raw = nsInputGet(id, 'lucyIn').trim();
         if (!raw || s.lucyRunning) {
             addDebugLog('LUCY_STATE', `Skipping - raw empty or already running`, { raw: !!raw, running: s.lucyRunning });
             return;
         }
         addDebugLog('LUCY_STATE', 'Starting Lucy request', { shellId: id, input: raw.substring(0, 50), model: selectedModel });
-        s.lucyIn = ''; s.lucyRunning = true;
+        nsInputSet(id, 'lucyIn', ''); s.lucyRunning = true;
         rshellSessions = [...rshellSessions];
         rsLogTo(id, 'lucy-in', raw);
 
@@ -1684,8 +1702,9 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     function rsSuggestion(id) {
         const s = getShell(id);
-        if (!s || !s.directIn) return '';
-        const input = s.directIn.toLowerCase();
+        const di = nsInputGet(id, 'directIn');
+        if (!s || !di) return '';
+        const input = di.toLowerCase();
         const bootTools = s.bootstrap?.tools
             ? s.bootstrap.tools.split(',').filter(Boolean).map(t => t.trim() + ' ')
             : [];
@@ -1701,7 +1720,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         const sugg = rsSuggestion(id) || s._aiSugg;
         if (!sugg) return;
         e.preventDefault();
-        s.directIn = sugg;
+        nsInputSet(id, 'directIn', sugg);
         s._aiSugg = ''; s._aiSuggLoading = false;
         if (s._aiSuggTimer) { clearTimeout(s._aiSuggTimer); s._aiSuggTimer = null; }
         rshellSessions = [...rshellSessions];
@@ -1749,7 +1768,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         if (e.key === 'Tab') { rsAcceptSuggestion(e, id); return; }
         if (e.key === 'Enter' && e.ctrlKey) {
             e.preventDefault();
-            const cmd = s.directIn.trim();
+            const cmd = nsInputGet(id, 'directIn').trim();
             if (cmd && !s.isStreaming) { rsSaveHistory(s.host.id, cmd); rsRunBackground(id, cmd); }
             return;
         }
@@ -1762,7 +1781,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             s._histIdx = e.key === 'ArrowUp'
                 ? Math.max(0, s._histIdx - 1)
                 : Math.min(hist.length, s._histIdx + 1);
-            s.directIn = s._histIdx === hist.length ? '' : hist[s._histIdx];
+            nsInputSet(id, 'directIn', s._histIdx === hist.length ? '' : hist[s._histIdx]);
             rshellSessions = [...rshellSessions];
         } else {
             s._histIdx = undefined;
@@ -1781,19 +1800,25 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
     function rsHandleDirectInput(id) {
         const s = getShell(id);
         if (!s) return;
-        if (s._aiSugg) { s._aiSugg = ''; }
+        // v1.7.221 — the live input value now lives in nsInput (see top), so
+        // typing no longer touches rshellSessions. Only reassign the array
+        // when we actually cleared a stale AI ghost — otherwise every
+        // keystroke would re-invalidate the session array (the paint
+        // starvation we're removing).
+        let changed = false;
+        if (s._aiSugg) { s._aiSugg = ''; changed = true; }
         if (s._aiSuggTimer) { clearTimeout(s._aiSuggTimer); s._aiSuggTimer = null; }
-        const input = s.directIn.trim();
+        const input = nsInputGet(id, 'directIn').trim();
         if (input.length >= 3 && !rsSuggestion(id)) {
             s._aiSuggTimer = setTimeout(() => rsAISuggest(id), 250); // ROI inmenso: Timeout reducido de 520 a 250ms para UX fluida Warp-style
         }
-        rshellSessions = [...rshellSessions];
+        if (changed) rshellSessions = [...rshellSessions];
     }
 
     async function rsAISuggest(id) {
         const s = getShell(id);
-        if (!s || s.isStreaming || s.running || !s.directIn.trim()) return;
-        const partial = s.directIn.trim();
+        if (!s || s.isStreaming || s.running || !nsInputGet(id, 'directIn').trim()) return;
+        const partial = nsInputGet(id, 'directIn').trim();
         if (partial.length < 3) return;
         s._aiSuggLoading = true;
         rshellSessions = [...rshellSessions];
@@ -1813,7 +1838,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
             const completion = resp.trim().replace(/^`+|`+$/g, '').split('\n')[0].trim();
             if (completion && completion.toLowerCase().startsWith(partial.toLowerCase())) {
                 const sx = getShell(id);
-                if (sx && sx.directIn.trim() === partial) {
+                if (sx && nsInputGet(id, 'directIn').trim() === partial) {
                     sx._aiSugg = completion;
                     rshellSessions = [...rshellSessions];
                 }
@@ -1830,7 +1855,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         const bgId = `bg_${shellId}_${Date.now()}`;
         const task = { id: bgId, cmd, startTime: Date.now(), streamOut: '', done: false, exitCode: null, durationMs: null };
         s.bgTasks = [...s.bgTasks, task];
-        s.directIn = '';
+        nsInputSet(shellId, 'directIn', '');
         rshellSessions = [...rshellSessions];
         rsLogTo(shellId, 'info', `⏳ Background iniciado: ${cmd}`);
 
@@ -2273,7 +2298,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
 
     async function startRdpAgent(shellId) {
         const s = getShell(shellId);
-        if (!s || !s.rdpAgentTask?.trim() || s.rdpAgentRunning) return;
+        if (!s || !nsInputGet(shellId, 'rdpAgentTask').trim() || s.rdpAgentRunning) return;
 
         // Find the mstsc window matching this host
         let windows = [];
@@ -2294,11 +2319,11 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         s.rdpAgentLog      = [];
         s.rdpAgentScreenshot = null;
         rshellSessions = [...rshellSessions];
-        rsLogTo(shellId, 'info', `[Agent] Agente GUI iniciado — proveedor: ${s.rdpAgentProvider} / modelo: ${s.rdpAgentModel} — tarea: "${s.rdpAgentTask}"`);
+        rsLogTo(shellId, 'info', `[Agent] Agente GUI iniciado — proveedor: ${s.rdpAgentProvider} / modelo: ${s.rdpAgentModel} — tarea: "${nsInputGet(shellId, 'rdpAgentTask')}"`);
 
         invoke('run_rdp_agent', {
             hwnd:     win.hwnd,
-            task:     s.rdpAgentTask,
+            task:     nsInputGet(shellId, 'rdpAgentTask'),
             model:    s.rdpAgentModel,
             maxSteps: 20,
         }).catch(e => {
@@ -2674,13 +2699,13 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <input
                 class="rdp-agent-task-input"
                 placeholder={isEN ? 'Describe the task… (e.g. "Open regedit and navigate to HKLM\\Software")' : 'Describe la tarea… (ej: "Abre regedit y navega a HKLM\\Software")'}
-                bind:value={s.rdpAgentTask}
+                bind:value={nsInput[s.id].rdpAgentTask}
                 disabled={s.rdpAgentRunning}
                 on:keydown={(e) => { if (e.key === 'Enter' && !s.rdpAgentRunning) startRdpAgent(s.id); }}
               />
               {#if !s.rdpAgentRunning}
               <button class="rdp-agent-run-btn"
-                disabled={!s.rdpAgentTask?.trim()}
+                disabled={!nsInputGet(s.id, 'rdpAgentTask').trim()}
                 on:click={() => startRdpAgent(s.id)}>
                 <Play size={13} style="display:inline;margin-right:4px;" /> {isEN ? 'Run' : 'Ejecutar'}
               </button>
@@ -2859,7 +2884,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                   <div class="rsl-iprompt-row">
                     <span class="rsl-iprompt-hint">{s.promptHint || 'Input'}:</span>
                     <input class="rsl-iprompt-input" type={s.promptIsPassword ? 'password' : 'text'}
-                      bind:value={s.interactiveInput}
+                      bind:value={nsInput[s.id].interactiveInput}
                       on:keydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); rsEnviarInput(s.id); } else if (e.key === 'Escape') { const sx=getShell(s.id); if(sx){sx.waitingForInput=false;rshellSessions=[...rshellSessions];} } }}
                       placeholder={s.promptHint || (isEN ? 'Type and press Enter…' : 'Escribe y presiona Enter…')}>
                     <button class="rsl-iprompt-send" on:click={() => rsEnviarInput(s.id)}>↵</button>
@@ -2916,33 +2941,31 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <div class="rshell-input-row" style="align-items:flex-end;">
                 <textarea class="rsi-box rdp-result-box" rows="3"
                   placeholder={isEN ? 'Paste output here and press Enter…' : 'Pega la salida aquí y presiona Enter…'}
-                  bind:value={s.rdpResultIn}
+                  bind:value={nsInput[s.id].rdpResultIn}
                   on:keydown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
-                      if (s.rdpResultIn.trim()) {
-                        const result = s.rdpResultIn.trim();
+                      if (nsInputGet(s.id, 'rdpResultIn').trim()) {
+                        const result = nsInputGet(s.id, 'rdpResultIn').trim();
                         const sx = getShell(s.id);
-                        if (sx) { sx.rdpResultIn = ''; sx.rdpClipboardCmd = null; rshellSessions=[...rshellSessions]; }
+                        if (sx) { nsInputSet(sx.id, 'rdpResultIn', ''); sx.rdpClipboardCmd = null; rshellSessions=[...rshellSessions]; }
                         rsLogTo(s.id, 'out', result);
                         // Feed result back to Lucy
-                        const sx2 = getShell(s.id);
-                        if (sx2) { sx2.lucyIn = `[RESULTADO DEL COMANDO EN RDP]\n${result}`; rshellSessions=[...rshellSessions]; }
+                        nsInputSet(s.id, 'lucyIn', `[RESULTADO DEL COMANDO EN RDP]\n${result}`);
                         rsEnviarLucy(s.id);
                       }
                     }
                   }}>
                 </textarea>
                 <button class="rsi-send" style="align-self:flex-end;margin-bottom:2px;"
-                  disabled={s.lucyRunning || !s.rdpResultIn?.trim()}
+                  disabled={s.lucyRunning || !nsInputGet(s.id, 'rdpResultIn').trim()}
                   on:click={() => {
                     const sx = getShell(s.id);
-                    if (!sx?.rdpResultIn?.trim()) return;
-                    const result = sx.rdpResultIn.trim();
-                    sx.rdpResultIn = ''; sx.rdpClipboardCmd = null; rshellSessions=[...rshellSessions];
+                    if (!sx || !nsInputGet(sx.id, 'rdpResultIn').trim()) return;
+                    const result = nsInputGet(sx.id, 'rdpResultIn').trim();
+                    nsInputSet(sx.id, 'rdpResultIn', ''); sx.rdpClipboardCmd = null; rshellSessions=[...rshellSessions];
                     rsLogTo(s.id, 'out', result);
-                    const sx2 = getShell(s.id);
-                    if (sx2) { sx2.lucyIn = `[RESULTADO DEL COMANDO EN RDP]\n${result}`; rshellSessions=[...rshellSessions]; }
+                    nsInputSet(s.id, 'lucyIn', `[RESULTADO DEL COMANDO EN RDP]\n${result}`);
                     rsEnviarLucy(s.id);
                   }}><Play size={12}/></button>
               </div>
@@ -2961,23 +2984,23 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                 <div style="flex:1;position:relative;">
                   {#if rsSuggestion(s.id)}
                     <div class="rs-suggestion" aria-hidden="true">
-                      <span style="opacity:0">{s.directIn}</span><span>{rsSuggestion(s.id).slice(s.directIn.length)}</span>
+                      <span style="opacity:0">{nsInputGet(s.id, 'directIn')}</span><span>{rsSuggestion(s.id).slice(nsInputGet(s.id, 'directIn').length)}</span>
                     </div>
                   {:else if s._aiSugg}
                     <div class="rs-suggestion rs-sugg-ai" aria-hidden="true">
-                      <span style="opacity:0">{s.directIn}</span><span>→ {s._aiSugg.slice(s.directIn.length)}</span>
+                      <span style="opacity:0">{nsInputGet(s.id, 'directIn')}</span><span>→ {s._aiSugg.slice(nsInputGet(s.id, 'directIn').length)}</span>
                     </div>
                   {/if}
                   <input class="rsi-box rs-direct-box"
                     id={`ns-direct-${s.id}`}
                     placeholder="systemctl restart sshd · whoami · ls -la ..."
-                    bind:value={s.directIn}
+                    bind:value={nsInput[s.id].directIn}
                     on:keydown={(e) => rsKeyDirect(e, s.id)}
                     on:input={() => rsHandleDirectInput(s.id)}
                     disabled={s.running || s.isStreaming || !s.connected}>
                 </div>
                 <button class="rsi-send" on:click={() => rsEnviarDirecto(s.id)}
-                  disabled={s.running || s.isStreaming || !s.connected || !s.directIn.trim()}><Play size={12}/></button>
+                  disabled={s.running || s.isStreaming || !s.connected || !nsInputGet(s.id, 'directIn').trim()}><Play size={12}/></button>
               </div>
               {#if s._aiSuggLoading}
                 <div class="rs-ai-spinner">↻ <span class="rs-ai-spin-dot">Lucy pensando…</span></div>
@@ -3007,12 +3030,12 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                   placeholder={s.rdpMode
                     ? (isEN ? 'Ask Lucy, describe what you see, or paste a screenshot…' : 'Pregunta a Lucy, describe lo que ves, o pega una captura…')
                     : (isEN ? '/fix [problem] for auto-troubleshoot · or ask Lucy anything...' : '/fix [problema] para auto-diagnostico · o pregunta lo que sea a Lucy...')}
-                  bind:value={s.lucyIn}
+                  bind:value={nsInput[s.id].lucyIn}
                   on:keydown={(e) => rsKeyLucy(e, s.id)}
                   on:input={(e) => { e.target.style.height='auto'; e.target.style.height=Math.min(e.target.scrollHeight,140)+'px'; }}
                   disabled={s.lucyRunning || (!s.connected && !s.rdpMode)}></textarea>
                 <button class="rsi-send rs-lucy-send" style="align-self:flex-end;margin-bottom:2px;" on:click={() => rsEnviarLucy(s.id)}
-                  disabled={s.lucyRunning || (!s.connected && !s.rdpMode) || !s.lucyIn.trim()}><Play size={12}/></button>
+                  disabled={s.lucyRunning || (!s.connected && !s.rdpMode) || !nsInputGet(s.id, 'lucyIn').trim()}><Play size={12}/></button>
               </div>
             </div>
           </div><!-- /rshell-inputs -->
