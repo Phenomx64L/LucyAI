@@ -7845,9 +7845,38 @@ times the SAME way, switch tool kind entirely.
                                     ? `I got stuck repeating the same step without new information, so I stopped instead of looping.${_loopedCmd ? `\n\nIt looks like I wanted to run this but it never executed:\n\n\`\`\`powershell\n${_loopedCmd.trim().slice(0, 400)}\n\`\`\`\n\nYou can run it directly, or rephrase your request.` : ' Try rephrasing your request.'}`
                                     : `Me quedé repitiendo el mismo paso sin información nueva, así que me detuve en lugar de seguir en bucle.${_loopedCmd ? `\n\nParece que quería ejecutar esto pero nunca corrió:\n\n\`\`\`powershell\n${_loopedCmd.trim().slice(0, 400)}\n\`\`\`\n\nPuedes ejecutarlo directamente, o reformular tu pregunta.` : ' Intenta reformular tu pregunta.'}`;
                             } else {
-                                _finalStuck = isEN
+                                // v1.7.228 — the model gathered tool results but kept
+                                // re-emitting the SAME tool instead of synthesizing.
+                                // This is the dominant failure mode for small LOCAL
+                                // code models: they don't naturally "answer from
+                                // results", so skip-stuck fires before they converge
+                                // (a tool→reason→answer task dies at step 2). Rather
+                                // than punt with "scroll up", do ONE forced-synthesis
+                                // turn — hand the model its OWN results and demand a
+                                // final prose answer with NO tools. Live-validated:
+                                // qwen2.5-coder:7b answers correctly here instead of
+                                // looping. Falls back to the old message on failure.
+                                let _synth = '';
+                                try {
+                                    const _rawSynth = await askLucyStream({
+                                        prompt: `[FINAL ANSWER REQUIRED — no more tools]\n\n=== ORIGINAL GOAL ===\n"${originalUserGoal}"\n=== END GOAL ===\n\nResults you already gathered:\n${(Array.isArray(toolResults) ? toolResults.join('\n\n') : '').slice(0, 12000)}\n\nThe loop is over. Using ONLY the results above, write the FINAL answer to the goal in the user's language, as Markdown. Do NOT call any tool. Do NOT output <TOOL> or <EXECUTE>. If the results don't contain the answer, say so plainly.`,
+                                        context: '',
+                                        userName: lucyConfig.name,
+                                        runbooksDir: null,
+                                        model: (_routedLoopModel || getEffectiveModel(t)),
+                                        images: null,
+                                        lang: userLang,
+                                        hostsJson: null,
+                                    }, () => {}, tabId);
+                                    _synth = String(_rawSynth || '')
+                                        .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                                        .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                                        .replace(/<EXECUTE[^>]*>[\s\S]*?(?:<\/EXECUTE[^>]*>|$)/gi, '')
+                                        .trim();
+                                } catch { /* forced synthesis is best-effort */ }
+                                _finalStuck = _synth.length >= 8 ? _synth : (isEN
                                     ? `I completed the work above but stopped before adding a summary (I was repeating myself). Scroll up for the results.`
-                                    : `Completé el trabajo de arriba pero me detuve antes de resumir (me estaba repitiendo). Revisa los resultados arriba.`;
+                                    : `Completé el trabajo de arriba pero me detuve antes de resumir (me estaba repitiendo). Revisa los resultados arriba.`);
                             }
                             renderAgentTask(_finalStuck);
                             clearAgentCheckpoint(tabId);

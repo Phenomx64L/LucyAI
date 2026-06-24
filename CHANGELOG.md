@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.227] — 2026-06-23
+## [1.7.228] — 2026-06-23
+
+### Fix — agent loop: forced-synthesis on skip-stuck so local models land their answer
+
+Validating the multi-step agent loop with a local code model (`qwen2.5-coder:7b`)
+surfaced a real gap. Small local models don't naturally "answer from results" —
+on a `tool → reason → answer` task they re-emit the SAME tool a couple times
+before synthesizing. But the skip-stuck guard (v1.7.107) fires on the **2nd
+byte-identical response**, so it killed the loop *before* the model converged.
+When that happened with tool results already gathered (the `_didAnyWork` path),
+the user got a useless `"…stopped before summarizing. Scroll up for the results."`
+placeholder instead of the actual answer (e.g. "the package version is 1.7.227").
+
+Now, in exactly that branch (skip-stuck fired, work was done, but the stuck
+response had no prose), Lucy makes ONE **forced-synthesis turn**: it hands the
+model its own accumulated tool results and a `[FINAL ANSWER REQUIRED — no more
+tools]` prompt demanding a final prose answer with no `<TOOL>`/`<EXECUTE>` tags,
+then surfaces that as the answer (falling back to the old placeholder only if the
+call fails or returns nothing). Live-validated: where qwen2.5-coder:7b previously
+dead-ended on a single-tool task, it now delivers the correct answer. General
+(helps any model that gets stuck), best-effort (try/catch), and gated to the
+"work-done-but-no-summary" case so it never fires on normal completions.
+
+**Loop verdict (for the record):** with this, local code models handle
+`tool → reason → answer` (single-step) tasks. Multi-tool CHAINS (tool A → feed
+result into tool B → compute) remain unreliable on 7B local models — they don't
+chain — so genuinely multi-step agentic work still needs a cloud model.
+svelte-check 0/0.
 
 ### Feature — local LLM tool parity for code-tuned models (closer to the cloud interaction)
 
