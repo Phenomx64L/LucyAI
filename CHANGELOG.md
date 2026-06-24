@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.223] — 2026-06-23
+## [1.7.224] — 2026-06-23
+
+### Fix — file indexer: prune system/build/dependency trees (lucy.db was 80% noise)
+
+A `lucy.db` audit found the file lives at 448 MB — and **80% of it (361 MB) was
+the `file_index` FTS5 table**, which had hit its 500,000-document cap with mostly
+junk: 312k `C:\Program Files` binaries (62% of the cap), 40k `node_modules`, 40k
+`AppData` cache entries, plus `$Recycle.Bin` / `pagefile.sys` / `hiberfil.sys` /
+`OneDriveTemp`. Only ~85k of the 500k were under `C:\Users`. Root cause:
+`indexer.rs` walked `WalkDir::new(root)` with **no `filter_entry`**, so a
+`start_indexer` on `C:\` crawled the entire drive indiscriminately — bloating the
+DB, slowing every `locate_file` query, and crowding the user's real files out of
+the capped index.
+
+Added a `filter_entry` predicate that prunes excluded directory subtrees by exact
+(case-insensitive) component name: Windows system/recovery dirs (`Windows`,
+`Program Files`, `Program Files (x86)`, `ProgramData`, `$Recycle.Bin`, `System
+Volume Information`, …), per-user caches / toolchains (`AppData`, `.cache`,
+`.cargo`, `.rustup`, `.dotnet`, `.m2`, `.vscode`, …), and VCS/build/dependency
+output (`node_modules`, `.git`, `target`, `__pycache__`, `dist`, `.next`, …).
+(`.rustup` alone held 52k generated Rust-std HTML doc files in the audited DB —
+99% of what survived the first cleanup pass.) Exact-match (not substring) so look-alikes like
+`windows-tools` or `my-target-app` are kept, and the explicitly chosen root is
+never pruned (depth 0) so indexing a build dir on purpose still works. The
+extension filter was deliberately NOT added — `locate_file` is a name search and
+users do legitimately look up `.exe`/`.dll` paths.
+
+Pure `is_excluded_index_dir()` with 3 unit tests (excludes the real noise trees,
+case-insensitive, keeps real user dirs). 359 Rust tests (was 356). A one-time
+re-index (or the bundled DB cleanup) reclaims the ~360 MB.
 
 ### Robustness — deep scan of chip_memory.rs + vec_index.rs: 1 unbounded cache
 
