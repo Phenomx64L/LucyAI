@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.226] — 2026-06-23
+## [1.7.227] — 2026-06-23
+
+### Feature — local LLM tool parity for code-tuned models (closer to the cloud interaction)
+
+Follow-up to the v1.7.226 local-LLM verification. The local system prompt
+deliberately told the model "you don't have tools here" — so local Lucy could
+chat + run `<EXECUTE>` shell commands + generate code, but not use the `<TOOL>`
+catalog (read/write/list/locate/search files, sysinfo) like the cloud path. Since
+the frontend dispatches the SAME `<TOOL>`/`<EXECUTE>` tags for local and cloud
+(one `FILE_TOOL_RE`/`NATIVE_TOOL_RE` + the same HITL/deny-list), the only thing
+blocking local tool use was the prompt.
+
+Empirically validated against the user's Ollama models: a curated 6-tool prompt
+with **one few-shot example per tool** makes `qwen2.5-coder:7b` emit the correct
+tags reliably (**7/8** live; readfile/writefile/listdir/locate_file/sysinfo all
+perfect, no over-triggering on plain questions). But the same prompt makes a
+general small model (`llama3.2`) **hallucinate** — inventing directory listings
+and fake hardware specs instead of calling the tool (3/8). Two findings drove the
+final shape: (1) small models garble tools that are *listed but not exemplified*
+(they emit `<LISTDIR:..>` or wrap a tool in `<EXECUTE>`), so every tool now has an
+example; (2) tools are unsafe for general models, so they're **gated**.
+
+`build_local_system_prompt` now takes the model and branches on
+`local_model_supports_tools(model)` (code-tuned marker — `qwen2.5-coder`,
+`codellama`, `codestral`, `starcoder`, `deepseek-coder`, …): code models get the
+curated tool set; everything else keeps the safe slim, tool-free prompt. Both
+`ask_lucy` and `ask_lucy_stream` pass the model through. Unit-tested (gate +
+both branches); the tool emission itself was validated live. Conservative gate —
+broaden the marker as other local models are validated.
 
 ### Fix — local LLM sampling params were silently dropped (verification of local↔Lucy)
 

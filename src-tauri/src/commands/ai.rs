@@ -1033,6 +1033,7 @@ pub async fn ask_lucy(
     // because small 7-14B models hallucinate when overwhelmed with rules.
     let final_prompt = if provider == "local" {
         crate::commands::prompt_sections::build_local_system_prompt(
+            &model,
             lang_instruction(user_lang),
             context.as_deref().unwrap_or_default(),
             &hosts_context,
@@ -1228,6 +1229,7 @@ pub async fn ask_lucy_stream(
     // Same provider-aware prompt selection as ask_lucy — see comment there.
     let final_prompt = if provider == "local" {
         crate::commands::prompt_sections::build_local_system_prompt(
+            &model,
             lang_instruction(user_lang),
             context.as_deref().unwrap_or_default(),
             &hosts_context,

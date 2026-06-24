@@ -1225,7 +1225,20 @@ pub fn build_system_prompt_v2_with_options(
 ///
 /// Total target: ≤ 800 tokens. Stays well within any quantized model's
 /// attention budget and leaves room for actual conversation context.
+/// Whether a LOCAL model is trustworthy enough to be handed the curated <TOOL>
+/// set (v1.7.227). Gated to code-tuned models: they're RL-trained for exact
+/// structured output and emit the tags reliably (qwen2.5-coder:7b scored 7/8 in
+/// live testing). General small models (e.g. llama3.2) instead HALLUCINATE —
+/// inventing directory listings and fake hardware specs rather than calling the
+/// tool — so they stay on the slim, tool-free prompt. `model` may still carry
+/// the "local-" prefix; the "code" substring check is unaffected. Conservative
+/// on purpose — broaden the marker as other local models get validated.
+pub fn local_model_supports_tools(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("code") // coder/codellama/codestral/codegemma/starcoder/deepseek-coder…
+}
+
 pub fn build_local_system_prompt(
+    model: &str,
     lang: &str,
     context: &str,
     hosts_context: &str,
@@ -1241,15 +1254,50 @@ pub fn build_local_system_prompt(
     out.push('\n');
     out.push_str(&format!("User: {}\nWorking dir: {}\n", user_name, working_dir));
 
-    // Output rules — minimal, intent-aware (the frontend chooses model based
-    // on intent; the prompt just reinforces the expected output shape).
-    out.push_str("\nOutput rules:\n");
-    out.push_str("- For code (Python, JS, PowerShell, etc.): respond with a SINGLE fenced code block ```lang\\n...\\n``` and a brief 1-line description before it. No invented commands. No tool tags.\n");
-    out.push_str("- For shell commands that should run NOW: wrap them in <EXECUTE>...</EXECUTE>. One command per tag. No explanation needed beyond the tag.\n");
-    out.push_str("- For file creation requests (e.g. \"genera un fichero hola.txt en X:\\\"): respond with a PowerShell <EXECUTE> using `New-Item` or `Set-Content`. Use the exact path the user gave.\n");
-    out.push_str("- For questions: respond plainly in the user's language. Do NOT prepend commands the user didn't ask for.\n");
-    out.push_str("- Never invent tool tags like <TOOL>... — you don't have tools here.\n");
-    out.push_str("- Never repeat the user's prompt back at them.\n");
+    if local_model_supports_tools(model) {
+        // Tools — a CURATED high-value subset (v1.7.227), gated to code-tuned
+        // local models. Validated live: qwen2.5-coder:7b emits these reliably
+        // (7/8) and doesn't over-trigger on plain questions. The frontend
+        // dispatches the SAME <TOOL>/<EXECUTE> tags for local and cloud (one
+        // FILE_TOOL_RE / NATIVE_TOOL_RE + the same HITL/deny-list), so handing a
+        // capable local model these tags brings it close to cloud parity for
+        // read / inspect / create actions.
+        out.push_str("\nYou have these tools. To use one, output ONLY the tag — no other text:\n");
+        out.push_str("- Read a file:           <TOOL>readfile:FULL\\PATH</TOOL>\n");
+        out.push_str("- Create/overwrite file: <TOOL>writefile:FULL\\PATH|CONTENT</TOOL>\n");
+        out.push_str("- List a directory:      <TOOL>listdir:FULL\\PATH</TOOL>\n");
+        out.push_str("- Find a file by name:   <TOOL>locate_file:NAME</TOOL>\n");
+        out.push_str("- Search file contents:  <TOOL>searchfiles:TERM</TOOL>\n");
+        out.push_str("- This PC's hardware:    <TOOL>sysinfo</TOOL>\n");
+        out.push_str("- Run a shell command:   <EXECUTE>command</EXECUTE>\n");
+        out.push_str("\nRules:\n");
+        out.push_str("- Use a tool ONLY when the user asks for that action. Emit ONE tag, no other text.\n");
+        out.push_str("- For general questions (definitions, how-to, opinions): just answer in prose. NO tool.\n");
+        out.push_str("- For code: respond with a SINGLE fenced ```lang block and a 1-line description. No tool tag.\n");
+        out.push_str("- Use the EXACT path the user gives. Never repeat the user's prompt back at them.\n");
+        // One example PER tool — small models reliably copy the exact tag syntax
+        // of tools they SEE exemplified, but garble ones only listed (they emit
+        // <LISTDIR:..> or wrap a tool inside <EXECUTE>). Validated live.
+        out.push_str("\nExamples:\n");
+        out.push_str("User: lee el archivo C:\\logs\\app.log\n<TOOL>readfile:C:\\logs\\app.log</TOOL>\n");
+        out.push_str("User: crea C:\\notas\\hola.txt con el texto Hola Mundo\n<TOOL>writefile:C:\\notas\\hola.txt|Hola Mundo</TOOL>\n");
+        out.push_str("User: lista la carpeta C:\\Windows\\Temp\n<TOOL>listdir:C:\\Windows\\Temp</TOOL>\n");
+        out.push_str("User: busca el archivo config.yaml\n<TOOL>locate_file:config.yaml</TOOL>\n");
+        out.push_str("User: en que archivos aparece la palabra TODO\n<TOOL>searchfiles:TODO</TOOL>\n");
+        out.push_str("User: cuanta RAM y CPU tiene esta maquina\n<TOOL>sysinfo</TOOL>\n");
+        out.push_str("User: muestra los 5 procesos que mas CPU usan\n<EXECUTE>Get-Process | Sort-Object CPU -Descending | Select-Object -First 5 Name,CPU</EXECUTE>\n");
+        out.push_str("User: que es DNS\nDNS es el sistema que traduce nombres de dominio a direcciones IP. (prosa, sin tool)\n");
+    } else {
+        // Slim prompt for general / small models — NO <TOOL> tags (they
+        // hallucinate data when handed them). Chat + <EXECUTE> shell + code only.
+        out.push_str("\nOutput rules:\n");
+        out.push_str("- For code (Python, JS, PowerShell, etc.): respond with a SINGLE fenced code block ```lang\\n...\\n``` and a brief 1-line description before it. No invented commands. No tool tags.\n");
+        out.push_str("- For shell commands that should run NOW: wrap them in <EXECUTE>...</EXECUTE>. One command per tag. No explanation needed beyond the tag.\n");
+        out.push_str("- For file creation requests (e.g. \"genera un fichero hola.txt en X:\\\"): respond with a PowerShell <EXECUTE> using `New-Item` or `Set-Content`. Use the exact path the user gave.\n");
+        out.push_str("- For questions: respond plainly in the user's language. Do NOT prepend commands the user didn't ask for.\n");
+        out.push_str("- Never invent tool tags like <TOOL>... — you don't have tools here.\n");
+        out.push_str("- Never repeat the user's prompt back at them.\n");
+    }
 
     // Hosts block (only when remote hosts are configured)
     if !hosts_context.is_empty() {
@@ -1405,5 +1453,38 @@ mod sig_tests {
     fn describe_type_uses_const_when_present() {
         let v = json!({ "const": "fixed" });
         assert_eq!(describe_schema_type(&v), "\"fixed\"");
+    }
+
+    #[test]
+    fn local_prompt_gates_tools_on_code_models() {
+        // Gate helper: only code-tuned local models get tools.
+        assert!(local_model_supports_tools("local-qwen2.5-coder:7b"));
+        assert!(local_model_supports_tools("codellama:13b"));
+        assert!(!local_model_supports_tools("local-llama3.2:latest"));
+        assert!(!local_model_supports_tools("gemma4:latest"));
+
+        // Code-tuned model → full curated tool set (v1.7.227 parity upgrade).
+        let tools = build_local_system_prompt(
+            "local-qwen2.5-coder:7b", "Reply in Spanish.", "", "", "edd", "lee C:\\x.txt", "C:\\work",
+        );
+        for needle in ["<TOOL>readfile:", "<TOOL>writefile:", "<TOOL>listdir:",
+                       "<TOOL>locate_file:", "<TOOL>searchfiles:", "<TOOL>sysinfo</TOOL>",
+                       "<EXECUTE>", "User: lee el archivo"] {
+            assert!(tools.contains(needle), "tools prompt missing: {needle}");
+        }
+        assert!(tools.contains("lee C:\\x.txt"), "user prompt not appended");
+        assert!(!tools.contains("you don't have tools"), "tools prompt must not deny tools");
+
+        // General model → slim prompt: NO <TOOL>, keeps the no-tools rule but
+        // still allows <EXECUTE> (so it can run commands, just not call tools).
+        let slim = build_local_system_prompt(
+            "local-llama3.2:latest", "Reply in Spanish.", "", "", "edd", "hola", "C:\\work",
+        );
+        // Must not DEFINE tools (the bare "<TOOL>" substring is allowed — it
+        // appears in the "Never invent tool tags like <TOOL>" negative rule).
+        assert!(!slim.contains("<TOOL>readfile:"), "slim prompt must not define tools");
+        assert!(!slim.contains("You have these tools"), "slim must not have the tools block");
+        assert!(slim.contains("you don't have tools"), "slim no-tools rule missing");
+        assert!(slim.contains("<EXECUTE>"), "slim must still allow EXECUTE");
     }
 }
