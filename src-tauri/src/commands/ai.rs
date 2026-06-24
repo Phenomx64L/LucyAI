@@ -1083,6 +1083,15 @@ pub async fn ask_lucy(
             let payload = json!({
                 "model": actual_model,
                 "messages": [{"role": "user", "content": final_prompt}],
+                // v1.7.226 — flat temperature/top_p are the OpenAI-compatible
+                // fields /v1/chat/completions actually honors (the response parser
+                // reads choices[]). The nested `options` is Ollama-NATIVE and is
+                // ignored by /v1 — and by LM Studio / llama.cpp / vLLM — so without
+                // these flat fields the 0.1 determinism tuning was silently dropped
+                // and local models drifted at the server default (~0.8). `options`
+                // is kept best-effort (num_ctx passthrough on native endpoints).
+                "temperature": 0.1,
+                "top_p": 0.9,
                 "options": {
                     "temperature": 0.1,
                     "num_ctx": ctx_size,
@@ -1270,6 +1279,11 @@ pub async fn ask_lucy_stream(
                 "model": actual_model,
                 "messages": [{"role": "user", "content": final_prompt}],
                 "stream": true,
+                // v1.7.226 — see ask_lucy: flat temperature/top_p are the fields
+                // the OpenAI-compat /v1 endpoint honors; nested `options` is
+                // Ollama-native and ignored there, so the tuning was being dropped.
+                "temperature": 0.1,
+                "top_p": 0.9,
                 "options": {
                     "temperature": 0.1,
                     "num_ctx": ctx_size,

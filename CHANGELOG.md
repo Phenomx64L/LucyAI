@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.225] — 2026-06-23
+## [1.7.226] — 2026-06-23
+
+### Fix — local LLM sampling params were silently dropped (verification of local↔Lucy)
+
+While verifying the local-LLM path end-to-end against a live Ollama, found that
+both `ask_lucy` and `ask_lucy_stream` send the sampling params as a nested
+Ollama-NATIVE `options: { temperature: 0.1, num_ctx, top_p, repeat_penalty }`
+object — but the response parser reads `choices[0].message.content` / `.delta`,
+i.e. the endpoint is the **OpenAI-compatible** `/v1/chat/completions`. That
+endpoint (and LM Studio / llama.cpp / vLLM) ignores the nested `options`, so the
+`temperature: 0.1` the code comments rely on "for code-gen quality / to stop
+small models drifting" was never applied — local models ran at the server
+default (~0.8), maximizing the exact drift the tuning was meant to prevent (e.g.
+a 7B model emitting `C:\emp` for `C:\temp`).
+
+Added the **flat** OpenAI-compatible `temperature` + `top_p` alongside the
+existing `options` (kept best-effort for `num_ctx` passthrough on native
+endpoints). Verified live: Ollama `/v1/chat/completions` accepts the combined
+payload and now honors the flat fields. No behavior change for cloud providers
+(Gemini/Claude/OpenAI/NVIDIA branches untouched).
+
+**Verification verdict (not a code change, for the record):** the local path is
+correctly wired — provider routing (`local-*`), request, OpenAI-compat parsing
+(non-stream + SSE streaming), token usage, and embeddings all work against a live
+Ollama. The deliberate limitation remains: local models get a SLIM system prompt
+with NO `<TOOL>` catalog / agent-loop (`build_local_system_prompt`), by design,
+so they do chat + `<EXECUTE>` + code-gen but not the full agentic interaction.
 
 ### Refinement — file indexer: also prune framework build output + tool caches
 
