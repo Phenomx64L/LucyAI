@@ -53,6 +53,14 @@ fn is_excluded_index_dir(dir_name: &str) -> bool {
         // VCS internals + build / dependency output
         "node_modules", ".git", ".svn", ".hg", "target", "__pycache__",
         ".venv", "venv", "dist", ".next", ".turbo",
+        // Framework build output + tool caches (generated, regenerable). These
+        // slipped through the first audit pass — e.g. SvelteKit's `.svelte-kit`
+        // and `build/_app` artifacts. Exact-match, so a source dir literally
+        // named "coverage"/"out" elsewhere is the only false positive risk.
+        ".svelte-kit", ".nuxt", ".vite", ".astro", ".angular", ".parcel-cache",
+        ".docusaurus", "bower_components", "coverage", ".idea", ".terraform",
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+        ".ipynb_checkpoints", ".serverless", ".expo",
     ];
     let lower = dir_name.to_ascii_lowercase();
     EXCLUDED.iter().any(|&e| e == lower)
@@ -190,7 +198,8 @@ mod tests {
         for d in ["Program Files", "Program Files (x86)", "Windows", "ProgramData",
                   "$Recycle.Bin", "node_modules", "AppData", ".git", "target",
                   "OneDriveTemp", "System Volume Information",
-                  ".rustup", ".cargo", ".dotnet", ".m2", ".vscode"] {
+                  ".rustup", ".cargo", ".dotnet", ".m2", ".vscode",
+                  ".svelte-kit", "coverage", ".idea", ".pytest_cache", ".terraform"] {
             assert!(is_excluded_index_dir(d), "should exclude {d}");
         }
     }
@@ -206,7 +215,8 @@ mod tests {
     fn keeps_real_user_directories() {
         // Exact-match, so look-alikes and the user's own folders survive.
         for d in ["Documents", "Rust_Projects", "src", "lucy-svelte",
-                  "windows-tools", "my-target-app", "git-repos", "appdata-viewer"] {
+                  "windows-tools", "my-target-app", "git-repos", "appdata-viewer",
+                  "coverage-report", "my-svelte-kit", "ideas", "next"] {
             assert!(!is_excluded_index_dir(d), "should NOT exclude {d}");
         }
     }

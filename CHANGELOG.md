@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
-## [1.7.224] — 2026-06-23
+## [1.7.225] — 2026-06-23
+
+### Refinement — file indexer: also prune framework build output + tool caches
+
+Follow-up to the v1.7.224 exclusion fix. After the live-DB cleanup, the handful
+of paths that still slipped into `file_index` were generated framework artifacts
+— e.g. SvelteKit's `.svelte-kit/` and `build/_app/immutable/`. Extended
+`is_excluded_index_dir` with another batch of exact-match, regenerable trees:
+`.svelte-kit`, `.nuxt`, `.vite`, `.astro`, `.angular`, `.parcel-cache`,
+`.docusaurus`, `bower_components`, `coverage`, `.idea`, `.terraform`,
+`.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.ipynb_checkpoints`,
+`.serverless`, `.expo`. Still exact-match (so `coverage-report`, `my-svelte-kit`,
+`ideas`, `next` are kept) and still no extension filter. Generic source-or-output
+names (`build`, `out`, `bin`, `obj`, `vendor`) were deliberately left OUT to
+avoid pruning real source trees. Test coverage extended for the new entries and
+their look-alikes. 359 Rust tests.
 
 ### Fix — file indexer: prune system/build/dependency trees (lucy.db was 80% noise)
 
