@@ -1245,14 +1245,17 @@ pub fn build_local_system_prompt(
     user_name: &str,
     prompt: &str,
     working_dir: &str,
-) -> String {
+) -> (String, String) {
+    // ── SYSTEM message (v1.7.229): the pure-STATIC instruction prefix —
+    // identity + lang + rules/tools. Identical across every turn of a session
+    // for a given model, so the local engine (Ollama / llama.cpp /v1) reuses its
+    // KV cache for it instead of re-processing this whole block each turn.
+    // Everything dynamic (user/cwd/memories/request) goes in the USER message
+    // below, so it never busts that cached prefix.
     let mut out = String::with_capacity(1024);
-
-    // Identity — short, plain, no jargon
     out.push_str("You are Lucy, a Windows SysAdmin assistant.\n");
     out.push_str(lang);
     out.push('\n');
-    out.push_str(&format!("User: {}\nWorking dir: {}\n", user_name, working_dir));
 
     if local_model_supports_tools(model) {
         // Tools — a CURATED high-value subset (v1.7.227), gated to code-tuned
@@ -1299,25 +1302,26 @@ pub fn build_local_system_prompt(
         out.push_str("- Never repeat the user's prompt back at them.\n");
     }
 
-    // Hosts block (only when remote hosts are configured)
+    // ── USER message (v1.7.229): everything DYNAMIC / session- and turn-specific
+    // (user name, working dir, remote hosts, injected memories/tool-results, and
+    // the request itself). Kept out of the cached system prefix above so KV reuse
+    // survives turn-to-turn.
+    let mut usr = String::with_capacity(512);
+    usr.push_str(&format!("User: {}\nWorking dir: {}\n", user_name, working_dir));
     if !hosts_context.is_empty() {
-        out.push_str("\nRemote hosts:\n");
-        out.push_str(hosts_context);
-        out.push('\n');
+        usr.push_str("\nRemote hosts:\n");
+        usr.push_str(hosts_context);
+        usr.push('\n');
     }
-
-    // Extra context (working memory, last command output, etc.)
     if !context.is_empty() {
-        out.push_str("\n--- Context ---\n");
-        out.push_str(context);
-        out.push_str("\n--- End Context ---\n");
+        usr.push_str("\n--- Context ---\n");
+        usr.push_str(context);
+        usr.push_str("\n--- End Context ---\n");
     }
+    usr.push_str("\nUser request:\n");
+    usr.push_str(prompt);
 
-    // User prompt at the very end, clearly delimited
-    out.push_str("\nUser request:\n");
-    out.push_str(prompt);
-
-    out
+    (out, usr)
 }
 
 // ── Tests for MCP signature injection (v1.4.2) ───────────────────────────
@@ -1463,28 +1467,31 @@ mod sig_tests {
         assert!(!local_model_supports_tools("local-llama3.2:latest"));
         assert!(!local_model_supports_tools("gemma4:latest"));
 
-        // Code-tuned model → full curated tool set (v1.7.227 parity upgrade).
-        let tools = build_local_system_prompt(
+        // v1.7.229 — build_local_system_prompt now returns (system, user): the
+        // STATIC tools/rules prefix in `system`, the DYNAMIC request in `user`.
+        // Code-tuned model → full curated tool set (v1.7.227) in the SYSTEM message.
+        let (tools_sys, tools_usr) = build_local_system_prompt(
             "local-qwen2.5-coder:7b", "Reply in Spanish.", "", "", "edd", "lee C:\\x.txt", "C:\\work",
         );
         for needle in ["<TOOL>readfile:", "<TOOL>writefile:", "<TOOL>listdir:",
                        "<TOOL>locate_file:", "<TOOL>searchfiles:", "<TOOL>sysinfo</TOOL>",
                        "<EXECUTE>", "User: lee el archivo"] {
-            assert!(tools.contains(needle), "tools prompt missing: {needle}");
+            assert!(tools_sys.contains(needle), "tools system missing: {needle}");
         }
-        assert!(tools.contains("lee C:\\x.txt"), "user prompt not appended");
-        assert!(!tools.contains("you don't have tools"), "tools prompt must not deny tools");
+        assert!(tools_usr.contains("lee C:\\x.txt"), "user request must be in the USER message");
+        assert!(!tools_sys.contains("you don't have tools"), "tools system must not deny tools");
+        // KV-cache invariant: the static system prefix must NOT carry the dynamic
+        // request, or the cached prefix would bust every turn.
+        assert!(!tools_sys.contains("lee C:\\x.txt"), "system prefix must stay static (no user request)");
 
-        // General model → slim prompt: NO <TOOL>, keeps the no-tools rule but
-        // still allows <EXECUTE> (so it can run commands, just not call tools).
-        let slim = build_local_system_prompt(
+        // General model → slim system: NO <TOOL> definitions, keeps the no-tools
+        // rule but still allows <EXECUTE>.
+        let (slim_sys, _slim_usr) = build_local_system_prompt(
             "local-llama3.2:latest", "Reply in Spanish.", "", "", "edd", "hola", "C:\\work",
         );
-        // Must not DEFINE tools (the bare "<TOOL>" substring is allowed — it
-        // appears in the "Never invent tool tags like <TOOL>" negative rule).
-        assert!(!slim.contains("<TOOL>readfile:"), "slim prompt must not define tools");
-        assert!(!slim.contains("You have these tools"), "slim must not have the tools block");
-        assert!(slim.contains("you don't have tools"), "slim no-tools rule missing");
-        assert!(slim.contains("<EXECUTE>"), "slim must still allow EXECUTE");
+        assert!(!slim_sys.contains("<TOOL>readfile:"), "slim system must not define tools");
+        assert!(!slim_sys.contains("You have these tools"), "slim must not have the tools block");
+        assert!(slim_sys.contains("you don't have tools"), "slim no-tools rule missing");
+        assert!(slim_sys.contains("<EXECUTE>"), "slim must still allow EXECUTE");
     }
 }

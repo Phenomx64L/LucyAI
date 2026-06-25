@@ -1031,8 +1031,11 @@ pub async fn ask_lucy(
     // Cloud models (Gemini/Claude/OpenAI/NVIDIA) get the full v2 prompt with
     // all rules + tools. Local Ollama models get a slim version (≤800 tokens)
     // because small 7-14B models hallucinate when overwhelmed with rules.
-    let final_prompt = if provider == "local" {
-        crate::commands::prompt_sections::build_local_system_prompt(
+    // Local uses a system+user message split for KV-cache prefix reuse (v1.7.229):
+    // build_local_system_prompt returns (static_system, dynamic_user). Cloud keeps
+    // the single combined prompt.
+    let local_msgs = if provider == "local" {
+        Some(crate::commands::prompt_sections::build_local_system_prompt(
             &model,
             lang_instruction(user_lang),
             context.as_deref().unwrap_or_default(),
@@ -1040,7 +1043,12 @@ pub async fn ask_lucy(
             &user_name,
             &prompt,
             &cwd,
-        )
+        ))
+    } else {
+        None
+    };
+    let final_prompt = if provider == "local" {
+        String::new() // local builds its own system+user messages in the "local" arm
     } else {
         build_system_prompt(
             lang_instruction(user_lang),
@@ -1080,19 +1088,26 @@ pub async fn ask_lucy(
             // Temperature 0.1 (not 0.2): small local models drift into nonsense
             // quickly above 0.15 — keep deterministic for code-gen quality.
             let actual_model = model.replace("local-", "");
-            let ctx_size = adaptive_num_ctx(final_prompt.len());
+            let (sys_p, user_p) = local_msgs.as_ref().expect("local provider always has local_msgs");
+            let ctx_size = adaptive_num_ctx(sys_p.len() + user_p.len());
             let payload = json!({
                 "model": actual_model,
-                "messages": [{"role": "user", "content": final_prompt}],
-                // v1.7.226 — flat temperature/top_p are the OpenAI-compatible
-                // fields /v1/chat/completions actually honors (the response parser
-                // reads choices[]). The nested `options` is Ollama-NATIVE and is
-                // ignored by /v1 — and by LM Studio / llama.cpp / vLLM — so without
-                // these flat fields the 0.1 determinism tuning was silently dropped
-                // and local models drifted at the server default (~0.8). `options`
-                // is kept best-effort (num_ctx passthrough on native endpoints).
+                // v1.7.229 — system+user split: the STATIC prompt prefix goes in a
+                // stable `system` message so the local engine reuses its KV cache
+                // for it across turns instead of re-processing it every turn.
+                "messages": [
+                    {"role": "system", "content": sys_p},
+                    {"role": "user",   "content": user_p}
+                ],
+                // v1.7.226 — flat temperature/top_p are the OpenAI-compat fields
+                // /v1/chat/completions honors (parser reads choices[]); nested
+                // `options` (Ollama-native) is ignored by /v1, kept best-effort.
+                // v1.7.229 — max_tokens caps runaway output; keep_alive keeps the
+                // model resident between turns (Ollama-native, best-effort).
                 "temperature": 0.1,
                 "top_p": 0.9,
+                "max_tokens": 3072,
+                "keep_alive": "30m",
                 "options": {
                     "temperature": 0.1,
                     "num_ctx": ctx_size,
@@ -1227,8 +1242,11 @@ pub async fn ask_lucy_stream(
     let user_lang = lang.as_deref().unwrap_or("es-MX");
     let hosts_context = build_hosts_context(hosts_json.as_deref());
     // Same provider-aware prompt selection as ask_lucy — see comment there.
-    let final_prompt = if provider == "local" {
-        crate::commands::prompt_sections::build_local_system_prompt(
+    // Local uses a system+user message split for KV-cache prefix reuse (v1.7.229):
+    // build_local_system_prompt returns (static_system, dynamic_user). Cloud keeps
+    // the single combined prompt.
+    let local_msgs = if provider == "local" {
+        Some(crate::commands::prompt_sections::build_local_system_prompt(
             &model,
             lang_instruction(user_lang),
             context.as_deref().unwrap_or_default(),
@@ -1236,7 +1254,12 @@ pub async fn ask_lucy_stream(
             &user_name,
             &prompt,
             &cwd,
-        )
+        ))
+    } else {
+        None
+    };
+    let final_prompt = if provider == "local" {
+        String::new() // local builds its own system+user messages in the "local" arm
     } else {
         build_system_prompt(
             lang_instruction(user_lang),
@@ -1276,16 +1299,22 @@ pub async fn ask_lucy_stream(
             // Temperature 0.1 + repeat_penalty 1.1 — small local models drift
             // into hallucination above 0.15 and loop on identical phrases.
             let actual_model = model.replace("local-", "");
-            let ctx_size = adaptive_num_ctx(final_prompt.len());
+            let (sys_p, user_p) = local_msgs.as_ref().expect("local provider always has local_msgs");
+            let ctx_size = adaptive_num_ctx(sys_p.len() + user_p.len());
             let payload = json!({
                 "model": actual_model,
-                "messages": [{"role": "user", "content": final_prompt}],
+                // v1.7.229 — system+user split for KV-cache prefix reuse (see ask_lucy).
+                "messages": [
+                    {"role": "system", "content": sys_p},
+                    {"role": "user",   "content": user_p}
+                ],
                 "stream": true,
-                // v1.7.226 — see ask_lucy: flat temperature/top_p are the fields
-                // the OpenAI-compat /v1 endpoint honors; nested `options` is
-                // Ollama-native and ignored there, so the tuning was being dropped.
+                // v1.7.226 flat temperature/top_p (OpenAI-compat); v1.7.229 max_tokens
+                // caps runaway output, keep_alive keeps the model resident.
                 "temperature": 0.1,
                 "top_p": 0.9,
+                "max_tokens": 3072,
+                "keep_alive": "30m",
                 "options": {
                     "temperature": 0.1,
                     "num_ctx": ctx_size,

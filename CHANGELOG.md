@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.229] — 2026-06-25
+
+### Perf — local LLM token economy: KV-cache prefix reuse + output backstop + keep-alive
+
+Quick wins #1–#4 from the local-LLM token-economy review. Goal: cut per-turn
+token spend on Ollama/LM-Studio/llama.cpp local models without touching the cloud
+path or the tool-parity behavior.
+
+**#3/#4 — system+user split for KV-cache prefix reuse (the big input lever).**
+`prompt_sections::build_local_system_prompt` now returns `(String, String)` —
+a STATIC `system` message (identity + language rule + the curated tools/few-shot
+block) and a DYNAMIC `user` message (user name, working dir, hosts, context,
+"User request:" + the prompt). Before, everything was concatenated into a single
+user message, so the leading tools block — by far the largest, most stable chunk —
+was re-tokenized from scratch every turn. By hoisting it into a stable leading
+`system` message, the local engine reuses its KV cache for that prefix across
+turns instead of reprocessing it. `ai.rs` (`ask_lucy` + `ask_lucy_stream`) now
+sends a 2-message `[{system}, {user}]` payload on the `"local"` arm.
+
+**#1 — `max_tokens: 3072` output backstop.** Caps runaway generation (a stuck
+local model could otherwise spew until the context filled). Sized generously so
+it never truncates a legitimate tool tag or answer — live-validated a tool call
+finishes at ~16 completion tokens with `finish_reason: stop`. (Stop sequences on
+`</TOOL>`/`</EXECUTE>` were considered and REJECTED: the OpenAI `stop` parameter
+excludes the matched string from the output, which would eat the closing tag that
+Lucy's dispatch regex requires.)
+
+**#2 — `keep_alive: "30m"`.** Keeps the model resident between turns so a
+follow-up doesn't pay the cold-load latency (Ollama-native field, best-effort —
+ignored by engines that don't honor it).
+
+Live-validated against the user's Ollama (`qwen2.5-coder:7b`, `/v1/chat/completions`):
+the new system+user payload is accepted and the model still emits the exact
+`<TOOL>readfile: C:\x.txt</TOOL>` tag (closing tag intact) — the split does NOT
+degrade tool emission. The KV-cache invariant is protected by a unit-test
+assertion: the static `system` prefix must NOT contain the dynamic user request.
+`cargo test` green.
+
+---
+
 ## [1.7.228] — 2026-06-23
 
 ### Fix — agent loop: forced-synthesis on skip-stuck so local models land their answer
