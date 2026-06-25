@@ -5119,6 +5119,15 @@ Use ONE of these patterns instead:
             // short-circuits to the manual model regardless of the prompt arg
             // (see its `if (!smartRouting && !privacyMode) return manual`).
             const _routedLoopModel = getEffectiveModel(t, raw || '');
+            // v1.7.230 — local-LLM token economy switches. `_isLocalModel` keys
+            // off the ACTUAL pinned loop model (post smart-routing), so it's
+            // right whether the user picked local manually, privacy-mode forced
+            // it, or the router chose it. `_localToolCapable` mirrors the Rust
+            // gate `local_model_supports_tools` (code-tuned == reliable tool
+            // emission). Used by: #6 loop cap, #7 verifier/prefetch gating,
+            // #10 tight context compression.
+            const _isLocalModel    = String(_routedLoopModel || '').startsWith('local-');
+            const _localToolCapable = _isLocalModel && /code/i.test(String(_routedLoopModel || ''));
             const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
 
             // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
@@ -5380,7 +5389,11 @@ Use ONE of these patterns instead:
                 // F1 — speculatively prefetch fetch:/search_web: tools the
                 // moment their tag closes, so the round-trip overlaps the rest
                 // of the stream instead of starting cold after it.
-                _speculateReadOnlyFromStream(accumulated, _specSet);
+                // v1.7.230 #7 — off for local models: their tag-following is less
+                // predictable, so a speculative fetch is more often wasted, and
+                // local sessions now run a low loop cap (#6) where the latency
+                // win barely applies.
+                if (!_isLocalModel) _speculateReadOnlyFromStream(accumulated, _specSet);
             }, tabId);
 
             // Parar drain y vaciar cola restante
@@ -5714,7 +5727,24 @@ Use ONE of these patterns instead:
                 // 25 cap was guarding against. The cap is now the last
                 // line of defence, not the first.
                 const _userMaxLoops = parseInt(safeGetLS('lucy_max_agent_loops', '60'), 10);
-                const MAX_LOOPS = isFinite(_userMaxLoops) ? Math.max(10, Math.min(200, _userMaxLoops)) : 60;
+                const _baseMaxLoops = isFinite(_userMaxLoops) ? Math.max(10, Math.min(200, _userMaxLoops)) : 60;
+                // v1.7.230 #6 — local models loop LESS. Validated live: 7B code
+                // models do single-step (one tool/execute → reason → answer) but
+                // re-loop on multi-tool CHAINS; general local models hallucinate
+                // with tools entirely. Letting them ride the 60-turn cap just
+                // re-sends prompt+context for dozens of non-converging turns =
+                // pure wasted local generation. Cap low (code-capable 6, slim 4)
+                // — generous enough that a real 3–5 step chain + its answer turn
+                // finishes by breaking early via shouldContinue=false BEFORE the
+                // cap, while a runaway local loop still stops in a handful of
+                // turns. If the cap IS reached with work already gathered, the
+                // MAX_LOOPS-hit branch below now does a forced-synthesis turn so
+                // the user still gets a real answer (not a bare warning). A user
+                // who set a LOWER global cap keeps it.
+                const _localLoopCap = _isLocalModel ? (_localToolCapable ? 6 : 4) : null;
+                const MAX_LOOPS = _localLoopCap != null
+                    ? Math.min(_baseMaxLoops, _localLoopCap)
+                    : _baseMaxLoops;
                 const ESCALATED_MAX_TOKENS = 64000; // openclaude pattern
                 let escalatedTokens = null; // null = usar default, número = override
                 let truncationRecoveryCount = 0;
@@ -6070,17 +6100,28 @@ Use ONE of these patterns instead:
                 const compressContext = async (fullCtx, agentModel, loop_i = 0) => {
                     let ctx = fullCtx;
                     const origLen = ctx.length;
+                    // v1.7.230 #10 — local-aware compression. Local engines run
+                    // small context windows AND re-tokenize the dynamic context
+                    // every continuation turn (no cross-turn cache for it), so we
+                    // lean HARD on the free Phase-1 dedup (tight gate + harder
+                    // truncation) and deliberately SKIP Phase 2 — Phase 2 spends a
+                    // CLOUD flash-lite call, which a local session shouldn't pay
+                    // (and may not even have configured). Cloud path unchanged.
+                    const _localTight = String(agentModel || '').startsWith('local-');
 
                     // Phase 1: Local dedup (free, no API call) — extracted to
                     // $lib/context-compressor.ts (localDedupAgentContext, tested).
-                    // Gate (>8KB && loop_i>=2) lives inside the helper.
-                    ctx = localDedupAgentContext(ctx, loop_i);
+                    // Gate (>8KB && loop_i>=2; tight: >3.5KB && loop_i>=1) lives
+                    // inside the helper.
+                    ctx = localDedupAgentContext(ctx, loop_i, _localTight);
 
                     // Phase 2: LLM compression for very large contexts (>20KB, iter 4+).
                     // Skip when the input is ~the same size as the last Phase-2 run
                     // (steady context held by the rolling window → re-compressing
                     // would just redo identical work and burn an LLM call).
-                    if (ctx.length > 20000 && loop_i >= 4 && Math.abs(origLen - _lastPhase2InputLen) > 3000) {
+                    // Skip entirely for local (#10) — Phase 1 tight already cut it,
+                    // and Phase 2 would bill a cloud round-trip on a local session.
+                    if (!_localTight && ctx.length > 20000 && loop_i >= 4 && Math.abs(origLen - _lastPhase2InputLen) > 3000) {
                         _lastPhase2InputLen = origLen;
                         // Compress ALL steps except last 2 using lightweight model
                         const cutoff = loop_i - 2;
@@ -7460,8 +7501,16 @@ Use ONE of these patterns instead:
                         // Before showing the final answer, optionally have a different
                         // model critique it. If concerns are found AND we haven't yet
                         // refined, feed the critique back as a continuation turn.
-                        const wantVerify = (verifierMode === 'always')
-                                       || (verifierMode === 'critical' && taskTouchedRiskyOps);
+                        // v1.7.230 #7 — skip the verifier sub-agent when the main
+                        // loop ran on a LOCAL model. It fires a SEPARATE LLM call
+                        // (pickCrossVerifierModel deliberately prefers a different —
+                        // usually CLOUD — family), so on a local session it both
+                        // adds a full extra round-trip AND defeats the point of
+                        // staying local. The local user opted into local for cost/
+                        // privacy; don't silently bill a cloud verifier behind them.
+                        const wantVerify = !_isLocalModel
+                                       && ((verifierMode === 'always')
+                                       || (verifierMode === 'critical' && taskTouchedRiskyOps));
                         if (wantVerify && !verifierRefinedOnce && cleanText && cleanText.length > 40) {
                             const verifyCard = newToolCard('✦', isEN ? 'Self-review' : 'Auto-revisión', 'read');
                             stepsHtml += `[✦ ${isEN ? 'Verifier reviewing…' : 'Verificador revisando…'}]\n`;
@@ -7747,7 +7796,7 @@ times the SAME way, switch tool kind entirely.
 
                     // ── Apply reactive compact if context is growing ──
                     const _preCompLen = agentCtx.length;
-                    let compressedCtx = await compressContext(agentCtx, getEffectiveModel(t), loop_i);
+                    let compressedCtx = await compressContext(agentCtx, (_routedLoopModel || getEffectiveModel(t)), loop_i);
                     if (compressedCtx.length < _preCompLen * 0.95) {
                         pushTrace({
                             phase: 'info',
@@ -7774,7 +7823,8 @@ times the SAME way, switch tool kind entirely.
                             // F1 — speculatively prefetch read-only network tools
                             // as their tags close mid-stream on continuation turns
                             // (the research-heavy path where this saves the most).
-                            _speculateReadOnlyFromStream(acc, _specSetTurn);
+                            // v1.7.230 #7 — off for local models (see first call site).
+                            if (!_isLocalModel) _speculateReadOnlyFromStream(acc, _specSetTurn);
                         }, tabId);
                     } catch(e) {
                         stepsHtml += `[ERROR] ${esc(String(e))}\n`;
@@ -7906,7 +7956,41 @@ times the SAME way, switch tool kind entirely.
                             goal_excerpt: originalUserGoal.slice(0, 200),
                         }, tabId);
                         finishReasoning();
-                        renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.`);
+                        // v1.7.230 #6 follow-up — don't dead-end on a bare warning
+                        // when the loop hit its cap WITH work already gathered. The
+                        // low local cap means a genuinely multi-step (NON-identical
+                        // each turn) local task can reach MAX_LOOPS mid-progress,
+                        // which the v1.7.228 forced-synthesis (skip-stuck path only)
+                        // never covered. Generalize that rescue here: hand the model
+                        // its own results and demand a final prose answer. Helps
+                        // cloud runaways too. Best-effort; falls back to the warning
+                        // only when no work was done or synthesis yields nothing.
+                        const _capDidWork = (Array.isArray(toolResults) && toolResults.length > 0) || (filesMod && filesMod.size > 0);
+                        let _capSynth = '';
+                        if (_capDidWork) {
+                            try {
+                                const _rawCapSynth = await askLucyStream({
+                                    prompt: `[FINAL ANSWER REQUIRED — no more tools]\n\n=== ORIGINAL GOAL ===\n"${originalUserGoal}"\n=== END GOAL ===\n\nResults you already gathered:\n${(Array.isArray(toolResults) ? toolResults.join('\n\n') : '').slice(0, 12000)}\n\nThe loop is over. Using ONLY the results above, write the FINAL answer to the goal in the user's language, as Markdown. Do NOT call any tool. Do NOT output <TOOL> or <EXECUTE>. If the results don't contain the answer, say so plainly.`,
+                                    context: '',
+                                    userName: lucyConfig.name,
+                                    runbooksDir: null,
+                                    model: (_routedLoopModel || getEffectiveModel(t)),
+                                    images: null,
+                                    lang: userLang,
+                                    hostsJson: null,
+                                }, () => {}, tabId);
+                                _capSynth = String(_rawCapSynth || '')
+                                    .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
+                                    .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
+                                    .replace(/<EXECUTE[^>]*>[\s\S]*?(?:<\/EXECUTE[^>]*>|$)/gi, '')
+                                    .trim();
+                            } catch { /* forced synthesis is best-effort */ }
+                        }
+                        if (_capSynth.length >= 8) {
+                            renderAgentTask(_capSynth);
+                        } else {
+                            renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.`);
+                        }
                     }
                 }
                 clearAgentCheckpoint(tabId);

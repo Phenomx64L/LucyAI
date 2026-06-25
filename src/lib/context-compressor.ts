@@ -191,17 +191,30 @@ export function compressToolResults(
  * Only runs once the context is large (>8 KB) AND the loop has a few steps
  * (loop_i ≥ 2); otherwise returns the input unchanged. Faithful extraction —
  * behaviour (incl. quirks) preserved bit-for-bit.
+ *
+ * v1.7.230 #10 — `tight` mode for LOCAL models. Local engines run small context
+ * windows (adaptive_num_ctx tops out where cloud is unbounded), so every char
+ * of carried-over context is precious AND re-tokenized each continuation turn
+ * with no cross-turn cache for the dynamic part. In tight mode the gate fires
+ * far earlier (>3.5 KB, loop_i ≥ 1), old steps keep only 350 chars, and
+ * execution output truncates at 2 KB. Cloud path (`tight=false`) is byte-for-byte
+ * unchanged. Pairs with the loop cap (#6) so local sessions both loop less AND
+ * carry less per turn.
  */
-export function localDedupAgentContext(ctx: string, loop_i: number): string {
-    if (!(ctx.length > 8000 && loop_i >= 2)) return ctx;
+export function localDedupAgentContext(ctx: string, loop_i: number, tight: boolean = false): string {
+    const minLen   = tight ? 3500 : 8000;
+    const minLoop  = tight ? 1 : 2;
+    const stepKeep = tight ? 350 : 600;
+    const execCap  = tight ? 2000 : 4000;
+    if (!(ctx.length > minLen && loop_i >= minLoop)) return ctx;
     let out = ctx;
-    // Trim old steps (keep only 600 chars each, except recent 2).
+    // Trim old steps (keep only `stepKeep` chars each, except recent 2).
     const keepRecent = Math.max(1, loop_i - 2);
     for (let s = 1; s < keepRecent; s++) {
         const stepRe = new RegExp(`--- TOOL RESULTS \\(step ${s}\\) ---\\n([\\s\\S]*?)(?=--- TOOL RESULTS \\(step ${s + 1}\\)|$)`);
         out = out.replace(stepRe, (full: string, body: string) => {
-            if (body.length <= 600) return full;
-            return `--- TOOL RESULTS (step ${s}, trimmed) ---\n${body.substring(0, 600)}\n[... ${body.length - 600} chars omitted]\n`;
+            if (body.length <= stepKeep) return full;
+            return `--- TOOL RESULTS (step ${s}, trimmed) ---\n${body.substring(0, stepKeep)}\n[... ${body.length - stepKeep} chars omitted]\n`;
         });
     }
     // Remove duplicate large blocks (>200 chars identical lines).
@@ -212,13 +225,14 @@ export function localDedupAgentContext(ctx: string, loop_i: number): string {
         seen.set(key, true);
         return line;
     });
-    // Truncate very long EXECUTION RESULTs (>4KB).
+    // Truncate very long EXECUTION RESULTs (>execCap).
     // v1.7.204 — fixed a latent dead-no-op: the quantifier was `{4000,?}`, an
     // INVALID quantifier that JS treats as a literal, so this transform never
-    // fired (audit-confirmed). Corrected to `{4000,}?` (lazy "4000 or more") so
+    // fired (audit-confirmed). Corrected to `{N,}?` (lazy "N or more") so
     // it actually truncates oversized execution output as the comment promised.
-    out = out.replace(/(\[EXECUTION RESULT\]\n)([\s\S]{4000,}?)(?=\n\n---|$)/g, (_m: string, prefix: string, body: string) => {
-        return prefix + body.substring(0, 4000) + '\n[... output truncated for context compression]';
+    const execRe = new RegExp(`(\\[EXECUTION RESULT\\]\\n)([\\s\\S]{${execCap},}?)(?=\\n\\n---|$)`, 'g');
+    out = out.replace(execRe, (_m: string, prefix: string, body: string) => {
+        return prefix + body.substring(0, execCap) + '\n[... output truncated for context compression]';
     });
     return out;
 }

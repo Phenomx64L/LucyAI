@@ -1293,13 +1293,18 @@ pub fn build_local_system_prompt(
     } else {
         // Slim prompt for general / small models — NO <TOOL> tags (they
         // hallucinate data when handed them). Chat + <EXECUTE> shell + code only.
+        // v1.7.230 #5 — terser slim rules (same 6 behaviors, fewer tokens). The
+        // slim block is paid in full on turn 1 / single-turn / any cache miss
+        // even after the v1.7.229 system-prefix KV cache, so trimming the prose
+        // still saves input for the non-code local user. Examples-free branch =
+        // no tool-emission to re-validate. Keeps the literal "you don't have
+        // tools" and "<EXECUTE>" markers the gate test asserts on.
         out.push_str("\nOutput rules:\n");
-        out.push_str("- For code (Python, JS, PowerShell, etc.): respond with a SINGLE fenced code block ```lang\\n...\\n``` and a brief 1-line description before it. No invented commands. No tool tags.\n");
-        out.push_str("- For shell commands that should run NOW: wrap them in <EXECUTE>...</EXECUTE>. One command per tag. No explanation needed beyond the tag.\n");
-        out.push_str("- For file creation requests (e.g. \"genera un fichero hola.txt en X:\\\"): respond with a PowerShell <EXECUTE> using `New-Item` or `Set-Content`. Use the exact path the user gave.\n");
-        out.push_str("- For questions: respond plainly in the user's language. Do NOT prepend commands the user didn't ask for.\n");
-        out.push_str("- Never invent tool tags like <TOOL>... — you don't have tools here.\n");
-        out.push_str("- Never repeat the user's prompt back at them.\n");
+        out.push_str("- Code: ONE fenced ```lang block + a 1-line description. No invented commands. No tool tags.\n");
+        out.push_str("- Shell command to run NOW: wrap it in <EXECUTE>...</EXECUTE>, one command per tag.\n");
+        out.push_str("- File creation: an <EXECUTE> using New-Item / Set-Content at the EXACT path given.\n");
+        out.push_str("- Questions: answer plainly in the user's language; don't prepend commands they didn't ask for.\n");
+        out.push_str("- Never invent <TOOL> tags — you don't have tools here. Never echo the user's prompt back.\n");
     }
 
     // ── USER message (v1.7.229): everything DYNAMIC / session- and turn-specific

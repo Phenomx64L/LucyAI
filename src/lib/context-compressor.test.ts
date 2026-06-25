@@ -181,4 +181,30 @@ describe('context-compressor / localDedupAgentContext (raw-string Phase 1)', () 
     it('does not throw on empty input', () => {
         expect(localDedupAgentContext('', 5)).toBe('');
     });
+
+    // v1.7.230 #10 — tight mode (local models): earlier gate + harder truncation.
+    it('tight mode fires earlier than the cloud gate (>3.5KB, loop_i>=1)', () => {
+        const dup = 'A'.repeat(250);
+        const ctx = `${dup}\n${dup}\n` + 'z'.repeat(4000); // ~4.5KB, under the 8KB cloud gate
+        // Cloud default: gate needs loop_i>=2 AND >8KB → loop_i 1 stays off, untouched.
+        expect(localDedupAgentContext(ctx, 1)).toBe(ctx);
+        // Tight: fires at loop_i 1 and ~4.5KB → dedups.
+        const out = localDedupAgentContext(ctx, 1, true);
+        expect(out).toContain('[... duplicate block omitted]');
+        expect(out.length).toBeLessThan(ctx.length);
+    });
+
+    it('tight mode trims old steps at 350 chars (vs 600 cloud)', () => {
+        const body = 'B'.repeat(500); // between the 350 tight cap and the 600 cloud cap
+        const ctx =
+            `--- TOOL RESULTS (step 1) ---\n${body}\n` +
+            `--- TOOL RESULTS (step 2) ---\nshort recent body\n` +
+            'p'.repeat(4000);
+        // Cloud: 500 <= 600 → step 1 NOT trimmed.
+        expect(localDedupAgentContext(ctx, 4)).toContain(body);
+        // Tight: 500 > 350 → step 1 trimmed.
+        const out = localDedupAgentContext(ctx, 4, true);
+        expect(out).toContain('--- TOOL RESULTS (step 1, trimmed) ---');
+        expect(out).not.toContain(body);
+    });
 });

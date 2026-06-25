@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.230] — 2026-06-25
+
+### Perf — local LLM token economy, round 2: slim-prompt trim + local loop cap + cloud-only machinery gated off + local-aware context compression
+
+Quick wins #5–#7 plus new-feature #10 from the local-LLM token-economy review,
+continuing v1.7.229. All four are gated on the LOCAL model (`_isLocalModel`,
+keyed off the pinned post-routing loop model) — the cloud path is byte-for-byte
+unchanged (verified by an adversarial 3-lens review: cloud-regression and
+security/HITL/parity lenses both came back clean).
+
+**#5 — terser slim prompt.** The non-code local prompt branch
+(`build_local_system_prompt`) was reworded to the same six behaviors in fewer
+tokens. The slim block is still paid in full on turn 1 / single-turn / any cache
+miss even after the v1.7.229 system-prefix KV cache, so trimming the prose saves
+input for the general-model local user. The CODE/tools branch and its `<TOOL>`
+few-shot examples (the validated tool-parity path) are untouched.
+
+**#6 — local loop cap.** Local models loop LESS. Validated live: 7B code models
+do single-step (one tool/execute → reason → answer) but re-loop on multi-tool
+CHAINS; general local models hallucinate with tools entirely. Riding the 60-turn
+cap just re-sends prompt+context for dozens of non-converging turns. `MAX_LOOPS`
+is now capped for local (code-capable 6, slim 4) via `Math.min(base, cap)` — a
+lower user setting still wins, cloud is unchanged. The cap is generous enough
+that a real 3–5 step chain finishes by breaking early (`shouldContinue=false`)
+before the cap; if the cap IS reached with work already gathered, the
+MAX_LOOPS-hit branch now runs a **forced-synthesis turn** (the v1.7.228 rescue,
+generalized off the identical-response-only path) so the user gets a real answer
+instead of a bare "interrupted" warning. (This forced-synthesis-on-cap also
+improves cloud runaways — strictly better than the old dead-end.)
+
+**#7 — cloud-only machinery gated off for local.** The cross-model verifier
+sub-agent (a SEPARATE, deliberately cross-family/usually-cloud LLM call) and the
+speculative read-only prefetch (F1) are skipped when the loop ran on a local
+model. The verifier only reviews the final-answer *prose* for quality — it gates
+no command — so skipping it weakens no safety control; it's a cost/privacy
+tradeoff the local user opted into. (The pre-loop embedding recall was already
+gated off for local since v1.7.115.)
+
+**#10 — local-aware context compression.** `localDedupAgentContext` gained a
+`tight` mode for local (gate fires at >3.5 KB / loop_i ≥ 1, 350-char step trim,
+2 KB execution-output cap), and `compressContext` now SKIPS its Phase-2 LLM pass
+for local — Phase 2 spends a cloud flash-lite call a local session shouldn't pay
+(and may not have configured). The free Phase-1 dedup (now tighter) carries it.
+Cloud path (`tight=false`) is byte-for-byte unchanged, including the
+`[EXECUTION RESULT]` truncation regex (rebuilt as `new RegExp` but verified
+identical for the cloud cap).
+
+svelte-check 0/0 · 21/21 context-compressor vitest (incl. 2 new tight-mode
+tests) · Rust prompt-gate test green.
+
+---
+
 ## [1.7.229] — 2026-06-25
 
 ### Perf — local LLM token economy: KV-cache prefix reuse + output backstop + keep-alive
