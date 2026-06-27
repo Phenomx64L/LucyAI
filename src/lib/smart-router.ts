@@ -335,6 +335,58 @@ export function detectHeavyPrompt(prompt: string, contextTokens = 0): string | n
     return null;
 }
 
+// ── v1.7.231 #9 — frontend-grade intent classifier for the router ─────────
+// The router already sizes LOCAL models by `detectedIntent` (needForIntent +
+// pickLocalForNeed), but NOTHING fed it that field — so a privacy-mode session
+// fell to needForIntent(undefined)='fast' and ALWAYS picked the SMALLEST local
+// model, even for heavy analysis (poor quality), while trivial turns couldn't
+// be steered to the smallest model on purpose. This pure classifier supplies a
+// richer signal from the prompt text so the router can right-size the local
+// model per intent:
+//   • greetings / trivial → 'short-greeting' → smallest local (token win)
+//   • code-gen requests   → 'code-gen'       → the coder model
+//   • log / error pastes  → 'log-paste'      → the largest local (quality)
+// Returns `undefined` for everything ambiguous, so the router's built-in
+// shell + heavy + default heuristics keep running EXACTLY as before — no
+// regression for non-greeting/non-code/non-log prompts. Conservative on
+// purpose: a wrong concrete label is worse than deferring to the heuristics.
+export type DetectedIntent = NonNullable<RoutingContext['detectedIntent']>;
+
+const GREETING_RE = /^\s*(hola|hi|hey|buenas|saludos|gracias|thanks|thank\s+you|ok|okay|vale|qu[eé]\s+hora|what\s+time|qu[eé]\s+d[ií]a|what\s+day|fecha|date|hora|time|ping|test|status|estado|c[oó]mo\s+est[aá]s|how\s+are\s+you|buenos\s+d[ií]as|buenas\s+(?:tardes|noches))\b/i;
+const CODEGEN_RE = /\b(?:dame|escrib[ea]|crea|genera|hazme|necesito|quiero|give\s+me|write|create|generate|make)\b[^.\n]{0,24}\b(?:script|c[oó]digo|code|powershell|bash|python|snippet|funci[oó]n|function)\b/i;
+const LOG_MARKER_RE = /(?:\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}\b|\b(?:ERROR|WARN(?:ING)?|FATAL|EXCEPTION|TRACEBACK|STACKTRACE|SEGFAULT|PANIC)\b|^\s+at\s+[\w$.]+\(|\b0x[0-9a-fA-F]{6,}\b)/m;
+
+/**
+ * Best-effort intent label for the router's `detectedIntent` field. Pure,
+ * allocation-light, and deliberately narrow — see the block comment above.
+ *
+ * Two over-match guards (added after adversarial review):
+ *   • Shell commands defer to the router's own heuristic — several shell verbs
+ *     (`ping`, `test-connection`) ALSO start greetings, and returning a concrete
+ *     intent would DISABLE that heuristic (`!ctx.detectedIntent` gate).
+ *   • A HEAVY/analysis signal vetoes both greeting and code-gen — a short task
+ *     like "status: analyze the prod incident" must NOT be downgraded to a fast
+ *     model just because it opens with a greeting-collision word.
+ */
+export function classifyRoutingIntent(prompt: string): DetectedIntent | undefined {
+    const p = (prompt || '').trim();
+    if (!p) return undefined;
+    // Shell command → defer to the router's looksLikeShellCommand heuristic.
+    if (looksLikeShellCommand(p)) return undefined;
+    // Any analysis/heavy keyword present → defer; never downgrade a heavy task.
+    const heavy = HEAVY_RE.test(p);
+    // Greeting / trivial — SHORT, greeting-shaped, and NOT a heavy task.
+    if (!heavy && p.length <= 64 && GREETING_RE.test(p)) return 'short-greeting';
+    // Code-generation request — but not when it's really a heavy analysis ask.
+    if (!heavy && CODEGEN_RE.test(p)) return 'code-gen';
+    // Log / stack-trace paste: multi-line AND carrying log markers, or a big
+    // multi-line blob. Deserves the strongest LOCAL model in privacy mode (and
+    // tier-4 heavy reasoning in cloud routing).
+    if (p.split('\n').length >= 6 && (LOG_MARKER_RE.test(p) || p.length > 1500)) return 'log-paste';
+    // Everything else → defer to the router's built-in heuristics.
+    return undefined;
+}
+
 /** Count subtasks in a prompt; ≥4 ⇒ structurally heavy. */
 function subtaskCount(prompt: string): number {
     if (!prompt || prompt.length < 60) return 0;

@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.231] — 2026-06-25
+
+### Feat — local LLM token economy, round 3: completion cache (#8) + intent-driven local tiering (#9)
+
+Two NEW features from the local-LLM token-economy review. Both are local-only;
+the cloud path is unchanged. An adversarial 2-lens review caught two real faults
+(below), both fixed and pinned with tests before this ships.
+
+**#8 — local completion cache (`ai.rs`).** A bounded LRU (256 entries) keyed by
+FNV-1a of `(model | system | user)` short-circuits an identical LOCAL prompt to
+its cached response, skipping the Ollama round-trip — the most expensive part
+(GPU token generation). Wired into both `ask_lucy` (non-stream) and
+`ask_lucy_stream` (the stream replays the cached text as one chunk through the
+same event channel, so the UI renders it identically). The dominant repeats are
+internal sub-prompts (context compression, intent classification, forced
+synthesis) and re-asked questions.
+- SAFE by construction: the cache holds the model's TEXT, not tool RESULTS — a
+  cached `<TOOL>readfile:…` tag still re-executes fresh against the live FS, so
+  there is no stale-read hazard. Cloud is never cached (billed per-call anyway +
+  Anthropic has its own prompt cache).
+- Review fix: the non-stream local branch never appends a `__TRUNCATED__`
+  sentinel, so a generation cut at the `max_tokens` cap would have been cached
+  and replayed forever. Now it checks `finish_reason` (`length`/`max_tokens`)
+  directly and refuses to cache a truncated local response.
+
+**#9 — intent-driven local tiering (`smart-router.ts` + `+page.svelte`).** The
+router already sizes the LOCAL model by `detectedIntent` (`needForIntent` +
+`pickLocalForNeed`), but nothing ever fed it that field — so privacy-mode
+sessions fell to `needForIntent(undefined)='fast'` and ALWAYS picked the
+SMALLEST local model, even for heavy analysis. A new pure `classifyRoutingIntent`
+supplies the signal from the prompt: greetings → smallest local (token win),
+code-gen → the coder model, log/error pastes → the largest local (quality). It
+returns `undefined` for ambiguous prompts so the router's own shell/heavy/default
+heuristics keep running.
+- Review fixes (cloud non-regression): `GREETING_RE`/`CODEGEN_RE` over-matched.
+  A short analysis task opening with a greeting-collision word (`status:`,
+  `test`, `date`, …) plus a heavy keyword was mis-labeled `short-greeting` and
+  silently downgraded to Flash before the heavy-tier check; and shell verbs that
+  double as greetings (`ping`, `test-connection`) disabled the shell heuristic.
+  Now the classifier defers any `looksLikeShellCommand` prompt and vetoes
+  greeting/code-gen whenever `HEAVY_RE` fires, with the code-gen filler
+  tightened. Pinned with regression tests.
+
+**Declined — #11 (per-task tool-result memo).** A naive read-only tool memo is
+unsafe here: a file can be mutated mid-task (editfile/writefile/EXECUTE) between
+two reads, so memoizing `readfile`/`listdir` by path would replay STALE content;
+and it largely duplicates the existing `checkToolLoop` (caps identical calls) +
+rolling context. Not worth the correctness risk as specified.
+
+Rust: 3 new cache tests. Frontend: 11 new smart-router tests (classifier +
+privacy-mode sizing + over-match guards). svelte-check 0/0.
+
+---
+
 ## [1.7.230] — 2026-06-25
 
 ### Perf — local LLM token economy, round 2: slim-prompt trim + local loop cap + cloud-only machinery gated off + local-aware context compression

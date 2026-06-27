@@ -66,6 +66,67 @@ pub fn get_cache_stats() -> CacheStats {
     cache_stats().lock().map(|g| g.clone()).unwrap_or_default()
 }
 
+// ── v1.7.231 #8 — LOCAL COMPLETION CACHE ──────────────────────────────────
+//
+// Bounded LRU of (model, system+user prompt) → response TEXT, for LOCAL models
+// ONLY. An identical local prompt returns the cached generation instead of
+// paying a fresh Ollama round-trip (the most expensive part — GPU token gen).
+// The dominant repeats are internal sub-prompts (context compression, intent
+// classification, forced-synthesis) and re-asked questions within a session.
+//
+// SAFETY: the cache stores the model's TEXT (e.g. a `<TOOL>readfile:…` tag or
+// prose), NOT tool RESULTS — a cached tool tag still re-executes fresh against
+// the live filesystem on replay, so there is no stale-read hazard. Cloud is
+// NEVER cached: cloud calls are billed per-request anyway, Anthropic has its
+// own prompt cache, and cloud responses feed the verifier/refine paths where
+// determinism could mask a real second opinion. Process-lifetime, volatile.
+const LOCAL_COMPLETION_CACHE_MAX: usize = 256;
+// Don't cache giant agentic contexts — they rarely repeat byte-for-byte and
+// would just thrash the LRU. Sub-prompts (the real win) are small.
+const LOCAL_COMPLETION_MAX_PROMPT: usize = 16_384;
+
+static LOCAL_COMPLETION_CACHE: once_cell::sync::Lazy<Mutex<(std::collections::HashMap<u64, String>, std::collections::VecDeque<u64>)>>
+    = once_cell::sync::Lazy::new(|| Mutex::new((std::collections::HashMap::with_capacity(LOCAL_COMPLETION_CACHE_MAX + 1), std::collections::VecDeque::with_capacity(LOCAL_COMPLETION_CACHE_MAX + 1))));
+
+/// FNV-1a 64-bit over model | system | user. Same family as `_embed_key`;
+/// collision risk at 256 entries is far below the noise floor.
+fn _local_completion_key(model: &str, system: &str, user: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for s in [model, "\u{1}", system, "\u{1}", user] {
+        for b in s.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
+
+/// Whether a response is safe/worth caching: non-empty, not a truncation /
+/// timeout sentinel (those are partial and must regenerate), within a sane size.
+fn _local_completion_cacheable(prompt_len: usize, resp: &str) -> bool {
+    prompt_len <= LOCAL_COMPLETION_MAX_PROMPT
+        && !resp.is_empty()
+        && resp.len() <= 200_000
+        && !resp.contains("__TRUNCATED__")
+        && !resp.contains("__STREAM_TIMEOUT__")
+}
+
+fn _local_completion_get(key: u64) -> Option<String> {
+    LOCAL_COMPLETION_CACHE.lock().ok().and_then(|g| g.0.get(&key).cloned())
+}
+
+fn _local_completion_put(key: u64, value: String) {
+    if let Ok(mut g) = LOCAL_COMPLETION_CACHE.lock() {
+        let (map, order) = &mut *g;
+        if map.insert(key, value).is_none() {
+            order.push_back(key);
+            while order.len() > LOCAL_COMPLETION_CACHE_MAX {
+                if let Some(old) = order.pop_front() { map.remove(&old); }
+            }
+        }
+    }
+}
+
 /// Adaptive `num_ctx` for Ollama. We used to hardcode 32768 which is fine for
 /// log-paste / analysis but blows VRAM on 7B vision models like qwen2.5vl
 /// (KV-cache at 32K easily takes 6-10 GB extra → "model runner unexpectedly
@@ -1062,6 +1123,19 @@ pub async fn ask_lucy(
         )
     };
 
+    // v1.7.231 #8 — local completion cache: identical (model, system+user) →
+    // cached text, skipping the Ollama round-trip entirely. Local-only; the
+    // cache holds the model's TEXT (a <TOOL> tag still re-executes fresh), so no
+    // stale-read hazard. See LOCAL_COMPLETION_CACHE module docs.
+    let _local_cache_key: Option<u64> = if provider == "local" {
+        local_msgs.as_ref().map(|(s, u)| _local_completion_key(&model, s, u))
+    } else { None };
+    if let Some(k) = _local_cache_key {
+        if let Some(hit) = _local_completion_get(k) {
+            return Ok(hit);
+        }
+    }
+
     let req = match provider {
         "openai" => {
             let payload = json!({ "model": model, "messages": [{"role": "user", "content": final_prompt}] });
@@ -1187,6 +1261,20 @@ pub async fn ask_lucy(
         } {
             let _ = log_usage_internal(&model, input_tokens, output_tokens, "ask_lucy", &user_name).await;
         }
+        // v1.7.231 #8 — store the local generation for identical future prompts.
+        // Unlike the stream path, the non-stream local branch never appends a
+        // __TRUNCATED__ sentinel, so we must check finish_reason DIRECTLY: a
+        // local response cut at the max_tokens cap would otherwise be cached and
+        // replay a half-written answer / tag on every future identical prompt.
+        if let Some(k) = _local_cache_key {
+            let truncated = v["choices"].get(0)
+                .and_then(|c| c["finish_reason"].as_str())
+                .map_or(false, |r| r == "length" || r == "max_tokens");
+            let plen = local_msgs.as_ref().map(|(s, u)| s.len() + u.len()).unwrap_or(0);
+            if !truncated && _local_completion_cacheable(plen, t) {
+                _local_completion_put(k, t.to_string());
+            }
+        }
         Ok(t.to_string())
     } else {
         Err(format!("Respuesta API ({}): {}", provider, body_text))
@@ -1272,6 +1360,21 @@ pub async fn ask_lucy_stream(
             crate::commands::prompt_sections::model_is_weak(&model),
         )
     };
+
+    // v1.7.231 #8 — local completion cache (streaming). On a hit, replay the
+    // cached text as ONE chunk through the same event channel the live stream
+    // uses, so the frontend renders it identically — minus the Ollama round-trip.
+    // Local-only; cached text is the model's output (tool tags re-execute fresh).
+    let _local_cache_key: Option<u64> = if provider == "local" {
+        local_msgs.as_ref().map(|(s, u)| _local_completion_key(&model, s, u))
+    } else { None };
+    if let Some(k) = _local_cache_key {
+        if let Some(hit) = _local_completion_get(k) {
+            let chunk_event = format!("lucy-chunk-{}", request_id);
+            let _ = window.emit(&chunk_event, &hit);
+            return Ok(hit);
+        }
+    }
 
     let req = match provider {
         "openai" => {
@@ -1474,6 +1577,15 @@ pub async fn ask_lucy_stream(
     }
 
     eprintln!("[ask_lucy_stream] Completado: {} bytes, modelo: {}, tokens: in={} out={}", full_text.len(), model, input_tokens, output_tokens);
+    // v1.7.231 #8 — store the local generation for identical future prompts.
+    // `_local_completion_cacheable` rejects the __TRUNCATED__/__STREAM_TIMEOUT__
+    // sentinels appended above, so only complete responses are cached.
+    if let Some(k) = _local_cache_key {
+        let plen = local_msgs.as_ref().map(|(s, u)| s.len() + u.len()).unwrap_or(0);
+        if _local_completion_cacheable(plen, &full_text) {
+            _local_completion_put(k, full_text.clone());
+        }
+    }
     Ok(full_text)
 }
 
@@ -1665,6 +1777,48 @@ pub async fn list_nvidia_models() -> Result<Vec<String>, String> {
     }
 
     Ok(names)
+}
+
+#[cfg(test)]
+mod local_completion_cache_tests {
+    use super::{_local_completion_key, _local_completion_cacheable, _local_completion_get, _local_completion_put};
+
+    #[test]
+    fn key_is_deterministic_and_component_sensitive() {
+        let a = _local_completion_key("local-qwen", "SYS", "USER");
+        let b = _local_completion_key("local-qwen", "SYS", "USER");
+        assert_eq!(a, b, "same inputs must hash identically");
+        // Each component changes the key.
+        assert_ne!(a, _local_completion_key("local-llama", "SYS", "USER"), "model must matter");
+        assert_ne!(a, _local_completion_key("local-qwen", "SYS2", "USER"), "system must matter");
+        assert_ne!(a, _local_completion_key("local-qwen", "SYS", "USER2"), "user must matter");
+        // The \u{1} separator prevents boundary-collision: ("AB","C") vs ("A","BC").
+        assert_ne!(
+            _local_completion_key("m", "AB", "C"),
+            _local_completion_key("m", "A", "BC"),
+            "field boundaries must not collide"
+        );
+    }
+
+    #[test]
+    fn cacheable_rejects_sentinels_empty_and_oversized() {
+        assert!(_local_completion_cacheable(100, "a normal answer"));
+        assert!(!_local_completion_cacheable(100, ""), "empty not cacheable");
+        assert!(!_local_completion_cacheable(100, "partial\n__TRUNCATED__"), "truncated not cacheable");
+        assert!(!_local_completion_cacheable(100, "x\n__STREAM_TIMEOUT__"), "timeout not cacheable");
+        assert!(!_local_completion_cacheable(1_000_000, "ok"), "oversized prompt not cacheable");
+        assert!(!_local_completion_cacheable(100, &"z".repeat(200_001)), "oversized response not cacheable");
+    }
+
+    #[test]
+    fn put_then_get_roundtrips() {
+        // Distinctive key unlikely to collide with anything else in the shared
+        // static; we assert only on retrieval of our own value.
+        let k = _local_completion_key("local-test-roundtrip-zzz", "S", "U");
+        assert!(_local_completion_get(k).is_none(), "fresh key starts empty");
+        _local_completion_put(k, "cached-value-42".to_string());
+        assert_eq!(_local_completion_get(k).as_deref(), Some("cached-value-42"));
+    }
 }
 
 #[cfg(test)]

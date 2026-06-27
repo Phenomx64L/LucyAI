@@ -287,7 +287,7 @@ import { listen } from '@tauri-apps/api/event';
     import { parseDesignMd, formatTokensForPrompt as designTokensForPrompt } from '$lib/design-md';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     // Restored after regression — smart-router was orphaned by Sprint D.
-    import { routeModel, enrichLocalModel, estimateTokens } from '$lib/smart-router';
+    import { routeModel, enrichLocalModel, estimateTokens, classifyRoutingIntent } from '$lib/smart-router';
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
              alertRules, activeAlerts, runbooks,
@@ -1896,6 +1896,12 @@ import { listen } from '@tauri-apps/api/event';
                 manualOverride: manual,
                 smartRoutingEnabled: !!lucyConfig.smartRouting,
                 privacyMode: !!lucyConfig.privacyMode,
+                // v1.7.231 #9 — feed the rich intent so the router right-sizes the
+                // LOCAL model (smallest for greetings, coder for code, largest for
+                // log/analysis). Undefined for ambiguous prompts → router keeps its
+                // own shell/heavy/default heuristics. Biggest win in privacy mode,
+                // which previously always fell to the smallest local model.
+                detectedIntent: classifyRoutingIntent(prompt || ''),
                 // Tier B #1 — Forward economy mode so the router tightens
                 // heavy-tier promotion thresholds. The manual model becomes
                 // the baseline for the savings estimate.
