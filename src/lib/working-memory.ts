@@ -36,8 +36,17 @@ export function buildWorkingMemoryDigest(tab: any): string {
     if (wm.activeIncident) {
         parts.push(`active_incident: ${wm.activeIncident.id} (phase: ${wm.activeIncident.phase})`);
     }
+    // v1.7.236 iter — rutas que el USUARIO te dio en la conversación. Siempre se
+    // inyectan (esta sección nunca se comprime), así que sobreviven a la
+    // compactación de turnos — el bug de "Lucy busca el archivo en la ruta vieja
+    // que ya no aplica" (transcript GoAnywhere: el usuario dio C:\...\IA Projects
+    // y Lucy volvió a la ruta de Downloads anterior).
+    if (wm.userPaths?.length) {
+        const lines = (wm.userPaths as any[]).slice(-6).map((p: any) => `  · ${p.path}${p.dir ? '  (carpeta actual de trabajo)' : ''}`).join('\n');
+        parts.push(`RUTAS QUE EL USUARIO TE INDICÓ (usa la MÁS RECIENTE; NO vuelvas a rutas antiguas de turnos previos):\n${lines}`);
+    }
     if (!parts.length) return '';
-    return `\n\n--- WORKING MEMORY (tab state) ---\n${parts.join('\n')}\n(Use this to avoid re-asking, re-creating files, or re-running successful commands. If last 2 cmds failed with the same cause, propose a DIFFERENT approach.)`;
+    return `\n\n--- WORKING MEMORY (tab state) ---\n${parts.join('\n')}\n(Use this to avoid re-asking, re-creating files, or re-running successful commands. If last 2 cmds failed with the same cause, propose a DIFFERENT approach. Trust "RUTAS QUE EL USUARIO TE INDICÓ" over any path buried in older/compacted turns.)`;
 }
 
 // ── SlotRelevance ─────────────────────────────────────────────────────────────
@@ -135,6 +144,43 @@ export function updateWorkingMemory(tab: any, ev: WMEvent, logFn?: (type: string
     } else if (ev.type === 'turn') {
         wm.turnCount = (wm.turnCount || 0) + 1;
     }
+}
+
+// ── captureUserPaths ──────────────────────────────────────────────────────────
+// v1.7.236 iter — extrae rutas de archivo/carpeta que el USUARIO menciona en su
+// mensaje y las ancla en workingMemory.userPaths. Se renderizan SIEMPRE en el
+// digest (que nunca se comprime), así que persisten toda la sesión aunque los
+// turnos viejos se compacten. Arregla el "olvida la ruta que le di".
+// Detecta: Windows absolutas (C:\...), UNC (\\host\share\...), Unix (/home/...),
+// tanto entre comillas como sueltas (los paths con espacios como "IA Projects"
+// se capturan porque la clase permite espacios hasta el fin de token razonable).
+export function captureUserPaths(tab: any, text: string): void {
+    if (!tab || !text) return;
+    const found: { path: string; dir: boolean }[] = [];
+    const push = (raw: string) => {
+        let p = raw.trim().replace(/[)\].,;:'"]+$/, '').trim();
+        if (p.length < 4 || p.length > 260) return;
+        // ¿carpeta o archivo? archivo = último segmento con extensión .xxx (1-6).
+        const last = p.split(/[\\/]/).pop() || '';
+        const dir = !/\.[A-Za-z0-9]{1,6}$/.test(last);
+        if (!found.some(f => f.path === p)) found.push({ path: p, dir });
+    };
+    // 1) Rutas entre comillas (permiten cualquier char, incl. espacios).
+    for (const m of text.matchAll(/["']([A-Za-z]:\\[^"'\r\n]+|\\\\[^"'\r\n]+|\/[^"'\r\n]{3,})["']/g)) push(m[1]);
+    // 2) Windows absolutas sueltas — permiten espacios en segmentos (IA Projects).
+    for (const m of text.matchAll(/\b[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\?)+/g)) push(m[0]);
+    // 3) UNC sueltas.
+    for (const m of text.matchAll(/\\\\[A-Za-z0-9._$-]+\\(?:[^\\/:*?"<>|\r\n]+\\?)+/g)) push(m[0]);
+    if (!found.length) return;
+    tab.workingMemory ??= {};
+    const wm = tab.workingMemory;
+    wm.userPaths ??= [];
+    for (const f of found) {
+        wm.userPaths = (wm.userPaths as any[]).filter((x: any) => x.path !== f.path);
+        wm.userPaths.push({ path: f.path, dir: f.dir, ts: Date.now() });
+        if (f.dir) wm.currentCwd = f.path;   // la última carpeta indicada = cwd
+    }
+    if (wm.userPaths.length > 8) wm.userPaths.splice(0, wm.userPaths.length - 8);
 }
 
 // ── compactOldTurns ───────────────────────────────────────────────────────────

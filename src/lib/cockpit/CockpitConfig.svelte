@@ -1,0 +1,315 @@
+<script>
+  /* ==========================================================================
+     Lucy 2.0 — Config (cockpit)  ·  Phase F4/views. EDITABLE.
+     Real, wired settings:
+       • API-key status via `get_configured_providers` (booleans only — the key
+         VALUE never crosses IPC; "Configurar" opens the classic provider modal
+         through the overlay-yield callback).
+       • Spend cap persisted to `lucy_spend_cap_usd` (localStorage; the agent
+         loop reads it fresh each run, so editing here takes effect immediately).
+       • Lucy personality → +page.svelte callback (updates the live var + LS).
+     Guardrails HITL/SSRF/scrubber are backend-enforced invariants (shown as
+     "obligatorio"). Additive — does not touch the classic settings UI.
+     ========================================================================== */
+  import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
+  import Settings from '@tabler/icons-svelte/icons/settings';
+  import Cpu from '@tabler/icons-svelte/icons/cpu';
+  import Key from '@tabler/icons-svelte/icons/key';
+  import ShieldLock from '@tabler/icons-svelte/icons/shield-lock';
+  import Database from '@tabler/icons-svelte/icons/database';
+  import Palette from '@tabler/icons-svelte/icons/palette';
+  import CircleCheck from '@tabler/icons-svelte/icons/circle-check';
+  import CircleX from '@tabler/icons-svelte/icons/circle-x';
+  import { localModels, ollamaOnline, refreshLocalModels } from '$lib/models.js';
+  import { ensureTtsVoices, resolveTtsVoice, speak } from '$lib/voice';
+
+  let { personality = 'balanced', onSetPersonality = undefined, onConfigureKeys = undefined, onOpenSettings = undefined, model = null, accent = 'emerald', onSetAccent = undefined, theme = 'dark', onSetTheme = undefined } = $props();
+  const THEME_OPTS = [{ k: 'dark', l: 'Oscuro' }, { k: 'light', l: 'Claro' }, { k: 'auto', l: 'Auto' }];
+  const ACCENT_KEYS = ['emerald', 'blue', 'violet', 'amber', 'pink', 'cyan'];
+
+  const localCount = $derived(($localModels || []).filter((m) => m.id !== 'local-custom').length);
+  function refreshLocal() { refreshLocalModels().catch(() => {}); }
+
+  const KEY_PROVIDERS = [
+    { name: 'Google Gemini', match: ['gemini', 'google'] },
+    { name: 'OpenAI',        match: ['openai', 'gpt'] },
+    { name: 'Anthropic',     match: ['anthropic', 'claude'] },
+    { name: 'NVIDIA NIM',    match: ['nvidia'] },
+    { name: 'Tavily (web)',  match: ['tavily'] },
+  ];
+  let configured = $state([]);
+  const keyOk = (matches) => matches.some((x) => configured.some((p) => String(p).toLowerCase().includes(x)));
+
+  let spendCap = $state(0);
+  function saveSpendCap() { const n = Math.max(0, Number(spendCap) || 0); spendCap = n; try { localStorage.setItem('lucy_spend_cap_usd', String(n)); } catch {} }
+
+  const PERSONAS = [
+    { id: 'concise',  label: 'Conciso' },
+    { id: 'balanced', label: 'Equilibrado' },
+    { id: 'detailed', label: 'Detallado' },
+  ];
+
+  const GUARDS = [
+    { name: 'HITL en comandos destructivos', desc: 'Confirmación humana antes de ejecutar' },
+    { name: 'Guardia SSRF en fetch',          desc: 'Bloquea loopback / RFC1918 / metadata' },
+    { name: 'Depurador de secretos',          desc: 'Redacta claves en memoria y auditoría' },
+  ];
+
+  const cloudLabel = $derived((String(model || '').split('::')[0].split('/').pop()) || 'Opus 4.8');
+
+  // v1.7.236 — versión DINÁMICA desde Tauri (getVersion lee tauri.conf.json)
+  // en vez de un string hardcodeado que se desincroniza cada release.
+  let appVersion = $state('1.7.236');
+  import { getVersion } from '@tauri-apps/api/app';
+
+  // ── Voz de Lucy (v1.7.235) ──────────────────────────────────────────────────
+  // El TTS tomaba la primera voz del idioma (en Windows suele ser "Raúl",
+  // masculina). Ahora: default inteligente (neural femenina, ver voice.ts) +
+  // este selector para fijar una voz concreta (localStorage lucy_tts_voice).
+  const _userLang = (() => { try { return localStorage.getItem('lucy_user_lang') === 'en' ? 'en-US' : 'es-MX'; } catch { return 'es-MX'; } })();
+  let ttsVoices = $state([]);        // voces del idioma activo (nombre + lang)
+  let ttsChoice = $state('');        // '' = auto (ranking); si no, voice.name fijado
+  let ttsAutoName = $state('');      // qué elige el auto — se muestra en la opción
+  function saveTtsChoice() {
+    try {
+      if (ttsChoice) localStorage.setItem('lucy_tts_voice', ttsChoice);
+      else localStorage.removeItem('lucy_tts_voice');
+    } catch {}
+  }
+  function testTtsVoice() {
+    saveTtsChoice(); // speak() lee la preferencia — probar = oír lo elegido
+    const sample = _userLang.startsWith('es')
+      ? 'Hola, soy Lucy. Así sonará mi voz cuando te hable.'
+      : 'Hi, I am Lucy. This is how my voice will sound.';
+    speak(sample, { getActiveLang: () => ({ stt: _userLang, tts: _userLang }) }).catch(() => {});
+  }
+
+  onMount(async () => {
+    try { appVersion = await getVersion(); } catch {}
+    try { const p = await invoke('get_configured_providers'); if (Array.isArray(p)) configured = p; } catch {}
+    try { spendCap = parseFloat(localStorage.getItem('lucy_spend_cap_usd') || '0') || 0; } catch {}
+    try {
+      const all = await ensureTtsVoices();
+      const prefix = _userLang.split('-')[0];
+      ttsVoices = all.filter((v) => v.lang.startsWith(prefix)).map((v) => ({ name: v.name, lang: v.lang }));
+      ttsAutoName = resolveTtsVoice(all, _userLang)?.name || '';
+      const pinned = localStorage.getItem('lucy_tts_voice');
+      if (pinned && ttsVoices.some((v) => v.name === pinned)) ttsChoice = pinned;
+    } catch {}
+  });
+</script>
+
+<div class="cfg">
+  <div class="cfg-head">
+    <span class="cfg-title">Configuración</span>
+    <span class="src-pill"><Settings size={14} stroke={1.75} /> Lucy v{appVersion}</span>
+    <button class="full-btn" onclick={() => onOpenSettings?.()} title="Apariencia · IA · MCP · Sistema · Idioma">Configuración completa →</button>
+  </div>
+
+  <div class="grid">
+    <!-- Modelos + preferencias -->
+    <section class="panel">
+      <div class="panel-head"><Cpu size={16} stroke={1.75} /><span class="ck-led" class:on={$ollamaOnline}></span><span class="ck-lbl">Modelos y comportamiento</span><span class="ck-rule" aria-hidden="true"></span></div>
+      <div class="rows">
+        <div class="row"><span class="row-l">Modelo activo</span><span class="row-v">{cloudLabel}</span></div>
+        <div class="row"><span class="row-l">Enrutado</span><span class="row-v"><span class="badge accent">Auto</span></span></div>
+        <div class="row">
+          <span class="row-l">Modelos locales (Ollama)</span>
+          <span class="row-v"><span class="ol-dot" class:on={$ollamaOnline}></span>{localCount} detectados<button class="mini-btn" onclick={refreshLocal} title="Redetectar">↻</button></span>
+        </div>
+        <div class="row">
+          <span class="row-l">Límite de gasto / sesión</span>
+          <span class="row-v">
+            <span class="cap-usd">$</span>
+            <input class="cap-input" type="number" min="0" step="0.5" bind:value={spendCap} onchange={saveSpendCap} />
+          </span>
+        </div>
+        <div class="row col">
+          <span class="row-l">Personalidad de Lucy</span>
+          <div class="seg">
+            {#each PERSONAS as p}
+              <button class="seg-btn" class:on={personality === p.id} onclick={() => onSetPersonality?.(p.id)}>{p.label}</button>
+            {/each}
+          </div>
+        </div>
+        <div class="row col">
+          <span class="row-l">Voz de Lucy (TTS)</span>
+          <div class="voice-row">
+            <select class="voice-sel" bind:value={ttsChoice} onchange={saveTtsChoice} disabled={!ttsVoices.length}>
+              <option value="">{ttsAutoName ? `Auto — ${ttsAutoName}` : 'Auto (recomendada)'}</option>
+              {#each ttsVoices as v (v.name)}
+                <option value={v.name}>{v.name} · {v.lang}</option>
+              {/each}
+            </select>
+            <button class="mini-btn" onclick={testTtsVoice} disabled={!ttsVoices.length} title="Escuchar una muestra">▶ Probar</button>
+          </div>
+          {#if !ttsVoices.length}
+            <div class="voice-hint">No se detectaron voces del sistema para el idioma activo.</div>
+          {/if}
+        </div>
+      </div>
+      <div class="note">El límite de gasto detiene el loop automático al cruzar el monto (0 = sin límite).</div>
+    </section>
+
+    <!-- Claves API -->
+    <section class="panel">
+      <div class="panel-head"><Key size={16} stroke={1.75} /> Claves API
+        <button class="head-btn" onclick={() => onConfigureKeys?.()}>Configurar</button>
+      </div>
+      <div class="rows">
+        {#each KEY_PROVIDERS as k}
+          <div class="row">
+            <span class="row-l">{k.name}</span>
+            <span class="row-v">
+              {#if keyOk(k.match)}
+                <span class="kstat ok"><CircleCheck size={14} stroke={1.9} /> configurada</span>
+              {:else}
+                <span class="kstat no"><CircleX size={14} stroke={1.9} /> sin configurar</span>
+              {/if}
+            </span>
+          </div>
+        {/each}
+        <div class="note">La clave nunca se muestra ni cruza al frontend — solo su estado.</div>
+      </div>
+    </section>
+
+    <!-- Guardarraíles -->
+    <section class="panel span-2">
+      <div class="panel-head"><ShieldLock size={16} stroke={1.75} /> Guardarraíles de seguridad</div>
+      <div class="guards">
+        {#each GUARDS as g (g.name)}
+          <div class="guard locked">
+            <span class="g-main">
+              <span class="g-name">{g.name}<span class="lockchip">obligatorio</span></span>
+              <span class="g-desc">{g.desc}</span>
+            </span>
+            <span class="switch on"><span class="knob"></span></span>
+          </div>
+        {/each}
+      </div>
+    </section>
+
+    <!-- Datos -->
+    <section class="panel">
+      <div class="panel-head"><Database size={16} stroke={1.75} /> Datos</div>
+      <div class="rows">
+        <div class="row"><span class="row-l">Ruta de datos</span><span class="row-v mono">%APPDATA%\Lucy</span></div>
+        <div class="row"><span class="row-l">Base de datos</span><span class="row-v mono">lucy.db</span></div>
+        <div class="row"><span class="row-l">Proveedores activos</span><span class="row-v">{configured.length}</span></div>
+      </div>
+    </section>
+
+    <!-- Apariencia -->
+    <section class="panel">
+      <div class="panel-head"><Palette size={16} stroke={1.75} /> Apariencia</div>
+      <div class="rows">
+        <div class="row">
+          <span class="row-l">Tema</span>
+          <span class="row-v seg">
+            {#each THEME_OPTS as o}
+              <button class="seg-btn" class:on={theme === o.k} onclick={() => onSetTheme?.(o.k)}>{o.l}</button>
+            {/each}
+          </span>
+        </div>
+        <div class="row">
+          <span class="row-l">Acento del cockpit</span>
+          <span class="row-v acc-swatches">
+            {#each ACCENT_KEYS as k}
+              <button class="acc-sw {k}" class:on={accent === k} onclick={() => onSetAccent?.(k)} aria-label={k}></button>
+            {/each}
+          </span>
+        </div>
+        <div class="row"><span class="row-l">Idioma</span><span class="row-v">Español <span class="hint-mini">· cámbialo en configuración completa</span></span></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<style>
+  .cfg { height: 100%; overflow-y: auto; padding: 18px 22px; }
+
+  .cfg-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .cfg-title { font-size: var(--fs-title); font-weight: var(--fw-medium); color: var(--text-primary); }
+  .src-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); }
+  .full-btn { margin-left: auto; font-size: var(--fs-footnote); color: var(--accent-ink); background: var(--accent); border: 0; border-radius: var(--r-md); padding: 6px 13px; cursor: pointer; transition: background var(--dur-fast) var(--ease-out); }
+  .full-btn:hover { background: var(--accent-hover); }
+  .ol-dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--text-disabled); flex-shrink: 0; }
+  .ol-dot.on { background: var(--accent); }
+  .mini-btn { background: transparent; border: 0; color: var(--accent); cursor: pointer; font-size: var(--fs-footnote); padding: 0 2px; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 15px 17px; }
+  .span-2 { grid-column: 1 / -1; }
+  /* v1.7.235 "instrumento premium" — cabecera de panel como label de
+     instrumento (la regla cubre las 5 secciones de una vez; el ck-lbl del
+     primer head es el mismo tratamiento, así que queda idéntico). */
+  .panel-head { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-medium); letter-spacing: var(--ls-label); text-transform: uppercase; color: var(--text-faint); margin-bottom: 13px; }
+  .panel-head :global(svg) { color: var(--accent); }
+  .head-btn { margin-left: auto; font-size: var(--fs-caption); color: var(--accent); background: var(--accent-bg); border: 0; border-radius: var(--r-sm); padding: 3px 10px; cursor: pointer; }
+  .head-btn:hover { background: rgba(61, 214, 164, 0.18); }
+
+  .rows { display: flex; flex-direction: column; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 9px 2px; border-top: 1px solid var(--border); }
+  .row.col { flex-direction: column; align-items: stretch; gap: 8px; }
+  .row:first-child { border-top: 0; }
+  .row-l { flex: 1; font-size: var(--fs-footnote); color: var(--text-muted); }
+  .row-v { display: flex; align-items: center; gap: 7px; font-size: var(--fs-footnote); color: var(--text-primary); }
+  .row-v.mono { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary); }
+  .badge { font-size: var(--fs-caption); color: var(--text-secondary); background: var(--surface-3); padding: 2px 9px; border-radius: var(--r-pill); }
+  .badge.accent { color: var(--accent); background: var(--accent-bg); }
+  .swatch { width: 12px; height: 12px; border-radius: 4px; background: var(--accent); }
+  .acc-swatches { display: flex; gap: 6px; }
+  .acc-sw { width: 20px; height: 20px; border-radius: var(--r-pill); border: 2px solid transparent; cursor: pointer; padding: 0; transition: transform var(--dur-fast) var(--ease-out); }
+  .acc-sw:hover { transform: scale(1.12); }
+  .acc-sw.on { border-color: var(--text-primary); }
+  .acc-sw.emerald { background: #3DD6A4; }
+  .acc-sw.blue { background: #5B9DF9; }
+  .acc-sw.violet { background: #A78BFA; }
+  .acc-sw.amber { background: #E5B567; }
+  .acc-sw.pink { background: #F06EA9; }
+  .acc-sw.cyan { background: #4FD1E0; }
+  .hint-mini { font-size: var(--fs-caption); color: var(--text-faint); }
+  .note { font-size: var(--fs-caption); color: var(--text-faint); margin-top: 10px; line-height: var(--lh-tight); }
+
+  .cap-usd { color: var(--text-muted); font-family: var(--font-mono); }
+  .cap-input { width: 72px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm); color: var(--text-primary); font-size: var(--fs-footnote); font-family: var(--font-mono); padding: 4px 8px; text-align: right; outline: 0; }
+  .cap-input:focus { border-color: var(--border-accent); }
+
+  .seg { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px; }
+  .seg-btn { flex: 1; font-size: var(--fs-caption); color: var(--text-muted); background: transparent; border: 0; border-radius: var(--r-sm); padding: 6px 8px; cursor: pointer; transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+  .seg-btn:hover { color: var(--text-primary); }
+  .seg-btn.on { color: var(--accent-ink); background: var(--accent); }
+
+  /* v1.7.235 — selector de voz TTS */
+  .voice-row { display: flex; align-items: center; gap: 8px; }
+  .voice-sel {
+    flex: 1; min-width: 0;
+    background: var(--surface-2); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: var(--r-sm);
+    font-size: var(--fs-caption); font-family: var(--font-sans);
+    padding: 6px 8px; cursor: pointer;
+  }
+  .voice-sel:disabled { opacity: 0.5; cursor: default; }
+  .voice-hint { font-size: var(--fs-caption); color: var(--text-faint); margin-top: 4px; }
+
+  .kstat { display: flex; align-items: center; gap: 5px; font-size: var(--fs-caption); padding: 2px 9px; border-radius: var(--r-pill); }
+  .kstat.ok { color: var(--success); background: var(--success-bg); }
+  .kstat.no { color: var(--text-faint); background: var(--surface-3); }
+
+  .guards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .guard { display: flex; align-items: center; gap: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; }
+  .g-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .g-name { display: flex; align-items: center; gap: 8px; font-size: var(--fs-footnote); color: var(--text-primary); }
+  .lockchip { font-size: var(--fs-caption); color: var(--accent); background: var(--accent-bg); padding: 0 7px; border-radius: var(--r-pill); }
+  .g-desc { font-size: var(--fs-caption); color: var(--text-muted); }
+  .switch { width: 36px; height: 20px; border-radius: var(--r-pill); background: var(--surface-3); border: 1px solid var(--border-strong); flex-shrink: 0; position: relative; }
+  .switch.on { background: var(--accent); border-color: transparent; }
+  .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: var(--r-pill); background: var(--text-primary); }
+  .switch.on .knob { transform: translateX(16px); background: var(--accent-ink); }
+
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: 1fr; }
+    .guards { grid-template-columns: 1fr; }
+  }
+</style>

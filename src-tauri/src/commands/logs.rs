@@ -88,6 +88,12 @@ pub async fn read_remote_log_linux(
     port: Option<u16>,
     key_path: Option<String>,
 ) -> Result<Vec<String>, String> {
+    // SECURITY v1.7.232 (Phase-2 C14): validate host/username before they reach the
+    // `ssh user@host` argv token (line ~100). The path is already single-quote-escaped
+    // (MED-1), but the user@host token is not — a username/host beginning with '-' would
+    // be re-parsed by SSH as an option (H10 argv-injection). Sibling SSH paths validate.
+    crate::commands::hosts::validate_host(&host)?;
+    crate::commands::hosts::validate_username(&username)?;
     let port_str = port.unwrap_or(22).to_string();
     let cmd = format!("tail -{} '{}'", lines, path.replace('\'', "'\\''"));
     let mut ssh_cmd = Command::new("ssh");

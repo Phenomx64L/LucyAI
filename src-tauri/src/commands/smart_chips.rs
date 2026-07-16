@@ -97,10 +97,21 @@ pub async fn generate_smart_chips(
 
     // Try Gemini first (cheapest), fall back to Anthropic Haiku.
     if let Ok(key) = read_keyring("gemini_api_key") {
-        let model = model_hint
+        // Chips are a tiny, high-frequency background task → always use a CHEAP
+        // flash model. The hint is only used to confirm the provider is Gemini;
+        // we ignore its tier. Two fixes vs the old code:
+        //   1. Strip Lucy's internal "::effort" suffix — the Gemini REST API
+        //      404s on `gemini-3.1-pro-preview::high` (it's not a real model id).
+        //   2. Downgrade a Pro hint to flash-lite — running Pro (let alone
+        //      Pro::high deep-reasoning) for a 3-chip JSON is slow and costly.
+        let base = model_hint
             .as_deref()
-            .filter(|m| m.starts_with("gemini"))
-            .unwrap_or("gemini-2.5-flash");
+            .map(|m| m.split_once("::").map(|(b, _)| b).unwrap_or(m))
+            .filter(|m| m.starts_with("gemini"));
+        let model = match base {
+            Some(m) if !m.contains("pro") => m, // honour a cheap flash hint as-is
+            _ => "gemini-3.1-flash-lite",       // default, or downgrade Pro/unknown
+        };
         match call_gemini_for_chips(&key, model, &system_prompt, &user_prompt).await {
             Ok(chips) => return Ok(chips),
             Err(e)    => eprintln!("[smart_chips] gemini path failed: {} — trying anthropic", e),
@@ -161,9 +172,10 @@ pub async fn generate_tab_title(
     }
     user_prompt.push_str("Title:");
 
-    // Gemini first.
+    // Gemini first. Cheap flash-lite — a tab title is 3-5 words. (Was the now
+    // retired gemini-2.5-flash, which 404s.)
     if let Ok(key) = read_keyring("gemini_api_key") {
-        if let Ok(raw) = call_gemini_for_text(&key, "gemini-2.5-flash", &sys, &user_prompt).await {
+        if let Ok(raw) = call_gemini_for_text(&key, "gemini-3.1-flash-lite", &sys, &user_prompt).await {
             return Ok(sanitize_title(&raw));
         }
     }

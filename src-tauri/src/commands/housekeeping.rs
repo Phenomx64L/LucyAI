@@ -67,6 +67,9 @@ fn try_emit(event: &str, payload: serde_json::Value) {
 /// the frontend (e.g. memory:consolidated for D2 visualization).
 pub fn start_all(app: &AppHandle) {
     let _ = APP_HANDLE.set(app.clone());
+    // Tier 0 — disaster recovery (v1.7.238): backup automático diario. Va primero
+    // para que un snapshot exista lo antes posible en operación desatendida.
+    db_auto_backup::spawn();
     // Tier A — self-care
     embed_warmup::spawn();
     audit_verify::spawn();
@@ -106,6 +109,99 @@ fn env_disabled(name: &str) -> bool {
 /// life of the run, random across runs.
 fn boot_jitter() -> Duration {
     Duration::from_millis(rand::random::<u64>() % 45_000)
+}
+
+// ── 0. auto-backup diario (v1.7.238 — disaster recovery desatendido) ─────
+//
+// Toda la maquinaria de backup (VACUUM INTO atómico + firma HMAC + restore
+// validado) ya existía en db_backup.rs, pero sus ÚNICOS call sites eran dos
+// botones manuales en la UI. En operación desatendida eso significa que si la
+// DB se corrompe (o el arranque resiliente v1.7.238 la pone en cuarentena y la
+// recrea fresca), TODA la memoria curada / permisos / audit trail se pierden
+// sin retorno. Este loop crea un snapshot firmado por día a
+// %APPDATA%\Lucy\backups\lucy-auto-<fecha>.db (retención 7), corriendo ~5 min
+// tras el boot y cada 24 h. VACUUM INTO no bloquea escritores.
+pub mod db_auto_backup {
+    use super::*;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    const TICK: Duration = Duration::from_secs(24 * 3600);
+    const KEEP: usize = 7;
+
+    fn backups_dir() -> std::path::PathBuf {
+        let mut p = std::path::PathBuf::from(
+            std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string()),
+        );
+        p.push("Lucy");
+        p.push("backups");
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    /// Conserva los `KEEP` snapshots más recientes (por mtime); borra el resto
+    /// junto a su sidecar `.sig`.
+    fn prune(dir: &std::path::Path) {
+        let mut items: Vec<(std::path::PathBuf, std::time::SystemTime)> =
+            std::fs::read_dir(dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    n.starts_with("lucy-auto-") && n.ends_with(".db")
+                })
+                .filter_map(|e| {
+                    let m = e.metadata().ok()?.modified().ok()?;
+                    Some((e.path(), m))
+                })
+                .collect();
+        items.sort_by(|a, b| b.1.cmp(&a.1)); // más nuevo primero
+        for (path, _) in items.into_iter().skip(KEEP) {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("db.sig"));
+        }
+    }
+
+    async fn run_once() {
+        let dir = backups_dir();
+        let date = chrono::Local::now().format("%Y-%m-%d");
+        let target = dir.join(format!("lucy-auto-{}.db", date));
+        let target_str = target.to_string_lossy().to_string();
+        match crate::commands::db_backup::db_backup_create(target_str).await {
+            Ok(bytes) => {
+                crate::utils::logging::write_app_log(
+                    "INFO",
+                    &format!("backup automático OK: {} ({} bytes)", target.display(), bytes),
+                );
+                prune(&dir);
+            }
+            Err(e) => {
+                // Si no hay DB (init falló) o el disco está lleno, se registra y
+                // se reintenta en el próximo tick. Nunca aborta el proceso.
+                crate::utils::logging::write_app_log(
+                    "WARNING",
+                    &format!("backup automático falló: {}", e),
+                );
+            }
+        }
+    }
+
+    pub fn spawn() {
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        if env_disabled("LUCY_HK_NO_AUTO_BACKUP") {
+            eprintln!("[housekeeping] db_auto_backup disabled via env");
+            return;
+        }
+        tauri::async_runtime::spawn(async {
+            // Espera a que el pool de la DB asiente antes del primer snapshot.
+            tokio::time::sleep(Duration::from_secs(300) + boot_jitter()).await;
+            loop {
+                run_once().await;
+                tokio::time::sleep(TICK).await;
+            }
+        });
+    }
 }
 
 // ── 1. embedding cache warmup ───────────────────────────────────────────
@@ -443,7 +539,7 @@ pub mod crystal_promo {
                         format!("{}\n\n{}", title, content)
                     };
                     let truncated_narrative = if narrative.len() > 8192 {
-                        format!("{}…", &narrative[..8189])
+                        format!("{}…", crate::utils::safe_truncate(&narrative, 8189))
                     } else {
                         narrative
                     };

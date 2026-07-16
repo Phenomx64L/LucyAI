@@ -552,10 +552,10 @@
         background:rgba(16,185,129,.3);
     }
     :global(:root.light .sb-lbl::after){background:linear-gradient(to right, rgba(15,23,42,.15), transparent);}
-    :global(:root.light .sb-lbl){color:#94a3b8;font-weight:800 !important;}
-    :global(:root.light .sb-it){color:#cbd5e1;}
-    :global(:root.light .sb-it:hover){background:rgba(255,255,255,.06);color:#ffffff;}
-    :global(:root.light .sb-it.act){background:color-mix(in srgb, var(--acc) 15%, transparent);color:var(--acc);font-weight:600;}
+    :global(:root.light .sb-lbl){color:var(--txt3);font-weight:800 !important;}
+    :global(:root.light .sb-it){color:var(--txt2);}
+    :global(:root.light .sb-it:hover){background:color-mix(in srgb, var(--acc) 8%, transparent);color:var(--txt);}
+    :global(:root.light .sb-it.act){background:color-mix(in srgb, var(--acc) 14%, transparent);color:var(--acc);font-weight:600;}
     :global(:root:not(.light)) .sidebar{
         background:var(--sidebar-overlay, #12141e) !important;
         backdrop-filter:blur(12px) saturate(140%);

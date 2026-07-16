@@ -33,6 +33,37 @@ export interface MemoryInfo {
     percent: number;
 }
 
+export interface SwapInfo {
+    enabled: boolean;
+    total_mb: number;
+    used_mb: number;
+    percent: number;
+}
+
+export interface TempSensor {
+    label: string;
+    celsius: number;
+    max: number | null;
+    critical: number | null;
+}
+
+export interface TemperatureInfo {
+    available: boolean;
+    sensors: TempSensor[];
+}
+
+export interface NetInterface {
+    name: string;
+    total_recv: number;
+    total_send: number;
+}
+
+export interface NetworkInfo {
+    recv_mbps: number;
+    send_mbps: number;
+    interfaces: NetInterface[];
+}
+
 export interface SystemHealth {
     hostname: string;
     os: string;
@@ -42,6 +73,11 @@ export interface SystemHealth {
     memory: MemoryInfo;
     disks: DiskInfo[];
     top_processes: ProcessInfo[];
+    // Present on the LOCAL health (get_system_health_json); the remote-health
+    // commands may omit them — hence optional. Shapes mirror system.rs exactly.
+    swap?: SwapInfo;
+    temperatures?: TemperatureInfo;
+    network?: NetworkInfo;
 }
 
 export interface FilePayload {

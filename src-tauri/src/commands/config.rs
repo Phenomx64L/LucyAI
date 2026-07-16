@@ -34,16 +34,34 @@ pub fn save_llm_key(provider: String, api_key: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_configured_providers() -> Result<Vec<String>, String> {
     let mut configured = Vec::new();
-    // `tavily` is included so the frontend can render its status row in
-    // the provider config modal even though Tavily is an auxiliary tool
-    // (web search), not an LLM provider. Keeping it in the same list lets
-    // the UI reuse the existing rendering loop.
+    // v1.7.238 — distinguir "no configurado" (NoEntry) de un error REAL/transitorio
+    // del keyring. Antes cualquier fallo (`.is_ok()`) se leía como "no configurado":
+    // con auto-arranque, una race del Credential Manager justo tras el logon
+    // devolvía lista vacía → el frontend mandaba a Lucy a la pantalla de setup como
+    // instalación virgen TODA la noche. Ahora, si el keyring falla con algo que NO
+    // es NoEntry y NO se pudo leer ninguna clave, devolvemos error para que el
+    // frontend reintente antes de asumir "sin configurar".
+    // `tavily` va incluido para que la UI renderice su fila de estado (es una
+    // herramienta auxiliar de búsqueda web, no un proveedor LLM).
+    let mut transient_err: Option<String> = None;
     for provider in ["gemini", "anthropic", "openai", "local", "nvidia", "tavily"] {
         let key_name = format!("{}_api_key", provider);
-        if let Ok(entry) = Entry::new("LucySysAdmin", &key_name) {
-            if entry.get_password().is_ok() {
-                configured.push(provider.to_string());
-            }
+        match Entry::new("LucySysAdmin", &key_name) {
+            Ok(entry) => match entry.get_password() {
+                Ok(_) => configured.push(provider.to_string()),
+                Err(keyring::Error::NoEntry) => { /* genuinamente sin configurar */ }
+                Err(e) => { transient_err.get_or_insert(format!("{}: {}", provider, e)); }
+            },
+            Err(e) => { transient_err.get_or_insert(format!("{} entry: {}", provider, e)); }
+        }
+    }
+    if configured.is_empty() {
+        if let Some(e) = transient_err {
+            write_app_log(
+                "WARNING",
+                &format!("get_configured_providers: keyring inaccesible ({}) — el frontend debe reintentar antes de asumir 'sin configurar'.", e),
+            );
+            return Err(format!("keyring transiently unavailable: {}", e));
         }
     }
     Ok(configured)

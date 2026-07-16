@@ -171,14 +171,31 @@ fn ssrf_safe_redirect_policy() -> reqwest::redirect::Policy {
             return attempt.error("too many redirects (>10)");
         }
         let url = attempt.url().as_str();
+        // 1. String/regex deny-list (literal internal IPs, metadata hostnames).
         let scan = crate::guardrails::scan_url(url);
-        match scan.decision {
-            crate::guardrails::ScanDecision::Allow => attempt.follow(),
-            _ => attempt.error(format!(
+        if !matches!(scan.decision, crate::guardrails::ScanDecision::Allow) {
+            return attempt.error(format!(
                 "Redirect to internal/sensitive target blocked: {}",
                 scan.reason
-            )),
+            ));
         }
+        // 2. SECURITY v1.7.232 (Phase-2 SSRF-REDIRECT-DNS-01): also RESOLVE the
+        //    redirect host and reject if it maps to an internal/loopback/metadata
+        //    IP. The string check above is trivially bypassed on the redirect path
+        //    by DNS-rebinding (a public-looking hostname whose A record is
+        //    169.254.169.254 / 127.0.0.1) or an obfuscated IP literal
+        //    (http://2130706433/) — `host_resolves_to_internal` normalizes both via
+        //    the OS resolver, the same guard the INITIAL fetch already runs (ai.rs)
+        //    but that the redirect chain was missing. Fail-closed (Err on
+        //    unresolvable). NOTE: a BLOCKING resolve on the (rare) redirect hop
+        //    inside this sync callback; a pinning connector that dials the validated
+        //    IP is the ideal future fix (also closes the resolve→connect TOCTOU).
+        if crate::guardrails::host_resolves_to_internal(url).is_err() {
+            return attempt.error(
+                "Redirect blocked: host resolves to an internal/loopback/metadata address".to_string(),
+            );
+        }
+        attempt.follow()
     })
 }
 
@@ -210,6 +227,97 @@ pub static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
         .build()
         .expect("Error creando cliente HTTP global")
 });
+
+// ── SSRF-hardened URL-fetch client (Phase-2 SSRF-REDIRECT-DNS-01 follow-up) ──
+//
+// The shared HTTP_CLIENT above MUST reach loopback (local Ollama at
+// 127.0.0.1:11434) and provider APIs, so it cannot reject internal IPs wholesale.
+// But `fetch_url_content` takes an LLM/agent-influenced URL and must never be an
+// SSRF gadget. A pre-request DNS check still leaves a resolve→connect TOCTOU (DNS
+// can flip between the check and the connect), so this dedicated client plugs a
+// custom resolver: it performs the ONE resolution reqwest then dials and drops
+// every internal/loopback/metadata address, so the IP reqwest connects to is the
+// SAME one we validated — closing the rebinding TOCTOU on the initial hop AND every
+// redirect, uniformly. Kept separate from HTTP_CLIENT precisely because the shared
+// client legitimately talks to loopback.
+
+/// Pure SSRF address filter: keep only routable public addresses. Extracted so it
+/// is unit-testable without a live resolver. Empty result ⇒ caller fails closed.
+fn ssrf_filter_public_addrs(addrs: Vec<std::net::SocketAddr>) -> Vec<std::net::SocketAddr> {
+    addrs
+        .into_iter()
+        .filter(|sa| !crate::guardrails::ip_is_internal(sa.ip()))
+        .collect()
+}
+
+struct SsrfGuardResolver;
+
+impl reqwest::dns::Resolve for SsrfGuardResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_string();
+            // The std resolver is blocking — run it off the async worker.
+            let resolved: Vec<std::net::SocketAddr> = tokio::task::spawn_blocking(move || {
+                use std::net::ToSocketAddrs;
+                (host.as_str(), 0u16).to_socket_addrs().map(|it| it.collect::<Vec<_>>())
+            })
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+            let public = ssrf_filter_public_addrs(resolved);
+            if public.is_empty() {
+                return Err::<reqwest::dns::Addrs, Box<dyn std::error::Error + Send + Sync>>(
+                    "SSRF guard: host resolves only to internal/loopback/metadata addresses".into(),
+                );
+            }
+            let addrs: reqwest::dns::Addrs = Box::new(public.into_iter());
+            Ok(addrs)
+        })
+    }
+}
+
+/// URL-fetch HTTP client used ONLY by `fetch_url_content`. Same short timeouts as
+/// HTTP_CLIENT_FAST, plus the redirect policy (string/regex + per-hop DNS check)
+/// AND the SsrfGuardResolver (resolved-IP pin) — belt-and-suspenders SSRF.
+pub static FETCH_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .user_agent(concat!("Lucy/", env!("CARGO_PKG_VERSION")))
+        .redirect(ssrf_safe_redirect_policy())
+        .dns_resolver(std::sync::Arc::new(SsrfGuardResolver))
+        .build()
+        .expect("Error creando FETCH_CLIENT")
+});
+
+#[cfg(test)]
+mod ssrf_resolver_tests {
+    use super::ssrf_filter_public_addrs;
+    use std::net::SocketAddr;
+
+    fn sa(s: &str) -> SocketAddr { s.parse().unwrap() }
+
+    #[test]
+    fn keeps_public_drops_internal() {
+        let out = ssrf_filter_public_addrs(vec![
+            sa("8.8.8.8:80"), sa("127.0.0.1:80"), sa("169.254.169.254:80"),
+            sa("10.0.0.5:80"), sa("1.1.1.1:80"), sa("192.168.1.9:80"),
+        ]);
+        assert_eq!(out, vec![sa("8.8.8.8:80"), sa("1.1.1.1:80")],
+            "only routable public IPs must survive the SSRF filter (order preserved)");
+    }
+
+    #[test]
+    fn all_internal_yields_empty_fail_closed() {
+        // Empty result → SsrfGuardResolver returns an error → connection refused.
+        let out = ssrf_filter_public_addrs(vec![
+            sa("127.0.0.1:80"), sa("10.1.2.3:80"), sa("[::1]:80"),
+        ]);
+        assert!(out.is_empty(), "a rebinding host resolving only to internal IPs must be blocked");
+    }
+}
 
 /// Cliente HTTP "rápido" — timeout corto (15s) para fetch de docs, providers list,
 /// catálogos NIM, healthchecks, etc. Mitiga ataques tipo slowloris donde una URL

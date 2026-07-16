@@ -56,12 +56,139 @@ pub fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("lucy.db"))
 }
 
-/// Initialize the shared pool + schema. Call once from the Tauri setup hook.
+/// Initialize the shared pool + schema (fail-fast variant). The Tauri boot path
+/// now uses `init_resilient` (retry + corruption recovery), so this simple
+/// variant is no longer called internally; kept as public API for tests and a
+/// future lucy-core adoption of the shared DB layer.
+#[allow(dead_code)]
 pub fn init(app: &AppHandle) -> Result<(), String> {
     if POOL.get().is_some() {
         return Ok(());
     }
+    init_with_path(db_path(app)?)
+}
+
+/// v1.7.238 — ¿el error de SQLite huele a corrupción del archivo (irrecuperable
+/// por reintento)? Se usa para decidir cuarentena+recreación vs backoff.
+pub(crate) fn looks_like_corruption(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("malformed")
+        || e.contains("not a database")
+        || e.contains("disk image is malformed")
+        || e.contains("database corruption")
+        || e.contains("file is encrypted")
+}
+
+/// v1.7.238 — Arranque RESILIENTE para operación DESATENDIDA (nadie mira a las
+/// 3am). El `init` normal falla-rápido (lo usan tests + la costura egui); este
+/// wrapper añade la capa "sin supervisor":
+///   • REINTENTO con backoff para locks transitorios (un antivirus/backup
+///     corporativo teniendo lucy.db abierto justo tras el reboot).
+///   • RECUPERACIÓN de corrupción: si la DB está corrupta, se pone en cuarentena
+///     (`lucy.db.corrupt-<ts>`) y se recrea fresca → Lucy vuelve DEGRADADA pero
+///     VIVA, en vez de quedar zombie permanente donde TODO comando de DB
+///     devuelve "not initialized" (que además fail-cierra toda ejecución).
+///   • Todo queda en `lucy_app.log` (archivo, sin depender de la DB) para
+///     reconstruir una noche fallida — antes iba a `eprintln!`, invisible en un
+///     binario GUI de Windows release.
+pub fn init_resilient(app: &AppHandle) -> Result<(), String> {
+    if POOL.get().is_some() {
+        return Ok(());
+    }
     let path = db_path(app)?;
+    init_path_resilient(path)
+}
+
+/// Núcleo de `init_resilient` sobre una ruta concreta (Tauri-free, testeable).
+pub fn init_path_resilient(path: std::path::PathBuf) -> Result<(), String> {
+    if POOL.get().is_some() {
+        return Ok(());
+    }
+    const ATTEMPTS: u32 = 3;
+    let mut last_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match init_with_path(path.clone()) {
+            Ok(()) => {
+                if attempt > 1 {
+                    crate::utils::logging::write_app_log(
+                        "INFO",
+                        &format!("metrics DB init OK en intento {}/{}", attempt, ATTEMPTS),
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = e.clone();
+                if looks_like_corruption(&e) {
+                    // Cuarentena del archivo corrupto + recreación fresca. Se
+                    // limpian los sidecars WAL/SHM para que la DB nueva arranque
+                    // limpia. Degradado (se pierde la memoria curada) pero VIVO;
+                    // el backup automático permite restaurar después.
+                    let ts = chrono::Utc::now().timestamp();
+                    let quarantine = path.with_extension(format!("db.corrupt-{}", ts));
+                    let renamed = std::fs::rename(&path, &quarantine).is_ok();
+                    for ext in ["db-wal", "db-shm"] {
+                        let _ = std::fs::remove_file(path.with_extension(ext));
+                    }
+                    crate::utils::logging::write_app_log(
+                        "FATAL",
+                        &format!(
+                            "lucy.db CORRUPTA ({}). Cuarentena → {:?} ({}); recreando esquema fresco.",
+                            e,
+                            quarantine,
+                            if renamed { "movida" } else { "MOVER FALLÓ" }
+                        ),
+                    );
+                    return match init_with_path(path.clone()) {
+                        Ok(()) => {
+                            crate::utils::logging::write_app_log(
+                                "WARNING",
+                                "metrics DB recreada fresca tras corrupción — memoria/historial perdidos; restaura desde backup si aplica.",
+                            );
+                            Ok(())
+                        }
+                        Err(e2) => {
+                            let msg = format!("recrear tras corrupción falló: {}", e2);
+                            crate::utils::logging::write_app_log("FATAL", &msg);
+                            Err(msg)
+                        }
+                    };
+                }
+                // Transitorio (lock): backoff creciente y reintento.
+                crate::utils::logging::write_app_log(
+                    "WARNING",
+                    &format!(
+                        "metrics DB init intento {}/{} falló: {} — reintentando",
+                        attempt, ATTEMPTS, e
+                    ),
+                );
+                if attempt < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(1500 * attempt as u64));
+                }
+            }
+        }
+    }
+    crate::utils::logging::write_app_log(
+        "FATAL",
+        &format!(
+            "metrics DB init FALLÓ tras {} intentos: {} — Lucy corre SIN persistencia (comandos que usan la DB fallarán fail-closed).",
+            ATTEMPTS, last_err
+        ),
+    );
+    Err(last_err)
+}
+
+/// v1.7.236 — Tauri-free seam. Initialize the shared pool + schema from a plain
+/// filesystem PATH. `init(app)` resolves the app-data dir then delegates here, so
+/// a NON-Tauri host (e.g. the native egui shell in the WebView-migration
+/// prototype) can reuse the EXACT same DB layer + every command function by
+/// calling this directly — no Tauri AppHandle, no IPC. Behavior for the Tauri app
+/// is unchanged: `init` still short-circuits before touching the path when the
+/// pool already exists, and this fn re-checks the same guard.
+pub fn init_with_path(path: std::path::PathBuf) -> Result<(), String> {
+    if POOL.get().is_some() {
+        return Ok(());
+    }
 
     // Pool manager: every connection it hands out runs the same PRAGMAs.
     // WAL mode is per-DATABASE (set once persists), but synchronous,
@@ -115,6 +242,19 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     let conn = pool.get()
         .map_err(|e| format!("Failed to acquire init connection: {}", e))?;
 
+    run_schema_init(&conn)?;
+
+    // Release the init connection back to the pool, then publish.
+    drop(conn);
+    POOL.set(pool)
+        .map_err(|_| "DB pool already initialized".to_string())?;
+    Ok(())
+}
+
+/// v1.7.234 — Full schema init (legacy-trigger drop + INIT_SQL + migrations
+/// array + grounding) extracted VERBATIM from the boot path so tests can run
+/// the EXACT real sequence against a fresh connection.
+pub(crate) fn run_schema_init(conn: &rusqlite::Connection) -> Result<(), String> {
     // Migration: drop legacy broken FTS5 triggers from older DB versions.
     conn.execute_batch(
         "DROP TRIGGER IF EXISTS agent_memories_ad;\
@@ -143,6 +283,20 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_agent_memories_expires \
          ON agent_memories(expires_at) WHERE expires_at > 0",
+        // ── v1.7.236 R5 — memorias fijadas (pin del operador) ─────────────
+        // pinned=1 → la memoria se inyecta SIEMPRE al contexto (bloque
+        // MEMORIAS FIJADAS), sin depender del score semántico. Pensado para
+        // instrucciones operativas en uso desatendido ("si preguntan por X,
+        // el procedimiento es Y"). Cap de inyección en get_pinned_memories.
+        "ALTER TABLE agent_memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+        // ── v1.7.233 — idempotent PDF re-ingest ─────────────────────────
+        // SHA-256 hex of the extracted text; pdf_ingest refuses to create a
+        // second full chunk set for a document already ingested.
+        "ALTER TABLE pdf_documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+        // v1.7.233 M2 — estado de la síntesis jerárquica por documento.
+        "ALTER TABLE pdf_documents ADD COLUMN synth_status TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS idx_pdf_docs_hash \
+         ON pdf_documents(content_hash) WHERE content_hash != ''",
         // ── v1.7.104 Sprint-4 perf — D3 sparkline index ─────────────────
         // `recent_model_latencies` (v1.7.99) selects with
         // `WHERE json_extract(metadata,'$.model') IS NOT NULL ORDER BY
@@ -174,9 +328,6 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         // OR IGNORE on a unique source_id prevents double-promotion.
         // Existing crystals get source_id=NULL — they're not eligible
         // for "already promoted" lookups but otherwise unaffected.
-        "ALTER TABLE agent_crystals ADD COLUMN source_id INTEGER NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_crystals_source_id \
-         ON agent_crystals(source_id) WHERE source_id IS NOT NULL",
         // ── Tier A #1 — Hierarchical forks + cost ledger ─────────────────
         // parent_task_id: the task_id of the fork that spawned THIS one.
         // Empty string = top-level fork (no parent). Enables tree rendering
@@ -205,6 +356,12 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             source_chars    INTEGER NOT NULL DEFAULT 0,\
             created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))\
         )",
+        // v1.7.234 fresh-install fix: este ALTER (v1.7.101) iba ANTES del
+        // CREATE TABLE de arriba -> en BD nueva fallaba con "no such table"
+        // (no tolerado) y abortaba TODO el init ("Metrics DB not initialized").
+        "ALTER TABLE agent_crystals ADD COLUMN source_id INTEGER NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_crystals_source_id \
+         ON agent_crystals(source_id) WHERE source_id IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS idx_agent_crystals_session \
          ON agent_crystals(session_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_agent_crystals_created \
@@ -304,13 +461,8 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     // columns to agent_memories and memory_core, plus the
     // memory_evidence and memory_instances tables. Failure here is
     // fatal: grounding columns are referenced by query-time scoring.
-    super::grounding::migrate(&conn)
+    super::grounding::migrate(conn)
         .map_err(|e| format!("grounding migration failed: {}", e))?;
-
-    // Release the init connection back to the pool, then publish.
-    drop(conn);
-    POOL.set(pool)
-        .map_err(|_| "DB pool already initialized".to_string())?;
     Ok(())
 }
 
@@ -1023,6 +1175,13 @@ pub async fn save_agent_memory(
         return Ok(dup);
     }
 
+    // v1.7.236 R4 — Stage 3: not a duplicate, but is it a CONTRADICTION of an
+    // existing fact (same subject, different value)? Probe now — still under
+    // the dedup lock so the old row can't be concurrently superseded — and
+    // apply after the insert succeeds. Best-effort: None on Ollama-down /
+    // timeout / no band candidate, and the save proceeds unchanged.
+    let contra_old_id: Option<i64> = stage3_contradiction_check(&title, &content).await;
+
     // v1.7.103 Sprint-3 H7: re-probe stage 1 INSIDE the final tx so a
     // concurrent writer that snuck in during the async stage 2 window
     // cannot land a duplicate. Stage 2 (Ollama embed probe) is async
@@ -1049,8 +1208,16 @@ pub async fn save_agent_memory(
         }
 
         let imp  = importance.unwrap_or(1).max(1).min(3);
-        let tags  = tags.unwrap_or_else(|| "[]".to_string());
-        let files = files.unwrap_or_else(|| "[]".to_string());
+        // v1.7.236 (audit): tags and files are agent-controlled and were the ONLY
+        // fields persisted UNSCRUBBED — a secret smuggled into a tag/file entry
+        // (e.g. a token pasted as a "tag") bypassed the title/content scrub above.
+        // Scrub the raw JSON strings at the persistence boundary, mirroring the
+        // title/content scrub. Redaction stays inside the string values, so the
+        // JSON array shape is preserved.
+        let tags  = crate::utils::secret_scrubber::scrub_for_audit(
+            &tags.unwrap_or_else(|| "[]".to_string()));
+        let files = crate::utils::secret_scrubber::scrub_for_audit(
+            &files.unwrap_or_else(|| "[]".to_string()));
         let sid   = session_id.unwrap_or_default();
         // TTL → absolute expires_at epoch seconds. ttl_days == None or 0
         // → keep forever (expires_at = 0, the default).
@@ -1085,6 +1252,35 @@ pub async fn save_agent_memory(
         })
     })?;
 
+    // v1.7.236 R4 — apply the contradiction verdict: the OLD row is marked
+    // superseded by the row we just inserted. Guarded by action == "inserted"
+    // (the re-probe may have returned a duplicate instead) and by the WHERE
+    // (`superseded_by IS NULL`) so an already-superseded row is never
+    // re-pointed. Failure here never un-does the save.
+    let mut result = result;
+    if result.action == "inserted" {
+        if let Some(old_id) = contra_old_id {
+            if old_id != result.id {
+                let n = with_db(|conn| {
+                    conn.execute(
+                        "UPDATE agent_memories SET superseded_by = ?2
+                          WHERE id = ?1 AND superseded_by IS NULL",
+                        rusqlite::params![old_id, result.id],
+                    )
+                    .map_err(|e| format!("stage3 supersede: {}", e))
+                })
+                .unwrap_or(0);
+                if n == 1 {
+                    result.action = "inserted_superseding".to_string();
+                    result.reason = format!(
+                        "Contradice a la memoria {} — la versión nueva la reemplaza (superseded)",
+                        old_id
+                    );
+                }
+            }
+        }
+    }
+
     Ok(result)
 }
 
@@ -1109,11 +1305,23 @@ fn stage1_fts_dedup(
     }
 
     let best: rusqlite::Result<(i64, f64)> = conn.query_row(
+        // v1.7.237 — exclude ALL document-derived rows from the dedup candidate
+        // set: 'pdf:%' chunks AND 'pdf-doc:%' ingest-summaries. Both live as
+        // agent_memories rows in the FTS index (pdf.rs) but are "not memories"
+        // for user-memory dedup. Without this, a user-authored capsule saturated
+        // with a document's vocabulary (e.g. "GoAnywhere MFT - Resumen Técnico
+        // Core") bm25-matches a raw chunk OR the doc's ingest-summary, returns
+        // action:"duplicate", and is NEVER inserted — the "I saved it /
+        // deduplicated automatically, but the capsule is invisible" bug. CONFIRMED
+        // in the field: Lucy dedup'd the capsule against the installation_guide /
+        // architecture_guide pdf-doc summaries. Dedup collapses only real memories.
         "SELECT am.id, bm25(agent_memories_fts) AS score
          FROM agent_memories am
          JOIN agent_memories_fts fts ON am.id = fts.rowid
          WHERE agent_memories_fts MATCH ?1
            AND am.superseded_by IS NULL
+           AND am.session_id NOT LIKE 'pdf:%'
+           AND am.session_id NOT LIKE 'pdf-doc:%'
          ORDER BY score ASC
          LIMIT 1",
         rusqlite::params![safe_q],
@@ -1182,11 +1390,19 @@ async fn stage2_embedding_dedup(
     //     fall through to a normal insert instead.
     // A DB error also yields 0 → fall through and insert (never lose a save).
     let touched = with_db(|conn| {
+        // v1.7.237 — also exclude document-derived rows (pdf: chunks and
+        // pdf-doc: summaries). A pdf-doc summary is embedded as entity_type
+        // 'memory', so the vec_index hit above CAN point at one; the session_id
+        // guard makes touched==0 for it → the code below falls through to a
+        // normal insert instead of collapsing a real user memory into a
+        // document stub. Mirrors the stage-1 FTS exclusion.
         conn.execute(
             "UPDATE agent_memories
              SET access_count = access_count + 1,
                  last_accessed_at = strftime('%s','now')
-             WHERE id = ?1 AND superseded_by IS NULL",
+             WHERE id = ?1 AND superseded_by IS NULL
+               AND session_id NOT LIKE 'pdf:%'
+               AND session_id NOT LIKE 'pdf-doc:%'",
             rusqlite::params![dup_id],
         ).map_err(|e| format!("touch failed: {}", e))
     }).unwrap_or(0);
@@ -1200,6 +1416,137 @@ async fn stage2_embedding_dedup(
         action: "duplicate".to_string(),
         reason: format!("Embedding cosine {:.3} matches memory {} (semantic paraphrase)", score, dup_id),
     }))
+}
+
+// ── v1.7.236 R4 — Stage 3: contradiction detection at save ───────────────────
+// Dedup (stages 1-2) catches "same fact, same value". This catches "same
+// subject, DIFFERENT value" — "el timeout de GoAnywhere es 30s" vs "…es 60s".
+// Without it both memories coexist and recall can inject the stale one; for
+// unattended users that trust Lucy blindly, serving obsolete config is the
+// worst failure mode. Flow: embeddings put the pair in the similarity band
+// [0.78, 0.92) (above = dup already caught, below = unrelated), then a local
+// LLM gives a strict yes/no verdict; on YES the OLD row is marked
+// superseded_by = new_id (existing machinery — every read path already
+// excludes superseded rows). Best-effort at every step: any failure means
+// "no contradiction", never a lost save.
+
+const CONTRA_BAND_LOW: f32 = 0.78;
+const CONTRA_BAND_HIGH: f32 = 0.92; // == stage-2 dup threshold
+
+/// Pure verdict parser (unit-tested): strips qwen3 <think> blocks, then the
+/// first token decides. Anything that isn't a clear SI/YES is a NO — a false
+/// "contradiction" would silently hide a valid memory, so we bias hard toward
+/// keeping both.
+fn parse_contradiction_verdict(raw: &str) -> bool {
+    let mut s = raw.trim();
+    if let Some(p) = s.find("</think>") {
+        s = s[p + 8..].trim();
+    }
+    let first = s
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_uppercase();
+    matches!(first.as_str(), "SI" | "SÍ" | "YES")
+}
+
+/// Strict yes/no verdict from the local LLM (same model + base as the M3
+/// query expansion). Bounded by the client timeout; None on any failure.
+async fn ollama_contradiction_verdict(old_text: &str, new_text: &str) -> Option<bool> {
+    let base = crate::commands::embeddings::ollama_base();
+    let sys = "Eres un verificador de hechos para la memoria de un asistente SysAdmin. \
+Te doy un hecho VIEJO y un hecho NUEVO sobre un tema similar. Responde EXACTAMENTE una palabra: \
+SI — si afirman valores/estados INCOMPATIBLES sobre el mismo asunto (el nuevo reemplaza al viejo), \
+NO — si son compatibles, complementarios o hablan de asuntos distintos. \
+Ante la duda responde NO.";
+    let user = format!(
+        "VIEJO:\n{}\n\nNUEVO:\n{}",
+        &old_text.chars().take(700).collect::<String>(),
+        &new_text.chars().take(700).collect::<String>()
+    );
+    let body = serde_json::json!({
+        "model": "qwen3:4b",
+        "messages": [
+            { "role": "system", "content": sys },
+            { "role": "user",   "content": user }
+        ],
+        "stream": false,
+        "options": { "temperature": 0.0, "num_predict": 60 }
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .ok()?;
+    let resp = client.post(format!("{}/api/chat", base)).json(&body).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let out = json
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    if out.trim().is_empty() {
+        return None;
+    }
+    Some(parse_contradiction_verdict(out))
+}
+
+/// Returns Some(old_id) when the new memory contradicts a live, non-pdf row in
+/// the similarity band. The probe embed is LRU-cached (same text stage 2 just
+/// embedded), so this costs one extra Ollama round-trip only when a band
+/// candidate actually exists.
+async fn stage3_contradiction_check(title: &str, content: &str) -> Option<i64> {
+    let probe = format!("{}\n{}", title, &content.chars().take(800).collect::<String>());
+    let (query_vec, _) = crate::commands::embeddings::embed_via_ollama_pub(&probe, None)
+        .await
+        .ok()?;
+    let hits = crate::commands::vec_index::search(&query_vec, 5, CONTRA_BAND_LOW);
+    let cand = hits
+        .iter()
+        .find(|(etype, _id, _t, score)| etype == "memory" && *score < CONTRA_BAND_HIGH)?;
+    let old_id: i64 = cand.1.parse().ok()?;
+    // Liveness + scope: only live, non-superseded, non-document rows can be
+    // contradicted (pdf chunks are reference material, not mutable facts).
+    let old = with_db(|conn| {
+        conn.query_row(
+            "SELECT title, content FROM agent_memories
+              WHERE id = ?1 AND superseded_by IS NULL AND session_id NOT LIKE 'pdf:%'",
+            rusqlite::params![old_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(|e| format!("stage3 fetch: {}", e))
+    })
+    .ok()?;
+    let old_text = format!("{}\n{}", old.0, old.1);
+    let new_text = format!("{}\n{}", title, content);
+    match ollama_contradiction_verdict(&old_text, &new_text).await {
+        Some(true) => Some(old_id),
+        _ => None,
+    }
+}
+
+/// v1.7.233 — Diversity cap for ranked memory results: at most 2 chunks per
+/// ingested document (session_id 'pdf:<doc_id>') in one result set. Same-doc
+/// chunks are near-identical (shared heading prefix + 200-char overlap), so
+/// letting one manual fill all 8-10 slots crowds out both real memories and
+/// other documents. Non-pdf rows pass through untouched.
+fn cap_per_document(ranked: Vec<(AgentMemory, f64)>, limit: usize) -> Vec<AgentMemory> {
+    const PER_DOC: usize = 2;
+    let mut per_doc: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut out: Vec<AgentMemory> = Vec::with_capacity(limit);
+    for (m, _) in ranked {
+        if out.len() >= limit { break; }
+        if m.session_id.starts_with("pdf:") {
+            let c = per_doc.entry(m.session_id.clone()).or_insert(0usize);
+            if *c >= PER_DOC { continue; }
+            *c += 1;
+        }
+        out.push(m);
+    }
+    out
 }
 
 /// Hybrid retrieval over memories — **RRF fusion** (BM25 + embedding
@@ -1226,11 +1573,28 @@ async fn stage2_embedding_dedup(
 /// default — they remain in the table for audit but never surface in
 /// normal retrieval.
 #[tauri::command]
-pub async fn search_agent_memories(query: String, limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+pub async fn search_agent_memories(
+    query: String,
+    limit: Option<i64>,
+    // v1.7.237 — Some(true) excluye filas derivadas de documentos (pdf:%/pdf-doc:%)
+    // para que la busqueda del Explorador (que quiere MEMORIAS) no muestre chunks
+    // ni resumenes de PDF como si fueran memorias. None/false = comportamiento
+    // actual (incluye documentos): lo usan otras rutas como el fallback-keyword
+    // del recall, que SI quiere documentacion. Gemelo del fix de dedup v1.7.237.
+    exclude_documents: Option<bool>,
+) -> Result<Vec<AgentMemory>, String> {
     let lim = limit.unwrap_or(10).max(1).min(50);
     if query.trim().is_empty() {
         return with_db(|_conn| get_recent_memories(Some(lim)));
     }
+    // Fragmentos SQL opcionales de exclusion de documentos: el stream BM25 aliasa
+    // la tabla (am.), el fetch final no.
+    let bm25_doc_filter = if exclude_documents.unwrap_or(false) {
+        " AND am.session_id NOT LIKE 'pdf:%' AND am.session_id NOT LIKE 'pdf-doc:%'"
+    } else { "" };
+    let fetch_doc_filter = if exclude_documents.unwrap_or(false) {
+        " AND session_id NOT LIKE 'pdf:%' AND session_id NOT LIKE 'pdf-doc:%'"
+    } else { "" };
     // Cast to usize for ranking math; FETCH_N is the pool we draw from in
     // each stream before fusion — wider than `lim` so the fusion has
     // headroom to interleave the two ranked lists.
@@ -1247,14 +1611,17 @@ pub async fn search_agent_memories(query: String, limit: Option<i64>) -> Result<
         // group-policy, dns↔name-resolution, etc.) — see commands/synonyms.rs
         let safe_q = crate::commands::synonyms::expand_query(&query);
         if safe_q.is_empty() { return Ok(Vec::new()); }
-        let sql = "SELECT am.id
+        let sql = format!(
+            "SELECT am.id
                    FROM agent_memories am
                    JOIN agent_memories_fts fts ON am.id = fts.rowid
                    WHERE agent_memories_fts MATCH ?1
-                     AND am.superseded_by IS NULL
+                     AND am.superseded_by IS NULL{}
                    ORDER BY bm25(agent_memories_fts) ASC
-                   LIMIT ?2";
-        let mut stmt = conn.prepare(sql).map_err(|e| format!("bm25 prepare: {}", e))?;
+                   LIMIT ?2",
+            bm25_doc_filter
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("bm25 prepare: {}", e))?;
         let n = FETCH_N as i64;
         let rows = stmt.query_map(rusqlite::params![safe_q, n], |r| r.get::<_, i64>(0))
             .map_err(|e| format!("bm25 query: {}", e))?;
@@ -1299,13 +1666,16 @@ pub async fn search_agent_memories(query: String, limit: Option<i64>) -> Result<
     let rows = with_db(|conn| {
         let in_clause = ids_vec.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
         // Safe: ids come from i64 results of SELECT, can't be injected.
+        // fetch_doc_filter (v1.7.237) excluye pdf:%/pdf-doc: cuando
+        // exclude_documents=Some(true) — necesario porque el stream coseno puede
+        // traer resumenes pdf-doc: (embebidos como entity_type 'memory').
         let sql = format!(
             "SELECT id, session_id, title, content, tags, files, importance, created_at,
                     access_count, last_accessed_at
              FROM agent_memories
              WHERE id IN ({})
-               AND superseded_by IS NULL",
-            in_clause
+               AND superseded_by IS NULL{}",
+            in_clause, fetch_doc_filter
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| format!("fetch prepare: {}", e))?;
         let mapped = stmt.query_map([], |row| {
@@ -1340,7 +1710,8 @@ pub async fn search_agent_memories(query: String, limit: Option<i64>) -> Result<
             combined.push((m, rrf * multiplier));
         }
         combined.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let top: Vec<AgentMemory> = combined.into_iter().take(lim_usize).map(|(m, _)| m).collect();
+        // v1.7.233: per-document diversity cap (≤2 chunks per ingested doc).
+        let top: Vec<AgentMemory> = cap_per_document(combined, lim_usize);
 
         // Touch matched rows so frequently-retrieved memories surface higher
         // in future searches. Fire-and-forget — if the UPDATE fails we still
@@ -1385,7 +1756,8 @@ const EXPAND_CACHE_MAX: usize = 64;
 /// Ask Ollama for N reformulations of `query`. Returns an empty vec on
 /// any failure (network, parse, timeout). The original query is NEVER
 /// included — callers add it explicitly so they control rank ordering.
-async fn expand_query_via_ollama(query: &str) -> Vec<String> {
+// v1.7.233 (M3): pub(crate) — pdf.rs reusa la expansión en pdf_search.
+pub(crate) async fn expand_query_via_ollama(query: &str) -> Vec<String> {
     // Trivially short queries don't benefit from expansion — single keyword
     // queries are already maximally lexical-friendly.
     let trimmed = query.trim();
@@ -1477,11 +1849,23 @@ fn bm25_search_one(query: &str, limit: usize) -> Result<Vec<i64>, String> {
         // matches "group policy", etc. Unknown tokens pass through.
         let safe_q = crate::commands::synonyms::expand_query(query);
         if safe_q.is_empty() { return Ok(Vec::new()); }
+        // v1.7.237 — exclude document-derived rows ('pdf:%' chunks + 'pdf-doc:%'
+        // ingest-summaries). bm25_search_one is used ONLY by
+        // search_agent_memories_expanded (= the `memoria_buscar` agent tool),
+        // which searches MEMORIES; documents are retrieved via the separate
+        // pdf_search + the proactive PDF list in the system prompt. Without this,
+        // the FTS index (hundreds of pdf rows) floods `memoria_buscar` with
+        // document fragments so the model never finds the memory it wants — the
+        // "hunt for the capsule ID that loops to MAX_LOOPS" bug. The base
+        // search_agent_memories (its own inline bm25) is intentionally untouched
+        // (browser/lessons keep their current behavior).
         let sql = "SELECT am.id
                    FROM agent_memories am
                    JOIN agent_memories_fts fts ON am.id = fts.rowid
                    WHERE agent_memories_fts MATCH ?1
                      AND am.superseded_by IS NULL
+                     AND am.session_id NOT LIKE 'pdf:%'
+                     AND am.session_id NOT LIKE 'pdf-doc:%'
                    ORDER BY bm25(agent_memories_fts) ASC
                    LIMIT ?2";
         let mut stmt = conn.prepare(sql).map_err(|e| format!("bm25 prepare: {}", e))?;
@@ -1630,10 +2014,8 @@ pub async fn search_agent_memories_expanded(
     })();
 
     let final_ranked = reranked.unwrap_or(candidates);
-    let top: Vec<AgentMemory> = final_ranked.into_iter()
-        .take(lim_usize)
-        .map(|(m, _)| m)
-        .collect();
+    // v1.7.233: per-document diversity cap (≤2 chunks per ingested doc).
+    let top: Vec<AgentMemory> = cap_per_document(final_ranked, lim_usize);
 
     // ── Touch returned rows for next-search ranking boost ───────────
     if !top.is_empty() {
@@ -1758,13 +2140,19 @@ pub fn auto_forget_run(dry_run: Option<bool>) -> Result<AutoForgetReport, String
         // Conservative: only importance==1 + access_count==0 + no TTL set
         // (TTL=0 means user/code didn't explicitly opt in to keep forever
         // — they just didn't set a TTL, so we treat that as eligible).
+        // v1.7.233: PDF chunks excluded — they are importance-1 reference
+        // material managed at the DOCUMENT level (pdf_delete_doc), and an
+        // unqueried manual section is not "low value", it just hasn't been
+        // needed yet. Without this, the janitor would silently erode an
+        // ingested manual 30 days after ingest.
         let low_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM agent_memories
              WHERE access_count = 0
                AND importance = 1
                AND expires_at = 0
                AND created_at < ?1
-               AND superseded_by IS NULL",
+               AND superseded_by IS NULL
+               AND session_id NOT LIKE 'pdf:%'",
             rusqlite::params![low_value_cutoff],
             |r| r.get(0),
         ).unwrap_or(0);
@@ -1776,7 +2164,8 @@ pub fn auto_forget_run(dry_run: Option<bool>) -> Result<AutoForgetReport, String
                    AND importance = 1
                    AND expires_at = 0
                    AND created_at < ?1
-                   AND superseded_by IS NULL",
+                   AND superseded_by IS NULL
+                   AND session_id NOT LIKE 'pdf:%'",
                 rusqlite::params![low_value_cutoff],
             ).map_err(|e| format!("auto_forget_run low-value: {}", e))? as i64
         } else { 0 };
@@ -1866,6 +2255,68 @@ pub fn consolidate_agent_memories(
     })
 }
 
+/// v1.7.233 — Real corpus-level counts for the Memory Browser stat cards.
+/// Before this, both memory UIs computed "totals" over the ≤50 fetched rows,
+/// so after a big PDF ingest every card lied ("50 memorias / 0 alta").
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryBrowserStats {
+    pub total: i64,       // live real memories (non-pdf, non-superseded)
+    pub high: i64,        // importance >= 3
+    pub tagged: i64,      // tags present (not '[]' / '')
+    pub week: i64,        // created in the last 7 days
+    pub superseded: i64,  // rows hidden by dedup/consolidation
+    pub pdf_chunks: i64,  // document chunk rows (session_id 'pdf:%')
+    pub pdf_docs: i64,    // ingested documents
+}
+
+// Named memory_browser_stats — memory.rs already owns `memory_stats`
+// (core/working-memory tiers introspection, a different subsystem).
+#[tauri::command]
+pub fn memory_browser_stats() -> Result<MemoryBrowserStats, String> {
+    with_db(|conn| {
+        let one = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> i64 {
+            conn.query_row(sql, params, |r| r.get::<_, i64>(0)).unwrap_or(0)
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64).unwrap_or(0);
+        let week_cutoff = now - 7 * 86_400;
+        const LIVE: &str = "(superseded_by IS NULL OR superseded_by = '') AND session_id NOT LIKE 'pdf:%'";
+        Ok(MemoryBrowserStats {
+            total:      one(&format!("SELECT COUNT(*) FROM agent_memories WHERE {LIVE}"), &[]),
+            high:       one(&format!("SELECT COUNT(*) FROM agent_memories WHERE {LIVE} AND importance >= 3"), &[]),
+            tagged:     one(&format!("SELECT COUNT(*) FROM agent_memories WHERE {LIVE} AND tags != '' AND tags != '[]'"), &[]),
+            week:       one(&format!("SELECT COUNT(*) FROM agent_memories WHERE {LIVE} AND created_at >= {week_cutoff}"), &[]),
+            superseded: one("SELECT COUNT(*) FROM agent_memories WHERE superseded_by IS NOT NULL AND superseded_by != ''", &[]),
+            pdf_chunks: one("SELECT COUNT(*) FROM agent_memories WHERE session_id LIKE 'pdf:%'", &[]),
+            pdf_docs:   one("SELECT COUNT(*) FROM pdf_documents", &[]),
+        })
+    })
+}
+
+/// Return the most recent memories ordered by importance then date.
+/// v1.7.233: optional `importance` pushes the filter into SQL — the browser
+/// used to filter client-side AFTER the 50-row fetch, silently hiding rows.
+#[tauri::command]
+pub fn get_recent_memories_filtered(limit: Option<i64>, importance: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+    with_db(|conn| {
+        let lim = limit.unwrap_or(15).max(1).min(50);
+        let imp = importance.unwrap_or(0);
+        let sql = format!(
+            "SELECT id, session_id, title, content, tags, files, importance, created_at
+             FROM agent_memories
+             WHERE (superseded_by IS NULL OR superseded_by = '')
+               AND session_id NOT LIKE 'pdf:%'
+               {}
+             ORDER BY importance DESC, created_at DESC
+             LIMIT ?1",
+            if imp > 0 { format!("AND importance = {}", imp.clamp(1, 3)) } else { String::new() }
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("get_recent_filtered prepare: {}", e))?;
+        map_memory_rows(&mut stmt, rusqlite::params![lim])
+    })
+}
+
 /// Return the most recent memories ordered by importance then date.
 #[tauri::command]
 pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
@@ -1875,12 +2326,79 @@ pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, Strin
         // tab kept re-detecting conflicts the user had just resolved via
         // keep_newer/keep_older — supersede_memory marked the row but
         // this query didn't honor it.
+        // v1.7.233: exclude PDF document chunks (session_id 'pdf:<doc_id>').
+        // A single ingested manual writes 1000+ importance-2 rows in one burst;
+        // with `ORDER BY importance DESC, created_at DESC` they saturated the
+        // ≤50-row window, flooding the Memory Browser AND the ambient context
+        // injection (construirContextoMemoria feeds Lucy the top rows of this
+        // query every turn). Document chunks stay reachable via pdf_search /
+        // memoria_buscar — they are reference material, not recent memories.
         let sql = "SELECT id, session_id, title, content, tags, files, importance, created_at
                    FROM agent_memories
-                   WHERE superseded_by IS NULL OR superseded_by = ''
+                   WHERE (superseded_by IS NULL OR superseded_by = '')
+                     AND session_id NOT LIKE 'pdf:%'
                    ORDER BY importance DESC, created_at DESC
                    LIMIT ?1";
         let mut stmt = conn.prepare(sql).map_err(|e| format!("get_recent prepare: {}", e))?;
+        map_memory_rows(&mut stmt, rusqlite::params![lim])
+    })
+}
+
+/// v1.7.236 R2 — refuerzo por citas. Tras cada respuesta, el frontend parsea
+/// los marcadores [§id] que Lucy CITÓ de verdad y bombea sus contadores de
+/// acceso. El decay estilo Mem0 de search_agent_memories hace el resto: lo
+/// citado sube, lo inyectado-e-ignorado decae con el tiempo. Cap 50 ids.
+#[tauri::command]
+pub fn touch_memories_by_ids(ids: Vec<i64>) -> Result<usize, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let ids: Vec<i64> = ids.into_iter().take(50).collect();
+    with_db(move |conn| {
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "UPDATE agent_memories
+                SET access_count = access_count + 1,
+                    last_accessed_at = strftime('%s','now')
+              WHERE id IN ({placeholders})"
+        );
+        conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
+            .map(|n| n as usize)
+            .map_err(|e| format!("touch by ids: {}", e))
+    })
+}
+
+/// v1.7.236 R5 — fija/desfija una memoria (pin del operador).
+#[tauri::command]
+pub fn set_memory_pinned(id: i64, pinned: bool) -> Result<(), String> {
+    with_db(move |conn| {
+        conn.execute(
+            "UPDATE agent_memories SET pinned = ?1 WHERE id = ?2",
+            rusqlite::params![pinned as i64, id],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("set pinned: {}", e))
+    })
+}
+
+/// v1.7.236 R5 — memorias fijadas para inyección incondicional. Mismo shape
+/// que get_recent_memories (reusa map_memory_rows); cap duro de 10 para que
+/// un exceso de pines no infle el contexto — el frontend inyecta ≤5.
+#[tauri::command]
+pub fn get_pinned_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
+    with_db(|conn| {
+        let lim = limit.unwrap_or(5).max(1).min(10);
+        let sql = "SELECT id, session_id, title, content, tags, files, importance, created_at
+                   FROM agent_memories
+                   WHERE pinned = 1
+                     AND (superseded_by IS NULL OR superseded_by = '')
+                     AND session_id NOT LIKE 'pdf:%'
+                   ORDER BY importance DESC, created_at DESC
+                   LIMIT ?1";
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("pinned prepare: {}", e))?;
         map_memory_rows(&mut stmt, rusqlite::params![lim])
     })
 }
@@ -2709,7 +3227,13 @@ pub async fn crystallize_session(
     // Crystallization promotes lessons to first-class memories so they
     // surface in the regular search pipeline. Fire-and-forget — failures
     // here don't invalidate the crystal itself.
-    for lesson in &lessons {
+    //
+    // v1.7.236 — CAP the promotion at MAX_PROMOTED_LESSONS. A runaway local
+    // model can emit dozens of <lesson> tags; without a cap, one auto-
+    // crystallized session could flood memory (the GoAnywhere failure mode).
+    // A genuinely useful session distils a handful of durable lessons, not 40.
+    const MAX_PROMOTED_LESSONS: usize = 6;
+    for lesson in lessons.iter().take(MAX_PROMOTED_LESSONS) {
         let title = format!("Lesson: {}",
             lesson.chars().take(60).collect::<String>());
         let tags  = serde_json::to_string(&vec!["crystal", "lesson"])
@@ -2725,7 +3249,94 @@ pub async fn crystallize_session(
         ).await;
     }
 
+    // v1.7.236 (#2 — crystals into the recall pipeline) — also promote the
+    // crystal NARRATIVE as a searchable memory. Lessons capture the actionable
+    // "how"; the narrative captures the "what we did / why", which is what
+    // answers "have I dealt with this before?". Until now the narrative lived
+    // only in `agent_crystals` (the cockpit viewer) and never reached recall.
+    // Importance 1 so it's findable but never outranks a hard fact; deduped by
+    // save_agent_memory's FTS pipeline; carries the same files list so a
+    // file-scoped recall can surface it.
+    {
+        let ntitle = format!("Sesión: {}", narrative.chars().take(60).collect::<String>());
+        let ntags = serde_json::to_string(&vec!["crystal", "session-summary"])
+            .unwrap_or_else(|_| "[]".to_string());
+        let _ = save_agent_memory(
+            ntitle,
+            narrative.clone(),
+            Some(ntags),
+            Some(files_affected_json.clone()),
+            Some(session_id.clone()),
+            Some(1),       // low importance — session context, not a hard fact
+            None,          // keep — crystallized context is durable
+        ).await;
+    }
+
     Ok(new_id)
+}
+
+/// Outcome of an auto-crystallization attempt (returned to the frontend so it can
+/// flash a subtle "sesión cristalizada" toast only when `fired`).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AutoCrystalResult {
+    pub fired: bool,
+    pub crystal_id: Option<i64>,
+    pub reason: String,
+}
+
+/// Auto-crystallize a session at its end — the AUTONOMOUS counterpart to the
+/// manual `/crystallize`. Lucy distils her own lessons without being asked, so
+/// the user need not re-teach her (the point-4 autonomy goal).
+///
+/// STRICT GATING against the memory-flood failure mode (the GoAnywhere incident,
+/// [[memory-system-overhaul]]). Every gate below is CHEAP and runs BEFORE any
+/// Ollama call, so a thin or already-distilled session costs nothing:
+///   • MIN_TURNS / MIN_TOOL_CALLS  — only sessions where real work happened.
+///   • MIN_TRANSCRIPT_CHARS        — there must be substance to distil.
+///   • one crystal per session     — idempotent; re-invoking each turn is a no-op.
+/// The lesson promotion inside `crystallize_session` is itself capped
+/// (MAX_PROMOTED_LESSONS) and deduped (save_agent_memory's FTS pipeline).
+///
+/// NEVER errors the caller: a failed gate or an Ollama-down box just returns
+/// `fired = false` with a reason, so the agent loop is never disturbed.
+#[tauri::command]
+pub async fn maybe_auto_crystallize_session(
+    session_id: String,
+    project: Option<String>,
+    transcript: String,
+    turn_count: i64,
+    tool_call_count: i64,
+) -> Result<AutoCrystalResult, String> {
+    const MIN_TURNS: i64 = 4;
+    const MIN_TOOL_CALLS: i64 = 3;
+    const MIN_TRANSCRIPT_CHARS: usize = 800;
+
+    let skip = |reason: &str| {
+        Ok(AutoCrystalResult { fired: false, crystal_id: None, reason: reason.to_string() })
+    };
+
+    if session_id.trim().is_empty() { return skip("no session id"); }
+    if turn_count < MIN_TURNS { return skip("session too short (turns)"); }
+    if tool_call_count < MIN_TOOL_CALLS { return skip("not enough tool activity"); }
+    if transcript.trim().chars().count() < MIN_TRANSCRIPT_CHARS { return skip("transcript too thin"); }
+
+    // Idempotent: at most ONE auto-crystal per session. Cheap DB check before we
+    // ever wake Ollama, so the agent loop can call this on every turn-end freely.
+    let already = with_db(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM agent_crystals WHERE session_id = ?1",
+            rusqlite::params![session_id],
+            |r| r.get::<_, i64>(0),
+        ).map_err(|e| format!("auto-crystal existence check: {}", e))
+    }).unwrap_or(0);
+    if already > 0 { return skip("session already crystallized"); }
+
+    // Gates passed — distil. crystallize_session is fail-fast on Ollama; we
+    // downgrade its error to a non-firing result so the turn is never broken.
+    match crystallize_session(session_id, project, transcript).await {
+        Ok(id) => Ok(AutoCrystalResult { fired: true, crystal_id: Some(id), reason: "crystallized".to_string() }),
+        Err(e) => skip(&format!("crystallize skipped: {}", e)),
+    }
 }
 
 /// List recent crystals, newest first. Optional filters by session or project.
@@ -3313,11 +3924,16 @@ pub async fn reflect_run(dry_run: Option<bool>) -> Result<ReflectReport, String>
     #[derive(Clone)]
     struct Eligible { title: String, content: String, tags: Vec<String> }
     let eligibles: Vec<Eligible> = with_db(|conn| {
+        // v1.7.233: exclude PDF chunks — after a large ingest the 400-newest
+        // window was 100% manual chunks (one giant same-tag cluster that the
+        // 4..20 size filter drops), starving insight generation for real
+        // memories indefinitely.
         let mut stmt = conn.prepare(
             "SELECT title, content, tags FROM agent_memories
              WHERE superseded_by IS NULL
                AND expires_at = 0
                AND created_at < ?1
+               AND session_id NOT LIKE 'pdf:%'
              ORDER BY created_at DESC
              LIMIT 400"
         ).map_err(|e| format!("reflect prepare: {}", e))?;
@@ -4038,14 +4654,17 @@ pub async fn update_agent_memory_tags(
 // the non-existent `save_agent_memory_full`, so the button silently did
 // nothing (the per-row catch swallowed "command not found"). Same class of
 // hole as the tags path above. A dedicated importance UPDATE keeps it small
-// and avoids touching save_agent_memory's INSERT/dedup path. Clamped 1..=10
-// to match the frontend's cap.
+// and avoids touching save_agent_memory's INSERT/dedup path.
+// v1.7.233: clamped 1..=3 — the SAVE path clamps 1..=3, every janitor policy
+// reasons in the 1..=3 scale ("3 is never evicted", "1 is consolidation-
+// eligible"), and the browser renders exactly 3 diamonds. The old 1..=10 cap
+// let bulk-promote mint importance values no other subsystem understood.
 #[tauri::command]
 pub async fn update_agent_memory_importance(
     id:         i64,
     importance: i64,
 ) -> Result<(), String> {
-    let imp = importance.clamp(1, 10);
+    let imp = importance.clamp(1, 3);
     with_db(|conn| {
         let n = conn.execute(
             "UPDATE agent_memories SET importance = ?1 WHERE id = ?2",
@@ -4056,4 +4675,158 @@ pub async fn update_agent_memory_importance(
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    /// v1.7.234 regression — the REAL full init path on a FRESH database
+    /// (first-time install). Must never fail.
+    #[test]
+    fn fresh_db_full_real_init_succeeds() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        run_schema_init(&conn).expect("real init path must succeed on a FRESH database");
+    }
+
+    /// v1.7.238 — el clasificador de corrupción decide cuarentena vs reintento.
+    /// Debe reconocer los mensajes reales de SQLite de archivo dañado y NO
+    /// confundir un lock transitorio (que sí se reintenta) con corrupción.
+    #[test]
+    fn corruption_classifier_distinguishes_corruption_from_transient() {
+        assert!(looks_like_corruption("database disk image is malformed"));
+        assert!(looks_like_corruption("file is not a database"));
+        assert!(looks_like_corruption("Failed to initialize schema: file is encrypted or is not a database"));
+        // Locks / IO transitorios NO son corrupción → se reintentan, no se borra la DB.
+        assert!(!looks_like_corruption("database is locked"));
+        assert!(!looks_like_corruption("Failed to acquire init connection: timed out"));
+        assert!(!looks_like_corruption("unable to open database file"));
+    }
+
+    /// v1.7.236 R5 — the pinned column must exist after the real init chain
+    /// (guards the migration-ordering class of bugs) and be updatable.
+    #[test]
+    fn pinned_column_exists_after_real_init() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        run_schema_init(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_memories') WHERE name='pinned'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "pinned column must exist after migrations");
+        conn.execute("UPDATE agent_memories SET pinned = 1 WHERE 1=0", [])
+            .expect("pinned column must be updatable");
+    }
+
+    /// v1.7.236 R4 — the verdict parser must be strict: only a clear SI/YES
+    /// counts as contradiction; everything ambiguous keeps both memories.
+    #[test]
+    fn contradiction_verdict_parser_is_strict() {
+        use super::parse_contradiction_verdict as p;
+        assert!(p("SI"));
+        assert!(p("sí"));
+        assert!(p("YES"));
+        assert!(p("  SI.  el valor cambió"));
+        assert!(p("<think>hmm 30 vs 60 son incompatibles</think>\nSI"));
+        assert!(!p("NO"));
+        assert!(!p("no, son complementarios"));
+        assert!(!p("<think>duda</think>\nNO"));
+        assert!(!p("SINCERAMENTE no lo sé"));   // "SINCERAMENTE" != token SI
+        assert!(!p(""));
+        assert!(!p("quizás"));
+        assert!(!p("Los hechos SI se contradicen")); // el veredicto va PRIMERO o no vale
+    }
+
+    /// v1.7.236 — auto-crystallization CHEAP gates must reject thin sessions
+    /// BEFORE any Ollama/DB work (flood protection). These early-return paths
+    /// never touch the DB, so no init is needed.
+    #[tokio::test]
+    async fn auto_crystallize_gates_reject_thin_sessions() {
+        let big = "x".repeat(2000);
+        // too few turns
+        let r = maybe_auto_crystallize_session("s1".into(), None, big.clone(), 2, 9).await.unwrap();
+        assert!(!r.fired, "2 turns must not fire");
+        assert_eq!(r.reason, "session too short (turns)");
+        // enough turns, too few tool calls
+        let r = maybe_auto_crystallize_session("s1".into(), None, big.clone(), 8, 1).await.unwrap();
+        assert!(!r.fired, "1 tool call must not fire");
+        assert_eq!(r.reason, "not enough tool activity");
+        // enough turns+tools, transcript too thin
+        let r = maybe_auto_crystallize_session("s1".into(), None, "short".into(), 8, 9).await.unwrap();
+        assert!(!r.fired, "thin transcript must not fire");
+        assert_eq!(r.reason, "transcript too thin");
+        // empty session id
+        let r = maybe_auto_crystallize_session("".into(), None, big, 8, 9).await.unwrap();
+        assert!(!r.fired, "no session id must not fire");
+        assert_eq!(r.reason, "no session id");
+    }
+
+    /// v1.7.233 regression — the GoAnywhere incident hotfix-of-the-hotfix.
+    /// INIT_SQL once contained `CREATE INDEX ... ON pdf_documents(content_hash)`,
+    /// but on an EXISTING database INIT_SQL runs BEFORE the migration that adds
+    /// the column → "no such column: content_hash" aborted the whole schema
+    /// init ("Metrics DB not initialized", every memory feature dead). Fresh
+    /// test DBs never caught it because CREATE TABLE ships the column.
+    /// This test boots against a LEGACY pdf_documents (no content_hash).
+    #[test]
+    fn init_sql_and_pdf_hash_migration_succeed_on_legacy_db() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Simulate a pre-v1.7.233 database: pdf_documents WITHOUT content_hash.
+        conn.execute_batch(
+            "CREATE TABLE pdf_documents (
+                id          TEXT    PRIMARY KEY,
+                filename    TEXT    NOT NULL,
+                path        TEXT    NOT NULL,
+                page_count  INTEGER NOT NULL DEFAULT 0,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                ingested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                status      TEXT    NOT NULL DEFAULT 'ingesting'
+            );",
+        ).unwrap();
+
+        // Boot step 1: INIT_SQL must NOT reference content_hash anywhere
+        // (CREATE TABLE IF NOT EXISTS is a no-op here, so the old shape stays).
+        conn.execute_batch(INIT_SQL)
+            .expect("INIT_SQL must succeed on a legacy DB without content_hash");
+
+        // Boot step 2: the migration pair (same statements as the migrations
+        // array, same order — ALTER first, index second).
+        conn.execute(
+            "ALTER TABLE pdf_documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            [],
+        ).expect("content_hash ALTER must succeed on a legacy DB");
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_docs_hash \
+             ON pdf_documents(content_hash) WHERE content_hash != ''",
+            [],
+        ).expect("content_hash index must succeed after the ALTER");
+
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('pdf_documents') WHERE name = 'content_hash'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(n, 1, "content_hash column missing after migration");
+    }
+
+    /// Fresh-install path: INIT_SQL ships content_hash in CREATE TABLE, the
+    /// ALTER then fails with "duplicate column" (swallowed by the migration
+    /// runner) and the index still applies cleanly.
+    #[test]
+    fn fresh_db_migration_pair_is_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(INIT_SQL).expect("INIT_SQL on fresh DB");
+        let err = conn.execute(
+            "ALTER TABLE pdf_documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            [],
+        ).unwrap_err().to_string();
+        assert!(err.contains("duplicate column"), "expected duplicate-column error, got: {}", err);
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_docs_hash \
+             ON pdf_documents(content_hash) WHERE content_hash != ''",
+            [],
+        ).expect("index on fresh DB");
+    }
 }

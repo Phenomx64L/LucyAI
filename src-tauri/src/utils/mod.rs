@@ -15,6 +15,10 @@ pub mod simd_cosine;
 // scrub_for_audit so Bearer tokens, password=, URL-embedded creds, AWS
 // keys, GitHub PATs and LLM provider keys never reach disk.
 pub mod secret_scrubber;
+// v1.7.235 — lossless JSON→schema+CSV tabular compression for large homogeneous
+// tool outputs (inventory / process lists / cve_match). ~43% token reduction,
+// reversible. Ported from the Headroom pilot (2026-07-09); no ML, no deps.
+pub mod json_tabular;
 
 /// Safely truncate a string at a char boundary, never panicking.
 /// Returns a slice of at most `max_bytes` bytes, ending at a valid UTF-8 boundary.

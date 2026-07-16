@@ -65,6 +65,43 @@ pub enum Role {
     SecretMaterial,
 }
 
+/// Scan a command that will be executed on a REMOTE host (SSH/WinRM). v1.7.232
+/// (Phase-2 C2). Remote exec previously had NO guardrail scan at all — only
+/// default-allow check_permission — an asymmetry vs. the local exec paths.
+///
+/// This deliberately applies ONLY the context-independent attack signatures:
+/// hidden Unicode tags and the S2 cmd-bypass / obfuscation shapes (fullwidth
+/// homoglyphs, %COMSPEC% redirects, cmd.exe absolute-path invocation, &-prefixed
+/// /s destructive forms). It intentionally does NOT apply:
+///   • S5 SSRF — that model targets Lucy's OWN outbound fetches; a command run
+///     ON the remote host legitimately curls internal IPs / cloud metadata, so
+///     applying S5 here would false-block normal remote administration.
+///   • plain destructive verbs — a remote operator's own shell is allowed to
+///     delete files / stop services (mirrors the Role::User philosophy). The
+///     agent path already gates destructive REMOTE commands at the frontend.
+/// Net: fail-closed on genuine injection/obfuscation, without breaking interactive
+/// remote admin (NexShell broadcast, slash batch) or internal-IP/metadata access.
+pub fn scan_remote_shell(command: &str) -> ScanResult {
+    if command.is_empty() {
+        return ScanResult::allow();
+    }
+    if patterns::has_hidden_unicode_tags(command) {
+        return ScanResult {
+            decision: ScanDecision::Block,
+            reason:   "Hidden Unicode tag characters detected (U+E0000..U+E007F)".to_string(),
+            matched:  vec!["HIDDEN_UNICODE"],
+        };
+    }
+    if patterns::S2_CMD_BYPASS.is_match(command) {
+        return ScanResult {
+            decision: ScanDecision::Block,
+            reason:   "S2: cmd-bypass / obfuscation shape detected".to_string(),
+            matched:  vec!["S2"],
+        };
+    }
+    ScanResult::allow()
+}
+
 /// Main entry. Applies the patterns relevant to `role` and returns the
 /// strictest decision found.
 pub fn scan(text: &str, role: Role) -> ScanResult {
@@ -260,7 +297,7 @@ fn extract_host(url: &str) -> Option<String> {
 /// True if the given resolved IP is one we must never let an LLM-driven
 /// fetch reach. Covers IPv4 + IPv6 internal ranges, including IPv4-mapped
 /// IPv6 (::ffff:10.0.0.1 style) and IPv6 unique-local (fc00::/7).
-fn ip_is_internal(ip: std::net::IpAddr) -> bool {
+pub fn ip_is_internal(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr;
     match ip {
         IpAddr::V4(v4) => {
@@ -351,6 +388,36 @@ mod tests {
         // ConvertTo-SecureString '...'
         let r = scan("hunter2';Invoke-Expression('calc.exe');#", Role::SecretMaterial);
         assert_eq!(r.decision, ScanDecision::Block);
+    }
+
+    // ── v1.7.232 (Phase-2 C2): remote-shell scan ────────────────────────
+    #[test]
+    fn remote_shell_allows_legit_admin_including_destructive_and_internal_ip() {
+        // A remote operator's own shell may delete files and curl internal
+        // services — scan_remote_shell must NOT block these (only injection shapes).
+        for s in [
+            "systemctl restart nginx",
+            "rm -rf /tmp/old-build",                          // destructive but operator-authorized
+            "curl http://10.0.0.5/health",                    // internal IP — S5 deliberately NOT applied
+            "curl http://169.254.169.254/latest/meta-data/",  // cloud metadata — legit on a cloud host
+            "Get-Content C:\\logs\\app.log -Tail 50",
+        ] {
+            assert_eq!(
+                scan_remote_shell(s).decision, ScanDecision::Allow,
+                "remote admin command should be allowed: {:?}", s
+            );
+        }
+    }
+
+    #[test]
+    fn remote_shell_blocks_injection_obfuscation_shapes() {
+        // S2 cmd-bypass / obfuscation + hidden-unicode ARE attacks in any context.
+        assert_eq!(scan_remote_shell("%COMSPEC% /c whoami").decision, ScanDecision::Block);
+        assert_eq!(scan_remote_shell("& del /s C:\\Windows\\Temp").decision, ScanDecision::Block);
+        // fullwidth homoglyph (U+FF5C fullwidth vertical bar)
+        assert_eq!(scan_remote_shell("whoami \u{ff5c} findstr x").decision, ScanDecision::Block);
+        // hidden Unicode tag character (U+E0041)
+        assert_eq!(scan_remote_shell("echo hi\u{e0041}").decision, ScanDecision::Block);
     }
 
     // ── H1 DNS-rebinding guard helpers ──────────────────────────────────

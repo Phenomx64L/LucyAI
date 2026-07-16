@@ -210,6 +210,15 @@ pub fn run() {
             // any new ones. Cooldown of 4 h prevents nagging.
             commands::proactive_detector::start_background_loop();
 
+            // v1.7.232 — Background vulnerability watch. Every 6 h, scans the
+            // local host's installed software against the curated CVE DB and
+            // toasts when the CRITICAL/HIGH set changes — so the operator is
+            // alerted even with the cockpit closed. Windows-only (no-op else).
+            commands::cve_match::start_vuln_watch_loop(handle.clone());
+            // v1.7.233 M2 — síntesis jerárquica de documentos ingeridos
+            // (resúmenes densos por lote de secciones vía LLM local).
+            commands::pdf::start_pdf_synth_loop();
+
             // v1.7.89 — Fast no-LLM dedup loop. Every 30 minutes, scans
             // memories saved in the last hour for near-duplicates
             // (tag-Jaccard ≥ 0.90, title 3-gram cosine ≥ 0.92, or
@@ -476,9 +485,16 @@ pub fn run() {
             }
 
             // Initialize the shared metrics/indexer DB once at startup.
-            // Failing here would leave commands unable to read/write, so log and continue.
-            if let Err(e) = metrics::init(app.handle()) {
-                eprintln!("[lucy] metrics::init failed: {}", e);
+            // v1.7.238 — arranque RESILIENTE para operación desatendida: reintenta
+            // locks transitorios y recupera de corrupción (cuarentena + recreación).
+            // Si aun así falla, se registra FATAL en lucy_app.log (archivo, no la DB)
+            // porque `eprintln!` es invisible en un binario GUI de Windows release —
+            // antes esto dejaba a Lucy zombie TODA la noche sin rastro.
+            if let Err(e) = metrics::init_resilient(app.handle()) {
+                crate::utils::logging::write_app_log(
+                    "FATAL",
+                    &format!("metrics DB no disponible tras init resiliente: {} — memoria, permisos y tareas programadas quedan DESHABILITADAS esta sesión.", e),
+                );
             }
 
             // Warm up the tiktoken BPE table on a background thread so the
@@ -701,6 +717,9 @@ pub fn run() {
             // AI
             ai::ask_lucy,
             ai::get_cache_stats,
+            // v1.7.235 — JSON tool-output tabular compression (lossless, reversible)
+            utils::json_tabular::compress_tool_output,
+            utils::json_tabular::expand_tool_output,
             commands::mcp::call_mcp_tool,
             commands::mcp::discover_mcp_tools,
             commands::mcp::mcp_server_list,
@@ -886,6 +905,7 @@ pub fn run() {
             metrics::delete_agent_memory,
             metrics::auto_forget_run,
             metrics::crystallize_session,
+            metrics::maybe_auto_crystallize_session,
             metrics::list_crystals,
             metrics::get_crystal,
             metrics::delete_crystal,
@@ -906,8 +926,14 @@ pub fn run() {
             metrics::consolidate_agent_memories,
             metrics::supersede_memory,
             metrics::search_agent_memories,
+            // v1.7.236 — Lote 1 memoria: refuerzo por citas (R2) + pines (R5)
+            metrics::touch_memories_by_ids,
+            metrics::set_memory_pinned,
+            metrics::get_pinned_memories,
             metrics::search_agent_memories_expanded,
             metrics::get_recent_memories,
+            metrics::get_recent_memories_filtered,  // v1.7.233 — importance filter in SQL
+            metrics::memory_browser_stats,          // v1.7.233 — real corpus totals for the browser cards
             // User Profile (Hermes-inspired persistent memory)
             metrics::set_user_profile,
             metrics::get_user_profile,
@@ -931,7 +957,7 @@ pub fn run() {
             metrics::get_confidence_distribution,
             // Provider Management (Multi-LLM Support)
             providers::save_credential,
-            providers::get_credential,
+            providers::has_credential,
             providers::check_provider_health,
             // Incident Response / SRE Mode (Nivel 4)
             incident::incident_start,

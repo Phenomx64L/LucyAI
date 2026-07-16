@@ -328,4 +328,15 @@
     .scm-btn-ghost:hover { color: var(--txt, #e2e8f0); }
     .scm-btn-danger { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.3); color: #f87171; }
     .scm-btn-danger:hover { background: rgba(239,68,68,.18); }
+
+    /* ── Light mode (v1.7.232) — translucent-white fills wash out on the white
+       modal surface; remap rows/controls to real plates with defined borders. */
+    :global(:root.light) .scm-tbtn,
+    :global(:root.light) .scm-act { background: var(--bg2); border-color: var(--bdr2); }
+    :global(:root.light) .scm-row { background: var(--bg4); border-color: var(--bdr); }
+    :global(:root.light) .scm-row:hover { background: var(--bg2); border-color: var(--bdr2); }
+    :global(:root.light) .scm-close:hover,
+    :global(:root.light) .scm-act:hover { background: rgba(15,23,42,.05); }
+    :global(:root.light) .scm-chip,
+    :global(:root.light) .scm-src-bundled { background: var(--bg2); border-color: var(--bdr); }
 </style>

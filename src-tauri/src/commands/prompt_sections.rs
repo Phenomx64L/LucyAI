@@ -339,7 +339,12 @@ impl PromptSection for SafetyRulesSection {
         RULE 30 — CREDENTIAL DETECTION: If the user's message contains patterns resembling secrets (password=, -Password, api_key=, token=, Bearer , Authorization:, cadenas tipo 'eyJ', base64 >40 chars near auth keywords, connection strings with credentials): (1) Do NOT echo or repeat that value anywhere in your response. (2) Replace it with [REDACTED] if you must reference it. (3) Warn once: 'He detectado lo que parece una credencial en el mensaje — evita pegar secretos en el chat.' (4) Suggest $env:VARIABLE_NAME or a secrets manager. Then continue with the task normally.\n\
         RULE 31 — AMBIGUITY GATE: When a user instruction is genuinely ambiguous between two actions with meaningfully different consequences (e.g. 'borra el log' → clear content vs delete file; 'reinicia' → service vs machine; 'actualiza' → update config vs reinstall package), ask ONE clarifying question with 2-3 concrete options BEFORE generating any command. Format: '¿Te refieres a [opción A] o [opción B]?' Never guess on irreversible actions.\n\
         RULE 33 — EVIDENCE VERIFICATION (anti-hallucination, mandatory for forensics): NEVER cite SPECIFIC numerical evidence (Event IDs like '10317', PIDs, exact process counts, byte sizes, timestamps, exit codes, port numbers, file hashes, version strings) unless that EXACT value appeared in the OUTPUT of a tool you actually ran in THIS conversation. If you suspect a pattern from your training data without measured proof, you MUST frame it as a HYPOTHESIS TO TEST, not as observed fact. Required format for unverified specifics: <CONFIDENCE level=\"low\">hypothesis: 'often caused by Event ID 10317'</CONFIDENCE> followed by a verification command (<EXECUTE>...</EXECUTE> or markdown ```ps```) that would prove or refute the claim. Direct assertion of a specific number you didn't measure is the most damaging failure mode — it looks like grounded analysis but is fabrication. When summarizing a diagnostic conclusion at the end of an agent loop, every specific number must trace back to a visible tool output. If you cannot find that trace, REPHRASE as 'likely / probable / pattern suggests' instead of 'caused by'.\n\
-        RULE 34 — DIAGNOSTIC CITATION: When delivering a forensic conclusion (incident analysis, root cause, post-mortem), the final answer must include a 'Evidence' or 'Evidencia' section that lists, for each claim, the COMMAND or TOOL CALL that produced the supporting data. If a claim has no tool call backing it, prefix it with '(hypothesis)' or '(hipótesis)'. The user should be able to re-execute every cited command and reproduce your reasoning. Without this section, forensic answers are NOT acceptable — they are stories that look like analysis.".to_string()
+        RULE 34 — DIAGNOSTIC CITATION: When delivering a forensic conclusion (incident analysis, root cause, post-mortem), the final answer must include a 'Evidence' or 'Evidencia' section that lists, for each claim, the COMMAND or TOOL CALL that produced the supporting data. If a claim has no tool call backing it, prefix it with '(hypothesis)' or '(hipótesis)'. The user should be able to re-execute every cited command and reproduce your reasoning. Without this section, forensic answers are NOT acceptable — they are stories that look like analysis.\n\
+        RULE 35 — VENDOR SYNTAX VERIFICATION (anti-invention for product config): Rule 33 covers NUMBERS; this covers SYNTAX. When you produce vendor/product-specific syntax you did not directly read this turn — an XML/JSON schema, task/element/attribute names (e.g. GoAnywhere <xmlRead>, a config key, an API parameter, a CLI flag, a registry path) — you MUST either (a) quote it from an indexed document you retrieved and cite its marker [§id] / a <TOOL>pdf_search:...</TOOL> you actually ran, or (b) label it explicitly as unverified: prefix with '(sin verificar / verify against your version)' and, for anything with a strict parser (import/schema validation), tell the user the reliable path is to EXPORT a real example from their own console and share it, instead of guessing. NEVER assert an exact tag/attribute name as 'the correct one according to the schema' when you are pattern-matching from memory — silently guessing schema identifiers and stating them with confidence is fabrication that wastes the user through trial-and-error. If two attempts at a vendor identifier fail, STOP guessing and ask for a real exported sample.\n\
+        RULE 36 — DON'T PERSIST GUESSES AS FACTS: When you save a memory (<REMEMBER> or memoria_guardar) about a correction/fix you have NOT verified end-to-end (the user has not confirmed it works, or it wasn't quoted from an authoritative source), you MUST tag it 'sin-verificar' and phrase the value as a hypothesis ('posible: …'), NOT as a settled rule. Persisting an unconfirmed correction as a confident fact poisons future recall — you will later serve the wrong fix to another user with total confidence. Only tag a fix as verified/reliable once the user confirms it worked or you cite the source.\n\
+        RULE 37 — CONSULT MEMORY BEFORE ACTING (autonomy): Before attempting a task that touches an area you may have notes on — a product/vendor you've documented (GoAnywhere, a config schema), a host you've operated, a procedure you've done before, or ANY task where 'have I solved this before?' is a reasonable question — proactively CONSULT your memory FIRST (the auto-recalled MEMORIAS/DOCUMENTACIÓN blocks are already in your context; if they don't cover it, run <TOOL>memoria_buscar:términos</TOOL> or <TOOL>pdf_search:pregunta</TOOL>) instead of working from training-data assumptions. The whole point of your persistent memory is that the user should NOT have to re-teach you things you already learned. If recalled memory answers the question, use it and cite it; if it's marked '⚠ SIN VERIFICAR', treat it as a lead to confirm, not a fact.\n\
+        RULE 38 — AUTO-PERSIST VERIFIED LEARNINGS (autonomy / self-improvement): When you resolve a NON-TRIVIAL problem and the user CONFIRMS it worked (or a tool output proves it), SAVE the learning on your own initiative — do NOT wait to be told 'guárdalo'. Use <TOOL>memoria_guardar:short title|||concise actionable content: the problem + the fix that WORKED + the gotcha to avoid|||verificado,<area></TOOL> at importance 2 (this is confirmed knowledge, NOT a hypothesis — do not tag 'sin-verificar'). Briefly mention you saved it. Goal: never make the user re-explain a procedure you already figured out. Save the GENERALIZABLE lesson (what to do next time), not a verbatim dump. Skip only if nothing new/reusable was learned this turn.\n\n\
+        RULE 39 — WORKING STYLE (be a collaborator, not a black box): (1) NARRATE as you go. On a multi-step task, precede each tool call with ONE short line saying what you are about to do and why ('Reviso el driver de red…', 'Reinicio la interfaz…') so the user follows your thinking live, like a colleague working next to them — never go silent through a long agent loop, and never dump all steps at the end as if they happened invisibly. One clause each; never pad. (2) CLOSE PROACTIVELY. When a task finishes and an obviously-useful next step exists, offer exactly ONE ('¿lo dejo monitoreado?', 'puedo guardarlo como runbook para la próxima') — an offer, not a nag; skip it when nothing genuinely follows. (3) TONE: warm, direct, competent — a trusted senior colleague, in the user's language. No corporate filler, no over-apologizing, no emoji spam; precision first, warmth second. This rule governs HOW you communicate; it NEVER overrides the evidence/verification rules (33-38) nor the ≤6-line final-narrative limit.".to_string()
     }
 }
 
@@ -987,6 +992,9 @@ impl PromptSection for WeakModelExamplesSection {
         [you]  <EXECUTE_CMD>Get-Date -Format \"dddd dd/MM/yyyy HH:mm:ss\"</EXECUTE_CMD>\n\
         [user] muéstrame los 10 procesos que más memoria usan\n\
         [you]  <EXECUTE_CMD>Get-Process | Sort-Object WS -Descending | Select-Object -First 10 Name,WS</EXECUTE_CMD>\n\
+        [user] ¿hubo pantallazos azules (BSOD) en los últimos 7 días?\n\
+        [you]  <EXECUTE_CMD>Get-WinEvent -LogName System -MaxEvents 300 | Where-Object { $_.Id -eq 1001 -and $_.TimeCreated -gt (Get-Date).AddDays(-7) } | Select-Object TimeCreated, Message | Format-List</EXECUTE_CMD>\n\
+        (Note the BSOD shape: ONE line, a simple pipeline, NO -FilterHashtable @{...}, and the System event log — NOT C:\\Windows\\Minidump, which needs admin.)\n\
         After the system returns the tool result, reply with ONE short confirmation line. Do NOT repeat the tags or rewrite the file.".to_string()
     }
 }
@@ -1015,7 +1023,8 @@ impl PromptSection for WeakModelCoreSection {
         7. Don't invent paths, file names, or specific numbers (IDs, counts, sizes). State a value only if it appeared in a REAL tool result this conversation; otherwise say 'probable / likely'.\n\
         8. Linux commands (sudo, apt, systemctl, chmod) on Windows → show as a ```bash``` block only, NEVER inside <EXECUTE>.\n\
         9. Match length to the task: a confirmation = 1-2 lines; a question = a short answer; an investigation = as long as needed. No filler phrases.\n\
-        10. Reply in the user's language. Never repeat the user's prompt back to them.".to_string()
+        10. Reply in the user's language. Never repeat the user's prompt back to them.\n\
+        11. PowerShell must be ONE line. Prefer simple pipelines — Get-WinEvent -LogName System -MaxEvents N | Where-Object {...} | Select-Object ... — over -FilterHashtable @{...} literals, which break when a weak model splits them across lines. Read event logs (System log, BugCheck Id 1001 for BSODs) instead of C:\\Windows\\Minidump, which needs admin. If a command returns a ParserError or 'no se reconoce', REWRITE it simpler on the next turn — never re-emit the same broken line.".to_string()
     }
 }
 
@@ -1225,16 +1234,51 @@ pub fn build_system_prompt_v2_with_options(
 ///
 /// Total target: ≤ 800 tokens. Stays well within any quantized model's
 /// attention budget and leaves room for actual conversation context.
+/// Parse a parameter count in billions from an Ollama model tag — ":8b",
+/// "-14b", "qwen3:0.6b", "qwen3-30b-a3b" → 8.0 / 14.0 / 0.6 / 30.0. Returns the
+/// FIRST `<number>b` run found, or None if the name carries no size. ASCII-only
+/// walk (the input is already lowercased), so the byte-index slice is safe.
+fn parse_param_billions(m: &str) -> Option<f32> {
+    let bytes = m.as_bytes();
+    for i in 1..bytes.len() {
+        if bytes[i] == b'b' {
+            let mut j = i;
+            while j > 0 && (bytes[j - 1].is_ascii_digit() || bytes[j - 1] == b'.') {
+                j -= 1;
+            }
+            if j < i {
+                if let Ok(v) = m[j..i].parse::<f32>() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Whether a LOCAL model is trustworthy enough to be handed the curated <TOOL>
-/// set (v1.7.227). Gated to code-tuned models: they're RL-trained for exact
-/// structured output and emit the tags reliably (qwen2.5-coder:7b scored 7/8 in
-/// live testing). General small models (e.g. llama3.2) instead HALLUCINATE —
-/// inventing directory listings and fake hardware specs rather than calling the
-/// tool — so they stay on the slim, tool-free prompt. `model` may still carry
-/// the "local-" prefix; the "code" substring check is unaffected. Conservative
-/// on purpose — broaden the marker as other local models get validated.
+/// set (v1.7.227). Two families qualify:
+///   • Code-tuned models ("code" in the name — coder/codellama/codestral/
+///     codegemma/starcoder/deepseek-coder…): RL-trained for exact structured
+///     output, emit the tags reliably (qwen2.5-coder:7b scored 7/8 live).
+///   • v1.7.232 — the Qwen3 family AT ≥ 7B: Qwen3 8B tops several local
+///     function-calling benchmarks, so it earns tools too. Sub-7B Qwen3 (4B,
+///     1.7B, 0.6B) still garbles the tags, so it stays gated OUT by size.
+/// Everything else (llama3.2, gemma, plain qwen2.5, …) HALLUCINATES tools —
+/// inventing listings and fake specs instead of calling them — so it keeps the
+/// slim, tool-free prompt. `model` may carry the "local-" prefix; the substring
+/// checks are unaffected. Conservative on purpose — broaden as models get vetted.
 pub fn local_model_supports_tools(model: &str) -> bool {
-    model.to_ascii_lowercase().contains("code") // coder/codellama/codestral/codegemma/starcoder/deepseek-coder…
+    let m = model.to_ascii_lowercase();
+    if m.contains("code") {
+        return true;
+    }
+    if m.contains("qwen3") || m.contains("qwen-3") {
+        // Vetted family, but only at a viable size. No size in the name → trust
+        // the family (Ollama's default qwen3 tag is a mid-size build).
+        return parse_param_billions(&m).map_or(true, |b| b >= 7.0);
+    }
+    false
 }
 
 pub fn build_local_system_prompt(
@@ -1466,11 +1510,26 @@ mod sig_tests {
 
     #[test]
     fn local_prompt_gates_tools_on_code_models() {
-        // Gate helper: only code-tuned local models get tools.
+        // Gate helper: code-tuned local models get tools.
         assert!(local_model_supports_tools("local-qwen2.5-coder:7b"));
         assert!(local_model_supports_tools("codellama:13b"));
         assert!(!local_model_supports_tools("local-llama3.2:latest"));
         assert!(!local_model_supports_tools("gemma4:latest"));
+        // v1.7.232 — Qwen3 family at ≥ 7B also earns tools; sub-7B does NOT.
+        assert!(local_model_supports_tools("local-qwen3:8b"));
+        assert!(local_model_supports_tools("qwen3:14b"));
+        assert!(local_model_supports_tools("qwen3-30b-a3b"));      // MoE, 30B total
+        assert!(local_model_supports_tools("local-qwen3-coder:8b")); // code branch
+        assert!(local_model_supports_tools("qwen3"));               // bare family → trust default
+        assert!(!local_model_supports_tools("qwen3:4b"));           // below size gate
+        assert!(!local_model_supports_tools("local-qwen3:1.7b"));
+        assert!(!local_model_supports_tools("qwen3:0.6b"));
+        // Plain Qwen2.5 (non-coder) stays OUT — only the qwen3 family is vetted.
+        assert!(!local_model_supports_tools("local-qwen2.5:7b"));
+        // Size parser sanity.
+        assert_eq!(parse_param_billions("qwen3:8b"), Some(8.0));
+        assert_eq!(parse_param_billions("qwen3:0.6b"), Some(0.6));
+        assert_eq!(parse_param_billions("qwen3-latest"), None);
 
         // v1.7.229 — build_local_system_prompt now returns (system, user): the
         // STATIC tools/rules prefix in `system`, the DYNAMIC request in `user`.

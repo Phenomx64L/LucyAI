@@ -7,6 +7,951 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
 
+## [1.7.238] — 2026-07-16
+
+### Fix — memory: capsule save + `memoria_buscar` no longer collapse against document rows
+
+After ingesting 14 GoAnywhere PDFs, asking Lucy to "encapsulate the key data
+into a memory" appeared to succeed but no capsule showed up, and asking for its
+ID sent the agent loop into a token-burning spin. Root cause: the dedup pipeline
+and the memory-search tool never inherited the `session_id NOT LIKE 'pdf:%'`
+exclusion from v1.7.233.
+
+- **Dedup** (`stage1_fts_dedup` + `stage2_embedding_dedup` liveness UPDATE) now
+  excludes both `pdf:%` chunks and `pdf-doc:%` summaries. Before, a
+  vocabulary-dense capsule bm25-matched a document chunk/summary, returned
+  `action:"duplicate"`, and was never inserted — the "I saved it / deduplicated
+  automatically, but it's invisible" bug.
+- **`memoria_buscar`** (`bm25_search_one`) excludes the same, so it returns real
+  memories; documents are still found via `pdf_search`.
+- **Empty-guard bail** — the hallucination guard now cuts the loop after 3
+  consecutive turns where every tool returned empty/errored, via the existing
+  forced-synthesis path (before: rode to `MAX_LOOPS`=60).
+- **Persistence fast-finish** — a turn whose only successful actions were memory/
+  principle writes ends directly instead of spending a full extra LLM turn just
+  to re-announce the save (the "responds but keeps working / prompt blinking"
+  symptom on high-effort cloud models).
+
+### Feat — Memory Explorer (cockpit) is now fully operable
+
+The V2 Explorer had cloned V1's views but dropped the actions. Ported them,
+reusing existing backend commands:
+
+- **Memorias** — importance filter (Todas/Alta/Media/Baja via
+  `get_recent_memories_filtered`), in-place edit of tags + importance, a "📌
+  Fijadas" section so pinned memories are always visible/unpinnable, and
+  provenance (files a memory touched + non-timestamp origin session).
+- **Crystals** — arrays rendered as bullets (were raw JSON) + delete.
+  **Insights** — delete + honest reinforcement count (was inflated by one).
+  **Lecciones** — promote / dismiss. **Principios** — enable/disable toggle.
+- **Grafo** — the selected node gained "Abrir en Memorias" and "Borrar".
+- **Browser search** — `search_agent_memories` gained an `exclude_documents`
+  flag; the Explorer's search no longer surfaces document rows as memories (the
+  recall keyword-fallback path is unaffected).
+
+### Feat — unattended-operation resilience (round 1)
+
+Hardening for running critical activities with no supervisor:
+
+- **Resilient DB init** — `metrics::init_resilient` retries transient locks with
+  backoff and, on corruption, quarantines `lucy.db` and recreates fresh
+  (degraded-but-alive instead of a permanent zombie where every DB command — and
+  thus all command execution — fail-closes). Failures now log FATAL to
+  `lucy_app.log` (file) instead of an invisible `eprintln!`.
+- **Automatic daily backup** — a housekeeping loop VACUUM-INTO-snapshots the DB
+  (signed) to `%APPDATA%\Lucy\backups\`, keeping 7. The backup machinery already
+  existed but nothing called it.
+- **Scheduled-task crash recovery** — a pre-marked `'running'` task now uses a
+  15-min lease instead of disabling itself; a crash mid-run self-heals instead
+  of leaving the task disabled forever claiming "running".
+- **Keyring boot race** — `get_configured_providers` distinguishes "not
+  configured" from a transient Credential Manager error; the frontend retries
+  3×5s before falling to the setup overlay (was: dropped to a virgin-install
+  screen on any hiccup).
+- **Cron in local time** — `next_after` now interprets cron in the operator's
+  local timezone (DST-correct), not UTC.
+- **Log rotation** — `lucy_app.log` keeps 5 compressed generations (was 1).
+
+### Perf — the reasoning stream no longer stalls the UI
+
+While Lucy was "thinking", every `<THOUGHT>` token re-parsed the whole
+accumulated text (O(n)) and ran a **global** `refresh()` (re-rendering every
+tab + the chrome), unthrottled — so long reasoning froze and jumped.
+`updateReasoning` now coalesces per animation frame, throttles the re-parse by
+length, and uses the granular `bumpTab` instead of `refresh()`; the same
+length-throttle was applied to the main streaming render for long responses.
+
+---
+
+## [1.7.236] — 2026-07-13
+
+### Feat — autonomous session crystallization (memory autonomy, point 4)
+
+Until now Lucy only distilled a session into a crystal + lessons when the user
+ran `/crystallize` by hand — she never learned from her own work unprompted.
+Now she auto-crystallizes substantial sessions at turn-end, so the user need not
+re-teach her how to do things. Gated hard against the memory-flood failure mode
+(the GoAnywhere incident):
+
+- **Rust `maybe_auto_crystallize_session`** — cheap gates run BEFORE any Ollama
+  call: `MIN_TURNS` (4), `MIN_TOOL_CALLS` (3), `MIN_TRANSCRIPT_CHARS` (800), and
+  **one crystal per session** (idempotent DB check), so re-invoking every
+  turn-end is a no-op. Ollama-down or a thin session just returns `fired=false`
+  — the turn is never disturbed.
+- **Lesson-promotion cap** — `crystallize_session` now promotes at most
+  `MAX_PROMOTED_LESSONS` (6) lessons to memories; a runaway local model can emit
+  dozens, and without a cap one auto-session could flood memory. Promotion still
+  flows through `save_agent_memory`'s FTS dedup.
+- **Frontend `maybeAutoCrystallize`** (fire-and-forget in the turn-end funnel) —
+  mirrors the Rust floors as a pre-gate (counting user turns + rendered tool
+  cards) plus a per-tab in-memory guard, so a thin/already-distilled session
+  costs nothing (no IPC).
+- Tests: cheap-gate rejections covered; `cargo test --lib` 396 passed / 0 failed.
+
+### Design — Terminal IA (cockpit) richer response experience
+
+The cockpit split conversation (center) from agent activity (workspace, right), so
+watching only the conversation felt flat vs working in Claude Code. This pass
+brings the activity INTO the conversation and polishes the composer:
+
+- **`❯` composer glyph aligned.** The row is `align-items:flex-end`, but the glyph
+  didn't share the textarea's vertical box (line-height + padding) so it sank ~5px
+  below the first line (reported "› descuadrado"). Now shares the box → level baseline.
+- **The thread shows WHAT Lucy is doing, not a spinner.** While she works, the
+  indicator now reads the latest live trace — a phase chip (`EJECUTANDO`/`PENSANDO`/
+  `ANALIZANDO`) + the real activity label ("Reiniciar la interfaz Ethernet") — instead
+  of a generic "pensando · paso 3".
+- **Inline activity previews.** Tool cards show a 2-line dimmed preview of their
+  output, and reasoning ("thought") cards a 1-line preview, right in the thread —
+  a real glimpse of what happened without expanding (full output still on click).
+  Failed tool cards get a danger-tinted border + preview.
+- **Streaming feels alive end-to-end.** Lucy's avatar now keeps pulsing while she
+  *writes* (before, the ring stopped the instant text began arriving), and the
+  typing cursor moved from a stray block that floated on its own line below the
+  text to an inline `::after` on the streamed markdown's last block — it blinks
+  right after the last word, like a real terminal cursor.
+- **RULE 39 — working style (behavior).** New system-prompt directive: Lucy narrates
+  each step in one short line as she works (a colleague thinking out loud, not a
+  silent black box), closes a finished task with exactly one proactive next-step
+  offer when there's an obvious one, and holds a warm-but-precise senior-colleague
+  tone in the user's language. Explicitly subordinate to the evidence rules (33-38)
+  and the ≤6-line narrative limit. (Prompt change — best judged in live use.)
+
+### Feat — richer recall: crystals in the pipeline (#2) + graph-aware expansion (#3)
+
+The two remaining memory-improvement proposals, now implemented:
+
+- **#2 — crystal narratives are recallable.** `crystallize_session` promoted only
+  the *lessons* (the actionable "how") into `agent_memories`; the *narrative* (the
+  "what we did / why") lived only in `agent_crystals`, invisible to recall. Now the
+  narrative is also promoted as a searchable memory (tags `crystal`,
+  `session-summary`, importance 1 so it's findable but never outranks a hard fact,
+  carrying the session's files list), so "have I dealt with this before?" surfaces
+  the right session. Deduped by the existing FTS pipeline.
+- **#3 — graph-aware recall.** After the pre-loop semantic recall, the single best
+  memory hit is used as a seed into the memory graph (`graph_neighbors` BFS over
+  `agent_memory_edges`, the edges the background loop rebuilds from shared
+  concept/file/session). Up to 2 CONNECTED memories that pure semantic search
+  missed — and aren't already injected — are added as a "MEMORIAS CONECTADAS"
+  block. Cheap local BFS (no Ollama, sub-ms, no timeout race), skipped on the tight
+  local-tier budget, deduped vs `_injectedMemIds`, best-effort so it never breaks a
+  turn. Both activate as the corpus grows; inert (correctly) on a near-empty DB.
+
+### Fix — principle honesty backstop (Lucy no longer claims saves that didn't happen)
+
+Verifying the memory submodules against the real DB surfaced that Lucy had told
+the user "guardado como P1" while the `principles` table stayed empty — she
+claimed a save she never performed (the model wrote a success sentence without
+emitting the `<TOOL>principle_set:…>` marker). The whole write path was actually
+sound; the failure was an honesty gap. New backstop in the agent loop: when a
+turn fires NO well-formed `principle_set` marker yet the reply claims a principle
+save ("guardado como P1", "añadí el principio", "saved as P…") and the principles
+table is confirmed empty, the false claim is replaced with a visible correction
+("no se persistió — pídemelo de nuevo") and the loop is told the save didn't take
+so Lucy can re-emit the marker correctly. Ties into the RULE 35/36/38 anti-guessing
+work. (Verification also confirmed the other six submodules — Memorias, Documentos,
+Grafo, Crystals, Insights, Lecciones — are correctly wired; they read empty only
+because the DB genuinely holds 1 memory and nothing else.)
+
+### Security & correctness — pre-build audit (8 findings, all adversarially verified)
+
+Finished the security/bug dimension of the pre-build audit that had previously
+died mid-run. Eight findings were surfaced by scoped finders and each survived
+an independent adversarial verification pass before being fixed:
+
+- **Provider API keys were exfiltrable over IPC (high→med).** `get_credential`
+  returned the raw keyring secret (`Ok(pass)`) to the renderer — any injected
+  UI path could `invoke('get_credential',{key:'anthropic'})` and read every
+  stored LLM key in plaintext. It had zero legitimate callers. Replaced with
+  `has_credential(key) → bool` (status only; the value never crosses IPC).
+- **Gemini key leaked in a URL + error string (high).** `check_gemini_health`
+  put the key in `?key=<secret>`; a connect/timeout error's `Display` embeds the
+  URL, which was formatted straight into the IPC-facing `Err(...)`. Now sent as
+  the `x-goog-api-key` header (matching ai.rs) with a generic error message.
+- **Remove-Item aliases bypassed the HITL delete gate (high).** The destructive
+  classifier hard-coded `remove-item`, so `rm`/`ri`/`del`/`erase`/`rd` (all
+  PowerShell aliases) recursively force-deleted with NO confirmation prompt. The
+  classifier is now alias-aware (verb + `-recur`/`-force`/`*`), word-boundary
+  anchored; new tests lock in the alias coverage.
+- **Streaming remote exec skipped the guardrail scan (med).** `stream_shell_cmd`
+  never called `scan_remote_shell`, so injection/obfuscation shapes reached the
+  host ungated through that entry point. Added the same fail-closed scan the
+  non-streaming remote paths already enforce.
+- **Batch-execute gate ignored "no lo ejecutes" (med).** 2+ read-only EXECUTE
+  tags auto-ran despite an explicit no-exec intent or an active security skill.
+  The batch gate now checks `!infoIntent && !skillInfoIntent` like its siblings.
+- **noExec regex missed reflexive Spanish (med).** "no se ejecute(n)" / "que no
+  se ejecute" — a common way to say "don't run it" — wasn't recognised. Added
+  the `se` clitic to the pattern.
+- **CSV round-trip dropped boundary nulls (med).** A single-column tabular array
+  with a null first/last element lost that row (empty line eaten by the newline
+  trim). Single-column arrays now pass through uncompressed, plus a hard
+  row-count guard on decompress refuses silent loss.
+- **Memory tags/files persisted unscrubbed (low).** `save_agent_memory` scrubbed
+  only title/content; a secret smuggled into a tag/file entry bypassed it. Both
+  are now scrubbed at the persistence boundary.
+
+Validation: `cargo test --lib` 395 passed / 0 failed; `svelte-check` 0/0.
+
+### Release — version alignment + installer package polish
+
+Pre-build pass: get the version registered everywhere it surfaces, and clean up
+the shipped install so it stops looking half-baked.
+
+- **Version aligned to 1.7.236** across `package.json`, `Cargo.toml`,
+  `Cargo.lock`, `tauri.conf.json` (the value NSIS/MSI stamp into the installer)
+  and this changelog.
+- **First-run overlay no longer stale.** `SetupOverlay.svelte` hard-coded
+  `LUCY_VERSION = '1.6.4'` (badge + "what's new" line) — dozens of releases
+  behind. Now read dynamically from `getVersion()` in `onMount` (same source as
+  the rest of the UI, with a current literal only as a dev/preview fallback),
+  and the "what's new" tagline moved from the 1.4.x "Hardening + SRE + MCP" to
+  "Memoria + Autonomía + Cockpit". Every other version surface (About modal,
+  Settings, cockpit config pill, tutorial, diagnostics/exports) was already
+  dynamic and now reflects 1.7.236.
+- **Installed binary renamed.** The crate is `lucy-svelte`, so the installer
+  dropped an ugly `lucy-svelte.exe`. Added `mainBinaryName: "Lucy Assistant"`
+  → the app installs as `Lucy Assistant.exe`, matching the product name,
+  window title and taskbar entry.
+- **Start Menu grouped.** `nsis.startMenuFolder: "Lucy Assistant"` collects the
+  app + uninstaller shortcuts under one named folder instead of loose entries.
+
+## [1.7.235] — 2026-07-09
+
+### Design — cockpit iter-2: proportion & finish pass (from live screenshots)
+
+Grounded on real screenshots of the rebuilt app. The instrument chrome landed,
+but four proportion/finish issues still read "AI-made":
+
+- **Blueprint over-exposure**: the grid texture covered entire panels edge to
+  edge (wireframe look). Now lives in a `::before` with a radial mask — it
+  concentrates behind the empty-state tile and fades out. Fixes workspace,
+  inventory loading and NexShell empties at once.
+- **Third type register**: Space Grotesk Variable (self-hosted via fontsource)
+  as `--font-display` for view titles + empty-state titles. Display for
+  headlines, Inter for prose, JetBrains Mono for instrument — three voices
+  with roles instead of two-font template feel.
+- **Proportion fixes**: Memoria stats stop being giant boxes with a floating
+  digit (auto-fill capped at 190px, tighter padding); Dashboard `.wide` grid
+  gets `align-items:start` so the Red panel no longer stretches into dead
+  space; stopped-services list becomes instrument rows (warn LED + mono name +
+  hairlines + max-height scroll).
+- **NexShell empty**: from one floating sentence in a full-screen void to a
+  real centered empty state (tile + display title + faded blueprint).
+- **Thread finish**: mono tabular timestamp next to "Lucy" per message
+  (ConvoMsg.ts stamped at push), and Lucy's prose bumped to 13.5px/1.7 — the
+  main content now reads larger than the chrome.
+
+### Fix — three user-reported issues (composer, path memory, principles visibility)
+
+- **#1 Multiline composer.** The cockpit composer was a single-line `<input>`
+  (only one line to type). Now an auto-growing `<textarea>` (1 line → up to
+  ~150px, then scrolls); Enter sends, Shift+Enter inserts a newline (hint added
+  to the placeholder). Re-measures when `draft` changes externally (send/voice/slash).
+- **#2 Lost paths after compaction.** When the conversation compacted old turns,
+  Lucy forgot file/folder paths the USER had given and reverted to an old path
+  (transcript: user gave `…\GAW\IA Projects`, Lucy went back to the Downloads
+  path). New `captureUserPaths()` extracts Windows/UNC/Unix paths from each user
+  message into `workingMemory.userPaths` — rendered in the always-injected WM
+  digest (which is never compacted), with framing to trust the most recent
+  user-given path over any buried in older turns. Last folder given becomes cwd.
+- **#3 Principles invisible in the memory browser.** Lucy saves rules via
+  `<TOOL>principle_set>` (the `save_principle` command) and reports "guardado
+  como P1", but the cockpit memory browser had NO principles tab — so the user
+  couldn't verify it. Added a "Principios" tab listing `list_principles`
+  (P#, name, scope, priority, enabled) with per-row delete.
+
+### Feat — autonomy: proactive memory consultation + auto-persist verified learnings
+
+Point 4 of the pre-build pass ("autonomía equiparable"). Two system-prompt rules
+plus a deterministic backstop so Lucy digs into her own memory and records what
+she learns without being told:
+- **RULE 37** — consult memory BEFORE acting on any area she may have notes on
+  (product/vendor, host, prior procedure) instead of working from training-data
+  assumptions; the user shouldn't have to re-teach her.
+- **RULE 38** — when a non-trivial problem is resolved and the user confirms it
+  worked, save the generalizable lesson on her own initiative (importance 2,
+  `verificado` tag), not a verbatim dump.
+- Deterministic backstop in `+page.svelte`: when the user's message signals
+  success ("funcionó", "ya quedó", "resuelto"…) and there was prior work, a
+  one-shot `[AUTO-APRENDIZAJE]` nudge tells Lucy to persist the verified fix now.
+  An explicit `verificado`/`confirmado` tag on `memoria_guardar` overrides the
+  RULE-36 hypothesis heuristic (confirmed knowledge isn't downgraded).
+
+### Chore/Fix — pre-build audit pass
+
+- **Security dep**: DOMPurify 3.4.5 → 3.4.12 (patch) closes 3 sanitizer-bypass
+  advisories — relevant since Lucy sanitizes LLM/web markdown with it. Remaining
+  npm-audit items are vite (dev-only, not shipped).
+- **Light theme**: extended the dark-code-well neutralization to `.act-out`,
+  `.cd-code`, `.cd-out`, `.chk-detail`, `.vc-patch` — these hardcoded
+  `rgba(0,0,0,.28)` wells rendered as black boxes on white in the light cockpit.
+- clippy: 0 errors, 66 style-only warnings (clamp/sort_by_key/arg-count) — noted,
+  not blocking.
+
+### Fix — anti-guessing + provenance (A) and active-task anchor (B), from a real GoAnywhere transcript
+
+A user transcript showed Lucy inventing vendor XML syntax (`readXML`→`readXml`→
+`xmlRead`) with total confidence, **saving a wrong "correction" as a fact**
+(poisoning future recall), and — across a restart / mid-loop — losing track of
+the file she was editing.
+
+- **A — anti-invention + memory provenance.** New system-prompt RULE 35 (vendor
+  syntax must be quoted+cited from an indexed doc or labeled "sin verificar";
+  after two failed guesses at a vendor identifier, STOP and ask for a real
+  exported sample) and RULE 36 (never persist an unconfirmed fix as a confident
+  fact). Deterministic backstops in the frontend: `memoria_guardar` now detects
+  hypothesis phrasing/tags → forces importance 1 + `sin-verificar` tag; the
+  auto-recall injection flags such memories with "⚠ SIN VERIFICAR" and instructs
+  the model to treat them as hints, never as official facts.
+- **B — active-task anchor.** The rolling context window (35KB cap, keep-last-5
+  tool results) could digest away the file/command being worked on. The agent
+  continuation prompt now injects a fresh, non-accumulating "ARCHIVOS ACTIVOS DE
+  ESTA TAREA" block from `filesMod` every turn — it lives in the prompt, not in
+  `agentCtx`, so the rolling window can never drop it. Fixes "forgot which file
+  it was editing" after many turns / a security block.
+
+Note: A prevents NEW poisoned memories; it does not clean existing ones — delete
+stale guessed corrections (e.g. the transcript's ID 506) in the memory browser.
+
+### Feat — memory batch 2: entity-triggered mid-loop recall + contradiction detection (v1.7.236)
+
+- **R3 Entity-triggered recall.** The pre-loop recall only sees the original
+  question; when step N's tool output reveals a new entity ("service GA-Agent
+  is down"), stored knowledge about it never entered the context. Now, after
+  each TOOL RESULTS injection, NEW entities (hyphenated/CamelCase/ALL-CAPS
+  names, executables/configs — stop-list filtered, entities from the original
+  query pre-seeded as seen) trigger a bounded mini-recall (k≤3, 600ms, hard
+  budget 3/run cloud · 2 local, dedup against everything already injected).
+  Hits carry [§id] so citation reinforcement (R2) applies. Critical for
+  non-code local models, which cannot call pdf_search themselves.
+- **R4 Contradiction detection at save (stage 3).** Dedup catches "same fact";
+  this catches "same subject, DIFFERENT value" ("timeout es 30s" vs "…es 60s")
+  — previously both coexisted and recall could serve the stale one. After
+  stages 1-2 miss, a similarity-band probe [0.78, 0.92) (embed is LRU-cached
+  from stage 2) plus a strict local-LLM yes/no verdict (temperature 0, doubt ⇒
+  NO, parser unit-tested) marks the OLD row `superseded_by = new_id` via the
+  existing machinery every read path already honors. Best-effort at every
+  step: Ollama down / timeout / ambiguity ⇒ normal insert, never a lost save.
+  New action `inserted_superseding` surfaces in SaveMemoryResult.
+
+### Feat — memory batch 1: conversational recall + citation reinforcement + pinned memories (v1.7.236)
+
+Three upgrades so cloud AND local models exploit memory harder, aimed at
+unattended multi-user operation:
+
+- **R1 Conversational recall.** Auto-recall embedded only the current message,
+  so anaphoric follow-ups ("¿y dónde se guarda eso?") retrieved nothing. Short
+  (<48 chars) or anaphora-pattern messages now rewrite the recall query as
+  `previous user message + current` (capped 600 chars). Semantic legs use the
+  rewritten query; the BM25 keyword fallback keeps the raw message (concatenated
+  turns would over-constrain the lexical MATCH). Skip-gate length now evaluates
+  the rewritten query, so short follow-ups with context pass.
+- **R2 Citation-driven reinforcement.** At turn end, the `[§id]` markers Lucy
+  actually cited (M4 grounding) are parsed from the final reply and
+  `touch_memories_by_ids` bumps their access stats — the existing Mem0-style
+  decay then makes truly-used content outrank injected-but-ignored content
+  over time. Fire-and-forget, never blocks the turn.
+- **R5 Pinned memories.** New `pinned` column (migration + schema test),
+  `set_memory_pinned` / `get_pinned_memories` commands, 📌 toggle in the
+  cockpit memory browser, and a `MEMORIAS FIJADAS` block injected EVERY
+  non-trivial turn (cap 5 / 3 local, own try — a failure never harms recall).
+  Operator guarantees for unattended use: pinned instructions don't depend on
+  semantic score.
+
+### Feat — keyword-recall fallback when Ollama is down
+
+The per-turn auto-recall skipped entirely when Ollama was offline — in
+unattended use (secondary users querying ingested docs) a dead Ollama meant
+zero memory. Deliberately NOT solved with the backend's Gemini embedding
+fallback for search: embedding the query with text-embedding-004 and comparing
+against nomic-stored vectors crosses embedding spaces (meaningless similarity →
+would inject garbage "relevant documentation"). Instead, with Ollama down the
+recall now falls back to `search_agent_memories` (base) whose BM25/FTS5 lexical
+stream needs no embeddings and covers both memories and PDF chunks (FTS indexes
+all agent_memories rows). Same bounded 700ms timeout, same local-tier budgets,
+clearly labeled block so the model knows it's keyword-based.
+
+### Fix — auto-recall now fires on short keyword queries
+
+The per-turn memory/document auto-recall (M1) skipped any prompt under 16
+chars — a terse keyword question like "GoAnywhere?" (11 chars) got NO recall,
+exactly the query style secondary users type against ingested documentation.
+Threshold lowered to 8; the real noise guard remains the trivial-greeting regex.
+Verified end-to-end: ingest (batch pdf_chunk embeddings + M2 synthesis, both
+retrievable) → per-turn unified recall (mem ≥0.45 / docs ≥0.50, local tier
+included) → system prompt proactively lists ingested PDFs with the pdf_search
+tool. Operational requirement for unattended use: Ollama running with
+`nomic-embed-text` (query-side embeddings).
+
+### Feat — Lucy's TTS voice: smart default + voice picker
+
+Lucy spoke with the generic male OS voice. Root cause in `voice.ts`: with several
+voices for the language it took `matchVoices[0]` — on Windows the Spanish list
+is usually headed by "Microsoft Raúl" (male, legacy SAPI), even when female
+voices (Sabina/Helena) or the far better Edge "(Natural)" neural voices exist.
+
+- **Smart default**: `resolveTtsVoice()` ranks candidates — exact locale >
+  same-language, neural/"Natural"/online quality +30, female given names +25
+  (Lucy is female), male names penalized. No config needed: Lucy now picks the
+  best female voice available.
+- **Voice picker** in Configuración → Modelos y comportamiento: dropdown with
+  the system voices for the active language, "Auto — <effective voice>" default,
+  "▶ Probar" plays a sample. Pinned voice persists in `lucy_tts_voice`
+  (localStorage) and is ignored automatically if the UI language stops matching
+  (a Spanish voice will never read English).
+- Voice-wait refactored into `ensureTtsVoices()` (single bounded wait, keeps the
+  historical orphan-listener fix). Both V1 and cockpit share this `speak()`.
+
+### Design — cockpit V2 "instrumento premium" (anti-generic pass)
+
+The V2 cockpit read as "AI-made template": unanchored composition, uniform flat
+panels, one perceived type size, default emerald-on-slate, centered-icon empty
+states. This pass gives it a deliberate identity — an *operations instrument
+with craft*, not another chat app:
+
+- **Tokens** (`cockpit-tokens.css`): new instrument primitives — `--fs-micro`,
+  `--fs-display`, `--ls-label`, `--grid-line`, `--inset-shadow` (dark + light) —
+  and global utilities: `.ck-lbl` (mono micro-label, tracked uppercase),
+  `.ck-led` (real-state LED, on/warn/err), `.ck-rule` (fading hairline),
+  `.ck-well` (inset data well), `.ck-blueprint` (grid texture for idle zones),
+  `.ck-num` (tabular mono figures). Code-block headers (`.code-lang`) styled as
+  instrument chrome. Canvas deepened one step (`#0A0E14`).
+- **CockpitShell**: the conversation now lives in an anchored ~820px reading
+  band (thread + composer + slash palette share the axis — kills the
+  "floating in a void" look); lane header = LED + instrument label + hairline;
+  composer gets a terminal prompt glyph `❯` that lights up with input, and
+  switches to mono command-mode when the draft starts with `/`; footer restyled
+  as telemetry (mono, tracked, tabular numerals, glowing LEDs); titlebar badge
+  in instrument mono.
+- **All 8 views + AgentWorkspace + Graph**: section headers → instrument labels
+  with real-state LEDs (Ollama online, log stream live, scan state, agent
+  running); hero metrics (Dashboard values, Compliance score, Memory counts,
+  Graph meta) → tabular mono; data cards gain inset depth; empty states → 
+  blueprint grid + instrument tile (the workspace's "Sin plan todavía" set).
+  View titles (18px) deliberately stay sans — the instrument voice is for
+  chrome, not headlines.
+
+### Feat — lossless JSON→schema+CSV compression for large tool outputs
+
+Verbose JSON arrays of uniform objects — Lucy's classic tool outputs (`inventory`,
+process lists, `cve_match` rows) — repeat every key on every element. New Rust
+module `utils/json_tabular.rs` losslessly rewrites such an array into a one-time
+schema header + CSV rows:
+
+```
+[JSON-TABLE v1] {"key":"installed_software","cols":["name","version",...],"n":160}
+App000,1.4.31,...
+App001,2.0.11,... (×160)
+[/JSON-TABLE]
+```
+
+Measured **~43% fewer tokens on a 160-row inventory, fully lossless** (round-trip,
+type fidelity `"5"`≠`5` / `null`≠`""`, and embedded commas/quotes/newlines all
+covered by 12 unit tests). Origin: a hands-on pilot of the Headroom project
+(58k★, Apache-2.0) — we ported the one high-value idea natively instead of taking
+the Python dependency (no ML, no sidecar, no proxy that sees keys).
+
+- Commands `compress_tool_output` / `expand_tool_output` (both passthrough-safe,
+  tolerate a short `[LABEL]\n` prefix before the JSON body).
+- Wired into the agent loop **before** the 12k-char tool-result cap, so ~2× more
+  real data survives the cap — we shrink instead of truncating. Fires only on big
+  homogeneous JSON arrays that save ≥12%; a one-time format legend is added to the
+  context when compression is applied so the model reads the table correctly.
+- Highest value on **small-context local models** (e.g. qwen3:8b @ 40k) in long
+  agent loops. Kill-switch: `localStorage.lucy_json_tabular = '0'`.
+
+## [1.7.234] — 2026-07-08
+
+### Fix — "generate the script but don't execute it" is now honored (local + cloud)
+
+When the user asked a model (notably the weaker local `qwen2.5-coder` via Ollama)
+to *generate* a script **without running it** — "generame el script, pero no lo
+ejecutes", "sólo entrégame el script" — Lucy still executed it and even raised the
+RunAs/UAC elevation prompt. The model emitted an `<EXECUTE>` block despite the
+instruction, and the frontend intent guard didn't catch that phrasing.
+
+Two root causes, both fixed in `+page.svelte`:
+
+- **No detector for the explicit "don't execute" phrase.** Added `noExecIntent`
+  ("no lo ejecutes", "sin ejecutar", "sólo genérame", "don't execute", "just
+  generate"…). It's folded into `infoIntent`, so **all execution gates** honor it
+  — including the two (agent-loop local + post-stream local) that didn't check
+  `codeGenIntent`. The RunAs/UAC prompt lives *inside* those gates, so suppressing
+  the gate also suppresses the elevation prompt. The `<EXECUTE>` block is shown as
+  a `powershell` code fence instead of running.
+
+- **`codeGenIntent` missed enclitic verb forms.** The old regex required a space
+  right after the verb (`genera␣script`), so "generaME el script" / "entrégame el
+  script" slipped through. Broadened to match generation verbs with optional
+  `-me` and Spanish accents within ~40 chars of an artifact noun.
+
+**New default: generation is show-not-run unless ordered.** A plain "genérame un
+script" now shows the script; an explicit run order (`runRequestIntent`:
+"ejecútalo", "córrelo", "y ejecuta", "run it") re-enables execution. Autonomous
+tasks ("reinicia el spooler", "haz un backup") don't match `codeGenIntent`, so
+they still execute normally. Verified with 15 classification cases (all pass).
+The static `[CODE GENERATION PROTOCOL]` prompt was also hardened with a no-run
+hard rule so instruction-following models cooperate before the guard even fires.
+
+### Fix — streaming repaint freeze on WebView2 (blank text until mouse-move)
+
+Three-layer defense for the reported bug where, during assistant text/code
+streaming, the chat area leaves blank gaps or the text vanishes entirely at the
+end of the response, only appearing when the mouse moves. Root cause: WebView2's
+GPU compositor **throttles the *present*** (buffer swap to screen) when there is
+no OS input — the renderer rasters the streamed text but never swaps it. The
+existing 2×2 corner presentation heartbeat forces presents, but Chromium's
+*partial swap* re-presents only the corner tile, leaving the message region
+(rastered in a throttled frame) stale until a real input forces a full present.
+
+**L3 — streaming present-pump (`+page.svelte`, the core fix).** While text is
+actively streaming (pinged on every rendered chunk and once at end-of-stream), a
+tiny 8×8 canvas **stretched to the full viewport** is content-damaged each frame.
+Content damage (unlike a property tween the compositor can skip) is
+non-optimizable, and because the element spans the whole surface the resulting
+present covers every tile the text can occupy → the streamed text flushes to
+screen with no input. The backing is 8×8 so the raster is ~free, the sheen is
+<1% and only alive while Lucy types; it auto-idles ~700 ms after the last chunk.
+The end-of-stream kick specifically fixes "el texto desaparece por completo al
+terminar". Shares the heartbeat's `localStorage.lucy_no_heartbeat = '1'` escape
+hatch.
+
+**L3 — cockpit stream uses `morphHtml` instead of `{@html}`.** The V2 live
+bubble rebuilt its entire subtree every frame (`{@html renderMd($agentStream)}`);
+it now uses the same in-place morphdom diff action V1 already uses, so only the
+trailing text mutates per chunk (less work, less flicker, damage localized to the
+new text). The live bubble is promoted to its own compositor layer (`.stream-live`)
+so the present-pump includes it cleanly.
+
+**L2 — `content-visibility: auto` scoped off the live bubbles (`chat-thread.css`).**
+It let the compositor keep the actively-growing Lucy/thinking bubble in the
+skipped (blank) state until an intersection recompute — a direct contributor to
+"el texto desaparece mientras la IA escribe". Kept only on the static
+user/system messages, which never mutate after mount.
+
+**L1 — WebView2 launch flags (already in place).** `CalculateNativeWinOcclusion`,
+`IntensiveWakeUpThrottling`, `BatterySaverModeAlignWakeUps`,
+`background-timer-throttling`, `renderer-backgrounding` and
+`backgrounding-occluded-windows` are all already disabled in `tauri.conf.json`
+(Tauri defaults preserved). No change needed — but a build predating v1.7.233
+won't have them, so **a rebuild is the prerequisite** for the fix to take effect.
+
+---
+
+## [1.7.232] — 2026-06-29
+
+### Security + Perf — phase-1 review of +page.svelte: the two critical findings
+
+First batch from the phased deep review of `src/routes/+page.svelte` (~12.9k
+lines). A 6-dimension multi-agent review with adversarial per-finding
+verification surfaced 19 confirmed issues; these are the two top-priority
+(critical/high) ones.
+
+**[Security · HIGH] Attribute-breakout XSS in the agent tool-card HTML.** The
+agent-loop-local `escapeHtml` escaped only `& < >`, but its output is
+interpolated into DOUBLE-QUOTED HTML attributes (`title="…"`, `data-preview="…"`,
+`data-path="…"`) built from UNTRUSTED data — tool/command/web/file/remote-host
+output. A literal `"` in that data closed the attribute and let an attacker
+append an inline event handler (`onmouseover=`/`onclick=`). The agent message is
+`push()`'d directly onto the tab (bypassing the `addMsg → safeHtml`/DOMPurify
+backstop) and set via `innerHTML` by `morphHtml`, so the injected handler would
+run on hover/click in the Tauri webview where `invoke()` reaches native commands.
+Interaction-gated, not zero-click, but a real DOMPurify-bypass injection. Fix:
+the local `escapeHtml` now escapes all five metacharacters (`& < > " '`),
+mirroring the canonical `$lib/safe-html.ts` escaper — closing the breakout at
+every `title=`/`data-*=` sink while leaving the template's own (hardcoded,
+trusted) inline handlers intact. Verified no `escapeHtml` output lands inside a
+JS-handler string; `data-*` values round-trip correctly (the parser decodes
+entities on read).
+
+**[Perf · HIGH] Per-frame streaming render did a full `tabs` array clone.** The
+streaming render path called `refresh()` (`tabs = [...tabs]`) ~25–60×/sec for the
+whole response, invalidating every page-level `$:` block (~30 of them) AND
+re-rendering EVERY mounted `<ChatThread>` — including background tabs that didn't
+change. The granular primitive `bumpTab(id)` (which ticks only the streaming
+tab's per-tab rev store, the path `ChatThread` already subscribes to via
+`getTabRevStore` → `$: tabRev` → `visibleMsgs`) was imported but never called.
+The per-frame render now uses `bumpTab(tabId)`; the guaranteed final render still
+calls `refresh()` to sync page chrome at stream end (and remains the
+"text-always-lands" backstop). Net: live text updates as before, but cousin tabs
+and page-level reactives are no longer recomputed every frame.
+
+### Fix — phase-1 review of +page.svelte: four confirmed medium findings
+
+- **[Leak] `gatedInterval(pollProactiveInsights)` discarded its stop fn.** The
+  returned stop function (which clears BOTH the 120s interval AND the
+  `visibilitychange` listener it adds) was thrown away, so every component
+  remount (HMR / page remount) leaked one interval + one document listener.
+  Captured in `_proactiveStop` and torn down in `onDestroy` — same treatment the
+  codebase already applies to `_ollamaPingInterval`/`_footerCostInterval`.
+- **[Leak] Anonymous delegated copy-button listener never unbound.** The
+  code-block "Copiar" delegated click listener (v1.7.181) was an anonymous
+  closure, so `onDestroy` couldn't remove it — the exact H8-class leak the
+  v1.7.111 fix named the other delegated listeners to avoid, but this later one
+  was missed. Hoisted to `_copyBtnClickHandler` and unbound in `onDestroy`.
+- **[Correctness] No empty-response guard on continuation turns.** An empty
+  mid-loop LLM reply (Gemini safety-block / empty Anthropic content) slipped past
+  skip-stuck (gated on `length > 0`), parsed to no tools, and rendered a generic
+  "✓ completed" — a FALSE success. The loop now stops on an empty continuation
+  with a clear message (the gathered steps stay visible), matching the first
+  turn's empty-response handling intent.
+- **[Perf] `scrollChat()` had no in-flight guard.** During a stream it was
+  called every frame, each spinning up its own ~18-frame rAF loop that re-queried
+  the DOM and forced a reflow; ~18 overlapped doing redundant work. A
+  `_scrollChatRunning` flag now coalesces concurrent calls to the single running
+  loop (which already re-reads `scrollHeight` each frame, tracking the live
+  bottom and self-extending).
+
+### Security — phase-1 review of +page.svelte: agent-loop exec/HITL hardening
+
+The earlier review's command-execution / HITL-bypass dimension (re-run after a
+session-limit miss) surfaced a real **HIGH** gap plus three mediums; all
+adversarially verified.
+
+- **[HIGH] Agent-loop `<EXECUTE_REMOTE>` auto-executed with no destructive
+  check / no HITL.** In the autonomous loop, the LOCAL exec branch gates on
+  `isDestructiveCmd → $showRunAsModal`, but the REMOTE branch dispatched
+  `execute_shell_cmd` directly — and the backend (`check_permission`, default
+  `allow`) has no remote deny-list. A prompt-injected model (fed untrusted
+  remote/web output earlier in the loop) could run a destructive command on a
+  configured host with zero confirmation. Destructive `<EXECUTE_REMOTE>` is now
+  BLOCKED in the loop and surfaced for manual review — it is NOT routed through
+  the confirm modal because `confirmarRunAs → runForced` executes LOCALLY and
+  could not safely run a remote command.
+- **[MEDIUM] Autofix "Aplicar corrección" skipped the destructive deny-list.**
+  `_lucyRunFix` ran raw LLM `<EXECUTE>` output via `execute_powershell` with no
+  `isDestructiveCmd` check (unlike every other frontend exec path). A destructive
+  fix now escalates to the explicit RunAs confirm modal instead of running on the
+  user's single "apply" click.
+- **[MEDIUM] Batch read-only allowlist included `curl`/`wget`/`find`.** These
+  were classified "safe to auto-run in parallel": `curl`/`wget` download
+  attacker content to disk (`-o`/`-OutFile`), `find … -delete`/`-exec rm` is
+  destructive on remote Linux. Removed from `isReadOnlyCmd`.
+- **[MEDIUM] `DESTRUCTIVE_RE` missed download / fetch-execute verbs.**
+  Added `Invoke-WebRequest`/`Invoke-RestMethod`/`iwr`/`irm`/`curl`/`wget`/
+  `DownloadString`/`DownloadFile`/`Net.WebClient`/`Invoke-Expression`/`iex`/
+  `Start-BitsTransfer`/`bitsadmin`/`certutil … -urlcache` — the "download a
+  script and run it" RCE-staging primitive that survived both the frontend
+  deny-list and the backend blocklist. (+2 tests.)
+- **[LOW, noted] Frontend `DESTRUCTIVE_RE` is broader than the backend obfstr
+  blocklist** — the reason the above are exploitable. Mitigated for now by
+  ensuring every frontend LLM-exec path gates on `isDestructiveCmd`; mirroring
+  the full deny-list into the Rust backend (so a frontend bypass can't reach an
+  un-prompted destructive command) is the proper defense-in-depth follow-up.
+
+Refuted (no change): executePlan (click-gated HITL), the runForced bypass token
+(single-use enforced in Rust), the cite-chip URL handlers (`URL_RE` excludes
+quotes), the writefile auto-open, and runbook steps (backend-guarded).
+
+svelte-check 0/0 · security.test.ts 15/15. (The streaming-render change touches
+the live-paint hot path — worth a quick manual smoke-test of a streamed response.)
+
+### Fix — phase-1 review of +page.svelte: low-severity cleanups
+
+Five confirmed LOW findings:
+- **[Data] Persist race.** `persistirNow()` (structural changes) and the
+  debounced `persistir()` could run two `_persistirInner()` DELETE→INSERT
+  sequences concurrently, letting the slower writer resurrect a just-closed
+  tab's SQLite session row. Both now chain through `_persistSerialized()` so the
+  sequences never interleave.
+- **[Cost] Cancel not honored before extra LLM calls.** A mid-task cancel that
+  landed as the loop entered the verifier sub-agent or the skip-stuck
+  forced-synthesis still fired a fresh LLM round-trip. Both now `break` on
+  `t._cancelled` first.
+- **[Perf] Tab-strip re-measure on every frame.** `$: if (tabs.length)
+  setTimeout(updateScrollState, 100)` re-fired on every `refresh()` (~60×/sec
+  during a stream), each scheduling 3 forced layout reads on an unchanged strip.
+  Now guarded to fire only on a structural tab-count change.
+- **[Leak] Per-tab Maps not cleared on tab close.** `_runToken[id]`,
+  `_forkBypassByTab`, `_forkAdviceByTab`, and `_lastTitledTurn` stranded one
+  entry per closed tab (random-uuid keys → slow session-lifetime growth). Now
+  deleted in `_ejecutarCierreTab`.
+- **[Perf] Speculative-prefetch O(N²) buffer rescan.** `_speculateReadOnlyFromStream`
+  re-scanned the whole growing stream buffer every frame once a `</TOOL>` had
+  appeared. Now scans only the new tail (with a 256-char backup window);
+  best-effort, so a missed prefetch on a >256-char tag is harmless.
+
+Considered and intentionally NOT changed (marginal value vs. hot-path risk; left
+for the maintainer): the per-message `addMsg` re-sanitize/`refresh()` cost (minor
+jank, touches a ~50-site funnel); the Phase-2 LLM context compressor that no-ops
+after the rolling-window collapse (it burns NO call when it no-ops — "fixing" it
+to fire would ADD a cloud round-trip; the dead branch could simply be removed
+since the rolling window already bounds context); and the final-iteration
+continuation+synthesis double LLM call (real but ~1/5 of a capped task, and
+skipping the last continuation drops that turn's tool data from the synthesis).
+
+### Feat — phase-1 review of +page.svelte: reliability + safety features
+
+- **Stream-stall watchdog.** The 1.5s stream heartbeat only `console.warn`'d a
+  stall — invisible in production (DevTools is blocked), so a frozen backend
+  stream (network drop, Ollama hang) left the user on a silent spinner forever.
+  Now, if no chunk arrives for ~12s after tokens started (30s before TTFT, for
+  local cold-starts), `askLucyStream` raises a visible toast with a one-click
+  **Cancel** (`cancelarEjecucion`), cleared the instant chunks resume or the
+  stream ends. Tab-less internal sub-calls (compression/verifier) opt out.
+- **RunAs confirm modal — keyboard-safe default.** The admin-elevation confirm
+  had no keyboard default, so a reflexive Enter could fall on the destructive
+  "Ejecutar con elevación" button. Enter now maps to **Cancel** UNLESS the
+  destructive button is focused deliberately (a keyboard user who tabs to it on
+  purpose can still confirm), plus `aria-modal`/`aria-describedby`/`tabindex`.
+- **Inline Retry/Regenerate on terminal-failure cards.** The empty-response and
+  MAX_LOOPS cards were dead ends (the user had to retype). They now carry a
+  "↻ Regenerar" button (delegated `_retryClickHandler`, named for teardown) that
+  re-runs the tab's stored turn prompt (`t._retryPrompt`).
+- **Connectivity awareness.** A lost internet connection used to surface only as
+  a cryptic cloud-provider error mid-task. `online`/`offline` listeners now toast
+  the transition (offline hints at the local Ollama tier) and track `_isOnline`.
+- **Session spend cap.** No brake existed on an autonomous loop's cloud-token
+  spend. `askLucyStream` now accumulates an estimated session cost
+  (`computeCost` × char→token estimates; local = $0), and the agent loop HALTS
+  with a clear card when it crosses `lucy_spend_cap_usd` (0 = off, opt-in).
+  Settable via a self-contained `/spend-cap <usd>` command (`/spend-cap` shows
+  the running total, `/spend-cap reset` zeroes it).
+- **Interrupted-agent recovery banner.** Agent checkpoints are saved every loop
+  iteration, but the only way to restore one was a `window.__lucyCheckpoints`
+  call in the DevTools console — which production hard-blocks, so an interrupted
+  long task was effectively lost. On launch, an in-app banner now lists tasks a
+  loop was mid-run when a prior session ended (goal, step, age, model) with
+  one-click **↻ Re-ejecutar** (re-runs the goal as a fresh turn in the active
+  tab) and **✕ Descartar** (clears the checkpoint), plus "Descartar todo". This
+  is the safe "re-run the goal" variant — a true mid-loop rehydration (re-enter
+  the loop at the saved iteration with the original `agentCtx`/`stepsHtml`) was
+  deliberately deferred as too risky for the loop hot-path.
+
+svelte-check 0/0. (UI-touching features — quick manual smoke-test recommended.)
+
+All six features from the phase-1 review feature list are now implemented.
+
+### Security — phase-2 review: backend command / path / remote-exec hardening
+
+A multi-agent audit of the Rust backend (`shell.rs`, `hosts.rs`, `local.rs`,
+`compliance.rs`, `inventory.rs`, `logs.rs`, `guardrails/`) with adversarial
+per-finding verification surfaced **14 confirmed** issues (3 refuted). All fixed
+here; every stated HITL / deny-list / SSRF / secret-store invariant is preserved.
+
+**SSH argv-injection — 4 unpatched paths (the documented H10 guard).** Four
+remote-SSH commands built `format!("{}@{}", username, host)` and handed it to
+`ssh` WITHOUT `validate_host`/`validate_username`, so a saved-host `username`
+beginning with `-` (e.g. `-oProxyCommand=<local cmd>`) is re-parsed by SSH's
+getopt as an option and executes a command on the LOCAL Windows box. Every
+sibling in `hosts.rs` already validated; these had been missed:
+- `execute_shell_cmd` validated ONLY its Windows branch — the Linux branch was
+  open, and it is the funnel for `read_remote_file`/`write_remote_file`, so both
+  inherited the gap. [HIGH]
+- `run_compliance_linux`, `discover_inventory_linux`, `read_remote_log_linux` had
+  no host/username validation at all. [MED]
+  Fix: `validate_host` + `validate_username` prepended to all four, before the
+  `user@host` sink.
+
+**Remote exec had NO guardrail scan (local↔remote asymmetry) [HIGH].**
+`execute_shell_cmd` / `execute_remote_windows` / `execute_remote_linux` gated only
+on the default-allow `check_permission`, unlike the local exec paths (blocklist +
+guardrails scan). Added `guardrails::scan_remote_shell`, which blocks genuine
+injection/obfuscation signatures (S2 cmd-bypass shapes + hidden-Unicode tags) on
+the remote command. Deliberately SCOPED: it does NOT apply S5 SSRF (a command run
+ON the remote host legitimately curls internal IPs / cloud metadata — the SSRF
+model is for Lucy's OWN outbound fetches) nor plain destructive verbs (a remote
+operator's own shell may delete files; the agent path already gates destructive
+remote at the frontend). Interactive remote admin (NexShell broadcast, slash
+batch) is untouched. (+2 tests.)
+
+**PowerShell destructive gate — verb coverage + adjacency evasions [MED×2].** The
+backend obfstr blocklist (the SOLE backend destructive gate — guardrails
+intentionally ignores destructive verbs) missed a large defense-evasion /
+persistence / privilege / arbitrary-overwrite verb set, and its substring match
+required fixed flag-adjacency. Added a boundary-anchored `DESTRUCTIVE_VERB_RE`
+classifier routed through the SAME bypass-token HITL flow (identical
+`SECURITY_BLOCK` contract the frontend already handles — no new UI, and no
+double-prompt: the frontend's `isDestructiveCmd` gate runs before `invoke()`, so
+anything it catches never reaches here): `Set-MpPreference`,
+`Out-File`/`Set-Content`/`Add-Content`, `New-LocalUser`/`Add-LocalGroupMember`,
+`Register-ScheduledTask`, `bcdedit`, `Set-ExecutionPolicy`, `Stop-Process` against
+known AV/EDR process names, and `Remove-Item` with the flag separated from the
+verb. Word-boundary anchored so read siblings (`Get-Content`/`Get-Process`/
+`schtasks /query`) and routine process kills never trip it. (+2 tests.)
+
+**`search_files` read & returned credential-store contents [HIGH].** Unlike
+`read_file_content`, `search_files` took the model-supplied `directory` verbatim —
+no `..` check, no secret/system block — recursively `read_to_string`'d every file
+and returned matching lines. It is agent-invocable (`searchfiles`, auto-run in the
+read-only batch), so a prompt-injected model could point it at `~/.ssh` / `~/.aws`
+/ `%APPDATA%\Lucy` and exfiltrate keys into context. Fix: the search ROOT now goes
+through `enforce_sensitive_path`, and each file is re-checked before read (covers
+descendants like `%APPDATA%\Lucy` whose name doesn't start with `.`).
+
+**Other path-guard asymmetries.**
+- `analyze_code` bypassed `enforce_sensitive_path` (only an ad-hoc `..` check) —
+  now gated like the other read tools. [LOW]
+- `list_directory` could enumerate credential-store metadata — now blocked for the
+  `SECRET_SUBPATHS` only (ordinary system-dir listing stays allowed: Lucy is a
+  SysAdmin tool; `path_exists` left alone — frontend-only SSH-key probe, not
+  agent-reachable). `SECRET_SUBPATHS` extracted to a single module-level source of
+  truth reused by both gates. [LOW]
+- `execute_reg` classified `reg save`/`copy`/`load`/`unload` (the offline SAM/hive
+  dump + hive-load primitives) as "reads" that skipped the crypto HITL token.
+  Flipped to default-DENY: only `query`/`export`/`compare` are reads. [LOW]
+
+**UTF-8 byte-slice panics (`panic = abort` → whole-app crash) [MED×3 + extras].**
+Several sites sliced untrusted strings by raw BYTE index (`&s[..N]`), which panics
+when byte N lands mid-multibyte-char — and the release profile aborts the whole
+process. All now use the existing char-boundary-safe `safe_truncate`: web-search
+snippet + Tavily error body, `search_files` result line, `edit_file` diff (which
+crashed AFTER the file was already written), `execute_reg` audit lines, and the
+`Raw:` JSON-error tails in `hosts.rs`/`compliance.rs`/`inventory.rs`.
+
+Refuted (no change): bypass-token not bound to command-kind (redeem is still
+string-equality on the authorized script — no cross-command reuse); `launch_rdp`
+host interpolation (single `.arg()`, not argv-injectable); the Windows
+compliance/inventory/log paths (WinRM `ensure_trusted_host`, no `user@host` argv
+sink).
+
+**`execute_cmd` (cmd.exe) obfuscation parity.** The cmd blocklist matched only the
+literal lowercased script, so cmd.exe caret-escaping (`fo^rmat d:` — cmd strips
+`^` before running) and attached switches (`del/s`, dodging the `"del /s"` entry)
+slipped it. It now also matches a de-obfuscated form (carets stripped, a space
+inserted before each `/`), mirroring `execute_powershell`'s backtick
+normalization. The frontend `normalizeCmd` already strips carets — this is the
+backend backstop. (+2 tests; benign `dir /s` verified not false-blocked.)
+
+Remaining residual (defense-in-depth only, left for the maintainer): the exotic
+PowerShell string-concat / variable-indirection aliases for `Remove-Item`
+(`& ('Remove-'+'Item')`, `$v=…;& $v`) — the frontend `normalizeCmd` already
+de-obfuscates concatenation before it reaches the backend, so these do not
+auto-execute un-prompted in the real UI/agent flow.
+
+### Security — phase-2 SSRF/secrets re-run: 5 more confirmed
+
+Re-running the one audit dimension that had died on a session limit (SSRF /
+secret-scrubber / injection-IPC) surfaced 5 real, adversarially-verified issues
+Phase 2 had not covered (2 refuted).
+
+**[HIGH] Redirect SSRF — `fetch_url_content` validated redirect hops by URL string
+only, not by DNS.** The initial fetch runs BOTH `scan_url` (string/regex) and
+`host_resolves_to_internal` (DNS resolve), but the redirect policy
+(`ssrf_safe_redirect_policy`, state.rs) ran only `scan_url` on each hop. So a
+public-looking origin could `302 → http://rebind.attacker.com/…` whose A record is
+`169.254.169.254` / `127.0.0.1:11434`, and reqwest would follow it and hand the
+cloud-IMDS credentials / loopback-service body back into agent context — the exact
+DNS-rebinding class the code's OWN comment (scanner.rs) flagged as an unmitigated
+follow-up. IP-literal obfuscation (`http://2130706433/`) bypassed the same way. Fix:
+the redirect policy now also runs `host_resolves_to_internal` on every hop (it
+normalizes obfuscated literals via the OS resolver and rejects rebinding hosts),
+fail-closed. A pinning connector remains the ideal future hardening (noted inline).
+
+**[HIGH] Secret scrubber missed SCREAMING_SNAKE env-var secrets.** Pattern #3
+anchored the keyword with `\b`, but `\b` treats `_` as a word char, so the dominant
+`PREFIX_PASSWORD=` / `AWS_SECRET_ACCESS_KEY=` / `NVIDIA_API_KEY=` form never matched
+— the value leaked verbatim into `lucy_audit.log` AND (via the same `scrub_for_audit`
+on `save_agent_memory`) into the memory DB, backups, Memory Browser UI, and future
+recalled prompts. Fix: the boundary is now `(^|[^A-Za-z0-9])`, capturing + preserving
+the boundary char so the line isn't mangled. Verified against the pinned `regex`
+crate version. (+1 test.)
+
+**[MED] `Pwd=` connection-string passwords short-circuited the scrubber.** The
+`has_potential_secret` marker gate omitted `pwd`, so `Server=…;Pwd=…;` returned
+early BEFORE the regex pass (whose pattern #3 does list `pwd`). Added `pwd` to the
+markers. (+1 test.)
+
+**[MED] NVIDIA (`nvapi-`) / Tavily (`tvly-`) provider keys had no scrub pattern.**
+Pattern #5 only covered the `sk-`/`sk-ant-` family, though Lucy consumes both NIM
+and Tavily keys. Added a dedicated pattern #8 + markers so bare/assignment forms
+redact. (+1 test.)
+
+**[LOW] Command stderr logged to `lucy_app.log` unscrubbed.** `execute_powershell`
+/`execute_cmd` wrote raw failing-command stderr via `write_app_log` without
+`scrub_for_audit` (unlike the script text, which was already scrubbed). A command
+that echoes a secret on stderr and exits non-zero leaked it; all three sites now
+scrub first.
+
+Refuted (no change): the compliance `id`-into-printf injection (real sink, but every
+shipped caller feeds developer-constant ids from static bundled CIS JSON — not
+attacker/LLM-reachable), and the SSH `key_path` leading-`-` guard gap (passed as the
+operand of `-i`, never re-parsed as a flag — defense-in-depth only).
+
+cargo check clean · 9 new backend tests green across the full phase-2 backend pass.
+
+**Test-infra:** serialized the three `extract_tokens_*` cache-stats tests behind a
+shared (poison-tolerant) lock. They read a process-wide counter with before/after
+deltas and could flake under `cargo test` thread-parallelism when a sibling call
+bumps the counter mid-assertion — a latent issue the new tests' scheduling
+surfaced. No product-code change; full `cargo test --lib` is now deterministic.
+
+### Security — SSRF: resolved-IP pinning connector (closes the redirect TOCTOU)
+
+Follow-up to SSRF-REDIRECT-DNS-01. The redirect-hop DNS check closed the practical
+rebinding exploit but left a resolve→connect TOCTOU (DNS could flip between the
+guard's resolution and reqwest's own connect-time resolution). `fetch_url_content`
+now uses a NEW dedicated `state::FETCH_CLIENT` whose custom `SsrfGuardResolver`
+performs the single resolution reqwest then dials and drops every internal/loopback/
+metadata address — so the IP connected to is the exact one validated, on the initial
+hop AND every redirect. Kept SEPARATE from the shared `HTTP_CLIENT` on purpose: that
+client must reach loopback (local Ollama) + provider APIs, so it cannot reject
+internal IPs wholesale. The pure address-filter is unit-tested (+2 tests); the
+redirect-policy DNS check stays as belt-and-suspenders. This is the "pinning
+connector" the earlier inline note had deferred.
+
+### Security — phase-3 review of commands/ai.rs + systemic byte-slice sweep
+
+Phase-3 target was `commands/ai.rs` (2.1k lines: the LLM-call machinery, agent
+prompt building, token accounting, fetch_url_content). The multi-agent workflow
+hit the account session limit mid-run, so this was reviewed INLINE. The file is
+otherwise well-hardened — endpoints are fixed per provider (Gemini interpolates
+only whitelisted model ids; NVIDIA puts the model in the body; local uses the
+user-configured URL, so no model-id→SSRF), API keys go to headers and never cross
+IPC or reach logs/errors, and the SSE/JSON parsing is null-safe (serde_json
+indexing returns Null, never panics) — with ONE real bug:
+
+**[MED] Byte-slice panic in `generate_skill_template` error paths.** Two error
+branches sliced the raw LLM response body at a fixed BYTE index
+(`&body_text[..body_text.len().min(400)]` / `min(300)`) → `panic=abort` crash when
+the network-controlled body ≥300/400 bytes has a multibyte char at the boundary.
+Same class as the phase-2 C6/C7/C8 fixes. Now `safe_truncate`.
+
+**Systemic follow-up — same byte-slice shape across the backend.** A repo-wide
+sweep found the identical `&str[..N]` / `&str[..len().min(N)]` panic shape at ~18
+sites (`panic=abort` ⇒ each is a crash vector on non-ASCII input). Fixed the
+high-reachability network/command cluster this pass, all → `safe_truncate`
+(behavior-preserving): hosts.rs (metrics + bootstrap JSON bodies ×3), local.rs
+(netsh args, cscript content), shell.rs (PS-script audit line), utils/shell.rs
+(host value), reflection.rs (write-path target), guardrails/prompt_guard.rs (HF
+response body). Then completed the sweep across the rest — the remaining
+fixed-index `&str[..N]` previews all → `safe_truncate`: audit.rs (cmd-output
+preview), housekeeping.rs (memory narrative), log_analysis.rs (error pattern),
+notify.rs ×2 (title/body), pty.rs (terminal line), process_lineage.rs +
+threat_scan.rs (process cmdline), proactive_detector.rs (DB-integrity result),
+rdp_agent.rs (typed text).
+
+Confirmed SAFE and deliberately left (verified each): byte-buffer (`&buf[..n]`)
+slices; every `.find()`/`.rfind()`-derived slice (object_bridge, security_skills,
+db, local, log_analysis source-split — the index is always a valid char boundary);
+slice-of-Vec bounded by `.min(len)` (annealing) and the Vec index
+`smart_chips.rs:217 words[..5]` (guarded by `len > 5`); ASCII-by-construction hex
+hashes (incident) / ISO timestamps (log_analysis buckets). The backend `&str`
+byte-slice panic class is now closed.
+
+---
+
 ## [1.7.231] — 2026-06-25
 
 ### Feat — local LLM token economy, round 3: completion cache (#8) + intent-driven local tiering (#9)

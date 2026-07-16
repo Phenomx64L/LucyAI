@@ -1,4 +1,11 @@
 <script>
+    // v1.7.234 — fuentes SELF-HOSTED (variable, bundled por Vite → funcionan
+    // offline; family names 'Inter Variable' / 'JetBrains Mono Variable'). Antes
+    // los @font-face usaban solo local() → caían a Segoe UI si no estaban
+    // instaladas. Beneficia V1 y V2 (ambas lideran su stack con estas familias).
+    import '@fontsource-variable/inter';
+    import '@fontsource-variable/jetbrains-mono';
+    import '@fontsource-variable/space-grotesk';   // v1.7.236 iter-2 — voz display del cockpit
     import '../app.css';
     import './page.css';
     import { onMount, onDestroy, tick } from 'svelte';
@@ -68,6 +75,20 @@ import { listen } from '@tauri-apps/api/event';
 
     import Tv2 from '@tabler/icons-svelte/icons/device-tv';
 
+    // ── Lucy 2.0 cockpit preview (DEV-ONLY; gated by $app/environment `dev`, so
+    //    it renders nothing in a release build). See src/lib/cockpit + /cockpit route. ──
+    import { dev } from '$app/environment';
+    // v1.7.234 — COCKPIT GA: la V2 se activa tambien en builds de release.
+    // 'dev' deja de ser el gate del cockpit (sigue gobernando lo demas:
+    // tutorial V1, toasts de diagnostico, demo). Kill-switch de emergencia
+    // sin recompilar: localStorage.lucy_ui_v2 = '0' (solo consola).
+    const COCKPIT = (() => { try { return localStorage.getItem('lucy_ui_v2') !== '0'; } catch { return true; } })();
+    // Preferencia de arranque (el fab la persiste): 'v1' arranca en clasico.
+    const _bootPrefV2 = (() => { try { return localStorage.getItem('lucy_ui_mode') !== 'v1'; } catch { return true; } })();
+    import CockpitShell from '$lib/cockpit/CockpitShell.svelte';
+    import { execPush, resetWorkspace, planAppend, planSet, planUpdate, convoPush, convoReset, artifactPush, streamSet, streamClear, statusPatch } from '$lib/cockpit/agent-workspace';
+    let cockpitMode = COCKPIT && _bootPrefV2; // dev boots into the cockpit; "Salir del cockpit" returns to classic
+
     import Terminal from '@tabler/icons-svelte/icons/terminal';
 
     import Key from '@tabler/icons-svelte/icons/key';
@@ -127,7 +148,7 @@ import { listen } from '@tauri-apps/api/event';
     import PredictiveChipStrip from '$lib/PredictiveChipStrip.svelte';
 
     // Phase 2c (May 2026) — extracted helpers from this file
-    import { dispatchSlashCommand } from '$lib/page/slash-commands';
+    import { dispatchSlashCommand, maybeAutoCrystallize } from '$lib/page/slash-commands';
     import { buildPreset, upsertPreset, deletePreset, stampApplied, presetPatches, persistPresetScalars, ageString } from '$lib/page/workspace-presets';
     import { loadMcpSecrets as mcpLoad, saveMcpSecret as mcpSave, deleteMcpSecret as mcpDelete } from '$lib/page/mcp-secrets';
     import { upsertChip, deleteChip, upsertQuickAction, deleteQuickAction } from '$lib/page/chips-quick-actions';
@@ -268,7 +289,7 @@ import { listen } from '@tauri-apps/api/event';
     import { detectElevationError as _detectElevationError, detectPlanLogicalFailure as _detectPlanLogicalFailure } from '$lib/plan-detect';
     import { selectMessagesWithinBudget } from '$lib/tab-budget';
     // v1.7.199 Phase-3 — pure agent-loop leaf helpers (tested).
-    import { hashResp as _hashResp } from '$lib/agent-loop-util';
+    import { hashResp as _hashResp, normalizeAgentResp as _normalizeAgentResp, pickStrongerInFamily as _pickStrongerInFamily } from '$lib/agent-loop-util';
     import { classifyToolResults } from '$lib/tool-result-classify';
     import { detectPromotableSafeCmd } from '$lib/auto-promote';
     import { escapeHtml, normalizeForMatch, formatTime, formatTokens as _libFormatTokens, fmtBytes as _fmtBytes, truncateWithHint as truncarConHint } from '$lib/text-utils';
@@ -288,6 +309,7 @@ import { listen } from '@tauri-apps/api/event';
     import { LLM_GROUPS, getModelDescription, refreshLocalModels, localModels, ollamaOnline, refreshNvidiaModels, nvidiaModels, nvidiaConfigured } from '$lib/models.js';
     // Restored after regression — smart-router was orphaned by Sprint D.
     import { routeModel, enrichLocalModel, estimateTokens, classifyRoutingIntent } from '$lib/smart-router';
+    import { computeCost } from '$lib/model-pricing'; // phase-1 review (feature): session spend cap
     import { get } from 'svelte/store';
     import { hosts, hostTagFilter, hostsFiltered, allTags,
              alertRules, activeAlerts, runbooks,
@@ -303,7 +325,7 @@ import { listen } from '@tauri-apps/api/event';
     import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns, applyShikiToHtml } from '$lib/message-render';
     import { initRecognition, toggleMic as _toggleMic, speak as _speak } from '$lib/voice';
     import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste } from '$lib/file-inputs';
-    import { buildWorkingMemoryDigest, slotRelevance, updateWorkingMemory, compactOldTurns } from '$lib/working-memory';
+    import { buildWorkingMemoryDigest, slotRelevance, updateWorkingMemory, compactOldTurns, captureUserPaths } from '$lib/working-memory';
     import { toDryRunCmd, parsePlanTags, renderPlanCard, isMultiIntentPrompt } from '$lib/plan-utils';
     import { cleanStreamDisplay as _cleanStreamDisplay, detectCodeGenIntent as _detectCodeGenIntent, hasToolResponse as _hasToolResponse, needsAgentLoop as _needsAgentLoop, isMultiStepResponse as _isMultiStepResponse, extractTags as _extractTags, parseTool as _parseTool, toolHash as _toolHash, isToolLooping as _isToolLooping, askLucyStream as _askLucyStreamFn, cancelStream as _cancelStream, isStreaming as _isStreaming, isSensitiveRegistry as _isSensitiveReg, buildCodeProtocol as _buildCodeProtocol, createTokenDrain as _createTokenDrain, enqueueChunk as _enqueueChunk, drainBatch as _drainBatch, flushDrain as _flushDrain, DRAIN_MS as _DRAIN_MS, MAX_AGENT_LOOPS as _MAX_LOOPS_CONST, MAX_IDENTICAL_TOOL_CALLS as _MAX_IDENTICAL, FILE_TOOL_RE as _FILE_TOOL_RE, NATIVE_TOOL_RE as _NATIVE_TOOL_RE } from '$lib/llm-stream';
 
@@ -744,9 +766,18 @@ import { listen } from '@tauri-apps/api/event';
 
     function _speculateReadOnlyFromStream(accumulated, specSet) {
         if (!accumulated || accumulated.indexOf('</TOOL>') === -1) return;
+        // phase-1 review — scan only the NEW tail since the last call instead of
+        // the whole growing buffer every streamed frame (was O(N²) over a
+        // response once a </TOOL> had appeared). `specSet._scanFrom` tracks the
+        // last scanned length; a 256-char backup window catches a tag straddling
+        // the boundary. specSet already dedups prefetch invokes, so re-scanning
+        // the overlap is harmless — and a missed prefetch on a >256-char tag just
+        // means that tool runs cold (best-effort read-only speculation, no bug).
+        const _from = Math.max(0, (specSet._scanFrom || 0) - 256);
+        specSet._scanFrom = accumulated.length;
         // Drop closed AND unclosed-trailing THOUGHT regions — only action-level
         // tags (outside reasoning) should speculate.
-        let actionable = accumulated.replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '');
+        let actionable = accumulated.slice(_from).replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '');
         actionable = actionable.replace(/<THOUGHT>[\s\S]*$/i, '');
         let m;
         const FETCH_RE = /<TOOL>fetch:([^<]+)<\/TOOL>/gi;
@@ -809,7 +840,7 @@ import { listen } from '@tauri-apps/api/event';
         // Explicit concrete model id → use as-is (advanced override)
         if (mode && mode !== 'auto' && mode !== 'ollama' && mode !== 'cloud') return mode;
 
-        if (mode === 'cloud') return mainModel || 'gemini-2.5-flash';
+        if (mode === 'cloud') return mainModel || 'gemini-3.5-flash';
 
         if (mode === 'ollama') {
             // Only honour 'ollama' if a local model is currently selected AND ollama is up.
@@ -823,12 +854,12 @@ import { listen } from '@tauri-apps/api/event';
             const firstReal = $localModels.find(m => m.id?.startsWith('local-') && m.id !== 'local-custom');
             if (firstReal) return firstReal.id;
         }
-        if (hasProv('gemini'))    return 'gemini-2.5-flash';
-        if (hasProv('openai'))    return 'gpt-4o-mini';
-        if (hasProv('anthropic')) return 'claude-3-5-sonnet-latest';
+        if (hasProv('gemini'))    return 'gemini-3.5-flash';
+        if (hasProv('openai'))    return 'gpt-5.4-mini';
+        if (hasProv('anthropic')) return 'claude-haiku-4-5';
         if (hasProv('nvidia'))    return 'meta/llama-3.3-70b-instruct';
         // Last resort — same as main
-        return mainModel || 'gemini-2.5-flash';
+        return mainModel || 'gemini-3.5-flash';
     }
 
     // v1.7.111 audit F3 — cross-MODEL verifier selection.
@@ -857,9 +888,9 @@ import { listen } from '@tauri-apps/api/event';
         // Preference order of DISTINCT families, cheapest-capable first.
         // We skip whichever family the main agent is using.
         const candidates = [
-            ['gemini',    'gemini-2.5-flash'],
-            ['anthropic', 'claude-3-5-sonnet-latest'],
-            ['openai',    'gpt-4o-mini'],
+            ['gemini',    'gemini-3.5-flash'],
+            ['anthropic', 'claude-haiku-4-5'],
+            ['openai',    'gpt-5.4-mini'],
             ['nvidia',    'meta/llama-3.3-70b-instruct'],
         ];
         for (const [fam, model] of candidates) {
@@ -945,6 +976,13 @@ import { listen } from '@tauri-apps/api/event';
     let pendingRunAsCmd    = null;  // { cmd, ctx, doSpeak, tabId }
     // ── SECURITY BLOCK BANNER ────────────────────────────
     let pendingSecurityBlock = null; // { tabId, cmd, ctx, doSpeak, blockWord, displayCmd }
+    // Cockpit v2.0 (dev): mirror the pending HITL authorization into a
+    // cockpit-native panel. Same approve/cancel as the classic RunAs modal /
+    // SecurityBlock banner — the server-verified bypass-token flow is untouched.
+    $: cockpitHitl = !COCKPIT ? null
+        : pendingSecurityBlock ? { kind: 'security', cmd: pendingSecurityBlock.displayCmd || pendingSecurityBlock.cmd || '', rule: pendingSecurityBlock.blockWord || '' }
+        : ($showRunAsModal && pendingRunAsCmd) ? { kind: 'runas', cmd: pendingRunAsCmd.cmd || '', rule: '' }
+        : null;
     // ── EXEC TIMER (U3) ──────────────────────────────────
     let _execSecs  = 0;   // segundos transcurridos en la ejecución actual
     let _execTimer = null; // ref al setInterval del contador
@@ -954,6 +992,9 @@ import { listen } from '@tauri-apps/api/event';
     let _ollamaPingInterval = null;       // refresh local models every 30s
     let _footerCostInterval = null;       // refresh monthly cost every 5 min
     let _scheduledTickInterval = null;    // poll due scheduled tasks every 60s
+    // phase-1 review — refs for two previously-LEAKED teardowns (cleared in onDestroy):
+    let _proactiveStop = null;            // stop fn from gatedInterval(pollProactiveInsights) — was discarded
+    let _copyBtnClickHandler = null;      // delegated code-block copy listener — was anonymous (H8-class leak)
     let _openclawUnlisten = null;         // openclaw webhook listener (reconnected v1.4.0)
     let activeIncidentId = null;          // incident timeline (reconnected v1.4.0)
     let predictiveChips = [];             // U5 — contextual next-action chips above input
@@ -1453,6 +1494,7 @@ import { listen } from '@tauri-apps/api/event';
     // firing after component remount / HMR).
     let _slashCmdClickHandler = null;  // ref al listener del menú slash
     let _arChipClickHandler   = null;  // ref al listener del chip auto-route
+    let _retryClickHandler    = null;  // ref al listener de "Regenerar" (terminal failure cards)
 
     // --- ACCIONES RÁPIDAS DINÁMICAS ---
     let quickActions = [];
@@ -1864,7 +1906,7 @@ import { listen } from '@tauri-apps/api/event';
     // tab.nvidiaCustomModel (typed by the user). All API call sites must
     // use getEffectiveModel(tab) instead of tab.selectedModel directly.
     function getEffectiveModel(tab, prompt = '') {
-        if (!tab) return 'gemini-2.5-flash';
+        if (!tab) return 'gemini-3.5-flash';
         // ── Auto-fallback override (May 2026) ───────────────────────────────
         // Set by runAI's catch block when the primary provider failed and
         // we're recursing with a backup. One-shot: cleared as soon as
@@ -1878,7 +1920,7 @@ import { listen } from '@tauri-apps/api/event';
             const m = (tab.nvidiaCustomModel || '').trim();
             return m || 'nvidia-custom';  // fallback keeps it invalid so Rust returns a clear error
         }
-        const manual = tab.selectedModel || 'gemini-2.5-flash';
+        const manual = tab.selectedModel || 'gemini-3.5-flash';
 
         // ── Smart routing (restored from orphaned smart-router.ts) ──
         // Only takes effect when the user opts in via /smart-router on.
@@ -1930,6 +1972,24 @@ import { listen } from '@tauri-apps/api/event';
     const clearAgentCheckpoint = clearCheckpoint;
     if (typeof window !== 'undefined') {
         window.__lucyCheckpoints = { list: listStaleCkpts, clear: clearCheckpoint };
+    }
+
+    // phase-1 review (feature) — interrupted-agent recovery banner handlers.
+    // Safe "re-run the goal" variant: clears the stale checkpoint and re-runs the
+    // goal as a fresh turn in the active tab (NOT a risky mid-loop rehydration).
+    function _rerunInterrupted(task) {
+        try { clearCheckpoint(task.tabId); } catch {}
+        _interruptedTasks = _interruptedTasks.filter(x => x.key !== task.key);
+        const tid = activeTabId || (tabs[0] && tabs[0].id);
+        if (tid && (task.goal || '').trim()) runAI(tid, task.goal.trim(), false);
+    }
+    function _dismissInterrupted(task) {
+        try { clearCheckpoint(task.tabId); } catch {}
+        _interruptedTasks = _interruptedTasks.filter(x => x.key !== task.key);
+    }
+    function _dismissAllInterrupted() {
+        for (const x of _interruptedTasks) { try { clearCheckpoint(x.tabId); } catch {} }
+        _interruptedTasks = [];
     }
 
     // ── Fix store for sidebar autofix — see $lib/page/fix-store.ts ──
@@ -1986,6 +2046,75 @@ import { listen } from '@tauri-apps/api/event';
     // focus / visibilitychange forces an instant reactive re-render + repaint
     // the moment Lucy comes back to the foreground — no hover required.
     let _focusRepaintHandler = null;
+    // v1.7.233 — presentation heartbeat (idle-freeze fix) handles.
+    let _heartbeatRaf = null;
+    let _heartbeatEl = null;
+    let _heartbeatVis = null;
+    // ── v1.7.234 — streaming PRESENT-PUMP (WebView2 present-throttle fix) ──────
+    // The 2×2 corner heartbeat keeps the RENDERER producing frames, but its
+    // damage sits in a screen corner; on this WebView2/hybrid-GPU build
+    // Chromium's *partial swap* presents only that tile, so text rastered in a
+    // throttled frame stays stale on screen until a real OS input (mouse-move)
+    // forces a full present — the reported "el texto aparece al mover el ratón",
+    // and the "desaparece por completo al terminar" when the final commit's
+    // present is dropped.
+    //
+    // While text is actively streaming — kickPresent() is pinged on every
+    // rendered chunk and once at end-of-stream — a tiny-backing (8×8) canvas
+    // STRETCHED to the full viewport is content-damaged each frame. A content
+    // change (fillRect) is non-optimizable damage (unlike a property tween the
+    // compositor can skip), and because the element covers the whole surface the
+    // resulting present spans every tile the text can live in → the streamed
+    // text flushes to screen with NO input. The backing is 8×8 so the raster is
+    // effectively free; the sheen is <1% and only alive while Lucy types. The
+    // pump auto-idles ~700ms after the last chunk, so it costs nothing at rest.
+    // Escape hatch shares the heartbeat's: localStorage.lucy_no_heartbeat = '1'.
+    let _pumpCanvas = null, _pumpCtx = null, _pumpRaf = null, _pumpUntil = 0, _pumpFlip = false;
+    function kickPresent(ms = 700) {
+        try {
+            if (typeof performance === 'undefined' || typeof document === 'undefined') return;
+            try { if (localStorage.getItem('lucy_no_heartbeat') === '1') return; } catch {}
+            _pumpUntil = performance.now() + ms;
+            if (_pumpRaf) return;                    // already pumping — just extended the window
+            if (!_pumpCanvas) {
+                const c = document.createElement('canvas');
+                c.width = 8; c.height = 8;           // tiny backing → fill is ~free
+                c.setAttribute('aria-hidden', 'true');
+                c.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483646;opacity:0.9;';
+                document.body.appendChild(c);
+                _pumpCanvas = c;
+                _pumpCtx = c.getContext('2d');
+            }
+            const _pump = (now) => {
+                _pumpFlip = !_pumpFlip;
+                if (_pumpCtx) {
+                    _pumpCtx.clearRect(0, 0, 8, 8);
+                    // <1% grey — imperceptible over dark OR light; the alternation
+                    // (0.6% ↔ 1.0%) is sub-JND but is real, non-optimizable damage.
+                    _pumpCtx.fillStyle = _pumpFlip ? 'rgba(128,128,128,0.006)' : 'rgba(128,128,128,0.010)';
+                    _pumpCtx.fillRect(0, 0, 8, 8);
+                }
+                if (now < _pumpUntil) { _pumpRaf = requestAnimationFrame(_pump); }
+                else { _pumpRaf = null; }            // idle → stop (zero cost at rest)
+            };
+            _pumpRaf = requestAnimationFrame(_pump);
+        } catch { /* best-effort — never let a repaint aid throw into the stream */ }
+    }
+    // phase-1 review (feature) — connectivity awareness (online/offline).
+    let _isOnline = true;
+    let _onlineHandler = null;
+    let _offlineHandler = null;
+    // phase-1 review (feature) — session spend cap. Accumulated estimated USD
+    // spend this process-session (all streamed LLM turns). The autonomous agent
+    // loop halts when it crosses the cap from `lucy_spend_cap_usd` (0 = off).
+    // Settable via the `/spend-cap` command. Estimate (chars→tokens), not billed.
+    let _sessionSpendUsd = 0;
+    // phase-1 review (feature) — interrupted-agent recovery banner. Checkpoints
+    // are saved every loop iteration but were only restorable via the DevTools
+    // console (blocked in prod). This in-app banner lists tasks interrupted in a
+    // prior session with one-click re-run / dismiss. (Safe "re-run the goal"
+    // variant — not a risky mid-loop rehydration.)
+    let _interruptedTasks = [];
 
     onMount(async () => {
         // v1.7.192 — instant repaint when Lucy regains focus/visibility.
@@ -1995,6 +2124,90 @@ import { listen } from '@tauri-apps/api/event';
         };
         window.addEventListener('focus', _focusRepaintHandler);
         document.addEventListener('visibilitychange', _focusRepaintHandler);
+
+        // ── v1.7.233 — PRESENTATION HEARTBEAT (idle-freeze fix, user-reported) ──
+        // Symptom: after a few seconds without input, ALL animations/transitions
+        // freeze until the mouse moves. The additionalBrowserArgs already disable
+        // Chromium's occlusion + backgrounding throttles, and the cockpit keeps
+        // an empty rAF pump — not enough: an empty rAF only keeps the renderer's
+        // frame clock scheduled. With ZERO damage per frame the compositor may
+        // skip presenting entirely, and display-level power features on hybrid-
+        // GPU laptops (Panel Self-Refresh / dynamic refresh) freeze what's on
+        // screen until an input invalidates it. This heartbeat alternates an
+        // imperceptible opacity delta on a 1×1 px composited element every frame
+        // → real damage → the compositor MUST present continuously. Cost: one
+        // tiny GPU layer (~0 CPU). Paused while the window is hidden/minimized.
+        // Escape hatch: localStorage.lucy_no_heartbeat = '1'.
+        try {
+            let _hbOff = false;
+            try { _hbOff = localStorage.getItem('lucy_no_heartbeat') === '1'; } catch {}
+            if (!_hbOff) {
+                // v2 (still freezing at ~8s idle with v1): two hardening moves.
+                //   1. CANVAS, not an opacity tween — fillRect each frame is
+                //      unambiguous CONTENT damage the compositor can't optimize
+                //      away like a tiny property change on a static layer.
+                //   2. z-index MAX — v1 sat at default z under the cockpit's
+                //      opaque full-screen overlay (z 9999); occlusion culling
+                //      drops fully-covered layers, so v1 produced ZERO damage
+                //      exactly where the user was testing.
+                // Plus instrumentation: the beat measures its own rAF gaps. A
+                // logged gap == the RENDERER stopped producing frames (Chromium/
+                // WebView2 level). Freeze WITHOUT a logged gap == frames kept
+                // flowing but the DISPLAY didn't show them (PSR/driver level,
+                // outside the app). See window.__lucyFreezeLog.
+                const hb = document.createElement('canvas');
+                hb.width = 2; hb.height = 2;
+                hb.setAttribute('aria-hidden', 'true');
+                hb.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;pointer-events:none;opacity:0.02;z-index:2147483647;';
+                document.body.appendChild(hb);
+                _heartbeatEl = hb;
+                const _hbCtx = hb.getContext('2d');
+                window.__lucyFreezeLog = window.__lucyFreezeLog || [];
+                let _hbFlip = false;
+                let _hbLast = (typeof performance !== 'undefined' ? performance.now() : 0);
+                const _beat = (now) => {
+                    _hbFlip = !_hbFlip;
+                    if (_hbCtx) { _hbCtx.fillStyle = _hbFlip ? '#000' : '#111'; _hbCtx.fillRect(0, 0, 2, 2); }
+                    if (now - _hbLast > 1500) {
+                        const gapMs = Math.round(now - _hbLast);
+                        console.warn(`[lucy-heartbeat] hueco de ${(gapMs / 1000).toFixed(1)}s sin frames del renderer (reanudado ${new Date().toLocaleTimeString()})`);
+                        window.__lucyFreezeLog.push({ at: new Date().toISOString(), gapMs });
+                        if (window.__lucyFreezeLog.length > 50) window.__lucyFreezeLog.shift();
+                        if (dev) { try { toast(`⚠ Renderer congelado ${(gapMs / 1000).toFixed(1)}s (ver consola)`, 'warn'); } catch {} }
+                    }
+                    _hbLast = now;
+                    _heartbeatRaf = requestAnimationFrame(_beat);
+                };
+                _heartbeatRaf = requestAnimationFrame(_beat);
+                _heartbeatVis = () => {
+                    if (document.visibilityState === 'hidden') {
+                        if (_heartbeatRaf) { cancelAnimationFrame(_heartbeatRaf); _heartbeatRaf = null; }
+                    } else if (!_heartbeatRaf) {
+                        // Reset the gap clock so the hidden period isn't logged
+                        // as a fake renderer freeze.
+                        _hbLast = (typeof performance !== 'undefined' ? performance.now() : 0);
+                        _heartbeatRaf = requestAnimationFrame(_beat);
+                    }
+                };
+                document.addEventListener('visibilitychange', _heartbeatVis);
+                console.info('[lucy-heartbeat] v2 activo (canvas, z-max)');
+            }
+        } catch { /* best-effort — a failed heartbeat must never block boot */ }
+        // phase-1 review (feature) — connectivity awareness. A lost internet
+        // connection used to surface only as a cryptic cloud-provider error
+        // mid-task. Now we detect it and say so plainly (and hint at the local
+        // tier). Named handlers so onDestroy can unbind them.
+        try { _isOnline = (typeof navigator !== 'undefined') ? navigator.onLine !== false : true; } catch {}
+        _offlineHandler = () => {
+            _isOnline = false;
+            try { toast('Sin conexión a internet. Los modelos en la nube no responderán — si tienes Ollama activo, cambia a un modelo local.', 'warn'); } catch {}
+        };
+        _onlineHandler = () => {
+            _isOnline = true;
+            try { toast('Conexión restaurada.', 'success'); } catch {}
+        };
+        window.addEventListener('offline', _offlineHandler);
+        window.addEventListener('online', _onlineHandler);
         // Aplicar modo de densidad
         document.body.classList.toggle('density-compact', uiDensity === 'compact');
         // v1.7.98 — D5: restore the operator's accent choice before first
@@ -2008,12 +2221,19 @@ import { listen } from '@tauri-apps/api/event';
             pollProactiveInsights();
             // v1.7.177 — gated: the proactive-insights detector poll skips its
             // IPC while the window is hidden, and refreshes once on re-show.
-            gatedInterval(pollProactiveInsights, 120_000);
+            // phase-1 review — capture the stop fn (it clears the interval AND
+            // the visibilitychange listener gatedInterval adds); was discarded,
+            // leaking one interval + one document listener per remount.
+            _proactiveStop = gatedInterval(pollProactiveInsights, 120_000);
         }, 90_000);
         // v1.7.181 — delegated copy for the Gemini-style code-block header the
         // markdown renderer emits. Delegation (not a per-element onclick)
         // because morphdom would strip an inline handler on the next chunk.
-        document.addEventListener('click', (ev) => {
+        // phase-1 review — NAMED handler (was anonymous) so onDestroy can unbind
+        // it; the H8 fix (v1.7.111) named the other delegated listeners for the
+        // same reason but missed this later-added one → it leaked a duplicate per
+        // remount, firing the copy N× on one click after N remounts.
+        _copyBtnClickHandler = (ev) => {
             const tgt = ev.target;
             const btn = (tgt && tgt.closest) ? tgt.closest('.copy-btn[data-copy]') : null;
             if (!btn) return;
@@ -2033,7 +2253,8 @@ import { listen } from '@tauri-apps/api/event';
                     if (lbl) lbl.textContent = 'Copiar';
                 }, 1500);
             }).catch(() => {});
-        });
+        };
+        document.addEventListener('click', _copyBtnClickHandler);
         // v1.7.44 — Wire up the idle detector FIRST so the `.app-hidden`
         // and `.lucy-quiescent` classes start tracking the window/user
         // state from the very first frame. Idempotent on HMR.
@@ -2158,13 +2379,17 @@ import { listen } from '@tauri-apps/api/event';
                     } catch {}
                 }
                 if (fresh.length > 0) {
-                    const withLoop = fresh.filter(s => s._turnLoop);
-                    const detail = withLoop.length
-                        ? ` (${withLoop.length} con turn-loop recuperable)`
-                        : '';
-                    setTimeout(() => {
-                        toast(`! ${fresh.length} tarea${fresh.length>1?'s':''} de agente quedó interrumpida en sesión previa${detail}. Revisa con window.__lucyCheckpoints.list() en consola.`, 'info');
-                    }, 1500);
+                    // phase-1 review (feature) — surface interrupted tasks in an
+                    // in-app banner (see markup) instead of a console-only pointer
+                    // (DevTools is blocked in prod, so the old toast was a dead end).
+                    _interruptedTasks = fresh.map(s => ({
+                        tabId: s.tabId,
+                        key: s.key,
+                        goal: (s.snap.goal || '').trim(),
+                        step: s.snap.loop_i,
+                        ageMin: Math.round((Date.now() - (s.snap.ts || 0)) / 60000),
+                        model: (s.snap.model || '').replace(/^local-/, ''),
+                    })).filter(x => x.goal);
                     console.warn('[Lucy] Stale agent checkpoints found:', fresh.map(s => ({ tab: s.tabId, goal: s.snap.goal?.slice(0,80), step: s.snap.loop_i, age_min: Math.round((Date.now() - s.snap.ts)/60000), turnLoop: !!s._turnLoop })));
                 }
                 // Auto-purge entries older than 24h
@@ -2269,6 +2494,23 @@ import { listen } from '@tauri-apps/api/event';
             });
         };
         document.addEventListener('click', _slashCmdClickHandler);
+        // phase-1 review (feature) — delegated "Regenerar" handler for terminal
+        // failure cards (empty response / MAX_LOOPS). Named (not anonymous) so
+        // onDestroy can unbind it. Re-runs the tab's stored turn prompt.
+        _retryClickHandler = (e) => {
+            const btn = e.target?.closest?.('.lucy-retry-btn[data-retry-tab]');
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const rtId = btn.getAttribute('data-retry-tab');
+            const tab = rtId ? getTab(rtId) : null;
+            if (!tab) return;
+            if (tab.isProcessing) { toast(isEN ? 'Already running…' : 'Ya está procesando…', 'info'); return; }
+            const prompt = (tab._retryPrompt || '').trim();
+            if (!prompt) { toast(isEN ? 'Nothing to regenerate' : 'No hay nada que regenerar', 'warn'); return; }
+            runAI(rtId, prompt, false);
+        };
+        document.addEventListener('click', _retryClickHandler);
 
         // v1.7.11 — Auto-route chip click → deactivate the current
         // skill/preset and remove the chip from view. Delegated so
@@ -2393,7 +2635,20 @@ import { listen } from '@tauri-apps/api/event';
             setTimeout(_scheduledTick, 30_000);
             _scheduledTickInterval = setInterval(_scheduledTick, 60_000);
 
-            const provs = await invoke('get_configured_providers');
+            // v1.7.238 — reintento ante fallo transitorio del keyring. Con
+            // auto-arranque, el Credential Manager puede no estar listo segundos
+            // tras el logon; get_configured_providers ahora LANZA en ese caso (en
+            // vez de devolver lista vacía que se leía como "instalación virgen" y
+            // dejaba a Lucy en la pantalla de setup toda la noche). Reintentamos
+            // 3× con 5s antes de caer al setup overlay.
+            let provs = [];
+            for (let _kr = 0; _kr < 3; _kr++) {
+                try { provs = await invoke('get_configured_providers'); break; }
+                catch (e) {
+                    debug.warn('[keyring] get_configured_providers falló, reintentando:', e);
+                    if (_kr < 2) await new Promise(r => setTimeout(r, 5000));
+                }
+            }
             let hasKey = Array.isArray(provs) && provs.length > 0;
             keyringOk = hasKey;
             configuredProvs = Array.isArray(provs) ? provs : [];   // drives sub-agent auto-picker
@@ -2463,7 +2718,13 @@ import { listen } from '@tauri-apps/api/event';
             const _currentMinor = _minor(appVersion || '');
             const _seenMinor    = _tutFlag === '1' ? _currentMinor : _minor(_tutFlag);
             const _tutNeedsRerun = !_tutFlag || _seenMinor !== _currentMinor;
-            if (_tutNeedsRerun && !showSetupOverlay) {
+            // v2.0 cockpit — in a dev build `appVersion` is the unreplaced
+            // placeholder ("---"), so the tutorial's done-flag never matches the
+            // version check and the tour re-fires every session. Dev/cockpit
+            // sessions don't need onboarding anyway, so skip scheduling it.
+            // v1.7.234 GA: si arrancamos en el cockpit, el onboarding lo hace el
+            // tour V2 (CockpitTour) — el tutorial clásico solo aplica en V1.
+            if (_tutNeedsRerun && !showSetupOverlay && !dev && !cockpitMode) {
                 setTimeout(() => { showTutorial = true; }, 1200);
             }
         }
@@ -2477,12 +2738,25 @@ import { listen } from '@tauri-apps/api/event';
         if (_ollamaPingInterval)   { clearInterval(_ollamaPingInterval); _ollamaPingInterval = null; }
         if (_scheduledTickInterval){ clearInterval(_scheduledTickInterval); _scheduledTickInterval = null; }
         if (_footerCostInterval)   { clearInterval(_footerCostInterval); _footerCostInterval = null; }
+        // phase-1 review — stop fn clears the proactive-insights interval AND its
+        // visibilitychange listener (was leaked: discarded return value).
+        if (_proactiveStop)        { try { _proactiveStop(); } catch {} _proactiveStop = null; }
         // ── Document-level listeners ──
         if (_focusRepaintHandler) {
             try { window.removeEventListener('focus', _focusRepaintHandler); } catch {}
             try { document.removeEventListener('visibilitychange', _focusRepaintHandler); } catch {}
             _focusRepaintHandler = null;
         }
+        // v1.7.233 — presentation heartbeat cleanup.
+        if (_heartbeatRaf) { try { cancelAnimationFrame(_heartbeatRaf); } catch {} _heartbeatRaf = null; }
+        if (_heartbeatVis) { try { document.removeEventListener('visibilitychange', _heartbeatVis); } catch {} _heartbeatVis = null; }
+        if (_heartbeatEl)  { try { _heartbeatEl.remove(); } catch {} _heartbeatEl = null; }
+        // v1.7.234 — streaming present-pump cleanup.
+        if (_pumpRaf)    { try { cancelAnimationFrame(_pumpRaf); } catch {} _pumpRaf = null; }
+        if (_pumpCanvas) { try { _pumpCanvas.remove(); } catch {} _pumpCanvas = null; _pumpCtx = null; }
+        // phase-1 review (feature) — connectivity listeners.
+        if (_offlineHandler) { try { window.removeEventListener('offline', _offlineHandler); } catch {} _offlineHandler = null; }
+        if (_onlineHandler)  { try { window.removeEventListener('online', _onlineHandler); } catch {} _onlineHandler = null; }
         if (_clickHandler)   document.removeEventListener('click', _clickHandler);
         if (typeof handlePlanButtonClick === 'function') {
             try { document.removeEventListener('click', handlePlanButtonClick); } catch {}
@@ -2490,7 +2764,10 @@ import { listen } from '@tauri-apps/api/event';
         // v1.7.111 H8 — unbind the two delegated click handlers that were
         // previously anonymous (and thus leaked one duplicate per remount).
         if (_slashCmdClickHandler) { try { document.removeEventListener('click', _slashCmdClickHandler); } catch {} _slashCmdClickHandler = null; }
+        if (_retryClickHandler)    { try { document.removeEventListener('click', _retryClickHandler); } catch {} _retryClickHandler = null; }
         if (_arChipClickHandler)   { try { document.removeEventListener('click', _arChipClickHandler); } catch {} _arChipClickHandler = null; }
+        // phase-1 review — the delegated code-block copy listener (H8-class leak).
+        if (_copyBtnClickHandler)  { try { document.removeEventListener('click', _copyBtnClickHandler); } catch {} _copyBtnClickHandler = null; }
         // Quick-look popover — detaches listeners + removes DOM node atomically.
         if (_qlHandle) { try { _qlHandle.detach(); } catch {} _qlHandle = null; }
         // ── Active streaming AI requests — cancel + unlisten ──
@@ -2609,6 +2886,11 @@ import { listen } from '@tauri-apps/api/event';
             tabs.forEach(t => { t.recognition = initRecognition(t.id, _voiceOpts()); });
             tabs = [...tabs]; // forzar reactividad
             setTimeout(scrollChat, 100);
+            // Cockpit v2.0 (dev-only): mirror the restored active tab's history
+            // into the V2 conversation lane so re-opening Lucy shows the thread,
+            // not an empty pane. No-op in release builds (syncCockpitConvo gates
+            // on `dev`).
+            syncCockpitConvo(activeTabId);
 
             // ── Hydrate persistent session summaries ──
             // For each restored tab, fetch its persisted YAML/text summary
@@ -2631,6 +2913,16 @@ import { listen } from '@tauri-apps/api/event';
                     .catch(e => debug.warn('[smart-digest] hydrate failed for tab', t.id, e));
             }
         }
+
+        // v1.7.234 — Fresh install / no restored sessions: seed the first tab.
+        // Historically the FIRST tab was created by the V1 welcome screen (which
+        // the user clicks through). With the cockpit as the default UI there is
+        // NO welcome screen, so a clean profile booted with ZERO tabs →
+        // activeTabId null → the composer, suggestion chips, model picker and
+        // tab strip all no-op (they all guard on / read `activeTabId`). Seed one
+        // so the cockpit is usable from frame 1. Gated to cockpit mode so the V1
+        // welcome-screen onboarding is untouched.
+        if (!activeTabId && cockpitMode) crearTab();
 
         const defaultActions = [
     { icono: 'activity',  nombre: isEN ? 'System Health'   : 'Salud del sistema',  script: 'TOOL_SYSINFO' },
@@ -2748,7 +3040,7 @@ import { listen } from '@tauri-apps/api/event';
                     const fix = await invoke('ask_lucy', {
                         prompt: `[AUTOFIX ANALYSIS] Action "${accion.nombre}" failed.\nScript: ${accion.script}\nError: ${errStr}\n\nRespond ONLY with either:\n1. A single PowerShell fix command inside <EXECUTE></EXECUTE> tags AND a 1-line Spanish explanation before it.\n2. Or if no fix is needed (e.g. already done), just a short Spanish explanation without <EXECUTE>.`,
                         context: '', userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,
-                        model: getEffectiveModel(activeTab) || 'gemini-2.5-flash',
+                        model: getEffectiveModel(activeTab) || 'gemini-3.5-flash',
                         images: null, lang: userLang, hostsJson: null
                     });
                     const fixExec = fix.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i);
@@ -2779,6 +3071,21 @@ import { listen } from '@tauri-apps/api/event';
             if (!item) { console.warn('[Lucy] Fix key not found:', key); return; }
             const { script, tabId } = item;
             const t = getTab(tabId); if(!t || t.isProcessing) return;
+            // SECURITY (phase-1 review) — the autofix path ran raw LLM <EXECUTE>
+            // output via execute_powershell WITHOUT the frontend destructive
+            // deny-list (unlike the agent loop / chat exec paths, which gate on
+            // isDestructiveCmd → $showRunAsModal). A prompt-injected fix could
+            // carry Stop-Computer / shutdown / reg delete / non-recursive
+            // Remove-Item — none of which the backend obfstr blocklist covers —
+            // and the user's single "Aplicar corrección" click would run it
+            // silently. Escalate a DESTRUCTIVE fix to the explicit RunAs confirm
+            // modal (which shows the destructive warning) instead of running it.
+            if (isDestructiveCmd(script)) {
+                _lucyFixStore.delete(key);
+                pendingRunAsCmd = { cmd: script, ctx: '', doSpeak: false, tabId, isDestructive: true };
+                $showRunAsModal = true;
+                return;
+            }
             t.isProcessing = true; startExecTimer(); refresh();
             try {
                 const out = await invoke('execute_powershell', { script, bypassToken: null });
@@ -2874,6 +3181,22 @@ import { listen } from '@tauri-apps/api/event';
         }
     }
 
+    // phase-1 review — serialize persistence so persistirNow() (structural
+    // changes) and the debounced persistir() can't run two _persistirInner()
+    // DELETE-then-INSERT sequences CONCURRENTLY. If the debounce fired (timer
+    // null) while its _persistirInner was mid-flight, a structural persistirNow()
+    // used to start a second one; with differing `tabs` snapshots the slower
+    // writer could re-insert (resurrect) a row the faster one just deleted. Each
+    // call now chains on the prior in-flight one (and captures the freshest
+    // `tabs` at run time).
+    let _persistInFlight = Promise.resolve();
+    function _persistSerialized() {
+        _persistInFlight = _persistInFlight
+            .then(() => _persistirInner())
+            .catch(e => console.error("[Lucy SQL] Persist err:", e));
+        return _persistInFlight;
+    }
+
     /** v1.7.51 — Immediate (un-debounced) persist. Call this from structural
      *  changes (crearTab, _ejecutarCierreTab, bifurcarConversación,
      *  confirmarRename, limpiarSesion) so the user's tab edits survive a
@@ -2881,7 +3204,7 @@ import { listen } from '@tauri-apps/api/event';
      *  twice. */
     async function persistirNow() {
         if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-        await _persistirInner();
+        await _persistSerialized();
     }
 
     function persistir() {
@@ -2891,7 +3214,7 @@ import { listen } from '@tauri-apps/api/event';
         if (_saveTimer) clearTimeout(_saveTimer);
         _saveTimer = setTimeout(() => {
             _saveTimer = null;
-            _persistirInner().catch(e => console.error("[Lucy SQL] Persist err:", e));
+            _persistSerialized();
         }, 500);
     }
 
@@ -2974,7 +3297,16 @@ import { listen } from '@tauri-apps/api/event';
      * the .chat-wrap.on container because Svelte transitions are still
      * mounting — we re-query each iteration.
      */
+    let _scrollChatRunning = false; // phase-1 review: in-flight guard (see scrollChat)
     function scrollChat() {
+        // phase-1 review — coalesce overlapping scroll loops. During a stream
+        // scrollChat() was called every frame, each spinning up its OWN ~18-frame
+        // rAF loop that re-queried the DOM + forced a reflow; ~18 overlapped at
+        // once doing redundant work. The already-running loop re-reads
+        // scrollHeight every frame (so it tracks the live bottom AND self-extends
+        // as new content arrives), so a concurrent call can safely no-op.
+        if (_scrollChatRunning) return Promise.resolve();
+        _scrollChatRunning = true;
         return new Promise((resolve) => {
             tick().then(() => {
                 let lastHeight = -1;
@@ -3009,6 +3341,7 @@ import { listen } from '@tauri-apps/api/event';
                         document.querySelectorAll('.chat-wrap.on .chat-area').forEach((el) => {
                             el.scrollTop = el.scrollHeight;
                         });
+                        _scrollChatRunning = false;
                         resolve();
                         return;
                     }
@@ -3304,6 +3637,15 @@ import { listen } from '@tauri-apps/api/event';
         // Drop the persistent session summary so it doesn't accumulate
         // across closed-and-recreated tabs with random uuids.
         invoke('delete_session_summary', { tabId: String(id) }).catch(e => debug.log('[summary] drop failed:', e));
+        // phase-1 review — drop the in-memory per-tab keyed entries that close
+        // never reclaimed. Tab ids are random uuids, so each open/close cycle
+        // stranded one entry in each of these (a slow session-lifetime leak).
+        try {
+            if (_runToken && typeof _runToken === 'object') delete _runToken[id];
+            _forkBypassByTab.delete(id);
+            _forkAdviceByTab.delete(id);
+            _lastTitledTurn.delete(id);
+        } catch {}
         // v1.7.51 — closing a tab is the most common "user closes Lucy right
         // after" pattern. MUST persist immediately, not debounced.
         persistirNow();
@@ -3315,6 +3657,86 @@ import { listen } from '@tauri-apps/api/event';
 
     const getTab=(id)=>tabs.find(t=>t.id===id);
     const refresh=()=>tabs=[...tabs];
+
+    // ── COCKPIT v2.0 — forward plan (dev-only) ────────────────────────────────
+    // Parse a step list from Lucy's FIRST reasoning block and seed it as a
+    // forward-looking plan (pending → running → done) BEFORE execution starts.
+    // Zero prompt / protocol changes: reads only what the model already says, so
+    // there is no release token cost or behaviour change. When no list is found
+    // the panel keeps its post-hoc command log (see the execPush site).
+    function extractPlanSteps(text) {
+        if (!text) return [];
+        const out = [];
+        for (const raw of String(text).split('\n')) {
+            const line = raw.trim();
+            // numbered ("1." / "1)" / "1 -") or bulleted ("-" / "•" / "*") item, 4-120 chars
+            const m = line.match(/^(?:\d{1,2}[.)\-]\s+|[-•*]\s+)(.{4,120})$/);
+            if (m) {
+                const label = m[1].trim().replace(/\*\*/g, '').replace(/`/g, '').replace(/[.:;\s]+$/, '');
+                if (label && !/^https?:/i.test(label)) out.push(label);
+            }
+            if (out.length >= 8) break;
+        }
+        return out.length >= 2 ? out : [];
+    }
+    function seedCockpitPlan(tabId, steps) {
+        const t = getTab(tabId); if (!t) return;
+        const now = Date.now();
+        planSet(steps.map((label, i) => ({ id: `p${i}`, label, status: i === 0 ? 'running' : 'pending', ts: now })));
+        t._cockpitPlanSeeded = true;
+        t._cockpitPlanIdx = 0;
+        t._cockpitPlanLen = steps.length;
+        t._cockpitPlanStart = now;
+    }
+    function advanceCockpitPlan(tabId) {
+        const t = getTab(tabId); if (!t || !t._cockpitPlanSeeded) return;
+        const idx = t._cockpitPlanIdx ?? 0;
+        const len = t._cockpitPlanLen ?? 0;
+        if (idx >= len - 1) return;                 // hold on the last step until fin()
+        planUpdate(`p${idx}`, { status: 'done' });
+        planUpdate(`p${idx + 1}`, { status: 'running' });
+        t._cockpitPlanIdx = idx + 1;
+    }
+    function completeCockpitPlan(tabId) {
+        const t = getTab(tabId); if (!t || !t._cockpitPlanSeeded) return;
+        const len = t._cockpitPlanLen ?? 0;
+        const total = Date.now() - (t._cockpitPlanStart ?? Date.now());
+        // Stamp the final step's duration so the workspace header shows real total elapsed.
+        for (let i = 0; i < len; i++) planUpdate(`p${i}`, i === len - 1 ? { status: 'done', ms: total } : { status: 'done' });
+        t._cockpitPlanSeeded = false;
+    }
+
+    // ── COCKPIT v2.0 — conversation-history sync ──────────────────────────────
+    // Rebuild the mirrored `agentConvo` store from a tab's REAL message history.
+    // Called when the cockpit opens or the user switches / creates / closes a
+    // terminal tab, so the V2 conversation lane reflects the selected tab's
+    // history (the addMsg/fin hooks only mirror *new* messages of the active
+    // tab; restored or background-tab history would otherwise be invisible).
+    // Dev-gated & additive — no effect on the classic release path.
+    function syncCockpitConvo(tabId) {
+        if (!COCKPIT) return;
+        convoReset();
+        streamClear();   // drop any live-stream bubble from the tab we're leaving
+        const t = getTab(tabId);
+        if (!t || !Array.isArray(t.messages)) return;
+        let lastLucy = null;
+        for (const m of t.messages) {
+            if (m.role !== 'user' && m.role !== 'lucy') continue;
+            const _ct = String(m.rawContent ?? m.content ?? '').trim()
+                || String(m.html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (!_ct) continue;
+            const _atts = Array.isArray(m.attachments)
+                ? m.attachments.filter(a => a && a.previewUrl).map(a => ({ name: a.name, previewUrl: a.previewUrl })).slice(0, 4)
+                : undefined;
+            convoPush({ role: m.role, text: _ct.length > 12000 ? _ct.slice(0, 12000) + '…' : _ct, atts: _atts });
+            if (m.role === 'lucy') lastLucy = m;
+        }
+        // Mark the last Lucy reply as already-mirrored so fin()'s object-identity
+        // mirror doesn't push a duplicate when this tab finishes its next turn.
+        t._cockpitMirroredMsg = lastLucy;
+        // Realign the workspace status chip with the tab we're now viewing.
+        statusPatch({ model: t.selectedModel, running: !!t.isProcessing });
+    }
 
     // ── RENOMBRADO INLINE DE TABS ─────────────────────────────────────────────
     function iniciarRename(tabId) {
@@ -3649,6 +4071,15 @@ import { listen } from '@tauri-apps/api/event';
         const t=getTab(tabId);
         obj.id=obj.id||(Date.now()+Math.random());
         obj.time=ahora();
+        if (COCKPIT && obj.role === 'user') { // Lucy 2.0 cockpit preview — mirror USER prompts here; Lucy replies (which mostly stream, bypassing addMsg) are mirrored centrally in fin()
+            const _ct = String(obj.rawContent ?? obj.content ?? '').trim()
+                || String(obj.html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            // Fase A: las imágenes adjuntas viajan al espejo (miniaturas en la burbuja).
+            const _atts = Array.isArray(obj.attachments)
+                ? obj.attachments.filter(a => a && a.previewUrl).map(a => ({ name: a.name, previewUrl: a.previewUrl })).slice(0, 4)
+                : undefined;
+            if (_ct || (_atts && _atts.length)) convoPush({ role: 'user', text: _ct.length > 12000 ? _ct.slice(0, 12000) + '…' : _ct, atts: _atts });
+        }
         // Quick-win A — update the per-tab activity timestamp so the
         // status dot can mark idle (>30 min without activity) tabs as
         // 'stale' in the strip. Cheap: one number per addMsg call.
@@ -4383,7 +4814,31 @@ REGLAS DE FORMATO:
         // ── SLASH COMMANDS ──
         if (raw.startsWith('/')) {
             const handled = handleSlashCommand(tabId, raw);
-            if (handled) { t.isProcessing = false; refresh(); return; }
+            if (handled) {
+                // Cockpit mirror (v2.0): a handled slash returns BEFORE the fin()
+                // funnel, so its output (e.g. /help, /route, /proactive) would
+                // never reach the mirrored conversation. Re-run the same
+                // identity-keyed mirror here. DEV-ONLY → inert in release builds.
+                if (COCKPIT && tabId === activeTabId) {
+                    if (t.messages.length === 0) {
+                        // /clear wiped the thread → clear the cockpit convo too.
+                        t._cockpitMirroredMsg = null; convoReset();
+                    } else {
+                        let _ll = null;
+                        for (let i = t.messages.length - 1; i >= 0; i--) {
+                            const _m = t.messages[i];
+                            if (_m && _m.role === 'lucy' && !_m._isToolPreparePlaceholder) { _ll = _m; break; }
+                        }
+                        if (_ll && _ll !== t._cockpitMirroredMsg) {
+                            t._cockpitMirroredMsg = _ll;
+                            const _raw = String(_ll.rawContent ?? '').trim()
+                                || String(_ll.html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                            if (_raw) convoPush({ role: 'lucy', text: _raw.length > 12000 ? _raw.slice(0, 12000) + '…' : _raw });
+                        }
+                    }
+                }
+                t.isProcessing = false; refresh(); return;
+            }
         }
 
         let disp=raw||"Analiza los archivos adjuntos.";
@@ -4462,6 +4917,31 @@ REGLAS DE FORMATO:
     // assembles the context bag (state references + mutation callbacks)
     // and forwards the call. New slash commands go in the module.
     function handleSlashCommand(tabId, raw) {
+        // phase-1 review (feature) — /spend-cap intercept (self-contained, not in
+        // the shared dispatcher). Forms: "/spend-cap" (show), "/spend-cap <usd>"
+        // (set; 0 disables), "/spend-cap reset" (zero the session counter).
+        const _scMatch = (raw || '').trim().match(/^\/spend-cap(?:\s+(\S+))?\s*$/i);
+        if (_scMatch) {
+            const arg = (_scMatch[1] || '').toLowerCase();
+            const _cap = parseFloat(safeGetLS('lucy_spend_cap_usd', '0')) || 0;
+            if (!arg) {
+                addMsg(tabId, { role: 'lucy', html: `<div class="mn">⬡ Spend cap</div>Gasto estimado de la sesión: <b>$${_sessionSpendUsd.toFixed(2)}</b>. Límite: <b>${_cap > 0 ? '$' + _cap.toFixed(2) : 'desactivado'}</b>.<br><span style="font-size:11px;color:var(--txt2)">Usa <code>/spend-cap &lt;usd&gt;</code> para fijarlo (0 = off) o <code>/spend-cap reset</code> para reiniciar el contador.</span>` });
+                return true;
+            }
+            if (arg === 'reset') {
+                _sessionSpendUsd = 0;
+                addMsg(tabId, { role: 'lucy', html: `<div class="mn">⬡ Spend cap</div>Contador de gasto de la sesión reiniciado a <b>$0.00</b>.` });
+                return true;
+            }
+            const n = parseFloat(arg);
+            if (!isFinite(n) || n < 0) {
+                addMsg(tabId, { role: 'lucy', html: `<div class="mn">⬡ Spend cap</div>Valor inválido. Ej: <code>/spend-cap 5</code> (= $5 por sesión) o <code>/spend-cap 0</code> para desactivar.` });
+                return true;
+            }
+            try { safeSetLSString('lucy_spend_cap_usd', String(n)); } catch {}
+            addMsg(tabId, { role: 'lucy', html: `<div class="mn">⬡ Spend cap</div>Límite de gasto de sesión ${n > 0 ? 'fijado en <b>$' + n.toFixed(2) + '</b>' : '<b>desactivado</b>'}. Gasto actual: $${_sessionSpendUsd.toFixed(2)}.` });
+            return true;
+        }
         return dispatchSlashCommand(tabId, raw, {
             isEN,
             currentTheme,
@@ -4509,6 +4989,8 @@ REGLAS DE FORMATO:
             openKgViewer: (path) => { openKgViewerFor(path); },
             // v1.7.29 — Knowledge Graph overlay opener.
             openKnowledgeGraph: () => { showKnowledgeGraph = true; },
+            // v1.7.232 — Memory Browser view opener (used by /memory).
+            openMemory: () => { setView('memory'); },
             // v1.7.34 — /capabilities self-introspection sources.
             mcpServers: mcpServers || [],
             runbooks: () => $runbooks || [],
@@ -4594,6 +5076,10 @@ REGLAS DE FORMATO:
     async function runAI(tabId,raw,doSpeak,retryCount = 0){
         const t=getTab(tabId);
         t.isProcessing=true; startExecTimer(); refresh();
+        // phase-1 review (feature) — remember this turn's user prompt so the
+        // "Regenerar" button on a terminal-failure card can re-run it. Guard on a
+        // non-empty raw so an internal auto-retry (raw='') doesn't clobber it.
+        if (t && (raw || '').trim()) t._retryPrompt = (raw || '').trim();
         // Hoisted refs so catch/finally can clean up even on unexpected throws.
         let _reasoningTickerRef = null;
         // v1.7.111 audit H4 — hoist the streaming drain timer to function
@@ -4617,6 +5103,10 @@ REGLAS DE FORMATO:
         const _persistedMemKeys = new Set();
         // Best-effort DESIGN.md detection — non-blocking. Caches per cwd.
         refreshDesignMd().catch(() => {});
+        // v1.7.236 iter (#2) — captura las rutas que el usuario menciona en su
+        // mensaje → working memory (siempre en contexto, nunca se comprime). Evita
+        // que Lucy "olvide" la carpeta/archivo activo tras una compactación.
+        try { if (raw) captureUserPaths(t, raw); } catch {}
         // ── Memory decay reinforcement (F1+, May 2026) ──────────────────────
         // Bump updated_at on Core memory entries whose key/value appears in
         // the user's message. Keeps facts the user actively mentions fresh;
@@ -4907,8 +5397,34 @@ REGLAS DE FORMATO:
             // worse off than v1.7.108. minScore=0.45 is stricter than
             // the on-demand tool (0.30) — automatic injection should
             // err on the side of NOT polluting context with weak hits.
+            //
+            // ── v1.7.236 R3 — estado compartido pre-loop ↔ mid-loop ────────────
+            // _injectedMemIds: ids ya inyectados este run (el recall por
+            // entidades del loop no re-inyecta lo que el pre-loop ya metió).
+            // _seenEntities: entidades ya vistas (query inicial + pasos previos)
+            // para disparar recall SOLO ante entidades NUEVAS en tool-results.
+            // _entityRecallsLeft: presupuesto duro de mini-recalls por run.
+            const _injectedMemIds = new Set();
+            const _seenEntities = new Set();
+            let _entityRecallsLeft = (t.selectedModel || '').startsWith('local-') ? 2 : 3;
+            const _ENTITY_STOP = new Set(['CPU','RAM','GPU','SSD','HDD','HTTP','HTTPS','DNS','TCP','UDP','SSH','FTP','SFTP','JSON','XML','HTML','CSS','ERROR','WARN','WARNING','INFO','DEBUG','TRACE','NULL','TRUE','FALSE','GET','POST','PUT','DELETE','OK','ID','URL','URI','PATH','EXE','DLL','MSI','USER','ADMIN','SYSTEM','WINDOWS','LINUX','TOOL','RESULT','RESULTS','STEP','SELECT','FROM','WHERE','UPDATE','INSERT','TABLE','INDEX','UTF','API','SDK','CLI','GUI','LOG','LOGS','PDF','SQL','LLM','FIN','NOTE','TIP','PID','RRF','AST','LAN','WAN','VPN','MAC','IPV4','IPV6','TODO','README']);
+            const _extractEntities = (txt) => {
+                const found = new Set();
+                const re = /\b([A-Z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)+|[A-Z]{3,}[0-9-]*|[A-Z][a-z]+[A-Z][A-Za-z0-9]*|[\w][\w.-]*\.(?:exe|dll|msi|ps1|sys|conf|ini|yaml|yml))\b/g;
+                let mm;
+                while ((mm = re.exec(String(txt).slice(0, 8000))) !== null && found.size < 24) {
+                    const e = mm[1];
+                    if (e.length < 4 || e.length > 40) continue;
+                    if (_ENTITY_STOP.has(e.toUpperCase())) continue;
+                    found.add(e);
+                }
+                return found;
+            };
             try {
                 const _raw = (raw || '').trim();
+                // Las entidades de la pregunta original NO disparan recall de
+                // entidades (el pre-loop ya las cubrió con la query completa).
+                for (const e of _extractEntities(_raw)) _seenEntities.add(e.toLowerCase());
                 // v1.7.115 perf-fix — gate the pre-loop recall hard. The
                 // embedding round-trip it triggers is BLOCKING and, when the
                 // active model is local Ollama, contends with the main
@@ -4924,35 +5440,195 @@ REGLAS DE FORMATO:
                 // bounded and small.
                 const _TRIVIAL_RE = /^\s*(hola|hi|hey|buenas|saludos|gracias|thanks|ok|vale|s[ií]|no|qu[eé]\s+hora|what\s+time|qu[eé]\s+d[ií]a|what\s+day|fecha|date|hora|time|ping|test|status|estado)\b/i;
                 const _selModel = (t.selectedModel || '');
+                // v1.7.233 (M1 recall unificado) — los modelos locales YA NO se
+                // saltan el recall: el embed pre-loop es SERIAL (termina antes
+                // de lanzar la generación, no compite con ella) y está capado a
+                // 700ms. En su lugar reciben un presupuesto recortado, alineado
+                // con la token-economy local (v1.7.229-231).
+                const _isLocalTier = _selModel.startsWith('local-');
+
+                // ── v1.7.236 R5 — MEMORIAS FIJADAS (pin del operador) ──────────
+                // Se inyectan SIEMPRE (salvo saludos triviales), sin depender del
+                // score semántico: son las garantías operativas para uso
+                // desatendido. try propio: un fallo aquí jamás tumba el recall.
+                if (!_TRIVIAL_RE.test(_raw)) {
+                    try {
+                        const _pinned = await invoke('get_pinned_memories', { limit: 5 });
+                        if (Array.isArray(_pinned) && _pinned.length > 0) {
+                            const _pinK = _isLocalTier ? 3 : 5;
+                            const _pinChars = _isLocalTier ? 250 : 400;
+                            const _pinFmt = _pinned.slice(0, _pinK)
+                                .map((m, i) => `${i + 1}. ${m.title ? `[${String(m.title).slice(0, 80)}] ` : ''}${String(m.content || '').slice(0, _pinChars)}`)
+                                .join('\n');
+                            if (_pinFmt) {
+                                ctx += `\n\n--- MEMORIAS FIJADAS (instrucciones del operador — SIEMPRE vigentes) ---\n${_pinFmt}\n--- FIN FIJADAS ---\nEl operador fijó estas instrucciones para que se cumplan incluso en su ausencia. Respétalas salvo orden contraria explícita del usuario actual.`;
+                            }
+                        }
+                    } catch { /* sin pines o DB fría — seguir sin bloque */ }
+                }
+
+                // ── v1.7.236 (Lote 4 / autonomía) — AUTO-APRENDIZAJE ───────────
+                // Cuando el usuario CONFIRMA que algo funcionó, se nudge-a a Lucy
+                // para que guarde el aprendizaje VERIFICADO por su cuenta (RULE 38),
+                // sin que se lo pidan → "no repetirle cómo hacer las cosas". Es el
+                // backstop determinista del prompt: aunque el modelo no tenga la
+                // iniciativa, este empujón la provoca justo en el momento correcto.
+                // Solo cuando NO es el primer turno del tab (hubo trabajo previo que
+                // valga la pena consolidar).
+                const _CONFIRM_RE = /\b(funcion[oó]|ya\s+(qued[oó]|sirve|jala|jaló|funciona|est[aá]\s+listo)|(qued[oó]|sirvi[oó])\s+(bien|perfecto)|resuelto|solucionad|lo\s+logr|correcto,?\s+(funcion|qued|sirv|grac)|perfecto,?\s+(funcion|qued|sirv|grac)|as[ií]\s+es,?\s+(funcion|qued))\b/i;
+                if (_CONFIRM_RE.test(_raw) && Array.isArray(t.messages) && t.messages.filter(m => m && m.rawRole === 'Lucy').length >= 1) {
+                    ctx += `\n\n[AUTO-APRENDIZAJE — el usuario acaba de CONFIRMAR que algo funcionó. Si en los turnos recientes resolviste un problema NO trivial (una corrección, un gotcha, una sintaxis que costó varios intentos, un procedimiento nuevo), GUÁRDALO AHORA por tu cuenta, sin pedir permiso, con <TOOL>memoria_guardar:título corto|||el problema + la solución que SÍ funcionó + qué evitar la próxima vez (generalizable, accionable)|||verificado,área</TOOL> a importancia 2. Es conocimiento VERIFICADO: NO lo marques como hipótesis. Menciona en una línea que lo guardaste. Si no hubo nada nuevo reutilizable, ignora esto.]`;
+                }
+
+                // ── v1.7.236 R1 — recall CONVERSACIONAL ────────────────────────
+                // El recall embebía solo el mensaje actual: el follow-up "¿y
+                // dónde se guarda eso?" (pronombres, cero keywords) no recuperaba
+                // nada. Si el mensaje es corto o anafórico, la query de recall se
+                // reescribe como `mensaje anterior + actual` — el tema viaja con
+                // la pregunta. Solo afecta la QUERY del recall semántico; el
+                // fallback keyword (BM25) sigue con _raw para no sobre-restringir
+                // el MATCH léxico con términos del turno anterior.
+                let _recallQuery = _raw;
+                const _ANAPHORA_RE = /^\s*¿?\s*((y|e|o|pero|entonces|también|tambien|además|ademas)\b|(eso|esa|ese|esto|esta|este|aquello)\b|(d[oó]nde|c[oó]mo|cu[aá]l(es)?|cu[aá]ndo|qu[eé]|por\s*qu[eé]|qui[eé]n)\s+(se|lo|la|los|las|es|est[aá]|era|hay)\b|(and|what\s+about|how\s+about|it|that|also)\b)/i;
+                if (_raw.length < 48 || _ANAPHORA_RE.test(_raw)) {
+                    const _prevUsers = (t.messages || []).filter(m => m && m.role === 'user' && m.rawContent);
+                    // El último 'user' es el mensaje ACTUAL (addMsg corre antes
+                    // de runAI); el penúltimo aporta el tema de la conversación.
+                    const _prevRaw = _prevUsers.length >= 2 ? String(_prevUsers[_prevUsers.length - 2].rawContent || '').trim() : '';
+                    if (_prevRaw && _prevRaw !== _raw) {
+                        _recallQuery = `${_prevRaw.slice(0, 300)}\n${_raw}`.slice(0, 600);
+                    }
+                }
+
+                // v1.7.235 — umbral 16 → 8 chars: una consulta de una sola
+                // palabra clave ("GoAnywhere?", "mysqldump") es EXACTAMENTE el
+                // tipo de pregunta que más necesita el recall de documentos;
+                // con 16 se la saltaba. El guard anti-ruido real es _TRIVIAL_RE.
+                // v1.7.236 — la longitud se evalúa sobre _recallQuery: un
+                // follow-up anafórico corto YA lleva el contexto del turno previo.
                 const _skipRecall =
-                    _raw.length < 16 ||
+                    _recallQuery.length < 8 ||
                     _raw.length > 4000 ||
-                    _TRIVIAL_RE.test(_raw) ||
-                    _selModel.startsWith('local-') ||
-                    ($ollamaOnline === false);
-                if (!_skipRecall) {
-                    const _autoHits = await Promise.race([
-                        invoke('semantic_search', {
-                            query: _raw,
-                            entityType: 'memory',
-                            limit: 5,
-                            minScore: 0.45,
-                            model: null,
-                        }),
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('auto-recall timeout')), 700))
+                    _TRIVIAL_RE.test(_raw);
+                if (!_skipRecall && $ollamaOnline === false) {
+                    // v1.7.235 — FALLBACK KEYWORD (Ollama caído). Antes: skip
+                    // total → cero recall en uso desatendido si Ollama moría.
+                    // NO usamos el fallback Gemini del backend para búsqueda:
+                    // embeber el query con text-embedding-004 y compararlo
+                    // contra vectores nomic es cruzar espacios vectoriales
+                    // distintos (similitudes sin significado → inyectaría
+                    // "documentación" basura). En su lugar: search_agent_memories
+                    // BASE, cuya pata BM25/FTS5 es léxica y funciona sin
+                    // embeddings — cubre memorias Y chunks de PDF (el FTS indexa
+                    // ambos). Mismo timeout acotado que el path semántico.
+                    try {
+                        const _kwK = _isLocalTier ? 3 : 5;
+                        const _kwChars = _isLocalTier ? 250 : 400;
+                        const _kwHits = await Promise.race([
+                            invoke('search_agent_memories', { query: _raw, limit: _kwK }),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('kw-recall timeout')), 700)),
+                        ]);
+                        if (Array.isArray(_kwHits) && _kwHits.length > 0) {
+                            const _kwFmt = _kwHits
+                                .filter(m => m && (m.content || m.title))
+                                .slice(0, _kwK)
+                                .map((m, i) => `${i + 1}. [${String(m.title || 'memoria').slice(0, 80)}] ${String(m.content || '').slice(0, _kwChars)}`)
+                                .join('\n');
+                            if (_kwFmt) {
+                                ctx += `\n\n--- MEMORIAS RECORDADAS (búsqueda por palabras clave — embeddings no disponibles) ---\n${_kwFmt}\n--- FIN MEMORIAS ---\nUsa estos hechos como base cuando sean relevantes. Para más detalle usa <TOOL>memoria_buscar:términos</TOOL>.`;
+                                try { setContextSnapshot({ memoriesCount: (t._lastMemoryHitsCount ?? 0) + _kwHits.length }); } catch {}
+                            }
+                        }
+                    } catch (e) {
+                        try { debug.log(`[+page] keyword-fallback recall skipped: ${String(e).slice(0, 120)}`); } catch {}
+                    }
+                } else if (!_skipRecall) {
+                    // v1.7.233 — recall UNIFICADO: memorias + documentos ingeridos
+                    // en paralelo bajo el mismo timeout. Los documentos exigen un
+                    // score más alto (0.50): inyectar manual equivocado es peor
+                    // que no inyectar nada. allSettled: si una pata falla, la
+                    // otra sigue sirviendo.
+                    const _memBudget = _isLocalTier ? { k: 3, chars: 250 } : { k: 5, chars: 400 };
+                    const _docBudget = _isLocalTier ? { k: 2, chars: 350 } : { k: 3, chars: 500 };
+                    const _timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('auto-recall timeout')), 700));
+                    const [_memRes, _docRes] = await Promise.race([
+                        Promise.allSettled([
+                            invoke('semantic_search', { query: _recallQuery, entityType: 'memory', limit: _memBudget.k, minScore: 0.45, model: null }),
+                            invoke('semantic_search', { query: _recallQuery, entityType: 'pdf_chunk', limit: _docBudget.k, minScore: 0.50, model: null }),
+                        ]),
+                        _timeout.then(() => { throw new Error('auto-recall timeout'); }),
                     ]);
+                    const _autoHits = (_memRes?.status === 'fulfilled' && Array.isArray(_memRes.value)) ? _memRes.value : [];
+                    const _docHits = (_docRes?.status === 'fulfilled' && Array.isArray(_docRes.value)) ? _docRes.value : [];
+                    // v1.7.236 R3 — registrar lo inyectado para que el recall por
+                    // entidades del loop no lo re-inyecte.
+                    try { [..._autoHits, ..._docHits].forEach(h => { if (h && h.entity_id != null) _injectedMemIds.add(String(h.entity_id)); }); } catch {}
+                    // M4 grounding — cada fragmento de documento lleva identidad
+                    // (§id) y se pide cita; el texto ya viene prefijado con
+                    // [filename] desde la ingesta.
+                    if (_docHits.length > 0) {
+                        const _docFmt = _docHits
+                            .filter(h => h && h.text)
+                            .slice(0, _docBudget.k)
+                            .map((h) => `[§${h.entity_id}] ${String(h.text).slice(0, _docBudget.chars)}`)
+                            .join('\n');
+                        if (_docFmt) {
+                            ctx += `\n\n--- DOCUMENTACIÓN RELEVANTE (fragmentos de documentos ingeridos) ---\n${_docFmt}\n--- FIN DOCUMENTACIÓN ---\nSi usas estos fragmentos, cita su marcador [§id]. Para más detalle del mismo documento usa <TOOL>pdf_search:consulta</TOOL>.`;
+                        }
+                    }
                     if (Array.isArray(_autoHits) && _autoHits.length > 0) {
+                        // v1.7.236 (Lote A/RULE 36) — marca las memorias que se ven
+                        // como hipótesis no verificadas para que el modelo NO las
+                        // sirva como hechos oficiales (el veneno del caso GoAnywhere).
+                        const _looksUnverified = (s) => /\b(sin[-\s]?verificar|no[-\s]?verificad|hip[oó]tesis|posible(?:mente)?|tentativ)\b/i.test(s);
                         const _formatted = _autoHits
                             .filter(h => h && h.text)
-                            .slice(0, 5)
-                            .map((h, i) => `${i + 1}. [score ${(h.score ?? 0).toFixed(2)}] ${String(h.text).slice(0, 400)}`)
+                            .slice(0, _memBudget.k)
+                            .map((h, i) => {
+                                const _txt = String(h.text).slice(0, _memBudget.chars);
+                                const _flag = _looksUnverified(_txt) ? '⚠ SIN VERIFICAR — ' : '';
+                                return `${i + 1}. [score ${(h.score ?? 0).toFixed(2)}] ${_flag}${_txt}`;
+                            })
                             .join('\n');
                         if (_formatted) {
-                            ctx += `\n\n--- MEMORIAS RECORDADAS AUTOMÁTICAMENTE (top-K semántico sobre tu mensaje) ---\n${_formatted}\n--- FIN MEMORIAS AUTO ---\nUsa estos hechos como base de tu respuesta cuando sean relevantes. NO los re-consultes con <TOOL>semantic:…</TOOL> a menos que necesites detalles adicionales no incluidos arriba.`;
+                            ctx += `\n\n--- MEMORIAS RECORDADAS AUTOMÁTICAMENTE (top-K semántico sobre tu mensaje) ---\n${_formatted}\n--- FIN MEMORIAS AUTO ---\nUsa estos hechos como base de tu respuesta cuando sean relevantes. NO los re-consultes con <TOOL>semantic:…</TOOL> a menos que necesites detalles adicionales no incluidos arriba. Las entradas marcadas "⚠ SIN VERIFICAR" son hipótesis no confirmadas: trátalas como pistas, NUNCA las afirmes como hechos oficiales, y verifícalas antes de actuar.`;
                             try {
                                 setContextSnapshot({ memoriesCount: (t._lastMemoryHitsCount ?? 0) + _autoHits.length });
                             } catch {}
                         }
+                    }
+
+                    // ── v1.7.236 (#3 — graph-aware recall) ───────────────────────
+                    // Expand the SINGLE best memory hit along the memory graph
+                    // (`agent_memory_edges`, rebuilt by the background loop from
+                    // shared concepts/files/session). Surfaces memories CONNECTED to
+                    // the top hit that pure semantic search missed — the classic
+                    // "you recalled A, but B is what you actually need and it's one
+                    // hop away". Cheap local BFS (`graph_neighbors`): no Ollama, no
+                    // embedding, sub-ms — so no timeout race is needed. Skipped on
+                    // the tight local-tier budget; dedup vs `_injectedMemIds`;
+                    // best-effort throughout so it can never break the turn.
+                    try {
+                        if (!_isLocalTier && Array.isArray(_autoHits) && _autoHits.length > 0) {
+                            const _seed = Number(_autoHits[0]?.entity_id);
+                            if (Number.isFinite(_seed) && _seed > 0) {
+                                const _neighbors = await invoke('graph_neighbors', { seedId: _seed, maxHops: 2, limit: 6 });
+                                const _fresh = (Array.isArray(_neighbors) ? _neighbors : [])
+                                    .filter(n => n && n.memory && n.memory.content && n.memory_id != null
+                                                 && !_injectedMemIds.has(String(n.memory_id))
+                                                 && !String(n.memory.session_id || '').startsWith('pdf:'))
+                                    .slice(0, 2);
+                                if (_fresh.length > 0) {
+                                    _fresh.forEach(n => _injectedMemIds.add(String(n.memory_id)));
+                                    const _gfmt = _fresh
+                                        .map((n) => `• (${n.edge_types || 'grafo'}) ${String(n.memory.content).slice(0, 300)}`)
+                                        .join('\n');
+                                    ctx += `\n\n--- MEMORIAS CONECTADAS (por grafo, a partir del recuerdo más relevante) ---\n${_gfmt}\n--- FIN CONECTADAS ---\nContexto relacionado por concepto/archivo/sesión compartidos; úsalo solo si encaja con la pregunta.`;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        try { debug.log(`[+page] graph-expand recall skipped: ${String(e).slice(0, 100)}`); } catch {}
                     }
                 }
             } catch (e) {
@@ -5053,6 +5729,7 @@ REGLAS DE FORMATO:
             // Initial state: show "thinking dots" until the first token arrives, then
             // they're replaced by streamed text + the cursor. Gives feedback during TTFT.
             t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: ahora() });
+            if (COCKPIT && tabId === activeTabId) statusPatch({ running: true }); // cockpit preview — mark the agent as running (rail pulse + footer)
             refresh(); await scrollChat();
 
             if (lucyPersonality === 'concise') ctx += '\n[STYLE: Ultra-short, direct answers only. No preambles or summaries.]';
@@ -5072,6 +5749,12 @@ REGLAS DE FORMATO:
   DO NOT execute these automatically. Explain what to run and ask for permission first.
 
 - If you need to use <EXECUTE>: ONLY if user explicitly says "run", "execute", "test it", or "check if..."
+- HARD RULE — if the user's message contains a no-run phrase ("no lo ejecutes", "sin
+  ejecutar", "sólo genérame/entrégame", "solo el script", "don't execute", "don't run",
+  "just generate", "only give me the script"): you are FORBIDDEN from emitting ANY
+  <EXECUTE>, <EXECUTE_CMD>, <EXECUTE_REMOTE> or <EXECUTE_*> tag this turn. Output the
+  full script/command inside a fenced \`\`\`powershell (or the right language) block and
+  STOP. Do not elevate, install, or auto-fix. This overrides every other instinct.
 - Always ask before attempting privilege elevation (RunAs, sudo, etc.)
 
 [SYNTHESIS PROTOCOL — MANDATORY when the user asks for analysis]:
@@ -5124,7 +5807,9 @@ Use ONE of these patterns instead:
             // Zero behaviour change when smart routing is OFF: getEffectiveModel
             // short-circuits to the manual model regardless of the prompt arg
             // (see its `if (!smartRouting && !privacyMode) return manual`).
-            const _routedLoopModel = getEffectiveModel(t, raw || '');
+            // `let` (was const): the self-heal escalation below can re-point this
+            // to a stronger in-family model after a weak model repeatedly fails.
+            let _routedLoopModel = getEffectiveModel(t, raw || '');
             // v1.7.230 — local-LLM token economy switches. `_isLocalModel` keys
             // off the ACTUAL pinned loop model (post smart-routing), so it's
             // right whether the user picked local manually, privacy-mode forced
@@ -5137,19 +5822,64 @@ Use ONE of these patterns instead:
             const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
 
             // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
-            const codeGenIntent = /dame\s+(un\s+)?script|escrib[ea]\s+(un\s+)?script|crea\s+(un\s+)?script|genera\s+(un\s+)?script|give\s+me\s+(a\s+)?script|write\s+(a\s+)?script|create\s+(a\s+)?script|generate\s+(a\s+)?script|hazme\s+(un\s+)?script|necesito\s+(un\s+)?script|quiero\s+(un\s+)?script|dame\s+.*c[oó]digo|dame\s+.*powershell|haz\s+.*script/i.test(raw);
+            // v1.7.234 — broadened. The old regex required a space right after the
+            // verb ("genera␣script"), so "generaME el script" / "entrégame el
+            // script" / "genérame nuevamente el script" all slipped through and
+            // were treated as run-intent. Now: any generation verb (with optional
+            // enclitic -me and Spanish accents) within ~40 chars of an artifact
+            // noun (script / código / powershell / comando / función / .ps1).
+            const codeGenIntent =
+                /\b(dame|d[eé]me|gen[eé]r[aá](me)?|cr[eé]a(me)?|escrib[eaí](me)?|hazme|haz|necesito|quiero|p[aá]same|entr[eé]g[aá](me)?|mu[eé]stra(me)?|prepara(me)?|arma(me)?|red[aá]cta(me)?)\b.{0,40}\b(script|c[oó]digo|powershell|bash|python|\.ps1|comando|funci[oó]n)\b/i.test(raw)
+                || /\b(give|write|create|generate|make|show|draft)\b.{0,30}\b(a\s+)?(script|code|powershell|command|function|\.ps1)\b/i.test(raw);
+
+            // ── EXPLICIT NO-EXECUTE INTENT (v1.7.234) ───────────────────────────
+            // The user EXPLICITLY forbids running it: "no lo ejecutes", "sin
+            // ejecutar", "sólo genérame", "don't execute", "just generate". This
+            // is the strongest possible signal and must HARD-SUPPRESS every
+            // <EXECUTE*> the model emits THIS turn — a weak local model (e.g.
+            // qwen coder) frequently emits an execute block anyway, ignoring the
+            // instruction. Kept independent of codeGenIntent so it fires even
+            // when the user also said "genérame el script", and folded into
+            // infoIntent below so EVERY execution gate honours it — including the
+            // two (post-stream local + agent-loop) that don't check codeGenIntent.
+            const noExecIntent =
+                // v1.7.236 (audit): the reflexive-passive clitic `se` was missing,
+                // so the very common Spanish phrasing "no se ejecute(n)" / "que no
+                // se ejecute" — a natural way to say "don't run it" — was not
+                // recognised as no-exec intent. Added `se\s+lo\s+` and `se\s+`.
+                /\bno\s+(?:se\s+lo\s+|se\s+|lo\s+|me\s+lo\s+|la\s+|las\s+|los\s+|nada\s+)?(?:ejecut\w+|corr\w+|apliqu\w+|aplic\w+|lanc\w+)/i.test(raw) ||
+                /\bsin\s+(?:ejecut\w+|correr\w*|aplicar\w*|lanzar\w*)/i.test(raw) ||
+                /\bno\s+quiero\s+que\s+(?:se\s+lo\s+|se\s+|lo\s+|me\s+lo\s+)?(?:ejecut\w+|corr\w+|apliqu\w+)/i.test(raw) ||
+                /\b(?:s[oó]lo|solamente|[uú]nicamente|nada\s+m[aá]s|only|just|simply)\s+(?:gener\w+|escrib\w+|cr[eé]a\w*|red[aá]ct\w*|prepar\w*|write|create|generate|draft)\b/i.test(raw) ||
+                /\b(?:do\s?n['’]?t|do\s+not)\s+(?:execute|run|apply|launch)\b/i.test(raw) ||
+                /\bwithout\s+(?:execut\w+|running|applying|launching)/i.test(raw);
+
+            // ── EXPLICIT RUN-ORDER INTENT (v1.7.234) ────────────────────────────
+            // The "orden previa" that RE-ENABLES execution for a generation
+            // request: "ejecútalo", "córrelo", "y ejecuta", "run it", "go ahead".
+            // Kept precise (explicit run verbs only) — a false positive here would
+            // wrongly auto-run a script the user just wanted to see. Used ONLY to
+            // let an explicit order override the "generation defaults to show, not
+            // run" rule at the two local-exec gates; it can never override an
+            // explicit noExecIntent (that wins via infoIntent, checked first).
+            const runRequestIntent =
+                /\b(?:ejec[uú]t(?:a|alo|ala|alos|alas|enlo|enla)|c[oó]rre(?:lo|la|los|las)?|l[aá]nza(?:lo|la)?|apl[ií]ca(?:lo|la)?|hazlo|realiz(?:a|alo))\b/i.test(raw) ||
+                /\by\s+(?:ejec[uú]t\w+|c[oó]rre\w+|l[aá]nza\w+|apl[ií]ca\w+)/i.test(raw) ||
+                /\b(?:run|execute|launch)\s+(?:it|this|that|the)\b/i.test(raw) ||
+                /\b(?:go\s+ahead|do\s+it)\b/i.test(raw);
 
             // ── INFORMATIONAL INTENT: user asks for a command to USE themselves, not to auto-execute ──
             // Signals: "dame el comando", "cómo se hace", "qué comando", "muéstrame cómo", etc.
             // This guard runs REGARDLESS of what the LLM emits — it enforces show-not-run at frontend level.
-            const infoIntent = !codeGenIntent && (
+            // noExecIntent is OR'd in so all downstream gates (which test infoIntent) suppress on it too.
+            const infoIntent = noExecIntent || (!codeGenIntent && (
                 /dame\s+(el\s+|un\s+)?comando|d[ií]me\s+(el\s+)?comando|cu[aá]l\s+es\s+el\s+comando/i.test(raw) ||
                 /qu[eé]\s+comando|c[oó]mo\s+(se\s+)?hac[eo]|c[oó]mo\s+(se\s+)?ejecuta|c[oó]mo\s+puedo/i.test(raw) ||
                 /para\s+(ejecutarlo|correrlo|hacerlo)\s+(yo|manual|mismo|solo|a\s+mano)/i.test(raw) ||
                 /give\s+me\s+(the\s+|a\s+)?command|show\s+me\s+(how|the\s+command)|what\s+command/i.test(raw) ||
                 /how\s+(do\s+I|to)\s+\w|mu[eé]strame\s+(c[oó]mo|el)/i.test(raw) ||
                 /solo\s+(qu[eé]|dame|dime|mu[eé]strame)\s/i.test(raw)
-            );
+            ));
 
             // ── v1.7.10 — SKILL-ACTIVE INTENT ───────────────────────────
             // When a security skill is active, every <EXECUTE> the LLM
@@ -5282,6 +6012,7 @@ Use ONE of these patterns instead:
             };
 
             let _lastRenderedLen = 0; // anti-flicker: skip re-render if nothing changed
+            let _lastParseAt = 0;     // v1.7.238 — throttle adaptativo del re-parseo por longitud
             // v1.7.45 — Throttle DOM rewrites to one per animation frame.
             //
             // Before: every drain tick (25 Hz, but burstable) called
@@ -5321,10 +6052,31 @@ Use ONE of these patterns instead:
                     // the page. That gap was the "el texto desaparece
                     // momentáneamente" the user reported across v1.7.45-52.
                     if (msg.role !== 'streaming') return;
+                    // v1.7.238 — throttle adaptativo del re-parseo. renderMd re-parsea
+                    // TODO el markdown acumulado cada tick (la caché LRU no ayuda al
+                    // stream: el texto crece → clave distinta → miss). En respuestas
+                    // largas eso es O(n)/tick y el texto se estanca. Escalamos el
+                    // intervalo mínimo con la longitud (el texto sigue fluyendo por
+                    // lotes; el render final garantizado abajo asegura el completo).
+                    {
+                        const _plen = _revealed.length;
+                        const _minMs = _plen > 12000 ? 110 : _plen > 4000 ? 70 : 0;
+                        if (_minMs > 0) {
+                            const _now = performance.now();
+                            if (_now - _lastParseAt < _minMs) return;
+                            _lastParseAt = _now;
+                        }
+                    }
                     const display = cleanStreamDisplay(_revealed);
                     // Anti-flicker: skip DOM update if display text hasn't grown
                     if (display.length === _lastRenderedLen) return;
                     _lastRenderedLen = display.length;
+                    // v1.7.234 — force a full-surface present for this frame so
+                    // WebView2 can't leave the freshly-rendered text rastered-
+                    // but-unpresented until a mouse-move. Rolling 700ms window
+                    // also covers brief inter-token pauses. (Both V1 + cockpit.)
+                    kickPresent();
+                    if (COCKPIT && tabId === activeTabId) streamSet(display); // cockpit preview — mirror the live stream into the cockpit conversation
                     msg.rawContent = display;
                     // v1.7.55 — Auto-close any open ``` fence so marked
                     // renders the partial code as a <pre> from the very
@@ -5364,7 +6116,15 @@ Use ONE of these patterns instead:
                         try { debug.log(`[stream-render] markdown parse failed mid-stream, plain fallback: ${String(_e).slice(0, 120)}`); } catch {}
                         msg.html = `<div class="mn">Lucy</div><div class="stream-body">${escapeHtml(_displayBalanced)}</div>`;
                     }
-                    refresh(); scrollChat();
+                    // PERF (phase-1 review): per-frame streaming render uses the
+                    // GRANULAR bumpTab(tabId) — it ticks only THIS tab's rev store
+                    // (ChatThread subscribes via getTabRevStore → $: tabRev →
+                    // visibleMsgs), instead of refresh()'s full `tabs=[...tabs]`
+                    // clone that invalidated every page-level $: block and re-
+                    // rendered EVERY mounted ChatThread (incl. background tabs)
+                    // ~25-60×/sec for the whole response. The guaranteed final
+                    // render below still calls refresh() to sync page chrome.
+                    bumpTab(tabId); scrollChat();
                 });
             };
 
@@ -5758,6 +6518,7 @@ Use ONE of these patterns instead:
 
                 const agentTaskId = Date.now();
                 let stepsHtml = '';
+                let _lastCompMsg = ''; // v1.7.232 — collapse repeated compression lines
                 let filesMod = new Set();
                 const editCountsByPath = new Map(); // anti-loop: contar ediciones por archivo
                 // v1.7.107 perf #5 — skip-stuck identical response detector.
@@ -5772,6 +6533,45 @@ Use ONE of these patterns instead:
                 // that briefly re-asserts a status line doesn't trip it.
                 let _lastAgentRespHash = '';
                 let _identicalRespStreak = 0;
+                // v1.7.232 — NEAR-identical grind detector (complements the
+                // byte-identical skip-stuck above). A cloud model can re-emit the
+                // SAME plan/tool every turn with only a reworded <THOUGHT> or
+                // whitespace/case churn — never byte-identical, so skip-stuck
+                // misses it — and ride toward MAX_LOOPS (60), each turn a full
+                // cloud round-trip. We hash the NORMALIZED response (THOUGHT
+                // stripped, lowercased, whitespace-collapsed, tool tags/args
+                // KEPT — see normalizeAgentResp) and bail once it repeats for
+                // _NORM_GRIND_LIMIT consecutive turns. Limit 2 = cut on the 3rd
+                // cosmetically-identical turn (one turn more lenient than the
+                // byte-identical path, which fires on the 2nd). Keeping the tags
+                // means turns on DIFFERENT targets (readfile A vs B, paged
+                // readlines) normalize differently → never a false grind.
+                let _lastNormHash = '';
+                let _normRespStreak = 0;
+                const _NORM_GRIND_LIMIT = 2;
+                // v1.7.232 — context-stall guard. Complements the byte-identical
+                // skip-stuck below: catches the model GRINDING with near-identical
+                // (not byte-identical) turns where the EFFECTIVE context stops
+                // growing — the symptom is the "[⊟ Contexto comprimido] N chars"
+                // line repeating with an IDENTICAL N for dozens of turns (dedup
+                // strips the same duplicate output the model re-emits each turn,
+                // so the post-compression context never grows). On a slow
+                // high-effort cloud model that runs to MAX_LOOPS=60 → minutes
+                // wasted. We track the post-compression context length; if it
+                // fails to grow for _STALL_LIMIT consecutive turns we bail through
+                // the SAME best-answer/forced-synthesis path as skip-stuck.
+                let _lastEffCtxLen = 0;
+                let _noGrowthStreak = 0;
+                // v1.7.232 — hardened: was (delta<256, limit 4). A grind that
+                // re-emits reworded fluff can add a couple hundred non-duplicate
+                // chars/turn, clearing the old 256 gate and resetting the streak,
+                // so it never tripped. Widen the "no meaningful growth" band to
+                // 400 chars and cut the streak to 3 turns. Kept modest (not the
+                // ~800 first considered) so a legitimate run of small distinct
+                // tool outputs isn't mistaken for a stall — the near-identical
+                // grind detector above is the primary, size-independent cut.
+                const _STALL_LIMIT = 3;
+                const _STALL_DELTA_MIN = 400;
                 // v1.7.188 — no-progress guard for "intent-only" turns. The
                 // model can keep the loop alive by merely STATING intent in
                 // <THOUGHT> ("voy a editar el archivo…") without ever emitting
@@ -5782,6 +6582,26 @@ Use ONE of these patterns instead:
                 // stated intent (no tool ran): the 1st gets a hard corrective
                 // nudge, the 2nd stops the loop and delivers the best answer.
                 let _intentOnlyStreak = 0;
+                // v1.7.232 — self-heal model escalation. When a WEAK model (e.g.
+                // Gemini Flash) fails EVERY tool call for _ESCALATE_AFTER turns in
+                // a row — the "malformed PowerShell twice, reflect, retry" pattern
+                // — escalate ONCE to a stronger model in the SAME provider family
+                // (same API key) for the rest of the task, instead of grinding.
+                // Opt-out via localStorage lucy_escalate_on_failure=false.
+                let _allToolsFailedStreak = 0;
+                let _didEscalateModel = false;
+                const _ESCALATE_AFTER = 2;
+                // v1.7.237 — empty-guard bail threshold. After _EMPTY_GUARD_BAIL
+                // consecutive turns where EVERY tool returned empty/errored (the
+                // exact condition that fires the hallucination guard), stop the loop
+                // via the forced-synthesis path instead of riding to MAX_LOOPS. One
+                // turn past _ESCALATE_AFTER so model escalation is tried first. This
+                // is the safety net for the GoAnywhere "hunt for the memory ID" loop:
+                // a different query each turn (defeats identical/grind) with growing
+                // context (defeats stall) but every tool call useless. Reuses
+                // _allToolsFailedStreak — the same signal that drives escalation.
+                const _EMPTY_GUARD_BAIL = 3;
+                const _escalateEnabled = safeGetLS('lucy_escalate_on_failure', 'true') !== 'false';
                 // _hashResp extracted to $lib/agent-loop-util.ts (v1.7.199, imported above, tested).
                 // ── Generic anti-loop: counts identical tool calls by hash(kind+args) ──
                 const toolCallCounts = new Map();
@@ -5917,9 +6737,19 @@ Use ONE of these patterns instead:
 
                 let thoughtsAccum = '';
                 let agentWarps = [];
+                if (COCKPIT) { resetWorkspace(); t._cockpitPlanSeeded = false; t._cockpitPlanTried = false; t._cockpitPlanIdx = 0; t._cockpitPlanLen = 0; } // Lucy 2.0 cockpit preview — clear the workspace + forward-plan state at run start
                 let agentToolCards = []; // Antigravity-style collapsible tool cards
 
-                const escapeHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                // SECURITY (phase-1 review): escape ALL FIVE HTML metacharacters,
+                // incl. " and '. This builder interpolates UNTRUSTED data (tool /
+                // command / web / file / remote-host output) into DOUBLE-QUOTED
+                // attribute values (title="…", data-preview="…", data-path="…").
+                // Escaping only &<> let a literal " in that output close the
+                // attribute and append an event-handler (onmouseover=/onclick=) —
+                // and agentMsg.html is push()'d directly, bypassing the addMsg →
+                // safeHtml/DOMPurify backstop, then set via innerHTML by morphHtml.
+                // Mirrors the canonical escapeHtml in $lib/safe-html.ts.
+                const escapeHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
                 // SECURITY: alias for brevity when building stepsHtml — always escape user-controlled content
                 const esc = escapeHtml;
                 // v1.7.113 audit M4 — cap the tool-card array. A prolific run
@@ -6139,7 +6969,7 @@ Use ONE of these patterns instead:
                         if (earlySteps.length > 0) {
                             const compressPrompt = `Summarize these ${earlySteps.length} tool-result steps into 150 words max. Capture key findings, file paths modified, errors encountered:\n\n${earlySteps.join('\n---\n')}`;
                             try {
-                                const compressModel = 'gemini-2.5-flash-lite-preview';
+                                const compressModel = 'gemini-3.1-flash-lite-preview';
                                 const compressResp = await askLucyStream({
                                     prompt: compressPrompt,
                                     context: '',
@@ -6164,7 +6994,16 @@ Use ONE of these patterns instead:
                     }
 
                     if (ctx.length < origLen) {
-                        stepsHtml += `[⊟ Contexto comprimido] ${(origLen - ctx.length)} chars ahorrados (Phase ${ctx.length < origLen * 0.7 ? '1+2' : '1'})\n`;
+                        const _compMsg = `[⊟ Contexto comprimido] ${(origLen - ctx.length)} chars ahorrados (Phase ${ctx.length < origLen * 0.7 ? '1+2' : '1'})\n`;
+                        // v1.7.232 — collapse CONSECUTIVE identical compression
+                        // lines. A grinding loop deduped the same N chars every
+                        // turn, producing a wall of dozens of identical lines.
+                        // Show each distinct value once (the stall detector now
+                        // also stops the grind early upstream).
+                        if (_compMsg !== _lastCompMsg) {
+                            stepsHtml += _compMsg;
+                            _lastCompMsg = _compMsg;
+                        }
                     }
                     return ctx;
                 };
@@ -6183,29 +7022,58 @@ Use ONE of these patterns instead:
                 };
                 t.messages.push(reasoningMsg);
 
+                // v1.7.238 — RESPONSIVIDAD del "pensando". Antes: CADA token de
+                // razonamiento re-parseaba TODO el texto (renderLucyMarkdown, O(n)) +
+                // `refresh()` GLOBAL (re-render de TODAS las pestañas y el chrome),
+                // sin rAF ni throttle → el texto se ESTANCABA mientras Lucy pensaba,
+                // peor en razonamientos largos. Ahora: coalesce por frame + throttle
+                // adaptativo por longitud + `bumpTab` GRANULAR (solo esta pestaña; el
+                // ChatThread la re-deriva vía tabRev). El render final lo garantiza
+                // finishReasoning.
+                let _reasonRaf = false;
+                let _reasonLastParse = 0;
+                const _reasonRender = () => {
+                    _reasonRaf = false;
+                    reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
+                    const _plen = reasoningMsg.content.length;
+                    const _minMs = _plen > 12000 ? 110 : _plen > 4000 ? 70 : 0;
+                    if (_minMs > 0) {
+                        const _now = performance.now();
+                        if (_now - _reasonLastParse < _minMs) {
+                            // Doc grande y muy pronto para re-parsear: re-agenda un
+                            // frame (auto-poll hasta cumplir el intervalo, aun si los
+                            // chunks se detienen → el trailing siempre se pinta).
+                            _reasonRaf = true; requestAnimationFrame(_reasonRender); return;
+                        }
+                        _reasonLastParse = _now;
+                    }
+                    reasoningMsg.html = reasoningMsg.content ? renderLucyMarkdown(reasoningMsg.content) : '';
+                    bumpTab(tabId);
+                };
                 const updateReasoning = (extraChunk) => {
                     if (extraChunk) reasoningMsg.content += extraChunk;
-                    reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
-                    reasoningMsg.html = reasoningMsg.content
-                        ? renderLucyMarkdown(reasoningMsg.content)
-                        : '';
-                    t.messages = [...t.messages];
-                    refresh();
+                    if (_reasonRaf) return;
+                    _reasonRaf = true;
+                    requestAnimationFrame(_reasonRender);
                 };
                 // BUG FIX: the duration timer only advanced when new THOUGHT chunks
                 // arrived. When the model used <TOOL> tags without much THOUGHT,
                 // the user saw "Pensando... 0.0s" frozen for the whole run.
                 // Drive the timer independently with a low-cost ticker (250ms).
+                // v1.7.238 — `bumpTab` granular en vez de `refresh()` global: el
+                // ticker corría un refresh de toda la app cada 250ms durante el pensar.
                 _reasoningTickerRef = setInterval(() => {
                     if (!reasoningMsg.active) return;
                     reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
-                    t.messages = [...t.messages];
-                    refresh();
+                    bumpTab(tabId);
                 }, 250);
                 const finishReasoning = () => {
                     reasoningMsg.active = false;
                     reasoningMsg.collapsed = true;
                     reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
+                    // v1.7.238 — render final garantizado: el último chunk pudo quedar
+                    // sin pintar por el throttle/rAF; aseguramos el html completo.
+                    if (reasoningMsg.content) reasoningMsg.html = renderLucyMarkdown(reasoningMsg.content);
                     if (_reasoningTickerRef) { clearInterval(_reasoningTickerRef); _reasoningTickerRef = null; }
                     // Drop the bubble entirely if it never accumulated any reasoning
                     // text — avoids an empty "Pensó durante 0.0s" placeholder.
@@ -6213,6 +7081,19 @@ Use ONE of these patterns instead:
                         t.messages = t.messages.filter(m => m.id !== reasoningMsg.id);
                     } else {
                         t.messages = [...t.messages];
+                        // Cockpit v2.0 — mirror the finished reasoning as a collapsible
+                        // "thought" entry in the conversation (once per turn).
+                        if (COCKPIT && tabId === activeTabId && !reasoningMsg._cockpitThought) {
+                            reasoningMsg._cockpitThought = true;
+                            convoPush({ role: 'thought', text: reasoningMsg.content, dur: reasoningMsg.duration });
+                            // Forward plan: seed pending steps from the FIRST reasoning block
+                            // (once per task). Runs before any command → a real look-ahead plan.
+                            if (!t._cockpitPlanTried) {
+                                t._cockpitPlanTried = true;
+                                const _steps = extractPlanSteps(reasoningMsg.content);
+                                if (_steps.length >= 2) seedCockpitPlan(tabId, _steps);
+                            }
+                        }
                     }
                     refresh();
                 };
@@ -6394,6 +7275,21 @@ Use ONE of these patterns instead:
 
                 for (let loop_i = 0; loop_i < MAX_LOOPS; loop_i++) {
                     if (t._cancelled) break;
+                    if (COCKPIT && tabId === activeTabId) statusPatch({ stepIndex: loop_i + 1 }); // cockpit preview — real agent step (titlebar + workspace)
+                    // phase-1 review (feature) — session spend cap. Halt the
+                    // autonomous loop when estimated session spend crosses the cap
+                    // (lucy_spend_cap_usd, 0 = off). Stops a runaway loop from
+                    // burning unbounded cloud tokens; raise the cap with /spend-cap
+                    // to continue. Local-only sessions cost $0 so never trip it.
+                    {
+                        const _spendCap = parseFloat(safeGetLS('lucy_spend_cap_usd', '0')) || 0;
+                        if (_spendCap > 0 && _sessionSpendUsd >= _spendCap) {
+                            finishReasoning();
+                            renderAgentTask(`\n\n> [!WARNING]\n> **Límite de gasto de sesión alcanzado** (~$${_sessionSpendUsd.toFixed(2)} de $${_spendCap.toFixed(2)}). Detuve la tarea automática para no seguir gastando tokens de la nube. Sube el límite con \`/spend-cap <usd>\` (o \`/spend-cap reset\` para reiniciar el contador) y reintenta.`);
+                            clearAgentCheckpoint(tabId);
+                            break;
+                        }
+                    }
                     // Quick-win F — Pause: between iterations, if the user
                     // pressed ⏸, await a resume-promise the toggle handler
                     // resolves. Was a 200ms spin-wait before; code review
@@ -6481,9 +7377,30 @@ Use ONE of these patterns instead:
                         lucyText = lucyText.replace(/<TOOL>memoria_guardar:[^<]+<\/TOOL>/gi, '');
                         const mgTitle   = mgM[1].trim();
                         const mgContent = mgM[2].trim();
-                        const mgTags    = mgM[3] ? JSON.stringify(mgM[3].split(',').map(t => t.trim()).filter(Boolean)) : '[]';
+                        let _mgTagArr = mgM[3] ? mgM[3].split(',').map(t => t.trim()).filter(Boolean) : [];
                         const mgFiles   = JSON.stringify([...filesMod]);
-                        const imp = /importance:3/i.test(mgContent) ? 3 : /importance:2/i.test(mgContent) ? 2 : 1;
+                        let imp = /importance:3/i.test(mgContent) ? 3 : /importance:2/i.test(mgContent) ? 2 : 1;
+                        // ── v1.7.236 (Lote A/RULE 36) — procedencia: red de seguridad ──
+                        // Un "aprendizaje" NO verificado (hipótesis, corrección sin
+                        // confirmar) nunca debe guardarse como hecho de alta
+                        // importancia — envenena el recall futuro (el caso del
+                        // transcript GoAnywhere: se guardó una etiqueta XML inventada
+                        // como si fuera oficial). Si el modelo lo marcó como tal (o el
+                        // texto lo delata), lo forzamos a importancia 1 y le ponemos el
+                        // tag `sin-verificar`, que el recall etiqueta al inyectar.
+                        // v1.7.236 Lote 4 — un tag EXPLÍCITO 'verificado'/'confirmado'
+                        // (RULE 38, auto-aprendizaje tras confirmación del usuario)
+                        // gana sobre la heurística de contenido: es conocimiento
+                        // confirmado, no debe degradarse a hipótesis.
+                        const _mgVerified = _mgTagArr.some(t => /verificad|confirmad|comprobad/i.test(t));
+                        const _mgUnverified = !_mgVerified && (
+                            _mgTagArr.some(t => /sin[-\s]?verificar|no[-\s]?verificad|hip[oó]tesis|unverified|tentativ/i.test(t)) ||
+                            /\b(sin verificar|no verificad|hip[oó]tesis|posible(?:mente)?|tentativ|creo que|probablemente|deber[ií]a ser|suele ser)\b/i.test(mgContent));
+                        if (_mgUnverified) {
+                            imp = 1;
+                            if (!_mgTagArr.some(t => /sin[-\s]?verificar/i.test(t))) _mgTagArr.push('sin-verificar');
+                        }
+                        const mgTags = JSON.stringify(_mgTagArr);
                         const _mgCard = newToolCard('◈', `Memoria: ${mgTitle}`, 'write');
                         try {
                             // Mem0-inspired (May 2026): backend now returns
@@ -6651,6 +7568,36 @@ Use ONE of these patterns instead:
                         }
                     }
 
+                    // ── v1.7.236 — PRINCIPLE HONESTY BACKSTOP ────────────────────
+                    // A principle is persisted ONLY via the principle_set marker
+                    // above. If none fired this turn (`!psM`) yet Lucy's text CLAIMS
+                    // she saved one ("guardado como P1", "añadí el principio"), the
+                    // claim is FALSE — a weak model reporting success it never
+                    // performed (the user reported exactly this: "afirma haberlo
+                    // guardado como P1 pero no lo veo en el módulo"). Confirm against
+                    // the DB and, when there are genuinely zero principles, replace
+                    // the lie with an honest, user-visible correction + feed it back
+                    // to the loop so she can re-emit the correct marker. `lucyText`
+                    // is per-iteration, so this never sticks to a later self-corrected
+                    // turn. Best-effort: verification failure never breaks the turn.
+                    if (!psM) {
+                        const _claimsPrincipleSave =
+                            /\bguardad[oa]\s+como\s+P\s?\d+/i.test(lucyText) ||
+                            /\bsaved\s+as\s+P\s?\d+/i.test(lucyText) ||
+                            (/\b(principi[oa]s?|principle|directriz)\b/i.test(lucyText) &&
+                             /\b(guard[ée]|guardad[oa]s?|he\s+guardad\w*|a[ñn]ad[íi]|agregu[ée]|persist[íi]|registr[ée]|sav(?:ed|e)d?|stored|added|cre[ée]|cread[oa])\b/i.test(lucyText));
+                        if (_claimsPrincipleSave) {
+                            try {
+                                const _existing = await invoke('list_principles', { scope: null });
+                                const _count = Array.isArray(_existing) ? _existing.length : 0;
+                                if (_count === 0) {
+                                    lucyText += '\n\n> ⚠ **Corrección:** dije que guardé un principio, pero **no se persistió** (no emití el marcador correcto), así que **no** aparece en tu módulo de Principios. Pídemelo de nuevo — p. ej. *"guarda como principio: <regla>"* — y esta vez lo guardo bien.';
+                                    toolResults.push('[PRINCIPLE HONESTY BACKSTOP] You claimed to save a principle but emitted NO well-formed <TOOL>principle_set:Name|||Rule|||scope?|||priority?</TOOL> marker, and the principles table is EMPTY — the save did NOT happen. If the user wanted it saved, emit that marker now, EXACTLY in that format (name, then |||, then the full rule text).');
+                                }
+                            } catch { /* verification best-effort — never break the turn */ }
+                        }
+                    }
+
                     // ── schedule_create: create a recurring or one-shot task ─────
                     // Format: <TOOL>schedule_create:Name|||Prompt body|||cron_expr|||iso_or_epoch_next_run</TOOL>
                     // - cron_expr: 5-field cron ("0 9 * * 1-5") or empty for one-shot
@@ -6751,11 +7698,13 @@ Use ONE of these patterns instead:
                                     if (!hits || hits.length === 0) {
                                         return `[PDF SEARCH: "${pdfQuery}"]\nNo se encontraron fragmentos relevantes en los PDFs ingresados. Asegúrate de haber ingresado el documento primero usando el panel PDF (sidebar).`;
                                     }
+                                    // v1.7.233 M4 — cada fragmento lleva identidad [§id] y se
+                                    // pide cita: el usuario puede verificar de qué sección salió.
                                     const formatted = hits.map((h, i) => {
                                         const score = (h.score * 100).toFixed(0);
-                                        return `### Resultado ${i+1} (relevancia: ${score}%)\n${h.text}`;
+                                        return `### Resultado ${i+1} [§${h.entity_id}] (relevancia: ${score}%)\n${h.text}`;
                                     }).join('\n\n---\n\n');
-                                    return `[PDF SEARCH RESULTS for "${pdfQuery}" — ${hits.length} fragmentos]\n\n${formatted}`;
+                                    return `[PDF SEARCH RESULTS for "${pdfQuery}" — ${hits.length} fragmentos]\n\n${formatted}\n\nSi usas estos fragmentos en tu respuesta, cita su marcador [§id].`;
                                 } catch (e) {
                                     return `[PDF SEARCH ERROR: ${e}]\nTip: requiere Ollama corriendo con el modelo nomic-embed-text. Alternativamente usa <TOOL>memoria_buscar:${pdfQuery}</TOOL> para búsqueda por palabras clave.`;
                                 }
@@ -7040,6 +7989,7 @@ Use ONE of these patterns instead:
                                     toolResults.push(`[EDIT RESULT] ${r}`);
                                     stepsHtml += `[· Edición] ${esc(path)}\n`;
                                     filesMod.add(path);
+                                    if (COCKPIT) { artifactPush({ kind: 'edit', path, summary: 'edición aplicada', before: oldStr, after: newStr }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'edit', text: path, ok: true, detail: 'edición aplicada' }); } // cockpit preview
                                     // Working memory: remember Lucy just edited this file.
                                     _updateWM(t, { type: 'file', path, op: 'edited' });
                                     finishToolCard(_editCard, String(r), true);
@@ -7094,6 +8044,7 @@ Use ONE of these patterns instead:
                                     const _r = await retryWithBackoff(() => invoke('write_file_content', { path: _wp, content: _wc, force: true }), 3, false);
                                     _wCard.diff = { oldStr: _oldC, newStr: _wc };
                                     filesMod.add(_wp);
+                                    if (COCKPIT) { artifactPush({ kind: 'write', path: _wp, summary: `${(_wc?.length || 0)} chars`, before: _oldC, after: _wc }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wp, ok: true, detail: `${(_wc?.length || 0)} chars` }); } // cockpit preview
                                     _updateWM(t, { type: 'file', path: _wp, op: 'created' });
                                     if (!t._writeUndo) t._writeUndo = new Map();
                                     t._writeUndo.set(_wp, _oldC);
@@ -7159,6 +8110,7 @@ Use ONE of these patterns instead:
                             toolResults.push(`[WRITE RESULT] ${r}`);
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
+                            if (COCKPIT) { artifactPush({ kind: 'write', path: _wPath, summary: `${(_fileContent?.length || 0)} chars`, after: _fileContent }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wPath, ok: true, detail: `${(_fileContent?.length || 0)} chars` }); } // cockpit preview
                             // Working memory: remember the new/written file.
                             _updateWM(t, { type: 'file', path: _wPath, op: 'created' });
                             // Per-tab undo buffer — `/revert <path>` reads from here.
@@ -7253,8 +8205,13 @@ Use ONE of these patterns instead:
 
                     // Guard: never execute if user only asked for the command (infoIntent)
                     //        or if Lucy emitted a Linux command while running on Windows.
+                    // v1.7.234 — also don't auto-run when the user asked to GENERATE a
+                    // script/código/comando and gave NO explicit run order: "generation
+                    // defaults to show, not run". An explicit order (runRequestIntent)
+                    // re-enables it. codeGenIntent requires a generation verb + artifact
+                    // noun, so autonomous tasks ("reinicia el spooler") never match it.
                     const _agentCmd = (execM && execM[1] ? execM[1] : '').trim();
-                    if (execM && !infoIntent && !skillInfoIntent && !_isLinuxCmd(_agentCmd)) {
+                    if (execM && !infoIntent && !skillInfoIntent && !(codeGenIntent && !runRequestIntent) && !_isLinuxCmd(_agentCmd)) {
                         toolUsed = true;
                         lucyText = lucyText.replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
                                            .replace(/<EXECUTE>[\s\S]*?(?:<\/EXECUTE>|$)/gi, '')
@@ -7267,6 +8224,22 @@ Use ONE of these patterns instead:
                         if (execRemoteM) {
                             const hostId = execRemoteM[1];
                             const cmd = execRemoteM[2].trim();
+                            // SECURITY (phase-1 review) — destructive remote commands must NOT
+                            // auto-execute. The LOCAL branch below gates via isDestructiveCmd →
+                            // $showRunAsModal, but this REMOTE branch dispatched execute_shell_cmd
+                            // with NO gate, and the backend (check_permission, default 'allow') has
+                            // no deny-list — so a prompt-injected model could run a destructive
+                            // command on a configured host with zero confirmation. We BLOCK + surface
+                            // for MANUAL review rather than route through the confirm modal:
+                            // confirmarRunAs → runForced executes LOCALLY, so it cannot safely run a
+                            // REMOTE command. (Mirrors the askLucyStream GUARDIAN, which already
+                            // gates <EXECUTE_REMOTE>.)
+                            if (isDestructiveCmd(cmd)) {
+                                stepsHtml += `[⛔ DESTRUCTIVO REMOTO bloqueado] ${esc(cmd.substring(0, 40))}… — requiere ejecución manual\n`;
+                                pushTrace({ phase: 'info', label: `⛔ Destructive <EXECUTE_REMOTE> on ${esc(String(hostId))} blocked (no auto-exec) — manual confirmation required`, step: loop_i + 1, tabId });
+                                toolResults.push(`[REMOTE COMMAND BLOCKED — NOT EXECUTED] The destructive command was blocked on host "${hostId}": Lucy never auto-runs destructive commands on remote hosts. Do NOT retry it as a tool. If the user genuinely intends this, tell them to run it manually from the NexShell panel.`);
+                                renderAgentTask();
+                            } else {
                             stepsHtml += `[◉ Remoto] ${esc(cmd.substring(0, 40))}...\n`;
                             const _lt = traceStart('exec.start', `remote:${hostId} ${cmd.substring(0,60)}`, loop_i + 1, tabId);
                             let h = null;
@@ -7312,6 +8285,7 @@ Use ONE of these patterns instead:
                                 toolResults.push(buildReactMarker(loop_i + 1, 2, String(e).slice(0, 240), cmd));
                                 pushTrace({ phase: 'react.reflect', label: `Reflect on remote exception (step ${loop_i + 1})`, detail: String(e).slice(0, 240), step: loop_i + 1, tabId });
                             }
+                            } // phase-1 review — close the non-destructive remote-exec else
                         } else {
                             const execType = (execCmdM && t.execEngine !== 'powershell') ? 'cmd' : execWmicM ? 'wmic' : execNetshM ? 'netsh' : execRegM ? 'reg' : execVbsM ? 'cscript' : 'powershell';
                             const cmd = execM[1].trim();
@@ -7375,6 +8349,11 @@ Use ONE of these patterns instead:
                                 const xc = inferExitCode(safeOut);
                                 const excerpt = xc && xc > 0 ? extractErrorExcerpt(safeOut) : '';
                                 _lt.end(xc === 0 || xc == null, excerpt || undefined, xc);
+                                // Cockpit preview (dev-only): use the REAL exit signal so Ejecución
+                                // shows ✓/✕ + exit code, the "solo errores" filter works, and a
+                                // failed command turns its Plan step red.
+                                const _execOk = xc == null || xc === 0;
+                                if (COCKPIT) { execPush({ cmd, output: safeOut, ok: _execOk, ms: elapsed, engine: engineLabel, code: xc ?? null }); if (t._cockpitPlanSeeded) advanceCockpitPlan(tabId); else planAppend({ label: cmd.length > 64 ? cmd.slice(0, 64) + '…' : cmd, status: _execOk ? 'done' : 'error', detail: engineLabel, ms: elapsed }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'exec', text: cmd, ok: _execOk, detail: String(safeOut || '').slice(0, 4000) }); } // Lucy 2.0 cockpit preview
 
                                 // Only truncate if length > 16000 AND doesn't contain ERROR (critical data at tail)
                                 const trunc = safeOut.length > 16000 && !safeOut.includes('ERROR') && !safeOut.includes('Exception')
@@ -7480,6 +8459,36 @@ Use ONE of these patterns instead:
                         shouldContinue = hasConcreteIntent || thoughtSignalsWork;
                     }
 
+                    // v1.7.237 — cierre directo tras guardados ("persistence fast-finish").
+                    // Un turno cuyas ÚNICAS acciones fueron escrituras exitosas de
+                    // memoria/principios no necesita otra vuelta al LLM: el resultado es
+                    // autodescriptivo ([MEMORY SAVED — ID N]) y el modelo ya entregó su
+                    // prosa junto a la etiqueta. Sin esto, el loop disparaba un turno
+                    // COMPLETO extra solo para re-anunciar "Listo, guardado" — respuesta
+                    // duplicada + 30-60 s de "sigue trabajando/parpadeando" en modelos
+                    // cloud de alto esfuerzo (síntoma reportado con "guarda esto en tu
+                    // memoria/principios"). Colocado DESPUÉS del bloque de detección de
+                    // arriba para que hasConcreteIntent no lo revierta.
+                    if (shouldContinue && toolUsed && !wasTruncated) {
+                        const _PERSIST_TOOLS = new Set(['memoria_guardar', 'principle_set', 'memory_core_set', 'memoria_eliminar', 'principle_delete', 'memory_core_delete']);
+                        const _tagKinds = [...agentResp.matchAll(/<TOOL>([a-z_0-9]+):/gi)].map((m) => m[1].toLowerCase());
+                        const _allToolTags = (agentResp.match(/<TOOL>/gi) || []).length;
+                        const _persistOnly = _tagKinds.length > 0
+                            && _tagKinds.length === _allToolTags          // ninguna etiqueta de formato desconocido
+                            && _tagKinds.every((k) => _PERSIST_TOOLS.has(k))
+                            && !/<EXECUTE/i.test(agentResp)
+                            && toolResults.length > 0
+                            && toolResults.every((r) => !/ERROR|BACKSTOP|BLOCKED/i.test(String(r).slice(0, 120)));
+                        // No cortar si la prosa anuncia MÁS trabajo ("ahora voy a…") —
+                        // en ese caso el turno de continuación sí es deseado.
+                        const _signalsMoreWork = /\b(voy a|ahora (voy|procedo|continúo)|acto seguido|next,? I|let me (now )?(run|edit|write|create|check|configure)|I('ll| will) (now )?(run|edit|write|create|check|configure))\b/i.test(cleanText);
+                        if (_persistOnly && cleanText.length >= 20 && !_signalsMoreWork) {
+                            shouldContinue = false;
+                            pushTrace({ phase: 'info', label: `✓ Guardado completado — cierre directo sin turno extra (step ${loop_i + 1})`, step: loop_i + 1, tabId, detail: 'Todas las herramientas del turno fueron escrituras de memoria/principios exitosas y la respuesta ya contiene el texto final. Se omite la continuación (antes: un turno LLM completo solo para re-anunciar el guardado).' });
+                            logTaskEvent('agent_persist_fast_finish', 'auto', null, { model: _loopModelName, step: loop_i + 1, tools: _tagKinds.join(',') }, tabId);
+                        }
+                    }
+
                     // v1.7.188 — no-progress guard. Count consecutive turns that
                     // continued ONLY on stated-but-unexecuted intent (no real tool
                     // ran). 1st: inject a hard "emit the tag" nudge. 2nd: stop the
@@ -7514,6 +8523,9 @@ Use ONE of these patterns instead:
                         // adds a full extra round-trip AND defeats the point of
                         // staying local. The local user opted into local for cost/
                         // privacy; don't silently bill a cloud verifier behind them.
+                        // phase-1 review — honor a mid-task cancel before the verifier
+                        // sub-agent fires an extra (often cloud) LLM round-trip.
+                        if (t._cancelled) break;
                         const wantVerify = !_isLocalModel
                                        && ((verifierMode === 'always')
                                        || (verifierMode === 'critical' && taskTouchedRiskyOps));
@@ -7647,6 +8659,35 @@ Use ONE of these patterns instead:
                     // + 40% tail, marker in the middle says how much was
                     // dropped + how to reread it.
                     const TOOL_HEAD_FRAC = 0.60;
+                    // v1.7.235 — JSON tool-output tabular compression. A verbose
+                    // JSON array of uniform objects (inventory, process lists,
+                    // cve_match…) repeats every key on every row. The Rust
+                    // `compress_tool_output` losslessly rewrites it to a
+                    // schema-header + CSV-rows block (~43% smaller, reversible).
+                    // Doing it BEFORE the head+tail cap means ~2× more real data
+                    // survives the 12k-char cap — we shrink instead of truncate.
+                    // Passthrough-safe (Rust returns the original unless it's a
+                    // big homogeneous array saving ≥12%). Kill: localStorage
+                    // lucy_json_tabular = '0'. Matters most for small-context
+                    // local models (qwen3:8b @ 40k) in long agent loops.
+                    let _tabularUsed = false;
+                    let _jsonTabularOn = true;
+                    try { _jsonTabularOn = localStorage.getItem('lucy_json_tabular') !== '0'; } catch {}
+                    if (_jsonTabularOn) {
+                        for (let i = 0; i < toolResults.length; i++) {
+                            const s = String(toolResults[i] ?? '');
+                            // Cheap gate: skip small results and anything that isn't
+                            // an object-with-quoted-keys (avoids IPC on logs/prose).
+                            if (s.length < 1500 || !/\{\s*"[^"]+"\s*:/.test(s)) continue;
+                            try {
+                                const c = await invoke('compress_tool_output', { text: s });
+                                if (typeof c === 'string' && c.length < s.length * 0.9) {
+                                    toolResults[i] = c;
+                                    _tabularUsed = true;
+                                }
+                            } catch {}
+                        }
+                    }
                     const capped = toolResults.map((r, i) => {
                         const s = String(r ?? '');
                         let text;
@@ -7680,7 +8721,59 @@ Use ONE of these patterns instead:
                         toolCtx = capped.map(r => r.text).join('\n\n');
                         debug.log(`[ctx-compress] step ${loop_i + 1}: skipped (anti-thrashing)`);
                     }
+                    // v1.7.235 — one-time legend so the model reads compressed
+                    // tool outputs correctly (added only when compression fired).
+                    if (_tabularUsed) {
+                        agentCtx += `\n\n[FORMATO JSON-TABLE] Algunos resultados abajo están comprimidos SIN pérdida: un bloque \`[JSON-TABLE v1] {"cols":[...]}\` seguido de filas CSV (una por objeto, columnas en el orden de "cols"; campo vacío = null; comillas solo si el valor es ambiguo). Trátalo como el array JSON original.`;
+                    }
                     agentCtx += `\n\n--- TOOL RESULTS (step ${loop_i + 1}) ---\n${toolCtx}`;
+
+                    // ── v1.7.236 R3 — recall por ENTIDADES nuevas en tool-results ──
+                    // El recall pre-loop solo vio la pregunta original. Si un paso
+                    // revela una entidad nueva (servicio, host, producto: "GA-Agent
+                    // caído"), el conocimiento guardado sobre ella nunca entraría.
+                    // Mini-recall (k≤3, 600ms) SOLO ante entidades no vistas, con
+                    // presupuesto duro por run (3 cloud / 2 local) y dedup contra lo
+                    // ya inyectado. Los hits llevan [§id] → el refuerzo R2 también
+                    // aplica. Crítico para locales no-code: no pueden pedir
+                    // pdf_search por sí mismos; esta es su segunda vía automática.
+                    if (_entityRecallsLeft > 0 && $ollamaOnline !== false) {
+                        try {
+                            const _newEnts = [];
+                            for (const e of _extractEntities(toolCtx)) {
+                                const k = e.toLowerCase();
+                                if (!_seenEntities.has(k)) {
+                                    _seenEntities.add(k);
+                                    if (_newEnts.length < 3) _newEnts.push(e);
+                                }
+                            }
+                            if (_newEnts.length > 0) {
+                                _entityRecallsLeft--;
+                                const _eq = _newEnts.join(' ');
+                                const _eTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('entity-recall timeout')), 600));
+                                const [_eMem, _eDoc] = await Promise.race([
+                                    Promise.allSettled([
+                                        invoke('semantic_search', { query: _eq, entityType: 'memory', limit: 2, minScore: 0.50, model: null }),
+                                        invoke('semantic_search', { query: _eq, entityType: 'pdf_chunk', limit: 2, minScore: 0.55, model: null }),
+                                    ]),
+                                    _eTimeout.then(() => { throw new Error('entity-recall timeout'); }),
+                                ]);
+                                const _eHits = []
+                                    .concat((_eMem?.status === 'fulfilled' && Array.isArray(_eMem.value)) ? _eMem.value : [])
+                                    .concat((_eDoc?.status === 'fulfilled' && Array.isArray(_eDoc.value)) ? _eDoc.value : [])
+                                    .filter(h => h && h.text && h.entity_id != null && !_injectedMemIds.has(String(h.entity_id)))
+                                    .slice(0, 3);
+                                if (_eHits.length > 0) {
+                                    _eHits.forEach(h => _injectedMemIds.add(String(h.entity_id)));
+                                    const _eFmt = _eHits.map(h => `[§${h.entity_id}] ${String(h.text).slice(0, 250)}`).join('\n');
+                                    agentCtx += `\n\n--- MEMORIA RELACIONADA (entidades detectadas en la salida: ${_newEnts.join(', ')}) ---\n${_eFmt}\n--- FIN MEMORIA RELACIONADA ---\nSi usas estos datos, cita su marcador [§id].`;
+                                    debug.log(`[R3] entity-recall (${_newEnts.join(', ')}): ${_eHits.length} hits`);
+                                }
+                            }
+                        } catch (e) {
+                            try { debug.log(`[R3] entity-recall skipped: ${String(e).slice(0, 100)}`); } catch {}
+                        }
+                    }
 
                     // v1.7.108 audit C5 + H7 — rolling window cap on agentCtx.
                     //
@@ -7800,6 +8893,31 @@ times the SAME way, switch tool kind entirely.
                         }
                     }
 
+                    // ── v1.7.232 — self-heal model escalation ───────────────────
+                    // A turn where EVERY tool call failed (all empty/errored) is the
+                    // fingerprint of a weak model that can't form a working command
+                    // (the observed "Gemini Flash emits malformed PowerShell, reflect,
+                    // retry, fail again" loop). After _ESCALATE_AFTER such turns in a
+                    // row, step up ONCE to a stronger model in the SAME provider family
+                    // (same API key — never an unconfigured provider) for the rest of
+                    // the task. Reset the streak the moment a tool succeeds or a turn
+                    // runs no tools. Opt-out: lucy_escalate_on_failure=false.
+                    const _allFailedThisTurn = totalToolCalls > 0 && (emptyCount + errorCount) === totalToolCalls;
+                    if (_allFailedThisTurn) _allToolsFailedStreak++; else _allToolsFailedStreak = 0;
+                    if (_escalateEnabled && !_didEscalateModel && _allToolsFailedStreak >= _ESCALATE_AFTER) {
+                        const _stronger = _pickStrongerInFamily(_routedLoopModel, LLM_GROUPS);
+                        if (_stronger && _stronger !== _routedLoopModel) {
+                            const _fromModel = _routedLoopModel;
+                            _routedLoopModel = _stronger;
+                            _didEscalateModel = true;
+                            agentCtx += `\n\n[!! MODEL ESCALATED — the previous model failed every tool call ${_allToolsFailedStreak} turns in a row. A STRONGER model now continues. Write CORRECT, simple, single-line commands; do not repeat the broken ones.]`;
+                            pushTrace({ phase: 'info', label: `⏫ Escalado de modelo: ${_fromModel} → ${_stronger} (tras ${_allToolsFailedStreak} turnos fallando todas las herramientas)`, step: loop_i + 1, tabId, detail: 'El modelo falló todas las herramientas repetidamente; se sube a un modelo más fuerte de la MISMA familia (misma API key) por el resto de la tarea. Desactivable con lucy_escalate_on_failure=false.' });
+                            logTaskEvent('agent_model_escalated', 'auto', null, { from: _fromModel, to: _stronger, streak: _allToolsFailedStreak, step: loop_i + 1 }, tabId);
+                            stepsHtml += `<span style="opacity:0.85;color:#7fb3ff">[⏫ Escalando a un modelo más fuerte (${_stronger}) tras errores repetidos.]</span>\n`;
+                            if (COCKPIT && tabId === activeTabId) statusPatch({ model: _stronger });
+                        }
+                    }
+
                     // ── Apply reactive compact if context is growing ──
                     const _preCompLen = agentCtx.length;
                     let compressedCtx = await compressContext(agentCtx, (_routedLoopModel || getEffectiveModel(t)), loop_i);
@@ -7813,7 +8931,31 @@ times the SAME way, switch tool kind entirely.
                         });
                     }
 
-                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
+                    // v1.7.232 — context-stall tracking (see _STALL_LIMIT decl).
+                    // Real progress GROWS the post-compression context (new tool
+                    // output survives dedup); a grinding model re-emits duplicate
+                    // output that dedup strips, so the effective length stalls. A
+                    // negative delta = a digest compaction (there WAS progress) →
+                    // reset, not a stall.
+                    {
+                        const _eff = compressedCtx.length;
+                        const _delta = _eff - _lastEffCtxLen;
+                        if (loop_i > 0 && _delta >= 0 && _delta < _STALL_DELTA_MIN) _noGrowthStreak++;
+                        else _noGrowthStreak = 0;
+                        _lastEffCtxLen = _eff;
+                    }
+
+                    // ── v1.7.236 (Lote B) — ANCLA DE TAREA ACTIVA ──────────────────
+                    // Se inyecta FRESCA en cada prompt de continuación (no vive en
+                    // agentCtx → la ventana rodante NUNCA la puede descartar, y no se
+                    // acumula porque se reconstruye desde filesMod cada turno). Arregla
+                    // el "olvidó qué archivo estaba modificando" del transcript
+                    // GoAnywhere: tras varios turnos + un SECURITY_BLOCK, Lucy perdía
+                    // el Read_XML_Test.xml activo. Además re-ancla el objetivo real.
+                    const _taskAnchor = (filesMod && filesMod.size > 0)
+                        ? `\n=== ARCHIVOS ACTIVOS DE ESTA TAREA (los estás modificando en este run — NO los pierdas de vista ni empieces de cero) ===\n${[...filesMod].slice(0, 12).map(f => `· ${f}`).join('\n')}\n=== FIN ARCHIVOS ACTIVOS ===\n`
+                        : '';
+                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n${_taskAnchor}\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
 
                     stepsHtml += `<span style="opacity:0.6">[↻ Siguiente turno...]</span>\n`;
                     renderAgentTask();
@@ -7843,26 +8985,80 @@ times the SAME way, switch tool kind entirely.
                     // facts the model decides to remember mid-loop got dropped.
                     extractAndPersistMemory(agentResp, _persistedMemKeys);
 
+                    // phase-1 review — EMPTY-RESPONSE guard on continuation turns.
+                    // The first turn detects an empty body and auto-falls-back to
+                    // another provider; the in-loop path had NO equivalent. An
+                    // empty mid-loop reply (Gemini safety-block / empty Anthropic
+                    // content block) slipped past skip-stuck (gated on length > 0),
+                    // the next parse found no tools → shouldContinue=false → the
+                    // loop rendered a generic "✓ completed" — a FALSE success. Stop
+                    // with a clear message instead (the gathered steps stay above).
+                    if (!String(agentResp || '').trim()) {
+                        pushTrace({
+                            phase: 'info',
+                            label: `⏹ Provider returned an EMPTY response mid-task (step ${loop_i + 2}) — stopping instead of reporting false success`,
+                            step: loop_i + 2,
+                            tabId,
+                        });
+                        finishReasoning();
+                        renderAgentTask(isEN
+                            ? `The model returned an empty response mid-task, so I stopped instead of looping or reporting a false success. The steps I completed are shown above — you can retry, rephrase, or switch models.`
+                            : `El modelo devolvió una respuesta vacía a mitad de la tarea, así que me detuve en lugar de seguir en bucle o reportar un éxito falso. Los pasos que completé están arriba — puedes reintentar, reformular o cambiar de modelo.`);
+                        clearAgentCheckpoint(tabId);
+                        break;
+                    }
+
                     // v1.7.107 perf #5 — skip-stuck detector. If two
                     // consecutive turns produce byte-identical responses
                     // (including the exact same <TOOL>/<THOUGHT>), the
                     // model is grinding. Bail out with a clear trace so
                     // we don't burn the rest of MAX_LOOPS.
                     const _curHash = _hashResp(agentResp);
-                    if (_curHash === _lastAgentRespHash && agentResp && agentResp.length > 0) {
+                    // v1.7.232 — near-identical grind streak. Hash the NORMALIZED
+                    // response (cosmetic churn removed) and count consecutive turns
+                    // that repeat it. Catches the reworded-same-turn grind the
+                    // byte-identical hash and the >_STALL_DELTA_MIN context check
+                    // both miss. (loop_i>0: nothing to compare on the first
+                    // continuation; mirrors the stall guard.)
+                    const _curNormHash = _hashResp(_normalizeAgentResp(agentResp));
+                    if (loop_i > 0 && _curNormHash === _lastNormHash) _normRespStreak++;
+                    else _normRespStreak = 0;
+                    _lastNormHash = _curNormHash;
+                    // v1.7.232 — bail on byte-identical responses, a near-identical
+                    // (reworded) grind, OR a context stall (effective context flat
+                    // for _STALL_LIMIT turns). All three mean "grinding"; all route
+                    // through the same best-answer / forced-synthesis path below.
+                    const _bailIdentical = (_curHash === _lastAgentRespHash);
+                    const _bailNormGrind = (_normRespStreak >= _NORM_GRIND_LIMIT);
+                    const _bailStalled   = (_noGrowthStreak >= _STALL_LIMIT);
+                    // v1.7.237 — empty-guard bail (see _EMPTY_GUARD_BAIL decl). Every
+                    // tool empty/errored for N turns straight, yet the response and
+                    // context keep changing → identical/grind/stall all miss it.
+                    const _bailEmptyGuard = (_allToolsFailedStreak >= _EMPTY_GUARD_BAIL);
+                    const _bailReason = _bailIdentical ? 'identical' : (_bailNormGrind ? 'grind' : (_bailStalled ? 'stall' : (_bailEmptyGuard ? 'emptyguard' : null)));
+                    if (_bailReason && agentResp && agentResp.length > 0) {
                         _identicalRespStreak++;
                         if (_identicalRespStreak >= 1) {
-                            pushTrace({
-                                phase: 'info',
-                                label: `⏹ Skip-stuck: respuesta idéntica al turno previo — bucle interrumpido en step ${loop_i + 2}`,
-                                step: loop_i + 2,
-                                tabId,
-                                detail: `Hash 0x${_curHash.toString(16)} repetido. El modelo está atascado regenerando la misma salida.`,
-                            });
-                            logTaskEvent('agent_loop_block', 'identical_response', null, {
-                                model: _loopModelName, step: loop_i + 2, hash: _curHash,
+                            const _bailLabel = _bailReason === 'identical'
+                                ? `⏹ Skip-stuck: respuesta idéntica al turno previo — bucle interrumpido en step ${loop_i + 2}`
+                                : _bailReason === 'grind'
+                                    ? `⏹ Grind-stuck: misma respuesta reformulada ${_normRespStreak + 1} turnos seguidos — bucle interrumpido en step ${loop_i + 2}`
+                                    : _bailReason === 'emptyguard'
+                                        ? `⏹ Empty-guard: todas las herramientas fallaron/vacías ${_allToolsFailedStreak} turnos seguidos — bucle interrumpido en step ${loop_i + 2}`
+                                        : `⏹ Stall-stuck: el contexto dejó de crecer (${_noGrowthStreak} turnos sin progreso) — bucle interrumpido en step ${loop_i + 2}`;
+                            const _bailDetail = _bailReason === 'identical'
+                                ? `Hash 0x${_curHash.toString(16)} repetido. El modelo está atascado regenerando la misma salida.`
+                                : _bailReason === 'grind'
+                                    ? `El modelo re-emitió la misma acción/plan con solo cambios cosméticos (THOUGHT/espacios/mayúsculas) ${_normRespStreak + 1} turnos seguidos. Sin progreso real.`
+                                    : _bailReason === 'emptyguard'
+                                        ? `Cada herramienta devolvió salida vacía o error durante ${_allToolsFailedStreak} turnos seguidos (el modelo cambia de query pero ninguna trae datos útiles). Se entrega la mejor respuesta con lo reunido en vez de seguir quemando turnos.`
+                                        : `El contexto efectivo no creció en ${_noGrowthStreak} turnos seguidos (el dedup elimina la salida duplicada que el modelo re-emite). Atascado sin progreso real.`;
+                            pushTrace({ phase: 'info', label: _bailLabel, step: loop_i + 2, tabId, detail: _bailDetail });
+                            logTaskEvent('agent_loop_block', _bailReason === 'identical' ? 'identical_response' : (_bailReason === 'grind' ? 'normalized_grind' : (_bailReason === 'emptyguard' ? 'empty_guard_streak' : 'context_stall')), null, {
+                                model: _loopModelName, step: loop_i + 2, hash: _curHash, normStreak: _normRespStreak, noGrowthStreak: _noGrowthStreak, emptyGuardStreak: _allToolsFailedStreak,
                             }, tabId);
-                            stepsHtml += `<span style="opacity:0.7;color:#caa45c">[⏹ Respuesta idéntica detectada — deteniendo el bucle.]</span>\n`;
+                            const _bailChip = _bailReason === 'identical' ? 'Respuesta idéntica' : (_bailReason === 'grind' ? 'Molienda reformulada' : (_bailReason === 'emptyguard' ? 'Herramientas sin datos útiles' : 'Sin progreso (contexto estancado)'));
+                            stepsHtml += `<span style="opacity:0.7;color:#caa45c">[⏹ ${_bailChip} detectado — deteniendo el bucle.]</span>\n`;
                             finishReasoning();
                             // v1.7.115 FIX — skip-stuck previously did a bare
                             // `break`, leaving the user with NO answer (just the
@@ -7914,6 +9110,9 @@ times the SAME way, switch tool kind entirely.
                                 // looping. Falls back to the old message on failure.
                                 let _synth = '';
                                 try {
+                                    // phase-1 review — skip the forced-synthesis LLM call if the
+                                    // user cancelled while the loop reached this skip-stuck branch.
+                                    if (t._cancelled) break;
                                     const _rawSynth = await askLucyStream({
                                         prompt: `[FINAL ANSWER REQUIRED — no more tools]\n\n=== ORIGINAL GOAL ===\n"${originalUserGoal}"\n=== END GOAL ===\n\nResults you already gathered:\n${(Array.isArray(toolResults) ? toolResults.join('\n\n') : '').slice(0, 12000)}\n\nThe loop is over. Using ONLY the results above, write the FINAL answer to the goal in the user's language, as Markdown. Do NOT call any tool. Do NOT output <TOOL> or <EXECUTE>. If the results don't contain the answer, say so plainly.`,
                                         context: '',
@@ -7995,7 +9194,7 @@ times the SAME way, switch tool kind entirely.
                         if (_capSynth.length >= 8) {
                             renderAgentTask(_capSynth);
                         } else {
-                            renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.`);
+                            renderAgentTask(`\n\n> [!WARNING]\n> **Análisis interrumpido:** El Agente Autónomo agotó su máximo de iteraciones permitidas (${MAX_LOOPS}) y se detuvo por seguridad.\n\n<button class="lucy-retry-btn" data-retry-tab="${tabId}" style="margin-top:6px;padding:5px 12px;font-size:12px;border-radius:6px;border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.08);color:#f59e0b;cursor:pointer;">↻ Regenerar</button>`);
                         }
                     }
                 }
@@ -8082,6 +9281,7 @@ times the SAME way, switch tool kind entirely.
                                    <li>Prompt demasiado largo agotó el budget de output — divide en pasos</li>
                                    <li>Mode collapse por contexto contaminado — abre un tab nuevo si esto se repite</li>
                                </ul>
+                               <button class="lucy-retry-btn" data-retry-tab="${tabId}" style="margin-top:10px;padding:5px 12px;font-size:12px;border-radius:6px;border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.08);color:#f59e0b;cursor:pointer;">↻ Regenerar</button>
                            </div>`,
                     style: 'border-left-color:#f59e0b;',
                 });
@@ -8214,12 +9414,26 @@ times the SAME way, switch tool kind entirely.
 
             // Helper: detect if command is read-only (safe to batch)
             const isReadOnlyCmd = (cmd) => {
-                const ro = /^(Get-|Select-|Where-|Format-|Out-|Measure-|Test-|Find-|grep|ls|cat|head|tail|ps|top|du|df|netstat|ss|lsof|curl|wget|find|locate|file|wc|od)/i;
+                // SECURITY (phase-1 review) — removed curl|wget|find from the
+                // "read-only, safe to auto-run in parallel" allowlist. curl/wget
+                // are NOT read-only (they fetch attacker-controlled content and can
+                // -o/-OutFile to disk → RCE staging), and POSIX `find … -delete` /
+                // `find … -exec rm` is destructive on remote Linux hosts. They were
+                // being auto-run in parallel with no confirm modal. (Find- = the
+                // PowerShell discovery verb, kept; locate/file/wc/od are read-only.)
+                const ro = /^(Get-|Select-|Where-|Format-|Out-|Measure-|Test-|Find-|grep|ls|cat|head|tail|ps|top|du|df|netstat|ss|lsof|locate|file|wc|od)/i;
                 return ro.test(cmd.trim());
             };
 
             // Batch if 2+ read-only commands
-            if (allExecTags.length >= 2 && !codeGenIntent) {
+            // v1.7.236 (audit): also honour infoIntent (which folds in
+            // noExecIntent — "no lo ejecutes") and skillInfoIntent (a security
+            // skill is active → EXECUTE blocks are documentation, never run).
+            // The single-remote (9355), post-stream (9443) and agent-loop (8079)
+            // gates already check these; this batch gate was the lone outlier
+            // that only checked codeGenIntent, so 2+ read-only EXECUTE tags
+            // auto-ran despite an explicit "no lo ejecutes".
+            if (allExecTags.length >= 2 && !codeGenIntent && !infoIntent && !skillInfoIntent) {
                 const readOnlyCmds = [];
                 for (const m of allExecTags) {
                     const isRemote = m[0].startsWith('<EXECUTE_REMOTE');
@@ -8404,7 +9618,9 @@ times the SAME way, switch tool kind entirely.
             // Si el tab está en modo PowerShell, <EXECUTE_CMD> también corre por PS (PS ejecuta cmds nativos)
             const execType = (execCmdM && t.execEngine !== 'powershell') ? 'cmd' : execWmicM ? 'wmic' : execNetshM ? 'netsh' : execRegM ? 'reg' : execVbsM ? 'cscript' : 'powershell';
             const _postCmd = (execM && execM[1] ? execM[1] : '').trim();
-            if(execM && !infoIntent && !skillInfoIntent && !_isLinuxCmd(_postCmd)){
+            // v1.7.234 — see 7900 gate: pure "generate a script" (codeGenIntent, no
+            // explicit run order) defaults to show-not-run here too.
+            if(execM && !infoIntent && !skillInfoIntent && !(codeGenIntent && !runRequestIntent) && !_isLinuxCmd(_postCmd)){
                 const cmd=execM[1].trim();
                 // ── Destructive command detection (shared with agent loop) ──
                 if (isDestructiveCmd(cmd)) {
@@ -8871,8 +10087,55 @@ times the SAME way, switch tool kind entirely.
                 t.messages = t.messages.filter(m => !m._isToolPreparePlaceholder);
             }
         }
+        // ── v1.7.236 R2 — refuerzo por citas. Si la respuesta final cita
+        //    marcadores [§id] (M4 grounding), esos chunks/memorias reciben un
+        //    touch de acceso: el decay estilo Mem0 de search_agent_memories hace
+        //    que lo REALMENTE usado suba y lo inyectado-e-ignorado decaiga.
+        //    Fire-and-forget: jamás bloquea el cierre del turno. ──
+        try {
+            let _citeLucy = null;
+            for (let i = t.messages.length - 1; i >= 0; i--) {
+                const _m = t.messages[i];
+                if (_m && _m.role === 'lucy' && !_m._isToolPreparePlaceholder) { _citeLucy = _m; break; }
+            }
+            const _citeText = String(_citeLucy?.rawContent ?? _citeLucy?.html ?? '');
+            const _citeIds = [...new Set(
+                Array.from(_citeText.matchAll(/\[§(\d{1,10})\]/g), (mm) => Number(mm[1]))
+                    .filter((n) => Number.isFinite(n) && n > 0)
+            )].slice(0, 50);
+            if (_citeIds.length) invoke('touch_memories_by_ids', { ids: _citeIds }).catch(() => {});
+        } catch { /* refuerzo best-effort */ }
+        // ── Lucy 2.0 cockpit preview: mirror the turn's FINAL Lucy reply into the
+        //    conversation store. Centralised at this single turn-end funnel and
+        //    keyed by message-OBJECT identity (not id) — the streamed reply reuses
+        //    the `streaming-<tabId>` id across turns, so an id key would collapse
+        //    every turn into one line or drop it. Captures both streamed answers
+        //    (which bypass addMsg) and addMsg-based replies (slash/quick/error).
+        //    DEV-ONLY → inert in a release build. ──
+        if (COCKPIT) {
+            let _lastLucy = null;
+            for (let i = t.messages.length - 1; i >= 0; i--) {
+                const _m = t.messages[i];
+                if (_m && _m.role === 'lucy' && !_m._isToolPreparePlaceholder) { _lastLucy = _m; break; }
+            }
+            if (_lastLucy && _lastLucy !== t._cockpitMirroredMsg) {
+                t._cockpitMirroredMsg = _lastLucy;
+                const _raw = String(_lastLucy.rawContent ?? '').trim()
+                    || String(_lastLucy.html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                if (_raw) convoPush({ role: 'lucy', text: _raw.length > 12000 ? _raw.slice(0, 12000) + '…' : _raw });
+            }
+            streamClear(); // the live "typing" bubble is now the settled convo line above
+            statusPatch({ running: false, costUsd: _sessionSpendUsd, model: t.selectedModel || null });
+            completeCockpitPlan(tabId); // forward plan: mark any remaining seeded steps done
+        }
         t.isProcessing=false;
         t._cancelled = false; // Reset para próxima ejecución
+        // v1.7.234 — final present: the end-of-stream commit (cockpit convo swap
+        // above / V1 promotion to the settled bubble) is ONE big render whose
+        // present WebView2 can drop when no more frames follow — the reported
+        // "el texto desaparece por completo al terminar la respuesta". The 700ms
+        // pump window flushes that last render even though the stream is done.
+        kickPresent();
         // ── IncidentTimeline: detect open incidents (fire-and-forget, no blocking) ──
         // Skip stale auto-incidents (>2h old without resolution) to avoid persistent
         // false-positive banners. The user can still see them in incident history.
@@ -8922,6 +10185,13 @@ times the SAME way, switch tool kind entirely.
         // compactedDigest where compactOldTurns will pick it up next turn.
         // Fire-and-forget — no await, never blocks UI.
         regenerateSmartDigest(t);
+        // ── v1.7.236 — AUTONOMOUS crystallization. At turn-end Lucy distils a
+        //    substantial session into a crystal + lessons WITHOUT being asked, so
+        //    she learns from her own work (point-4 autonomy). Fire-and-forget;
+        //    all flood-gating (min turns/tools/chars, one per session, capped +
+        //    deduped lessons) lives frontend-pre-gate + Rust-authoritative, so
+        //    this call is a no-op for thin/already-distilled sessions. ──
+        try { maybeAutoCrystallize(tabId, getTab); } catch {}
         // ── AUTO-SEND queued message (like Gemini/Claude behaviour) ─────────
         if (t.pendingMessage) {
             const pm = t.pendingMessage;
@@ -9012,6 +10282,16 @@ if (Test-Path $src) {
         let _rafScheduled = false;
         let _pendingChunk = false;
         let _lastTpsAt   = 0;
+        // phase-1 review (feature) — stream-stall watchdog. The 1.5s heartbeat
+        // below only console.warn'd a stall (invisible in prod, where DevTools is
+        // blocked), so a frozen backend stream (network drop, Ollama hang) left
+        // the user staring at a silent spinner forever. Now: if no chunk arrives
+        // for _stallMs while a tab-bound stream is in flight, surface a visible
+        // toast with a one-click Cancel. Cleared the instant chunks resume / the
+        // stream ends. Tab-less internal sub-calls (compression/verifier) opt out.
+        let _lastChunkAt = performance.now();
+        let _stalled = false;
+        const _stallToastId = `stream-stall-${requestId}`;
         let _cachedTps   = 0;
         // v1.7.193 — fallback timer. THIS local askLucyStream (not the
         // llm-stream.ts copy) is the function the chat actually calls, and it
@@ -9059,6 +10339,10 @@ if (Test-Path $src) {
             if (streamState.cancelled) return; // Ignorar chunks post-cancelación
             if (!ttft) ttft = performance.now() - t0;
             accumulated += event.payload;
+            // phase-1 review (feature) — chunk arrived: reset the stall clock and,
+            // if a stall toast was showing, clear it (the stream recovered).
+            _lastChunkAt = performance.now();
+            if (_stalled) { _stalled = false; try { sonnerToast.dismiss(_stallToastId); } catch {} }
             _pendingChunk = true;
             if (!_rafScheduled) {
                 _rafScheduled = true;
@@ -9094,6 +10378,26 @@ if (Test-Path $src) {
                     cancelled: streamState.cancelled,
                     elapsedMs: Math.round(performance.now() - t0),
                 }));
+                // phase-1 review (feature) — stall watchdog. Tab-bound streams only
+                // (internal compression/verifier sub-calls pass tabId=null and opt
+                // out). If no chunk for _stallMs, surface a visible toast with a
+                // one-click Cancel. Tighter window once tokens started flowing;
+                // looser before TTFT so a local cold-start isn't flagged early.
+                if (tabId && !streamState.cancelled) {
+                    const _gap = performance.now() - _lastChunkAt;
+                    const _stallMs = ttft ? 12000 : 30000;
+                    if (_gap > _stallMs && !_stalled) {
+                        _stalled = true;
+                        try {
+                            sonnerToast.warning(
+                                ttft ? 'La respuesta del modelo se detuvo.' : 'El modelo tarda en responder…',
+                                { id: _stallToastId, duration: Infinity,
+                                  description: `Sin datos hace ${Math.round(_gap / 1000)}s. Esc cancela la tarea.`,
+                                  action: { label: 'Cancelar', onClick: () => { try { cancelarEjecucion(tabId); } catch {} } } }
+                            );
+                        } catch { /* toast best-effort */ }
+                    }
+                }
             } catch (_e) { /* heartbeat must never throw */ }
         }, 1500);
 
@@ -9102,6 +10406,15 @@ if (Test-Path $src) {
             // Force a final flush so the closing chunk reaches onChunk before we return.
             if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
             if (_pendingChunk) flushChunk();
+            // phase-1 review (feature) — accumulate estimated session spend for the
+            // spend cap. Single choke point covering EVERY streamed turn (first
+            // turn, loop continuations, synthesis, compression). Estimate from char
+            // counts (no per-call token data on the wire); local models cost $0.
+            try {
+                const _inTok = estimateTokens(String(params.prompt || '') + String(params.context || ''));
+                const _outTok = estimateTokens(String(result || ''));
+                _sessionSpendUsd += computeCost(String(params.model || ''), _inTok, _outTok);
+            } catch { /* cost estimate is best-effort */ }
             // Si fue cancelado mientras esperábamos, devolver lo acumulado hasta ahora
             if (streamState.cancelled) return accumulated || '';
 
@@ -9150,6 +10463,8 @@ if (Test-Path $src) {
             throw e;
         } finally {
             clearInterval(_hbTimer);
+            // phase-1 review (feature) — clear any stall toast on stream end.
+            if (_stalled) { try { sonnerToast.dismiss(_stallToastId); } catch {} }
             if (_fallbackTimer !== null) { clearTimeout(_fallbackTimer); _fallbackTimer = null; }
             unlisten();
             if (tabId) _activeStreams.delete(tabId);
@@ -9471,7 +10786,7 @@ if (Test-Path $src) {
                 tabId:          tab.id,
                 anchorMsgIndex: half,
                 summary:        summaryText,
-                modelUsed:      'gemini-2.5-flash',
+                modelUsed:      'gemini-3.5-flash',
                 tokensIn:       Math.ceil(summaryInput.length / 4),
                 tokensOut:      Math.ceil(summaryText.length / 4),
             }).catch(e => debug.warn('[smart-digest] persist failed:', e));
@@ -9556,7 +10871,7 @@ if (Test-Path $src) {
         try {
             // Detectar proveedor por prefijo/formato del modelo activo
             const _activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
-            const _model = getEffectiveModel(_activeTab) || 'gemini-2.5-flash';
+            const _model = getEffectiveModel(_activeTab) || 'gemini-3.5-flash';
             const _provider = _model.startsWith('claude') ? 'anthropic'
                             : _model.startsWith('gpt')    ? 'openai'
                             : _model.startsWith('local')  ? 'local'
@@ -10126,7 +11441,19 @@ if (Test-Path $src) {
     }
 
     $: if (activeTabId) scrollToActiveTab();
-    $: if (tabs.length) setTimeout(updateScrollState, 100);
+    // phase-1 review — re-measure the tab strip only on a STRUCTURAL tab-count
+    // change, not on every refresh() (tabs=[...tabs]) during a stream. The old
+    // `$: if (tabs.length) setTimeout(updateScrollState, 100)` re-fired ~60×/sec
+    // and scheduled 3 forced layout reads each time on an unchanged strip. The
+    // guard ref is read INSIDE the function (not in the reactive expression) so
+    // the reactive tracks only `tabs.length` and doesn't self-retrigger.
+    let _lastTabCount = -1;
+    const _maybeUpdateScrollState = (n) => {
+        if (n === _lastTabCount) return;
+        _lastTabCount = n;
+        if (n) setTimeout(updateScrollState, 100);
+    };
+    $: _maybeUpdateScrollState(tabs.length);
 </script>
 
 <svelte:window
@@ -10303,6 +11630,7 @@ if (Test-Path $src) {
 
   <div class="body" class:focus-mode={focusMode}>
 
+    {#if !cockpitMode}
     <Sidebar
       {activeView} {sidebarCollapsed} {sidebarWidth} {sidebarResizing}
       quickActions={quickActions} {isEN} {rshellSessions} {registrosOpen}
@@ -10355,8 +11683,9 @@ if (Test-Path $src) {
       on:toggleforks={() => showForksMonitor = !showForksMonitor}
       on:togglepdf={() => showPdfPanel = !showPdfPanel}
     />
+    {/if} <!-- Fase C: la Sidebar no se monta bajo el cockpit -->
 
-    <div class="panel">
+    <div class="panel" style:display={cockpitMode ? 'none' : null}>
 
       <!-- v1.7.23 — Context Strip moved out of `.chat-wrap` (which had
            `overflow:hidden` and `display:none` when inactive, clipping
@@ -10634,14 +11963,20 @@ if (Test-Path $src) {
               on:replaymessage={() => { showReplayBrowser = true; toast(isEN ? '⏪ Replay browser opened — pick the turn to re-run' : '⏪ Replay browser abierto — elige el turno a re-ejecutar', 'info'); }}
               on:contextmessage={(e) => { ctxMsg = e.detail.msg; ctxMenuX = e.detail.x; ctxMenuY = e.detail.y; ctxMenuOpen = true; }}
               on:emptySuggest={(e) => {
-                  // v1.7.26 — click on an Empty State suggestion. We
-                  // pre-fill the composer instead of submitting so the
-                  // user can edit before sending — important for
-                  // discovery: they SEE the slash command syntax.
+                  // v1.7.26 — click on an Empty State suggestion.
+                  // v1.7.232 — slash-command starters (/memory, /kg, /skills…)
+                  // EXECUTE on click for one-tap navigation (they felt broken
+                  // when they only pre-filled). Free-text starters still
+                  // pre-fill the composer so the user can edit before sending
+                  // — and the command badge on the card still shows the syntax.
                   const _t = getTab(activeTabId); if (!_t) return;
                   _t.inputValue = e.detail.prompt;
                   refresh();
-                  tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+                  if (e.detail.prompt.trim().startsWith('/')) {
+                      process(activeTabId);
+                  } else {
+                      tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+                  }
               }}
               on:reactmessage={(e) => {
                   // v1.4.15 — 👍/👎 reactions logged to Layer 3 memory via
@@ -10804,7 +12139,7 @@ if (Test-Path $src) {
           bind:rshellSessions
           bind:activeShellId
           hosts={$hosts} {lucyConfig} {userLang} {isEN}
-          selectedModel={activeTab?.selectedModel || 'gemini-2.5-flash'}
+          selectedModel={activeTab?.selectedModel || 'gemini-3.5-flash'}
           on:toast={e => toast(e.detail.msg, e.detail.type)}
           on:openHostModal={e => abrirHostModal(e.detail?.host || null)}
         />
@@ -11106,6 +12441,29 @@ if (Test-Path $src) {
        on hover. duration is per-toast (set in the toast() wrapper). -->
   <Toaster theme="dark" richColors closeButton position="bottom-right" />
 
+  <!-- phase-1 review (feature) — interrupted-agent recovery banner. Lists tasks
+       that an agent loop was running when a prior session ended (checkpoints are
+       saved every iteration). Replaces the old console-only pointer (DevTools is
+       blocked in prod). "Re-ejecutar" re-runs the goal as a fresh turn. -->
+  {#if _interruptedTasks.length > 0}
+  <div style="position:fixed;top:46px;left:50%;transform:translateX(-50%);z-index:900;max-width:580px;width:calc(100% - 40px);background:rgba(28,28,32,0.98);border:1px solid rgba(245,158,11,0.32);border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,0.5);padding:11px 14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:10px;">
+      <div style="font-size:12.5px;font-weight:600;color:#f59e0b;">⟲ {_interruptedTasks.length} tarea{_interruptedTasks.length > 1 ? 's' : ''} interrumpida{_interruptedTasks.length > 1 ? 's' : ''} en una sesión previa</div>
+      <button on:click={_dismissAllInterrupted} style="background:none;border:none;color:var(--txt2);font-size:11.5px;cursor:pointer;white-space:nowrap;">Descartar todo</button>
+    </div>
+    {#each _interruptedTasks as task (task.key)}
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid rgba(255,255,255,0.05);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{task.goal}</div>
+          <div style="font-size:10.5px;color:var(--txt2);">paso {(task.step ?? 0) + 1} · hace {task.ageMin} min{task.model ? ' · ' + task.model : ''}</div>
+        </div>
+        <button on:click={() => _rerunInterrupted(task)} title="Re-ejecutar el objetivo como un turno nuevo" style="padding:4px 10px;font-size:11px;border-radius:6px;border:1px solid rgba(16,185,129,0.4);background:rgba(16,185,129,0.1);color:#10b981;cursor:pointer;white-space:nowrap;">↻ Re-ejecutar</button>
+        <button on:click={() => _dismissInterrupted(task)} title="Descartar" style="padding:4px 8px;font-size:11px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:transparent;color:var(--txt2);cursor:pointer;">✕</button>
+      </div>
+    {/each}
+  </div>
+  {/if}
+
   <!-- Defensive fallback stack: only used if Sonner fails to mount.
        The legacy markup stays so the user never loses a notification. -->
   <div class="toast-stack">
@@ -11117,15 +12475,21 @@ if (Test-Path $src) {
   </div>
 
   <!-- ── MODAL: CONFIRMACIÓN RUNAS (#20) ── -->
-  {#if $showRunAsModal}
+  {#if $showRunAsModal && !cockpitMode}
   <div class="mb">
-    <div role="dialog" use:focusTrap class="mbox sm" style="text-align:center;">
+    <!-- phase-1 review (feature) — keyboard-safe default for this security-critical
+         confirm: Enter maps to Cancel UNLESS the destructive button is focused
+         deliberately (so a reflexive Enter can't elevate, but a keyboard user who
+         tabs to "Ejecutar con elevación" on purpose can still confirm). -->
+    <div role="dialog" use:focusTrap class="mbox sm" style="text-align:center;"
+         aria-modal="true" aria-describedby="runas-cmd-preview" tabindex="-1"
+         on:keydown={(e) => { if (e.key === 'Enter' && !(e.target instanceof HTMLElement && e.target.classList.contains('warn'))) { e.preventDefault(); cancelarRunAs(); } }}>
       <div style="font-size:32px;margin-bottom:12px;display:flex;justify-content:center;"><ShieldCheck size={32} strokeWidth={1.5} style="color:var(--amber)"/></div>
       <h2 style="color:white;margin:0 0 8px;font-size:16px;font-weight:600;">Comando con privilegios de Administrador</h2>
       <p style="color:var(--txt2);font-size:13px;margin-bottom:8px;line-height:1.5;">
         Lucy quiere ejecutar el siguiente comando con <b style="color:var(--amber);">elevación de permisos (RunAs)</b>:
       </p>
-      <pre style="background:rgba(255,170,0,0.06);border:1px solid rgba(255,170,0,0.2);border-radius:6px;padding:10px;font-size:11px;color:#c8a060;text-align:left;overflow:auto;max-height:120px;margin:0 0 20px;">{pendingRunAsCmd?.cmd || ''}</pre>
+      <pre id="runas-cmd-preview" style="background:rgba(255,170,0,0.06);border:1px solid rgba(255,170,0,0.2);border-radius:6px;padding:10px;font-size:11px;color:#c8a060;text-align:left;overflow:auto;max-height:120px;margin:0 0 20px;">{pendingRunAsCmd?.cmd || ''}</pre>
       <p style="color:#5a4a2a;font-size:12px;margin-bottom:20px;">Windows mostrará un cuadro de confirmación UAC. Solo procede si confías en este comando.</p>
       <div style="display:flex;gap:10px;justify-content:center;">
         <button class="mbtn ghost" on:click={cancelarRunAs}>Cancelar</button>
@@ -11634,7 +12998,7 @@ if (Test-Path $src) {
 
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Sub-Agents Model' : 'Modelo P. Sub-Agentes'}</span>
-            <select bind:value={subAgentModel} on:change={() => safeSetLSString('lucy_subagent', subAgentModel)} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+            <select bind:value={subAgentModel} on:change={() => safeSetLSString('lucy_subagent', subAgentModel)} class="theme-picker-inline" style="background:var(--bg3); color:var(--txt); border:1px solid var(--bdr2); border-radius:4px; padding:4px;">
               <option value="auto">{isEN ? 'Auto (cheapest available)' : 'Auto (más barato disponible)'}</option>
               <option value="ollama">{isEN ? 'Local Ollama (Fast/Free)' : 'Ollama Local (Rápido/Gratis)'}</option>
               <option value="cloud">{isEN ? 'Cloud (Main LLM)' : 'Nube (Igual al Principal)'}</option>
@@ -11658,7 +13022,7 @@ if (Test-Path $src) {
               {isEN ? 'Verifier sub-agent' : 'Sub-agente verificador'}
               <span style="opacity:0.5; cursor:help;">ⓘ</span>
             </span>
-            <select bind:value={verifierMode} on:change={() => safeSetLSString('lucy_verifier_mode', verifierMode)} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+            <select bind:value={verifierMode} on:change={() => safeSetLSString('lucy_verifier_mode', verifierMode)} class="theme-picker-inline" style="background:var(--bg3); color:var(--txt); border:1px solid var(--bdr2); border-radius:4px; padding:4px;">
               <option value="off">{isEN ? 'Off' : 'Desactivado'}</option>
               <option value="critical">{isEN ? 'Only for risky tasks' : 'Solo tareas críticas'}</option>
               <option value="always">{isEN ? 'Always (every answer)' : 'Siempre (cada respuesta)'}</option>
@@ -11667,15 +13031,16 @@ if (Test-Path $src) {
           {#if verifierMode !== 'off'}
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'Verifier model' : 'Modelo verificador'}</span>
-            <select bind:value={verifierModel} on:change={() => safeSetLSString('lucy_verifier_model', verifierModel)} class="theme-picker-inline" style="background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:4px;">
+            <select bind:value={verifierModel} on:change={() => safeSetLSString('lucy_verifier_model', verifierModel)} class="theme-picker-inline" style="background:var(--bg3); color:var(--txt); border:1px solid var(--bdr2); border-radius:4px; padding:4px;">
               <option value="auto">{isEN ? 'Auto (different from main)' : 'Auto (distinto al principal)'}</option>
               <option value="ollama">{isEN ? 'Local Ollama' : 'Ollama Local'}</option>
-              <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-              <option value="claude-3-5-sonnet-latest">Claude 3.5 Sonnet</option>
-              <option value="gpt-4o">GPT-4o</option>
-              <option value="gpt-4o-mini">GPT-4o mini</option>
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="claude-opus-4-8::high">Claude Opus 4.8</option>
+              <option value="claude-sonnet-4-6::medium">Claude Sonnet 4.6</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+              <option value="gpt-5.5">GPT-5.5</option>
+              <option value="gpt-5.4-mini">GPT-5.4 mini</option>
+              <option value="gemini-3.1-pro-preview::medium">Gemini 3.1 Pro</option>
+              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
             </select>
           </div>
           <div class="settings-row" style="margin-top:-4px; padding-top:0;">
@@ -12863,6 +14228,25 @@ if (Test-Path $src) {
     on:submit={(e) => commitPresetName(e.detail)}
     on:cancel={() => showPresetPrompt = false}
   />
+
+  {#if COCKPIT}
+    <!-- ── Lucy 2.0 cockpit — GA desde v1.7.234 (antes dev-only). El fab
+         alterna V1↔V2 y PERSISTE la elección (lucy_ui_mode) para el próximo
+         arranque. Kill-switch total sin UI: localStorage.lucy_ui_v2='0'. ── -->
+    <button
+      on:click={() => { cockpitMode = !cockpitMode; try { localStorage.setItem('lucy_ui_mode', cockpitMode ? 'v2' : 'v1'); } catch {} if (cockpitMode) syncCockpitConvo(activeTabId); }}
+      title={cockpitMode ? 'Volver a la interfaz clásica (V1)' : 'Abrir el cockpit v2.0'}
+      style="position:fixed; bottom:16px; right:16px; z-index:10000; display:flex; align-items:center; gap:6px; font-size:12px; color:#07130E; background:#3DD6A4; border:0; border-radius:10px; padding:8px 13px; cursor:pointer; box-shadow:0 6px 20px rgba(0,0,0,0.45); font-family:system-ui,sans-serif;"
+    >{cockpitMode ? '← Salir del cockpit' : 'Cockpit v2.0'}</button>
+    {#if cockpitMode}
+      <!-- HITL yield: when a destructive-command authorization is pending (security
+           block or RunAs modal), the overlay steps aside via display:none — the
+           component stays MOUNTED (draft/active-view preserved) — so the real,
+           server-verified authorization flow in the classic UI is visible and
+           usable. Zero changes to the security-critical bypass-token path. -->
+      <div style="position:fixed; inset:0; z-index:9999;{(showHostModal || showProviderConfig || showSettingsModal) ? ' display:none;' : ''}"><CockpitShell live userName={lucyConfig.name} onSubmit={(txt, opts) => { const s = txt.trim(); if (!activeTabId) crearTab(); /* v1.7.234: crea la 1ª pestaña al vuelo si no hay ninguna (fresh install) */ if (!activeTabId) return; const t = getTab(activeTabId); const hasAtt = !!(t && t.attachedFiles && t.attachedFiles.length); if (!s && !hasAtt) return; const _voice = !!(opts && opts.voice); if (s.startsWith('/') || hasAtt) { if (t) { t.inputValue = s; t.usedVoice = _voice; process(activeTabId); } } else { addMsg(activeTabId, { role: 'user', html: txt, rawContent: txt }); runAI(activeTabId, s, _voice); } }} onStop={() => { if (activeTabId) cancelarEjecucion(activeTabId); }} hitl={cockpitHitl} onHitlApprove={() => { if (pendingSecurityBlock) autorizarSecurityBlock(); else if ($showRunAsModal) confirmarRunAs(); }} onHitlCancel={() => { if (pendingSecurityBlock) limpiarSecurityBlock(); else if ($showRunAsModal) cancelarRunAs(); }} onRegenerate={() => { const t = getTab(activeTabId); if (t && !t.isProcessing) { const lu = [...t.messages].reverse().find(m => m.role === 'user'); const p = String(lu?.rawContent || '').trim(); if (p) runAI(activeTabId, p, false); } }} onReact={(kind, text) => { try { logTaskEvent('msg_reaction', kind, null, { text: String(text || '').slice(0, 200) }, activeTabId); } catch {} }} attachments={(activeTab?.attachedFiles ?? []).slice()} onAttach={() => { if (!activeTabId) crearTab(); if (activeTabId) attach(activeTabId); }} onRemoveAttach={(name) => { if (activeTabId) removeFile(activeTabId, name); }} onHostAdd={() => abrirHostModal()} onHostEdit={(h) => abrirHostModal(h)} onHostDelete={(h) => eliminarHost(h.id)} model={activeTab?.selectedModel} onModelChange={(id) => { if (!activeTabId) crearTab(); const t = getTab(activeTabId); if (t) { t.selectedModel = id; refresh(); statusPatch({ model: id }); } }} personality={lucyPersonality} onSetPersonality={(p) => { lucyPersonality = p; safeSetLSString('lucy_personality', p); }} onConfigureKeys={() => showProviderConfig = true} onOpenSettings={() => showSettingsModal = true} tabs={tabs.map(t => ({ id: t.id, title: t.title }))} activeTabId={activeTabId} onSelectTab={(id) => { activeTabId = id; syncCockpitConvo(id); }} onNewTab={() => { crearTab(); syncCockpitConvo(activeTabId); }} onCloseTab={(id) => { cerrarTab(id, { stopPropagation() {} }).then(() => syncCockpitConvo(activeTabId)); }} /></div>
+    {/if}
+  {/if}
 
 </div><!-- /root -->
 

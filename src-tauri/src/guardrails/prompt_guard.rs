@@ -285,7 +285,7 @@ async fn download_one_file(
     if !res.status().is_success() {
         let code = res.status().as_u16();
         let body = res.text().await.unwrap_or_default();
-        let snippet = &body[..body.len().min(200)];
+        let snippet = crate::utils::safe_truncate(&body, 200);
         let msg = match code {
             401 => "HF 401 — token inválido o sin acceso al modelo gated.".to_string(),
             403 => format!("HF 403 — debes aceptar la licencia en huggingface.co/{} antes de descargar.", HF_REPO),

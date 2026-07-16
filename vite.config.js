@@ -13,15 +13,26 @@ export default defineConfig(async () => ({
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
+  // Port 5173 (Vite's default), NOT 1420: on this machine Hyper-V/WinNAT had
+  // reserved the 1420-range — Windows let the dev server bind() but silently
+  // DROPPED inbound loopback connections (the SYN never reached accept()), so
+  // Vite printed "ready" yet the WebView2 hung with ERR_CONNECTION_TIMED_OUT.
+  // Those reservations reshuffle on reboot; 5173 is outside the reserved blocks
+  // (verified reachable). devUrl in tauri.conf.json matches.
   server: {
-    port: 1420,
+    port: 5173,
     strictPort: true,
-    host: host || false,
+    // Pin to IPv4 loopback. With `host: false`, Node 17+ on Windows binds
+    // `localhost` to whatever it resolves FIRST — often IPv6 `::1` only — while
+    // the Tauri WebView2 connects to `127.0.0.1` (IPv4) → SYN_SENT hangs →
+    // ERR_CONNECTION_TIMED_OUT in the app window. Forcing 127.0.0.1 (and
+    // devUrl in tauri.conf.json to match) keeps the whole dev loop on IPv4.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 5174,
         }
       : undefined,
     watch: {

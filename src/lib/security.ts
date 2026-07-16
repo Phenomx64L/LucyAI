@@ -63,7 +63,15 @@ export function normalizeCmd(cmd: string): string {
 // auto-runs anything isDestructiveCmd() returns false for, so `del /f /s /q C:\…`
 // or `rd /s /q` were executing WITHOUT the confirmation modal. Backslashes that
 // precede a slash flag are escaped (\/) for clarity.
-export const DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|Clear-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b|\b(?:del|erase)\s|\brmdir\b|\brd\s+\/|vssadmin\s+delete|\bdiskpart\b|\bcipher\s+\/w)/i;
+// v1.7.232 phase-1 security review (C3) — added remote-code-fetch / download
+// verbs. "Download a script and run it" (iwr/Invoke-WebRequest/Invoke-RestMethod
+// -OutFile then run; iex (New-Object Net.WebClient).DownloadString(...);
+// certutil -urlcache; Start-BitsTransfer/bitsadmin; curl/wget -o) is a classic
+// RCE staging primitive. The download-to-disk verbs survived BOTH the old
+// frontend deny-list AND the backend obfstr blocklist, so an LLM-emitted fetch-
+// exec command auto-ran with no confirmation. These now route through HITL. (The
+// "ask once too many" doctrine above accepts a confirm on a benign web GET.)
+export const DESTRUCTIVE_RE = /(?:netsh\s+interface|Set-NetAdapter|Remove-|Stop-Service|Restart-Service|Disable-|Set-Service|Set-ItemProperty|Invoke-WmiMethod|Uninstall-\w+|Reset-\w+|Disable-NetAdapter|reg\s+(?:delete|add)\b|net\s+(?:stop|user|group|localgroup)|Clear-EventLog|wevtutil\s+(?:cl|clear-log)\b|Restart-Computer|Stop-Computer|Enable-PSRemoting|Set-ExecutionPolicy|Format-Volume|Initialize-Disk|Clear-Disk|(?:C:\\Windows\\System32|System32\\\\?)|\bshutdown\b|\breboot\b|\bsc\s+(?:delete|stop|config)\b|\btaskkill\b|\bkill\s+-9\b|\brm\s+-rf\b|\bdd\s+if=|\bmkfs|\bfdisk\b|\bformat\s+[A-Z]:|\bsystemctl\s+(?:stop|disable|mask|reset)\b|\biptables\s+-F\b|\b(?:del|erase)\s|\brmdir\b|\brd\s+\/|vssadmin\s+delete|\bdiskpart\b|\bcipher\s+\/w|Invoke-WebRequest|Invoke-RestMethod|\biwr\b|\birm\b|\bcurl\b|\bwget\b|DownloadString|DownloadFile|DownloadData|Net\.WebClient|Invoke-Expression|\biex\b|Start-BitsTransfer|\bbitsadmin\b|certutil[^\n]*-urlcache)/i;
 
 /**
  * True if `cmd` looks destructive after normalization. Use this to gate

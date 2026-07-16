@@ -228,4 +228,15 @@
     .sk-run-input:focus{border-color:rgba(16,185,129,.3);}
     .sk-run-btn{margin-top:8px;width:100%;padding:10px;background:linear-gradient(135deg, rgba(16,185,129,.12), rgba(13,150,104,.08));border:1px solid rgba(16,185,129,.25);border-radius:8px;color:var(--acc);font-weight:700;font-size:13px;cursor:pointer;transition:.2s;}
     .sk-run-btn:hover{background:linear-gradient(135deg, rgba(16,185,129,.2), rgba(13,150,104,.15));box-shadow:0 0 16px rgba(16,185,129,.15);}
+
+    /* ── Light mode (v1.7.232) — translucent-white fills wash out on the white
+       modal surface; remap cards/chips/controls to real plates + borders. */
+    :global(:root.light) .sk-cat-btn{background:var(--bg2);}
+    :global(:root.light) .sk-cat-btn:hover{background:rgba(15,23,42,.05);color:var(--txt);}
+    :global(:root.light) .sk-close:hover{background:rgba(15,23,42,.05);}
+    :global(:root.light) .sk-card{background:var(--bg4);border-color:var(--bdr);box-shadow:var(--shadow-card);}
+    :global(:root.light) .sk-card:hover{background:var(--bg2);border-color:var(--acc);}
+    :global(:root.light) .sk-tag,
+    :global(:root.light) .sk-tag-pill,
+    :global(:root.light) .sk-phase{background:var(--bg2);border-color:var(--bdr);}
 </style>

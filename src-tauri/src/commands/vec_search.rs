@@ -291,13 +291,13 @@ pub fn knn(
 pub struct VecFilter<'a> {
     /// If Some, restrict to embeddings_vec_map.entity_type = filter.
     pub entity_type: Option<&'a str>,
-    /// If Some AND entity_type is "agent_memory", require
+    /// If Some AND entity_type is "memory", require
     /// agent_memories.importance >= filter.
     pub importance_min: Option<i64>,
-    /// If true AND entity_type is "agent_memory", exclude rows whose
+    /// If true AND entity_type is "memory", exclude rows whose
     /// agent_memories.superseded_by IS NOT NULL.
     pub exclude_superseded: bool,
-    /// If true AND entity_type is "agent_memory", exclude rows that
+    /// If true AND entity_type is "memory", exclude rows that
     /// have expired (expires_at > 0 AND < now).
     pub exclude_expired: bool,
 }
@@ -337,34 +337,40 @@ pub fn knn_filtered(
     }
 
     // Memory-specific filters only kick in when the entity_type IS
-    // agent_memory (or no filter — in which case we can't narrow to one
+    // memory (or no filter — in which case we can't narrow to one
     // table without a CTE per type; left for v1.8).
+    //
+    // v1.7.233: these predicates matched entity_type 'agent_memory', but
+    // every writer stores memory embeddings as 'memory' (upsert callers in
+    // +page.svelte, backfill_embeddings) — so exclude_superseded /
+    // exclude_expired / importance_min were DEAD CODE and superseded
+    // memories stayed semantically retrievable forever.
     let memory_filters_active = filter.importance_min.is_some()
         || filter.exclude_superseded
         || filter.exclude_expired;
 
     let agent_memory_join_needed = memory_filters_active
-        && (filter.entity_type == Some("agent_memory")
+        && (filter.entity_type == Some("memory")
             || filter.entity_type.is_none());
 
     let join_clause = if agent_memory_join_needed {
-        // LEFT JOIN so non-agent_memory rows survive the join. The
+        // LEFT JOIN so non-memory rows survive the join. The
         // entity_type guard inside each predicate keeps the filter
         // logically scoped.
-        "LEFT JOIN agent_memories am ON m.entity_type = 'agent_memory' AND am.id = CAST(m.entity_id AS INTEGER)"
+        "LEFT JOIN agent_memories am ON m.entity_type = 'memory' AND am.id = CAST(m.entity_id AS INTEGER)"
     } else {
         ""
     };
 
     if let Some(min) = filter.importance_min {
-        wheres.push("(m.entity_type != 'agent_memory' OR am.importance >= ?)".to_string());
+        wheres.push("(m.entity_type != 'memory' OR am.importance >= ?)".to_string());
         params.push(Box::new(min));
     }
     if filter.exclude_superseded {
-        wheres.push("(m.entity_type != 'agent_memory' OR am.superseded_by IS NULL)".to_string());
+        wheres.push("(m.entity_type != 'memory' OR am.superseded_by IS NULL)".to_string());
     }
     if filter.exclude_expired {
-        wheres.push("(m.entity_type != 'agent_memory' OR am.expires_at IS NULL OR am.expires_at = 0 OR am.expires_at > strftime('%s','now'))".to_string());
+        wheres.push("(m.entity_type != 'memory' OR am.expires_at IS NULL OR am.expires_at = 0 OR am.expires_at > strftime('%s','now'))".to_string());
     }
 
     let sql = format!(

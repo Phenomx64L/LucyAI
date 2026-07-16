@@ -19,6 +19,31 @@ static VAR_ASSIGN_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Laz
     regex::Regex::new(r"^\$([A-Za-z_][A-Za-z0-9_]*)\s*=").expect("VAR_ASSIGN_RE is a valid pattern")
 });
 
+// v1.7.232 (Phase-2 C1/C3): verb-level destructive classifier. A backend backstop
+// that — unlike the substring `blocklist` below — does NOT depend on fixed flag
+// adjacency, so it survives the argument-splitting evasions the v1.7.218 fix left
+// open (e.g. `Remove-Item C:\x -Recurse` with the flag after the path). It targets
+// high-signal defense-evasion / persistence / privilege / arbitrary-overwrite verbs
+// that the substring list (and, for several, the frontend DESTRUCTIVE_RE) miss:
+// Set-MpPreference, Out-File/Set-Content/Add-Content, New-LocalUser, Register-
+// ScheduledTask, bcdedit, Stop-Process against AV process names, etc. Every entry
+// is a long, distinctive cmdlet name or a verb+flag/target pair, and is word-boundary
+// anchored, so read-only siblings (Get-Content / Get-Process / Get-Service /
+// `schtasks /query`) never match — keeping agent-halt false positives near zero.
+static DESTRUCTIVE_VERB_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(
+        // v1.7.236 (audit): the Remove-Item branch is now ALIAS-AWARE. It used to
+        // hardcode the literal `remove-item`, so PowerShell's built-in aliases
+        // (`ri`, `rm`, `del`, `erase`, `rd`, `rmdir` — all Remove-Item) recursively
+        // force-deleted user data with NO HITL prompt. The branch now matches the
+        // cmdlet OR any of its aliases when combined with a recursive/force/wildcard
+        // shape (`-recur`, `-force`, or `*`). Word-boundary anchored so `Get-*` and
+        // alias substrings inside other words never match; a false positive is only
+        // an extra confirmation prompt, whereas a miss is a silent destructive run.
+        r"(?i)(\b(set-content|out-file|add-content|set-service|stop-service|new-service|stop-computer|restart-computer|set-itemproperty|new-itemproperty|set-mppreference|add-mppreference|new-localuser|add-localgroupmember|register-scheduledtask|bcdedit|set-executionpolicy)\b|\b(remove-item|ri|rm|del|erase|rd|rmdir)\b[^\n]*(-recur|-force|\*)|\bschtasks\b[^\n]*/(create|change|delete|run)|\bcipher\b[^\n]*/w|\bstop-process\b[^\n]*\b(msmpeng|mpdefendercoreservice|windefend|wdnissvc|sense|mssense|securityhealthservice|csfalcon|cbdefense|sentinelagent|cylancesvc)\b)"
+    ).expect("DESTRUCTIVE_VERB_RE is a valid pattern")
+});
+
 // ── POWERSHELL LOCAL CON AUDIT LOG ────────────────────────────────────────────
 
 #[tauri::command]
@@ -49,7 +74,7 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
             "[{}] [USR:{}] [PLACEHOLDER_GUARD] {} :: {}",
             timestamp, user, evidence,
             &crate::utils::secret_scrubber::scrub_for_audit(
-                &script[..script.len().min(200)]
+                crate::utils::safe_truncate(&script, 200)
             )
         );
         let _ = OpenOptions::new().create(true).append(true).open(&audit_path)
@@ -171,6 +196,29 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
                 write_app_log("WARNING", &format!("Bloqueado comando prohibido: {}", blocked));
                 return Err(format!("SECURITY_BLOCK:{}:{}", new_token, blocked));
             }
+        }
+
+        // v1.7.232 (Phase-2 C1/C3): verb-level destructive classifier, evaluated on
+        // the de-obfuscated form (backticks stripped, whitespace collapsed) so it
+        // survives the same obfuscation the substring blocklist normalizes for. It
+        // routes matches through the IDENTICAL bypass-token flow (same SECURITY_BLOCK
+        // contract the frontend already handles), so no new frontend path is needed
+        // and there is no double-prompt: the frontend's isDestructiveCmd gate runs
+        // BEFORE invoke(), so anything it already catches never reaches here.
+        if DESTRUCTIVE_VERB_RE.is_match(&script_norm) {
+            let new_token = crate::state::generate_secure_token();
+            let expiry = std::time::Instant::now()
+                + std::time::Duration::from_secs(crate::state::BYPASS_TOKEN_TTL_SECS);
+            match crate::state::BYPASS_TOKENS.lock() {
+                Ok(mut t) => { t.insert(new_token.clone(), (script.clone(), expiry)); }
+                Err(e) => {
+                    write_app_log("ERROR", &format!("BYPASS_TOKENS mutex poisoned during insert: {}", e));
+                    return Err("Error interno: no se pudo registrar token de seguridad. Reinicia Lucy.".to_string());
+                }
+            }
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [DESTRUCTIVE_VERB_PENDING_AUTH] Script: {}", timestamp, user, scrub);
+            write_app_log("WARNING", "Bloqueado verbo destructivo (clasificador C1/C3)");
+            return Err(format!("SECURITY_BLOCK:{}:{}", new_token, "verbo destructivo del sistema"));
         }
     }
 
@@ -468,8 +516,9 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
         }
     } else if !stdout.trim().is_empty() {
         // Non-zero exit but we got output — return it with a warning footer instead of erroring.
+        // SCRUB-4: stderr may echo a secret from a failing command — scrub before disk.
         write_app_log("WARNING", &format!("PowerShell non-zero exit with output. stderr: {}",
-            stderr.trim()));
+            crate::utils::secret_scrubber::scrub_for_audit(stderr.trim())));
         Ok(format!("{}\n\n[stderr warnings — partial results, exit non-zero]\n{}",
             stdout, stderr.trim()))
     } else {
@@ -480,7 +529,9 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
         } else {
             stderr
         };
-        write_app_log("WARNING", &format!("PowerShell error: {}", err_msg));
+        // SCRUB-4: scrub any secret in stderr before it hits lucy_app.log.
+        write_app_log("WARNING", &format!("PowerShell error: {}",
+            crate::utils::secret_scrubber::scrub_for_audit(&err_msg)));
         Err(format!("PowerShell Error:\n{}", err_msg))
     }
 }
@@ -517,6 +568,18 @@ pub async fn stream_shell_cmd(
     if let Some(ref kp) = key_path {
         if kp.trim_start().starts_with('-') {
             return Err("Ruta de clave SSH inválida: no puede comenzar con '-'".to_string());
+        }
+    }
+
+    // SECURITY v1.7.236 (audit): the STREAMING remote path skipped the remote
+    // guardrail scan that both non-streaming remote paths (hosts.rs run_winrm /
+    // run_ssh) already enforce, so injection/obfuscation shapes reached the
+    // remote host ungated through this entry point. Mirror hosts.rs:95 — scan
+    // before the permission check, fail-closed on Block.
+    {
+        let rscan = crate::guardrails::scan_remote_shell(&command);
+        if matches!(rscan.decision, crate::guardrails::ScanDecision::Block) {
+            return Err(format!("Comando remoto bloqueado por guardrail: {}", rscan.reason));
         }
     }
 
@@ -790,6 +853,55 @@ mod tests {
     fn setup() {
         crate::commands::metrics::init_in_memory_for_tests()
             .expect("test DB init failed");
+    }
+
+    // ── v1.7.232 (Phase-2 C1/C3): verb-level destructive classifier ──────────
+    // Pure regex — no DB/setup needed. Also forces DESTRUCTIVE_VERB_RE's Lazy
+    // init, so an invalid pattern fails the suite instead of panicking at runtime.
+    // Inputs are lowercased to mirror the production call site (script_norm).
+    #[test]
+    fn destructive_verb_classifier_flags_high_signal_verbs() {
+        for s in [
+            "Set-MpPreference -DisableRealtimeMonitoring $true",
+            "Get-Process | Out-File C:\\evil.ps1",
+            "Set-Content -Path C:\\x -Value y",
+            "Add-Content C:\\x 'more'",
+            "New-LocalUser hacker",
+            "Add-LocalGroupMember -Group Administrators -Member hacker",
+            "Register-ScheduledTask -TaskName Persist -Action $a",
+            "bcdedit /set {default} recoveryenabled No",
+            "Set-ExecutionPolicy Bypass -Scope Process",
+            "Remove-Item C:\\temp\\stuff -Recurse -Force", // flag AFTER path (C3 adjacency gap)
+            "Stop-Process -Name MsMpEng -Force",           // kill Windows Defender (C1)
+            // v1.7.236 (audit): Remove-Item ALIASES must be flagged too.
+            "rm C:\\temp\\stuff -Recurse -Force",          // rm  = Remove-Item
+            "ri C:\\temp\\stuff -Force",                   // ri  = Remove-Item
+            "del C:\\temp\\stuff -Recurse",                // del = Remove-Item
+            "erase C:\\x -Force",                          // erase = Remove-Item
+            "rd C:\\dir -Recurse",                         // rd  = Remove-Item
+        ] {
+            assert!(
+                DESTRUCTIVE_VERB_RE.is_match(&s.to_lowercase()),
+                "should flag destructive verb: {:?}", s
+            );
+        }
+    }
+
+    #[test]
+    fn destructive_verb_classifier_leaves_reads_alone() {
+        for s in [
+            "Get-Content C:\\logs\\app.log",
+            "Get-Process | Select-Object Name,CPU",
+            "Get-Service Spooler",
+            "Stop-Process -Name notepad",       // routine kill — NOT an AV process name
+            "schtasks /query /fo LIST",         // reading scheduled tasks
+            "Get-ChildItem -Recurse C:\\proj",  // recursive READ, no destructive verb
+        ] {
+            assert!(
+                !DESTRUCTIVE_VERB_RE.is_match(&s.to_lowercase()),
+                "should NOT flag read-only command: {:?}", s
+            );
+        }
     }
 
     /// CONTRACT: stdout from `Write-Output` MUST reach the caller.

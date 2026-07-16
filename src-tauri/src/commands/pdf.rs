@@ -17,10 +17,11 @@
 //   • FTS5:   <TOOL>memoria_buscar:query</TOOL>  (works without Ollama)
 //   • Vector: <TOOL>pdf_search:query</TOOL>       (requires Ollama + model)
 
-use crate::commands::embeddings::embed_and_store;
+use crate::commands::embeddings::{embed_and_store, embed_and_store_batch};
 use crate::commands::metrics::shared_db;
 use crate::utils::db::{generate_id, PdfDocument};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use tauri::{AppHandle, Emitter};
 
@@ -141,7 +142,11 @@ fn detect_heading(block: &str) -> Option<String> {
     let trimmed = block.trim();
     let first = trimmed.lines().next().unwrap_or("").trim();
     if first.is_empty() || first.chars().count() > 80 { return None; }
-    let ends_sentence = first.ends_with(['.', ',', ';', ':']);
+    // v1.7.233: '?' and '!' added to the veto. Without them a numbered FAQ
+    // question ("5. What encryption standards does your trading partner
+    // support?") passed rule 2 as a heading and — because the active section
+    // is sticky in chunk_structured — got prepended to hundreds of chunks.
+    let ends_sentence = first.ends_with(['.', ',', ';', ':', '?', '!']);
 
     // 1. Markdown ATX heading (markitdown emits these).
     if let Some(rest) = first.strip_prefix('#') {
@@ -171,6 +176,26 @@ fn detect_heading(block: &str) -> Option<String> {
         return Some(first.to_string());
     }
     None
+}
+
+/// Collect up to `max` section headings from the text, using the same
+/// block-splitting + detect_heading logic as `chunk_structured`. Feeds the
+/// per-document summary memory's mini table-of-contents (v1.7.233).
+fn collect_headings(text: &str, max: usize) -> Vec<String> {
+    let mut blocks: Vec<&str> = text.split("\n\n").map(|b| b.trim()).filter(|b| !b.is_empty()).collect();
+    if blocks.len() <= 1 {
+        blocks = text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for block in blocks {
+        if let Some(h) = detect_heading(block) {
+            if !out.contains(&h) {
+                out.push(h);
+                if out.len() >= max { break; }
+            }
+        }
+    }
+    out
 }
 
 fn chunk_structured(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
@@ -315,6 +340,31 @@ pub async fn pdf_ingest(
 
     let total_chars = clean.len();
 
+    // ── v1.7.233: idempotent re-ingest ────────────────────────────────────
+    // Hash the EXTRACTED TEXT (not the path — drag-drop copies the file to a
+    // temp path, so path equality never matches). Same content already
+    // ingested → refuse with a friendly pointer instead of silently writing
+    // a full duplicate chunk set (the pre-fix behaviour: doc_id was random,
+    // so re-ingesting a 1475-section manual duplicated all 1475 rows).
+    let content_hash = format!("{:x}", Sha256::digest(clean.as_bytes()));
+    let existing: Option<(String, u32)> = shared_db(|conn| {
+        Ok(conn.query_row(
+            "SELECT filename, chunk_count FROM pdf_documents
+             WHERE content_hash = ?1 AND status = 'done'
+             LIMIT 1",
+            rusqlite::params![content_hash],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)),
+        ).ok())
+    })?;
+    if let Some((prev_name, prev_chunks)) = existing {
+        return Err(format!(
+            "Este documento ya está ingerido como '{}' ({} secciones). \
+             Lucy ya puede consultarlo con pdf_search. Si quieres re-ingerirlo \
+             (p.ej. tras mejorar el chunking), bórralo primero desde el panel PDF.",
+            prev_name, prev_chunks
+        ));
+    }
+
     // Surface which extractor ran so the user can tell whether markitdown's
     // structure-preserving path kicked in (vs the plain pdf-extract fallback).
     let _ = app.emit("pdf_progress", PdfProgress {
@@ -333,9 +383,9 @@ pub async fn pdf_ingest(
     // ── Phase 2: save doc record (status = ingesting) ────────────────────
     shared_db(|conn| {
         conn.execute(
-            "INSERT INTO pdf_documents (id, filename, path, chunk_count, status)
-             VALUES (?1, ?2, ?3, ?4, 'ingesting')",
-            rusqlite::params![doc_id, filename, path, total],
+            "INSERT INTO pdf_documents (id, filename, path, chunk_count, status, content_hash)
+             VALUES (?1, ?2, ?3, ?4, 'ingesting', ?5)",
+            rusqlite::params![doc_id, filename, path, total, content_hash],
         ).map_err(|e| format!("pdf_documents insert: {}", e))?;
         Ok(())
     })?;
@@ -352,11 +402,15 @@ pub async fn pdf_ingest(
                             filename.replace('"', "'"));
         let files = format!("[\"{}\"]", path.replace('\\', "\\\\").replace('"', "\\\""));
 
+        // v1.7.233: importance 1 (was hardcoded 2). Reference-manual chunks
+        // must never outrank organic memories in importance-ordered queries;
+        // they are excluded from the row-level janitors anyway (managed at
+        // document level via pdf_delete_doc).
         let mid = shared_db(|conn| {
             conn.execute(
                 "INSERT INTO agent_memories
                     (session_id, title, content, tags, files, importance)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 2)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1)",
                 rusqlite::params![session_id, title, chunk, tags, files],
             ).map_err(|e| format!("agent_memories insert chunk {}: {}", n, e))?;
             Ok(conn.last_insert_rowid())
@@ -380,7 +434,43 @@ pub async fn pdf_ingest(
         Ok(())
     })?;
 
+    // ── v1.7.233: ONE summary memory per document ─────────────────────────
+    // The chunks themselves are reference material (importance 1, excluded
+    // from the browser/ambient recall). This single importance-2 row is what
+    // Lucy actually "remembers": the document exists, its shape, and how to
+    // query it. session_id 'pdf-doc:' (NOT 'pdf:') so it survives the pdf
+    // exclusions; embedded as entity_type 'memory' below so the pre-loop
+    // semantic recall can surface it when the user asks about the topic.
+    let toc = collect_headings(&clean, 12);
+    let summary_body = format!(
+        "Documento de referencia ingerido: \"{}\" — {} secciones, {} caracteres. \
+         Para consultar su contenido usa la herramienta pdf_search (búsqueda semántica) \
+         o memoria_buscar (texto).{}",
+        filename, total, total_chars,
+        if toc.is_empty() { String::new() } else { format!(" Temas detectados: {}.", toc.join(" · ")) }
+    );
+    let summary_mid: Option<i64> = {
+        let doc_session = format!("pdf-doc:{}", doc_id);
+        let s_title = format!("Documento: {}", filename);
+        let s_tags = format!("[\"pdf-doc\",\"pdf:{}\",\"{}\"]", doc_id, filename.replace('"', "'"));
+        let s_files = format!("[\"{}\"]", path.replace('\\', "\\\\").replace('"', "\\\""));
+        shared_db(|conn| {
+            conn.execute(
+                "INSERT INTO agent_memories
+                    (session_id, title, content, tags, files, importance)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 2)",
+                rusqlite::params![doc_session, s_title, summary_body, s_tags, s_files],
+            ).map_err(|e| format!("doc summary insert: {}", e))?;
+            Ok(Some(conn.last_insert_rowid()))
+        }).unwrap_or(None)
+    };
+
     // ── Phase 4: embed in background (Ollama, fire-and-forget) ───────────
+    // v1.7.233: BATCHED — 16 chunks per /api/embed call (M1) instead of one
+    // HTTP round-trip per chunk. A 1475-chunk manual drops from 1475 serial
+    // requests (minutes of Ollama churn) to ~92. embed_and_store_batch also
+    // mirrors each vector into sqlite-vec, so pdf_search sees the new chunks
+    // immediately instead of after the next boot's backfill.
     {
         let app2      = app.clone();
         let doc2      = doc_id.clone();
@@ -390,26 +480,32 @@ pub async fn pdf_ingest(
 
         tauri::async_runtime::spawn(async move {
             let total_emb = chunks2.len() as u32;
-            for (i, (chunk, mid)) in chunks2.iter().zip(mids2.iter()).enumerate() {
-                let n   = (i + 1) as u32;
+            let items: Vec<(String, String)> = chunks2.iter().zip(mids2.iter())
                 // Prepend filename so the embedding carries document context
-                let txt = format!("[{}] {}", fname2, chunk);
-                match embed_and_store(
-                    "pdf_chunk".into(),
-                    mid.to_string(),
-                    txt,
-                    None,
-                ).await {
-                    Ok(_)  => {},
-                    Err(e) => {
-                        eprintln!("[pdf] embed skip chunk {}/{}: {}", n, total_emb, e);
-                    }
+                .map(|(chunk, mid)| (mid.to_string(), format!("[{}] {}", fname2, chunk)))
+                .collect();
+            let mut done: u32 = 0;
+            for batch in items.chunks(16) {
+                match embed_and_store_batch("pdf_chunk", batch, None).await {
+                    Ok(n)  => done += n,
+                    Err(e) => eprintln!("[pdf] embed batch skip ({} items): {}", batch.len(), e),
                 }
                 let _ = app2.emit("pdf_progress", PdfProgress {
-                    doc_id: doc2.clone(), current: n, total: total_emb,
+                    doc_id: doc2.clone(), current: done.min(total_emb), total: total_emb,
                     phase: "embedding".into(),
-                    message: format!("Embedding chunk {}/{}", n, total_emb),
+                    message: format!("Embedding {}/{}", done.min(total_emb), total_emb),
                 });
+            }
+            // The doc-level summary memory gets a 'memory'-type embedding so
+            // the pre-loop semantic recall can surface "this manual exists"
+            // when the user asks about its topic.
+            if let Some(smid) = summary_mid {
+                let _ = embed_and_store(
+                    "memory".into(),
+                    smid.to_string(),
+                    format!("Documento: {} — manual/documento de referencia ingerido, consultable con pdf_search", fname2),
+                    None,
+                ).await;
             }
             let _ = app2.emit("pdf_progress", PdfProgress {
                 doc_id: doc2.clone(), current: total_emb, total: total_emb,
@@ -426,9 +522,16 @@ pub async fn pdf_ingest(
 #[tauri::command]
 pub async fn pdf_list_docs() -> Result<Vec<PdfDocument>, String> {
     shared_db(|conn| {
+        // v1.7.233: embedded_count via correlated subquery — the docs list can
+        // now show real embedding coverage ("N/M embebidos") instead of the
+        // ambiguous 'done' (which only covers the chunk-saving phase).
         let mut stmt = conn.prepare(
-            "SELECT id, filename, path, page_count, chunk_count, ingested_at, status
-             FROM pdf_documents ORDER BY ingested_at DESC",
+            "SELECT d.id, d.filename, d.path, d.page_count, d.chunk_count, d.ingested_at, d.status,
+                    (SELECT COUNT(*) FROM embeddings e
+                      WHERE e.entity_type = 'pdf_chunk'
+                        AND e.entity_id IN (SELECT CAST(am.id AS TEXT) FROM agent_memories am
+                                             WHERE am.session_id = 'pdf:' || d.id)) AS embedded_count
+             FROM pdf_documents d ORDER BY d.ingested_at DESC",
         ).map_err(|e| format!("pdf_list_docs prepare: {}", e))?;
 
         fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PdfDocument> {
@@ -440,6 +543,7 @@ pub async fn pdf_list_docs() -> Result<Vec<PdfDocument>, String> {
                 chunk_count: row.get(4)?,
                 ingested_at: row.get(5)?,
                 status:      row.get(6)?,
+                embedded_count: row.get(7)?,
             })
         }
 
@@ -472,31 +576,34 @@ pub async fn pdf_delete_doc(doc_id: String) -> Result<u32, String> {
     })?;
 
     let chunk_count = mem_ids.len() as u32;
+    let doc_session = format!("pdf-doc:{}", doc_id);
 
-    // 2. Delete embeddings (entity_id = mem_id as string)
-    for mid in &mem_ids {
-        let eid = mid.to_string();
-        let _ = shared_db(|conn| {
-            conn.execute(
-                "DELETE FROM embeddings
-                  WHERE entity_type = 'pdf_chunk' AND entity_id = ?1",
-                rusqlite::params![eid],
-            ).map_err(|e| format!("delete embedding: {}", e))?;
-            Ok(())
-        });
-    }
-
-    // 3. Delete all memory chunks for this document
+    // 2-4. One DB pass (v1.7.233 — was 1475 separate lock acquisitions):
+    //   · chunk embeddings via a single subquery DELETE
+    //   · the doc-level summary memory (session 'pdf-doc:') + its 'memory'
+    //     embedding, added in v1.7.233
+    //   · the chunk rows and the doc record
+    let synth_session = format!("pdf:synth:{}", doc_id);
     shared_db(|conn| {
+        // v1.7.233 M2: los resúmenes de síntesis ('pdf:synth:') también se
+        // embeben como pdf_chunk — el mismo subquery de sesión los cubre.
         conn.execute(
-            "DELETE FROM agent_memories WHERE session_id = ?1",
-            rusqlite::params![session_id],
+            "DELETE FROM embeddings
+              WHERE entity_type = 'pdf_chunk'
+                AND entity_id IN (SELECT CAST(id AS TEXT) FROM agent_memories
+                                   WHERE session_id = ?1 OR session_id = ?2)",
+            rusqlite::params![session_id, synth_session],
+        ).map_err(|e| format!("delete embeddings: {}", e))?;
+        conn.execute(
+            "DELETE FROM embeddings
+              WHERE entity_type = 'memory'
+                AND entity_id IN (SELECT CAST(id AS TEXT) FROM agent_memories WHERE session_id = ?1)",
+            rusqlite::params![doc_session],
+        ).map_err(|e| format!("delete summary embedding: {}", e))?;
+        conn.execute(
+            "DELETE FROM agent_memories WHERE session_id = ?1 OR session_id = ?2 OR session_id = ?3",
+            rusqlite::params![session_id, doc_session, synth_session],
         ).map_err(|e| format!("delete memories: {}", e))?;
-        Ok(())
-    })?;
-
-    // 4. Delete doc record
-    shared_db(|conn| {
         conn.execute(
             "DELETE FROM pdf_documents WHERE id = ?1",
             rusqlite::params![doc_id],
@@ -516,11 +623,282 @@ pub async fn pdf_search(
     limit: Option<u32>,
     min_score: Option<f32>,
 ) -> Result<Vec<crate::commands::embeddings::SemanticHit>, String> {
-    crate::commands::embeddings::semantic_search(
-        query,
-        Some("pdf_chunk".to_string()),
-        limit.or(Some(5)),
-        min_score.or(Some(0.2)),
-        None,
-    ).await
+    use std::collections::HashMap;
+    let lim = limit.unwrap_or(5).max(1) as usize;
+    let base_min = min_score.unwrap_or(0.2);
+
+    // ── v1.7.233 M3 — expansión de consulta + fusión RRF ─────────────────
+    // La original + hasta 3 reformulaciones del LLM local (best-effort: sin
+    // Ollama la lista queda en [original] y el comportamiento es el previo).
+    let mut queries: Vec<String> = vec![query.clone()];
+    queries.extend(crate::commands::metrics::expand_query_via_ollama(&query).await);
+
+    const RRF_K: f64 = 60.0;
+    let mut fused: HashMap<String, (f64, crate::commands::embeddings::SemanticHit)> = HashMap::new();
+    for q in &queries {
+        let hits = crate::commands::embeddings::semantic_search(
+            q.clone(),
+            Some("pdf_chunk".to_string()),
+            Some(8),
+            Some(base_min.min(0.30)),
+            None,
+        ).await.unwrap_or_default();
+        for (rank, h) in hits.into_iter().enumerate() {
+            let e = fused.entry(h.entity_id.clone()).or_insert((0.0, h));
+            e.0 += 1.0 / (RRF_K + rank as f64 + 1.0);
+        }
+    }
+    let mut ranked: Vec<(f64, crate::commands::embeddings::SemanticHit)> = fused.into_values().collect();
+    ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(20);
+
+    // Rerank cross-encoder (feature `ml-reranker`; devuelve None si no está
+    // compilado o el modelo ONNX falta — fallback silencioso al orden RRF).
+    let passages: Vec<&str> = ranked.iter().map(|(_, h)| h.text.as_str()).collect();
+    if let Some(scores) = crate::commands::reranker::rerank(&query, &passages) {
+        if scores.len() == ranked.len() {
+            let mut paired: Vec<(f32, crate::commands::embeddings::SemanticHit)> =
+                scores.into_iter().zip(ranked.into_iter().map(|(_, h)| h)).collect();
+            paired.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            ranked = paired.into_iter().map(|(s, h)| (s as f64, h)).collect();
+        }
+    }
+    let out: Vec<crate::commands::embeddings::SemanticHit> =
+        ranked.into_iter().take(lim).map(|(_, h)| h).collect();
+
+    // ── v1.7.233 M4 — señal de uso ────────────────────────────────────────
+    // Lo consultado sube en el ranking futuro (mismo touch que
+    // search_agent_memories). Fire-and-forget: un fallo no rompe la búsqueda.
+    let ids: Vec<String> = out.iter()
+        .filter_map(|h| h.entity_id.parse::<i64>().ok().map(|i| i.to_string()))
+        .collect();
+    if !ids.is_empty() {
+        let id_list = ids.join(",");
+        let _ = shared_db(move |conn| {
+            let _ = conn.execute(&format!(
+                "UPDATE agent_memories
+                 SET access_count = access_count + 1,
+                     last_accessed_at = strftime('%s','now')
+                 WHERE id IN ({})", id_list), []);
+            Ok(())
+        });
+    }
+    Ok(out)
+}
+
+// ── v1.7.233 M2 — Síntesis jerárquica de documentos ─────────────────────────
+// Loop background que destila cada PDF ingerido en resúmenes densos (~100-150
+// palabras por lote de secciones consecutivas) usando el LLM local. Las
+// síntesis se guardan como agent_memories session 'pdf:synth:<doc_id>'
+// (prefijo 'pdf:' → heredan TODAS las exclusiones de chunks) y se embeben como
+// entity_type 'pdf_chunk', así pdf_search las encuentra — y al ser densas
+// suelen ganar el top-k frente al chunk crudo de 2.500 chars.
+
+const SYNTH_BATCH: usize = 9;          // ~capítulo (secciones consecutivas)
+const SYNTH_MODEL: &str = "qwen3:4b";  // mismo modelo que el consolidador
+
+/// Agrupa ids de chunks consecutivos en lotes (start§, end§, ids) — 1-based.
+fn synth_group(ids: &[i64], batch: usize) -> Vec<(usize, usize, Vec<i64>)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < ids.len() {
+        let end = (i + batch.max(1)).min(ids.len());
+        out.push((i + 1, end, ids[i..end].to_vec()));
+        i = end;
+    }
+    out
+}
+
+/// Resumen técnico fiel vía Ollama. Best-effort: Err si Ollama no responde.
+async fn ollama_summarize(text: &str) -> Result<String, String> {
+    let base = crate::commands::embeddings::ollama_base();
+    let body = serde_json::json!({
+        "model": SYNTH_MODEL,
+        "messages": [
+            { "role": "system", "content": "Eres un sintetizador técnico. Resume el fragmento de manual en 100-150 palabras EN ESPAÑOL, fiel al contenido, sin inventar nada, conservando exactos los nombres de opciones, comandos, rutas y valores. Devuelve SOLO el resumen." },
+            { "role": "user",   "content": text }
+        ],
+        "stream": false,
+        "options": { "temperature": 0.2, "num_predict": 320 }
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build().map_err(|e| format!("client: {}", e))?;
+    let resp = client.post(format!("{}/api/chat", base)).json(&body).send().await
+        .map_err(|e| format!("ollama: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("ollama {}", resp.status()));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| format!("json: {}", e))?;
+    let mut out = json.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str())
+        .unwrap_or("").trim().to_string();
+    // qwen3 puede emitir razonamiento <think>…</think> — quedarnos con lo de después.
+    if let Some(p) = out.find("</think>") { out = out[p + 8..].trim().to_string(); }
+    if out.is_empty() { Err("respuesta vacía".into()) } else { Ok(out) }
+}
+
+/// Un documento por tick. Devuelve true si procesó (o intentó) alguno.
+async fn pdf_synth_tick() -> Result<bool, String> {
+    let doc: Option<(String, String)> = shared_db(|conn| {
+        Ok(conn.query_row(
+            "SELECT id, filename FROM pdf_documents
+             WHERE status = 'done' AND synth_status = ''
+             ORDER BY ingested_at ASC LIMIT 1",
+            [], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ).ok())
+    })?;
+    let Some((doc_id, filename)) = doc else { return Ok(false) };
+
+    let session = format!("pdf:{}", doc_id);
+    let synth_session = format!("pdf:synth:{}", doc_id);
+
+    // Claim + reintento idempotente: purga síntesis parciales de un intento
+    // previo (y sus embeddings) ANTES de regenerar — sin esto un fallo a mitad
+    // duplicaría resúmenes en el siguiente tick.
+    shared_db(|conn| {
+        conn.execute("UPDATE pdf_documents SET synth_status = 'working' WHERE id = ?1",
+            rusqlite::params![doc_id]).map_err(|e| format!("claim: {}", e))?;
+        conn.execute(
+            "DELETE FROM embeddings WHERE entity_type = 'pdf_chunk'
+               AND entity_id IN (SELECT CAST(id AS TEXT) FROM agent_memories WHERE session_id = ?1)",
+            rusqlite::params![synth_session]).map_err(|e| format!("purge emb: {}", e))?;
+        conn.execute("DELETE FROM agent_memories WHERE session_id = ?1",
+            rusqlite::params![synth_session]).map_err(|e| format!("purge synth: {}", e))?;
+        Ok(())
+    })?;
+
+    let rows: Vec<(i64, String)> = shared_db(|conn| {
+        let mut st = conn.prepare(
+            "SELECT id, content FROM agent_memories WHERE session_id = ?1 ORDER BY id ASC",
+        ).map_err(|e| format!("chunks prepare: {}", e))?;
+        let v = st.query_map(rusqlite::params![session], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| format!("chunks query: {}", e))?
+            .filter_map(|r| r.ok()).collect();
+        Ok(v)
+    })?;
+    if rows.is_empty() {
+        shared_db(|conn| { let _ = conn.execute(
+            "UPDATE pdf_documents SET synth_status = 'done' WHERE id = ?1",
+            rusqlite::params![doc_id]); Ok(()) })?;
+        return Ok(true);
+    }
+
+    let ids: Vec<i64> = rows.iter().map(|(i, _)| *i).collect();
+    let mut items: Vec<(String, String)> = Vec::new();  // (entity_id, texto a embeber)
+    let mut made = 0usize;
+    for (a, b, gids) in synth_group(&ids, SYNTH_BATCH) {
+        let joined: String = rows.iter()
+            .filter(|(i, _)| gids.contains(i))
+            .map(|(_, c)| c.as_str())
+            .collect::<Vec<_>>().join("\n\n")
+            .chars().take(12_000).collect();
+        match ollama_summarize(&joined).await {
+            Ok(sum) => {
+                let title = format!("Síntesis: {} §{}-{}", filename, a, b);
+                let tags = format!("[\"pdf-synth\",\"pdf:{}\",\"{}\"]", doc_id, filename.replace('"', "'"));
+                let mid = shared_db(|conn| {
+                    conn.execute(
+                        "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
+                         VALUES (?1, ?2, ?3, ?4, '[]', 1)",
+                        rusqlite::params![synth_session, title, sum, tags],
+                    ).map_err(|e| format!("synth insert: {}", e))?;
+                    Ok(conn.last_insert_rowid())
+                })?;
+                items.push((mid.to_string(), format!("[{}] {}", filename, sum)));
+                made += 1;
+            }
+            Err(e) => {
+                // Ollama caído a mitad: re-marca pendiente (el próximo tick
+                // purga lo parcial y reintenta desde cero) y sal del tick.
+                eprintln!("[pdf-synth] {} lote §{}-{}: {}", filename, a, b, e);
+                shared_db(|conn| { let _ = conn.execute(
+                    "UPDATE pdf_documents SET synth_status = '' WHERE id = ?1",
+                    rusqlite::params![doc_id]); Ok(()) })?;
+                return Ok(true);
+            }
+        }
+    }
+    let _ = crate::commands::embeddings::embed_and_store_batch("pdf_chunk", &items, None).await;
+    shared_db(|conn| { let _ = conn.execute(
+        "UPDATE pdf_documents SET synth_status = 'done' WHERE id = ?1",
+        rusqlite::params![doc_id]); Ok(()) })?;
+    eprintln!("[pdf-synth] {}: {} síntesis creadas", filename, made);
+    Ok(true)
+}
+
+/// Loop background (patrón proactive_detector). Idempotente. Delay inicial
+/// 3 min; tick cada 30 min; UN documento por tick para no saturar Ollama.
+pub fn start_pdf_synth_loop() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::SeqCst) { return; }
+    tauri::async_runtime::spawn(async {
+        // Crash-recovery: un 'working' huérfano de una sesión anterior vuelve
+        // a la cola (el tick purga sus parciales antes de regenerar).
+        let _ = shared_db(|conn| { let _ = conn.execute(
+            "UPDATE pdf_documents SET synth_status = '' WHERE synth_status = 'working'", []); Ok(()) });
+        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+        loop {
+            if let Err(e) = pdf_synth_tick().await { eprintln!("[pdf-synth] tick: {}", e); }
+            tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── detect_heading — the GoAnywhere incident class ──────────────────────
+    // A numbered FAQ QUESTION must not become a (sticky) section heading; the
+    // '?' veto is what prevents one FAQ entry from prefixing hundreds of
+    // chunks (v1.7.233 fix).
+    #[test]
+    fn faq_question_is_not_a_heading() {
+        assert_eq!(detect_heading("5. What encryption standards does your trading partner support?"), None);
+        assert_eq!(detect_heading("3. Install the agent now!"), None);
+    }
+
+    #[test]
+    fn real_numbered_headings_still_match() {
+        assert_eq!(detect_heading("3.1 Installation Requirements"), Some("3.1 Installation Requirements".into()));
+        assert_eq!(detect_heading("7 Pre-Installation Notes"), Some("7 Pre-Installation Notes".into()));
+    }
+
+    #[test]
+    fn markdown_and_allcaps_headings_match() {
+        assert_eq!(detect_heading("## Firewall Recommendations"), Some("Firewall Recommendations".into()));
+        assert_eq!(detect_heading("SYSTEM REQUIREMENTS"), Some("SYSTEM REQUIREMENTS".into()));
+    }
+
+    #[test]
+    fn sentences_and_paragraphs_are_not_headings() {
+        assert_eq!(detect_heading("This is a normal sentence that ends with a period."), None);
+        assert_eq!(detect_heading("First line\nSecond line of the same block"), None);
+        assert_eq!(detect_heading(""), None);
+    }
+
+    // ── M2 síntesis: agrupación en lotes consecutivos ────────────────────────
+    #[test]
+    fn synth_group_batches_consecutively() {
+        let ids: Vec<i64> = (100..122).collect(); // 22 chunks
+        let g = synth_group(&ids, 9);
+        assert_eq!(g.len(), 3);
+        assert_eq!((g[0].0, g[0].1), (1, 9));
+        assert_eq!((g[1].0, g[1].1), (10, 18));
+        assert_eq!((g[2].0, g[2].1), (19, 22));
+        assert_eq!(g[2].2, (118..122).collect::<Vec<i64>>());
+        assert_eq!(g.iter().map(|(_, _, v)| v.len()).sum::<usize>(), 22);
+        assert!(synth_group(&[], 9).is_empty());
+    }
+
+    // ── chunking sanity: overlap + coverage on plain text ───────────────────
+    #[test]
+    fn chunk_text_covers_and_overlaps() {
+        let text = "abcdefghij".repeat(100); // 1000 chars, no structure
+        let chunks = chunk_text(&text, 300, 50);
+        assert!(chunks.len() >= 3);
+        // Every chunk within size; consecutive chunks share the overlap region.
+        for c in &chunks { assert!(c.chars().count() <= 300); }
+    }
 }

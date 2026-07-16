@@ -54,9 +54,18 @@ pub async fn save_credential(key: String, value: String) -> Result<CredentialSav
     }
 }
 
-/// Retrieve a credential from the system keyring
+/// Report whether a credential EXISTS in the system keyring — returns a bool,
+/// never the value.
+///
+/// SECURITY (audit v1.7.236): the previous `get_credential` returned the raw
+/// keyring secret (`Ok(pass)`) across the IPC boundary, so any renderer path
+/// could `invoke('get_credential',{key:'anthropic'})` and exfiltrate every
+/// stored LLM provider key in plaintext. It had ZERO legitimate call sites —
+/// provider keys are used entirely backend-side (ai.rs attaches them as request
+/// headers). This replaces it with a status-only probe: the invariant is "only
+/// boolean/status crosses IPC; a key VALUE never does."
 #[tauri::command]
-pub async fn get_credential(key: String) -> Result<String, String> {
+pub async fn has_credential(key: String) -> Result<bool, String> {
     let service = "LucySysAdmin";
     let credential_key = if key.ends_with("_api_key") || key.ends_with("_endpoint") {
         key
@@ -65,10 +74,7 @@ pub async fn get_credential(key: String) -> Result<String, String> {
     };
 
     match Entry::new(service, &credential_key) {
-        Ok(entry) => match entry.get_password() {
-            Ok(pass) => Ok(pass),
-            Err(_) => Err("Credential not found".into()),
-        },
+        Ok(entry) => Ok(entry.get_password().is_ok()),
         Err(e) => Err(format!("Keyring error: {}", e)),
     }
 }
@@ -123,12 +129,17 @@ async fn check_gemini_health() -> Result<ProviderHealth, String> {
         .and_then(|e| e.get_password())
     {
         Ok(api_key) => {
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models?key={}",
-                api_key
-            );
-
-            let resp = HTTP_CLIENT.get(&url).send().await;
+            // SECURITY (audit v1.7.236): the key goes in the `x-goog-api-key`
+            // HEADER, never the URL query string. A `?key=<secret>` URL leaks
+            // the key into any error string — reqwest::Error's Display embeds
+            // the request URL on connect/timeout/TLS failures, and that error
+            // used to be formatted straight into the IPC-facing Err(...) below.
+            // ai.rs:1223 already uses the header form; this was the missed spot.
+            let resp = HTTP_CLIENT
+                .get("https://generativelanguage.googleapis.com/v1beta/models")
+                .header("x-goog-api-key", &api_key)
+                .send()
+                .await;
 
             match resp {
                 Ok(r) if r.status().is_success() => {
@@ -144,7 +155,10 @@ async fn check_gemini_health() -> Result<ProviderHealth, String> {
                         r.status().canonical_reason().unwrap_or("Unknown")
                     ))
                 }
-                Err(e) => Err(format!("Gemini connection error: {}", e)),
+                // Never format the raw reqwest::Error into an IPC/user string:
+                // it can carry the request URL (and, on other call shapes, a
+                // secret). A generic message is enough for a health probe.
+                Err(_) => Err("Gemini connection error: request failed".into()),
             }
         }
         Err(_) => Err("Gemini API key not configured".into()),

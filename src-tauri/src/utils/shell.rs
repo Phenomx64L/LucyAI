@@ -51,7 +51,7 @@ pub fn ensure_trusted_host(host: &str) {
     if host.contains('\'') || host.contains(';') || host.contains('`') || host.is_empty() || host.len() > 255 {
         crate::utils::logging::write_app_log(
             "WARNING",
-            &format!("ensure_trusted_host: rejected suspicious host value: {:?}", &host[..host.len().min(60)])
+            &format!("ensure_trusted_host: rejected suspicious host value: {:?}", crate::utils::safe_truncate(host, 60))
         );
         return;
     }

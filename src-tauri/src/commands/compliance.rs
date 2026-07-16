@@ -15,6 +15,13 @@ pub async fn run_compliance_linux(
     port: Option<u16>,
     key_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // SECURITY v1.7.232 (Phase-2 C12): validate host/username before they reach the
+    // `ssh user@host` argv token (line ~46). A leading '-' is otherwise re-parsed by
+    // SSH as an option (H10 argv-injection → -oProxyCommand local exec). Every sibling
+    // SSH path in hosts.rs enforces these; this compliance path had been missed.
+    crate::commands::hosts::validate_host(&host)?;
+    crate::commands::hosts::validate_username(&username)?;
+
     let checks: Vec<serde_json::Value> = serde_json::from_str(&checks_json)
         .map_err(|e| format!("JSON inválido en checks: {}", e))?;
 
@@ -62,7 +69,7 @@ pub async fn run_compliance_linux(
         .map_err(|e| e.to_string())??;
 
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido de compliance: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido de compliance: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }
 
 /// Ejecuta un batch de checks de compliance en un host Windows via WinRM.
@@ -100,7 +107,7 @@ $results += [PSCustomObject]@{{ id='{}'; exit_code=$ec; stdout=$out.Substring(0,
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }
 
 /// Ejecuta un batch de checks de compliance en la máquina local.
@@ -141,5 +148,5 @@ $results += [PSCustomObject]@{{ id='{}'; exit_code=$ec; stdout=$out.Substring(0,
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }

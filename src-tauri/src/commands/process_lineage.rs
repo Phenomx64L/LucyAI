@@ -188,7 +188,7 @@ pub fn poll_once() -> Result<(usize, usize), String> {
             let cmdline = sys.process(Pid::from_u32(*pid))
                 .map(|p| p.cmd().join(" "))
                 .unwrap_or_default();
-            let cmdline_truncated = if cmdline.len() > 512 { format!("{}…", &cmdline[..512]) } else { cmdline };
+            let cmdline_truncated = if cmdline.len() > 512 { format!("{}…", crate::utils::safe_truncate(&cmdline, 512)) } else { cmdline };
             let _ = name; // currently only used to enrich chain via by_pid
 
             // Compute chain hash

@@ -88,6 +88,27 @@ pub(crate) fn enforce_sensitive_path(raw: &str, for_write: bool) -> Result<std::
     Ok(canonical)
 }
 
+/// User credential/secret stores under %USERPROFILE%. Read OR write of anything
+/// beneath these is blocked by sensitive_path_block_reason, and enumeration is
+/// blocked by list_directory (C10). Single source of truth — keep it here.
+const SECRET_SUBPATHS: &[&str] = &[
+    r"\.ssh\",                // SSH private keys
+    r"\.aws\credentials",     // AWS keys
+    r"\.azure\",              // Azure tokens
+    r"\appdata\local\google\chrome\user data\default\login data",
+    r"\appdata\roaming\microsoft\credentials\",
+    r"\appdata\roaming\microsoft\protect\",  // DPAPI master keys
+    r"\appdata\local\microsoft\vault\",
+    r"\appdata\roaming\lucy\",               // Our own secret store!
+];
+
+/// True if `canon_lower` (already lowercased, `\\?\`-stripped, absolute) falls
+/// inside one of the user's SECRET_SUBPATHS credential stores.
+fn is_secret_store_subpath(canon_lower: &str, userprofile_lower: &str) -> bool {
+    if userprofile_lower.is_empty() { return false; }
+    SECRET_SUBPATHS.iter().any(|sub| canon_lower.starts_with(&format!("{}{}", userprofile_lower, sub)))
+}
+
 /// Pure blocklist check over an already-canonicalized path string.
 ///
 /// SEC FIX (v1.7.218): `std::fs::canonicalize` on Windows returns an extended-
@@ -115,24 +136,10 @@ fn sensitive_path_block_reason(canonical_display: &str, userprofile_lower: &str,
         return Some(format!("Path bloqueado por política: {} (área de sistema)", canonical_display));
     }
 
-    // User-secret directories — read OR write blocked.
-    if !userprofile_lower.is_empty() {
-        const SECRET_SUBPATHS: &[&str] = &[
-            r"\.ssh\",                // SSH private keys
-            r"\.aws\credentials",     // AWS keys
-            r"\.azure\",              // Azure tokens
-            r"\appdata\local\google\chrome\user data\default\login data",
-            r"\appdata\roaming\microsoft\credentials\",
-            r"\appdata\roaming\microsoft\protect\",  // DPAPI master keys
-            r"\appdata\local\microsoft\vault\",
-            r"\appdata\roaming\lucy\",               // Our own secret store!
-        ];
-        for sub in SECRET_SUBPATHS {
-            let full = format!("{}{}", userprofile_lower, sub);
-            if canon_lower.starts_with(&full) {
-                return Some(format!("Path bloqueado por política: {} (almacén de credenciales)", canonical_display));
-            }
-        }
+    // User-secret directories — read OR write blocked. (C10: the SECRET_SUBPATHS
+    // list is now module-level so list_directory reuses the exact same set.)
+    if is_secret_store_subpath(&canon_lower, userprofile_lower) {
+        return Some(format!("Path bloqueado por política: {} (almacén de credenciales)", canonical_display));
     }
 
     // Windows hosts file — read OK (legitimate), write blocked (rootkit-style modification)
@@ -293,6 +300,21 @@ pub async fn execute_cmd(
 
     let lower = script.to_lowercase();
 
+    // v1.7.232 (Phase-2 C3 residual): match the blocklist against a DE-OBFUSCATED
+    // form as well. cmd.exe strips carets before executing, so `fo^rmat d:` /
+    // `de^l /s` slip the literal substrings; and an attached switch like `del/s`
+    // (no space) dodges the space-separated `"del /s"` entry. Stripping carets and
+    // inserting a space before each `/` collapses both evasions to the canonical
+    // form. Mirrors execute_powershell's `script_norm` (which strips backticks);
+    // the frontend `normalizeCmd` already does the caret strip — this is the
+    // backend backstop. Used ONLY for matching; execution still uses `script`.
+    let norm: String = lower
+        .replace('^', "")
+        .replace('/', " /")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
     let blocklist = [
         "format ", "del /s", "rd /s", "rmdir /s",
         "net user /add", "net localgroup administrators",
@@ -306,7 +328,7 @@ pub async fn execute_cmd(
     let bypassed = was_blocked_but_bypassed;
     if !bypassed {
         for blocked in &blocklist {
-            if lower.contains(blocked) {
+            if lower.contains(blocked) || norm.contains(blocked) {
                 audit(&format!("[{}] [HOST:{}] [CMD_BLOCKED_PENDING_AUTH] {}",
                     ts(), host(), scrub));
                 return Err(issue_block_token(blocked));
@@ -364,7 +386,9 @@ pub async fn execute_cmd(
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             if out.status.success() { Ok(stdout) }
             else {
-                write_app_log("WARNING", &format!("CMD error: {}", stderr));
+                // SCRUB-4: scrub any secret in stderr before it hits lucy_app.log.
+                write_app_log("WARNING", &format!("CMD error: {}",
+                    crate::utils::secret_scrubber::scrub_for_audit(&stderr)));
                 Err(format!("CMD Error:\n{}{}", stderr, stdout))
             }
         }
@@ -458,7 +482,7 @@ pub async fn execute_netsh(args: String) -> Result<String, String> {
         }
     }
 
-    audit(&format!("[{}] [HOST:{}] [NETSH] {}", ts(), host(), &args[..args.len().min(200)]));
+    audit(&format!("[{}] [HOST:{}] [NETSH] {}", ts(), host(), crate::utils::safe_truncate(&args, 200)));
 
     let parsed_args = parse_args(&args);
     let result = tokio::time::timeout(
@@ -498,10 +522,15 @@ pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<S
     }
 
     let lower = args.trim().to_lowercase();
-    let is_write = lower.starts_with("add ")
-        || lower.starts_with("delete ")
-        || lower.starts_with("import ")
-        || lower.starts_with("restore ");
+    // SECURITY v1.7.232 (Phase-2 C4): default-DENY classification. Only read-only
+    // verbs (query/export/compare) skip the crypto bypass_token HITL gate; EVERY
+    // other reg operation is treated as a write — including the previously-missed
+    // save/copy/load/unload, i.e. the offline hive-dump / hive-load primitives
+    // (`reg save HKLM\SAM out.hiv` dumps the credential hive to a file). The old
+    // prefix allowlist only caught add/delete/import/restore, letting save/copy/
+    // load/unload through classified as reads with no token.
+    let first_verb = lower.split_whitespace().next().unwrap_or("");
+    let is_write = !matches!(first_verb, "query" | "export" | "compare");
 
     // v1.4.9 (C3): registry writes now go through the SAME cryptographic
     // bypass_token flow as execute_cmd / execute_powershell. The old code
@@ -520,7 +549,7 @@ pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<S
                     if authorized_script == &args {
                         bypassed_by_token = true;
                         audit(&format!("[{}] [HOST:{}] [REG_AUTHORIZED_BYPASS] {}",
-                            ts(), host(), &args[..args.len().min(300)]));
+                            ts(), host(), crate::utils::safe_truncate(&args, 300)));
                         tokens_map.remove(token);
                     }
                 }
@@ -535,7 +564,7 @@ pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<S
                 t.insert(new_token.clone(), (args.clone(), expiry));
             }
             audit(&format!("[{}] [HOST:{}] [REG_BLOCKED_PENDING_AUTH] {}",
-                ts(), host(), &args[..args.len().min(300)]));
+                ts(), host(), crate::utils::safe_truncate(&args, 300)));
             // v1.5.0: removed the legacy `force_write:true` deprecation
             // shim. Crypto bypass_token is now the ONLY way past this gate.
             return Err(format!("SECURITY_BLOCK:{}:reg write", new_token));
@@ -543,7 +572,7 @@ pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<S
     }
 
     let op_type = if is_write { if bypassed_by_token { "REG_WRITE_BYPASS" } else { "REG_WRITE_UNREACHABLE" } } else { "REG_READ" };
-    audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op_type, &args[..args.len().min(300)]));
+    audit(&format!("[{}] [HOST:{}] [{}] {}", ts(), host(), op_type, crate::utils::safe_truncate(&args, 300)));
 
     let parsed_args = parse_args(&args);
     let result = tokio::time::timeout(
@@ -622,7 +651,7 @@ pub async fn execute_cscript(script_content: String, bypass_token: Option<String
                     t.insert(new_token.clone(), (script_content.clone(), expiry));
                 }
                 audit(&format!("[{}] [HOST:{}] [CSCRIPT_BLOCKED_PENDING_AUTH] {} :: {}",
-                    ts(), host(), blocked, &script_content[..script_content.len().min(200)]));
+                    ts(), host(), blocked, crate::utils::safe_truncate(&script_content, 200)));
                 // v1.5.0: removed the legacy `force_execute:true` shim.
                 // Only a valid bypass_token (issued by this very call's
                 // SECURITY_BLOCK response and approved by the user) can
@@ -1228,6 +1257,22 @@ pub async fn list_directory(path: String) -> Result<Vec<serde_json::Value>, Stri
     let p = resolved.as_path();
     let norm_path = p.to_string_lossy().to_string();
 
+    // SECURITY v1.7.232 (Phase-2 C10): block agent enumeration of the user's
+    // credential stores (.ssh/.aws/DPAPI/browser creds/Lucy's own store). We do
+    // NOT block ordinary system dirs (C:\Windows, Program Files) — Lucy is a
+    // SysAdmin tool and listing those is legitimate; only credential-store
+    // metadata (names/sizes/mtimes) has no valid agent use. (path_exists is left
+    // ungated: frontend-only SSH-key probe inside .ssh, not agent-reachable.)
+    {
+        let up = std::env::var("USERPROFILE").unwrap_or_default().to_ascii_lowercase();
+        let canon = p.canonicalize().unwrap_or_else(|_| resolved.clone());
+        let canon_str = canon.to_string_lossy();
+        let canon_lower = canon_str.strip_prefix(r"\\?\").unwrap_or(&canon_str).to_ascii_lowercase();
+        if is_secret_store_subpath(&canon_lower, &up) {
+            return Err(format!("Listado bloqueado por política: {} (almacén de credenciales)", path));
+        }
+    }
+
     {
         let cache = DIR_CACHE.lock().await;
         if let Some(entry) = cache.get(&norm_path) {
@@ -1304,7 +1349,14 @@ pub async fn search_files(
     use std::path::Path;
     use aho_corasick::AhoCorasick;
 
-    let dir = Path::new(&directory);
+    // SECURITY v1.7.232 (Phase-2 C5): gate the search ROOT through the same
+    // sensitive-path enforcer as read_file_content. Previously search_files took
+    // `directory` verbatim (no '..' check, no secret/system block), so pointing it
+    // straight at C:\Users\<u>\.ssh enumerated and READ credential files into the
+    // agent context. This also supplies the missing '..' / `\\?\` rejection.
+    // Per-file re-checks below (inside walk) cover descendants like %APPDATA%\Lucy.
+    let canonical_root = enforce_sensitive_path(&directory, false)?;
+    let dir = canonical_root.as_path();
     if !dir.exists() || !dir.is_dir() {
         return Err(format!("Directorio no encontrado: {}", directory));
     }
@@ -1363,14 +1415,20 @@ pub async fn search_files(
             let Ok(meta) = std::fs::metadata(&path) else { continue };
             if meta.len() > 1_048_576 { continue; } // 1 MB max
 
+            // SECURITY C5: never READ a file inside a protected credential store,
+            // even if the walk descended into one whose name doesn't start with '.'
+            // (e.g. %APPDATA%\Roaming\Lucy). Mirrors read_file_content's gate.
+            if enforce_sensitive_path(&path.to_string_lossy(), false).is_err() { continue; }
             let Ok(content) = std::fs::read_to_string(&path) else { continue };
             for (i, line) in content.lines().enumerate() {
                 if results.len() >= max { break; }
                 if ac.is_match(line) {
                     let rel = path.strip_prefix(dir).unwrap_or(&path);
+                    // C7: char-boundary-safe (was `&line[..200]`, which panics on a
+                    // multibyte char straddling byte 200 → panic=abort kills the app).
                     results.push(format!("{}:{}| {}",
                         rel.display(), i + 1,
-                        if line.len() > 200 { &line[..200] } else { line }
+                        crate::utils::safe_truncate(line, 200)
                     ));
                 }
             }
@@ -1477,7 +1535,9 @@ pub async fn edit_file(
     invalidate_dir_cache_for_parent(p).await;
 
     let limited_diff = if diff_str.len() > 3000 {
-        format!("{}... [Diff Truncado]", &diff_str[..3000])
+        // C8: char-boundary-safe (was `&diff_str[..3000]` → panic=abort on a
+        // multibyte char straddling byte 3000, AFTER the file was already written).
+        format!("{}... [Diff Truncado]", crate::utils::safe_truncate(&diff_str, 3000))
     } else {
         diff_str
     };
@@ -1507,10 +1567,11 @@ pub async fn analyze_code(path: String) -> Result<String, String> {
     // GLOBAL_CWD via resolve_path. analyze_code was the only one operating
     // on the raw input, so paths like "src/main.rs" silently failed because
     // they resolved against the *process* CWD instead of the user's project.
-    if path.contains("..") {
-        return Err("Path traversal blocked: '..' not allowed.".to_string());
-    }
-    let resolved = resolve_path(&path);
+    // SECURITY v1.7.232 (Phase-2 C9): gate through the same sensitive-path enforcer
+    // as read_file_content/read_file_lines (was only an ad-hoc '..' check), so
+    // source/config under system or secret dirs isn't parsed and echoed back.
+    // enforce_sensitive_path already rejects '..' and `\\?\` verbatim prefixes.
+    let resolved = enforce_sensitive_path(&path, false)?;
     let path = resolved.as_path();
     if !path.exists() {
         return Err(format!("Archivo no encontrado: {}", resolved.display()));
@@ -1694,7 +1755,7 @@ async fn search_web_tavily(query: &str, api_key: &str) -> Result<String, String>
     let status = res.status();
     if !status.is_success() {
         let txt = res.text().await.unwrap_or_default();
-        let snippet = &txt[..txt.len().min(200)];
+        let snippet = crate::utils::safe_truncate(&txt, 200); // C6: was &txt[..min(200)] (mid-char panic)
         return Err(format!("Tavily HTTP {}: {}", status.as_u16(), snippet));
     }
 
@@ -1736,7 +1797,9 @@ async fn search_web_tavily(query: &str, api_key: &str) -> Result<String, String>
         // Cap each snippet to 500 chars so a 5-result page fits in a
         // typical LLM context budget for the search_web tool slot.
         let snippet = if snippet.len() > 500 {
-            format!("{}…", &snippet[..500])
+            // C6: char-boundary-safe (was `&snippet[..500]` on attacker-influenced
+            // web content → panic=abort). safe_truncate walks back to a boundary.
+            format!("{}…", crate::utils::safe_truncate(snippet, 500))
         } else {
             snippet.to_string()
         };
@@ -2090,6 +2153,39 @@ mod tests {
         assert!(
             out.contains("cmd-sentinel-8h2q"),
             "CMD stdout NOT captured. Got: {:?}", out
+        );
+    }
+
+    /// CONTRACT (v1.7.232 Phase-2 C3 residual): the de-obfuscation normalization
+    /// catches caret-escaped and attached-switch destructive forms that dodge the
+    /// literal substring blocklist. A match must return a SECURITY_BLOCK token —
+    /// i.e. the command is intercepted BEFORE execution (these never run).
+    #[tokio::test]
+    async fn cmd_blocklist_catches_obfuscated_destructive() {
+        setup();
+        for s in [
+            "de^l /s /q C:\\Windows\\Temp\\nope",  // caret-escaped `del` (cmd strips ^)
+            "del/s C:\\Windows\\Temp\\nope",       // attached switch dodges "del /s"
+            "fo^rmat D:",                           // caret-escaped `format`
+            "rd/s C:\\nope",                        // attached switch
+        ] {
+            let r = execute_cmd(s.to_string(), None).await;
+            assert!(
+                matches!(&r, Err(e) if e.starts_with("SECURITY_BLOCK:")),
+                "obfuscated destructive cmd should be blocked pre-exec, got: {:?}", r
+            );
+        }
+    }
+
+    /// CONTRACT: the `/`-split normalization must NOT false-block a benign switch
+    /// command. `dir /s` is a recursive LISTING (read) and must still run.
+    #[tokio::test]
+    async fn cmd_blocklist_allows_benign_switch_command() {
+        setup();
+        let r = execute_cmd("dir /s /b C:\\Windows\\System32\\drivers\\etc".to_string(), None).await;
+        assert!(
+            !matches!(&r, Err(e) if e.starts_with("SECURITY_BLOCK:")),
+            "benign `dir /s` must not be blocked, got: {:?}", r
         );
     }
 

@@ -33,12 +33,12 @@ pub async fn send_notification(
 
     // Sanitize inputs — prevent absurdly long notifications from clogging the OS
     let title = if title.len() > 200 {
-        format!("{}…", &title[..199])
+        format!("{}…", crate::utils::safe_truncate(&title, 199))
     } else {
         title
     };
     let body = if body.len() > 1000 {
-        format!("{}…", &body[..999])
+        format!("{}…", crate::utils::safe_truncate(&body, 999))
     } else {
         body
     };

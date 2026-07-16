@@ -72,7 +72,7 @@ export async function getLessons(filter: LessonFilter = {}): Promise<Lesson[]> {
     let memLessons: Lesson[] = [];
     try {
         const mems: RawMemory[] = filter.query
-            ? await invoke('search_agent_memories', { query: `lesson ${filter.query}`, limit: 50 })
+            ? await invoke('search_agent_memories', { query: `lesson ${filter.query}`, limit: 50, excludeDocuments: true })
             : await invoke('get_recent_memories', { limit: 50 });
 
         memLessons = mems

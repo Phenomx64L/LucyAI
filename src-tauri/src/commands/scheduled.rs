@@ -168,12 +168,26 @@ pub fn mark_scheduled_run(
             |r| Ok((r.get(0)?,)),
         );
         let (cron_expr,) = row.map_err(|e| format!("mark_scheduled_run lookup: {}", e))?;
-        let (next_run, enabled) = match cron_expr {
-            Some(ref e) if !e.is_empty() => match next_after(e, now + 60) {
-                Ok(n)  => (n, 1_i64),
-                Err(_) => (now + 3600, 1_i64),  // bad cron → retry in 1h, don't disable
-            },
-            _ => (0, 0_i64),                    // one-shot → disable, next_run irrelevant
+        // v1.7.238 — la pre-marca 'running' (frontend, para evitar doble disparo
+        // mientras corre) usaba la MISMA lógica que un cierre real: one-shot →
+        // enabled=0, así que un crash a mitad dejaba la tarea DESHABILITADA para
+        // siempre con last_status='running' (mentira de estado, jamás se ejecutó);
+        // cron → avanzaba next_run, tragándose la ocurrencia. Ahora 'running' usa
+        // un LEASE de 15 min (enabled=1): el tick de 60s no re-dispara, pero si
+        // hay crash la tarea vuelve a estar "due" tras el lease y se re-ejecuta
+        // UNA vez. El cierre real ('ok'/'error'/'skipped') sí computa abajo el
+        // next_run definitivo (one-shot→disable, cron→siguiente ocurrencia).
+        const RUNNING_LEASE_SECS: i64 = 900;
+        let (next_run, enabled) = if status == "running" {
+            (now + RUNNING_LEASE_SECS, 1_i64)
+        } else {
+            match cron_expr {
+                Some(ref e) if !e.is_empty() => match next_after(e, now + 60) {
+                    Ok(n)  => (n, 1_i64),
+                    Err(_) => (now + 3600, 1_i64),  // bad cron → retry in 1h, don't disable
+                },
+                _ => (0, 0_i64),                    // one-shot → disable, next_run irrelevant
+            }
         };
         conn.execute(
             "UPDATE scheduled_tasks SET
@@ -272,7 +286,21 @@ pub fn next_after(expr: &str, from: i64) -> Result<i64, String> {
     let mut t = ((from + 59) / 60) * 60;
     let cap = from + 366 * 24 * 60 * 60;
     while t < cap {
-        let (mn, hr, dy, mo, dow) = decompose_utc(t);
+        // v1.7.238 — interpretar el cron en hora LOCAL del operador ("0 3 * * *"
+        // = 3am local, no UTC — antes disparaba con offset de -6h en CDMX y nadie
+        // avisaba). Se calcula el offset local para ESTE t (chrono maneja DST
+        // correctamente por-instante) y se decompone t+offset con el decompositor
+        // existente. Los offsets de zona son múltiplos de minuto, así que t+off
+        // sigue alineado al minuto.
+        let local_off = {
+            use chrono::TimeZone;
+            chrono::Local
+                .timestamp_opt(t, 0)
+                .single()
+                .map(|dt| dt.offset().local_minus_utc() as i64)
+                .unwrap_or(0)
+        };
+        let (mn, hr, dy, mo, dow) = decompose_utc(t + local_off);
         if matches_field(fields[0], mn, 0, 59)
             && matches_field(fields[1], hr, 0, 23)
             && matches_field(fields[2], dy, 1, 31)
@@ -385,10 +413,13 @@ mod tests {
         let next = next_after("0 9 * * *", t0).unwrap();
         assert!(next > t0);
         assert!(next - t0 < 25 * 3600);   // less than 25 hours away
-        // The hour field of next must be 9 in UTC.
-        let (mn, hr, _, _, _) = decompose_utc(next);
-        assert_eq!(mn, 0);
-        assert_eq!(hr, 9);
+        // v1.7.238 — el cron se interpreta en hora LOCAL del operador (no UTC),
+        // así que la hora LOCAL de `next` debe ser 9:00 en la zona de la máquina.
+        // TZ-independiente: chequea contra chrono::Local, no un offset fijo.
+        use chrono::{TimeZone, Timelike};
+        let dt = chrono::Local.timestamp_opt(next, 0).single().unwrap();
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.hour(), 9);
     }
 
     #[test]

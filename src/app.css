@@ -53,8 +53,8 @@
   --border-color:  #1e293b;
   --border-light:  #334155;
   /* ── Typography ── */
-  --font-mono:     'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Consolas', monospace;
-  --font-ui:       'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono:     'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Consolas', monospace;
+  --font-ui:       'Inter Variable', 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
 
   /* ── Warp-style theme system (consumed by .bg-warp-gradient + .sidebar-glass) ── */
   /* Punchier defaults — pushed even further for visible contrast on dark monitors */

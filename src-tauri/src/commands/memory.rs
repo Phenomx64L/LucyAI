@@ -913,7 +913,7 @@ pub async fn memory_graph(
         // ── 1) Cargar nodos ─────────────────────────────────────────────
         // Por importancia descendente — las más relevantes ganan el cap.
         let total_memories: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM agent_memories WHERE superseded_by IS NULL AND importance >= ?1",
+            "SELECT COUNT(*) FROM agent_memories WHERE superseded_by IS NULL AND importance >= ?1 AND session_id NOT LIKE 'pdf:%'",
             params![min_imp],
             |r| r.get(0),
         ).unwrap_or(0);
@@ -922,6 +922,7 @@ pub async fn memory_graph(
             "SELECT id, title, content, tags, importance, access_count, created_at
              FROM agent_memories
              WHERE superseded_by IS NULL AND importance >= ?1
+               AND session_id NOT LIKE 'pdf:%' -- v1.7.233: doc chunks are not memories (see F1)
              ORDER BY importance DESC, access_count DESC, created_at DESC
              LIMIT ?2",
         ).map_err(|e| format!("memory_graph prepare: {}", e))?;

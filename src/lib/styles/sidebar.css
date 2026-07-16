@@ -503,3 +503,21 @@
 /* Collapsed sidebar: hide the body rail (no visible body) but keep the
    header dot (the only locator the user has at that width). */
 .sidebar.closed .sb-accordion-body[data-section]::before { display: none; }
+
+/* ── Focus styling (v1.7.232) ──────────────────────────────────────────────
+   The nav items are <div role="button" tabindex="0">, so the GLOBAL
+   `[tabindex="0"]:focus-visible { outline:2px solid accent; outline-offset:2px }`
+   (page.css) painted a 2px ring 2px OUTSIDE each item. On the narrow sidebar
+   that ring hugs the panel edge and reads as "the panel contour lighting up"
+   on select — visually noisy. Replace it with a CONTAINED inset accent ring
+   (keeps keyboard a11y, stays inside the pill) and no ring on mouse focus.
+   Higher specificity (.sidebar …) than the global rule so this wins. */
+.sidebar .sb-it:focus-visible,
+.sidebar .sb-accordion-hdr:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--acc, #10b981) 45%, transparent);
+}
+.sidebar .sb-it:focus:not(:focus-visible),
+.sidebar .sb-accordion-hdr:focus:not(:focus-visible) {
+    outline: none;  /* mouse focus: no ring (active .act glow is preserved) */
+}

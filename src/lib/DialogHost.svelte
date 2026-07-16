@@ -111,7 +111,12 @@
 
 <style>
     .ldh-overlay {
-        position: fixed; inset: 0; z-index: 9500;
+        /* v1.7.232 — above the dev cockpit overlay (z 9999) so a lucyConfirm/
+           lucyPrompt (e.g. the close-tab confirmation) renders OVER the cockpit,
+           dimming it via this scrim, instead of forcing the cockpit to hide and
+           reveal the classic UI behind. Unchanged in classic mode: still sits
+           above all normal content, below the 10500 critical-overlay band. */
+        position: fixed; inset: 0; z-index: 10050;
         background: rgba(2, 6, 12, 0.72);
         backdrop-filter: blur(4px);
         display: flex; align-items: center; justify-content: center;

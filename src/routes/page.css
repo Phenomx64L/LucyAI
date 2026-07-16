@@ -1,6 +1,6 @@
-/* ── FUENTE: Inter desde Google Fonts. @import MUST precede all rules (CSS
-   spec), so it lives at the very top of the global stylesheet. ── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+/* ── FUENTE: Inter ahora es SELF-HOSTED (v1.7.234) vía @fontsource-variable,
+   importada en +page.svelte. Se quitó el @import de Google Fonts: dependía de
+   red (fallaba en equipos air-gapped) y no incluía JetBrains Mono. ── */
 
 /* ── OPSCENTER DESIGN SYSTEM — High-density data visualization tokens ────────
    Military-grade information density for SRE dashboards, process tables,
@@ -1504,12 +1504,26 @@ body.density-compact .chat{gap:2px !important;}
 
 /* ── UX: LIGHT THEME ────────────────────────────── */
 :root.light{
-    --bg:#f0f4f8;--bg2:#e8edf3;--bg3:#dde3ea;--bg4:#c8d4de;
-    --txt:#1a2234;--txt1:#1a2234;--txt2:#4a5568;--txt3:#64748b;
-    --bdr:#c0ccd8;--bdr2:#a8b8c8;
-    --acc:#00a86b;--blue:#2563eb;--purple:#7c3aed;--red:#dc2626;--amber:#d97706;
-    --acc-d:rgba(0,168,107,0.1);--acc-b:rgba(0,168,107,0.2);
+    /* v1.7.232 — Light-mode contrast rebuild.
+       The old scale DESCENDED in luminance (bg lightest → bg4 darkest), the
+       inverse of the dark scale, so the app's many rgba(255,255,255,…) overlay
+       fills had nothing to lift off and every card read as washed-out. The
+       scale now ASCENDS toward white (matching dark's "elevation adds light"
+       model): a soft cool-grey canvas with surfaces stepping to pure white, so
+       cards genuinely pop. Borders are stronger (visible hairlines on white)
+       and the accent is deepened (emerald-600) for AA-grade contrast as text /
+       icon / border on light. */
+    --bg:#e7ecf2;--bg2:#f1f5f9;--bg3:#f8fafc;--bg4:#ffffff;
+    --txt:#0f172a;--txt1:#0f172a;--txt2:#475569;--txt3:#64748b;
+    --bdr:#cbd5e1;--bdr2:#94a3b8;
+    --acc:#059669;--blue:#2563eb;--purple:#7c3aed;--red:#dc2626;--amber:#d97706;
+    --acc-d:rgba(5,150,105,0.10);--acc-b:rgba(5,150,105,0.22);
     --mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
+    /* Light-mode depth comes from shadow, not fill — surfaces opt in via
+       var(--shadow-card) / var(--shadow-pop). Dark mode leaves these unset
+       (no shadow) since elevation there is conveyed by the lighter fill. */
+    --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 2px 6px rgba(15,23,42,.06);
+    --shadow-pop:0 4px 14px rgba(15,23,42,.10), 0 2px 6px rgba(15,23,42,.06);
 }
 /* App shell */
 :root.light body{background:var(--bg);}
@@ -1530,7 +1544,18 @@ body.density-compact .chat{gap:2px !important;}
 :root.light .tab.active{background:var(--bg2);color:var(--acc);}
 :root.light .tab-rename-input{background:rgba(255,255,255,.9);color:var(--txt);}
 /* Sidebar */
-:root.light .sidebar{background:rgba(232,237,243,.98);border-right:1px solid var(--bdr);}
+:root.light .sidebar{background:#f8fafc;border-right:1px solid var(--bdr);}
+/* The sidebar element is `.sidebar.sidebar-glass`. `.sidebar-glass` forces
+   background:var(--sidebar-overlay) !important, and the active Warp theme sets
+   that var DARK on the `.root` div (closer ancestor than :root.light, and often
+   inline) — so the panel rendered dark in light mode regardless of the rule
+   above. Override the glass directly with !important so light mode wins. The
+   frosted backdrop-filter blur stays; only the tint flips to near-white. */
+:root.light .sidebar-glass{
+    background-color:rgba(248,250,252,.92) !important;
+    background-image:none !important;
+    border-right:1px solid var(--bdr) !important;
+}
 /* Status bar (top) */
 :root.light .sbar{background:rgba(224,230,238,.9);border-bottom:1px solid var(--bdr);}
 :root.light .bi{border-right-color:var(--bdr);}
@@ -1678,8 +1703,12 @@ body.density-compact .chat{gap:2px !important;}
 :root.light .view-wrap{background:var(--bg);}
 :root.light .view-hdr{background:rgba(224,230,238,.8);border-bottom-color:var(--bdr);}
 /* Chat messages */
-:root.light .msg-lucy{background:#ffffff !important;border:1px solid rgba(0,168,107,.22) !important;border-left:2px solid var(--acc) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:0 1px 6px rgba(0,0,0,.07);}
-:root.light .msg-user{background:rgba(213,228,250,.9) !important;border:1px solid rgba(59,130,246,.18) !important;border-right:2px solid var(--blue) !important;backdrop-filter:none !important;color:var(--txt) !important;}
+/* v1.7.232 — bubble parity: both speakers get a faint accent-tinted white,
+   a matching hairline, the accent edge, and the SAME soft shadow, so neither
+   bubble reads heavier than the other (was: Lucy pure-white vs user saturated
+   blue → lopsided). */
+:root.light .msg-lucy{background:color-mix(in srgb, var(--acc) 6%, #fff) !important;border:1px solid color-mix(in srgb, var(--acc) 26%, transparent) !important;border-left:2px solid var(--acc) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:var(--shadow-card) !important;}
+:root.light .msg-user{background:color-mix(in srgb, var(--blue) 11%, #fff) !important;border:1px solid color-mix(in srgb, var(--blue) 26%, transparent) !important;border-right:2px solid var(--blue) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:var(--shadow-card) !important;}
 :root.light .msg-lucy .mn{color:var(--acc);}
 :root.light .msg-user .mn{color:var(--blue);}
 :root.light .msg-time{color:var(--txt3);}
@@ -1712,6 +1741,11 @@ body.density-compact .chat{gap:2px !important;}
 /* Modals */
 :root.light .mb{background:rgba(40,60,80,.45);}
 :root.light .mbox{background:#fff;border-color:var(--bdr2);box-shadow:0 20px 60px rgba(0,0,0,.18);}
+/* Settings cards: the rgba(255,255,255,.018) fill is white-on-white inside the
+   light modal — give each section a faint grouped plate so related controls
+   read as a card, not one flat list. */
+:root.light .settings-section{background:var(--bg2);border-color:var(--bdr);}
+:root.light .settings-body::-webkit-scrollbar-thumb{background:var(--bdr2);}
 :root.light .minp{background:rgba(0,0,0,.04);border-color:var(--bdr);color:var(--txt);}
 :root.light .minp:focus{border-color:var(--acc);}
 :root.light .minp::placeholder{color:var(--txt3);}
@@ -1964,11 +1998,14 @@ body.density-compact .chat{gap:2px !important;}
 
 /* NexShell CSS moved to NexShellView.svelte */
 
-  /* Extra Sidebar Text Overrides for Light Mode */
-  :root.light .sb-lbl            { color:#94a3b8; font-weight:800 !important; }
-  :root.light .sb-it             { color:#cbd5e1; }
-  :root.light .sb-it:hover       { background:rgba(255,255,255,.06); color:#ffffff; }
-  :root.light .sb-it.act         { background:color-mix(in srgb, var(--acc) 15%, transparent); color:var(--acc); font-weight: 600; }
+  /* Extra Sidebar Text Overrides for Light Mode (v1.7.232 — contrast fix).
+     The previous values (#cbd5e1 text, #ffffff hover) were light-on-light =
+     near-invisible. Dark readable text; hover/active use clean accent tints
+     that render crisp over the near-white rail (see :root.light .sidebar). */
+  :root.light .sb-lbl            { color:var(--txt3); font-weight:800 !important; }
+  :root.light .sb-it             { color:var(--txt2); }
+  :root.light .sb-it:hover       { background:color-mix(in srgb, var(--acc) 8%, transparent); color:var(--txt); }
+  :root.light .sb-it.act         { background:color-mix(in srgb, var(--acc) 14%, transparent); color:var(--acc); font-weight:600; }
 
   /* ── Lucy Gen 2 — Model badge (Smart Routing decision indicator) ──────
    * Appears at the foot of an auto-routed Lucy bubble. Compact, low-noise,

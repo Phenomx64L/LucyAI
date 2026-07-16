@@ -841,6 +841,13 @@
   .btn.xxs { font-size: 10px; padding: 3px 7px; }
   .btn:disabled { opacity: .5; cursor: not-allowed; }
 
+  /* Light mode (v1.7.232) — translucent-white fills vanish on the white modal;
+     give the server cards a real plate. .btn keeps its token border (visible on
+     light), so its variant backgrounds (.pri/.danger) stay intact. */
+  :global(:root.light) .srv { background: var(--bg4); border-color: var(--bdr); box-shadow: var(--shadow-card); }
+  :global(:root.light) .x:hover,
+  :global(:root.light) .env-pick:hover { background: rgba(15,23,42,.05); }
+
   /* ── Run-tool overlay ───────────────────────────────────────────── */
   .run-panel-bg {
     position: fixed; inset: 0; z-index: 5100;

@@ -52,8 +52,15 @@
 }
 
 /* Native virtualization: messages outside the viewport don't render;
-   80px height reserve keeps the scrollbar honest. */
-.msg-user, .msg-lucy, .sys-msg, .msg-thinking {
+   80px height reserve keeps the scrollbar honest.
+   v1.7.234 — REMOVED .msg-lucy / .msg-thinking from this set. content-visibility:
+   auto lets the compositor SKIP rendering an element it deems off-screen, and that
+   on/off-screen decision is tied to the render lifecycle — when WebView2 throttles
+   presents mid-stream, the actively-growing Lucy bubble could stay in the skipped
+   (blank) state until a mouse-move forced an intersection recompute. A direct
+   contributor to "el texto desaparece mientras la IA escribe". The static
+   user/system bubbles never mutate after mount, so they keep the virtualization. */
+.msg-user, .sys-msg {
     content-visibility: auto;
     contain-intrinsic-size: 0 80px;
 }
@@ -688,3 +695,24 @@
 @media (prefers-reduced-motion: reduce) {
     .lucy-thought > summary::before { transition: none; }
 }
+
+/* ── Light mode (v1.7.232) ────────────────────────────────────────────────
+   The thinking-disclosure and forensic result blocks used translucent-white
+   fills / cyan-at-3% tints that vanish on the light canvas. Remap to readable
+   light surfaces; cyan text drops to cyan-700 for contrast on white. */
+:root.light .lucy-thought {
+    background: rgba(8,145,178,.05);
+    border-color: rgba(8,145,178,.22);
+    border-left-color: rgba(8,145,178,.5);
+}
+:root.light .lucy-thought > summary { color: #0e7490; }
+:root.light .lucy-thought > summary:hover { background: rgba(8,145,178,.08); }
+:root.light .lucy-thought > :not(summary) {
+    background: rgba(15,23,42,.03);
+    border-top-color: rgba(8,145,178,.15);
+}
+:root.light .lucy-thought code { background: rgba(15,23,42,.06); }
+:root.light .rb-block { background: var(--bg4); border-color: var(--bdr); }
+:root.light .rb-block[open] { background: var(--bg2); }
+:root.light .rb-summary:hover { background: rgba(15,23,42,.04); }
+:root.light .rb-chip { background: var(--bg2); border-color: var(--bdr); }

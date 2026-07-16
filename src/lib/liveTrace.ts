@@ -3,6 +3,14 @@
 // Lucy is thinking, executing, and observing. Cheap, ephemeral (no persistence).
 
 import { writable, get } from 'svelte/store';
+// ── Lucy 2.0 cockpit: mirror every trace event into the cockpit store.
+//    v1.7.234 COCKPIT GA — ya no es dev-only; mismo kill-switch que +page
+//    (localStorage.lucy_ui_v2 = '0'). ──
+import { tracePush as _cockpitTrace } from './cockpit/agent-workspace';
+const COCKPIT = (() => {
+    try { return typeof localStorage !== 'undefined' && localStorage.getItem('lucy_ui_v2') !== '0'; }
+    catch { return true; }
+})();
 
 export type TracePhase =
     | 'thought'       // LLM reasoning streaming
@@ -49,6 +57,7 @@ export function pushTrace(e: Omit<TraceEntry, 'id' | 'ts'> & { ts?: number }) {
         next.push(entry);
         return next;
     });
+    if (COCKPIT) _cockpitTrace({ phase: entry.phase, label: entry.label, detail: entry.detail, step: entry.step }); // cockpit mirror
     return entry.id;
 }
 

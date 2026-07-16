@@ -88,6 +88,16 @@ pub async fn execute_remote_windows(
     validate_username(&username)?;
     validate_password(&password)?;
 
+    // SECURITY v1.7.232 (Phase-2 C2): guardrail scan on the remote command (S2
+    // injection/obfuscation shapes only — see scan_remote_shell). Closes the
+    // local-vs-remote gate asymmetry without false-blocking legit admin.
+    {
+        let rscan = crate::guardrails::scan_remote_shell(&command);
+        if matches!(rscan.decision, crate::guardrails::ScanDecision::Block) {
+            return Err(format!("Comando remoto bloqueado por guardrail: {}", rscan.reason));
+        }
+    }
+
     // Check permission rules before executing
     let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
     match perm.action.as_str() {
@@ -144,7 +154,7 @@ pub async fn get_remote_health_windows(
         }
     };
     let v: serde_json::Value = serde_json::from_str(raw.trim())
-        .map_err(|e| format!("Error parseando métricas: {}. Raw: {}", e, &raw[..raw.len().min(200)]))?;
+        .map_err(|e| format!("Error parseando métricas: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 200)))?;
 
     let mem_total = v["mem_total_mb"].as_f64().unwrap_or(0.0) as u64;
     let mem_free  = v["mem_free_mb"].as_f64().unwrap_or(0.0) as u64;
@@ -184,6 +194,16 @@ pub async fn execute_remote_linux(
     // Validate inputs to prevent injection via host/username
     validate_host(&host)?;
     validate_username(&username)?;
+
+    // SECURITY v1.7.232 (Phase-2 C2): guardrail scan on the remote command (S2
+    // injection/obfuscation shapes only — see scan_remote_shell). Closes the
+    // local-vs-remote gate asymmetry without false-blocking legit admin.
+    {
+        let rscan = crate::guardrails::scan_remote_shell(&command);
+        if matches!(rscan.decision, crate::guardrails::ScanDecision::Block) {
+            return Err(format!("Comando remoto bloqueado por guardrail: {}", rscan.reason));
+        }
+    }
 
     // Check permission rules before executing
     let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
@@ -302,7 +322,7 @@ printf '{"hostname":"%s","os":"%s","uptime_h":%d,"timestamp":"%s","cpu":{"global
     }
 
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido del host: {}.\nRaw (primeros 400 chars): {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido del host: {}.\nRaw (primeros 400 chars): {}", e, crate::utils::safe_truncate(&raw, 400)))
 }
 
 // ── SHELL REMOTA DIRECTA (sin streaming) ──────────────────────────────────────
@@ -317,10 +337,31 @@ pub async fn execute_shell_cmd(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<String, String> {
+    // SECURITY v1.7.232 (Phase-2 C11): validate host + username for BOTH the Linux
+    // (SSH) and Windows (WinRM) paths, BEFORE the host_type branch. The Linux branch
+    // builds `format!("{}@{}", username, host)` and passes it to `ssh` argv — a
+    // username/host beginning with '-' would otherwise be re-parsed by SSH's getopt as
+    // an option (H10 argv-injection → -oProxyCommand local exec). Previously ONLY the
+    // Windows else-branch validated, leaving the SSH path exposed; read_remote_file /
+    // write_remote_file funnel through here so they inherited the gap too.
+    validate_host(&host)?;
+    validate_username(&username)?;
     // SECURITY: cap password length early (validates Some only — None is fine
     // for key-based auth). Prevents 100MB password payloads from consuming
     // memory or appearing in panic traces.
     if let Some(ref p) = password { validate_password(p)?; }
+
+    // SECURITY v1.7.232 (Phase-2 C2): remote exec had NO guardrail scan (only
+    // default-allow check_permission) — an asymmetry vs. the local exec paths.
+    // Block genuine injection/obfuscation shapes; see scan_remote_shell for why
+    // SSRF / plain destructive verbs are deliberately NOT gated here (would break
+    // legitimate interactive remote admin + internal-IP/metadata access).
+    {
+        let rscan = crate::guardrails::scan_remote_shell(&command);
+        if matches!(rscan.decision, crate::guardrails::ScanDecision::Block) {
+            return Err(format!("Comando remoto bloqueado por guardrail: {}", rscan.reason));
+        }
+    }
 
     // Check permission rules before executing
     let perm = super::metrics::check_permission(command.clone(), "command".to_string()).await?;
@@ -364,8 +405,7 @@ pub async fn execute_shell_cmd(
             Err(if stderr.trim().is_empty() { stdout } else { stderr })
         }
     } else {
-        validate_host(&host)?;
-        validate_username(&username)?;
+        // (host/username already validated at the top of the function — C11)
         ensure_trusted_host(&host);
         let pwd = password.unwrap_or_default();
         let output = tokio::time::timeout(
@@ -478,7 +518,7 @@ printf '{"hostname":"%s","os":"%s","shell":"%s","kernel":"%s","user":"%s","cwd":
 
         if raw.is_empty() { return Err("Bootstrap: sin datos del host".to_string()); }
         serde_json::from_str(&raw)
-            .map_err(|e| format!("Bootstrap JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(300)]))
+            .map_err(|e| format!("Bootstrap JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 300)))
 
     } else {
         // Windows WinRM — script PowerShell inyectado en ScriptBlock
@@ -522,7 +562,7 @@ printf '{"hostname":"%s","os":"%s","shell":"%s","kernel":"%s","user":"%s","cwd":
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if raw.is_empty() { return Err("Bootstrap Windows: sin datos".to_string()); }
         serde_json::from_str(&raw)
-            .map_err(|e| format!("Bootstrap JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(300)]))
+            .map_err(|e| format!("Bootstrap JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 300)))
     }
 }
 

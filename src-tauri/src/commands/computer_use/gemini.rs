@@ -29,7 +29,7 @@ fn resolve_gemini_model(raw: &str) -> String {
     if base.starts_with("gemini") && !base.is_empty() {
         base.to_string()
     } else {
-        "gemini-2.5-flash".to_string()
+        "gemini-3.5-flash".to_string() // was retired gemini-2.5-flash
     }
 }
 

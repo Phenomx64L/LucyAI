@@ -55,6 +55,10 @@ export interface SlashCtx {
     /** v1.7.29 — open the global Knowledge Graph overlay (force-directed
      *  memory graph). Used by /graph, /kg, /knowledge slash commands. */
     openKnowledgeGraph?: () => void;
+    /** v1.7.232 — switch to the Memory Browser full view (activeView='memory').
+     *  Used by /memory, /memoria. The command was in the typeahead registry
+     *  but had no handler, so the home "Abrir Memoria" card was a no-op. */
+    openMemory?: () => void;
     /** Reactive accessors — passed in as snapshots so the module never
      *  reaches into Svelte stores directly (those are the page's
      *  responsibility to subscribe to). */
@@ -311,6 +315,20 @@ export function dispatchSlashCommand(tabId: string, raw: string, ctx: SlashCtx):
         case 'insights':
             runInsightsList(sysMsg);
             return true;
+
+        // ── Memory browser (full view) ──────────────────────────────────
+        // /memory | /memoria — switch to the Memory Browser view. Listed in
+        // the typeahead registry since v1.7.x but never had a handler, so the
+        // home "Abrir Memoria" card and a typed /memory both did nothing.
+        case 'memory': case 'memoria': {
+            if (ctx.openMemory) {
+                ctx.openMemory();
+                sysMsg(ctx.isEN ? '✦ Opening Memory Browser…' : '✦ Abriendo el explorador de memoria…', 'var(--acc)');
+            } else {
+                sysMsg('Memory browser opener not wired into context.', 'var(--red)');
+            }
+            return true;
+        }
 
         // ── Memory graph (Tier 3 #9) ────────────────────────────────────
         // /graph-rebuild         — reconstruye los edges del grafo (corre auto cada 24 h)
@@ -2557,6 +2575,72 @@ function runCrystallize(
             sysMsg(`Crystallize falló: ${String(e).substring(0, 200)}`, 'var(--red)');
         }
     })();
+}
+
+/** Per-tab guard so a session is auto-crystallized at most once per app run. */
+const _autoCrystallizedTabs = new Set<string>();
+
+/**
+ * v1.7.236 — AUTONOMOUS session crystallization (the point-4 autonomy goal).
+ *
+ * Distils the session into a crystal + lessons at turn-end WITHOUT the user
+ * asking, so Lucy learns from her own work and the user need not re-teach her
+ * how to do things. All the STRICT flood-gating (the GoAnywhere failure mode)
+ * lives in the Rust command `maybe_auto_crystallize_session`: cheap gates before
+ * any Ollama call, one crystal per session, capped + deduped lesson promotion.
+ *
+ * This helper adds a FRONTEND pre-gate (mirroring the Rust floors) plus a per-tab
+ * in-memory guard, so the common case — a thin session, or one already distilled
+ * — costs nothing (no transcript build past the counters, no IPC). It is meant to
+ * be called fire-and-forget from the turn-end funnel: never awaited by the turn,
+ * never throws.
+ */
+export async function maybeAutoCrystallize(
+    tabId: string,
+    getTab: (id: string) => { id: string; messages: any[] } | null | undefined,
+): Promise<void> {
+    if (_autoCrystallizedTabs.has(tabId)) return;             // already fired this session
+    const t = getTab(tabId);
+    if (!t || !t.messages || t.messages.length === 0) return;
+
+    let turnCount = 0;
+    let toolCallCount = 0;
+    const lines: string[] = [];
+    for (const m of t.messages) {
+        const role: string = (m && m.role) || '';
+        if (role === 'user') turnCount++;
+        // Each executed tool renders one collapsible card: `<details id="tc-…">`.
+        const html = (m && m.html) ? String(m.html) : '';
+        if (html) {
+            const cards = html.match(/id="tc-/g);
+            if (cards) toolCallCount += cards.length;
+        }
+        if (role === 'system' || role === 'toast') continue;
+        const raw = (m && (m.rawContent || m.text || m.html || '')) as string;
+        const trimmed = String(raw).replace(/<[^>]+>/g, '').trim();
+        if (trimmed) lines.push(`[${role}] ${trimmed}`);
+    }
+
+    // Frontend pre-gate — mirror the Rust floors (MIN_TURNS=4, MIN_TOOL_CALLS=3,
+    // MIN_TRANSCRIPT_CHARS=800) so a thin session never even pays the IPC. The
+    // Rust side re-checks all of these plus per-session idempotency.
+    if (turnCount < 4 || toolCallCount < 3) return;
+    const transcript = lines.join('\n\n');
+    if (transcript.length < 800) return;
+
+    try {
+        const res = await invoke<{ fired: boolean; crystal_id: number | null; reason: string }>(
+            'maybe_auto_crystallize_session',
+            { sessionId: tabId, project: '', transcript, turnCount, toolCallCount },
+        );
+        // Once fired OR the DB already holds a crystal for this session, stop
+        // probing this tab for the rest of its life.
+        if (res && (res.fired || res.reason === 'session already crystallized')) {
+            _autoCrystallizedTabs.add(tabId);
+        }
+    } catch {
+        /* background autonomy must never disturb the turn */
+    }
 }
 
 /** Print the 10 most recent crystals as a compact list. */

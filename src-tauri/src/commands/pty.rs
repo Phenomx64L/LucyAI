@@ -131,7 +131,7 @@ fn flush_audit_lines(buf: &mut Vec<u8>) {
         // Cap individual line length — paranoid against pathological
         // single-line pastes that bypassed the buffer cap.
         let logged = if trimmed.len() > 1024 {
-            format!("{}…", &trimmed[..1021])
+            format!("{}…", crate::utils::safe_truncate(trimmed, 1021))
         } else {
             trimmed.to_string()
         };

@@ -122,7 +122,7 @@ pub async fn save_audit_entry(
 ) -> Result<i64, String> {
     // Truncate output_preview to 500 chars max to prevent bloat
     let preview = if output_preview.len() > 500 {
-        format!("{}…", &output_preview[..499])
+        format!("{}…", crate::utils::safe_truncate(&output_preview, 499))
     } else {
         output_preview
     };

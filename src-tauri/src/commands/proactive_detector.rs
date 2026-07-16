@@ -334,7 +334,7 @@ fn detect_db_integrity_alarm(conn: &rusqlite::Connection) -> Option<DetectionHit
     if r_lower.contains("locked") || r_lower.contains("query error") {
         return None;
     }
-    let preview = if res.len() > 200 { format!("{}…", &res[..200]) } else { res.clone() };
+    let preview = if res.len() > 200 { format!("{}…", crate::utils::safe_truncate(&res, 200)) } else { res.clone() };
     Some(DetectionHit {
         kind: "db_integrity_alarm",
         severity: "critical",

@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/2.0.0/schema.json",
   "productName": "Lucy Assistant",
-  "version": "1.7.231",
+  "mainBinaryName": "Lucy Assistant",
+  "version": "1.7.238",
   "identifier": "com.lucy.dev",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../build"
   },
   "app": {
@@ -24,7 +25,7 @@
         "decorations": false,
         "transparent": true,
         "backgroundColor": "#00060a0f",
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,BatterySaverModeAlignWakeUps --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows",
         "windowEffects": {
           "effects": ["mica"],
           "state": "active",
@@ -83,6 +84,7 @@
         "installerIcon": "icons/icon.ico",
         "sidebarImage": "icons/installer-sidebar.bmp",
         "headerImage": "icons/installer-header.bmp",
+        "startMenuFolder": "Lucy Assistant",
         "compression": "lzma"
       }
     }

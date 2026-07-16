@@ -101,6 +101,47 @@
     let highlightedMemId: number | null = null;
     let _highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // ── v1.7.233 — real corpus stats + Documents view ────────────────────
+    // The stat cards used to be computed over the ≤50 fetched rows and
+    // presented as corpus totals (they lied after any big PDF ingest).
+    // memory_stats() returns real COUNT(*)s; the Documents toggle surfaces
+    // ingested PDFs as documents (with per-doc delete) instead of drowning
+    // the memory list in their chunks.
+    interface RealStats {
+        total: number; high: number; tagged: number; week: number;
+        superseded: number; pdf_chunks: number; pdf_docs: number;
+    }
+    let realStats: RealStats | null = null;
+    let memView: 'memorias' | 'docs' = 'memorias';
+    interface PdfDoc {
+        id: string; filename: string; path: string; page_count: number;
+        chunk_count: number; ingested_at: number; status: string;
+    }
+    let pdfDocs: PdfDoc[] = [];
+    let docsLoading = false;
+    async function loadRealStats() {
+        try { realStats = await invoke<RealStats>('memory_browser_stats'); } catch { /* cards fall back to page stats */ }
+    }
+    async function loadDocs() {
+        docsLoading = true;
+        try { pdfDocs = await invoke<PdfDoc[]>('pdf_list_docs'); }
+        catch (e) { memError = String(e); pdfDocs = []; }
+        finally { docsLoading = false; }
+    }
+    async function deleteDoc(d: PdfDoc) {
+        if (!await lucyConfirm(
+            isEN ? `Delete document "${d.filename}" (${d.chunk_count} sections)?`
+                 : `¿Borrar el documento "${d.filename}" (${d.chunk_count} secciones)?`,
+            { tone: 'danger',
+              description: isEN ? 'Removes its chunks, embeddings and summary memory.' : 'Elimina sus chunks, embeddings y memoria-resumen.',
+              confirmLabel: isEN ? 'Delete' : 'Borrar' })) return;
+        try {
+            await invoke('pdf_delete_doc', { docId: d.id });
+            await loadDocs();
+            loadRealStats();
+        } catch (e) { memError = String(e); }
+    }
+
     // ── Sprint D — Memory health timeline ──────────────────────────────
     // Renders a tiny histogram of memory creation events across the last
     // 30 days, plus rolling counts. Drives the "Memory health" mini-chart
@@ -159,12 +200,17 @@
         memError = null;
         try {
             if (memQuery.trim().length === 0) {
-                memorias = await invoke<Memory[]>('get_recent_memories', { limit: 50 });
+                // v1.7.233: the importance filter now runs in SQL. Filtering
+                // client-side AFTER the 50-row fetch silently hid rows (pick
+                // "Normal (1)" with 50 importance-2 rows on the page → empty
+                // list even with hundreds of importance-1 memories in the DB).
+                memorias = await invoke<Memory[]>('get_recent_memories_filtered',
+                    { limit: 50, importance: memImportance > 0 ? memImportance : null });
             } else {
-                memorias = await invoke<Memory[]>('search_agent_memories', { query: memQuery, limit: 50 });
-            }
-            if (memImportance > 0) {
-                memorias = memorias.filter(m => m.importance === memImportance);
+                memorias = await invoke<Memory[]>('search_agent_memories', { query: memQuery, limit: 50, excludeDocuments: true });
+                if (memImportance > 0) {
+                    memorias = memorias.filter(m => m.importance === memImportance);
+                }
             }
         } catch (e) {
             memError = String(e);
@@ -172,6 +218,7 @@
         } finally {
             memLoading = false;
         }
+        loadRealStats();  // fire-and-forget — the cards refresh when it lands
     }
 
     function onMemQueryInput() {
@@ -198,7 +245,9 @@
         let pinned = 0, untagged = 0, expiringSoon = 0, recent7d = 0;
         let highestImp = 0;
         for (const m of memorias) {
-            if (m.importance === 10) pinned++;
+            // v1.7.233: importance is a 1..=3 scale everywhere now (the old
+            // ===10 "pinned" convention is gone; update clamps to 3).
+            if (m.importance >= 3) pinned++;
             if (!tagList(m.tags).length) untagged++;
             // expires_at: 0 = never. >0 = unix sec; "soon" = within 7d.
             const exp = ((m as unknown) as { expires_at?: number }).expires_at || 0;
@@ -257,7 +306,7 @@
             for (const id of bulkSelected) {
                 const m = memorias.find(x => x.id === id);
                 if (!m) continue;
-                const newImp = Math.min(10, (m.importance || 1) + 1);
+                const newImp = Math.min(3, (m.importance || 1) + 1);  // v1.7.233: 1..=3 scale (backend clamps too)
                 if (newImp === m.importance) continue;
                 try {
                     // v1.7.120 — was calling the non-existent
@@ -754,16 +803,19 @@
     <!-- ══════════════════════════ MEMORIES ══════════════════════════ -->
     {#if activeTab === 'memorias'}
     <section class="mv-section">
-        <!-- M1 — Stats dashboard. Read-only summary above the search row. -->
-        {#if memorias.length > 0}
+        <!-- M1 — Stats dashboard. v1.7.233: total / high / week come from
+             memory_stats() (real COUNT(*)s over the whole table) instead of
+             the ≤50 fetched rows; page-scoped counts keep the page fallback.
+             The documents card doubles as the toggle into the Documents view. -->
+        {#if memorias.length > 0 || realStats}
         <div class="mv-stats">
             <div class="mv-stat">
-                <span class="mv-stat-num">{memStats.total}</span>
+                <span class="mv-stat-num">{realStats?.total ?? memStats.total}</span>
                 <span class="mv-stat-lbl">{isEN ? 'memories' : 'memorias'}</span>
             </div>
-            <div class="mv-stat" class:hot={memStats.pinned > 0}>
-                <span class="mv-stat-num">{memStats.pinned}</span>
-                <span class="mv-stat-lbl">📌 {isEN ? 'pinned' : 'fijadas'}</span>
+            <div class="mv-stat" class:hot={(realStats?.high ?? memStats.pinned) > 0}>
+                <span class="mv-stat-num">{realStats?.high ?? memStats.pinned}</span>
+                <span class="mv-stat-lbl">◆ {isEN ? 'high import.' : 'alta import.'}</span>
             </div>
             <div class="mv-stat" class:hot={memStats.untagged > 0}>
                 <span class="mv-stat-num">{memStats.untagged}</span>
@@ -774,13 +826,23 @@
                 <span class="mv-stat-lbl">⏱ {isEN ? 'expire <7d' : 'expiran <7d'}</span>
             </div>
             <div class="mv-stat">
-                <span class="mv-stat-num">{memStats.recent7d}</span>
+                <span class="mv-stat-num">{realStats?.week ?? memStats.recent7d}</span>
                 <span class="mv-stat-lbl">⊕ {isEN ? 'new this week' : 'nuevas 7d'}</span>
             </div>
             <div class="mv-stat">
                 <span class="mv-stat-num">{memStats.highestImp}</span>
                 <span class="mv-stat-lbl">⮬ {isEN ? 'top importance' : 'top importancia'}</span>
             </div>
+            {#if realStats && realStats.pdf_docs > 0}
+                <button class="mv-stat mv-stat-btn" class:active={memView === 'docs'}
+                        on:click={() => { memView = memView === 'docs' ? 'memorias' : 'docs'; if (memView === 'docs') loadDocs(); }}
+                        title={isEN
+                            ? `${realStats.pdf_chunks} chunks across ${realStats.pdf_docs} ingested documents — click to manage`
+                            : `${realStats.pdf_chunks} chunks en ${realStats.pdf_docs} documentos ingeridos — clic para gestionar`}>
+                    <span class="mv-stat-num">{realStats.pdf_docs}</span>
+                    <span class="mv-stat-lbl">📄 {isEN ? 'documents' : 'documentos'}</span>
+                </button>
+            {/if}
         </div>
 
         <!-- Sprint D — Memory health timeline (30-day creation histogram) -->
@@ -866,6 +928,42 @@
         {#if memError}
             <div class="mv-error"><AlertTriangle size={14}/> {memError}</div>
         {/if}
+        {#if memView === 'docs'}
+            <!-- v1.7.233 — Documents view: ingested PDFs as documents (not as
+                 1000+ chunk rows). Delete removes chunks + embeddings + the
+                 summary memory via pdf_delete_doc. -->
+            <div class="mv-docs-head">
+                <span>{isEN ? 'Ingested documents — their chunks stay OUT of the memory list; Lucy queries them with pdf_search.' : 'Documentos ingeridos — sus chunks quedan FUERA de la lista de memorias; Lucy los consulta con pdf_search.'}</span>
+                <button class="mv-bulk-btn" on:click={() => { memView = 'memorias'; }}>← {isEN ? 'Back to memories' : 'Volver a memorias'}</button>
+            </div>
+            {#if docsLoading}
+                <div class="mv-loading"><Skeleton variant="card" height="58px" /><Skeleton variant="card" height="58px" /></div>
+            {:else if pdfDocs.length === 0}
+                <EmptyState
+                    icon="📄"
+                    title={isEN ? 'No documents ingested' : 'Sin documentos ingeridos'}
+                    description={isEN ? 'Ingest a PDF from the PDF panel and it will appear here.' : 'Ingiere un PDF desde el panel PDF y aparecerá aquí.'} />
+            {:else}
+                <ul class="mv-list">
+                    {#each pdfDocs as d (d.id)}
+                        <li class="mv-card">
+                            <div class="mv-card-head">
+                                <span class="mv-id">📄</span>
+                                <span class="mv-card-title">{d.filename}</span>
+                                <span class="mv-doc-status" class:warn={d.status !== 'done'}>{d.status}</span>
+                                <button class="mv-del" title={isEN ? 'Delete document (chunks + embeddings)' : 'Borrar documento (chunks + embeddings)'}
+                                    on:click={() => deleteDoc(d)}><Trash size={13}/></button>
+                            </div>
+                            <div class="mv-card-foot">
+                                <span class="mv-date">{fmtDate(d.ingested_at)}</span>
+                                <span class="mv-tag">{d.chunk_count} {isEN ? 'sections' : 'secciones'}</span>
+                                <span class="mv-tag" title={d.path}>{d.path.split(/[\\/]/).slice(-2).join('/')}</span>
+                            </div>
+                        </li>
+                    {/each}
+                </ul>
+            {/if}
+        {:else}
         {#if memLoading}
             <!-- v1.4.15 — skeleton rows replace the bare "Loading…" label. -->
             <div class="mv-loading">
@@ -898,8 +996,11 @@
                                    title={isEN ? 'Select for bulk action' : 'Seleccionar para acción en lote'}/>
                             <span class="mv-id">#{m.id}</span>
                             <span class="mv-card-title">{m.title}</span>
-                            <span class="mv-imp" style="color:{importanceColor(m.importance)};" title="importance">
-                                {'◆'.repeat(m.importance)}{'·'.repeat(3 - m.importance)}
+                            <!-- Clamp to the 1-3 diamond scale: bulk Promote can push
+                                 importance up to 10, and String.repeat(negative) throws
+                                 RangeError — one such row bricked the whole list render. -->
+                            <span class="mv-imp" style="color:{importanceColor(m.importance)};" title="importance {m.importance}">
+                                {'◆'.repeat(Math.min(3, Math.max(0, m.importance)))}{'·'.repeat(Math.max(0, 3 - m.importance))}
                             </span>
                             <!-- v1.6.0 — live grounding score (ADR-044).
                                  Computed query-time by the Rust backend;
@@ -965,6 +1066,7 @@
                 {/each}
             </ul>
         {/if}
+        {/if} <!-- /memView docs:else -->
     </section>
     {/if}
 
@@ -1609,6 +1711,20 @@
     .mv-stat.hot   .mv-stat-num { color: #f59e0b; }
     .mv-stat.warn  { border-color: rgba(239,68,68,.30); background: rgba(239,68,68,.05); }
     .mv-stat.warn  .mv-stat-num { color: #ef4444; }
+    /* v1.7.233 — clickable documents card (toggles the Documents view) */
+    .mv-stat-btn { cursor: pointer; font: inherit; transition: border-color .15s, background .15s; }
+    .mv-stat-btn:hover  { border-color: rgba(86,180,233,.40); background: rgba(86,180,233,.06); }
+    .mv-stat-btn.active { border-color: rgba(86,180,233,.55); background: rgba(86,180,233,.10); }
+    .mv-stat-btn.active .mv-stat-num { color: #56b4e9; }
+    .mv-docs-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        font-size: 11px; color: var(--txt2); padding: 6px 2px 8px; line-height: 1.5;
+    }
+    .mv-doc-status {
+        font-size: 10px; color: #10b981; background: rgba(16,185,129,.08);
+        border-radius: 4px; padding: 1px 7px; text-transform: uppercase; letter-spacing: .3px;
+    }
+    .mv-doc-status.warn { color: #f59e0b; background: rgba(245,158,11,.08); }
     /* Sprint E — Crystal viewer redesign */
     .crystal-empty {
         display: flex; flex-direction: column; align-items: center;
@@ -1989,4 +2105,41 @@
         font-size: 10px; word-break: break-all;
     }
     .mv-verify-actions { gap: 4px; flex-wrap: wrap; }
+
+    /* ── Light mode (v1.7.232) ────────────────────────────────────────────
+       The view was authored entirely with rgba(255,255,255,.0x) "add-light"
+       fills + borders — invisible on the light canvas. Remap the surfaces to
+       real white plates with defined borders and soft shadows so the toolbar,
+       controls and memory cards read as elements instead of floating text. */
+    :global(:root.light) .mv-tabs,
+    :global(:root.light) .mv-search,
+    :global(:root.light) .mv-select,
+    :global(:root.light) .mv-icon-btn,
+    :global(:root.light) .mv-graph-btn,
+    :global(:root.light) .mv-admin-btn,
+    :global(:root.light) .mv-graph-form,
+    :global(:root.light) .mv-graph-form input[type=number],
+    :global(:root.light) .mv-graph-form select {
+        background: var(--bg4, #fff);
+        border-color: var(--bdr2, #94a3b8);
+    }
+    :global(:root.light) .mv-tabs button:hover,
+    :global(:root.light) .mv-icon-btn:hover,
+    :global(:root.light) .mv-graph-btn:hover,
+    :global(:root.light) .mv-admin-btn:hover {
+        background: rgba(15,23,42,.05);
+        color: var(--txt);
+    }
+    :global(:root.light) .mv-card {
+        background: var(--bg4, #fff);
+        border-color: var(--bdr, #cbd5e1);
+        box-shadow: var(--shadow-card, 0 1px 2px rgba(15,23,42,.05), 0 2px 6px rgba(15,23,42,.06));
+    }
+    :global(:root.light) .mv-card:hover { border-color: var(--bdr2, #94a3b8); }
+    :global(:root.light) .mv-card.mv-card-selected {
+        background: color-mix(in srgb, var(--acc, #059669) 8%, #fff);
+        border-color: var(--acc, #059669);
+    }
+    :global(:root.light) code { background: rgba(15,23,42,.05); }
+    :global(:root.light) .mv-tab-sep { color: rgba(15,23,42,.18); }
 </style>

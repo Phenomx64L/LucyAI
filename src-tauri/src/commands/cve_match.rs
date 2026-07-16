@@ -275,6 +275,99 @@ pub fn cve_scan(software: Vec<SoftwareInput>) -> CveScanResult {
     }
 }
 
+// ── Background vulnerability watch (v1.7.232) ───────────────────────────────
+// Periodically scans the LOCAL host's installed software against the curated
+// CVE DB and fires an OS toast when the set of CRITICAL/HIGH findings CHANGES —
+// so the operator is alerted even with the cockpit closed. The cockpit's
+// in-view scans (Inventory + Dashboard) remain; this is the "even when nobody
+// is looking" layer. Windows-only (registry-based software discovery).
+
+#[cfg(windows)]
+mod vuln_watch {
+    use super::{cve_scan, CveScanResult, SoftwareInput};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // FNV-1a fingerprint of the current CRITICAL/HIGH set, so the same unpatched
+    // vulnerabilities don't re-notify every tick. Resets on restart (a still-
+    // unpatched critical is worth one nag per app launch).
+    static LAST_VULN_FP: AtomicU64 = AtomicU64::new(0);
+
+    fn installed_software() -> Vec<SoftwareInput> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = r#"Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | Select-Object -First 250 | ForEach-Object { [PSCustomObject]@{name=$_.DisplayName; version=$_.DisplayVersion} } | ConvertTo-Json -Depth 3 -Compress"#;
+        let out = match std::process::Command::new("powershell")
+            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass").arg("-Command").arg(script)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            _ => return Vec::new(),
+        };
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let raw = raw.trim();
+        if raw.is_empty() { return Vec::new(); }
+        // ConvertTo-Json emits a bare object for one item, an array for many.
+        if let Ok(v) = serde_json::from_str::<Vec<SoftwareInput>>(raw) { return v; }
+        if let Ok(one) = serde_json::from_str::<SoftwareInput>(raw) { return vec![one]; }
+        Vec::new()
+    }
+
+    fn fingerprint(res: &CveScanResult) -> u64 {
+        let mut keys: Vec<String> = res.matches.iter()
+            .filter(|m| m.cve.severity == "CRITICAL" || m.cve.severity == "HIGH")
+            .map(|m| format!("{}|{}", m.cve.cve_id, m.software_name))
+            .collect();
+        keys.sort();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for k in &keys {
+            for b in k.bytes() { h ^= b as u64; h = h.wrapping_mul(0x0100_0000_01b3); }
+            h ^= 0x0a; h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+
+    pub fn tick(app: &tauri::AppHandle) {
+        use tauri_plugin_notification::NotificationExt;
+        let software = installed_software();
+        if software.is_empty() { return; }
+        let res = cve_scan(software);
+        let crit = res.matches.iter().filter(|m| m.cve.severity == "CRITICAL").count();
+        let high = res.matches.iter().filter(|m| m.cve.severity == "HIGH").count();
+        if crit == 0 && high == 0 { return; }
+        let fp = fingerprint(&res);
+        // Only notify when the finding set changed since the last tick / launch.
+        if LAST_VULN_FP.swap(fp, Ordering::Relaxed) == fp { return; }
+        let body = if crit > 0 {
+            format!("{} crítica(s) y {} alta(s) en el software instalado. Abre Lucy → Inventario → Vulnerabilidades para ver el parche.", crit, high)
+        } else {
+            format!("{} vulnerabilidad(es) de severidad alta en el software instalado. Abre Lucy → Inventario → Vulnerabilidades.", high)
+        };
+        let _ = app.notification().builder()
+            .title("Lucy — Vulnerabilidades detectadas")
+            .body(&body)
+            .show();
+    }
+}
+
+/// Spawn the background vulnerability watch. Called once from lib.rs at startup.
+/// Windows-only; a no-op on other platforms (registry-based discovery). Re-checks
+/// every 6 hours and only toasts when the CRITICAL/HIGH set changes.
+pub fn start_vuln_watch_loop(app: tauri::AppHandle) {
+    #[cfg(not(windows))]
+    { let _ = app; }
+    #[cfg(windows)]
+    tauri::async_runtime::spawn(async move {
+        // Boot delay so we don't race startup / migrations / the first poll.
+        tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+        loop {
+            let app2 = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || vuln_watch::tick(&app2)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

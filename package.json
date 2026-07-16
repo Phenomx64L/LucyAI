@@ -1,6 +1,6 @@
 {
   "name": "lucy-svelte",
-  "version": "1.7.231",
+  "version": "1.7.238",
   "description": "Lucy — Autonomous SysAdmin AI Assistant (Tauri + Svelte + Rust)",
   "type": "module",
   "scripts": {
@@ -19,6 +19,9 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@fontsource-variable/space-grotesk": "^5.2.10",
     "@formkit/auto-animate": "^0.9.0",
     "@tabler/icons-svelte": "^3.41.1",
     "@tauri-apps/api": "^2",

@@ -24,9 +24,9 @@ export function getProviderForModel(model: string | null | undefined): Provider 
  */
 export function getDefaultModelForProvider(provider: string): string | null {
     switch (provider) {
-        case 'gemini':    return 'gemini-2.5-flash';
+        case 'gemini':    return 'gemini-3.5-flash';
         case 'anthropic': return 'claude-haiku-4-5';
-        case 'openai':    return 'gpt-4o-mini';
+        case 'openai':    return 'gpt-5.4-mini';
         case 'nvidia':    return 'meta/llama-3.3-70b-instruct';
         case 'local':     return null;
         default:          return null;

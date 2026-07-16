@@ -200,4 +200,45 @@
         background: rgba(245,158,11,0.10);
         border-color: rgba(245,158,11,0.45);
     }
+
+    /* ── Light mode (v1.7.232) ─────────────────────────────────────────────
+       Strip + neutral chips were dark-tuned: the strip's black gradient smudges
+       on white, and the neutral chip's `var(--text-main)` (#e2e8f0, no light
+       value) is light-grey on white = invisible (the washed-out "Relanzar").
+       Target `.pchip-info` for the neutral case so the colored variants keep
+       their hue; deepen the suggest/caution tints for parity on white. */
+    :global(:root.light) .chip-strip {
+        background: linear-gradient(to bottom, rgba(15,23,42,0.035), transparent);
+        border-top-color: var(--bdr, #cbd5e1);
+    }
+    :global(:root.light) .pchip-info {
+        background: var(--bg4, #fff);
+        border-color: var(--bdr2, #94a3b8);
+        color: var(--txt, #0f172a);
+        box-shadow: var(--shadow-card, 0 1px 2px rgba(15,23,42,.05), 0 2px 6px rgba(15,23,42,.06));
+    }
+    :global(:root.light) .pchip-info:hover {
+        background: var(--bg2, #f1f5f9);
+        border-color: var(--acc, #059669);
+    }
+    :global(:root.light) .pchip-suggest {
+        background: color-mix(in srgb, var(--blue, #2563eb) 9%, #fff);
+        border-color: color-mix(in srgb, var(--blue, #2563eb) 38%, transparent);
+    }
+    :global(:root.light) .pchip-suggest:hover {
+        background: color-mix(in srgb, var(--blue, #2563eb) 15%, #fff);
+        border-color: var(--blue, #2563eb);
+    }
+    :global(:root.light) .pchip-caution {
+        background: color-mix(in srgb, var(--amber, #d97706) 12%, #fff);
+        border-color: color-mix(in srgb, var(--amber, #d97706) 42%, transparent);
+    }
+    :global(:root.light) .pchip-caution:hover {
+        background: color-mix(in srgb, var(--amber, #d97706) 18%, #fff);
+        border-color: var(--amber, #d97706);
+    }
+    /* Provenance LLM badge is light-purple (#c4b5fd) — illegible on white. */
+    :global(:root.light) .pchip-src-llm { color: #7c3aed; }
+    :global(:root.light) .pchip-x { color: var(--txt3, #64748b); }
+    :global(:root.light) .pchip-x:hover { background: rgba(15,23,42,0.08); color: var(--txt, #0f172a); }
 </style>

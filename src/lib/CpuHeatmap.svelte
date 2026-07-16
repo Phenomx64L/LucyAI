@@ -155,6 +155,27 @@
         font-style: italic;
     }
 
+    /* ── Light mode (v1.7.232) ────────────────────────────────────────────
+       The semi-matte tints (cell base 3.5% slate, fills ~22–30% alpha) are
+       calibrated to glow on a dark plate. On the light canvas the cell base
+       vanishes and the fills wash out to pale pastels. In light mode give the
+       cell a real grey plate and push the fills to a higher alpha so each core
+       reads as a clearly-tinted bar, not a faint smudge. Blue uses blue-600
+       (the light `op` bucket's #5ec8ff is too pale on white). */
+    :global(:root.light) .hm-cell {
+        background: #eef2f7;
+        border-color: var(--bdr, #cbd5e1);
+    }
+    :global(:root.light) .hm-cell:hover { background: #e4eaf1; }
+    :global(:root.light) .hm-ok   .hm-fill { background: rgba(5,150,105,0.40); }
+    :global(:root.light) .hm-op   .hm-fill { background: rgba(37,99,235,0.34); }
+    :global(:root.light) .hm-warn .hm-fill { background: rgba(217,119,6,0.44); }
+    :global(:root.light) .hm-crit .hm-fill { background: rgba(220,38,38,0.48); }
+    :global(:root.light) .hm-ok   { border-color: rgba(5,150,105,0.34); }
+    :global(:root.light) .hm-op   { border-color: rgba(37,99,235,0.32); }
+    :global(:root.light) .hm-warn { border-color: rgba(217,119,6,0.40); }
+    :global(:root.light) .hm-crit { border-color: rgba(220,38,38,0.44); }
+
     /* Reduce motion for accessibility */
     @media (prefers-reduced-motion: reduce) {
         .hm-fill { transition: none; }

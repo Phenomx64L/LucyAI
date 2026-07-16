@@ -48,17 +48,12 @@ pub fn get_logs_dir() -> std::path::PathBuf {
 /// Rota automáticamente si supera 5 MB y comprime el archivo histórico a .gz.
 pub fn write_app_log(level: &str, message: &str) {
     let log_path = get_logs_dir().join("lucy_app.log");
-    // Rotación: si supera 5 MB renombra a .1.log y la comprime en background
-    if let Ok(meta) = std::fs::metadata(&log_path) {
-        if meta.len() > 5 * 1024 * 1024 {
-            let rotated = get_logs_dir().join("lucy_app.1.log");
-            // Drop the prior .1.log.gz first so we don't accumulate forever
-            let _ = std::fs::remove_file(get_logs_dir().join("lucy_app.1.log.gz"));
-            if std::fs::rename(&log_path, &rotated).is_ok() {
-                std::thread::spawn(move || gzip_rotated_log(&rotated));
-            }
-        }
-    }
+    // v1.7.238 — rotación con 5 generaciones comprimidas (antes: 1). En operación
+    // desatendida, una noche con un loop de errores ruidoso puede churnear varias
+    // generaciones; conservar solo 1 borraba el INICIO del incidente — justo el
+    // dato clave para el post-mortem. Reusa el helper genérico rotate_log (mismo
+    // criterio que el audit log, que ya guarda 3).
+    rotate_log("lucy_app.log", 5 * 1024 * 1024, 5);
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
         let _ = writeln!(file, "[{}] [{}] {}", ts, level, message);

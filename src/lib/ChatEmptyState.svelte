@@ -25,6 +25,7 @@
     import Cpu      from '@tabler/icons-svelte/icons/cpu';
     import Book     from '@tabler/icons-svelte/icons/book-2';
     import Sparkles from '@tabler/icons-svelte/icons/sparkles';
+    import ShieldLock from '@tabler/icons-svelte/icons/shield-lock';
 
     export let userName: string = '';
     export let isEN: boolean = false;
@@ -55,15 +56,19 @@
     // distinctive surfaces (skills, memory, runbooks) rather than the
     // generic "help me with X".
     $: defaultSuggestions = isEN ? [
-        { icon: Brain,    label: 'Open Memoria',      prompt: '/memory' },
-        { icon: Share3,   label: 'Knowledge graph',   prompt: '/kg' },
-        { icon: Bolt,     label: 'Browse skills',     prompt: '/sec-skill' },
-        { icon: Cpu,      label: 'CPU SIMD info',     prompt: '/cpu' },
+        { icon: Brain,      label: 'Open Memory',      prompt: '/memory' },
+        { icon: Share3,     label: 'Knowledge graph',  prompt: '/kg' },
+        { icon: Bolt,       label: 'Browse skills',    prompt: '/skills' },
+        { icon: ShieldLock, label: 'Security catalog', prompt: '/sec-skill' },
+        { icon: Sparkles,   label: 'Capabilities',     prompt: '/capabilities' },
+        { icon: Cpu,        label: 'CPU SIMD info',    prompt: '/cpu' },
     ] : [
-        { icon: Brain,    label: 'Abrir Memoria',     prompt: '/memory' },
-        { icon: Share3,   label: 'Grafo de conocimiento', prompt: '/kg' },
-        { icon: Bolt,     label: 'Ver skills',        prompt: '/sec-skill' },
-        { icon: Cpu,      label: 'Info CPU SIMD',     prompt: '/cpu' },
+        { icon: Brain,      label: 'Abrir Memoria',         prompt: '/memory' },
+        { icon: Share3,     label: 'Grafo de conocimiento', prompt: '/kg' },
+        { icon: Bolt,       label: 'Ver skills',            prompt: '/skills' },
+        { icon: ShieldLock, label: 'Catálogo seguridad',    prompt: '/sec-skill' },
+        { icon: Sparkles,   label: 'Capacidades',           prompt: '/capabilities' },
+        { icon: Cpu,        label: 'Info CPU SIMD',         prompt: '/cpu' },
     ];
 
     $: rendered = suggestions.length > 0 ? suggestions : defaultSuggestions;
@@ -283,5 +288,32 @@
     .ces-sug-item { display: contents; } /* keep grid layout unchanged */
     @media (prefers-reduced-motion: reduce) {
         .ces-wrap { animation: none !important; }
+    }
+
+    /* ── Light mode (v1.7.232) ────────────────────────────────────────────
+       The base card uses background:rgba(255,255,255,.015) + a translucent
+       border — values tuned to "add light" on a dark canvas, which render
+       invisible on the light canvas. In light mode give each starter a real
+       white surface, a defined border, and a soft shadow so depth comes from
+       elevation (the light-UI idiom) instead of a fill that isn't there. */
+    :global(:root.light) .ces-sug {
+        background: var(--bg4, #fff);
+        border-color: var(--bdr2, #94a3b8);
+        color: var(--txt2, #475569);
+        box-shadow: var(--shadow-card, 0 1px 2px rgba(15,23,42,.05), 0 2px 6px rgba(15,23,42,.06));
+    }
+    :global(:root.light) .ces-sug:hover {
+        background: color-mix(in srgb, var(--accent, #059669) 7%, #fff);
+        border-color: var(--accent, #059669);
+        color: var(--txt1, #0f172a);
+        box-shadow: var(--shadow-pop, 0 4px 14px rgba(5,150,105,.16));
+    }
+    /* The avatar's dark contact-ring (rgba(0,0,0,.35)) is harsh on white. */
+    :global(:root.light) .ces-mark-wrap {
+        box-shadow: 0 0 0 1px rgba(15,23,42,.08);
+    }
+    :global(:root.light) .ces-hint kbd {
+        background: var(--bg2, #f1f5f9);
+        border-color: var(--bdr2, #94a3b8);
     }
 </style>

@@ -133,6 +133,84 @@ export async function toggleMic(tabId: string, opts: VoiceOpts): Promise<void> {
     refresh();
 }
 
+// ── TTS voice selection (v1.7.235) ───────────────────────────────────────────
+// The old picker took `matchVoices[0]` — on Windows the Spanish list is usually
+// headed by "Microsoft Raúl" (male, legacy SAPI), which is why Lucy spoke with
+// the generic male OS voice even when Sabina/Helena (female) or the far better
+// Edge "(Natural)" neural voices were installed. Now:
+//   1. The user can PIN a voice (localStorage `lucy_tts_voice`, exact
+//      voice.name; picker in Configuración → Modelos y comportamiento).
+//   2. With no pin (or a pinned voice whose language no longer matches), a
+//      ranking picks the best default: neural/Natural quality first, then
+//      female given names (Lucy is female), exact locale over same-prefix.
+
+const LS_TTS_VOICE = 'lucy_tts_voice';
+
+// Female given names across Windows SAPI + Edge Natural voices (es/en). Used
+// only as a RANKING hint — any voice can still be pinned explicitly.
+const FEMALE_HINTS = [
+    'dalia', 'sabina', 'helena', 'paloma', 'laura', 'elvira', 'camila', 'lucia', 'lucía',
+    'isidora', 'andrea', 'yolanda', 'ximena', 'renata', 'catalina', 'paulina', 'francisca',
+    'valentina', 'marcela', 'salome', 'salomé', 'sonia', 'carmen', 'mónica', 'monica',
+    'jenny', 'aria', 'michelle', 'zira', 'eva', 'ana', 'emma', 'ava', 'sonia',
+];
+const MALE_HINTS = ['raul', 'raúl', 'pablo', 'jorge', 'gerardo', 'david', 'mark', 'guy', 'christopher', 'eric', 'roger'];
+
+function rankVoice(v: SpeechSynthesisVoice, wantTts: string): number {
+    const prefix = wantTts.split('-')[0];
+    if (!v.lang.startsWith(prefix)) return -1;         // wrong language → out
+    let s = v.lang === wantTts ? 40 : 20;              // exact locale > same prefix
+    const n = v.name.toLowerCase();
+    if (n.includes('natural') || n.includes('neural') || n.includes('online')) s += 30; // Edge neural ≫ SAPI
+    if (FEMALE_HINTS.some(f => n.includes(f))) s += 25;
+    if (MALE_HINTS.some(m => n.includes(m))) s -= 15;
+    return s;
+}
+
+// Ensure getVoices() is populated (async in Tauri WebView). Bounded wait, no
+// orphan listeners (the historical leak fix is preserved).
+export async function ensureTtsVoices(): Promise<SpeechSynthesisVoice[]> {
+    if (!window.speechSynthesis) return [];
+    let voces = window.speechSynthesis.getVoices();
+    if (!voces.length) {
+        await new Promise<void>(resolve => {
+            let _settled = false;
+            const onVoicesChanged = () => {
+                if (_settled) return;
+                _settled = true;
+                window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+                resolve();
+            };
+            window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
+            setTimeout(() => {
+                if (_settled) return;
+                _settled = true;
+                window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+                resolve();
+            }, 2000);
+        });
+        voces = window.speechSynthesis.getVoices();
+    }
+    return voces;
+}
+
+// Resolve the voice speak() will use for `wantTts` — pinned if valid, else the
+// ranked default. Exported so the Config picker can show the effective choice.
+export function resolveTtsVoice(voces: SpeechSynthesisVoice[], wantTts: string): SpeechSynthesisVoice | undefined {
+    let pinned: string | null = null;
+    try { pinned = localStorage.getItem(LS_TTS_VOICE); } catch {}
+    if (pinned) {
+        const v = voces.find(x => x.name === pinned);
+        // A pinned voice only applies while it matches the active language —
+        // switching Lucy to English must not read English with a Spanish voice.
+        if (v && v.lang.startsWith(wantTts.split('-')[0])) return v;
+    }
+    return voces
+        .map(v => ({ v, s: rankVoice(v, wantTts) }))
+        .filter(x => x.s >= 0)
+        .sort((a, b) => b.s - a.s)[0]?.v;
+}
+
 // ── speak ─────────────────────────────────────────────────────────────────────
 // TTS: strips HTML/markdown from text before speaking.
 export async function speak(text: string, opts: Pick<VoiceOpts, 'getActiveLang'>): Promise<void> {
@@ -149,30 +227,7 @@ export async function speak(text: string, opts: Pick<VoiceOpts, 'getActiveLang'>
 
     window.speechSynthesis.cancel();
 
-    // Wait for voices if not yet loaded (needed in Tauri WebView).
-    // BUG FIX: the old setTimeout(2s) race left a permanent 'voiceschanged' listener.
-    // Each speak() call on a new tab added another orphan listener.
-    let voces = window.speechSynthesis.getVoices();
-    if (!voces.length) {
-        await new Promise<void>(resolve => {
-            let _settled = false;
-            const onVoicesChanged = () => {
-                if (_settled) return;
-                _settled = true;
-                voces = window.speechSynthesis.getVoices();
-                window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
-                resolve();
-            };
-            window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
-            setTimeout(() => {
-                if (_settled) return;
-                _settled = true;
-                window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
-                resolve();
-            }, 2000);
-        });
-        voces = window.speechSynthesis.getVoices();
-    }
+    const voces = await ensureTtsVoices();
 
     const activeLang = opts.getActiveLang();
     const u = new SpeechSynthesisUtterance(limpio);
@@ -180,11 +235,8 @@ export async function speak(text: string, opts: Pick<VoiceOpts, 'getActiveLang'>
     u.rate = 1.05;
     u.pitch = 1.0;
 
-    const langPrefix = activeLang.tts.split('-')[0];
-    const matchVoices = voces.filter(v => v.lang.startsWith(langPrefix));
-    if (matchVoices.length) {
-        u.voice = matchVoices.find(v => v.lang === activeLang.tts) || matchVoices[0];
-    }
+    const chosen = resolveTtsVoice(voces, activeLang.tts);
+    if (chosen) u.voice = chosen;
 
     window.speechSynthesis.speak(u);
 }

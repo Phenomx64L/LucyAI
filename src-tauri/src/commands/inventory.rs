@@ -13,6 +13,13 @@ pub async fn discover_inventory_linux(
     port: Option<u16>,
     key_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // SECURITY v1.7.232 (Phase-2 C13): validate host/username before they reach the
+    // `ssh user@host` argv token (line ~94). A leading '-' is otherwise re-parsed by
+    // SSH as an option (H10 argv-injection). Sibling SSH paths in hosts.rs enforce
+    // these; this inventory-discovery path had been missed.
+    crate::commands::hosts::validate_host(&host)?;
+    crate::commands::hosts::validate_username(&username)?;
+
     let script = r#"
 echo "{"
 
@@ -113,7 +120,7 @@ echo "}"
         .map_err(|e| e.to_string())??;
 
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido del inventario: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido del inventario: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }
 
 /// Descubre servicios, puertos, software y certificados en un host Windows via WinRM.
@@ -166,7 +173,7 @@ $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }
 
 /// Descubre servicios locales (máquina donde corre Lucy).
@@ -222,5 +229,5 @@ $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     serde_json::from_str(&raw)
-        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, &raw[..raw.len().min(400)]))
+        .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }

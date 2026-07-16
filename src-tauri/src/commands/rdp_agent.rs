@@ -586,7 +586,7 @@ async fn execute_action_impl(hwnd: u64, action: ComputerAction, app: &AppHandle)
             }
 
             ComputerAction::Type { text } => {
-                let preview = if text.len() > 40 { &text[..40] } else { &text };
+                let preview = crate::utils::safe_truncate(&text, 40);
                 emit(app, hwnd, "action", "", &format!("[Desktop] Escribiendo: \"{}\"{}",
                     preview, if text.len() > 40 { "…" } else { "" }));
                 #[cfg(windows)]

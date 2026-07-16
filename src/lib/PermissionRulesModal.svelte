@@ -737,6 +737,17 @@
         background: rgba(16,185,129,.05);
     }
 
+    /* Light mode (v1.7.232) — the rgba(255,255,255,.0x) panel/table fills are
+       invisible on the white modal; remap to real plates + readable borders.
+       The allow-action green (#66ff66) is illegible on white → deepen it. */
+    :global(:root.light) .form-panel,
+    :global(:root.light) .rules-table { background: var(--bg4); border-color: var(--bdr); }
+    :global(:root.light) .rules-table thead { background: var(--bg2); }
+    :global(:root.light) .rules-table td { border-bottom-color: var(--bdr); }
+    :global(:root.light) .action.allow { color: #16a34a; }
+    :global(:root.light) .action.block { color: #dc2626; }
+    :global(:root.light) .action.ask   { color: #b45309; }
+
     .pattern {
         font-family: 'Courier New', monospace;
         color: var(--blue, #3b9eff);

@@ -391,7 +391,7 @@ fn normalize_pattern(message: &str) -> String {
 
     // Truncate very long patterns
     if pattern.len() > 200 {
-        pattern = format!("{}…", &pattern[..199]);
+        pattern = format!("{}…", crate::utils::safe_truncate(&pattern, 199));
     }
 
     pattern

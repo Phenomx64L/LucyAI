@@ -104,7 +104,7 @@ pub fn analyze_response(
                 if !target.is_empty() && !path_is_plausible(target, cwd, &wm.recent_paths) {
                     reasons.push(format!(
                         "Path sospechoso: '{}' no coincide con CWD ({}) ni paths recientes",
-                        &target[..target.len().min(80)], cwd
+                        crate::utils::safe_truncate(target, 80), cwd
                     ));
                     if max_risk.is_none() {
                         max_risk = Some(RiskLevel::Medium);

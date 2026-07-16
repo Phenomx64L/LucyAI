@@ -654,7 +654,9 @@ pub async fn fetch_url_content(url: String) -> Result<String, String> {
             return Err(format!("URL bloqueada por SSRF guard: {}", reason));
         }
     }
-    let res = HTTP_CLIENT
+    // SSRF-hardened dedicated client (pins the validated resolved IP; see
+    // state::FETCH_CLIENT). NOT the shared HTTP_CLIENT, which must reach loopback.
+    let res = crate::state::FETCH_CLIENT
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Lucy/1.0")
         .header("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9")
@@ -1537,15 +1539,20 @@ pub async fn ask_lucy_stream(
                         }
                     }
 
-                    if input_tokens == 0 && output_tokens == 0 {
-                        if let Some((in_t, out_t)) = match provider {
-                            "openai" | "local" | "nvidia" => extract_tokens_openai(&v),
-                            "anthropic" => extract_tokens_anthropic(&v),
-                            _ => extract_tokens_gemini(&v),
-                        } {
-                            input_tokens = in_t;
-                            output_tokens = out_t;
-                        }
+                    if let Some((in_t, out_t)) = match provider {
+                        "openai" | "local" | "nvidia" => extract_tokens_openai(&v),
+                        "anthropic" => extract_tokens_anthropic(&v),
+                        _ => extract_tokens_gemini(&v),
+                    } {
+                        // Streaming usage is CUMULATIVE (Gemini reports it on every
+                        // chunk; Anthropic in message_delta). The old guard
+                        // `if input==0 && output==0` froze the totals at the FIRST
+                        // usage-bearing chunk — for Gemini that's the prompt tokens
+                        // + only ~1-2 output tokens, so every stream logged "out=2"
+                        // and the cost readout undercounted output by ~100×. Take
+                        // the running max so we settle on the final total.
+                        if in_t  > input_tokens  { input_tokens  = in_t;  }
+                        if out_t > output_tokens { output_tokens = out_t; }
                     }
 
                     let text_chunk = match provider {
@@ -1694,7 +1701,7 @@ REGLAS:
             }
         }
         // Couldn't extract content — return the raw body so the user can see what came back.
-        Err(format!("Respuesta inesperada de '{}' (sin contenido reconocible): {}", provider, &body_text[..body_text.len().min(400)]))
+        Err(format!("Respuesta inesperada de '{}' (sin contenido reconocible): {}", provider, crate::utils::safe_truncate(&body_text, 400)))
     } else {
         // Surface common API errors with actionable hints
         let hint = if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -1706,7 +1713,7 @@ REGLAS:
         } else {
             String::new()
         };
-        Err(format!("API '{}' respondió {} {}{}", provider, status.as_u16(), &body_text[..body_text.len().min(300)], hint))
+        Err(format!("API '{}' respondió {} {}{}", provider, status.as_u16(), crate::utils::safe_truncate(&body_text, 300), hint))
     }
 }
 
@@ -2029,6 +2036,15 @@ mod anthropic_resolver_tests {
     // it between tests, but we CAN make assertions that hold regardless of
     // what other tests ran first — e.g. "calling extract_tokens_anthropic
     // with cache fields strictly increases the cache_read_total".
+    //
+    // v1.7.232: the exact-delta assertions (`after == before + 1`) also need
+    // isolation from PARALLEL execution — `cargo test` runs these on separate
+    // threads, so a sibling extract_tokens_* call can bump the shared counter
+    // between one test's `before` and `after` reads and break its +1 assertion
+    // (a latent flake, surfaced when unrelated new tests reshuffled scheduling).
+    // This lock serializes the counter-mutating tests; poison-tolerant so one
+    // failing test doesn't cascade into the others.
+    static CACHE_STATS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// CONTRACT: get_cache_stats returns a usable struct, even before any
     /// anthropic call has been made (avoids panic on first read).
@@ -2050,6 +2066,7 @@ mod anthropic_resolver_tests {
     /// call counted as cache activity the ratio would be useless.
     #[test]
     fn extract_tokens_no_cache_fields_bumps_total_only() {
+        let _serial = CACHE_STATS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = get_cache_stats();
         let body = serde_json::json!({
             "usage": { "input_tokens": 100, "output_tokens": 50 }
@@ -2070,6 +2087,7 @@ mod anthropic_resolver_tests {
     /// the activity counter. This is the happy path AI-1 was built for.
     #[test]
     fn extract_tokens_with_cache_read_bumps_cache_counters() {
+        let _serial = CACHE_STATS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = get_cache_stats();
         let body = serde_json::json!({
             "usage": {
@@ -2093,6 +2111,9 @@ mod anthropic_resolver_tests {
     /// `output_tokens: 1` but a malformed cache event might miss input.
     #[test]
     fn extract_tokens_missing_input_returns_none() {
+        // Holds the serial lock too: this call may still bump calls_total before
+        // returning None, which would race the exact-delta tests above.
+        let _serial = CACHE_STATS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let body = serde_json::json!({ "usage": { "output_tokens": 50 } });
         let r = extract_tokens_anthropic(&body);
         assert!(r.is_none(), "missing input_tokens must return None, not panic");

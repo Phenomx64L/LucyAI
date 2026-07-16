@@ -35,7 +35,7 @@ mod patterns;
 mod scanner;
 pub mod prompt_guard;
 
-pub use scanner::{scan, scan_url, host_resolves_to_internal, ScanDecision, ScanResult, Role};
+pub use scanner::{scan, scan_url, scan_remote_shell, host_resolves_to_internal, ip_is_internal, ScanDecision, ScanResult, Role};
 
 // ── Tauri command — frontend pre-check ─────────────────────────────────
 // Exposed to the Svelte side so the UI can pre-scan user input before

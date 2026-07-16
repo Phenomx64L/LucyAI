@@ -559,15 +559,21 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_type ON embeddings(entity_type);
 -- Tracks every ingested PDF. Chunks live in agent_memories
 -- (session_id = 'pdf:{id}') and embeddings table (entity_type = 'pdf_chunk').
 CREATE TABLE IF NOT EXISTS pdf_documents (
-    id          TEXT    PRIMARY KEY,
-    filename    TEXT    NOT NULL,
-    path        TEXT    NOT NULL,
-    page_count  INTEGER NOT NULL DEFAULT 0,
-    chunk_count INTEGER NOT NULL DEFAULT 0,
-    ingested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-    status      TEXT    NOT NULL DEFAULT 'ingesting'  -- 'ingesting'|'done'|'error'
+    id           TEXT    PRIMARY KEY,
+    filename     TEXT    NOT NULL,
+    path         TEXT    NOT NULL,
+    page_count   INTEGER NOT NULL DEFAULT 0,
+    chunk_count  INTEGER NOT NULL DEFAULT 0,
+    ingested_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    status       TEXT    NOT NULL DEFAULT 'ingesting',  -- 'ingesting'|'done'|'error'
+    content_hash TEXT    NOT NULL DEFAULT '',           -- SHA-256 hex of extracted text (v1.7.233 idempotent re-ingest)
+    synth_status TEXT    NOT NULL DEFAULT ''            -- '' pendiente | 'working' | 'done' | 'error:…' (v1.7.233 M2 síntesis)
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_docs_ingested ON pdf_documents(ingested_at DESC);
+-- NOTE: idx_pdf_docs_hash (on content_hash) is created in the metrics.rs
+-- migrations array, NOT here. On an EXISTING database this INIT_SQL runs
+-- BEFORE the ALTER that adds content_hash — an index referencing the column
+-- here aborts the whole schema init ("Metrics DB not initialized").
 
 -- Create indexes for fast queries
 CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp);
@@ -762,6 +768,12 @@ pub struct PdfDocument {
     pub chunk_count: i64,
     pub ingested_at: i64,
     pub status:      String,  // 'ingesting' | 'done' | 'error'
+    // v1.7.233 — how many of this doc's chunks have a pdf_chunk embedding.
+    // `status='done'` only covers the chunk-SAVING phase; embeddings run in a
+    // background task with no other visibility. embedded_count == chunk_count
+    // means the document is 100% semantically searchable.
+    #[serde(default)]
+    pub embedded_count: i64,
 }
 
 // ── Per-model pricing (May 2026) ──────────────────────────────────────────

@@ -395,8 +395,68 @@ pub(crate) async fn embed_and_store(
                created_at = strftime('%s','now')",
             params![id, entity_type, entity_id, text, blob, dims, used_model],
         ).map_err(|e| format!("embed_and_store: {}", e))?;
+        // v1.7.233 — mirror into sqlite-vec like upsert_embedding does.
+        // Without this, freshly ingested pdf_chunk vectors only reached the
+        // durable vec0 index at the NEXT boot's backfill; a pdf_search that
+        // found stale non-empty hits returned early and never saw new chunks.
+        let _ = super::vec_search::upsert_vec(conn, &entity_type, &entity_id, &text, &v);
         Ok(())
-    })
+    })?;
+    vec_index::invalidate();
+    Ok(())
+}
+
+/// v1.7.233 — Batch variant of `embed_and_store` for bulk ingestion (PDF
+/// chunks). Embeds `items` = (entity_id, text) pairs 16-per-HTTP-call via
+/// Ollama's /api/embed (M1); when a batch call fails (older Ollama,
+/// Gemini-only setup) it falls back to the sequential per-text path so
+/// ingestion still completes. Returns how many embeddings were stored.
+pub(crate) async fn embed_and_store_batch(
+    entity_type: &str,
+    items: &[(String, String)],
+    model: Option<String>,
+) -> Result<u32, String> {
+    const BATCH: usize = 16;
+    let mut stored: u32 = 0;
+    for chunk in items.chunks(BATCH) {
+        let texts: Vec<&str> = chunk.iter().map(|(_, t)| t.as_str()).collect();
+        match embed_batch_via_ollama(&texts, model.as_deref()).await {
+            Ok((vecs, used_model)) => {
+                shared_db(|conn| {
+                    for ((eid, text), v) in chunk.iter().zip(vecs.iter()) {
+                        let dims = v.len() as i64;
+                        let blob = vec_to_blob(v);
+                        let id = generate_id();
+                        conn.execute(
+                            "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                             ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                               text  = excluded.text,
+                               vec   = excluded.vec,
+                               dims  = excluded.dims,
+                               model = excluded.model,
+                               created_at = strftime('%s','now')",
+                            params![id, entity_type, eid, text, blob, dims, used_model],
+                        ).map_err(|e| format!("embed_and_store_batch: {}", e))?;
+                        let _ = super::vec_search::upsert_vec(conn, entity_type, eid, text, v);
+                    }
+                    Ok(())
+                })?;
+                stored += chunk.len() as u32;
+            }
+            Err(_) => {
+                // Batch endpoint unavailable — per-text fallback (best-effort,
+                // same semantics as the old sequential ingest loop).
+                for (eid, text) in chunk {
+                    if embed_and_store(entity_type.to_string(), eid.clone(), text.clone(), model.clone()).await.is_ok() {
+                        stored += 1;
+                    }
+                }
+            }
+        }
+    }
+    vec_index::invalidate();
+    Ok(stored)
 }
 
 // ── Tauri commands ─────────────────────────────────────────────────────────
@@ -563,17 +623,24 @@ pub async fn semantic_search(
     // semantic_search no longer falls through to the linear scan when the
     // caller wants to scope the search (e.g. only chunks of a runbook).
     {
+        // v1.7.233: memory-scoped searches (the pre-loop recall, memoria
+        // tools) now exclude superseded/expired rows — the vec_search
+        // predicates were dead code before (entity_type naming mismatch),
+        // so rows hidden by dedup/consolidation stayed semantically
+        // retrievable forever. Other entity types keep defaults.
+        let is_memory = entity_type.as_deref() == Some("memory");
         let filter = super::vec_search::VecFilter {
             entity_type: entity_type.as_deref(),
-            // For pure semantic_search we don't know whether the caller
-            // wants to skip superseded/expired memories — that's a
-            // memory-pipeline concern, not a generic embedding-search
-            // one. Defaults stay off; the per-table recall paths
-            // (memory.rs, metrics.rs) can pass tighter filters.
+            exclude_superseded: is_memory,
+            exclude_expired: is_memory,
             ..Default::default()
         };
+        // Over-fetch 10× for memory queries: with 1000+ pdf_chunk vectors in
+        // the same vec0 table, a 5× pool can be exhausted by chunks before
+        // the entity_type filter runs, silently starving memory recall.
+        let over_fetch = if is_memory { 10 } else { 5 };
         let knn_res = shared_db(|conn| {
-            super::vec_search::knn_filtered(conn, &qvec, limit, filter, 5)
+            super::vec_search::knn_filtered(conn, &qvec, limit, filter, over_fetch)
         });
         if let Ok(rows) = knn_res {
             if !rows.is_empty() {
@@ -679,7 +746,12 @@ pub async fn backfill_embeddings(
     let pairs: Vec<(String, String)> = shared_db(|conn| {
         let sql = match entity_type.as_str() {
             "skill" => "SELECT id, (name || ' — ' || COALESCE(description,'') || ' — ' || COALESCE(triggers,'')) FROM skills WHERE enabled = 1",
-            "memory" => "SELECT CAST(id AS TEXT), (title || ' — ' || content) FROM agent_memories",
+            // v1.7.233: exclude PDF chunks — they are already embedded as
+            // entity_type 'pdf_chunk' by pdf_ingest. Without this filter one
+            // maintenance backfill would re-embed every chunk as 'memory',
+            // letting the manual invade the pre-loop semantic recall that is
+            // deliberately scoped to entityType:'memory'.
+            "memory" => "SELECT CAST(id AS TEXT), (title || ' — ' || content) FROM agent_memories WHERE session_id NOT LIKE 'pdf:%'",
             other => return Err(format!("Unknown entity_type '{}' for backfill", other)),
         };
         let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;

@@ -4,8 +4,9 @@
      Toda la lógica de Keyring ocurre aquí — el padre solo reacciona al evento.
 ─────────────────────────────────────────────────────────────────────────── -->
 <script>
-    import { createEventDispatcher } from 'svelte';
+    import { createEventDispatcher, onMount } from 'svelte';
     import { invoke } from '@tauri-apps/api/core';
+    import { getVersion } from '@tauri-apps/api/app';
     import { focusTrap } from '$lib/actions';
     import { safeSetLSString } from '$lib/safe-ls';
 
@@ -26,10 +27,15 @@
     let setupLoading = false;
     let setupError   = '';
     let setupStep    = 'form'; // 'form' | 'success'
-    let showWhatsNew = false;  // toggle the "What's new in 1.7.0" panel
+    let showWhatsNew = false;  // toggle the "What's new" panel
 
-    // Bumped each release. Keep in sync with package.json + Cargo.toml.
-    const LUCY_VERSION = '1.6.4';
+    // v1.7.236 — versión DINÁMICA desde Tauri (getVersion lee tauri.conf.json),
+    // igual que el resto de la UI. El literal es solo un fallback para el modo
+    // dev/preview donde getVersion() puede no resolver; se sobrescribe en onMount.
+    let LUCY_VERSION = '1.7.236';
+    onMount(async () => {
+        try { LUCY_VERSION = await getVersion(); } catch { /* keep fallback */ }
+    });
 
     // ── Helpers de i18n ──────────────────────────────────────────────────────
     $: t = (es, pt, en, fr = en, de = en) =>
@@ -129,11 +135,11 @@
       <button class="so-whatsnew-toggle" type="button" on:click={() => showWhatsNew = !showWhatsNew}>
         <span class="so-spark">✦</span>
         <span>{t(
-          `Novedades en v${LUCY_VERSION} · Hardening + SRE + MCP`,
-          `Novidades em v${LUCY_VERSION} · Hardening + SRE + MCP`,
-          `What's new in v${LUCY_VERSION} · Hardening + SRE + MCP`,
-          `Nouveautés en v${LUCY_VERSION} · Hardening + SRE + MCP`,
-          `Neu in v${LUCY_VERSION} · Hardening + SRE + MCP`
+          `Novedades en v${LUCY_VERSION} · Memoria + Autonomía + Cockpit`,
+          `Novidades em v${LUCY_VERSION} · Memória + Autonomia + Cockpit`,
+          `What's new in v${LUCY_VERSION} · Memory + Autonomy + Cockpit`,
+          `Nouveautés en v${LUCY_VERSION} · Mémoire + Autonomie + Cockpit`,
+          `Neu in v${LUCY_VERSION} · Speicher + Autonomie + Cockpit`
         )}</span>
         <span class="so-chevron" class:open={showWhatsNew}>▸</span>
       </button>

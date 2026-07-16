@@ -3624,6 +3624,14 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
         text-align:left;
     }
     .ns-cap-item span:first-child{ font-size:16px;flex-shrink:0; }
+    /* Light mode (v1.7.232): the rgba(255,255,255,.04) fill is invisible on
+       the light canvas — give the capability cards a real white surface +
+       defined border + soft shadow so they read as cards, not flat text. */
+    :global(:root.light) .ns-cap-item{
+        background:var(--bg4, #fff);
+        border-color:var(--bdr2, #94a3b8);
+        box-shadow:var(--shadow-card, 0 1px 2px rgba(15,23,42,.05), 0 2px 6px rgba(15,23,42,.06));
+    }
 
     /* Session tabs */
     .ns-session-tabs{ display:flex;gap:1px;background:var(--bg);padding:4px 8px 0;border-bottom:1px solid var(--bdr);flex-wrap:nowrap;overflow-x:auto;flex-shrink:0; }

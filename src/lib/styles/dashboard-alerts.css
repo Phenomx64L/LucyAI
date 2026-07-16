@@ -148,3 +148,18 @@
 .sk-section{background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:8px;}
 .sk-row{height:11px;border-radius:4px;background:linear-gradient(90deg,var(--bg4) 25%,rgba(255,255,255,.04) 50%,var(--bg4) 75%);background-size:200% 100%;animation:sk-shimmer 1.5s infinite;}
 .sk-row.short{width:60%;}
+
+/* ── Light mode (v1.7.232) ────────────────────────────────────────────────
+   --bg4 is white in light mode, so the shimmer's white highlight is invisible
+   (white→white) and skeletons sit dead. Drop the highlight to a faint dark
+   wash so the loading shimmer reads. Also give .dash-section a clean light
+   plate (its rgba(0,0,0,.15) fill goes muddy-grey on the light canvas). */
+:root.light .dash-section{background:var(--bg2);}
+:root.light .sk-lbl,
+:root.light .sk-val,
+:root.light .sk-bar,
+:root.light .sk-sub,
+:root.light .sk-row{
+    background:linear-gradient(90deg,var(--bg2) 25%,rgba(15,23,42,.05) 50%,var(--bg2) 75%);
+    background-size:200% 100%;
+}

@@ -95,12 +95,20 @@ fn run_once() -> Result<DedupReport, String> {
         // Pull recent, non-pinned, non-superseded memories. We sort by
         // created_at ASC so the OLDER member of any duplicate pair is
         // seen first — that's what we'll supersede.
+        //
+        // PDF chunks (session_id 'pdf:<doc_id>') are EXCLUDED: every chunk of
+        // one document carries an identical tag set (Jaccard 1.0) and
+        // near-identical '§N/M' titles, so the syntactic predicates below
+        // would mass-supersede legitimate, distinct-content chunks. Document
+        // corpora are intentional near-duplicates; they are managed at the
+        // document level (pdf_delete_doc), never deduped row-by-row.
         let mut stmt = conn.prepare(
             "SELECT id, title, content, tags, importance \
              FROM agent_memories \
              WHERE created_at >= ?1 \
                AND importance < 3 \
                AND superseded_by IS NULL \
+               AND session_id NOT LIKE 'pdf:%' \
              ORDER BY created_at ASC \
              LIMIT 200"
         ).map_err(|e| format!("prepare: {}", e))?;
@@ -187,10 +195,13 @@ fn run_once() -> Result<DedupReport, String> {
             let tx = conn.unchecked_transaction()
                 .map_err(|e| format!("tx open: {}", e))?;
             {
+                // Only set the superseded_by COLUMN — every read path filters on
+                // it. The old version also appended ',superseded_by:auto-dedup'
+                // to `tags`, which corrupted the JSON array string ('["a","b"],
+                // superseded_by:auto-dedup') and broke tag parsers downstream
+                // (annealing clustering, browser tag chips).
                 let mut stmt = tx.prepare(
-                    "UPDATE agent_memories SET superseded_by = ?1, \
-                       tags = CASE WHEN tags = '' THEN 'superseded_by:auto-dedup' \
-                                   ELSE tags || ',superseded_by:auto-dedup' END \
+                    "UPDATE agent_memories SET superseded_by = ?1 \
                      WHERE id = ?2 AND superseded_by IS NULL"
                 ).map_err(|e| format!("stmt: {}", e))?;
                 for (older, newer) in &to_supersede {

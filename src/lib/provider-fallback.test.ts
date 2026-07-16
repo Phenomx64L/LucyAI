@@ -19,9 +19,9 @@ describe('getProviderForModel', () => {
 
 describe('getDefaultModelForProvider', () => {
     it('returns a cheap default per cloud provider', () => {
-        expect(getDefaultModelForProvider('gemini')).toBe('gemini-2.5-flash');
+        expect(getDefaultModelForProvider('gemini')).toBe('gemini-3.5-flash');
         expect(getDefaultModelForProvider('anthropic')).toBe('claude-haiku-4-5');
-        expect(getDefaultModelForProvider('openai')).toBe('gpt-4o-mini');
+        expect(getDefaultModelForProvider('openai')).toBe('gpt-5.4-mini');
         expect(getDefaultModelForProvider('nvidia')).toBe('meta/llama-3.3-70b-instruct');
     });
     it('returns null for local and unknown providers', () => {

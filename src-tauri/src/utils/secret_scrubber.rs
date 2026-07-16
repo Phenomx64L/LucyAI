@@ -53,11 +53,18 @@ static PATTERNS: Lazy<Vec<ScrubPattern>> = Lazy::new(|| {
         //    --password=Foo, -p Foo (skipped: too noisy), token=Foo, api_key=Foo,
         //    secret=Foo, apikey=Foo. Accepts both = and : separators.
         //    Requires non-space value of >= 4 chars to skip empty/placeholder.
+        // v1.7.232 (Phase-2 SCRUB-1): the boundary is `(^|[^A-Za-z0-9])`, NOT `\b`.
+        // `\b` treats `_` as a word char, so it FAILS to match the dominant
+        // SCREAMING_SNAKE env-var form where the keyword is an underscore-joined
+        // suffix (DB_PASSWORD=, AWS_SECRET_ACCESS_KEY=, NVIDIA_API_KEY=) — those
+        // leaked verbatim. `[^A-Za-z0-9]` treats `_` as a boundary. The boundary
+        // char is captured ($1) and preserved in the replacement so the log line
+        // isn't mangled; $2 = keyword, $3 = value (dropped).
         ScrubPattern {
             re: Regex::new(
-                r"(?i)\b(password|passwd|pwd|api[-_]?key|apikey|access[-_]?key|secret[-_]?key|secret|token|auth[-_]?token|client[-_]?secret)\s*[:=]\s*[\x22\x27]?([^\s\x22\x27]{4,})[\x22\x27]?"
+                r"(?i)(^|[^A-Za-z0-9])(password|passwd|pwd|api[-_]?key|apikey|access[-_]?key|secret[-_]?key|secret|token|auth[-_]?token|client[-_]?secret)\s*[:=]\s*[\x22\x27]?([^\s\x22\x27]{4,})[\x22\x27]?"
             ).expect("scrub regex 3"),
-            replacement: "$1=[REDACTED]",
+            replacement: "${1}${2}=[REDACTED]",
         },
         // 4. AWS access key ID — fixed prefix + 16 alnum
         ScrubPattern {
@@ -85,6 +92,15 @@ static PATTERNS: Lazy<Vec<ScrubPattern>> = Lazy::new(|| {
             ).expect("scrub regex 7"),
             replacement: "[REDACTED_PRIVATE_KEY]",
         },
+        // 8. Provider keys Lucy actually consumes: NVIDIA NIM (`nvapi-`) and
+        //    Tavily (`tvly-`). v1.7.232 (Phase-2 SCRUB-3) — pattern #5 only covered
+        //    the sk-/sk-ant- family, so bare/assignment forms of these leaked.
+        ScrubPattern {
+            re: Regex::new(
+                r"\b(?:nvapi-|tvly-)[A-Za-z0-9_\-]{16,}\b"
+            ).expect("scrub regex 8"),
+            replacement: "[REDACTED_PROVIDER_KEY]",
+        },
     ]
 });
 
@@ -95,9 +111,13 @@ fn has_potential_secret(s: &str) -> bool {
     let bytes = s.as_bytes();
     // We're matching against the lowercase form of any of these markers.
     static MARKERS: &[&[u8]] = &[
-        b"password", b"passwd", b"api_key", b"apikey", b"api-key",
+        // v1.7.232 (Phase-2 SCRUB-2): `pwd` was missing, so `Pwd=`/`pwd=`
+        // connection-string passwords short-circuited past the regex (which DOES
+        // list pwd). v1.7.232 (Phase-2 SCRUB-3): `nvapi-`/`tvly-` added so provider
+        // keys reach the new pattern #8.
+        b"password", b"passwd", b"pwd", b"api_key", b"apikey", b"api-key",
         b"secret", b"token", b"bearer", b"authorization",
-        b"akia", b"sk-", b"ghp_", b"gho_", b"ghs_", b"ghr_",
+        b"akia", b"sk-", b"nvapi-", b"tvly-", b"ghp_", b"gho_", b"ghs_", b"ghr_",
         b"github_pat_", b"-----begin",
         b"://", // URL with possible embedded creds
     ];
@@ -217,5 +237,54 @@ mod tests {
         let s = "smbclient //fileserver/share -U domain\\\\user";
         let out = scrub_for_audit(s);
         assert_eq!(out, s);
+    }
+
+    // ── v1.7.232 (Phase-2) regression tests ──────────────────────────────────
+
+    #[test]
+    fn scrub1_redacts_screaming_snake_env_secrets() {
+        // The dominant real-world form: keyword is an underscore-joined suffix.
+        // `\b` failed here because `_` is a word char; `(^|[^A-Za-z0-9])` fixes it.
+        for (line, secret) in [
+            ("export DB_PASSWORD=hunter2value", "hunter2value"),
+            ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"),
+            ("$env:MY_SECRET_KEY='supersecretvalue123'", "supersecretvalue123"),
+            ("FOO_TOKEN=abcd1234efgh5678", "abcd1234efgh5678"),
+        ] {
+            let out = scrub_for_audit(line);
+            assert!(!out.contains(secret), "SCRUB-1 leaked {:?} in {:?} -> {:?}", secret, line, out);
+            assert!(out.contains("[REDACTED]"), "expected redaction marker in {:?}", out);
+        }
+        // The underscore boundary char must be preserved (log line not mangled).
+        assert!(
+            scrub_for_audit("export DB_PASSWORD=hunter2value").contains("DB_PASSWORD"),
+            "boundary char dropped — key name mangled"
+        );
+    }
+
+    #[test]
+    fn scrub2_redacts_connection_string_pwd() {
+        // `Pwd=` (ADO.NET/ODBC) and bare `pwd=` were short-circuited because the
+        // MARKERS gate omitted `pwd` (defeating pattern #3, which already lists it).
+        for (line, secret) in [
+            ("Server=db;Uid=admin;Pwd=Passw0rd;", "Passw0rd"),
+            ("pwd=Passw0rdXYZ", "Passw0rdXYZ"),
+            ("PWD=Passw0rdXYZ", "Passw0rdXYZ"),
+        ] {
+            let out = scrub_for_audit(line);
+            assert!(!out.contains(secret), "SCRUB-2 leaked {:?} in {:?} -> {:?}", secret, line, out);
+        }
+    }
+
+    #[test]
+    fn scrub3_redacts_nvidia_and_tavily_keys() {
+        for (line, secret) in [
+            ("$env:NVIDIA_NIM_KEY = \"nvapi-abcdef0123456789ABCDEF0123\"", "nvapi-abcdef0123456789ABCDEF0123"),
+            ("using tvly-abcdef0123456789ABCDEF for search", "tvly-abcdef0123456789ABCDEF"),
+        ] {
+            let out = scrub_for_audit(line);
+            assert!(!out.contains(secret), "SCRUB-3 leaked {:?} in {:?} -> {:?}", secret, line, out);
+            assert!(out.contains("[REDACTED_PROVIDER_KEY]"), "expected provider-key marker in {:?}", out);
+        }
     }
 }

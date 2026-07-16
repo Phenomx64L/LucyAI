@@ -826,8 +826,11 @@
     /* v1.7.180 — streamReveal removed. Its `:last-of-type` slide re-fired on the
        actively-streaming line on every chunk, reading as a tremble. morphdom
        mutates the trailing text in place, so no entrance animation is needed. */
-    :global(:root.light .msg-lucy){background:#ffffff !important;border:1px solid rgba(0,168,107,.22) !important;border-left:2px solid var(--acc) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:0 1px 6px rgba(0,0,0,.07);}
-    :global(:root.light .msg-user){background:rgba(213,228,250,.9) !important;border:1px solid rgba(59,130,246,.18) !important;border-right:2px solid var(--blue) !important;backdrop-filter:none !important;color:var(--txt) !important;}
+    /* v1.7.232 — bubble parity (keep in sync with page.css copy): both speakers
+       get a faint accent-tinted white + matching hairline + accent edge + the
+       same soft shadow, so neither bubble reads heavier than the other. */
+    :global(:root.light .msg-lucy){background:color-mix(in srgb, var(--acc) 6%, #fff) !important;border:1px solid color-mix(in srgb, var(--acc) 26%, transparent) !important;border-left:2px solid var(--acc) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:var(--shadow-card) !important;}
+    :global(:root.light .msg-user){background:color-mix(in srgb, var(--blue) 11%, #fff) !important;border:1px solid color-mix(in srgb, var(--blue) 26%, transparent) !important;border-right:2px solid var(--blue) !important;backdrop-filter:none !important;color:var(--txt) !important;box-shadow:var(--shadow-card) !important;}
     :global(:root.light .msg-lucy .mn){color:var(--acc);}
     :global(:root.light .msg-user .mn){color:var(--blue);}
     :global(:root.light .msg-time){color:var(--txt3);}
