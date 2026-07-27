@@ -298,6 +298,7 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.212 — canonical tool taxonomy (single source of truth; replaces the
     // regexes/predicates that were duplicated inline in runAI and had diverged).
     import { FILE_TOOL_RE, NATIVE_TOOL_RE, hasToolResponse, isMultiStepResponse } from '$lib/agent-tools';
+    import { classifyTurnIntent, isLinuxCmd, isReadOnlyCmd, wantsFileOutput, stripScaffolding, hadActionableBlock, detectExecTag } from '$lib/agent-intent';
     import { runHeadlessAgent } from '$lib/headless-agent';
     // v1.7.213/214 — native read-only tool handlers (table-driven; Batch 2/2b).
     import { NATIVE_READONLY_HANDLERS, NATIVE_READONLY_HANDLERS_DEPS } from '$lib/agent-tools-native';
@@ -5898,85 +5899,34 @@ Use ONE of these patterns instead:
             const _localToolCapable = _isLocalModel && /code/i.test(String(_routedLoopModel || ''));
             const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
 
-            // ── CODE GENERATION INTENT: detect if user wants code, not execution ──
-            // v1.7.234 — broadened. The old regex required a space right after the
-            // verb ("genera␣script"), so "generaME el script" / "entrégame el
-            // script" / "genérame nuevamente el script" all slipped through and
-            // were treated as run-intent. Now: any generation verb (with optional
-            // enclitic -me and Spanish accents) within ~40 chars of an artifact
-            // noun (script / código / powershell / comando / función / .ps1).
-            const codeGenIntent =
-                /\b(dame|d[eé]me|gen[eé]r[aá](me)?|cr[eé]a(me)?|escrib[eaí](me)?|hazme|haz|necesito|quiero|p[aá]same|entr[eé]g[aá](me)?|mu[eé]stra(me)?|prepara(me)?|arma(me)?|red[aá]cta(me)?)\b.{0,40}\b(script|c[oó]digo|powershell|bash|python|\.ps1|comando|funci[oó]n)\b/i.test(raw)
-                || /\b(give|write|create|generate|make|show|draft)\b.{0,30}\b(a\s+)?(script|code|powershell|command|function|\.ps1)\b/i.test(raw);
-
-            // ── EXPLICIT NO-EXECUTE INTENT (v1.7.234) ───────────────────────────
-            // The user EXPLICITLY forbids running it: "no lo ejecutes", "sin
-            // ejecutar", "sólo genérame", "don't execute", "just generate". This
-            // is the strongest possible signal and must HARD-SUPPRESS every
-            // <EXECUTE*> the model emits THIS turn — a weak local model (e.g.
-            // qwen coder) frequently emits an execute block anyway, ignoring the
-            // instruction. Kept independent of codeGenIntent so it fires even
-            // when the user also said "genérame el script", and folded into
-            // infoIntent below so EVERY execution gate honours it — including the
-            // two (post-stream local + agent-loop) that don't check codeGenIntent.
-            const noExecIntent =
-                // v1.7.236 (audit): the reflexive-passive clitic `se` was missing,
-                // so the very common Spanish phrasing "no se ejecute(n)" / "que no
-                // se ejecute" — a natural way to say "don't run it" — was not
-                // recognised as no-exec intent. Added `se\s+lo\s+` and `se\s+`.
-                /\bno\s+(?:se\s+lo\s+|se\s+|lo\s+|me\s+lo\s+|la\s+|las\s+|los\s+|nada\s+)?(?:ejecut\w+|corr\w+|apliqu\w+|aplic\w+|lanc\w+)/i.test(raw) ||
-                /\bsin\s+(?:ejecut\w+|correr\w*|aplicar\w*|lanzar\w*)/i.test(raw) ||
-                /\bno\s+quiero\s+que\s+(?:se\s+lo\s+|se\s+|lo\s+|me\s+lo\s+)?(?:ejecut\w+|corr\w+|apliqu\w+)/i.test(raw) ||
-                /\b(?:s[oó]lo|solamente|[uú]nicamente|nada\s+m[aá]s|only|just|simply)\s+(?:gener\w+|escrib\w+|cr[eé]a\w*|red[aá]ct\w*|prepar\w*|write|create|generate|draft)\b/i.test(raw) ||
-                /\b(?:do\s?n['’]?t|do\s+not)\s+(?:execute|run|apply|launch)\b/i.test(raw) ||
-                /\bwithout\s+(?:execut\w+|running|applying|launching)/i.test(raw);
-
-            // ── EXPLICIT RUN-ORDER INTENT (v1.7.234) ────────────────────────────
-            // The "orden previa" that RE-ENABLES execution for a generation
-            // request: "ejecútalo", "córrelo", "y ejecuta", "run it", "go ahead".
-            // Kept precise (explicit run verbs only) — a false positive here would
-            // wrongly auto-run a script the user just wanted to see. Used ONLY to
-            // let an explicit order override the "generation defaults to show, not
-            // run" rule at the two local-exec gates; it can never override an
-            // explicit noExecIntent (that wins via infoIntent, checked first).
-            const runRequestIntent =
-                /\b(?:ejec[uú]t(?:a|alo|ala|alos|alas|enlo|enla)|c[oó]rre(?:lo|la|los|las)?|l[aá]nza(?:lo|la)?|apl[ií]ca(?:lo|la)?|hazlo|realiz(?:a|alo))\b/i.test(raw) ||
-                /\by\s+(?:ejec[uú]t\w+|c[oó]rre\w+|l[aá]nza\w+|apl[ií]ca\w+)/i.test(raw) ||
-                /\b(?:run|execute|launch)\s+(?:it|this|that|the)\b/i.test(raw) ||
-                /\b(?:go\s+ahead|do\s+it)\b/i.test(raw);
-
-            // ── INFORMATIONAL INTENT: user asks for a command to USE themselves, not to auto-execute ──
-            // Signals: "dame el comando", "cómo se hace", "qué comando", "muéstrame cómo", etc.
-            // This guard runs REGARDLESS of what the LLM emits — it enforces show-not-run at frontend level.
-            // noExecIntent is OR'd in so all downstream gates (which test infoIntent) suppress on it too.
-            const infoIntent = noExecIntent || (!codeGenIntent && (
-                /dame\s+(el\s+|un\s+)?comando|d[ií]me\s+(el\s+)?comando|cu[aá]l\s+es\s+el\s+comando/i.test(raw) ||
-                /qu[eé]\s+comando|c[oó]mo\s+(se\s+)?hac[eo]|c[oó]mo\s+(se\s+)?ejecuta|c[oó]mo\s+puedo/i.test(raw) ||
-                /para\s+(ejecutarlo|correrlo|hacerlo)\s+(yo|manual|mismo|solo|a\s+mano)/i.test(raw) ||
-                /give\s+me\s+(the\s+|a\s+)?command|show\s+me\s+(how|the\s+command)|what\s+command/i.test(raw) ||
-                /how\s+(do\s+I|to)\s+\w|mu[eé]strame\s+(c[oó]mo|el)/i.test(raw) ||
-                /solo\s+(qu[eé]|dame|dime|mu[eé]strame)\s/i.test(raw)
-            ));
-
-            // ── v1.7.10 — SKILL-ACTIVE INTENT ───────────────────────────
-            // When a security skill is active, every <EXECUTE> the LLM
-            // emits is treated as INFORMATIONAL (rendered as a code
-            // block, not run), regardless of what the user actually
-            // typed. The skill body is reference documentation; we
-            // never want it executed without explicit user values.
+            // ── TURN INTENT GATES ───────────────────────────────────────────────
+            // The four booleans that decide whether ANYTHING the model emits is
+            // allowed to run this turn, plus the security-skill override:
             //
-            // This is the UX fix on top of v1.7.9's backend guard:
-            // before, Lucy's streaming response was interrupted when
-            // her placeholder EXECUTE tried to run. Now the EXECUTE
-            // block is silently downgraded to a ```powershell fence
-            // and the explanation flows uninterrupted.
-            const _skillActiveForExec = peekActiveSecuritySkill();
-            const skillInfoIntent = !!_skillActiveForExec;
+            //   codeGenIntent    user wants an artifact (a script), not a run
+            //   noExecIntent     user EXPLICITLY forbade running it
+            //   runRequestIntent user gave an explicit run order
+            //   infoIntent       user wants the command to use themselves
+            //                    (noExecIntent is folded in, so every downstream
+            //                     gate that tests infoIntent honours it too)
+            //   skillInfoIntent  a security skill is active → <EXECUTE> is
+            //                    reference documentation, never run it
+            //
+            // Extracted to $lib/agent-intent (v1.7.239) with 64 characterization
+            // tests — the regexes moved byte-identical. Read the module for the
+            // full rationale and for the QUIRK notes on the known accent/\b gaps.
+            const _turnIntent = classifyTurnIntent(raw, peekActiveSecuritySkill());
+            const codeGenIntent    = _turnIntent.codeGenIntent;
+            const noExecIntent     = _turnIntent.noExecIntent;
+            const runRequestIntent = _turnIntent.runRequestIntent;
+            const infoIntent       = _turnIntent.infoIntent;
+            const skillInfoIntent  = _turnIntent.skillInfoIntent;
 
-            // ── LINUX-ON-WINDOWS GUARD: detect Linux-specific syntax in <EXECUTE> on Windows ──
-            // Applied post-response to catch cases where the LLM ignores OS Guard prompt rule.
-            const _isLinuxCmd = (cmd) =>
-                /^\s*(sudo\s|apt(-get)?\s|yum\s|dnf\s|pacman\s|brew\s|systemctl\s|journalctl|service\s+\w+\s+(start|stop|restart|status)|chmod\s|chown\s|chgrp\s|useradd\s|userdel\s|groupadd\s|passwd\s|crontab\s|bash\s+-[ce]|sh\s+-[ce]|mount\s|umount\s|fdisk\s|lsblk|mkfs\.|iptables\s|ip\s+(route|addr|link)|ufw\s|sestatus|getenforce|setenforce)/i.test(cmd.trim());
+            // LINUX-ON-WINDOWS GUARD: detect Linux-specific syntax in <EXECUTE>
+            // on Windows. Applied post-response to catch cases where the LLM
+            // ignores the OS Guard prompt rule.
+            const _isLinuxCmd = isLinuxCmd;
+
 
             // ── Token buffer: revelado progresivo tipo Gemini/ChatGPT ──
             let _tokenQ = [];       // cola de fragmentos de texto entrantes
@@ -6443,7 +6393,7 @@ Use ONE of these patterns instead:
             // so the LLM can chain sysinfo/security/etc. + a final
             // <TOOL>writefile:...</TOOL>. Distinct from the multi-intent
             // regex so we can debug each path independently in telemetry.
-            const _wantsFileOutput = /\b(escritorio|desktop|guarda\s+(?:en|el|la|lo)|guardar\s+(?:en|el|la|lo|como)|deposita(?:lo)?|dep[oó]sit[aá](?:lo|melo|me)?|exporta(?:lo)?|exp[oó]rtalo|save\s+(?:as|to|it)|export(?:\s+it|\s+to)?|en\s+(?:un\s+)?archivo|to\s+(?:a\s+)?file|en\s+(?:mi\s+)?(?:carpeta|escritorio|documentos|downloads|descargas)|\.(?:md|txt|pdf|json|csv|html|docx?|xlsx?)\b)/i.test(raw || '');
+            const _wantsFileOutput = wantsFileOutput(raw); // $lib/agent-intent (v1.7.239)
             if (!_isMultiStep && !_userMultiIntent && !_wantsFileOutput) {
                 if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");fin(tabId);return;}
                 if(resp.includes('<TOOL>netconn</TOOL>')){
@@ -9295,15 +9245,7 @@ times the SAME way, switch tool kind entirely.
             // showing the user a confusing "empty response" warning right
             // below a perfectly visible code block.
             // Fix: keep EXECUTE INNER content in those modes; strip outer tags only.
-            const _respClean = (resp || '')
-                .replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '')
-                .replace(/<TOOL>[\s\S]*?<\/TOOL>/gi, '')
-                .replace(/<EXECUTE[^>]*>([\s\S]*?)<\/EXECUTE[^>]*>/gi,
-                    (_m, inner) => (infoIntent || codeGenIntent || skillInfoIntent) ? String(inner || '') : '')
-                .replace(/<PLAN>[\s\S]*?<\/PLAN>/gi, '')
-                .replace(/<REMEMBER[^>]*>[\s\S]*?<\/REMEMBER>/gi, '')
-                .replace(/<LEARN>[\s\S]*?<\/LEARN>/gi, '')
-                .trim();
+            const _respClean = stripScaffolding(resp, infoIntent || codeGenIntent || skillInfoIntent); // $lib/agent-intent (v1.7.239)
             // BUG FIX (v1.4.4): suppress the empty-response warning when the
             // raw response contained ANY actionable block. Tool cards / chapter
             // view produce visible output downstream, so a missing narrative
@@ -9319,7 +9261,7 @@ times the SAME way, switch tool kind entirely.
             // fallback BEFORE the EXECUTE_REMOTE executor ran — the command never
             // fired and the user saw a false "respuesta vacía" + model swap.
             // Match ANY <EXECUTE… variant (REMOTE/CMD/WMIC/NETSH/REG/CSCRIPT/plain).
-            const _hadActionableBlock = /<TOOL>|<EXECUTE|<PLAN>|<REMEMBER\b|<LEARN>/i.test(resp || '');
+            const _hadActionableBlock = hadActionableBlock(resp); // $lib/agent-intent (v1.7.239)
             if (_respClean.length === 0 && !_hadActionableBlock) {
                 // ── Provider auto-fallback (May 2026) ───────────────────────
                 // Before giving up, see if we have another configured provider
@@ -9489,18 +9431,10 @@ times the SAME way, switch tool kind entirely.
                 ...safeResp.matchAll(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/gi)
             ];
 
-            // Helper: detect if command is read-only (safe to batch)
-            const isReadOnlyCmd = (cmd) => {
-                // SECURITY (phase-1 review) — removed curl|wget|find from the
-                // "read-only, safe to auto-run in parallel" allowlist. curl/wget
-                // are NOT read-only (they fetch attacker-controlled content and can
-                // -o/-OutFile to disk → RCE staging), and POSIX `find … -delete` /
-                // `find … -exec rm` is destructive on remote Linux hosts. They were
-                // being auto-run in parallel with no confirm modal. (Find- = the
-                // PowerShell discovery verb, kept; locate/file/wc/od are read-only.)
-                const ro = /^(Get-|Select-|Where-|Format-|Out-|Measure-|Test-|Find-|grep|ls|cat|head|tail|ps|top|du|df|netstat|ss|lsof|locate|file|wc|od)/i;
-                return ro.test(cmd.trim());
-            };
+            // Read-only detection (safe to batch in parallel) lives in
+            // $lib/agent-intent — see isReadOnlyCmd there for the security
+            // rationale behind the allowlist, and its tests for what is
+            // deliberately excluded (curl / wget / find).
 
             // Batch if 2+ read-only commands
             // v1.7.236 (audit): also honour infoIntent (which folds in
@@ -9679,26 +9613,22 @@ times the SAME way, switch tool kind entirely.
             }
 
             // ── EXECUTE: detect engine from tag or tab setting ────────────────
-            const execCmdM   = safeResp.match(/<EXECUTE_CMD>([\s\S]*?)<\/EXECUTE_CMD>/i)   || (t.execEngine==='cmd'  ? safeResp.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i) : null);
-            const execWmicM  = safeResp.match(/<EXECUTE_WMIC>([\s\S]*?)<\/EXECUTE_WMIC>/i);
-            const execNetshM = safeResp.match(/<EXECUTE_NETSH>([\s\S]*?)<\/EXECUTE_NETSH>/i);
-            const execRegM   = safeResp.match(/<EXECUTE_REG>([\s\S]*?)<\/EXECUTE_REG>/i);
-            const execVbsM   = safeResp.match(/<EXECUTE_CSCRIPT>([\s\S]*?)<\/EXECUTE_CSCRIPT>/i) || safeResp.match(/```vbs?\n([\s\S]*?)\n```/i);
-            const execPsM    = (!execCmdM && !execWmicM && !execNetshM && !execRegM && !execVbsM)
-                // When infoIntent is active, DO NOT match ```code blocks``` — they are intentional
-                // display-only blocks produced by the CODE GENERATION GUARD above. Matching them
-                // would re-execute what was explicitly converted to a code block for the user.
-                ? (safeResp.match(/<EXECUTE>([\s\S]*?)<\/EXECUTE>/i) || (!infoIntent ? safeResp.match(/\`\`\`(?:powershell|ps1|bash|cmd)\n?([\s\S]*?)\n?\`\`\`/i) : null))
-                : null;
-
-            const execM = execCmdM || execWmicM || execNetshM || execRegM || execVbsM || execPsM;
-            // Si el tab está en modo PowerShell, <EXECUTE_CMD> también corre por PS (PS ejecuta cmds nativos)
-            const execType = (execCmdM && t.execEngine !== 'powershell') ? 'cmd' : execWmicM ? 'wmic' : execNetshM ? 'netsh' : execRegM ? 'reg' : execVbsM ? 'cscript' : 'powershell';
-            const _postCmd = (execM && execM[1] ? execM[1] : '').trim();
+            // Tag precedence (CMD → WMIC → NETSH → REG → CSCRIPT → PS), the tab
+            // engine override and the infoIntent fence suppression all live in
+            // $lib/agent-intent#detectExecTag (v1.7.239), under test.
+            //
+            // NOTE: the agent loop has its OWN, deliberately DIFFERENT copy of
+            // this detection (search `execRemoteM`): it tolerates unterminated
+            // closing tags on truncated streams and has no fenced-code fallback.
+            // The two are not interchangeable — do not unify them without
+            // deciding which behaviour each path should have.
+            const _execTag = detectExecTag(safeResp, t.execEngine, infoIntent);
+            const execType = _execTag ? _execTag.type : 'powershell';
+            const _postCmd = _execTag ? _execTag.cmd : '';
             // v1.7.234 — see 7900 gate: pure "generate a script" (codeGenIntent, no
             // explicit run order) defaults to show-not-run here too.
-            if(execM && !infoIntent && !skillInfoIntent && !(codeGenIntent && !runRequestIntent) && !_isLinuxCmd(_postCmd)){
-                const cmd=execM[1].trim();
+            if(_execTag && !infoIntent && !skillInfoIntent && !(codeGenIntent && !runRequestIntent) && !_isLinuxCmd(_postCmd)){
+                const cmd=_postCmd;
                 // ── Destructive command detection (shared with agent loop) ──
                 if (isDestructiveCmd(cmd)) {
                     pendingRunAsCmd = { cmd, ctx, doSpeak, tabId, isDestructive: true };
