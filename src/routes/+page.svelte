@@ -299,6 +299,7 @@ import { listen } from '@tauri-apps/api/event';
     // regexes/predicates that were duplicated inline in runAI and had diverged).
     import { FILE_TOOL_RE, NATIVE_TOOL_RE, hasToolResponse, isMultiStepResponse } from '$lib/agent-tools';
     import { classifyTurnIntent, isLinuxCmd, isReadOnlyCmd, wantsFileOutput, stripScaffolding, hadActionableBlock, detectExecTag } from '$lib/agent-intent';
+    import { tryQuickNativeTool } from '$lib/agent-quick-tools';
     import { runHeadlessAgent } from '$lib/headless-agent';
     // v1.7.213/214 — native read-only tool handlers (table-driven; Batch 2/2b).
     import { NATIVE_READONLY_HANDLERS, NATIVE_READONLY_HANDLERS_DEPS } from '$lib/agent-tools-native';
@@ -6440,26 +6441,12 @@ Use ONE of these patterns instead:
             // regex so we can debug each path independently in telemetry.
             const _wantsFileOutput = wantsFileOutput(raw); // $lib/agent-intent (v1.7.239)
             if (!_isMultiStep && !_userMultiIntent && !_wantsFileOutput) {
-                if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await host.invoke('get_system_health');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)host.speak("Aquí tienes el reporte.");host.fin(tabId);return;}
-                if(resp.includes('<TOOL>netconn</TOOL>')){
-                    try{const conns=await host.invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! Red</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    host.fin(tabId);return;
-                }
-                if(resp.includes('<TOOL>tasklist</TOOL>')){
-                    try{const tasks=await host.invoke('get_tasklist');const rows=tasks.slice(0,25).map(t=>`${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Procesos)</div><pre style="font-size:11px;">${rows}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! Tasklist</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    host.fin(tabId);return;
-                }
-                const evtM0=resp.match(/<TOOL>eventlog:([^<:]+):(\d+)(?::([^<]+))?<\/TOOL>/i);
-                if(evtM0){
-                    try{const safeCount=Math.min(parseInt(evtM0[2]),500);const events=await host.invoke('get_event_log',{logName:evtM0[1],count:safeCount,level:evtM0[3]||null});const rows=events.map(e=>`[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (EventLog: ${evtM0[1]})</div><pre style="font-size:11px;">${rows||'Sin eventos.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! EventLog</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    host.fin(tabId);return;
-                }
-                const regM0=resp.match(/<TOOL>registry:([^|<]+)\|([^|<]+)\|([^<]*)<\/TOOL>/i);
-                if(regM0){
-                    if(isSensitiveRegistry(regM0[2])){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">⊗ Registro</div>Acceso denegado a ruta sensible: ${regM0[1]}\\${regM0[2]}`,style:'border-left-color:#ef4444;'});host.fin(tabId);return;}
-                    try{const val=await host.invoke('read_registry_value',{hive:regM0[1],keyPath:regM0[2],valueName:regM0[3]||''});host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Registro)</div><code style="font-family:var(--mono);font-size:12px;">${regM0[1]}\\${regM0[2]}\\${regM0[3]||'(Default)'} = ${val}</code>`,rawRole:'Lucy',rawContent:val});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! Registro</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    host.fin(tabId);return;
-                }
+                // Handling lives in $lib/agent-quick-tools (v1.7.239, Phase 2 of
+                // the runAI migration) — sysinfo / netconn / tasklist / eventlog /
+                // registry, each of which answers and ENDS the turn. The gate
+                // above stays here because it is about this turn, not about any
+                // individual tool. Returns true once it has handled the reply.
+                if (await tryQuickNativeTool(resp, { tabId, doSpeak, host })) return;
             }
 
             // ── AGENT LOOP: Multi-step tool chaining (incluye native tools) ──
