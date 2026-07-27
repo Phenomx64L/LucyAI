@@ -5151,9 +5151,54 @@ REGLAS DE FORMATO:
         return persisted;
     }
 
-    async function runAI(tabId,raw,doSpeak,retryCount = 0){
-        const t=getTab(tabId);
-        t.isProcessing=true; startExecTimer(); refresh();
+    // ── The default host: this component's own capabilities, named ──────────
+    //
+    // Phase 1 of the runAI() migration (v1.7.239). Every side effect inside
+    // runAI() now goes through a `host` object typed by $lib/agent-host instead
+    // of reaching directly for the component's functions. This binding is the
+    // production one and is BEHAVIOURALLY IDENTICAL to calling them directly —
+    // the members are thin arrows over the same functions, so nothing about
+    // ordering, identity or reactivity changes.
+    //
+    // Why arrows rather than direct references: several of the bound functions
+    // (`fin`, `addMsg`) are declared further down the file. Arrows defer the
+    // lookup to call time, so this object is safe to define here, next to its
+    // only consumer, rather than being forced to the bottom of the script.
+    //
+    // What it buys: a phase of runAI() can now be moved into a headless module
+    // without rewriting its body — it keeps calling `host.addMsg(...)`, and only
+    // the object behind `host` differs between the chat UI and a headless run.
+    /** @type {import('$lib/agent-host').AgentHost} */
+    const defaultAgentHost = {
+        addMsg:       (tabId, msg) => addMsg(tabId, msg),
+        addThinking:  (tabId) => addThinking(tabId),
+        scrollChat:   () => scrollChat(),
+        fin:          (tabId) => fin(tabId),
+        getTab:       (tabId) => getTab(tabId),
+        refresh:      () => refresh(),
+        bumpTab:      (tabId) => bumpTab(tabId),
+        toast: {
+            success: (m) => sonnerToast.success(m),
+            error:   (m) => sonnerToast.error(m),
+            info:    (m) => sonnerToast.info(m),
+            warning: (m) => sonnerToast.warning(m),
+        },
+        speak:        (text) => speak(text),
+        // The two HITL halts. Both set the pending state and raise the modal;
+        // the caller is expected to `fin()` and return — the user's answer is
+        // what resumes the turn.
+        confirmRunAs: (req) => {
+            pendingRunAsCmd = { cmd: req.cmd, ctx: req.ctx, doSpeak: req.doSpeak, tabId: req.tabId, ...(req.isDestructive ? { isDestructive: true } : {}) };
+            $showRunAsModal = true;
+        },
+        confirmSecurityBlock: (req) => { pendingSecurityBlock = req; },
+        logTaskEvent: (eventType, subtype, elapsedMs, metadata, tabId) => logTaskEvent(eventType, subtype, elapsedMs, metadata, tabId),
+        invoke:       (cmd, args) => invoke(cmd, args),
+    };
+
+    async function runAI(tabId,raw,doSpeak,retryCount = 0,host = defaultAgentHost){
+        const t=host.getTab(tabId);
+        t.isProcessing=true; startExecTimer(); host.refresh();
         // phase-1 review (feature) — remember this turn's user prompt so the
         // "Regenerar" button on a terminal-failure card can re-run it. Guard on a
         // non-empty raw so an internal auto-retry (raw='') doesn't clobber it.
@@ -5191,13 +5236,13 @@ REGLAS DE FORMATO:
         // unused facts decay naturally and stop polluting the system prompt.
         // Fire-and-forget — never blocks the message send, never throws.
         if (raw && raw.length > 0 && raw.length < 4000) {
-            invoke('memory_core_reinforce', { text: raw })
+            host.invoke('memory_core_reinforce', { text: raw })
                 .then(n => { if (n > 0) debug.log(`[memory-decay] reinforced ${n} entries from user msg`); })
                 .catch(e => debug.log('[memory-decay] reinforce failed:', e));
         }
         // Mostrar indicador "Lucy pensando" inline
-        addThinking(tabId);
-        await scrollChat();
+        host.addThinking(tabId);
+        await host.scrollChat();
         try{
             // Compact old turns if tab is long (opus-4-7 #1 — prompt budget)
             const compaction = compactOldTurns(t, lucyConfig.name);
@@ -5363,7 +5408,7 @@ REGLAS DE FORMATO:
                 const _mcpHint = _mcpCount > 0
                     ? `<span class="ar-mcp" title="${_mcpCount} MCP tool(s) also surfaced for this turn">+${_mcpCount} MCP</span>`
                     : '';
-                addMsg(tabId, {
+                host.addMsg(tabId, {
                     role: 'system',                   // no Lucy bubble / avatar
                     rawRole: 'Sistema',
                     rawContent: '',                   // not part of LLM conversation history
@@ -5389,10 +5434,10 @@ REGLAS DE FORMATO:
             (async () => {
                 try {
                     const _bypassOn = !!_forkBypassByTab.get(tabId);
-                    const _advice = await invoke('fork_advice', { prompt: raw });
+                    const _advice = await host.invoke('fork_advice', { prompt: raw });
                     _forkAdviceByTab.set(tabId, _advice);
                     if (_bypassOn) {
-                        addMsg(tabId, {
+                        host.addMsg(tabId, {
                             role: 'system', rawRole: 'Sistema', rawContent: '',
                             html: `<div class="fa-chip fa-bypass" title="Fork advisor bypassed via /serial">` +
                                   `<span class="fa-icon">🪡</span>` +
@@ -5417,7 +5462,7 @@ REGLAS DE FORMATO:
                     const _branchTxt = _branchCount > 0
                         ? (isEN ? `${_branchCount} branches` : `${_branchCount} ramas`)
                         : (isEN ? 'parallel-worthy' : 'paralelizable');
-                    addMsg(tabId, {
+                    host.addMsg(tabId, {
                         role: 'system', rawRole: 'Sistema', rawContent: '',
                         html: `<div class="fa-chip" title="${_tip.replace(/"/g, '&quot;')}">` +
                               `<span class="fa-icon">🔱</span>` +
@@ -5531,7 +5576,7 @@ REGLAS DE FORMATO:
                 // desatendido. try propio: un fallo aquí jamás tumba el recall.
                 if (!_TRIVIAL_RE.test(_raw)) {
                     try {
-                        const _pinned = await invoke('get_pinned_memories', { limit: 5 });
+                        const _pinned = await host.invoke('get_pinned_memories', { limit: 5 });
                         if (Array.isArray(_pinned) && _pinned.length > 0) {
                             const _pinK = _isLocalTier ? 3 : 5;
                             const _pinChars = _isLocalTier ? 250 : 400;
@@ -5603,7 +5648,7 @@ REGLAS DE FORMATO:
                         const _kwK = _isLocalTier ? 3 : 5;
                         const _kwChars = _isLocalTier ? 250 : 400;
                         const _kwHits = await Promise.race([
-                            invoke('search_agent_memories', { query: _raw, limit: _kwK }),
+                            host.invoke('search_agent_memories', { query: _raw, limit: _kwK }),
                             new Promise((_, rej) => setTimeout(() => rej(new Error('kw-recall timeout')), 700)),
                         ]);
                         if (Array.isArray(_kwHits) && _kwHits.length > 0) {
@@ -5631,8 +5676,8 @@ REGLAS DE FORMATO:
                     const _timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('auto-recall timeout')), 700));
                     const [_memRes, _docRes] = await Promise.race([
                         Promise.allSettled([
-                            invoke('semantic_search', { query: _recallQuery, entityType: 'memory', limit: _memBudget.k, minScore: 0.45, model: null }),
-                            invoke('semantic_search', { query: _recallQuery, entityType: 'pdf_chunk', limit: _docBudget.k, minScore: 0.50, model: null }),
+                            host.invoke('semantic_search', { query: _recallQuery, entityType: 'memory', limit: _memBudget.k, minScore: 0.45, model: null }),
+                            host.invoke('semantic_search', { query: _recallQuery, entityType: 'pdf_chunk', limit: _docBudget.k, minScore: 0.50, model: null }),
                         ]),
                         _timeout.then(() => { throw new Error('auto-recall timeout'); }),
                     ]);
@@ -5690,7 +5735,7 @@ REGLAS DE FORMATO:
                         if (!_isLocalTier && Array.isArray(_autoHits) && _autoHits.length > 0) {
                             const _seed = Number(_autoHits[0]?.entity_id);
                             if (Number.isFinite(_seed) && _seed > 0) {
-                                const _neighbors = await invoke('graph_neighbors', { seedId: _seed, maxHops: 2, limit: 6 });
+                                const _neighbors = await host.invoke('graph_neighbors', { seedId: _seed, maxHops: 2, limit: 6 });
                                 const _fresh = (Array.isArray(_neighbors) ? _neighbors : [])
                                     .filter(n => n && n.memory && n.memory.content && n.memory_id != null
                                                  && !_injectedMemIds.has(String(n.memory_id))
@@ -5728,7 +5773,7 @@ REGLAS DE FORMATO:
                 const META_RE = /\b(qu[eé] skills?|qu[eé] (puedes|sabes) hacer|qu[eé] capacidades?|cu[aá]ntas? skills?|tus capacidades?|tu inventario|de qu[eé] (te|se) compone|how many skills?|what (can|do) you (have|do)|your capabilities|your skills?|capabilidades de lucy|capacidades de lucy)\b/i;
                 if (META_RE.test(raw || '')) {
                     /** @type {{ cybersec_skills_bundled: number; cybersec_skills_user: number; cybersec_domains: number; cybersec_frameworks: number; embed_cache_ready: boolean }} */
-                    const cap = await invoke('lucy_capabilities_skills');
+                    const cap = await host.invoke('lucy_capabilities_skills');
                     const _totalSec = cap.cybersec_skills_bundled + cap.cybersec_skills_user;
                     const _mcpN = mcpServers?.length ?? 0;
                     const _rbN = ($runbooks || []).length;
@@ -5753,7 +5798,7 @@ REGLAS DE FORMATO:
             } catch {}
             let imgs=[];
             if(t.attachedFiles.length){const txts=t.attachedFiles.filter(f=>f.type==='text');const pix=t.attachedFiles.filter(f=>f.type==='image');if(txts.length)ctx+='\n\n--- ARCHIVOS ---\n'+txts.map(f=>`[${f.name}]\n${f.content}`).join('\n---\n');if(pix.length)pix.forEach(img=>imgs.push({mimeType:img.mimeType,data:img.content}));}
-            t.attachedFiles=[]; refresh();
+            t.attachedFiles=[]; host.refresh();
 
             // ── URL context fetcher: si el mensaje contiene URLs, fetch su contenido ──
             const urlMatches = [...(raw||'').matchAll(/https?:\/\/[^\s"'<>()]+/gi)];
@@ -5761,10 +5806,10 @@ REGLAS DE FORMATO:
                 const maxUrls = 2; // máximo 2 URLs por mensaje para no saturar el contexto
                 const urlsToFetch = urlMatches.slice(0, maxUrls).map(m => m[0]);
                 // Mostrar indicador temporal
-                const thinkMsg = getTab(tabId)?.messages.find(m=>m.id==='thinking-'+tabId);
-                if (thinkMsg) { thinkMsg.html = `<span style="color:#3a5a7a;font-size:11px;">↻ Leyendo documentación (${urlsToFetch.length} URL${urlsToFetch.length>1?'s':''})…</span>`; refresh(); }
+                const thinkMsg = host.getTab(tabId)?.messages.find(m=>m.id==='thinking-'+tabId);
+                if (thinkMsg) { thinkMsg.html = `<span style="color:#3a5a7a;font-size:11px;">↻ Leyendo documentación (${urlsToFetch.length} URL${urlsToFetch.length>1?'s':''})…</span>`; host.refresh(); }
                 const fetchResults = await Promise.allSettled(
-                    urlsToFetch.map(u => _cachedFetch('fetch_url_content', u, () => invoke('fetch_url_content', { url: u })))
+                    urlsToFetch.map(u => _cachedFetch('fetch_url_content', u, () => host.invoke('fetch_url_content', { url: u })))
                 );
                 let webCtx = ''; let fetchedCount = 0;
                 fetchResults.forEach((res, i) => {
@@ -5774,7 +5819,7 @@ REGLAS DE FORMATO:
                     }
                 });
                 if (webCtx) ctx += webCtx;
-                if (thinkMsg) { thinkMsg.html = fetchedCount > 0 ? `<span style="color:#3a5a7a;font-size:11px;">✓ ${fetchedCount} URL${fetchedCount>1?'s':''} leída${fetchedCount>1?'s':''} · procesando…</span>` : ''; refresh(); }
+                if (thinkMsg) { thinkMsg.html = fetchedCount > 0 ? `<span style="color:#3a5a7a;font-size:11px;">✓ ${fetchedCount} URL${fetchedCount>1?'s':''} leída${fetchedCount>1?'s':''} · procesando…</span>` : ''; host.refresh(); }
             }
 
             // ── Streaming: reemplaza el thinking con texto progresivo (#14) ──
@@ -5808,7 +5853,7 @@ REGLAS DE FORMATO:
             // they're replaced by streamed text + the cursor. Gives feedback during TTFT.
             t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: ahora() });
             if (COCKPIT && tabId === activeTabId) statusPatch({ running: true }); // cockpit preview — mark the agent as running (rail pulse + footer)
-            refresh(); await scrollChat();
+            host.refresh(); await host.scrollChat();
 
             if (lucyPersonality === 'concise') ctx += '\n[STYLE: Ultra-short, direct answers only. No preambles or summaries.]';
             else if (lucyPersonality === 'detailed') ctx += '\n[STYLE: Thorough explanations with context, examples and step-by-step detail.]';
@@ -6065,7 +6110,7 @@ Use ONE of these patterns instead:
                 _rafQueued = true;
                 requestAnimationFrame(() => {
                     _rafQueued = false;
-                    const t2 = getTab(tabId);
+                    const t2 = host.getTab(tabId);
                     const msg = t2?.messages.find(m => m.id === streamMsgId);
                     if (!msg) return;
                     // v1.7.53 — Bail out if the bubble has already been promoted
@@ -6151,7 +6196,7 @@ Use ONE of these patterns instead:
                     // rendered EVERY mounted ChatThread (incl. background tabs)
                     // ~25-60×/sec for the whole response. The guaranteed final
                     // render below still calls refresh() to sync page chrome.
-                    bumpTab(tabId); scrollChat();
+                    host.bumpTab(tabId); host.scrollChat();
                 });
             };
 
@@ -6173,7 +6218,7 @@ Use ONE of these patterns instead:
             // tool prefetch (see _speculateReadOnlyFromStream).
             const _specSet = new Set();
             let resp = await askLucyStream(aiParams, (accumulated) => {
-                const t2 = getTab(tabId);
+                const t2 = host.getTab(tabId);
                 if (t2?._cancelled) return;
                 // Encolar solo el texto NUEVO desde el último chunk
                 const newText = accumulated.substring(_prevAccLen);
@@ -6201,7 +6246,7 @@ Use ONE of these patterns instead:
             // full revealed text into the bubble NOW, synchronously, bypassing
             // the rAF + the length-equality skip, so content is never lost.
             try {
-                const _ft = getTab(tabId);
+                const _ft = host.getTab(tabId);
                 const _fmsg = _ft?.messages.find(m => m.id === streamMsgId);
                 if (_fmsg && _fmsg.role === 'streaming') {
                     const _fdisp = cleanStreamDisplay(_revealed);
@@ -6211,12 +6256,12 @@ Use ONE of these patterns instead:
                         const _ff = _fdisp.match(/^```/gm);
                         const _fbal = (_ff && _ff.length % 2 === 1) ? _fdisp + '\n```' : _fdisp;
                         _fmsg.html = `<div class="mn">Lucy</div><div class="stream-body">${renderMd(renderConfidenceTags(_fbal))}</div>`;
-                        refresh();
+                        host.refresh();
                     }
                 }
             } catch (_e) { /* render is best-effort — promotion below still runs */ }
             // Guard: si fue cancelado mientras esperábamos, no procesar
-            if (t._cancelled) { fin(tabId); return; }
+            if (t._cancelled) { host.fin(tabId); return; }
             // Doble-check: si ya no está procesando (cancel concurrente), salir
             if (!t.isProcessing) return;
 
@@ -6240,14 +6285,14 @@ Use ONE of these patterns instead:
                         const reasons = getReasons(verdict);
                         const risk = getRisk(verdict);
                         t.messages = t.messages.filter(m => m.id !== streamMsgId);
-                        addMsg(tabId, {
+                        host.addMsg(tabId, {
                             role: 'lucy',
                             html: `<div class="mn">⊗ ReflectionGate — ${risk} risk</div>${badge}<div style="margin-top:8px;font-size:12px;color:var(--txt2);">${isEN ? 'Response blocked before execution. Reasons:' : 'Respuesta bloqueada antes de ejecución. Razones:'}<ul>${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul></div>`,
                             style: 'border-left-color:#ef4444;',
                             rawRole: 'Lucy',
                             rawContent: `[BLOCKED by ReflectionGate: ${risk}] ${reasons.join('; ')}`,
                         });
-                        fin(tabId); return;
+                        host.fin(tabId); return;
                     }
                     t._reflectionBadge = badge;
                     pushTrace({ phase: 'warn', label: `ReflectionGate: ${getReasons(verdict).join('; ')}`, tabId: t.id });
@@ -6395,25 +6440,25 @@ Use ONE of these patterns instead:
             // regex so we can debug each path independently in telemetry.
             const _wantsFileOutput = wantsFileOutput(raw); // $lib/agent-intent (v1.7.239)
             if (!_isMultiStep && !_userMultiIntent && !_wantsFileOutput) {
-                if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await invoke('get_system_health');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)speak("Aquí tienes el reporte.");fin(tabId);return;}
+                if(resp.includes('<TOOL>sysinfo</TOOL>')){const r=await host.invoke('get_system_health');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Hardware)</div><pre>${r}</pre>`,rawRole:'Lucy',rawContent:r});if(doSpeak)host.speak("Aquí tienes el reporte.");host.fin(tabId);return;}
                 if(resp.includes('<TOOL>netconn</TOOL>')){
-                    try{const conns=await invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Red</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    fin(tabId);return;
+                    try{const conns=await host.invoke('get_network_connections');const rows=conns.slice(0,30).map(c=>`${c.protocol.padEnd(4)} ${(c.local_addr+':'+c.local_port).padEnd(22)} ${(c.remote_addr?c.remote_addr+':'+c.remote_port:'').padEnd(22)} ${c.state} (PID ${c.pid??'-'})`).join('\n');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Red)</div><pre style="font-size:11px;">${rows||'Sin conexiones activas.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! Red</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    host.fin(tabId);return;
                 }
                 if(resp.includes('<TOOL>tasklist</TOOL>')){
-                    try{const tasks=await invoke('get_tasklist');const rows=tasks.slice(0,25).map(t=>`${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Procesos)</div><pre style="font-size:11px;">${rows}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Tasklist</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    fin(tabId);return;
+                    try{const tasks=await host.invoke('get_tasklist');const rows=tasks.slice(0,25).map(t=>`${t.name.padEnd(30)} PID:${String(t.pid).padEnd(6)} ${(t.mem_kb/1024).toFixed(1)} MB`).join('\n');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Procesos)</div><pre style="font-size:11px;">${rows}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! Tasklist</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    host.fin(tabId);return;
                 }
                 const evtM0=resp.match(/<TOOL>eventlog:([^<:]+):(\d+)(?::([^<]+))?<\/TOOL>/i);
                 if(evtM0){
-                    try{const safeCount=Math.min(parseInt(evtM0[2]),500);const events=await invoke('get_event_log',{logName:evtM0[1],count:safeCount,level:evtM0[3]||null});const rows=events.map(e=>`[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n');addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (EventLog: ${evtM0[1]})</div><pre style="font-size:11px;">${rows||'Sin eventos.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! EventLog</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    fin(tabId);return;
+                    try{const safeCount=Math.min(parseInt(evtM0[2]),500);const events=await host.invoke('get_event_log',{logName:evtM0[1],count:safeCount,level:evtM0[3]||null});const rows=events.map(e=>`[${e.level}] ${e.time} · ${e.source} (ID ${e.event_id})\n  ${e.message}`).join('\n\n');host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (EventLog: ${evtM0[1]})</div><pre style="font-size:11px;">${rows||'Sin eventos.'}</pre>`,rawRole:'Lucy',rawContent:rows});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! EventLog</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    host.fin(tabId);return;
                 }
                 const regM0=resp.match(/<TOOL>registry:([^|<]+)\|([^|<]+)\|([^<]*)<\/TOOL>/i);
                 if(regM0){
-                    if(isSensitiveRegistry(regM0[2])){addMsg(tabId,{role:'lucy',html:`<div class="mn">⊗ Registro</div>Acceso denegado a ruta sensible: ${regM0[1]}\\${regM0[2]}`,style:'border-left-color:#ef4444;'});fin(tabId);return;}
-                    try{const val=await invoke('read_registry_value',{hive:regM0[1],keyPath:regM0[2],valueName:regM0[3]||''});addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Registro)</div><code style="font-family:var(--mono);font-size:12px;">${regM0[1]}\\${regM0[2]}\\${regM0[3]||'(Default)'} = ${val}</code>`,rawRole:'Lucy',rawContent:val});}catch(e){addMsg(tabId,{role:'lucy',html:`<div class="mn">! Registro</div>${e}`,style:'border-left-color:#ef4444;'});}
-                    fin(tabId);return;
+                    if(isSensitiveRegistry(regM0[2])){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">⊗ Registro</div>Acceso denegado a ruta sensible: ${regM0[1]}\\${regM0[2]}`,style:'border-left-color:#ef4444;'});host.fin(tabId);return;}
+                    try{const val=await host.invoke('read_registry_value',{hive:regM0[1],keyPath:regM0[2],valueName:regM0[3]||''});host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy (Registro)</div><code style="font-family:var(--mono);font-size:12px;">${regM0[1]}\\${regM0[2]}\\${regM0[3]||'(Default)'} = ${val}</code>`,rawRole:'Lucy',rawContent:val});}catch(e){host.addMsg(tabId,{role:'lucy',html:`<div class="mn">! Registro</div>${e}`,style:'border-left-color:#ef4444;'});}
+                    host.fin(tabId);return;
                 }
             }
 
@@ -6647,7 +6692,7 @@ Use ONE of these patterns instead:
                             detail: `Args (truncated): ${String(args).slice(0, 240)}\n\nHint to LLM: ${hintAlt || 'switch strategy'}`,
                         });
                         // Telemetry: persistent log for "which models get stuck most"
-                        logTaskEvent('agent_loop_block', 'tool_loop', null, {
+                        host.logTaskEvent('agent_loop_block', 'tool_loop', null, {
                             model: _loopModelName, kind, args_excerpt: String(args).slice(0, 120),
                             count: prev + 1, iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
                         }, tabId);
@@ -6726,7 +6771,7 @@ Use ONE of these patterns instead:
                                 detail: `Lucy is acting on the same file/URL/service repeatedly with different commands. The first attempt likely succeeded. Force-stopping the loop.`,
                             });
                             // Telemetry: capture which models hit target-loops most
-                            logTaskEvent('agent_loop_block', 'target_loop', null, {
+                            host.logTaskEvent('agent_loop_block', 'target_loop', null, {
                                 model: _loopModelName, target: label, count: prev + 1,
                                 iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
                             }, tabId);
@@ -6753,7 +6798,7 @@ Use ONE of these patterns instead:
                     errorFingerprints.set(fp, count);
                     if (count > MAX_SAME_ERROR) {
                         // Telemetry: track which models trigger repeat-error blocks
-                        logTaskEvent('agent_loop_block', 'error_repeat', null, {
+                        host.logTaskEvent('agent_loop_block', 'error_repeat', null, {
                             model: _loopModelName, fingerprint: fp.slice(0, 120),
                             count, iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
                         }, tabId);
@@ -7075,7 +7120,7 @@ Use ONE of these patterns instead:
                         _reasonLastParse = _now;
                     }
                     reasoningMsg.html = reasoningMsg.content ? renderLucyMarkdown(reasoningMsg.content) : '';
-                    bumpTab(tabId);
+                    host.bumpTab(tabId);
                 };
                 const updateReasoning = (extraChunk) => {
                     if (extraChunk) reasoningMsg.content += extraChunk;
@@ -7092,7 +7137,7 @@ Use ONE of these patterns instead:
                 _reasoningTickerRef = setInterval(() => {
                     if (!reasoningMsg.active) return;
                     reasoningMsg.duration = ((Date.now() - reasoningMsg.startTs) / 1000);
-                    bumpTab(tabId);
+                    host.bumpTab(tabId);
                 }, 250);
                 const finishReasoning = () => {
                     reasoningMsg.active = false;
@@ -7122,7 +7167,7 @@ Use ONE of these patterns instead:
                             }
                         }
                     }
-                    refresh();
+                    host.refresh();
                 };
 
                 let agentMsg = {
@@ -7288,7 +7333,7 @@ Use ONE of these patterns instead:
                         }
                     }
                     t.messages = [...t.messages];
-                    refresh(); scrollChat();
+                    host.refresh(); host.scrollChat();
                 };
 
                 // ── Plan C — track whether this task touched anything risky.
@@ -7434,7 +7479,7 @@ Use ONE of these patterns instead:
                             //   { id, action: "inserted"|"duplicate", reason }
                             // so the agent can surface dedup info to the user
                             // instead of silently re-storing the same fact.
-                            const saveRes = await invoke('save_agent_memory', {
+                            const saveRes = await host.invoke('save_agent_memory', {
                                 title: mgTitle, content: mgContent,
                                 tags: mgTags, files: mgFiles,
                                 sessionId: String(agentTaskId), importance: imp
@@ -7444,7 +7489,7 @@ Use ONE of these patterns instead:
                             // Only embed truly new memories — dedup hits already
                             // have an embedding from when they were first saved.
                             if (action === 'inserted') {
-                                invoke('upsert_embedding', {
+                                host.invoke('upsert_embedding', {
                                     entityType: 'memory',
                                     entityId: String(savedId),
                                     text: `${mgTitle}\n${mgContent}`,
@@ -7484,10 +7529,10 @@ Use ONE of these patterns instead:
                             let okCount = 0;
                             for (const id of ids) {
                                 try {
-                                    const n = await invoke('delete_agent_memory', { id });
+                                    const n = await host.invoke('delete_agent_memory', { id });
                                     if (n > 0) okCount++;
                                     // Best-effort embedding cleanup
-                                    invoke('delete_embedding', { entityType: 'memory', entityId: String(id) }).catch(() => {});
+                                    host.invoke('delete_embedding', { entityType: 'memory', entityId: String(id) }).catch(() => {});
                                 } catch (e) { debug.warn('[memoria_eliminar] id', id, 'failed:', e); }
                             }
                             toolResults.push(`[MEMORY DELETED] ${okCount}/${ids.length} memorias eliminadas (ids: ${ids.join(', ')})`);
@@ -7519,7 +7564,7 @@ Use ONE of these patterns instead:
                         const idCount = mcIds.split(',').filter(Boolean).length;
                         const _conCard = newToolCard('⇄', `Consolidar ${idCount} → 1: ${mcTitle}`, 'write');
                         try {
-                            const newId = await invoke('consolidate_agent_memories', {
+                            const newId = await host.invoke('consolidate_agent_memories', {
                                 deleteIds:  mcIds,
                                 newTitle:   mcTitle,
                                 newContent: mcBody,
@@ -7529,9 +7574,9 @@ Use ONE of these patterns instead:
                             // Best-effort embedding cleanup for the dropped ids
                             // + register new embedding for the consolidated entry.
                             for (const oldId of mcIds.split(',').map(s => s.trim()).filter(Boolean)) {
-                                invoke('delete_embedding', { entityType: 'memory', entityId: oldId }).catch(() => {});
+                                host.invoke('delete_embedding', { entityType: 'memory', entityId: oldId }).catch(() => {});
                             }
-                            invoke('upsert_embedding', {
+                            host.invoke('upsert_embedding', {
                                 entityType: 'memory',
                                 entityId: String(newId),
                                 text: `${mcTitle}\n${mcBody}`,
@@ -7562,7 +7607,7 @@ Use ONE of these patterns instead:
                         const pPriority = psM[4] ? parseInt(psM[4].trim(), 10) : 100;
                         const _pCard = newToolCard('▤', `Principle: ${pName}`, 'write');
                         try {
-                            const newId = await invoke('save_principle', {
+                            const newId = await host.invoke('save_principle', {
                                 name: pName,
                                 rule: pRule,
                                 scope: pScope,
@@ -7585,7 +7630,7 @@ Use ONE of these patterns instead:
                         const pdId = parseInt(pdM[1], 10);
                         const _pdCard = newToolCard('⊘', `Delete principle ${pdId}`, 'write');
                         try {
-                            const n = await invoke('delete_principle', { id: pdId });
+                            const n = await host.invoke('delete_principle', { id: pdId });
                             toolResults.push(`[PRINCIPLE DELETED] id=${pdId} (${n} row${n === 1 ? '' : 's'})`);
                             stepsHtml += `[⊘ Principle ${pdId}] eliminado\n`;
                             finishToolCard(_pdCard, `${n} row removed`, n > 0);
@@ -7615,7 +7660,7 @@ Use ONE of these patterns instead:
                              /\b(guard[ée]|guardad[oa]s?|he\s+guardad\w*|a[ñn]ad[íi]|agregu[ée]|persist[íi]|registr[ée]|sav(?:ed|e)d?|stored|added|cre[ée]|cread[oa])\b/i.test(lucyText));
                         if (_claimsPrincipleSave) {
                             try {
-                                const _existing = await invoke('list_principles', { scope: null });
+                                const _existing = await host.invoke('list_principles', { scope: null });
                                 const _count = Array.isArray(_existing) ? _existing.length : 0;
                                 if (_count === 0) {
                                     lucyText += '\n\n> ⚠ **Corrección:** dije que guardé un principio, pero **no se persistió** (no emití el marcador correcto), así que **no** aparece en tu módulo de Principios. Pídemelo de nuevo — p. ej. *"guarda como principio: <regla>"* — y esta vez lo guardo bien.';
@@ -7646,7 +7691,7 @@ Use ONE of these patterns instead:
                         }
                         const _scCard = newToolCard('⏰', `Schedule: ${sName}`, 'write');
                         try {
-                            const newId = await invoke('save_scheduled_task', {
+                            const newId = await host.invoke('save_scheduled_task', {
                                 name: sName,
                                 prompt: sPrompt,
                                 cronExpr: sCron,
@@ -7669,7 +7714,7 @@ Use ONE of these patterns instead:
                         lucyText = lucyText.replace(/<TOOL>schedule_list<\/TOOL>/gi, '');
                         const _slCard = newToolCard('⏰', 'Scheduled tasks', 'read');
                         try {
-                            const tasks = await invoke('list_scheduled_tasks');
+                            const tasks = await host.invoke('list_scheduled_tasks');
                             const summary = (tasks || []).map(t => {
                                 const next = new Date(t.next_run * 1000).toISOString();
                                 const last = t.last_run ? new Date(t.last_run * 1000).toISOString() : '—';
@@ -7697,7 +7742,7 @@ Use ONE of these patterns instead:
                                 // 3 LLM reformulations × 2 streams (BM25+cosine) → RRF. The
                                 // 1-3s extra latency is invisible inside an agent turn but
                                 // buys ~15-25% better recall on vague queries.
-                                const mems = await invoke('search_agent_memories_expanded', { query: mbQuery, limit: 8 });
+                                const mems = await host.invoke('search_agent_memories_expanded', { query: mbQuery, limit: 8 });
                                 if (!mems || mems.length === 0) {
                                     return `[MEMORY SEARCH: "${mbQuery}"]\nNo se encontraron memorias relevantes. Esto puede ser la primera vez que trabajas en esta área.`;
                                 }
@@ -7721,7 +7766,7 @@ Use ONE of these patterns instead:
                             label: `[📄 PDF Search] ${pdfQuery}`,
                             fn: async () => {
                                 try {
-                                    const hits = await invoke('pdf_search', { query: pdfQuery, limit: 5 });
+                                    const hits = await host.invoke('pdf_search', { query: pdfQuery, limit: 5 });
                                     if (!hits || hits.length === 0) {
                                         return `[PDF SEARCH: "${pdfQuery}"]\nNo se encontraron fragmentos relevantes en los PDFs ingresados. Asegúrate de haber ingresado el documento primero usando el panel PDF (sidebar).`;
                                     }
@@ -7748,7 +7793,7 @@ Use ONE of these patterns instead:
                         const cValue   = coreM[3].trim();
                         const _cCard = newToolCard('◆', `Core memory: ${cSection}/${cKey}`, 'write');
                         try {
-                            const cId = await invoke('memory_core_set', {
+                            const cId = await host.invoke('memory_core_set', {
                                 section: cSection, key: cKey, value: cValue, pinned: true
                             });
                             toolResults.push(`[CORE MEMORY SET — ${cSection}/${cKey}]\n${cValue}`);
@@ -7768,7 +7813,7 @@ Use ONE of these patterns instead:
                         const dKey     = cdM[2].trim();
                         const _dCard = newToolCard('◆', `Core delete: ${dSection}/${dKey}`, 'write');
                         try {
-                            await invoke('memory_core_delete', { section: dSection, key: dKey });
+                            await host.invoke('memory_core_delete', { section: dSection, key: dKey });
                             toolResults.push(`[CORE MEMORY DELETED — ${dSection}/${dKey}]`);
                             stepsHtml += `[◆ Core del] ${esc(dSection)}.${esc(dKey)}\n`;
                             finishToolCard(_dCard, 'deleted', true);
@@ -7827,7 +7872,7 @@ Use ONE of these patterns instead:
                         // schema-migration mismatches when fork_results gained
                         // new columns. Surface failures in console + LiveTrace
                         // so we never silently lose Sub-Agent visibility again.
-                        const fDbId = await invoke('fork_save', {
+                        const fDbId = await host.invoke('fork_save', {
                             taskId: fTaskId,
                             tabId: tabId || '',
                             sessionId: String(agentTaskId),
@@ -7841,7 +7886,7 @@ Use ONE of these patterns instead:
                         });
 
                         // Sub-agente de un solo paso — sin tool loop, modelo configurable
-                        const _fPromise = invoke('ask_lucy', {
+                        const _fPromise = host.invoke('ask_lucy', {
                             prompt: _fPrompt,
                             context: _fCtx,
                             userName: lucyConfig.name,
@@ -7858,7 +7903,7 @@ Use ONE of these patterns instead:
                             const tIn  = Math.ceil((_fPrompt.length + _fCtx.length) / 4);
                             const tOut = Math.ceil(resultStr.length / 4);
                             // Persistir resultado + tokens en SQLite (server computes cost_usd)
-                            invoke('fork_update', {
+                            host.invoke('fork_update', {
                                 taskId: fTaskId, status: 'done',
                                 result: resultStr, errorMsg: null,
                                 tokensIn: tIn, tokensOut: tOut,
@@ -7875,7 +7920,7 @@ Use ONE of these patterns instead:
                             forkedTasks[fTaskId].status = 'error';
                             forkedTasks[fTaskId].result = errStr;
                             // Persistir error en SQLite (no token data on failure)
-                            invoke('fork_update', {
+                            host.invoke('fork_update', {
                                 taskId: fTaskId, status: 'error',
                                 result: null, errorMsg: errStr,
                                 tokensIn: null, tokensOut: null,
@@ -7910,7 +7955,7 @@ Use ONE of these patterns instead:
 
                                 // 2. Fallback a SQLite (fork de sesión anterior o tab diferente)
                                 try {
-                                    const dbFork = await invoke('fork_get', { taskId: wTaskId });
+                                    const dbFork = await host.invoke('fork_get', { taskId: wTaskId });
                                     if (dbFork) {
                                         if (dbFork.status === 'done' && dbFork.result) {
                                             return `[SUBTASK RESULT (persisted): ${wTaskId}]\n${dbFork.result}`;
@@ -7936,7 +7981,7 @@ Use ONE of these patterns instead:
                         if (_rfChk.blocked) {
                             toolResults.push(_rfChk.msg);
                         } else {
-                            readOnlyTasks.push({ label: `[· Lectura] ${_rfPath}`, fn: () => retryWithBackoff(() => invoke('read_file_content', {path:_rfPath}), 2, true).then(c => { const t2 = c.length > 16000 && !c.includes('ERROR') ? c.substring(0,16000)+'\n... [! archivo truncado a 16000 chars — usa readlines para rangos específicos]' : c; return `[FILE CONTENT: ${_rfPath}]\n${t2}`; }) });
+                            readOnlyTasks.push({ label: `[· Lectura] ${_rfPath}`, fn: () => retryWithBackoff(() => host.invoke('read_file_content', {path:_rfPath}), 2, true).then(c => { const t2 = c.length > 16000 && !c.includes('ERROR') ? c.substring(0,16000)+'\n... [! archivo truncado a 16000 chars — usa readlines para rangos específicos]' : c; return `[FILE CONTENT: ${_rfPath}]\n${t2}`; }) });
                         }
                     }
 
@@ -7958,10 +8003,10 @@ Use ONE of these patterns instead:
                                     const parts = queryStr.split('|||');
                                     const toolName = (parts[0] || '').trim();
                                     const argsJson = (parts[1] || '{}').trim();
-                                    return invoke('mcp_server_call', { name: arg1, toolName, argsJson, env: mcpSecrets });
+                                    return host.invoke('mcp_server_call', { name: arg1, toolName, argsJson, env: mcpSecrets });
                                 }
                                 // Legacy path: whole string is the command, queryStr is "tool|||args".
-                                return invoke('call_mcp_tool', { serverName: arg1, query: queryStr, env: mcpSecrets });
+                                return host.invoke('call_mcp_tool', { serverName: arg1, query: queryStr, env: mcpSecrets });
                             }, 2, true).then(c => `[MCP ${arg1} RESULT]\n`+c)
                         });
                     }
@@ -8012,7 +8057,7 @@ Use ONE of these patterns instead:
                                     const oldStr = parts[1].replace(/\\n/g, '\n');
                                     const newStr = parts.slice(2).join('|||').replace(/\\n/g, '\n');
                                     _editCard.diff = { oldStr, newStr };
-                                    const r = await retryWithBackoff(() => invoke('edit_file', {path, oldString:oldStr, newString:newStr, replaceAll:false}), 3, false);
+                                    const r = await retryWithBackoff(() => host.invoke('edit_file', {path, oldString:oldStr, newString:newStr, replaceAll:false}), 3, false);
                                     toolResults.push(`[EDIT RESULT] ${r}`);
                                     stepsHtml += `[· Edición] ${esc(path)}\n`;
                                     filesMod.add(path);
@@ -8067,8 +8112,8 @@ Use ONE of these patterns instead:
                             return (async () => {
                                 try {
                                     let _oldC = '';
-                                    try { _oldC = String(await invoke('read_file_content', { path: _wp }) || ''); } catch { _oldC = ''; }
-                                    const _r = await retryWithBackoff(() => invoke('write_file_content', { path: _wp, content: _wc, force: true }), 3, false);
+                                    try { _oldC = String(await host.invoke('read_file_content', { path: _wp }) || ''); } catch { _oldC = ''; }
+                                    const _r = await retryWithBackoff(() => host.invoke('write_file_content', { path: _wp, content: _wc, force: true }), 3, false);
                                     _wCard.diff = { oldStr: _oldC, newStr: _wc };
                                     filesMod.add(_wp);
                                     if (COCKPIT) { artifactPush({ kind: 'write', path: _wp, summary: `${(_wc?.length || 0)} chars`, before: _oldC, after: _wc }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wp, ok: true, detail: `${(_wc?.length || 0)} chars` }); } // cockpit preview
@@ -8119,12 +8164,12 @@ Use ONE of these patterns instead:
                             // produce a side-by-side diff in the tool card. Best-effort:
                             // a missing file just means "fresh-file" (all additions).
                             let _oldContent = '';
-                            try { _oldContent = String(await invoke('read_file_content', { path: _wPath }) || ''); }
+                            try { _oldContent = String(await host.invoke('read_file_content', { path: _wPath }) || ''); }
                             catch { _oldContent = ''; }
                             // v1.4.16 — toast.promise only for LARGE writes
                             // (>32 KB). Small ones happen many times per agent
                             // turn and would spam the corner of the screen.
-                            const _wPromise = retryWithBackoff(() => invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
+                            const _wPromise = retryWithBackoff(() => host.invoke('write_file_content', {path:_wPath, content:_fileContent, force:true}), 3, false);
                             if ((_fileContent?.length || 0) > 32_768) {
                                 const _wShort = _wPath.split(/[\\/]/).pop() || _wPath;
                                 sonnerToast.promise(_wPromise, {
@@ -8175,7 +8220,7 @@ Use ONE of these patterns instead:
                                         const _openShort = _wPath.split(/[\\/]/).pop() || _wPath;
                                         const _openCard = newToolCard('▸', `${isEN ? 'Open' : 'Abrir'} ${_openShort}`, 'system');
                                         try {
-                                            const _openOut = await invoke('execute_powershell', { script: `Start-Process "${_wPath}"`, bypassToken: null });
+                                            const _openOut = await host.invoke('execute_powershell', { script: `Start-Process "${_wPath}"`, bypassToken: null });
                                             toolResults.push(`[OPEN RESULT] Archivo abierto correctamente: ${_wPath}. ${String(_openOut || '').slice(0, 160)}`);
                                             stepsHtml += `[▸ ${isEN ? 'Opened' : 'Abierto'}] ${esc(_wPath)}\n`;
                                             filesMod.add(_wPath);
@@ -8209,7 +8254,7 @@ Use ONE of these patterns instead:
                         const newPath = cdToolM[1].trim();
                         const _cdCard = newToolCard('▸', `cd ${newPath}`, 'system');
                         try {
-                            await invoke('set_tab_cwd', { tabId: String(tabId), path: newPath });
+                            await host.invoke('set_tab_cwd', { tabId: String(tabId), path: newPath });
                             _updateWM(t, { type: 'cwd', path: newPath });
                             toolResults.push(`[CWD CHANGED] Working directory is now: ${newPath}`);
                             stepsHtml += `[▸ cwd] ${esc(newPath)}\n`;
@@ -8279,8 +8324,8 @@ Use ONE of these patterns instead:
                                     throw new Error(`Host '${hostId}' no encontrado en NexShell.`);
                                 }
 
-                                const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
-                                const out = await invoke('execute_shell_cmd', {
+                                const pwd = await host.invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                                const out = await host.invoke('execute_shell_cmd', {
                                     host: h.host, username: h.username, command: cmd,
                                     hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
                                     password: pwd, keyPath: h.sshKeyPath||null
@@ -8335,19 +8380,17 @@ Use ONE of these patterns instead:
                             // ── Detect destructive commands requiring confirmation ──
                             if (!_execBlocked && isDestructiveCmd(cmd)) {
                                 stepsHtml += `[! DESTRUCTIVO] Comando requiere confirmación.\n`;
-                                pendingRunAsCmd = { cmd, ctx: agentCtx, doSpeak, tabId, isDestructive: true };
-                                $showRunAsModal = true;
+                                host.confirmRunAs({ cmd, ctx: agentCtx, doSpeak, tabId, isDestructive: true });
                                 renderAgentTask(lucyText.trim());
-                                fin(tabId);
+                                host.fin(tabId);
                                 return;
                             }
 
                             if (!_execBlocked && execType === 'powershell' && /start-process\s+powershell\s+-verb\s+runas/i.test(cmd)) {
                                 stepsHtml += `[! UAC] Elevación de privilegios solicitada.\n`;
-                                pendingRunAsCmd = { cmd, ctx: agentCtx, doSpeak, tabId };
-                                $showRunAsModal = true;
+                                host.confirmRunAs({ cmd, ctx: agentCtx, doSpeak, tabId });
                                 renderAgentTask(lucyText.trim());
-                                fin(tabId);
+                                host.fin(tabId);
                                 return;
                             }
 
@@ -8359,13 +8402,13 @@ Use ONE of these patterns instead:
                             try {
                                 const t0 = Date.now();
                                 let out;
-                                if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,});
-                                else if (execType==='wmic')     out=await invoke('execute_wmic',   {query:cmd});
-                                else if (execType==='netsh')    out=await invoke('execute_netsh',  {args:cmd});
-                                else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,bypassToken:null});
-                                else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
-                                else if (execType==='execute_powershell') out=await invoke('execute_powershell',{script:cmd,});
-                                else                            out=await invoke('execute_powershell',{script:cmd,});
+                                if      (execType==='cmd')      out=await host.invoke('execute_cmd',    {script:cmd,});
+                                else if (execType==='wmic')     out=await host.invoke('execute_wmic',   {query:cmd});
+                                else if (execType==='netsh')    out=await host.invoke('execute_netsh',  {args:cmd});
+                                else if (execType==='reg')      out=await host.invoke('execute_reg',    {args:cmd,bypassToken:null});
+                                else if (execType==='cscript')  out=await host.invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
+                                else if (execType==='execute_powershell') out=await host.invoke('execute_powershell',{script:cmd,});
+                                else                            out=await host.invoke('execute_powershell',{script:cmd,});
 
                                 const elapsed = Date.now() - t0;
                                 const engineLabel = {powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS';
@@ -8418,18 +8461,18 @@ Use ONE of these patterns instead:
                                     const token = parts[1] || '';
                                     const bw    = parts.slice(2).join(':') || parts[1] || 'restricted';
                                     const sc    = cmd.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                                    pendingSecurityBlock = { tabId, cmd, ctx: '', doSpeak, blockWord: bw, displayCmd: sc, execType, token };
-                                    addMsg(tabId, {
+                                    host.confirmSecurityBlock({ tabId, cmd, ctx: '', doSpeak, blockWord: bw, displayCmd: sc, execType, token });
+                                    host.addMsg(tabId, {
                                         role: 'lucy',
                                         html: `<div class="mn" style="color:#fbbf24;">⬡ Lucy (Seguridad)</div>Instrucción restringida durante el agent loop [${{powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS'}]: <code>${bw.slice(0,80)}</code>. Revisa el panel de autorización debajo.`,
                                         style: 'border-left-color:#fbbf24;background:rgba(251,191,36,0.04);',
                                     });
                                     finishToolCard(_execCard, `SECURITY_BLOCK · esperando autorización`, false);
                                     pushTrace({ phase: 'info', label: `⬡ Security block (step ${loop_i + 1}) — awaiting user authorization`, detail: bw, step: loop_i + 1, tabId });
-                                    if (doSpeak) speak('Pausado por seguridad.');
+                                    if (doSpeak) host.speak('Pausado por seguridad.');
                                     // Hard exit: stop the agent loop, let pendingSecurityBlock UI take over.
                                     t._cancelled = true;
-                                    fin(tabId);
+                                    host.fin(tabId);
                                     return;
                                 }
                                 agentWarps.push(warpBlock(cmd, String(e), false, 0, 'ERR'));
@@ -8512,7 +8555,7 @@ Use ONE of these patterns instead:
                         if (_persistOnly && cleanText.length >= 20 && !_signalsMoreWork) {
                             shouldContinue = false;
                             pushTrace({ phase: 'info', label: `✓ Guardado completado — cierre directo sin turno extra (step ${loop_i + 1})`, step: loop_i + 1, tabId, detail: 'Todas las herramientas del turno fueron escrituras de memoria/principios exitosas y la respuesta ya contiene el texto final. Se omite la continuación (antes: un turno LLM completo solo para re-anunciar el guardado).' });
-                            logTaskEvent('agent_persist_fast_finish', 'auto', null, { model: _loopModelName, step: loop_i + 1, tools: _tagKinds.join(',') }, tabId);
+                            host.logTaskEvent('agent_persist_fast_finish', 'auto', null, { model: _loopModelName, step: loop_i + 1, tools: _tagKinds.join(',') }, tabId);
                         }
                     }
 
@@ -8525,7 +8568,7 @@ Use ONE of these patterns instead:
                         _intentOnlyStreak++;
                         if (_intentOnlyStreak >= 2) {
                             pushTrace({ phase: 'info', label: `⏹ Sin progreso: ${_intentOnlyStreak} turnos declarando intención sin emitir herramienta — finalizando`, step: loop_i + 1, tabId, detail: 'El modelo dijo que actuaría (editar/escribir/ejecutar) pero nunca emitió <TOOL>/<EXECUTE>. Se corta el bucle.' });
-                            logTaskEvent('agent_loop_block', 'intent_only_no_tool', null, { model: _loopModelName, streak: _intentOnlyStreak, step: loop_i + 1 }, tabId);
+                            host.logTaskEvent('agent_loop_block', 'intent_only_no_tool', null, { model: _loopModelName, streak: _intentOnlyStreak, step: loop_i + 1 }, tabId);
                             stepsHtml += `<span style="opacity:0.7;color:#caa45c">[⏹ Declaró intención sin ejecutar ${_intentOnlyStreak} veces — deteniendo el bucle.]</span>\n`;
                             shouldContinue = false; // fall through to the final-answer / verifier path
                         } else {
@@ -8583,7 +8626,7 @@ Use ONE of these patterns instead:
 
                             let verdict = '';
                             try {
-                                verdict = String(await invoke('ask_lucy', {
+                                verdict = String(await host.invoke('ask_lucy', {
                                     prompt: verPrompt,
                                     context: '',
                                     userName: lucyConfig.name,
@@ -8707,7 +8750,7 @@ Use ONE of these patterns instead:
                             // an object-with-quoted-keys (avoids IPC on logs/prose).
                             if (s.length < 1500 || !/\{\s*"[^"]+"\s*:/.test(s)) continue;
                             try {
-                                const c = await invoke('compress_tool_output', { text: s });
+                                const c = await host.invoke('compress_tool_output', { text: s });
                                 if (typeof c === 'string' && c.length < s.length * 0.9) {
                                     toolResults[i] = c;
                                     _tabularUsed = true;
@@ -8780,8 +8823,8 @@ Use ONE of these patterns instead:
                                 const _eTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('entity-recall timeout')), 600));
                                 const [_eMem, _eDoc] = await Promise.race([
                                     Promise.allSettled([
-                                        invoke('semantic_search', { query: _eq, entityType: 'memory', limit: 2, minScore: 0.50, model: null }),
-                                        invoke('semantic_search', { query: _eq, entityType: 'pdf_chunk', limit: 2, minScore: 0.55, model: null }),
+                                        host.invoke('semantic_search', { query: _eq, entityType: 'memory', limit: 2, minScore: 0.50, model: null }),
+                                        host.invoke('semantic_search', { query: _eq, entityType: 'pdf_chunk', limit: 2, minScore: 0.55, model: null }),
                                     ]),
                                     _eTimeout.then(() => { throw new Error('entity-recall timeout'); }),
                                 ]);
@@ -8893,7 +8936,7 @@ DO NOT rewrite the same script again. Instead:
                                 step: loop_i + 1,
                                 tabId,
                             });
-                            logTaskEvent('agent_loop_block', 'ps_parse_errors', null, {
+                            host.logTaskEvent('agent_loop_block', 'ps_parse_errors', null, {
                                 model: _loopModelName, parse_errors: psParseErrorCount, iteration: loop_i + 1,
                             }, tabId);
                         }
@@ -8939,7 +8982,7 @@ times the SAME way, switch tool kind entirely.
                             _didEscalateModel = true;
                             agentCtx += `\n\n[!! MODEL ESCALATED — the previous model failed every tool call ${_allToolsFailedStreak} turns in a row. A STRONGER model now continues. Write CORRECT, simple, single-line commands; do not repeat the broken ones.]`;
                             pushTrace({ phase: 'info', label: `⏫ Escalado de modelo: ${_fromModel} → ${_stronger} (tras ${_allToolsFailedStreak} turnos fallando todas las herramientas)`, step: loop_i + 1, tabId, detail: 'El modelo falló todas las herramientas repetidamente; se sube a un modelo más fuerte de la MISMA familia (misma API key) por el resto de la tarea. Desactivable con lucy_escalate_on_failure=false.' });
-                            logTaskEvent('agent_model_escalated', 'auto', null, { from: _fromModel, to: _stronger, streak: _allToolsFailedStreak, step: loop_i + 1 }, tabId);
+                            host.logTaskEvent('agent_model_escalated', 'auto', null, { from: _fromModel, to: _stronger, streak: _allToolsFailedStreak, step: loop_i + 1 }, tabId);
                             stepsHtml += `<span style="opacity:0.85;color:#7fb3ff">[⏫ Escalando a un modelo más fuerte (${_stronger}) tras errores repetidos.]</span>\n`;
                             if (COCKPIT && tabId === activeTabId) statusPatch({ model: _stronger });
                         }
@@ -9081,7 +9124,7 @@ times the SAME way, switch tool kind entirely.
                                         ? `Cada herramienta devolvió salida vacía o error durante ${_allToolsFailedStreak} turnos seguidos (el modelo cambia de query pero ninguna trae datos útiles). Se entrega la mejor respuesta con lo reunido en vez de seguir quemando turnos.`
                                         : `El contexto efectivo no creció en ${_noGrowthStreak} turnos seguidos (el dedup elimina la salida duplicada que el modelo re-emite). Atascado sin progreso real.`;
                             pushTrace({ phase: 'info', label: _bailLabel, step: loop_i + 2, tabId, detail: _bailDetail });
-                            logTaskEvent('agent_loop_block', _bailReason === 'identical' ? 'identical_response' : (_bailReason === 'grind' ? 'normalized_grind' : (_bailReason === 'emptyguard' ? 'empty_guard_streak' : 'context_stall')), null, {
+                            host.logTaskEvent('agent_loop_block', _bailReason === 'identical' ? 'identical_response' : (_bailReason === 'grind' ? 'normalized_grind' : (_bailReason === 'emptyguard' ? 'empty_guard_streak' : 'context_stall')), null, {
                                 model: _loopModelName, step: loop_i + 2, hash: _curHash, normStreak: _normRespStreak, noGrowthStreak: _noGrowthStreak, emptyGuardStreak: _allToolsFailedStreak,
                             }, tabId);
                             const _bailChip = _bailReason === 'identical' ? 'Respuesta idéntica' : (_bailReason === 'grind' ? 'Molienda reformulada' : (_bailReason === 'emptyguard' ? 'Herramientas sin datos útiles' : 'Sin progreso (contexto estancado)'));
@@ -9183,7 +9226,7 @@ times the SAME way, switch tool kind entirely.
                         // Telemetry: persistent record of which model burned through
                         // the full iteration budget without finishing — strong signal
                         // that this model/goal combo needs intervention or routing.
-                        logTaskEvent('agent_loop_block', 'max_loops', null, {
+                        host.logTaskEvent('agent_loop_block', 'max_loops', null, {
                             model: _loopModelName, max: MAX_LOOPS,
                             goal_excerpt: originalUserGoal.slice(0, 200),
                         }, tabId);
@@ -9226,8 +9269,8 @@ times the SAME way, switch tool kind entirely.
                     }
                 }
                 clearAgentCheckpoint(tabId);
-                if(doSpeak) speak("Listo.");
-                fin(tabId);return;
+                if(doSpeak) host.speak("Listo.");
+                host.fin(tabId);return;
             }
 
             // ── BUG FIX (May 2026): empty Lucy response detection ──────────
@@ -9269,7 +9312,7 @@ times the SAME way, switch tool kind entirely.
                 // a safety-filter quirk that doesn't reproduce on Claude.
                 const _fb = await _findFallbackModel(aiParams.model);
                 if (_fb && retryCount < 1) {
-                    addMsg(tabId, {
+                    host.addMsg(tabId, {
                         role: 'lucy',
                         html: `<div class="mn" style="color:#60a5fa;">⇄ Cambiando de modelo</div>
                                <div style="font-size:12px;color:var(--txt);margin-top:4px;">
@@ -9277,19 +9320,19 @@ times the SAME way, switch tool kind entirely.
                                </div>`,
                         style: 'border-left-color:#60a5fa;',
                     });
-                    logTaskEvent('provider_fallback', 'empty_response', null,
+                    host.logTaskEvent('provider_fallback', 'empty_response', null,
                         { from: aiParams.model, to: _fb.model, reason: 'empty_response' }, tabId);
                     // Recurse once with the fallback model (retryCount guard
                     // prevents an infinite loop if both providers fail).
-                    fin(tabId);
-                    const t2 = getTab(tabId);
+                    host.fin(tabId);
+                    const t2 = host.getTab(tabId);
                     if (t2) {
                         // Stash the fallback so getEffectiveModel picks it up
                         t2._fallbackModel = _fb.model;
                     }
-                    return await runAI(tabId, raw, doSpeak, retryCount + 1);
+                    return await runAI(tabId, raw, doSpeak, retryCount + 1, host);
                 }
-                addMsg(tabId, {
+                host.addMsg(tabId, {
                     role: 'lucy',
                     html: `<div class="mn" style="color:#f59e0b;">⚠ Respuesta vacía del modelo</div>
                            <div style="font-size:12px;color:var(--txt);line-height:1.5;margin-top:4px;">
@@ -9318,7 +9361,7 @@ times the SAME way, switch tool kind entirely.
                     rawRole: 'Sistema',
                     rawContent: '[Sistema: la respuesta anterior del modelo llegó vacía (probable safety filter, timeout o budget agotado). NO es un patrón a continuar — en este turno responde normalmente y de forma completa al usuario.]',
                 });
-                fin(tabId); return;
+                host.fin(tabId); return;
             }
 
             t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Lucy',rawContent:resp});
@@ -9334,7 +9377,7 @@ times the SAME way, switch tool kind entirely.
             extractAndPersistMemory(resp, _persistedMemKeys);
 
             const learnM=resp.match(/<LEARN>([\s\S]*?)<\/LEARN>/i);
-            if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}fin(tabId);return;}
+            if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{host.addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}host.fin(tabId);return;}
 
             // ── CODE GENERATION GUARD: if user asked for code, strip <EXECUTE> ──
             let safeResp = resp;
@@ -9372,13 +9415,13 @@ times the SAME way, switch tool kind entirely.
                 safeResp = safeResp.replace(/<EXECUTE[^>]*>[\s\S]*?<\/EXECUTE[^>]*>/gi, '');
                 const prose = safeResp.trim();
                 const proseHtml = prose ? renderLucyMarkdown(prose) : '';
-                addMsg(tabId, {
+                host.addMsg(tabId, {
                     role: 'lucy',
                     html: `<div class="mn">Lucy</div>${proseHtml}${cardHtml}`,
                     rawContent: prose + '\n\n[PLAN pending user action]',
                 });
                 // Don't fin() — wait for user to click. Mark tab not processing so input is usable.
-                t.isProcessing = false; refresh();
+                t.isProcessing = false; host.refresh();
                 return;
             }
 
@@ -9413,12 +9456,12 @@ times the SAME way, switch tool kind entirely.
                     safeResp = safeResp.replace(firstDestructive[0], '');
                     const prose = safeResp.replace(/<EXECUTE[^>]*>[\s\S]*?<\/EXECUTE[^>]*>/gi,'').trim();
                     const proseHtml = prose ? renderLucyMarkdown(prose) : '';
-                    addMsg(tabId, {
+                    host.addMsg(tabId, {
                         role: 'lucy',
                         html: `<div class="mn" style="color:#f59e0b;">⚠ Lucy (Plan auto-generado)</div>${proseHtml}<div style="font-size:11px;color:#f59e0b;margin:4px 0 8px 0;">Lucy intentó ejecutar un comando destructivo sin <code>&lt;PLAN&gt;</code>. Requerimos tu confirmación.</div>${renderPlanCard(synthPlan, planId)}`,
                         rawContent: `[GUARDIAN] Comando destructivo: ${cmd}`,
                     });
-                    t.isProcessing = false; refresh();
+                    t.isProcessing = false; host.refresh();
                     return;
                 }
             }
@@ -9474,11 +9517,11 @@ times the SAME way, switch tool kind entirely.
                                     if (!h) throw new Error(`Host '${item.hostId}' not found`);
                                     const pf = await preflightHost(h);
                                     if (!pf.ok) {
-                                        logTaskEvent('preflight_fail', h.type || 'unknown', Date.now()-itemT0, { host: h.name, err: pf.err }, tabId);
+                                        host.logTaskEvent('preflight_fail', h.type || 'unknown', Date.now()-itemT0, { host: h.name, err: pf.err }, tabId);
                                         return { hostName: h.name, output: null, error: `Preflight falló — ${pf.err}` };
                                     }
-                                    const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
-                                    const out = await invoke('execute_shell_cmd', {
+                                    const pwd = await host.invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                                    const out = await host.invoke('execute_shell_cmd', {
                                         host: h.host, username: h.username, command: item.cmd,
                                         hostType: h.type, port: h.port || (h.type === 'linux' ? 22 : 5985),
                                         password: pwd, keyPath: h.sshKeyPath || null,
@@ -9486,7 +9529,7 @@ times the SAME way, switch tool kind entirely.
                                     _updateWM(t, { type:'exec', cmd:item.cmd, target:h.name, ok:true, ms:Date.now()-itemT0, host:h });
                                     return { hostName: h.name, output: out, error: null };
                                 } else {
-                                    const out = await invoke('execute_powershell', { script: item.cmd });
+                                    const out = await host.invoke('execute_powershell', { script: item.cmd });
                                     _updateWM(t, { type:'exec', cmd:item.cmd, target:'local', ok:true, ms:Date.now()-itemT0 });
                                     return { hostName: 'Local', output: out, error: null };
                                 }
@@ -9499,7 +9542,7 @@ times the SAME way, switch tool kind entirely.
                         // Wait all in parallel
                         const settled = await Promise.allSettled(promises);
                         const elapsed = Date.now() - t0;
-                        logTaskEvent('batch', String(readOnlyCmds.length), elapsed, { count: readOnlyCmds.length }, tabId);
+                        host.logTaskEvent('batch', String(readOnlyCmds.length), elapsed, { count: readOnlyCmds.length }, tabId);
 
                         // Render results
                         const batchHtml = readOnlyCmds.map((item, i) => {
@@ -9516,7 +9559,7 @@ times the SAME way, switch tool kind entirely.
                             </div>`;
                         }).join('');
 
-                        addMsg(tabId, {
+                        host.addMsg(tabId, {
                             role: 'lucy',
                             html: `<div class="mn">Lucy</div><div style="color:var(--acc);font-size:11px;margin-bottom:8px;">⚡ Batch execution (${readOnlyCmds.length} commands in parallel, ${elapsed}ms)</div>${batchHtml}`,
                             rawContent: readOnlyCmds.map((item, i) => {
@@ -9528,14 +9571,14 @@ times the SAME way, switch tool kind entirely.
                         // Strip all exec tags from display so they don't re-execute
                         safeResp = safeResp.replace(/<EXECUTE_REMOTE[\s\S]*?<\/EXECUTE_REMOTE>/gi, '')
                                           .replace(/<EXECUTE>[\s\S]*?<\/EXECUTE>/gi, '');
-                        fin(tabId); return;  // Done with batch execution
+                        host.fin(tabId); return;  // Done with batch execution
                     } catch (e) {
-                        addMsg(tabId, {
+                        host.addMsg(tabId, {
                             role: 'lucy',
                             html: `<div class="mn">!</div>Batch execution error: <pre style="color:#f87171;">${String(e).substring(0,300)}</pre>`,
                             style: 'border-left-color:#ef4444;'
                         });
-                        fin(tabId); return;
+                        host.fin(tabId); return;
                     }
                 }
             }
@@ -9549,27 +9592,27 @@ times the SAME way, switch tool kind entirely.
                 const hostIdClean = hostId.replace(/^LucyHost_/, '');
                 const h = $hosts.find(x => x.id === hostIdClean || x.name === hostId);
                 if (!h) {
-                    addMsg(tabId, {
+                    host.addMsg(tabId, {
                         role: 'lucy',
                         html: `<div class="mn">!</div>Lucy intentó ejecutar en host <code>${hostId}</code> pero no está configurado. Revisa la lista de hosts.`,
                         style: 'border-left-color:#f59e0b;'
                     });
-                    fin(tabId); return;
+                    host.fin(tabId); return;
                 }
                 const t0 = Date.now();
                 try {
                     const pf = await preflightHost(h);
                     if (!pf.ok) {
-                        addMsg(tabId, {
+                        host.addMsg(tabId, {
                             role: 'lucy',
                             html: `<div class="mn" style="color:#f59e0b;">⚠ Host inaccesible</div><div style="font-size:12px;color:var(--txt2);margin:4px 0;"><b>${h.name}</b> (${h.host}) — preflight falló.</div><pre style="color:#f87171;font-size:11px;">${pf.err}</pre><div style="font-size:11px;color:var(--txt2);margin-top:6px;">Comando no ejecutado. Verifica conectividad, firewall o credenciales de red.</div>`,
                             style: 'border-left-color:#f59e0b;'
                         });
-                        logTaskEvent('preflight_fail', h.type || 'unknown', Date.now()-t0, { host: h.name, err: pf.err }, tabId);
-                        fin(tabId); return;
+                        host.logTaskEvent('preflight_fail', h.type || 'unknown', Date.now()-t0, { host: h.name, err: pf.err }, tabId);
+                        host.fin(tabId); return;
                     }
-                    const pwd = await invoke('get_host_credential', { hostId: h.id }).catch(() => null);
-                    const out = await invoke('execute_shell_cmd', {
+                    const pwd = await host.invoke('get_host_credential', { hostId: h.id }).catch(() => null);
+                    const out = await host.invoke('execute_shell_cmd', {
                         host: h.host, username: h.username, command: cmd,
                         hostType: h.type,
                         port: h.port || (h.type === 'linux' ? 22 : 5985),
@@ -9581,12 +9624,12 @@ times the SAME way, switch tool kind entirely.
                     const html = `<div class="mn">Lucy</div>` +
                         `<div style="font-size:12px;color:var(--txt2);margin-bottom:6px;">◉ Ejecutado en <b>${h.name}</b> (${h.type==='linux'?'SSH':'WinRM'}) — ${elapsed}ms</div>` +
                         warpBlock(cmd, safeOut, true, elapsed, h.type==='windows'?'WinRM':'SSH');
-                    addMsg(tabId, { role: 'lucy', html, rawContent: `[${h.name}] ${cmd}\n${safeOut}` });
+                    host.addMsg(tabId, { role: 'lucy', html, rawContent: `[${h.name}] ${cmd}\n${safeOut}` });
                     t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida (${h.name}): ${safeOut}`});
                     // Auto-follow-up: ask Lucy to interpret the result
                     const followPrompt = `[REMOTE EXECUTION RESULT — ${h.name}]\nComando: ${cmd.substring(0,200)}\nSalida:\n${safeOut.substring(0,3000)}\n\nAnaliza brevemente este resultado y dime qué observas. Si necesitas ejecutar otro comando, usa <EXECUTE_REMOTE target="${h.id}">...</EXECUTE_REMOTE>.`;
                     try {
-                        const follow = await invoke('ask_lucy', {
+                        const follow = await host.invoke('ask_lucy', {
                             prompt: followPrompt, context: '', userName: lucyConfig.name,
                             runbooksDir: lucyConfig.runbooksDir || null,
                             model: getEffectiveModel(t), lang: userLang,
@@ -9594,7 +9637,7 @@ times the SAME way, switch tool kind entirely.
                         });
                         const followClean = (follow || '').replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '').trim();
                         if (followClean) {
-                            addMsg(tabId, {
+                            host.addMsg(tabId, {
                                 role: 'lucy',
                                 html: `<div class="mn">Lucy</div>${renderLucyMarkdown(followClean)}`,
                                 rawContent: followClean,
@@ -9603,13 +9646,13 @@ times the SAME way, switch tool kind entirely.
                     } catch(e) { console.warn('[remote] follow-up failed:', e); }
                 } catch(e) {
                     _updateWM(t, { type:'exec', cmd, target:h.name, ok:false, ms:Date.now()-t0, err:e });
-                    addMsg(tabId, {
+                    host.addMsg(tabId, {
                         role: 'lucy',
                         html: `<div class="mn">!</div>Error ejecutando en <b>${h.name}</b>: <pre style="color:#f87171;">${String(e).substring(0,500)}</pre>`,
                         style: 'border-left-color:#ef4444;'
                     });
                 }
-                fin(tabId); return;
+                host.fin(tabId); return;
             }
 
             // ── EXECUTE: detect engine from tag or tab setting ────────────────
@@ -9631,28 +9674,26 @@ times the SAME way, switch tool kind entirely.
                 const cmd=_postCmd;
                 // ── Destructive command detection (shared with agent loop) ──
                 if (isDestructiveCmd(cmd)) {
-                    pendingRunAsCmd = { cmd, ctx, doSpeak, tabId, isDestructive: true };
-                    $showRunAsModal = true;
-                    fin(tabId);
+                    host.confirmRunAs({ cmd, ctx, doSpeak, tabId, isDestructive: true });
+                    host.fin(tabId);
                     return;
                 }
                 // ── Confirmación RunAs (#20) ─────────────────────────────────
                 if (execType === 'powershell' && /start-process\s+powershell\s+-verb\s+runas/i.test(cmd)) {
-                    pendingRunAsCmd = { cmd, ctx, doSpeak, tabId };
-                    $showRunAsModal = true;
-                    fin(tabId);
+                    host.confirmRunAs({ cmd, ctx, doSpeak, tabId });
+                    host.fin(tabId);
                     return;
                 }
                 const t0=Date.now();
                 const engineLabel = {powershell:'PS',cmd:'CMD',wmic:'WMIC',netsh:'netsh',reg:'reg',cscript:'VBS'}[execType]||'PS';
                 try{
                     let out;
-                    if      (execType==='cmd')      out=await invoke('execute_cmd',    {script:cmd,});
-                    else if (execType==='wmic')     out=await invoke('execute_wmic',   {query:cmd});
-                    else if (execType==='netsh')    out=await invoke('execute_netsh',  {args:cmd});
-                    else if (execType==='reg')      out=await invoke('execute_reg',    {args:cmd,bypassToken:null});
-                    else if (execType==='cscript')  out=await invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
-                    else                            out=await invoke('execute_powershell',{script:cmd,});
+                    if      (execType==='cmd')      out=await host.invoke('execute_cmd',    {script:cmd,});
+                    else if (execType==='wmic')     out=await host.invoke('execute_wmic',   {query:cmd});
+                    else if (execType==='netsh')    out=await host.invoke('execute_netsh',  {args:cmd});
+                    else if (execType==='reg')      out=await host.invoke('execute_reg',    {args:cmd,bypassToken:null});
+                    else if (execType==='cscript')  out=await host.invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
+                    else                            out=await host.invoke('execute_powershell',{script:cmd,});
                     const elapsed=Date.now()-t0;
                     _updateWM(t, { type:'exec', cmd, target:'local', ok:true, ms:elapsed });
                     t.messages.push({id:Date.now()+Math.random(),role:'hidden',rawRole:'Sistema',rawContent:`Salida: ${out}`});
@@ -9666,7 +9707,7 @@ times the SAME way, switch tool kind entirely.
                         throw new Error(_outTxt);
                     }
 
-                    const analysis=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.\n\nANTI-HALLUCINATION RULES (strict):\n• If the output is empty or shows "(sin salida)", you MUST report that NO DATA was returned. DO NOT invent results, DO NOT claim "executed successfully — no items found", DO NOT assume the command worked silently.\n• When output is empty, say literally: "El comando no devolvió datos. Esto puede indicar: (a) el comando se redirigió a otro stream, (b) no hay coincidencias, o (c) un fallo silencioso. Sugiero verificar con: <comando alternativo>."\n• ONLY claim success when the output contains observable evidence (rows, values, properties, status fields). NEVER infer state from absence of output.\n• Quote real values from the output when present. NEVER fabricate service names, status values, file paths, or numeric metrics that are not literally in the text above.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
+                    const analysis=await host.invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.\n\nANTI-HALLUCINATION RULES (strict):\n• If the output is empty or shows "(sin salida)", you MUST report that NO DATA was returned. DO NOT invent results, DO NOT claim "executed successfully — no items found", DO NOT assume the command worked silently.\n• When output is empty, say literally: "El comando no devolvió datos. Esto puede indicar: (a) el comando se redirigió a otro stream, (b) no hay coincidencias, o (c) un fallo silencioso. Sugiero verificar con: <comando alternativo>."\n• ONLY claim success when the output contains observable evidence (rows, values, properties, status fields). NEVER infer state from absence of output.\n• Quote real values from the output when present. NEVER fabricate service names, status values, file paths, or numeric metrics that are not literally in the text above.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
                     const sa=renderLucyMarkdown(analysis);
                     // v1.7.60 — Pass hostname + engine + absolute timestamp so the
                     // terminal-recording header (Mission Control A3) shows the full
@@ -9679,17 +9720,17 @@ times the SAME way, switch tool kind entirely.
                         ts: _wbTs,
                         exitCode: 0,
                     });
-                    addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
-                    if(doSpeak)speak(analysis);
+                    host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${sa}${wb}`,rawRole:'Lucy',rawContent:analysis});
+                    if(doSpeak)host.speak(analysis);
                 }catch(err){
                     if(typeof err==='string'&&err.startsWith('SECURITY_BLOCK:')){
                         auditAlerts++;
                         const parts=err.split(':');
                         const token=parts[1]; const bw=parts[2]||parts[1];
                         const sc=cmd.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                        addMsg(tabId,{role:'lucy',html:`<div class="mn">⬡ Lucy (Seguridad)</div>Instrucción restringida [${engineLabel}]: <code>${bw}</code>. Revisa el panel de autorización debajo.`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
-                        pendingSecurityBlock = { tabId, cmd, ctx, doSpeak, blockWord: bw, displayCmd: sc, execType, token };
-                        if(doSpeak)speak("Pausado por seguridad.");
+                        host.addMsg(tabId,{role:'lucy',html:`<div class="mn">⬡ Lucy (Seguridad)</div>Instrucción restringida [${engineLabel}]: <code>${bw}</code>. Revisa el panel de autorización debajo.`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);'});
+                        host.confirmSecurityBlock({ tabId, cmd, ctx, doSpeak, blockWord: bw, displayCmd: sc, execType, token });
+                        if(doSpeak)host.speak("Pausado por seguridad.");
                     }else{
                         const elapsed=Date.now()-t0;
                         _updateWM(t, { type:'exec', cmd, target:'local', ok:false, ms:elapsed, err });
@@ -9711,7 +9752,7 @@ times the SAME way, switch tool kind entirely.
                         const _skillActive = peekActiveSecuritySkill();
                         if (_skillActive && retryCount === 0) {
                             const errSnip = String(err).substring(0, 400);
-                            addMsg(tabId, {
+                            host.addMsg(tabId, {
                                 role: 'lucy',
                                 html: `<div class="mn" style="color:#fbbf24;display:flex;align-items:center;gap:6px;">
                                          <span>⚠</span>
@@ -9730,15 +9771,15 @@ times the SAME way, switch tool kind entirely.
                                 rawRole: 'Sistema',
                                 rawContent: `[SKILL ACTIVE — execution halted]\nA command from the active skill workflow failed. Do NOT retry. Tell the user the skill's example values are placeholders and ask for real ones. Do not invent paths, tenant ids, usernames, or any other concrete values from skill examples.`,
                             });
-                            if (doSpeak) speak("El comando del skill usaba valores de ejemplo. Espero tus datos reales.");
+                            if (doSpeak) host.speak("El comando del skill usaba valores de ejemplo. Espero tus datos reales.");
                             return;
                         }
                         if (retryCount < 3) {
-                            logTaskEvent('retry', String(retryCount + 1), elapsed, { error: String(err).substring(0,120) }, tabId);
+                            host.logTaskEvent('retry', String(retryCount + 1), elapsed, { error: String(err).substring(0,120) }, tabId);
                             const errorSnippet = String(err).substring(0, 500);
                             const sysRet = `El comando falló con esta salida:\n${errorSnippet}\n\nAplica tu regla de auto-corrección. NO pidas perdón, solo envía el nuevo comando corregido en un bloque <EXECUTE>. Céntrate en arreglar el error para lograr el objetivo.`;
                             
-                            addMsg(tabId, {
+                            host.addMsg(tabId, {
                                 role: 'lucy',
                                 html: `<div class="mn" style="color:#a78bfa;display:flex;align-items:center;gap:6px;">
                                          <span style="display:inline-block;animation:spin 2s linear infinite;">↻</span>
@@ -9751,15 +9792,15 @@ times the SAME way, switch tool kind entirely.
                                 rawContent: sysRet
                             });
                             
-                            if (doSpeak) speak(`Corrigiendo error, intento ${retryCount + 1}.`);
+                            if (doSpeak) host.speak(`Corrigiendo error, intento ${retryCount + 1}.`);
                             
                             // Iniciar el auto-retry — return to prevent double fin()
-                            await runAI(tabId, '', doSpeak, retryCount + 1);
+                            await runAI(tabId, '', doSpeak, retryCount + 1, host);
                             return;
                         } else {
-                            const rec=await invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
-                            addMsg(tabId,{role:'lucy',html:`<div class="mn" style="color:#ef4444;">! Límite de auto-correcciones (3) alcanzado</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);',rawRole:'Lucy',rawContent:rec});
-                            if(doSpeak)speak("No pude solucionar el error tras 3 intentos. Deteniendo proceso.");
+                            const rec=await host.invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
+                            host.addMsg(tabId,{role:'lucy',html:`<div class="mn" style="color:#ef4444;">! Límite de auto-correcciones (3) alcanzado</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);',rawRole:'Lucy',rawContent:rec});
+                            if(doSpeak)host.speak("No pude solucionar el error tras 3 intentos. Deteniendo proceso.");
                         }
                     }
                 }
@@ -9804,7 +9845,7 @@ times the SAME way, switch tool kind entirely.
                     // created with ~0 tokens; without this recompute,
                     // pruneTabForBudget undercounts long Lucy responses.
                     existingStreamMsg.tokens = Math.ceil(clean.length / 4);
-                    refresh();
+                    host.refresh();
                     // v1.7.53 — Decorate the freshly-rendered <pre> nodes. The
                     // streaming render path doesn't call addCopyBtns; the
                     // permanent message does need it (copy / run buttons,
@@ -9813,14 +9854,14 @@ times the SAME way, switch tool kind entirely.
                     addCopyBtns({
                         isEN,
                         getActiveTabId: () => activeTabId,
-                        getTab,
+                        getTab: host.getTab,
                         runProcess: (id) => process(id),
-                        setTabsExecEngine: (id, eng) => { const t2 = getTab(id); if (t2) { t2.execEngine = eng; tabs = tabs; } },
-                        setTabInputValue:  (id, val) => { const t2 = getTab(id); if (t2) { t2.inputValue = val; tabs = tabs; } },
+                        setTabsExecEngine: (id, eng) => { const t2 = host.getTab(id); if (t2) { t2.execEngine = eng; tabs = tabs; } },
+                        setTabInputValue:  (id, val) => { const t2 = host.getTab(id); if (t2) { t2.inputValue = val; tabs = tabs; } },
                         copyToClipboard: (text, btn) => copiarAlPortapapeles(text, btn),
                     });
                 } else {
-                    addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
+                    host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Lucy</div>${_rgBadge}${renderLucyMarkdown(clean)}`,rawRole:'Lucy',rawContent:clean});
                 }
                 // v1.7.16 — Post-stream script verification.
                 // Fire-and-forget: re-renders the message HTML 1-2s
@@ -9834,7 +9875,7 @@ times the SAME way, switch tool kind entirely.
                     verifyAndAnnotateMarkdown(clean)
                         .then(annotated => {
                             if (annotated === clean) return;
-                            const _t = getTab(tabId);
+                            const _t = host.getTab(tabId);
                             if (!_t) return;
                             const _msg = _msgIdForVerify
                                 ? _t.messages.find(m => m.id === _msgIdForVerify)
@@ -9843,13 +9884,13 @@ times the SAME way, switch tool kind entirely.
                             _msg.html = `<div class="mn">Lucy</div>${_rgBadge}${_cgBadge}${renderLucyMarkdown(annotated)}`;
                             _msg.rawContent = annotated;
                             _msg.tokens = Math.ceil(annotated.length / 4);
-                            refresh();
+                            host.refresh();
                         })
                         .catch(e => console.warn('[script-verifier] post-stream verify failed:', e));
                 }
                 if (_rgBadge) t._reflectionBadge = null; // limpiar badge usado
                 if (_cgBadge) t._confidenceBadge = null; // v1.7.109 F4 — clear confidence badge after consume
-                if(doSpeak)speak(clean);
+                if(doSpeak)host.speak(clean);
             }
         }catch(e){
             _lastErrorAt = Date.now();
@@ -9864,7 +9905,7 @@ times the SAME way, switch tool kind entirely.
             if (retryCount < 1 && _isRetryableProviderError(e)) {
                 const _fb = await _findFallbackModel(_currentModel);
                 if (_fb) {
-                    addMsg(tabId, {
+                    host.addMsg(tabId, {
                         role: 'lucy',
                         html: `<div class="mn" style="color:#60a5fa;">⇄ Cambiando de modelo</div>
                                <div style="font-size:12px;color:var(--txt);margin-top:4px;">
@@ -9873,7 +9914,7 @@ times the SAME way, switch tool kind entirely.
                                </div>`,
                         style: 'border-left-color:#60a5fa;',
                     });
-                    logTaskEvent('provider_fallback', 'critical_error', null,
+                    host.logTaskEvent('provider_fallback', 'critical_error', null,
                         { from: _currentModel, to: _fb.model, reason: String(e).slice(0, 200) }, tabId);
                     // Stash fallback model so getEffectiveModel uses it on retry
                     if (t) t._fallbackModel = _fb.model;
@@ -9890,11 +9931,11 @@ times the SAME way, switch tool kind entirely.
                     if (_drainTimer) { clearInterval(_drainTimer); _drainTimer = null; }
                     if (_cardTicker) { clearInterval(_cardTicker); _cardTicker = null; }
                     _deactivateStaleReasoning(tabId); // v1.7.195 — don't leave a frozen "Pensando…" during the retry
-                    fin(tabId);
-                    return await runAI(tabId, raw, doSpeak, retryCount + 1);
+                    host.fin(tabId);
+                    return await runAI(tabId, raw, doSpeak, retryCount + 1, host);
                 }
             }
-            addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});
+            host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});
         }
         finally{
             // Belt-and-braces: stop the reasoning ticker even if finishReasoning()
@@ -9913,14 +9954,14 @@ times the SAME way, switch tool kind entirely.
             // a ghost placeholder under the user message when the loop ends without
             // streaming text (the second screenshot bug).
             try {
-                const tt = getTab(tabId);
+                const tt = host.getTab(tabId);
                 if (tt && Array.isArray(tt.messages)) {
                     tt.messages = tt.messages.filter(m =>
                         !(m.role === 'streaming' && (!m.rawContent || !m.rawContent.trim()))
                     );
                 }
             } catch {}
-            fin(tabId);
+            host.fin(tabId);
         }
     }
 
