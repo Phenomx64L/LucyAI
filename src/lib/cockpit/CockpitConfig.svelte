@@ -24,7 +24,24 @@
   import { localModels, ollamaOnline, refreshLocalModels } from '$lib/models.js';
   import { ensureTtsVoices, resolveTtsVoice, speak } from '$lib/voice';
 
-  let { personality = 'balanced', onSetPersonality = undefined, onConfigureKeys = undefined, onOpenSettings = undefined, model = null, accent = 'emerald', onSetAccent = undefined, theme = 'dark', onSetTheme = undefined } = $props();
+  let { personality = 'balanced', onSetPersonality = undefined, onConfigureKeys = undefined, onOpenSettings = undefined, model = null, accent = 'emerald', onSetAccent = undefined, theme = 'dark', onSetTheme = undefined, smartRouting = false, privacyMode = false } = $props();
+
+  // ── Enrutado: estado REAL, no una etiqueta fija ─────────────────────────────
+  // Esta fila mostraba un `<span class="badge accent">Auto</span>` hardcodeado.
+  // Si el operador apagaba el enrutamiento inteligente desde la configuración
+  // clásica, este panel seguía afirmando "Auto" para siempre: parecía un
+  // indicador de estado y no leía ningún estado. Ahora llega por props desde
+  // +page.svelte, igual que `personality`, así que refleja el valor vivo.
+  //
+  // El modo privacidad gana: bloquea TODO el tráfico a Ollama local sin
+  // importar el router, de modo que anunciar "Auto" en ese caso sería la misma
+  // mentira con otro nombre.
+  const routeLabel = $derived(privacyMode ? 'Local' : (smartRouting ? 'Auto' : 'Manual'));
+  const routeTitle = $derived(
+    privacyMode ? 'Modo privacidad activo: todo el tráfico LLM queda fijado a Ollama local.'
+    : smartRouting ? 'Enrutamiento inteligente activo: Lucy elige el modelo por turno según la complejidad.'
+    : 'Enrutamiento manual: se usa el modelo seleccionado en el desplegable.'
+  );
   const THEME_OPTS = [{ k: 'dark', l: 'Oscuro' }, { k: 'light', l: 'Claro' }, { k: 'auto', l: 'Auto' }];
   const ACCENT_KEYS = ['emerald', 'blue', 'violet', 'amber', 'pink', 'cyan'];
 
@@ -85,9 +102,24 @@
     speak(sample, { getActiveLang: () => ({ stt: _userLang, tts: _userLang }) }).catch(() => {});
   }
 
+  // ── Ruta de datos: preguntada, no adivinada ─────────────────────────────────
+  // Estas dos filas tenían `%APPDATA%\Lucy` y `lucy.db` escritos a mano. La
+  // ruta era FALSA: el `identifier` de tauri.conf.json es `com.lucy.dev`, así
+  // que los datos viven en `%APPDATA%\com.lucy.dev`. Quien fuera a buscar su
+  // base de datos guiándose por este panel no la encontraba.
+  //
+  // `db_info` ya devuelve la ruta absoluta resuelta por el backend y la
+  // configuración clásica ya la usa — una sola fuente de verdad en vez de una
+  // segunda cadena literal que se desincroniza igual que la primera.
+  let dbPath = $state('');
+  const dbDir  = $derived(dbPath ? dbPath.replace(/[\\/][^\\/]*$/, '') : '');
+  const dbFile = $derived(dbPath ? (dbPath.split(/[\\/]/).pop() || '') : '');
+
   onMount(async () => {
     try { appVersion = await getVersion(); } catch {}
     try { const p = await invoke('get_configured_providers'); if (Array.isArray(p)) configured = p; } catch {}
+    // Si falla, las filas muestran «no disponible» — nunca una ruta inventada.
+    try { const info = await invoke('db_info'); if (info?.path) dbPath = String(info.path); } catch {}
     try { spendCap = parseFloat(localStorage.getItem('lucy_spend_cap_usd') || '0') || 0; } catch {}
     try {
       const all = await ensureTtsVoices();
@@ -113,7 +145,7 @@
       <div class="panel-head"><Cpu size={16} stroke={1.75} /><span class="ck-led" class:on={$ollamaOnline}></span><span class="ck-lbl">Modelos y comportamiento</span><span class="ck-rule" aria-hidden="true"></span></div>
       <div class="rows">
         <div class="row"><span class="row-l">Modelo activo</span><span class="row-v">{cloudLabel}</span></div>
-        <div class="row"><span class="row-l">Enrutado</span><span class="row-v"><span class="badge accent">Auto</span></span></div>
+        <div class="row"><span class="row-l">Enrutado</span><span class="row-v"><span class="badge" class:accent={smartRouting || privacyMode} title={routeTitle}>{routeLabel}</span></span></div>
         <div class="row">
           <span class="row-l">Modelos locales (Ollama)</span>
           <span class="row-v"><span class="ol-dot" class:on={$ollamaOnline}></span>{localCount} detectados<button class="mini-btn" onclick={refreshLocal} title="Redetectar">↻</button></span>
@@ -194,8 +226,8 @@
     <section class="panel">
       <div class="panel-head"><Database size={16} stroke={1.75} /> Datos</div>
       <div class="rows">
-        <div class="row"><span class="row-l">Ruta de datos</span><span class="row-v mono">%APPDATA%\Lucy</span></div>
-        <div class="row"><span class="row-l">Base de datos</span><span class="row-v mono">lucy.db</span></div>
+        <div class="row"><span class="row-l">Ruta de datos</span><span class="row-v mono path" title={dbDir || undefined}>{dbDir || 'no disponible'}</span></div>
+        <div class="row"><span class="row-l">Base de datos</span><span class="row-v mono path" title={dbFile || undefined}>{dbFile || 'no disponible'}</span></div>
         <div class="row"><span class="row-l">Proveedores activos</span><span class="row-v">{configured.length}</span></div>
       </div>
     </section>
@@ -256,6 +288,9 @@
   .row-l { flex: 1; font-size: var(--fs-footnote); color: var(--text-muted); }
   .row-v { display: flex; align-items: center; gap: 7px; font-size: var(--fs-footnote); color: var(--text-primary); }
   .row-v.mono { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary); }
+  /* Una ruta absoluta real es larga; que se recorte con puntos suspensivos en
+     vez de empujar la etiqueta fuera de la fila (el título lleva el valor completo). */
+  .row-v.path { min-width: 0; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .badge { font-size: var(--fs-caption); color: var(--text-secondary); background: var(--surface-3); padding: 2px 9px; border-radius: var(--r-pill); }
   .badge.accent { color: var(--accent); background: var(--accent-bg); }
   .swatch { width: 12px; height: 12px; border-radius: 4px; background: var(--accent); }

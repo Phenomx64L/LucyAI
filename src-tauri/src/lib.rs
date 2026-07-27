@@ -328,8 +328,14 @@ pub fn run() {
                     use std::sync::Mutex as StdMutex;
                     use std::time::{Instant, Duration};
 
-                    // Rate limiter: peer_addr → (window_start, request_count)
+                    // Rate limiter: peer IP → (window_start, request_count)
                     // 30 req / 60 s. Map auto-prunes entries older than the window.
+                    //
+                    // KEY MUST BE THE IP, NOT THE SocketAddr. `SocketAddr`'s Display
+                    // includes the EPHEMERAL PORT (`127.0.0.1:54321`), which is
+                    // different on every TCP connection — keying on it gave each
+                    // request a fresh bucket with count 1, so the limit never fired
+                    // and the whole limiter was dead code that read as working.
                     let rate_state: Arc<StdMutex<HashMap<String, (Instant, u32)>>> =
                         Arc::new(StdMutex::new(HashMap::new()));
 
@@ -341,7 +347,7 @@ pub fn run() {
                             let rl = rate_state.clone();
                             tauri::async_runtime::spawn(async move {
                                 // ── Rate limit ─────────────────────────────────
-                                let peer_key = addr.to_string();
+                                let peer_key = addr.ip().to_string();
                                 let allowed = match rl.lock() {
                                     Ok(mut map) => {
                                         let now = Instant::now();
@@ -367,19 +373,67 @@ pub fn run() {
                                 }
 
                                 // ── Read with hard cap ────────────────────────
-                                let mut buf = vec![0u8; 65536];
-                                let n = match tokio::time::timeout(
-                                    Duration::from_secs(5),
-                                    socket.read(&mut buf)
-                                ).await {
-                                    Ok(Ok(n)) if n > 0 => n,
-                                    _ => {
+                                //
+                                // MUST LOOP. A single `read()` returns whatever one
+                                // TCP segment happened to carry — it is NOT the whole
+                                // request. With one read, a payload past the MSS or a
+                                // client that flushes headers separately got silently
+                                // truncated: a cut body produced a bogus 400, and a cut
+                                // `Authorization` header produced a bogus 401. Both
+                                // fail closed (no security hole) but they made the
+                                // gateway look intermittently broken for valid clients.
+                                //
+                                // Read until the header terminator, then honour
+                                // Content-Length for the body. 64 KiB hard cap and a
+                                // 5 s total deadline still bound the work.
+                                const MAX_REQ: usize = 65_536;
+                                let mut buf: Vec<u8> = Vec::with_capacity(4096);
+                                let mut chunk = [0u8; 4096];
+                                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+                                // Phase 1 — headers.
+                                let head_end = loop {
+                                    if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                        break idx + 4;
+                                    }
+                                    if buf.len() >= MAX_REQ {
+                                        let _ = socket.write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                                         let _ = socket.shutdown().await;
                                         return;
                                     }
+                                    match tokio::time::timeout_at(deadline, socket.read(&mut chunk)).await {
+                                        Ok(Ok(n)) if n > 0 => buf.extend_from_slice(&chunk[..n]),
+                                        // EOF before the terminator, read error, or deadline.
+                                        _ => {
+                                            let _ = socket.shutdown().await;
+                                            return;
+                                        }
+                                    }
                                 };
 
-                                let req = match std::str::from_utf8(&buf[..n]) {
+                                // Phase 2 — body, sized by Content-Length when present.
+                                let content_len: usize = {
+                                    let head = String::from_utf8_lossy(&buf[..head_end]);
+                                    head.lines()
+                                        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                                        .and_then(|l| l.split(':').nth(1))
+                                        .and_then(|v| v.trim().parse::<usize>().ok())
+                                        .unwrap_or(0)
+                                };
+                                if content_len > MAX_REQ {
+                                    let _ = socket.write_all(b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                                    let _ = socket.shutdown().await;
+                                    return;
+                                }
+                                while buf.len() < head_end + content_len {
+                                    if buf.len() >= MAX_REQ { break; }
+                                    match tokio::time::timeout_at(deadline, socket.read(&mut chunk)).await {
+                                        Ok(Ok(n)) if n > 0 => buf.extend_from_slice(&chunk[..n]),
+                                        _ => break, // short body: let the JSON check below reject it
+                                    }
+                                }
+
+                                let req = match std::str::from_utf8(&buf) {
                                     Ok(s) => s,
                                     Err(_) => {
                                         let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
@@ -389,11 +443,22 @@ pub fn run() {
                                 };
 
                                 // ── Auth: require Authorization: Bearer <token> ──
-                                // Constant-time-ish comparison via exact-substring match on word boundary.
-                                // Token is 64 hex chars; collisions with random text are astronomically unlikely.
-                                let auth_ok = req
+                                //
+                                // NOT a constant-time comparison — `==` on &str short-
+                                // circuits on the first differing byte. That is accepted
+                                // here, not overlooked: the token is 256 bits of CSPRNG
+                                // output, the listener is loopback-only, and the (now
+                                // functional) per-IP limiter caps attempts at 30/min.
+                                // Remote timing extraction of a 64-hex secret under those
+                                // constraints is not a practical attack. Do NOT copy this
+                                // pattern to a secret that is short, low-entropy, or
+                                // reachable off-host.
+                                //
+                                // Scan the HEADER SECTION only — `req` now carries the
+                                // body too, and a token echoed inside a JSON payload must
+                                // never satisfy auth.
+                                let auth_ok = req[..head_end]
                                     .lines()
-                                    .take(40)  // headers section only
                                     .any(|line| {
                                         let trimmed = line.trim();
                                         let lower = trimmed.to_ascii_lowercase();
@@ -414,14 +479,9 @@ pub fn run() {
                                 }
 
                                 // ── Extract body ──────────────────────────────
-                                let body = match req.find("\r\n\r\n") {
-                                    Some(idx) => req[idx + 4..].trim().to_string(),
-                                    None => {
-                                        let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
-                                        let _ = socket.shutdown().await;
-                                        return;
-                                    }
-                                };
+                                // `head_end` is already the byte offset past the
+                                // terminator, so no second scan is needed.
+                                let body = req[head_end..].trim().to_string();
 
                                 if body.is_empty() || body.len() > 65_536 {
                                     let status = if body.is_empty() { "400 Bad Request" } else { "413 Payload Too Large" };
@@ -434,6 +494,30 @@ pub fn run() {
                                 // ── Strict JSON validation ────────────────────
                                 if serde_json::from_str::<serde_json::Value>(&body).is_err() {
                                     let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 14\r\nConnection: close\r\n\r\nExpected JSON\n").await;
+                                    let _ = socket.shutdown().await;
+                                    return;
+                                }
+
+                                // ── Guardrail: the payload is UNTRUSTED DATA ──
+                                // The frontend drops this straight into Lucy's
+                                // conversation context, so it reaches the model. Every
+                                // other path that feeds the model — tool output, remote
+                                // shell, assistant scripts — is scanned; this one was
+                                // not, which made the gateway the one unguarded way to
+                                // put attacker-chosen text in front of the agent. A
+                                // holder of the token is not necessarily the author of
+                                // the payload: an integration relaying an issue body or
+                                // an email carries a third party's words.
+                                let gscan = crate::guardrails::scan(&body, crate::guardrails::Role::Tool);
+                                if !matches!(gscan.decision, crate::guardrails::ScanDecision::Allow) {
+                                    crate::utils::logging::write_app_log(
+                                        "WARNING",
+                                        &format!(
+                                            "OpenClaw: payload from {} blocked by guardrail [{}]",
+                                            peer_key, gscan.reason
+                                        ),
+                                    );
+                                    let _ = socket.write_all(b"HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                                     let _ = socket.shutdown().await;
                                     return;
                                 }
