@@ -5197,7 +5197,39 @@ REGLAS DE FORMATO:
         invoke:       (cmd, args) => invoke(cmd, args),
     };
 
-    async function runAI(tabId,raw,doSpeak,retryCount = 0,host = defaultAgentHost){
+    // ── The default context: this component's own state, named ──────────────
+    //
+    // Phase 3 of the runAI() migration (v1.7.239), the read-side counterpart to
+    // `defaultAgentHost` above. Phase 1 named what runAI() WRITES; this names
+    // what it READS — 71 direct reaches into component state that a headless
+    // caller has no way to satisfy.
+    //
+    // EVERY MEMBER IS A GETTER, and that is load-bearing, not style. A turn runs
+    // for minutes: `sessionSpendUsd` climbs with each cloud call, `mcpServers`
+    // can reload, `hostName` changes when the operator switches host. A plain
+    // object built here would freeze those at turn START, and the spend cap —
+    // which fires by comparing the LIVE total against the limit — would compare
+    // against the total from before the turn spent anything, and never fire.
+    //
+    // Getters keep the exact previous semantics: each access re-reads the live
+    // variable, which is what `lucyConfig.name` did before. Behaviourally
+    // identical, same as Phase 1's thin arrows.
+    /** @type {import('$lib/agent-context').AgentContext} */
+    const defaultAgentContext = {
+        get config()          { return lucyConfig; },
+        get lang()            { return userLang; },
+        get personality()     { return lucyPersonality; },
+        get subAgentModel()   { return subAgentModel; },
+        get verifierMode()    { return verifierMode; },
+        get hostName()        { return hostName; },
+        get activeTabId()     { return activeTabId; },
+        get sessionSpendUsd() { return _sessionSpendUsd; },
+        get mcpServers()      { return mcpServers; },
+        get mcpSecrets()      { return mcpSecrets; },
+        get cockpitUi()       { return COCKPIT; },
+    };
+
+    async function runAI(tabId,raw,doSpeak,retryCount = 0,host = defaultAgentHost,agentEnv = defaultAgentContext){
         const t=host.getTab(tabId);
         t.isProcessing=true; startExecTimer(); host.refresh();
         // phase-1 review (feature) — remember this turn's user prompt so the
@@ -5246,7 +5278,7 @@ REGLAS DE FORMATO:
         await host.scrollChat();
         try{
             // Compact old turns if tab is long (opus-4-7 #1 — prompt budget)
-            const compaction = compactOldTurns(t, lucyConfig.name);
+            const compaction = compactOldTurns(t, agentEnv.config.name);
             if (compaction.digest) {
                 t.workingMemory ||= {};
                 t.workingMemory.compactedDigest = compaction.digest;
@@ -5298,7 +5330,7 @@ REGLAS DE FORMATO:
             // it up below.
             let _unifiedPlan = null;
             try {
-                _unifiedPlan = await buildUnifiedContext(raw, mcpServers || []);
+                _unifiedPlan = await buildUnifiedContext(raw, agentEnv.mcpServers || []);
             } catch (e) {
                 console.warn('[+page] unified context failed:', e);
             }
@@ -5776,7 +5808,7 @@ REGLAS DE FORMATO:
                     /** @type {{ cybersec_skills_bundled: number; cybersec_skills_user: number; cybersec_domains: number; cybersec_frameworks: number; embed_cache_ready: boolean }} */
                     const cap = await host.invoke('lucy_capabilities_skills');
                     const _totalSec = cap.cybersec_skills_bundled + cap.cybersec_skills_user;
-                    const _mcpN = mcpServers?.length ?? 0;
+                    const _mcpN = agentEnv.mcpServers?.length ?? 0;
                     const _rbN = ($runbooks || []).length;
                     ctx += `\n\n--- INVENTARIO REAL DE LUCY (responde con estos números, no estimes) ---\n` +
                         `- Skills cybersec cargadas: ${_totalSec} (${cap.cybersec_skills_bundled} bundled de la librería Anthropic + ${cap.cybersec_skills_user} instaladas por usuario).\n` +
@@ -5853,11 +5885,11 @@ REGLAS DE FORMATO:
             // Initial state: show "thinking dots" until the first token arrives, then
             // they're replaced by streamed text + the cursor. Gives feedback during TTFT.
             t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: ahora() });
-            if (COCKPIT && tabId === activeTabId) statusPatch({ running: true }); // cockpit preview — mark the agent as running (rail pulse + footer)
+            if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId) statusPatch({ running: true }); // cockpit preview — mark the agent as running (rail pulse + footer)
             host.refresh(); await host.scrollChat();
 
-            if (lucyPersonality === 'concise') ctx += '\n[STYLE: Ultra-short, direct answers only. No preambles or summaries.]';
-            else if (lucyPersonality === 'detailed') ctx += '\n[STYLE: Thorough explanations with context, examples and step-by-step detail.]';
+            if (agentEnv.personality === 'concise') ctx += '\n[STYLE: Ultra-short, direct answers only. No preambles or summaries.]';
+            else if (agentEnv.personality === 'detailed') ctx += '\n[STYLE: Thorough explanations with context, examples and step-by-step detail.]';
 
             // ── CRITICAL: Script/Code Generation Safety ──
             ctx += `
@@ -5907,8 +5939,8 @@ Use ONE of these patterns instead:
             // text, never `raw` (which feeds history, tab title, etc.) — so
             // the user's transcript stays clean and the chip / replay views
             // show what they actually typed.
-            const _briefPrefix = lucyConfig?.briefMode
-                ? (userLang?.startsWith('es')
+            const _briefPrefix = agentEnv.config?.briefMode
+                ? (agentEnv.lang?.startsWith('es')
                     ? '[Modo conciso: responde en máx. 3 líneas, sin preámbulos] '
                     : '[Brief mode: answer in 3 lines max, no preamble] ')
                 : '';
@@ -5943,7 +5975,7 @@ Use ONE of these patterns instead:
             // #10 tight context compression.
             const _isLocalModel    = String(_routedLoopModel || '').startsWith('local-');
             const _localToolCapable = _isLocalModel && /code/i.test(String(_routedLoopModel || ''));
-            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:userLang,hostsJson:JSON.stringify($hosts)};
+            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:agentEnv.lang,hostsJson:JSON.stringify($hosts)};
 
             // ── TURN INTENT GATES ───────────────────────────────────────────────
             // The four booleans that decide whether ANYTHING the model emits is
@@ -6149,7 +6181,7 @@ Use ONE of these patterns instead:
                     // but-unpresented until a mouse-move. Rolling 700ms window
                     // also covers brief inter-token pauses. (Both V1 + cockpit.)
                     kickPresent();
-                    if (COCKPIT && tabId === activeTabId) streamSet(display); // cockpit preview — mirror the live stream into the cockpit conversation
+                    if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId) streamSet(display); // cockpit preview — mirror the live stream into the cockpit conversation
                     msg.rawContent = display;
                     // v1.7.55 — Auto-close any open ``` fence so marked
                     // renders the partial code as a <pre> from the very
@@ -6515,7 +6547,7 @@ Use ONE of these patterns instead:
                 if (!originalUserGoal) {
                     for (let i = t.messages.length - 1; i >= 0; i--) {
                         const m = t.messages[i];
-                        if (m.rawRole === 'Iván' || m.rawRole === lucyConfig.name || (m.role === 'user' && m.rawContent)) {
+                        if (m.rawRole === 'Iván' || m.rawRole === agentEnv.config.name || (m.role === 'user' && m.rawContent)) {
                             originalUserGoal = (m.rawContent || '').trim();
                             if (originalUserGoal) break;
                         }
@@ -6796,7 +6828,7 @@ Use ONE of these patterns instead:
 
                 let thoughtsAccum = '';
                 let agentWarps = [];
-                if (COCKPIT) { resetWorkspace(); t._cockpitPlanSeeded = false; t._cockpitPlanTried = false; t._cockpitPlanIdx = 0; t._cockpitPlanLen = 0; } // Lucy 2.0 cockpit preview — clear the workspace + forward-plan state at run start
+                if (agentEnv.cockpitUi) { resetWorkspace(); t._cockpitPlanSeeded = false; t._cockpitPlanTried = false; t._cockpitPlanIdx = 0; t._cockpitPlanLen = 0; } // Lucy 2.0 cockpit preview — clear the workspace + forward-plan state at run start
                 let agentToolCards = []; // Antigravity-style collapsible tool cards
 
                 // SECURITY (phase-1 review): escape ALL FIVE HTML metacharacters,
@@ -7032,11 +7064,11 @@ Use ONE of these patterns instead:
                                 const compressResp = await askLucyStream({
                                     prompt: compressPrompt,
                                     context: '',
-                                    userName: lucyConfig.name,
-                                    runbooksDir: lucyConfig.runbooksDir || null,
+                                    userName: agentEnv.config.name,
+                                    runbooksDir: agentEnv.config.runbooksDir || null,
                                     model: compressModel,
                                     images: null,
-                                    lang: userLang,
+                                    lang: agentEnv.lang,
                                     hostsJson: JSON.stringify($hosts),
                                     maxTokensOverride: 300
                                 }, () => {}, tabId);
@@ -7142,7 +7174,7 @@ Use ONE of these patterns instead:
                         t.messages = [...t.messages];
                         // Cockpit v2.0 — mirror the finished reasoning as a collapsible
                         // "thought" entry in the conversation (once per turn).
-                        if (COCKPIT && tabId === activeTabId && !reasoningMsg._cockpitThought) {
+                        if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId && !reasoningMsg._cockpitThought) {
                             reasoningMsg._cockpitThought = true;
                             convoPush({ role: 'thought', text: reasoningMsg.content, dur: reasoningMsg.duration });
                             // Forward plan: seed pending steps from the FIRST reasoning block
@@ -7334,7 +7366,7 @@ Use ONE of these patterns instead:
 
                 for (let loop_i = 0; loop_i < MAX_LOOPS; loop_i++) {
                     if (t._cancelled) break;
-                    if (COCKPIT && tabId === activeTabId) statusPatch({ stepIndex: loop_i + 1 }); // cockpit preview — real agent step (titlebar + workspace)
+                    if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId) statusPatch({ stepIndex: loop_i + 1 }); // cockpit preview — real agent step (titlebar + workspace)
                     // phase-1 review (feature) — session spend cap. Halt the
                     // autonomous loop when estimated session spend crosses the cap
                     // (lucy_spend_cap_usd, 0 = off). Stops a runaway loop from
@@ -7342,9 +7374,9 @@ Use ONE of these patterns instead:
                     // to continue. Local-only sessions cost $0 so never trip it.
                     {
                         const _spendCap = parseFloat(safeGetLS('lucy_spend_cap_usd', '0')) || 0;
-                        if (_spendCap > 0 && _sessionSpendUsd >= _spendCap) {
+                        if (_spendCap > 0 && agentEnv.sessionSpendUsd >= _spendCap) {
                             finishReasoning();
-                            renderAgentTask(`\n\n> [!WARNING]\n> **Límite de gasto de sesión alcanzado** (~$${_sessionSpendUsd.toFixed(2)} de $${_spendCap.toFixed(2)}). Detuve la tarea automática para no seguir gastando tokens de la nube. Sube el límite con \`/spend-cap <usd>\` (o \`/spend-cap reset\` para reiniciar el contador) y reintenta.`);
+                            renderAgentTask(`\n\n> [!WARNING]\n> **Límite de gasto de sesión alcanzado** (~$${agentEnv.sessionSpendUsd.toFixed(2)} de $${_spendCap.toFixed(2)}). Detuve la tarea automática para no seguir gastando tokens de la nube. Sube el límite con \`/spend-cap <usd>\` (o \`/spend-cap reset\` para reiniciar el contador) y reintenta.`);
                             clearAgentCheckpoint(tabId);
                             break;
                         }
@@ -7401,8 +7433,8 @@ Use ONE of these patterns instead:
                     // $lib/agent-tools-native.ts. Only graphify stays inline (it
                     // writes toolResults/stepsHtml directly, not readOnlyTasks).
                     const _nativeDeps = {
-                        retryWithBackoff, cachedFetch: _cachedFetch, mcpServers, mcpSecrets,
-                        loadMcpServers, runbooksDir: (lucyConfig.runbooksDir || ''), tabId: (t.id || 'global'),
+                        retryWithBackoff, cachedFetch: _cachedFetch, mcpServers: agentEnv.mcpServers, mcpSecrets: agentEnv.mcpSecrets,
+                        loadMcpServers, runbooksDir: (agentEnv.config.runbooksDir || ''), tabId: (t.id || 'global'),
                     };
                     for (const _h of NATIVE_READONLY_HANDLERS) {
                         const _m = agentResp.match(_h.matchRe);
@@ -7839,7 +7871,7 @@ Use ONE of these patterns instead:
                         // Elegir el modelo del sub-agente con el helper unificado.
                         // Honra la preferencia del usuario y nunca cae en silencio a Gemini Flash:
                         // si pidió 'ollama' pero no hay local activo, sube a 'auto' (proveedor más barato disponible).
-                        const forkModel = pickSubAgentModel(subAgentModel, activeTab?.selectedModel);
+                        const forkModel = pickSubAgentModel(agentEnv.subAgentModel, activeTab?.selectedModel);
 
                         // Tier A #1 — Build the full input now so we can
                         // estimate tokens accurately when the fork finishes.
@@ -7876,10 +7908,10 @@ Use ONE of these patterns instead:
                         const _fPromise = host.invoke('ask_lucy', {
                             prompt: _fPrompt,
                             context: _fCtx,
-                            userName: lucyConfig.name,
-                            runbooksDir: lucyConfig.runbooksDir || null,
+                            userName: agentEnv.config.name,
+                            runbooksDir: agentEnv.config.runbooksDir || null,
                             model: forkModel,
-                            lang: userLang,
+                            lang: agentEnv.lang,
                             hostsJson: JSON.stringify($hosts),
                             images: null
                         }).then(r => {
@@ -7981,7 +8013,7 @@ Use ONE of these patterns instead:
                         lucyText = lucyText.replace(/<TOOL>mcp_query:[\s\S]*?<\/TOOL>/gi, '');
                         const arg1 = mcpQ[1].trim();
                         const queryStr = mcpQ[2].trim();
-                        const isRegistered = mcpServers.some(s => s.name === arg1);
+                        const isRegistered = agentEnv.mcpServers.some(s => s.name === arg1);
                         readOnlyTasks.push({
                             label: `[⊟ MCP] ${arg1}`,
                             fn: () => retryWithBackoff(() => {
@@ -7990,10 +8022,10 @@ Use ONE of these patterns instead:
                                     const parts = queryStr.split('|||');
                                     const toolName = (parts[0] || '').trim();
                                     const argsJson = (parts[1] || '{}').trim();
-                                    return host.invoke('mcp_server_call', { name: arg1, toolName, argsJson, env: mcpSecrets });
+                                    return host.invoke('mcp_server_call', { name: arg1, toolName, argsJson, env: agentEnv.mcpSecrets });
                                 }
                                 // Legacy path: whole string is the command, queryStr is "tool|||args".
-                                return host.invoke('call_mcp_tool', { serverName: arg1, query: queryStr, env: mcpSecrets });
+                                return host.invoke('call_mcp_tool', { serverName: arg1, query: queryStr, env: agentEnv.mcpSecrets });
                             }, 2, true).then(c => `[MCP ${arg1} RESULT]\n`+c)
                         });
                     }
@@ -8048,7 +8080,7 @@ Use ONE of these patterns instead:
                                     toolResults.push(`[EDIT RESULT] ${r}`);
                                     stepsHtml += `[· Edición] ${esc(path)}\n`;
                                     filesMod.add(path);
-                                    if (COCKPIT) { artifactPush({ kind: 'edit', path, summary: 'edición aplicada', before: oldStr, after: newStr }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'edit', text: path, ok: true, detail: 'edición aplicada' }); } // cockpit preview
+                                    if (agentEnv.cockpitUi) { artifactPush({ kind: 'edit', path, summary: 'edición aplicada', before: oldStr, after: newStr }); if (tabId === agentEnv.activeTabId) convoPush({ role: 'tool', kind: 'edit', text: path, ok: true, detail: 'edición aplicada' }); } // cockpit preview
                                     // Working memory: remember Lucy just edited this file.
                                     _updateWM(t, { type: 'file', path, op: 'edited' });
                                     finishToolCard(_editCard, String(r), true);
@@ -8103,7 +8135,7 @@ Use ONE of these patterns instead:
                                     const _r = await retryWithBackoff(() => host.invoke('write_file_content', { path: _wp, content: _wc, force: true }), 3, false);
                                     _wCard.diff = { oldStr: _oldC, newStr: _wc };
                                     filesMod.add(_wp);
-                                    if (COCKPIT) { artifactPush({ kind: 'write', path: _wp, summary: `${(_wc?.length || 0)} chars`, before: _oldC, after: _wc }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wp, ok: true, detail: `${(_wc?.length || 0)} chars` }); } // cockpit preview
+                                    if (agentEnv.cockpitUi) { artifactPush({ kind: 'write', path: _wp, summary: `${(_wc?.length || 0)} chars`, before: _oldC, after: _wc }); if (tabId === agentEnv.activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wp, ok: true, detail: `${(_wc?.length || 0)} chars` }); } // cockpit preview
                                     _updateWM(t, { type: 'file', path: _wp, op: 'created' });
                                     if (!t._writeUndo) t._writeUndo = new Map();
                                     t._writeUndo.set(_wp, _oldC);
@@ -8169,7 +8201,7 @@ Use ONE of these patterns instead:
                             toolResults.push(`[WRITE RESULT] ${r}`);
                             stepsHtml += `[⊞ Escritura] ${esc(_wPath)}\n`;
                             filesMod.add(_wPath);
-                            if (COCKPIT) { artifactPush({ kind: 'write', path: _wPath, summary: `${(_fileContent?.length || 0)} chars`, after: _fileContent }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wPath, ok: true, detail: `${(_fileContent?.length || 0)} chars` }); } // cockpit preview
+                            if (agentEnv.cockpitUi) { artifactPush({ kind: 'write', path: _wPath, summary: `${(_fileContent?.length || 0)} chars`, after: _fileContent }); if (tabId === agentEnv.activeTabId) convoPush({ role: 'tool', kind: 'write', text: _wPath, ok: true, detail: `${(_fileContent?.length || 0)} chars` }); } // cockpit preview
                             // Working memory: remember the new/written file.
                             _updateWM(t, { type: 'file', path: _wPath, op: 'created' });
                             // Per-tab undo buffer — `/revert <path>` reads from here.
@@ -8410,7 +8442,7 @@ Use ONE of these patterns instead:
                                 // shows ✓/✕ + exit code, the "solo errores" filter works, and a
                                 // failed command turns its Plan step red.
                                 const _execOk = xc == null || xc === 0;
-                                if (COCKPIT) { execPush({ cmd, output: safeOut, ok: _execOk, ms: elapsed, engine: engineLabel, code: xc ?? null }); if (t._cockpitPlanSeeded) advanceCockpitPlan(tabId); else planAppend({ label: cmd.length > 64 ? cmd.slice(0, 64) + '…' : cmd, status: _execOk ? 'done' : 'error', detail: engineLabel, ms: elapsed }); if (tabId === activeTabId) convoPush({ role: 'tool', kind: 'exec', text: cmd, ok: _execOk, detail: String(safeOut || '').slice(0, 4000) }); } // Lucy 2.0 cockpit preview
+                                if (agentEnv.cockpitUi) { execPush({ cmd, output: safeOut, ok: _execOk, ms: elapsed, engine: engineLabel, code: xc ?? null }); if (t._cockpitPlanSeeded) advanceCockpitPlan(tabId); else planAppend({ label: cmd.length > 64 ? cmd.slice(0, 64) + '…' : cmd, status: _execOk ? 'done' : 'error', detail: engineLabel, ms: elapsed }); if (tabId === agentEnv.activeTabId) convoPush({ role: 'tool', kind: 'exec', text: cmd, ok: _execOk, detail: String(safeOut || '').slice(0, 4000) }); } // Lucy 2.0 cockpit preview
 
                                 // Only truncate if length > 16000 AND doesn't contain ERROR (critical data at tail)
                                 const trunc = safeOut.length > 16000 && !safeOut.includes('ERROR') && !safeOut.includes('Exception')
@@ -8584,8 +8616,8 @@ Use ONE of these patterns instead:
                         // sub-agent fires an extra (often cloud) LLM round-trip.
                         if (t._cancelled) break;
                         const wantVerify = !_isLocalModel
-                                       && ((verifierMode === 'always')
-                                       || (verifierMode === 'critical' && taskTouchedRiskyOps));
+                                       && ((agentEnv.verifierMode === 'always')
+                                       || (agentEnv.verifierMode === 'critical' && taskTouchedRiskyOps));
                         if (wantVerify && !verifierRefinedOnce && cleanText && cleanText.length > 40) {
                             const verifyCard = newToolCard('✦', isEN ? 'Self-review' : 'Auto-revisión', 'read');
                             stepsHtml += `[✦ ${isEN ? 'Verifier reviewing…' : 'Verificador revisando…'}]\n`;
@@ -8616,10 +8648,10 @@ Use ONE of these patterns instead:
                                 verdict = String(await host.invoke('ask_lucy', {
                                     prompt: verPrompt,
                                     context: '',
-                                    userName: lucyConfig.name,
-                                    runbooksDir: lucyConfig.runbooksDir || null,
+                                    userName: agentEnv.config.name,
+                                    runbooksDir: agentEnv.config.runbooksDir || null,
                                     model: verModel,
-                                    lang: userLang,
+                                    lang: agentEnv.lang,
                                     hostsJson: JSON.stringify($hosts),
                                     images: null
                                 }));
@@ -8657,10 +8689,10 @@ Use ONE of these patterns instead:
                                 const refineParams = {
                                     prompt: `[REFINEMENT TURN — your previous final answer was reviewed by a verifier sub-agent (${verModel}) and the following concerns were raised. Address them concretely, then deliver an UPDATED final answer in Markdown with NO tool tags.]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n\n=== YOUR PREVIOUS ANSWER ===\n${cleanText.slice(0, 4000)}\n\n=== VERIFIER CONCERNS ===\n${concerns}\n\nProduce the corrected final answer now. Keep what was right; fix what the verifier flagged. Wrap your reasoning in <THOUGHT>...</THOUGHT> (under 80 words).`,
                                     context: agentCtx.slice(-4000),
-                                    userName: lucyConfig.name,
-                                    runbooksDir: lucyConfig.runbooksDir || null,
+                                    userName: agentEnv.config.name,
+                                    runbooksDir: agentEnv.config.runbooksDir || null,
                                     model: (_routedLoopModel || getEffectiveModel(t)), // v1.7.110 H5 — pinned loop model
-                                    lang: userLang,
+                                    lang: agentEnv.lang,
                                     hostsJson: JSON.stringify($hosts),
                                     images: null
                                 };
@@ -8971,7 +9003,7 @@ times the SAME way, switch tool kind entirely.
                             pushTrace({ phase: 'info', label: `⏫ Escalado de modelo: ${_fromModel} → ${_stronger} (tras ${_allToolsFailedStreak} turnos fallando todas las herramientas)`, step: loop_i + 1, tabId, detail: 'El modelo falló todas las herramientas repetidamente; se sube a un modelo más fuerte de la MISMA familia (misma API key) por el resto de la tarea. Desactivable con lucy_escalate_on_failure=false.' });
                             host.logTaskEvent('agent_model_escalated', 'auto', null, { from: _fromModel, to: _stronger, streak: _allToolsFailedStreak, step: loop_i + 1 }, tabId);
                             stepsHtml += `<span style="opacity:0.85;color:#7fb3ff">[⏫ Escalando a un modelo más fuerte (${_stronger}) tras errores repetidos.]</span>\n`;
-                            if (COCKPIT && tabId === activeTabId) statusPatch({ model: _stronger });
+                            if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId) statusPatch({ model: _stronger });
                         }
                     }
 
@@ -9012,7 +9044,7 @@ times the SAME way, switch tool kind entirely.
                     const _taskAnchor = (filesMod && filesMod.size > 0)
                         ? `\n=== ARCHIVOS ACTIVOS DE ESTA TAREA (los estás modificando en este run — NO los pierdas de vista ni empieces de cero) ===\n${[...filesMod].slice(0, 12).map(f => `· ${f}`).join('\n')}\n=== FIN ARCHIVOS ACTIVOS ===\n`
                         : '';
-                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n${_taskAnchor}\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:userLang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
+                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n${_taskAnchor}\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:agentEnv.lang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
 
                     stepsHtml += `<span style="opacity:0.6">[↻ Siguiente turno...]</span>\n`;
                     renderAgentTask();
@@ -9173,11 +9205,11 @@ times the SAME way, switch tool kind entirely.
                                     const _rawSynth = await askLucyStream({
                                         prompt: `[FINAL ANSWER REQUIRED — no more tools]\n\n=== ORIGINAL GOAL ===\n"${originalUserGoal}"\n=== END GOAL ===\n\nResults you already gathered:\n${(Array.isArray(toolResults) ? toolResults.join('\n\n') : '').slice(0, 12000)}\n\nThe loop is over. Using ONLY the results above, write the FINAL answer to the goal in the user's language, as Markdown. Do NOT call any tool. Do NOT output <TOOL> or <EXECUTE>. If the results don't contain the answer, say so plainly.`,
                                         context: '',
-                                        userName: lucyConfig.name,
+                                        userName: agentEnv.config.name,
                                         runbooksDir: null,
                                         model: (_routedLoopModel || getEffectiveModel(t)),
                                         images: null,
-                                        lang: userLang,
+                                        lang: agentEnv.lang,
                                         hostsJson: null,
                                     }, () => {}, tabId);
                                     _synth = String(_rawSynth || '')
@@ -9234,11 +9266,11 @@ times the SAME way, switch tool kind entirely.
                                 const _rawCapSynth = await askLucyStream({
                                     prompt: `[FINAL ANSWER REQUIRED — no more tools]\n\n=== ORIGINAL GOAL ===\n"${originalUserGoal}"\n=== END GOAL ===\n\nResults you already gathered:\n${(Array.isArray(toolResults) ? toolResults.join('\n\n') : '').slice(0, 12000)}\n\nThe loop is over. Using ONLY the results above, write the FINAL answer to the goal in the user's language, as Markdown. Do NOT call any tool. Do NOT output <TOOL> or <EXECUTE>. If the results don't contain the answer, say so plainly.`,
                                     context: '',
-                                    userName: lucyConfig.name,
+                                    userName: agentEnv.config.name,
                                     runbooksDir: null,
                                     model: (_routedLoopModel || getEffectiveModel(t)),
                                     images: null,
-                                    lang: userLang,
+                                    lang: agentEnv.lang,
                                     hostsJson: null,
                                 }, () => {}, tabId);
                                 _capSynth = String(_rawCapSynth || '')
@@ -9317,7 +9349,7 @@ times the SAME way, switch tool kind entirely.
                         // Stash the fallback so getEffectiveModel picks it up
                         t2._fallbackModel = _fb.model;
                     }
-                    return await runAI(tabId, raw, doSpeak, retryCount + 1, host);
+                    return await runAI(tabId, raw, doSpeak, retryCount + 1, host, agentEnv);
                 }
                 host.addMsg(tabId, {
                     role: 'lucy',
@@ -9617,9 +9649,9 @@ times the SAME way, switch tool kind entirely.
                     const followPrompt = `[REMOTE EXECUTION RESULT — ${h.name}]\nComando: ${cmd.substring(0,200)}\nSalida:\n${safeOut.substring(0,3000)}\n\nAnaliza brevemente este resultado y dime qué observas. Si necesitas ejecutar otro comando, usa <EXECUTE_REMOTE target="${h.id}">...</EXECUTE_REMOTE>.`;
                     try {
                         const follow = await host.invoke('ask_lucy', {
-                            prompt: followPrompt, context: '', userName: lucyConfig.name,
-                            runbooksDir: lucyConfig.runbooksDir || null,
-                            model: getEffectiveModel(t), lang: userLang,
+                            prompt: followPrompt, context: '', userName: agentEnv.config.name,
+                            runbooksDir: agentEnv.config.runbooksDir || null,
+                            model: getEffectiveModel(t), lang: agentEnv.lang,
                             hostsJson: JSON.stringify($hosts), images: null,
                         });
                         const followClean = (follow || '').replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '').trim();
@@ -9694,7 +9726,7 @@ times the SAME way, switch tool kind entirely.
                         throw new Error(_outTxt);
                     }
 
-                    const analysis=await host.invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${lucyConfig.name} of what happened and the result.\n\nANTI-HALLUCINATION RULES (strict):\n• If the output is empty or shows "(sin salida)", you MUST report that NO DATA was returned. DO NOT invent results, DO NOT claim "executed successfully — no items found", DO NOT assume the command worked silently.\n• When output is empty, say literally: "El comando no devolvió datos. Esto puede indicar: (a) el comando se redirigió a otro stream, (b) no hay coincidencias, o (c) un fallo silencioso. Sugiero verificar con: <comando alternativo>."\n• ONLY claim success when the output contains observable evidence (rows, values, properties, status fields). NEVER infer state from absence of output.\n• Quote real values from the output when present. NEVER fabricate service names, status values, file paths, or numeric metrics that are not literally in the text above.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
+                    const analysis=await host.invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand executed: \`${cmd.substring(0,150)}\`\nOutput:\n${_outTxt.substring(0,1000)}\n\nWrite a brief direct Markdown summary for ${agentEnv.config.name} of what happened and the result.\n\nANTI-HALLUCINATION RULES (strict):\n• If the output is empty or shows "(sin salida)", you MUST report that NO DATA was returned. DO NOT invent results, DO NOT claim "executed successfully — no items found", DO NOT assume the command worked silently.\n• When output is empty, say literally: "El comando no devolvió datos. Esto puede indicar: (a) el comando se redirigió a otro stream, (b) no hay coincidencias, o (c) un fallo silencioso. Sugiero verificar con: <comando alternativo>."\n• ONLY claim success when the output contains observable evidence (rows, values, properties, status fields). NEVER infer state from absence of output.\n• Quote real values from the output when present. NEVER fabricate service names, status values, file paths, or numeric metrics that are not literally in the text above.`,context:'',userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:getEffectiveModel(t),lang:agentEnv.lang,hostsJson:null,images:null});
                     const sa=renderLucyMarkdown(analysis);
                     // v1.7.60 — Pass hostname + engine + absolute timestamp so the
                     // terminal-recording header (Mission Control A3) shows the full
@@ -9702,7 +9734,7 @@ times the SAME way, switch tool kind entirely.
                     // and at WHAT exact time of day.
                     const _wbTs = new Date().toTimeString().slice(0, 8); // HH:MM:SS
                     const wb=warpBlock(cmd,out,true,elapsed,engineLabel, undefined, undefined, {
-                        hostname: hostName,
+                        hostname: agentEnv.hostName,
                         engine: engineLabel,
                         ts: _wbTs,
                         exitCode: 0,
@@ -9782,10 +9814,10 @@ times the SAME way, switch tool kind entirely.
                             if (doSpeak) host.speak(`Corrigiendo error, intento ${retryCount + 1}.`);
                             
                             // Iniciar el auto-retry — return to prevent double fin()
-                            await runAI(tabId, '', doSpeak, retryCount + 1, host);
+                            await runAI(tabId, '', doSpeak, retryCount + 1, host, agentEnv);
                             return;
                         } else {
-                            const rec=await host.invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${lucyConfig.name}.`,context:'',userName: lucyConfig.name, runbooksDir: lucyConfig.runbooksDir || null,model:getEffectiveModel(t),lang:userLang,hostsJson:null,images:null});
+                            const rec=await host.invoke('ask_lucy',{prompt:`[SYSTEM ANALYSIS — DO NOT ask for clarification, respond directly]\nCommand failed: \`${cmd.substring(0,150)}\`\nError: ${String(err).substring(0,400)}\n\nExplain the error briefly in Markdown and suggest 1-2 concrete next steps for ${agentEnv.config.name}.`,context:'',userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:getEffectiveModel(t),lang:agentEnv.lang,hostsJson:null,images:null});
                             host.addMsg(tabId,{role:'lucy',html:`<div class="mn" style="color:#ef4444;">! Límite de auto-correcciones (3) alcanzado</div>${renderLucyMarkdown(rec)}${wb}`,style:'border-left-color:#f59e0b;background:rgba(255,170,0,0.04);',rawRole:'Lucy',rawContent:rec});
                             if(doSpeak)host.speak("No pude solucionar el error tras 3 intentos. Deteniendo proceso.");
                         }
@@ -9840,7 +9872,7 @@ times the SAME way, switch tool kind entirely.
                     // blocks would render plain.
                     addCopyBtns({
                         isEN,
-                        getActiveTabId: () => activeTabId,
+                        getActiveTabId: () => agentEnv.activeTabId,
                         getTab: host.getTab,
                         runProcess: (id) => process(id),
                         setTabsExecEngine: (id, eng) => { const t2 = host.getTab(id); if (t2) { t2.execEngine = eng; tabs = tabs; } },
@@ -9919,7 +9951,7 @@ times the SAME way, switch tool kind entirely.
                     if (_cardTicker) { clearInterval(_cardTicker); _cardTicker = null; }
                     _deactivateStaleReasoning(tabId); // v1.7.195 — don't leave a frozen "Pensando…" during the retry
                     host.fin(tabId);
-                    return await runAI(tabId, raw, doSpeak, retryCount + 1, host);
+                    return await runAI(tabId, raw, doSpeak, retryCount + 1, host, agentEnv);
                 }
             }
             host.addMsg(tabId,{role:'lucy',html:`<div class="mn">Error crítico</div>${e}`,style:'border-left-color:#ef4444;'});
