@@ -733,7 +733,9 @@
         </aside>
       {/if}
     {:else if activeModule === 'dashboard'}
-      <div class="view-full"><CockpitDashboard /></div>
+      <!-- Un insight accionable salta a Terminal IA y lo envía: el operador ve
+           la sugerencia y la ejecuta sin cambiar de módulo ni copiar texto. -->
+      <div class="view-full"><CockpitDashboard onRunCommand={(text) => { activeModule = 'terminal'; onSubmit?.(text); }} /></div>
     {:else if activeModule === 'nexshell'}
       <!-- NexShell renders in the always-mounted host below (keeps SSH sessions alive) -->
     {:else if activeModule === 'memory'}

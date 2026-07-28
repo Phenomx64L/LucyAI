@@ -9,11 +9,16 @@
      data is the fallback for a plain-browser preview.
      ========================================================================== */
   import { onMount } from 'svelte';
+
+  // Un insight puede traer un siguiente paso sugerido. Sin esta salida el
+  // operador tendría que copiarlo a mano desde un texto.
+  let { onRunCommand = undefined } = $props();
   import { tweened } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
   import { invoke } from '@tauri-apps/api/core';
   import { getSystemHealthJson } from '$lib/lucy-api';
   import { hosts } from '$lib/stores';
+  import Bulb from '@tabler/icons-svelte/icons/bulb';
   import Cpu from '@tabler/icons-svelte/icons/cpu';
   import DeviceDesktop from '@tabler/icons-svelte/icons/device-desktop';
   import Database from '@tabler/icons-svelte/icons/database';
@@ -53,7 +58,27 @@
   let loading = $state(false);
   let error = $state('');
   let lastUpdate = $state('');
-  let _timer = null, _svcTimer = null, _vulnTimer = null;
+  let _timer = null, _svcTimer = null, _vulnTimer = null, _insTimer = null;
+
+  // ── Insights proactivos ───────────────────────────────────────────────────
+  // Solo LECTURA de lo que el detector de fondo ya escribió. Se filtran los
+  // descartados en el backend; aquí solo se pide y se muestra.
+  let insights = $state([]);
+  async function loadInsights() {
+    try {
+      const rows = await invoke('proactive_insights_recent', { limit: 6 });
+      insights = Array.isArray(rows) ? rows.filter((r) => !r.dismissed) : [];
+    } catch {
+      insights = [];   // sin backend (preview en navegador) — sin insights
+    }
+  }
+  async function dismissInsight(id) {
+    // Optimista: la fila desaparece al instante y el backend se entera después.
+    // Si el descarte fallara, la próxima recarga la devuelve — preferible a que
+    // el botón parezca no hacer nada.
+    insights = insights.filter((i) => i.id !== id);
+    try { await invoke('proactive_insight_dismiss', { id }); } catch {}
+  }
   // Software vulnerabilities on the LOCAL host (offline CVE DB, same as the
   // Inventory view's cve_scan). Surfaced as a dashboard alert.
   let vulns = $state({ total: 0, critical: 0, high: 0, at: '' });
@@ -262,7 +287,16 @@
 
   onMount(() => {
     refresh(); slowProbe(); vulnScan(); startPoll();
-    return () => { if (_timer) clearInterval(_timer); if (_svcTimer) clearInterval(_svcTimer); if (_vulnTimer) clearInterval(_vulnTimer); };
+    // Cada 2 min, igual que la UI clásica: el detector de fondo escribe con
+    // cadencia de minutos, sondear más rápido solo gasta.
+    loadInsights();
+    _insTimer = setInterval(loadInsights, 120000);
+    return () => {
+      if (_timer) clearInterval(_timer);
+      if (_svcTimer) clearInterval(_svcTimer);
+      if (_vulnTimer) clearInterval(_vulnTimer);
+      if (_insTimer) clearInterval(_insTimer);
+    };
   });
 </script>
 
@@ -302,6 +336,41 @@
     <div class="alerts">
       <span class="alerts-lbl"><AlertTriangle size={14} stroke={1.85} /> {alerts.length} alerta{alerts.length > 1 ? 's' : ''}</span>
       {#each alerts as a}<span class="alert {a.sev}">{a.text}</span>{/each}
+    </div>
+  {/if}
+
+  <!-- ── Insights proactivos ────────────────────────────────────────────────
+       El detector corre en segundo plano desde el arranque y escribe a la tabla
+       `proactive_insights`. La UI clásica lo sondeaba y el cockpit no preguntaba
+       nunca: un operador en V2 no recibía ni un aviso. Aquí no se detecta nada
+       nuevo — solo se muestra lo que Lucy ya sabía.
+
+       Van sobre las alertas derivadas porque son de otra naturaleza: aquellas
+       describen el estado actual (CPU alta, servicios caídos); estas son cosas
+       que Lucy CONCLUYÓ observando en el tiempo. -->
+  {#if insights.length}
+    <div class="insights">
+      <div class="ins-head">
+        <Bulb size={14} stroke={1.85} />
+        <span>Lucy ha observado</span>
+        <span class="ins-count">{insights.length}</span>
+      </div>
+      {#each insights as ins (ins.id)}
+        <div class="ins {ins.severity}">
+          <span class="ins-dot"></span>
+          <div class="ins-main">
+            <div class="ins-title">{ins.title}</div>
+            {#if ins.detail}<div class="ins-detail">{ins.detail}</div>{/if}
+            {#if ins.action_hint}
+              <!-- El detector sugiere el siguiente paso. Sin un botón, el
+                   operador tiene que copiarlo a mano desde un texto. -->
+              <button class="ins-act" onclick={() => onRunCommand?.(ins.action_hint)}
+                title="Enviar a Terminal IA">{ins.action_hint}</button>
+            {/if}
+          </div>
+          <button class="ins-x" onclick={() => dismissInsight(ins.id)} title="Descartar" aria-label="Descartar">✕</button>
+        </div>
+      {/each}
     </div>
   {/if}
 
@@ -456,6 +525,33 @@
   .dash-error { margin-bottom: 14px; padding: 10px 14px; background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--r-md); font-size: var(--fs-footnote); color: var(--text-secondary); }
 
   .alerts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); }
+
+  /* ── Insights proactivos ──────────────────────────────────────────────── */
+  .insights { margin-bottom: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 14px 12px; }
+  .ins-head { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: var(--ls-label); text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px; }
+  .ins-head :global(svg) { color: var(--accent); }
+  .ins-count { color: var(--accent); background: var(--accent-bg); padding: 0 7px; border-radius: var(--r-pill); }
+  .ins { display: flex; align-items: flex-start; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--border); }
+  .ins:first-of-type { border-top: 0; }
+  /* Severidad en el punto, no en el fondo: varias filas con fondo de color
+     compiten con las métricas y convierten el panel en un semáforo. */
+  .ins-dot { width: 7px; height: 7px; border-radius: var(--r-pill); margin-top: 6px; flex-shrink: 0; background: var(--text-disabled); }
+  .ins.warning .ins-dot { background: #E5B567; }
+  .ins.critical .ins-dot { background: var(--danger); }
+  .ins.info .ins-dot { background: var(--accent); }
+  .ins-main { flex: 1; min-width: 0; }
+  .ins-title { font-size: var(--fs-footnote); color: var(--text-primary); }
+  .ins-detail { font-size: var(--fs-caption); color: var(--text-muted); margin-top: 2px; line-height: var(--lh-tight); }
+  .ins-act {
+    margin-top: 6px; font-family: var(--font-mono); font-size: var(--fs-caption);
+    color: var(--accent); background: var(--accent-bg); border: 1px solid var(--accent-line);
+    border-radius: var(--r-sm); padding: 3px 9px; cursor: pointer; text-align: left;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ins-act:hover { background: rgba(61, 214, 164, 0.18); }
+  .ins-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ins-x { background: transparent; border: 0; color: var(--text-faint); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; flex-shrink: 0; }
+  .ins-x:hover { color: var(--text-primary); }
   .alerts-lbl { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); font-weight: var(--fw-medium); color: var(--warning); }
   .alert { font-size: var(--fs-caption); padding: 2px 9px; border-radius: var(--r-pill); }
   .alert.warn { color: var(--warning); background: var(--warning-bg); }
