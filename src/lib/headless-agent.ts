@@ -35,7 +35,50 @@
 // Pure except for the handlers it is given: `askLucy` and `handlers` are both
 // injected, so the loop unit-tests without Tauri.
 
-import { NATIVE_READONLY_HANDLERS, type NativeHandler } from './agent-tools-native';
+import {
+    NATIVE_READONLY_HANDLERS,
+    NATIVE_READONLY_HANDLERS_DEPS,
+    type NativeHandler,
+    type NativeHandlerDeps,
+} from './agent-tools-native';
+
+/**
+ * The deps-coupled tools a background sub-agent may use.
+ *
+ * An EXPLICIT ALLOW-LIST, not "everything in NATIVE_READONLY_HANDLERS_DEPS",
+ * and the difference matters: that table's name has drifted from its contents.
+ * It also holds `start_indexer` (kicks off a background indexing job — a write
+ * by any honest reading), `obj_query` (needs a live PowerShell session bound to
+ * a real tab, which a fork does not have), and the network-egress tools
+ * (`fetch`, `search_web`, `mcp_discover`). Inheriting that list wholesale would
+ * hand an unattended agent more than "look at the machine".
+ *
+ * What is here is exactly machine inspection: the questions a background
+ * diagnostic sub-agent needs to answer and nothing else. Widening this list is
+ * a security decision — make it deliberately, not by adding to the table above.
+ */
+export const SUBAGENT_DEPS_TOOLS = [
+    'sysinfo', 'netconn', 'tasklist', 'eventlog', 'registry', 'system_diff',
+] as const;
+
+/**
+ * Binds deps-coupled handlers into the plain `NativeHandler` shape the loop
+ * drives, so a caller can hand `runHeadlessAgent` one flat array.
+ *
+ * Unknown names are dropped silently rather than throwing: the allow-list is a
+ * policy statement, and a tool being renamed in the table should narrow what a
+ * sub-agent can do, never crash the turn that launched it.
+ */
+export function bindDepsHandlers(kinds: readonly string[], deps: NativeHandlerDeps): NativeHandler[] {
+    return NATIVE_READONLY_HANDLERS_DEPS
+        .filter((h) => kinds.includes(h.kind))
+        .map((h) => ({
+            kind: h.kind,
+            matchRe: h.matchRe,
+            stripRe: h.stripRe,
+            build: (m: RegExpMatchArray) => h.build(m, deps),
+        }));
+}
 
 /** Tags that mean "change the machine". Their presence ends an unattended run. */
 const MUTATING_RE = /<EXECUTE|<TOOL>(writefile|editfile|panic_kill|cd_change|cd|fork_task|memoria_eliminar|memory_core_delete|principle_set|principle_delete|schedule_create|start_indexer):/i;

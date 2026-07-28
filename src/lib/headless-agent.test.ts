@@ -3,8 +3,11 @@ import {
     runHeadlessAgent,
     stripToolTags,
     findMutatingTag,
+    bindDepsHandlers,
+    SUBAGENT_DEPS_TOOLS,
     type HeadlessAgentOptions,
 } from './headless-agent';
+import { NATIVE_READONLY_HANDLERS_DEPS } from './agent-tools-native';
 import type { NativeHandler } from './agent-tools-native';
 
 /** Fake read-only handler so the loop tests never touch Tauri. */
@@ -67,6 +70,63 @@ describe('findMutatingTag', () => {
         ['respuesta sin herramientas'],
     ])('allows %s', (text) => {
         expect(findMutatingTag(text)).toBeNull();
+    });
+});
+
+describe('SUBAGENT_DEPS_TOOLS — the allow-list', () => {
+    const deps: any = {
+        retryWithBackoff: async (fn: any) => fn(),
+        cachedFetch: async (_c: string, _q: string, p: any) => p(),
+        mcpServers: [], mcpSecrets: {}, loadMcpServers: async () => [],
+        runbooksDir: '', tabId: 'fork:test',
+    };
+
+    it('every allowed name exists in the deps table', () => {
+        // A rename upstream must fail here, not silently shrink what a
+        // sub-agent can do while the prompt keeps advertising the old name.
+        const known = NATIVE_READONLY_HANDLERS_DEPS.map((h) => h.kind);
+        for (const k of SUBAGENT_DEPS_TOOLS) expect(known).toContain(k);
+    });
+
+    it('EXCLUDES the deps tools a background agent must not have', () => {
+        // The point of the list. `start_indexer` kicks off a background job,
+        // `obj_query` needs a live PowerShell session bound to a real tab, and
+        // the rest reach the network. None belong to an unattended agent.
+        for (const forbidden of ['start_indexer', 'obj_query', 'fetch', 'search_web', 'mcp_discover']) {
+            expect(SUBAGENT_DEPS_TOOLS as readonly string[]).not.toContain(forbidden);
+        }
+    });
+
+    it('binds only the allowed handlers', () => {
+        const bound = bindDepsHandlers(SUBAGENT_DEPS_TOOLS, deps);
+        expect(bound.map((h) => h.kind).sort()).toEqual([...SUBAGENT_DEPS_TOOLS].sort());
+    });
+
+    it('drops unknown names instead of throwing', () => {
+        // A tool disappearing upstream should narrow the sub-agent, never crash
+        // the turn that launched it.
+        const bound = bindDepsHandlers(['sysinfo', 'herramienta_inexistente'], deps);
+        expect(bound.map((h) => h.kind)).toEqual(['sysinfo']);
+    });
+
+    it('produces handlers the loop can actually drive', () => {
+        const bound = bindDepsHandlers(['sysinfo'], deps);
+        const m = '<TOOL>sysinfo</TOOL>'.match(bound[0].matchRe);
+        expect(m).not.toBeNull();
+        const task = bound[0].build(m!);
+        expect(task.label).toBeTruthy();
+        expect(typeof task.fn).toBe('function');
+    });
+
+    it('a bound handler still refuses a mutating request at the loop level', async () => {
+        // Belt and braces: even with real tools bound, the mutation gate is what
+        // keeps an unattended sub-agent read-only.
+        const { fn } = scriptedAskLucy(['<TOOL>writefile:C:\\x.txt</TOOL>']);
+        const r = await runHeadlessAgent('escribe', {
+            askLucy: fn,
+            handlers: bindDepsHandlers(SUBAGENT_DEPS_TOOLS, deps),
+        });
+        expect(r.status).toBe('blocked');
     });
 });
 

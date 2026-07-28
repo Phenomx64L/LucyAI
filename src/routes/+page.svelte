@@ -300,7 +300,7 @@ import { listen } from '@tauri-apps/api/event';
     import { FILE_TOOL_RE, NATIVE_TOOL_RE, hasToolResponse, isMultiStepResponse } from '$lib/agent-tools';
     import { classifyTurnIntent, isLinuxCmd, isReadOnlyCmd, wantsFileOutput, stripScaffolding, hadActionableBlock, detectExecTag } from '$lib/agent-intent';
     import { tryQuickNativeTool } from '$lib/agent-quick-tools';
-    import { runHeadlessAgent } from '$lib/headless-agent';
+    import { runHeadlessAgent, bindDepsHandlers, SUBAGENT_DEPS_TOOLS } from '$lib/headless-agent';
     // v1.7.213/214 — native read-only tool handlers (table-driven; Batch 2/2b).
     import { NATIVE_READONLY_HANDLERS, NATIVE_READONLY_HANDLERS_DEPS } from '$lib/agent-tools-native';
     import { LANGS, BACKUP_KEYS as _BACKUP_KEYS, BACKUP_VERSION as _BACKUP_VERSION, LEGACY_ICON_MAP } from '$lib/constants';
@@ -7907,7 +7907,15 @@ Use ONE of these patterns instead:
                         // pruneTabForBudget). It's coarse but unblocks the
                         // cost ledger without round-tripping through the
                         // server for exact usage data.
-                        const _fPrompt = `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano. Completa la siguiente tarea y responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas):\n\n${fInstruction}`;
+                        // El prompt decía "sin tags de herramientas" — coherente cuando
+                        // no había bucle que las ejecutara, y ahora la única razón por
+                        // la que el sub-agente no las usaría. Se le nombra el subconjunto
+                        // EXACTO que puede llamar: pedir una que no está disponible
+                        // aborta su turno, así que enumerarlas es más barato que dejarle
+                        // adivinar desde el catálogo completo del system prompt.
+                        const _fTools = ['sysinfo', 'netconn', 'tasklist', 'eventlog:LOG:N', 'registry:HIVE|PATH|VALOR', ...SUBAGENT_DEPS_TOOLS.filter(t => t === 'system_diff'), 'threat_scan', 'daily_patterns', 'process_lineage:PID']
+                            .map(t => `<TOOL>${t}</TOOL>`).join(', ');
+                        const _fPrompt = `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano con acceso de SOLO LECTURA a la máquina.\n\nHerramientas disponibles (úsalas si necesitas datos reales; una por paso, máximo 4 pasos): ${_fTools}\n\nNO tienes acceso a ejecución de comandos, escritura de ficheros ni hosts remotos. Si la tarea los requiriera, dilo y termina — el hilo principal lo hará con confirmación del operador.\n\nCuando tengas lo necesario, responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas en la respuesta final):\n\n${fInstruction}`;
                         const _fCtx = agentCtx.substring(Math.max(0, agentCtx.length - 3000));
                         // Persistir en SQLite inmediatamente como 'running'.
                         // parentTaskId: si hay un fork "padre" activo en este loop, lo asociamos.
@@ -7932,18 +7940,61 @@ Use ONE of these patterns instead:
                             return null;
                         });
 
-                        // Sub-agente de un solo paso — sin tool loop, modelo configurable
-                        const _fPromise = host.invoke('ask_lucy', {
-                            prompt: _fPrompt,
-                            context: _fCtx,
-                            userName: agentEnv.config.name,
-                            runbooksDir: agentEnv.config.runbooksDir || null,
-                            model: forkModel,
-                            lang: agentEnv.lang,
-                            hostsJson: JSON.stringify(agentEnv.hosts),
-                            images: null
-                        }).then(r => {
-                            const resultStr = String(r);
+                        // ── Sub-agente CON herramientas (v1.7.240) ──────────────────
+                        // Antes esto era un `ask_lucy` de un disparo: el sub-agente
+                        // podía razonar pero no mirar la máquina, así que servía para
+                        // pensar en paralelo, no para trabajar en paralelo.
+                        //
+                        // Ahora conduce el bucle headless con una lista de permitidos
+                        // de solo lectura. El límite es el mismo que el de las tareas
+                        // programadas y por la misma razón: aquí no hay humano a quien
+                        // preguntar. Si pide algo mutante, PARA y se lo devuelve a
+                        // Lucy, que sí puede pedir confirmación.
+                        const _fDeps = {
+                            retryWithBackoff,
+                            cachedFetch: _cachedFetch,
+                            // Un fork no tiene pestaña ni servidores MCP propios; las
+                            // herramientas permitidas no los usan, pero el bundle debe
+                            // estar completo. El id sintético mantiene trazable de qué
+                            // fork salió cada llamada.
+                            mcpServers: [], mcpSecrets: {}, loadMcpServers: async () => [],
+                            runbooksDir: agentEnv.config.runbooksDir || '',
+                            tabId: `fork:${fTaskId}`,
+                        };
+                        const _fHandlers = [
+                            ...NATIVE_READONLY_HANDLERS,
+                            ...bindDepsHandlers(SUBAGENT_DEPS_TOOLS, _fDeps),
+                        ];
+                        const _fPromise = runHeadlessAgent(_fPrompt, {
+                            askLucy: (p, c) => host.invoke('ask_lucy', {
+                                prompt: p,
+                                // El contexto acumulado del sub-agente se ENCADENA al del
+                                // padre: sin esto, la salida de su primera herramienta se
+                                // perdería y repetiría la misma llamada cada iteración.
+                                context: c ? `${_fCtx}\n\n${c}` : _fCtx,
+                                userName: agentEnv.config.name,
+                                runbooksDir: agentEnv.config.runbooksDir || null,
+                                model: forkModel,
+                                lang: agentEnv.lang,
+                                hostsJson: JSON.stringify(agentEnv.hosts),
+                                images: null
+                            }).then(o => String(o || '')),
+                            handlers: _fHandlers,
+                            maxIterations: 4,
+                            onStep: (label) => {
+                                stepsHtml += `[⇉ ${esc(fTaskId)}] ${esc(label)}\n`;
+                                renderAgentTask();
+                            },
+                        }).then(res => {
+                            // Lo que el padre recibe incluye QUÉ miró el sub-agente, no
+                            // solo su conclusión: sin eso Lucy no puede juzgar si la
+                            // respuesta se apoya en datos reales o en suposiciones.
+                            const trail = res.steps.length ? `\n\n[herramientas: ${res.steps.join(' ')}]` : '';
+                            const resultStr = res.status === 'blocked'
+                                ? `[SUB-AGENTE BLOQUEADO] Pidió una acción que un agente en segundo plano no ejecuta (${res.blockedBy}). Los sub-agentes son de solo lectura por diseño: si hace falta esa acción, hazla tú en el hilo principal, donde el operador puede confirmarla.\n\n${res.text}${trail}`
+                                : res.status === 'max_iterations'
+                                    ? `[SUB-AGENTE INCOMPLETO] Agotó sus ${res.iterations} pasos sin cerrar la tarea.\n\n${res.text}${trail}`
+                                    : `${res.text}${trail}`;
                             host.forks[fTaskId].status = 'done';
                             host.forks[fTaskId].result = resultStr;
                             forkFinish(fTaskId, { status: 'done', result: resultStr });
