@@ -102,7 +102,19 @@
   });
 
   // Patch guidance: max_version is the first FIXED version, so upgrade past it.
-  const patchCmd = (m) => `winget upgrade --name "${m.software_name}"`;
+  // El comando de parcheo es una SUGERENCIA, no una certeza, y la interfaz debe
+  // decirlo. `winget upgrade --name "<DisplayName>"` da por hecho que el nombre
+  // del registro de desinstalación es el de un paquete de winget, y para
+  // controladores y software OEM casi nunca lo es: el operador lo pega, recibe
+  // «No se encontró ningún paquete» y se queda sin saber si el problema es el
+  // comando o el hallazgo.
+  //
+  // `--query` en vez de `--name`: busca por coincidencia parcial en lugar de
+  // exigir el nombre exacto del paquete, que es la razón concreta por la que la
+  // versión anterior fallaba.
+  const patchCmd = (m) => `winget upgrade --query "${m.software_name}"`;
+  /** Comprobación previa: dice si winget conoce siquiera este software. */
+  const patchProbe = (m) => `winget search --query "${m.software_name}"`;
   const fixHint = (m) => m.cve.max_version ? `Actualiza a ≥ ${m.cve.max_version}` : 'Actualiza a la última versión del proveedor';
   const nvdUrl = (id) => `https://nvd.nist.gov/vuln/detail/${id}`;
   async function copyKey(key, text) {
@@ -218,6 +230,17 @@
               <button class="vc-copy" title="Copiar comando de parche" aria-label="Copiar comando de parche" onclick={() => copyKey('cmd-' + m.cve.cve_id + m.software_name, patchCmd(m))}>
                 {#if _copiedKey === 'cmd-' + m.cve.cve_id + m.software_name}<Check size={13} stroke={2} />{:else}<Copy size={13} stroke={1.75} />{/if}
               </button>
+            </div>
+            <!-- Decir que es una sugerencia y ofrecer la comprobación previa
+                 evita el callejón sin salida de «no se encontró ningún paquete»
+                 sin pista de qué hacer después. -->
+            <div class="vc-note">
+              Sugerencia — mucho software OEM y los controladores no están en winget.
+              Comprueba antes con
+              <button class="vc-inline" onclick={() => copyKey('probe-' + m.cve.cve_id + m.software_name, patchProbe(m))}
+                title="Copiar comprobación">{patchProbe(m)}</button>
+              {#if _copiedKey === 'probe-' + m.cve.cve_id + m.software_name}<span class="vc-ok">copiado</span>{/if}
+              ; si no aparece, actualízalo desde el fabricante.
             </div>
           </div>
         {/each}
@@ -353,6 +376,15 @@
   .vc-fix { display: flex; align-items: center; gap: 5px; font-size: var(--fs-caption); color: var(--success); }
   .vc-fix :global(svg) { color: var(--success); }
   .vc-patch { display: flex; align-items: center; gap: 8px; margin-top: 9px; padding: 6px 10px; background: rgba(0,0,0,0.28); border: 1px solid var(--border); border-radius: var(--r-sm); }
+  .vc-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--text-faint); line-height: var(--lh-tight); }
+  .vc-inline {
+    font-family: var(--font-mono); font-size: var(--fs-caption);
+    color: var(--text-secondary); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: 1px 6px; cursor: pointer;
+  }
+  .vc-inline:hover { color: var(--text-primary); border-color: var(--border-strong); }
+  .vc-ok { color: var(--accent); margin-left: 4px; }
   .vc-patch code { flex: 1; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
   .vc-copy { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
   .vc-copy:hover { background: var(--surface-3); color: var(--text-primary); }

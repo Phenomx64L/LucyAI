@@ -188,26 +188,42 @@ fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 ///
 /// This map is intentionally narrow — we only consolidate cases where the
 /// installed-base name on Win/Linux differs from the CVE product name.
+/// Whole-word test over a lowercased name.
+///
+/// `contains` is wrong for short aliases and it produced a real false positive:
+/// "AMD SBxxx SMBus Driver" contains "smb", so it canonicalised to the `smb`
+/// product and got reported as EternalBlue CRITICAL — on a machine with no
+/// SMBv1 problem, with a patch command that could not work. Any installed
+/// program with "SMBus" in its name hit it.
+///
+/// Splitting on non-alphanumerics means "smbus" is one token and no longer
+/// matches "smb", while "OpenSSH_8.5p1" still yields "openssh".
+fn has_word(lower: &str, word: &str) -> bool {
+    lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == word)
+}
+
 fn canonical_name(raw: &str) -> String {
     let lower = raw.to_lowercase();
     let l = lower.as_str();
-    // Cheap aliasing for high-traffic names
-    if l.contains("openssl") { return "openssl".into(); }
-    if l.contains("openssh") || l == "ssh" { return "openssh".into(); }
-    if l.contains("apache http") || l.contains("apache2") { return "apache-httpd".into(); }
-    if l.contains("nginx") { return "nginx".into(); }
-    if l.contains("confluence") { return "atlassian-confluence".into(); }
-    if l.contains("log4j") { return "log4j".into(); }
-    if l.contains("spring") && (l.contains("core") || l.contains("framework")) { return "spring-core".into(); }
-    if l.contains("citrix") && l.contains("adc") { return "citrix-adc".into(); }
-    if l.contains("fortios") || l.contains("fortigate") { return "fortinet-fortios".into(); }
+    // Cheap aliasing for high-traffic names.
+    // Single tokens use has_word; multi-word phrases stay as `contains`, since a
+    // phrase is already specific enough to not collide by accident.
+    if has_word(l, "openssl") { return "openssl".into(); }
+    if has_word(l, "openssh") || l == "ssh" { return "openssh".into(); }
+    if l.contains("apache http") || has_word(l, "apache2") { return "apache-httpd".into(); }
+    if has_word(l, "nginx") { return "nginx".into(); }
+    if has_word(l, "confluence") { return "atlassian-confluence".into(); }
+    if has_word(l, "log4j") { return "log4j".into(); }
+    if has_word(l, "spring") && (has_word(l, "core") || has_word(l, "framework")) { return "spring-core".into(); }
+    if has_word(l, "citrix") && has_word(l, "adc") { return "citrix-adc".into(); }
+    if has_word(l, "fortios") || has_word(l, "fortigate") { return "fortinet-fortios".into(); }
     if l.contains("vmware esxi") || l == "esxi" { return "vmware-esxi".into(); }
-    if l.contains("xz") && l.contains("util") { return "xz-utils".into(); }
-    if l.contains("outlook") { return "outlook".into(); }
+    if has_word(l, "xz") && l.contains("util") { return "xz-utils".into(); }
+    if has_word(l, "outlook") { return "outlook".into(); }
     if l.contains("print spooler") { return "windows-print-spooler".into(); }
-    if l.contains("netlogon") { return "windows-netlogon".into(); }
-    if l.contains("smb") || l.contains("server message block") { return "smb".into(); }
-    if l.contains("linux") && l.contains("kernel") { return "linux-kernel".into(); }
+    if has_word(l, "netlogon") { return "windows-netlogon".into(); }
+    if has_word(l, "smb") || l.contains("server message block") { return "smb".into(); }
+    if has_word(l, "linux") && has_word(l, "kernel") { return "linux-kernel".into(); }
     // Default: collapse non-alphanumeric to '-'
     let mut out = String::new();
     let mut last_dash = false;
@@ -220,6 +236,23 @@ fn canonical_name(raw: &str) -> String {
     }
     out.trim_matches('-').to_string()
 }
+
+/// Products that are OPERATING-SYSTEM COMPONENTS, not entries in Add/Remove
+/// Programs.
+///
+/// Matching these against an installed-software list is a category error in
+/// both directions: EternalBlue is a flaw in the Windows SMBv1 stack, not a
+/// program with a DisplayName and a DisplayVersion, so a "match" can only ever
+/// be a coincidence of naming — and a real unpatched host would never be caught
+/// this way either. Detecting them properly needs OS build / patch level, which
+/// is a different scan.
+///
+/// Excluding them here is the honest position until that scan exists: no
+/// finding beats a wrong finding on a security panel, because a false CRITICAL
+/// spends the operator's trust in every future one.
+const OS_COMPONENT_PRODUCTS: &[&str] = &[
+    "smb", "windows-print-spooler", "windows-netlogon", "windows-msmq",
+];
 
 /// Scan a software list against the curated CVE DB. Returns ALL matches —
 /// the frontend renders them grouped by severity.
@@ -239,6 +272,9 @@ pub fn cve_scan(software: Vec<SoftwareInput>) -> CveScanResult {
         }
         for entry in db.iter() {
             if entry.product != canonical { continue; }
+            // See OS_COMPONENT_PRODUCTS: an installed-software list cannot
+            // legitimately confirm or deny these.
+            if OS_COMPONENT_PRODUCTS.contains(&entry.product.as_str()) { continue; }
             // version >= min ?
             if version_cmp(&version, &entry.min_version) == std::cmp::Ordering::Less {
                 continue;
@@ -465,6 +501,41 @@ mod tests {
         assert_eq!(version_cmp("8.5p2", "8.5p1"), Greater,
                    "higher patch level wins");
         assert_eq!(version_cmp("2.4.49", "2.4.50"), Less);
+    }
+
+    #[test]
+    /// The reported false positive, pinned.
+    #[test]
+    fn smbus_driver_is_not_smb() {
+        // "AMD SBxxx SMBus Driver" canonicalised to `smb` via a substring match
+        // and was reported as EternalBlue CRITICAL, with a winget command that
+        // could not work. Any program with "SMBus" in its name hit this.
+        assert_ne!(canonical_name("AMD SBxxx SMBus Driver"), "smb");
+        assert_ne!(canonical_name("Intel(R) SMBus Controller"), "smb");
+        // …while a genuine SMB product still canonicalises.
+        assert_eq!(canonical_name("Windows SMB Server"), "smb");
+        assert_eq!(canonical_name("Server Message Block stack"), "smb");
+    }
+
+    #[test]
+    fn os_components_never_match_installed_software() {
+        // Even given the exact canonical name, an installed-software scan must
+        // not claim an OS-component CVE: it cannot confirm or deny it.
+        let result = cve_scan(vec![SoftwareInput {
+            name: "Windows SMB Server".into(),
+            version: Some("1.0".into()),
+        }]);
+        assert!(result.matches.iter().all(|m| m.cve.cve_id != "CVE-2017-0144"),
+            "EternalBlue must not be reported from an installed-software list");
+    }
+
+    #[test]
+    fn word_aliases_still_resolve() {
+        // The narrowing must not cost the real matches.
+        assert_eq!(canonical_name("OpenSSL 3.0.1"), "openssl");
+        assert_eq!(canonical_name("OpenSSH_8.5p1"), "openssh");
+        assert_eq!(canonical_name("log4j-core-2.14.1.jar"), "log4j");
+        assert_eq!(canonical_name("nginx/1.18.0"), "nginx");
     }
 
     #[test]
