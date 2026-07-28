@@ -95,7 +95,7 @@
   // The route preview (/cockpit) leaves it false and plays the demo instead.
   // `onSubmit(text)` runs the REAL agent when the cockpit composer is used.
   let { live = false, onSubmit = undefined, onHostAdd = undefined, onHostEdit = undefined, onHostDelete = undefined, model = null, onModelChange = undefined, personality = 'balanced', onSetPersonality = undefined, onConfigureKeys = undefined, onOpenSettings = undefined,
-        smartRouting = false, privacyMode = false,
+        smartRouting = false, privacyMode = false, onSetPrivacyMode = undefined,
         tabs = [], activeTabId = null, onSelectTab = undefined, onNewTab = undefined, onCloseTab = undefined,
         onStop = undefined, hitl = null, onHitlApprove = undefined, onHitlCancel = undefined,
         onRegenerate = undefined, onReact = undefined,
@@ -745,7 +745,7 @@
     {:else if activeModule === 'compliance'}
       <div class="view-full"><CockpitCompliance /></div>
     {:else if activeModule === 'config'}
-      <div class="view-full"><CockpitConfig {model} {personality} {onSetPersonality} {onConfigureKeys} {onOpenSettings} {smartRouting} {privacyMode} accent={accentKey} onSetAccent={setAccent} theme={themeKey} onSetTheme={setTheme} /></div>
+      <div class="view-full"><CockpitConfig {model} {personality} {onSetPersonality} {onConfigureKeys} {onOpenSettings} {smartRouting} {privacyMode} {onSetPrivacyMode} accent={accentKey} onSetAccent={setAccent} theme={themeKey} onSetTheme={setTheme} /></div>
     {:else}
       {@const M = rail.find((r) => r.id === activeModule)}
       <div class="view-full view-placeholder">

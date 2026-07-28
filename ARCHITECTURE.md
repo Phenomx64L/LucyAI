@@ -131,7 +131,7 @@ SIMD hot path) · `housekeeping.rs` (1174) · `db_backup.rs` (618) ·
 | File | LOC | Role |
 |---|---|---|
 | `routes/+page.svelte` | **13370** | App shell + **agent loop (`runAI`)** + streaming pipeline + reasoning bubble. Has a null byte ~offset 264909 → use `grep -a` for full-file search |
-| `lib/NexShellView.svelte` | 4124 | Remote/local shell terminal; 5 inputs with the paint-starvation bind pattern |
+| `lib/NexShellView.svelte` | 4155 | Remote/local shell terminal; per-shell input drafts live in the `nsInput` map (paint bug fixed v1.7.221) |
 | `lib/page/slash-commands.ts` | 2943 | Slash-command dispatch table |
 
 ### 3.2 Extracted page logic — `src/lib/page/` (11 files) & `hooks/`
@@ -216,8 +216,13 @@ See §5 CSS gotcha: real chat bubbles live in `ChatThread.svelte`'s scoped
    `<style>` beat `styles/chat-thread.css`. Edit the scoped block.
 4. **Paint-starvation inputs**: never `bind:value={item.field}` on an `{#each}`
    member for high-freq inputs (invalidates whole array → paint death). Use the
-   `_draft` pattern (`ChatInput.svelte`). **NexShellView's 5 inputs still have
-   this bug** — prime scan target.
+   `_draft` pattern (`ChatInput.svelte`), or a separate map keyed by id.
+   **NexShellView was FIXED in v1.7.221** — its five inputs (`directIn`,
+   `lucyIn`, `interactiveInput`, `rdpResultIn`, `rdpAgentTask`) moved off the
+   session object into the `nsInput` map, so typing no longer invalidates
+   `rshellSessions`. This entry used to say the bug was still there; it sent at
+   least one reader to re-fix work already done. The rule stands, the example
+   does not.
 5. **Memory "doesn't save/recall"**: 2-stage dedup collapse + decay threshold +
    embeddings silent-skip — behavior, not crash. `/memory-health` to diagnose.
 6. **manual_clamp clippy (21×)** are intentional (panic-safe) — not bugs.
@@ -230,7 +235,7 @@ See §5 CSS gotcha: real chat bubbles live in `ChatThread.svelte`'s scoped
 
 1. `src-tauri/src/commands/metrics.rs` (4039) — dedup/race/SQL correctness
 2. `src/routes/+page.svelte` (13370) — agent loop, streaming, reasoning, state
-3. `src/lib/NexShellView.svelte` (4124) — inputs (paint bug), shell flows
+3. `src/lib/NexShellView.svelte` (4155) — shell flows, session lifecycle
 4. `src-tauri/src/commands/local.rs` (2175) + `shell.rs` (973) — exec safety
 5. `src/lib/page/slash-commands.ts` (2943) — dispatch correctness
 6. `commands/ai.rs` (1889) + `prompt_sections.rs` (1409) — LLM payloads, SSRF

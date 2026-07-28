@@ -335,6 +335,18 @@ import { listen } from '@tauri-apps/api/event';
     // smartRouting + privacyMode restored (see /smart-router and /privacy slash
     // commands). Persisted in localStorage alongside the rest of lucyConfig.
     let lucyConfig         = { name: '', smartRouting: false, privacyMode: false, economyMode: false, userAvatarUrl: '', briefMode: false };
+    // Canonical setters for the two router flags. The same two lines existed in
+    // three places — the slash-command deps, the settings modal buttons, and
+    // now the cockpit — which is how a flag ends up persisted in one surface and
+    // not another. One definition, three callers.
+    const setSmartRouting = (on) => {
+        lucyConfig = { ...lucyConfig, smartRouting: !!on };
+        try { localStorage.setItem('lucy_smart_routing', on ? '1' : '0'); } catch {}
+    };
+    const setPrivacyMode = (on) => {
+        lucyConfig = { ...lucyConfig, privacyMode: !!on };
+        try { localStorage.setItem('lucy_privacy_mode', on ? '1' : '0'); } catch {}
+    };
     let _lastRouteDecision = null;  // RoutingDecision | null — type erased for plain-JS <script>
     // v1.7.73 — Fork advisor bypass flag, keyed by tabId. Toggled via the
     // `/serial` slash command. When set, the next prompt's system build
@@ -5045,14 +5057,8 @@ REGLAS DE FORMATO:
             // Smart-router / privacy toggles — persist + mirror back into lucyConfig
             lucyFlags: { smartRouting: !!lucyConfig.smartRouting, privacyMode: !!lucyConfig.privacyMode },
             lastRouteDecision: _lastRouteDecision,
-            setSmartRouting: (on) => {
-                lucyConfig = { ...lucyConfig, smartRouting: !!on };
-                try { localStorage.setItem('lucy_smart_routing', on ? '1' : '0'); } catch {}
-            },
-            setPrivacyMode: (on) => {
-                lucyConfig = { ...lucyConfig, privacyMode: !!on };
-                try { localStorage.setItem('lucy_privacy_mode', on ? '1' : '0'); } catch {}
-            },
+            setSmartRouting,
+            setPrivacyMode,
             // v1.7.73 — fork advisor bypass per tab. Used by /serial.
             setForkAdviceBypass: (id, on) => { _forkBypassByTab.set(id, !!on); },
             getForkAdviceBypass: (id) => !!_forkBypassByTab.get(id),
@@ -13287,11 +13293,11 @@ if (Test-Path $src) {
             </label>
             <div style="display:flex;gap:6px;">
               <button class="settings-btn" class:settings-btn-on={lucyConfig.smartRouting}
-                on:click={() => { lucyConfig = { ...lucyConfig, smartRouting: true };  try { localStorage.setItem('lucy_smart_routing', '1'); } catch {} }}>
+                on:click={() => setSmartRouting(true)}>
                 ◆ {isEN ? 'On' : 'Activado'}
               </button>
               <button class="settings-btn" class:settings-btn-on={!lucyConfig.smartRouting}
-                on:click={() => { lucyConfig = { ...lucyConfig, smartRouting: false }; try { localStorage.setItem('lucy_smart_routing', '0'); } catch {} }}>
+                on:click={() => setSmartRouting(false)}>
                 ○ {isEN ? 'Off' : 'Apagado'}
               </button>
             </div>
@@ -13307,11 +13313,11 @@ if (Test-Path $src) {
             </label>
             <div style="display:flex;gap:6px;">
               <button class="settings-btn" class:settings-btn-on={lucyConfig.privacyMode}
-                on:click={() => { lucyConfig = { ...lucyConfig, privacyMode: true };  try { localStorage.setItem('lucy_privacy_mode', '1'); } catch {} }}>
+                on:click={() => setPrivacyMode(true)}>
                 🔒 {isEN ? 'On' : 'Activado'}
               </button>
               <button class="settings-btn" class:settings-btn-on={!lucyConfig.privacyMode}
-                on:click={() => { lucyConfig = { ...lucyConfig, privacyMode: false }; try { localStorage.setItem('lucy_privacy_mode', '0'); } catch {} }}>
+                on:click={() => setPrivacyMode(false)}>
                 🔓 {isEN ? 'Off' : 'Apagado'}
               </button>
             </div>
@@ -14378,7 +14384,7 @@ if (Test-Path $src) {
            component stays MOUNTED (draft/active-view preserved) — so the real,
            server-verified authorization flow in the classic UI is visible and
            usable. Zero changes to the security-critical bypass-token path. -->
-      <div style="position:fixed; inset:0; z-index:9999;{(showHostModal || showProviderConfig || showSettingsModal) ? ' display:none;' : ''}"><CockpitShell live userName={lucyConfig.name} onSubmit={(txt, opts) => { const s = txt.trim(); if (!activeTabId) crearTab(); /* v1.7.234: crea la 1ª pestaña al vuelo si no hay ninguna (fresh install) */ if (!activeTabId) return; const t = getTab(activeTabId); const hasAtt = !!(t && t.attachedFiles && t.attachedFiles.length); if (!s && !hasAtt) return; const _voice = !!(opts && opts.voice); if (s.startsWith('/') || hasAtt) { if (t) { t.inputValue = s; t.usedVoice = _voice; process(activeTabId); } } else { addMsg(activeTabId, { role: 'user', html: txt, rawContent: txt }); runAI(activeTabId, s, _voice); } }} onStop={() => { if (activeTabId) cancelarEjecucion(activeTabId); }} hitl={cockpitHitl} onHitlApprove={() => { if (pendingSecurityBlock) autorizarSecurityBlock(); else if ($showRunAsModal) confirmarRunAs(); }} onHitlCancel={() => { if (pendingSecurityBlock) limpiarSecurityBlock(); else if ($showRunAsModal) cancelarRunAs(); }} onRegenerate={() => { const t = getTab(activeTabId); if (t && !t.isProcessing) { const lu = [...t.messages].reverse().find(m => m.role === 'user'); const p = String(lu?.rawContent || '').trim(); if (p) runAI(activeTabId, p, false); } }} onReact={(kind, text) => { try { logTaskEvent('msg_reaction', kind, null, { text: String(text || '').slice(0, 200) }, activeTabId); } catch {} }} attachments={(activeTab?.attachedFiles ?? []).slice()} onAttach={() => { if (!activeTabId) crearTab(); if (activeTabId) attach(activeTabId); }} onRemoveAttach={(name) => { if (activeTabId) removeFile(activeTabId, name); }} onHostAdd={() => abrirHostModal()} onHostEdit={(h) => abrirHostModal(h)} onHostDelete={(h) => eliminarHost(h.id)} model={activeTab?.selectedModel} onModelChange={(id) => { if (!activeTabId) crearTab(); const t = getTab(activeTabId); if (t) { t.selectedModel = id; refresh(); statusPatch({ model: id }); } }} personality={lucyPersonality} onSetPersonality={(p) => { lucyPersonality = p; safeSetLSString('lucy_personality', p); }} smartRouting={lucyConfig.smartRouting} privacyMode={lucyConfig.privacyMode} onConfigureKeys={() => showProviderConfig = true} onOpenSettings={() => showSettingsModal = true} tabs={tabs.map(t => ({ id: t.id, title: t.title }))} activeTabId={activeTabId} onSelectTab={(id) => { activeTabId = id; syncCockpitConvo(id); }} onNewTab={() => { crearTab(); syncCockpitConvo(activeTabId); }} onCloseTab={(id) => { cerrarTab(id, { stopPropagation() {} }).then(() => syncCockpitConvo(activeTabId)); }} /></div>
+      <div style="position:fixed; inset:0; z-index:9999;{(showHostModal || showProviderConfig || showSettingsModal) ? ' display:none;' : ''}"><CockpitShell live userName={lucyConfig.name} onSubmit={(txt, opts) => { const s = txt.trim(); if (!activeTabId) crearTab(); /* v1.7.234: crea la 1ª pestaña al vuelo si no hay ninguna (fresh install) */ if (!activeTabId) return; const t = getTab(activeTabId); const hasAtt = !!(t && t.attachedFiles && t.attachedFiles.length); if (!s && !hasAtt) return; const _voice = !!(opts && opts.voice); if (s.startsWith('/') || hasAtt) { if (t) { t.inputValue = s; t.usedVoice = _voice; process(activeTabId); } } else { addMsg(activeTabId, { role: 'user', html: txt, rawContent: txt }); runAI(activeTabId, s, _voice); } }} onStop={() => { if (activeTabId) cancelarEjecucion(activeTabId); }} hitl={cockpitHitl} onHitlApprove={() => { if (pendingSecurityBlock) autorizarSecurityBlock(); else if ($showRunAsModal) confirmarRunAs(); }} onHitlCancel={() => { if (pendingSecurityBlock) limpiarSecurityBlock(); else if ($showRunAsModal) cancelarRunAs(); }} onRegenerate={() => { const t = getTab(activeTabId); if (t && !t.isProcessing) { const lu = [...t.messages].reverse().find(m => m.role === 'user'); const p = String(lu?.rawContent || '').trim(); if (p) runAI(activeTabId, p, false); } }} onReact={(kind, text) => { try { logTaskEvent('msg_reaction', kind, null, { text: String(text || '').slice(0, 200) }, activeTabId); } catch {} }} attachments={(activeTab?.attachedFiles ?? []).slice()} onAttach={() => { if (!activeTabId) crearTab(); if (activeTabId) attach(activeTabId); }} onRemoveAttach={(name) => { if (activeTabId) removeFile(activeTabId, name); }} onHostAdd={() => abrirHostModal()} onHostEdit={(h) => abrirHostModal(h)} onHostDelete={(h) => eliminarHost(h.id)} model={activeTab?.selectedModel} onModelChange={(id) => { if (!activeTabId) crearTab(); const t = getTab(activeTabId); if (t) { t.selectedModel = id; refresh(); statusPatch({ model: id }); } }} personality={lucyPersonality} onSetPersonality={(p) => { lucyPersonality = p; safeSetLSString('lucy_personality', p); }} smartRouting={lucyConfig.smartRouting} privacyMode={lucyConfig.privacyMode} onSetPrivacyMode={setPrivacyMode} onConfigureKeys={() => showProviderConfig = true} onOpenSettings={() => showSettingsModal = true} tabs={tabs.map(t => ({ id: t.id, title: t.title }))} activeTabId={activeTabId} onSelectTab={(id) => { activeTabId = id; syncCockpitConvo(id); }} onNewTab={() => { crearTab(); syncCockpitConvo(activeTabId); }} onCloseTab={(id) => { cerrarTab(id, { stopPropagation() {} }).then(() => syncCockpitConvo(activeTabId)); }} /></div>
     {/if}
   {/if}
 

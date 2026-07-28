@@ -24,7 +24,7 @@
   import { localModels, ollamaOnline, refreshLocalModels } from '$lib/models.js';
   import { ensureTtsVoices, resolveTtsVoice, speak } from '$lib/voice';
 
-  let { personality = 'balanced', onSetPersonality = undefined, onConfigureKeys = undefined, onOpenSettings = undefined, model = null, accent = 'emerald', onSetAccent = undefined, theme = 'dark', onSetTheme = undefined, smartRouting = false, privacyMode = false } = $props();
+  let { personality = 'balanced', onSetPersonality = undefined, onConfigureKeys = undefined, onOpenSettings = undefined, model = null, accent = 'emerald', onSetAccent = undefined, theme = 'dark', onSetTheme = undefined, smartRouting = false, privacyMode = false, onSetPrivacyMode = undefined } = $props();
 
   // ── Enrutado: estado REAL, no una etiqueta fija ─────────────────────────────
   // Esta fila mostraba un `<span class="badge accent">Auto</span>` hardcodeado.
@@ -146,6 +146,31 @@
       <div class="rows">
         <div class="row"><span class="row-l">Modelo activo</span><span class="row-v">{cloudLabel}</span></div>
         <div class="row"><span class="row-l">Enrutado</span><span class="row-v"><span class="badge" class:accent={smartRouting || privacyMode} title={routeTitle}>{routeLabel}</span></span></div>
+        <!-- Modo privacidad.
+             Deliberadamente un control propio y no un tercer estado del selector
+             de enrutado: no es una estrategia de enrutado, es un CIERRE. Fija
+             todo el tráfico LLM a Ollama local sin importar el router ni el
+             modelo elegido. Fundirlo con "Auto / Manual" haría que cambiar de
+             estrategia lo desactivara sin querer.
+             Es la función de cumplimiento de Lucy y hasta ahora solo existía en
+             la configuración clásica: quien usara el cockpit no podía llegar a
+             ella. -->
+        <div class="row">
+          <span class="row-l">Modo privacidad
+            <span class="row-hint">todo el tráfico a Ollama local</span>
+          </span>
+          <span class="row-v seg">
+            <button class="seg-btn" class:on={privacyMode} onclick={() => onSetPrivacyMode?.(true)}
+              title="Bloquea TODO el tráfico LLM a Ollama local. Para entornos con requisitos de cumplimiento o sin salida a internet.">Activado</button>
+            <button class="seg-btn" class:on={!privacyMode} onclick={() => onSetPrivacyMode?.(false)}
+              title="Permite modelos en la nube según el enrutado.">Apagado</button>
+          </span>
+        </div>
+        {#if privacyMode && !$ollamaOnline}
+          <!-- El cierre sin destino es el peor de los mundos: la nube bloqueada
+               y el local ausente. Decirlo aquí, no cuando falle el primer turno. -->
+          <div class="row-warn">Ollama no responde. Con el modo privacidad activo, Lucy no tiene ningún modelo disponible.</div>
+        {/if}
         <div class="row">
           <span class="row-l">Modelos locales (Ollama)</span>
           <span class="row-v"><span class="ol-dot" class:on={$ollamaOnline}></span>{localCount} detectados<button class="mini-btn" onclick={refreshLocal} title="Redetectar">↻</button></span>
@@ -305,6 +330,14 @@
   .acc-sw.pink { background: #F06EA9; }
   .acc-sw.cyan { background: #4FD1E0; }
   .hint-mini { font-size: var(--fs-caption); color: var(--text-faint); }
+  .row-hint { display: block; font-size: var(--fs-caption); color: var(--text-faint); margin-top: 1px; }
+  .row-warn {
+    display: flex; align-items: flex-start; gap: 7px;
+    margin: 2px 0 8px; padding: 8px 11px;
+    background: var(--warning-bg, rgba(229,181,103,0.10));
+    border: 1px solid var(--warning, #E5B567); border-radius: var(--r-sm);
+    font-size: var(--fs-caption); color: var(--text-secondary); line-height: var(--lh-tight);
+  }
   .note { font-size: var(--fs-caption); color: var(--text-faint); margin-top: 10px; line-height: var(--lh-tight); }
 
   .cap-usd { color: var(--text-muted); font-family: var(--font-mono); }
