@@ -61,11 +61,23 @@
   let loading = $state(false);
   let error = $state('');
   let lastUpdate = $state('');
-  let _timer = null, _svcTimer = null, _vulnTimer = null, _insTimer = null;
+  let _timer = null, _svcTimer = null, _vulnTimer = null, _insTimer = null, _secTimer = null;
 
   // ── Insights proactivos ───────────────────────────────────────────────────
   // Solo LECTURA de lo que el detector de fondo ya escribió. Se filtran los
   // descartados en el backend; aquí solo se pide y se muestra.
+  // ── Briefs de seguridad ─────────────────────────────────────────────────
+  // `dashboard_failed_logins_24h` y `dashboard_open_incidents` existían con
+  // cero superficie en V2. Solo se piden para el equipo local: ambos consultan
+  // esta máquina, así que mostrarlos mientras el selector apunta a un host
+  // remoto atribuiría datos locales al equipo equivocado.
+  let sec = $state({ logins: null, incidents: null });
+  async function loadSecurity() {
+    if (selectedHost !== 'local') { sec = { logins: null, incidents: null }; return; }
+    try { sec.logins = await invoke('dashboard_failed_logins_24h'); } catch { sec.logins = null; }
+    try { sec.incidents = await invoke('dashboard_open_incidents', { hostName: sys.name || '' }); } catch { sec.incidents = null; }
+  }
+
   let insights = $state([]);
   async function loadInsights() {
     try {
@@ -294,11 +306,17 @@
     // cadencia de minutos, sondear más rápido solo gasta.
     loadInsights();
     _insTimer = setInterval(loadInsights, 120000);
+    // El primer sondeo espera a que `sys.name` tenga el hostname real: el brief
+    // de incidentes se consulta POR host, y pedirlo con el placeholder
+    // devolvería siempre cero.
+    setTimeout(loadSecurity, 2500);
+    _secTimer = setInterval(loadSecurity, 300000);
     return () => {
       if (_timer) clearInterval(_timer);
       if (_svcTimer) clearInterval(_svcTimer);
       if (_vulnTimer) clearInterval(_vulnTimer);
       if (_insTimer) clearInterval(_insTimer);
+      if (_secTimer) clearInterval(_secTimer);
     };
   });
 </script>
@@ -351,6 +369,33 @@
        Van sobre las alertas derivadas porque son de otra naturaleza: aquellas
        describen el estado actual (CPU alta, servicios caídos); estas son cosas
        que Lucy CONCLUYÓ observando en el tiempo. -->
+  <!-- ── Seguridad ────────────────────────────────────────────────────────
+       Solo aparece cuando hay algo que decir: un panel que anuncia "0 intentos
+       fallidos" cada día enseña a saltárselo, y el día que ponga 40 tampoco se
+       leerá. El caso "no disponible" sí se muestra, porque un cero por falta de
+       permisos no es lo mismo que un cero real — y confundirlos es peor que no
+       mirar. -->
+  {#if sec.logins?.count_24h > 0 || sec.incidents?.open_count > 0 || (sec.logins && !sec.logins.available)}
+    <div class="secbar">
+      {#if sec.logins?.count_24h > 0}
+        <button class="sec-item warn" onclick={() => onRunCommand?.('Analiza los inicios de sesión fallidos de las últimas 24 horas en este equipo y dime si hay un patrón de ataque')}>
+          <AlertTriangle size={14} stroke={1.85} />
+          <b>{sec.logins.count_24h}</b> inicio{sec.logins.count_24h === 1 ? '' : 's'} de sesión fallido{sec.logins.count_24h === 1 ? '' : 's'} · 24 h
+        </button>
+      {/if}
+      {#if sec.incidents?.open_count > 0}
+        <button class="sec-item bad" onclick={() => onRunCommand?.(`Resume el incidente abierto "${sec.incidents.latest_title}" y propón los siguientes pasos`)}>
+          <AlertTriangle size={14} stroke={1.85} />
+          <b>{sec.incidents.open_count}</b> incidente{sec.incidents.open_count === 1 ? '' : 's'} abierto{sec.incidents.open_count === 1 ? '' : 's'}
+          {#if sec.incidents.latest_title}<span class="sec-sub">· {sec.incidents.latest_title}</span>{/if}
+        </button>
+      {/if}
+      {#if sec.logins && !sec.logins.available}
+        <span class="sec-item muted" title={sec.logins.note}>Registro de seguridad no legible — {sec.logins.note}</span>
+      {/if}
+    </div>
+  {/if}
+
   {#if insights.length}
     <div class="insights">
       <div class="ins-head">
@@ -528,6 +573,24 @@
   .dash-error { margin-bottom: 14px; padding: 10px 14px; background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--r-md); font-size: var(--fs-footnote); color: var(--text-secondary); }
 
   .alerts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); }
+
+  /* ── Briefs de seguridad ──────────────────────────────────────────────── */
+  .secbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .sec-item {
+    display: flex; align-items: center; gap: 7px;
+    font-size: var(--fs-footnote); color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 9px 13px; cursor: pointer; text-align: left;
+  }
+  .sec-item b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .sec-item.warn { border-color: rgba(229,181,103,0.45); }
+  .sec-item.warn :global(svg) { color: #E5B567; }
+  .sec-item.bad { border-color: rgba(240,110,110,0.45); }
+  .sec-item.bad :global(svg) { color: var(--danger); }
+  .sec-item:hover:not(.muted) { background: var(--surface-2); }
+  .sec-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .sec-item.muted { cursor: default; color: var(--text-faint); font-size: var(--fs-caption); }
+  .sec-sub { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 
   /* ── Insights proactivos ──────────────────────────────────────────────── */
   .insights { margin-bottom: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 14px 12px; }

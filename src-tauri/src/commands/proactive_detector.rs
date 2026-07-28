@@ -239,6 +239,29 @@ fn try_insert(conn: &rusqlite::Connection, hit: &DetectionHit) -> Result<bool, S
             hit.action_hint,
         ],
     ).map_err(|e| format!("insert: {}", e))?;
+
+    // Fuera de la máquina, si hay canal configurado.
+    //
+    // Este punto y no `run_all_detectors`: aquí ya pasó el dedupe y la ventana
+    // de enfriamiento, así que `Ok(true)` significa "esto es NUEVO". Avisar
+    // desde el bucle reenviaría el mismo hallazgo cada pasada hasta que alguien
+    // lo descartara, y un canal que repite acaba silenciado.
+    //
+    // El umbral de severidad lo aplica el puente: el detector emite
+    // info/warning/critical, el mismo vocabulario, así que un 'info' no cruza
+    // salvo que el operador lo haya pedido explícitamente.
+    let (sev, title, detail) = (hit.severity.clone(), hit.title.clone(), hit.detail.clone());
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::commands::notify_bridge::deliver(
+            &format!("Lucy — {}", title), &detail, &sev,
+        ).await {
+            crate::utils::logging::write_app_log(
+                "WARNING",
+                &format!("notify_bridge: no se pudo enviar el insight proactivo: {}", e),
+            );
+        }
+    });
+
     Ok(true)
 }
 
