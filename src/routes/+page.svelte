@@ -149,6 +149,7 @@ import { listen } from '@tauri-apps/api/event';
 
     // Phase 2c (May 2026) — extracted helpers from this file
     import { dispatchSlashCommand, maybeAutoCrystallize } from '$lib/page/slash-commands';
+    import { extractPlanSteps } from '$lib/page/plan-seed';
     import { buildPreset, upsertPreset, deletePreset, stampApplied, presetPatches, persistPresetScalars, ageString } from '$lib/page/workspace-presets';
     import { loadMcpSecrets as mcpLoad, saveMcpSecret as mcpSave, deleteMcpSecret as mcpDelete } from '$lib/page/mcp-secrets';
     import { upsertChip, deleteChip, upsertQuickAction, deleteQuickAction } from '$lib/page/chips-quick-actions';
@@ -3755,21 +3756,11 @@ import { listen } from '@tauri-apps/api/event';
     // Zero prompt / protocol changes: reads only what the model already says, so
     // there is no release token cost or behaviour change. When no list is found
     // the panel keeps its post-hoc command log (see the execPush site).
-    function extractPlanSteps(text) {
-        if (!text) return [];
-        const out = [];
-        for (const raw of String(text).split('\n')) {
-            const line = raw.trim();
-            // numbered ("1." / "1)" / "1 -") or bulleted ("-" / "•" / "*") item, 4-120 chars
-            const m = line.match(/^(?:\d{1,2}[.)\-]\s+|[-•*]\s+)(.{4,120})$/);
-            if (m) {
-                const label = m[1].trim().replace(/\*\*/g, '').replace(/`/g, '').replace(/[.:;\s]+$/, '');
-                if (label && !/^https?:/i.test(label)) out.push(label);
-            }
-            if (out.length >= 8) break;
-        }
-        return out.length >= 2 ? out : [];
-    }
+    // extractPlanSteps moved to $lib/page/plan-seed (v1.7.240) — it was an
+    // untested inline heuristic and it showed: it accepted ANY bullet in the
+    // text, so a turn once rendered "Destino: Chat" / "Formato: Markdown" as its
+    // plan, and a stalled turn rendered its two lines twice. See that module for
+    // the three rules and the cases each one came from.
     function seedCockpitPlan(tabId, steps) {
         const t = getTab(tabId); if (!t) return;
         const now = Date.now();
