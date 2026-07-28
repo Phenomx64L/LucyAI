@@ -18,6 +18,7 @@
   import Key from '@tabler/icons-svelte/icons/key';
   import Bell from '@tabler/icons-svelte/icons/bell';
   import Plug from '@tabler/icons-svelte/icons/plug';
+  import Clock from '@tabler/icons-svelte/icons/clock';
   import { loadMcpSecrets } from '$lib/page/mcp-secrets';
   import ShieldLock from '@tabler/icons-svelte/icons/shield-lock';
   import Database from '@tabler/icons-svelte/icons/database';
@@ -149,6 +150,45 @@
     } finally { mcpBusy = null; }
   }
 
+  // ── Tareas programadas ──────────────────────────────────────────────────────
+  // Backend completo (listar, activar, borrar) y cero superficie en V2. Importa
+  // más de lo que parece: una tarea programada corre SIN humano delante, así que
+  // si nadie puede ver qué hay programado ni su último resultado, el trabajo
+  // desatendido es invisible por definición.
+  let tasks = $state([]);
+  let tasksBusy = $state(null);
+  const fmtWhen = (ts) => (ts ? new Date(ts * 1000).toLocaleString('es', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+  async function loadTasks() {
+    try { const l = await invoke('list_scheduled_tasks'); tasks = Array.isArray(l) ? l : []; }
+    catch { tasks = []; }
+  }
+  async function toggleTask(t) {
+    tasksBusy = t.id;
+    try { await invoke('toggle_scheduled_task', { id: t.id, enabled: !t.enabled }); await loadTasks(); }
+    catch {} finally { tasksBusy = null; }
+  }
+  async function delTask(t) {
+    tasksBusy = t.id;
+    try { await invoke('delete_scheduled_task', { id: t.id }); await loadTasks(); }
+    catch {} finally { tasksBusy = null; }
+  }
+
+  // ── Reglas de permisos ──────────────────────────────────────────────────────
+  // Es el guardarraíl que decide qué se ejecuta sin preguntar. Mostrarlo junto a
+  // los guardarraíles de solo lectura completa la respuesta a "qué puede hacer
+  // Lucy sin mi permiso" — hasta ahora la mitad de esa respuesta era inalcanzable.
+  let rules = $state([]);
+  let rulesBusy = $state(null);
+  async function loadRules() {
+    try { const l = await invoke('list_permission_rules', { appliesTo: null }); rules = Array.isArray(l) ? l : []; }
+    catch { rules = []; }
+  }
+  async function delRule(r) {
+    rulesBusy = r.id;
+    try { await invoke('delete_permission_rule', { ruleId: r.id }); await loadRules(); }
+    catch {} finally { rulesBusy = null; }
+  }
+
   let spendCap = $state(0);
   function saveSpendCap() { const n = Math.max(0, Number(spendCap) || 0); spendCap = n; try { localStorage.setItem('lucy_spend_cap_usd', String(n)); } catch {} }
 
@@ -213,6 +253,8 @@
     try { const info = await invoke('db_info'); if (info?.path) dbPath = String(info.path); } catch {}
     await loadBridge();
     await loadMcp();
+    await loadTasks();
+    await loadRules();
     try { spendCap = parseFloat(localStorage.getItem('lucy_spend_cap_usd') || '0') || 0; } catch {}
     try {
       const all = await ensureTtsVoices();
@@ -446,6 +488,72 @@
       {/if}
     </section>
 
+    <!-- Tareas programadas -->
+    <section class="panel">
+      <div class="panel-head"><Clock size={16} stroke={1.75} /> Tareas programadas
+        <button class="head-btn" onclick={() => onOpenSettings?.()}>Gestionar</button>
+      </div>
+      {#if tasks.length === 0}
+        <div class="note" style="margin-top:0">Ninguna tarea programada. Corren sin supervisión y con herramientas de solo lectura.</div>
+      {:else}
+        <div class="rows">
+          {#each tasks as t (t.id)}
+            <div class="row col mcp-row">
+              <div class="mcp-line">
+                <span class="mcp-dot {t.last_status === 'ok' ? 'ok' : t.last_status === 'error' ? 'error' : 'pending'}"></span>
+                <span class="mcp-name" class:off={!t.enabled}>{t.name}</span>
+                {#if t.cron_expr}<span class="mcp-tag" title="Expresión cron">{t.cron_expr}</span>{/if}
+                <span class="mcp-lat" title="Próxima ejecución">→ {fmtWhen(t.next_run)}</span>
+                <span class="mcp-acts">
+                  <button class="b-btn" disabled={tasksBusy === t.id} onclick={() => toggleTask(t)}>{t.enabled ? 'Pausar' : 'Activar'}</button>
+                  <button class="b-btn danger" disabled={tasksBusy === t.id} onclick={() => delTask(t)}>Borrar</button>
+                </span>
+              </div>
+              {#if t.last_run}
+                <div class="mcp-cmd">Última: {fmtWhen(t.last_run)} · {t.last_status ?? '—'}</div>
+              {/if}
+              <!-- El resultado va truncado y en línea: el valor está en ver de un
+                   vistazo si la última pasada hizo algo, no en leer el informe. -->
+              {#if t.last_status === 'error' && t.last_output}
+                <div class="b-msg bad">{String(t.last_output).slice(0, 220)}</div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+
+    <!-- Reglas de permisos -->
+    <section class="panel">
+      <div class="panel-head"><ShieldLock size={16} stroke={1.75} /> Reglas de permisos
+        <button class="head-btn" onclick={() => onOpenSettings?.()}>Gestionar</button>
+      </div>
+      {#if rules.length === 0}
+        <div class="note" style="margin-top:0">
+          Sin reglas propias. Todo comando destructivo pasa por confirmación humana — que es
+          el comportamiento por defecto y el más seguro.
+        </div>
+      {:else}
+        <div class="rows">
+          {#each rules as r (r.id)}
+            <div class="row col mcp-row">
+              <div class="mcp-line">
+                <!-- El color va por ACCIÓN, no por estado: 'allow' es la que
+                     salta la confirmación, y es la que hay que poder localizar. -->
+                <span class="rule-act {r.action}">{r.action === 'allow' ? 'permitir' : r.action === 'block' ? 'bloquear' : 'preguntar'}</span>
+                <span class="mcp-name" class:off={!r.enabled}>{r.pattern}</span>
+                <span class="mcp-tag">{r.applies_to}</span>
+                <span class="mcp-acts">
+                  <button class="b-btn danger" disabled={rulesBusy === r.id} onclick={() => delRule(r)}>Borrar</button>
+                </span>
+              </div>
+              {#if r.description}<div class="mcp-cmd">{r.description}</div>{/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+
     <!-- Guardarraíles -->
     <section class="panel span-2">
       <div class="panel-head"><ShieldLock size={16} stroke={1.75} /> Guardarraíles de seguridad</div>
@@ -596,6 +704,17 @@
     font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
   }
+  /* Acción de la regla — el color por ACCIÓN, no por estado: 'permitir' es la
+     que salta la confirmación humana y debe localizarse de un vistazo. */
+  .rule-act {
+    font-family: var(--font-mono); font-size: var(--fs-caption);
+    padding: 1px 8px; border-radius: var(--r-pill); flex-shrink: 0;
+    color: var(--text-faint); background: var(--surface-3);
+  }
+  .rule-act.allow { color: var(--danger); background: rgba(240,110,110,0.12); }
+  .rule-act.block { color: var(--accent); background: var(--accent-bg); }
+  .rule-act.ask   { color: #E5B567; background: rgba(229,181,103,0.12); }
+
   .mcp-tool-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
   .mcp-tool {
     font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary);
