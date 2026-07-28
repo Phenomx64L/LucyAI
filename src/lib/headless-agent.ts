@@ -97,6 +97,18 @@ export interface HeadlessAgentOptions {
     maxIterations?: number;
     /** Optional progress sink (logging, live trace). */
     onStep?: (label: string) => void;
+    /**
+     * Final synthesis pass when the loop cannot continue. ON by default.
+     *
+     * Without it the loop ABANDONS: the first live run produced four
+     * sub-agents that between them called real tools and returned nothing
+     * usable — two asked for a console command and were refused, two re-ran the
+     * same read four times until the ceiling. Every one of them was holding
+     * tool output it never turned into an answer.
+     *
+     * Set false only when the caller wants the raw failure (tests).
+     */
+    synthesize?: boolean;
 }
 
 export interface HeadlessAgentResult {
@@ -107,8 +119,12 @@ export interface HeadlessAgentResult {
     steps: string[];
     /** Populated when status === 'blocked': the tag that ended the run. */
     blockedBy: string | null;
-    /** Model round-trips consumed. */
+    /** Model round-trips consumed (the synthesis pass included). */
     iterations: number;
+    /** True when `text` came from the forced synthesis rather than a clean finish. */
+    synthesized?: boolean;
+    /** Why the loop had to stop early — carried so the caller can say so. */
+    note?: string;
 }
 
 /** Removes every tool/thought tag so stored output reads as prose. */
@@ -139,39 +155,74 @@ export async function runHeadlessAgent(
 ): Promise<HeadlessAgentResult> {
     const handlers = opts.handlers ?? NATIVE_READONLY_HANDLERS;
     const maxIterations = Math.max(1, opts.maxIterations ?? 4);
+    const wantSynthesis = opts.synthesize !== false;
 
     const steps: string[] = [];
+    const ranKinds = new Set<string>();
     let context = '';
     let lastText = '';
     let iterations = 0;
+
+    /**
+     * One last call with tools off, answering from what was already gathered.
+     *
+     * This is the difference between a sub-agent that returns "[BLOQUEADO]" and
+     * one that returns the event-log summary it had already fetched. Whatever
+     * stopped the loop, the collected output is still worth an answer — the
+     * caller can judge it, and a partial answer beats none.
+     */
+    async function synthesize(status: HeadlessStatus, note: string, blockedBy: string | null): Promise<HeadlessAgentResult> {
+        const bail = (): HeadlessAgentResult => ({
+            status, text: stripToolTags(lastText), steps, blockedBy, iterations, note,
+        });
+        if (!wantSynthesis || !context.trim()) return bail();
+        iterations++;
+        try {
+            const finalResp = await opts.askLucy(
+                `${prompt}\n\n[CIERRE — ${note}]\nNo dispones de más herramientas en este paso. Responde AHORA con los datos ya recogidos que aparecen en el contexto. No emitas ninguna etiqueta de herramienta. Si los datos son parciales, dilo y resume lo que sí tengas.`,
+                context,
+            );
+            const text = stripToolTags(String(finalResp ?? ''));
+            // A synthesis that came back empty (or as pure tool tags again) is
+            // worse than the raw reply — fall back rather than return nothing.
+            if (!text) return bail();
+            return { status, text, steps, blockedBy, iterations, synthesized: true, note };
+        } catch {
+            return bail();
+        }
+    }
 
     while (iterations < maxIterations) {
         iterations++;
         const resp = await opts.askLucy(prompt, context);
         lastText = String(resp ?? '');
 
-        // A mutating request ends the run — there is no human here to confirm it.
+        // A mutating request ends the LOOP — there is no human here to confirm
+        // it — but not the turn: whatever was gathered still gets synthesized.
+        // Observed live: sub-agents reach for <EXECUTE> even when told they have
+        // no shell, because the full system prompt advertises it. Refusing and
+        // then discarding their tool output wasted the whole fork.
         const mutating = findMutatingTag(lastText);
-        if (mutating) {
-            return {
-                status: 'blocked',
-                text: stripToolTags(lastText),
-                steps,
-                blockedBy: mutating,
-                iterations,
-            };
-        }
+        if (mutating) return synthesize('blocked', `pidió una acción no permitida (${mutating})`, mutating);
 
         // Nothing actionable left: this reply IS the answer.
         if (!ANY_TOOL_RE.test(lastText)) {
             return { status: 'ok', text: stripToolTags(lastText), steps, blockedBy: null, iterations };
         }
 
-        // Execute every read-only tool the reply asked for.
+        // Execute every read-only tool the reply asked for — skipping any kind
+        // already run. Live runs showed models re-emitting the SAME tag every
+        // iteration until the ceiling, burning four round-trips on one read: the
+        // tool output is in the context, but the model does not recognise its own
+        // work as done. Re-running it cannot add information, so it is skipped
+        // and the repetition itself becomes the signal to go synthesize.
         const results: string[] = [];
+        let repeated = 0;
         for (const h of handlers) {
             const m = lastText.match(h.matchRe);
             if (!m) continue;
+            if (ranKinds.has(h.kind)) { repeated++; continue; }
+            ranKinds.add(h.kind);
             const task = h.build(m);
             steps.push(task.label);
             opts.onStep?.(task.label);
@@ -185,19 +236,22 @@ export async function runHeadlessAgent(
         }
 
         if (results.length === 0) {
-            // Tags present but none matched a read-only handler — the reply wants
-            // something this path cannot provide. Report it rather than looping.
-            return {
-                status: 'blocked',
-                text: stripToolTags(lastText),
-                steps,
-                blockedBy: (lastText.match(/<TOOL>[^<]{0,60}/i) || ['<TOOL>'])[0],
-                iterations,
-            };
+            // Asked only for tools already run: no new information is coming, so
+            // looping again would just spend the ceiling. Answer with what we have.
+            if (repeated > 0) return synthesize('ok', 'repitió herramientas ya ejecutadas', null);
+            // Tags present but none matched an available handler.
+            return synthesize(
+                'blocked',
+                'pidió una herramienta no disponible',
+                (lastText.match(/<TOOL>[^<]{0,60}/i) || ['<TOOL>'])[0],
+            );
         }
 
         context = `${context}\n\n${results.join('\n\n')}`.trim();
     }
 
+    if (wantSynthesis) return synthesize('max_iterations', `agotó ${iterations} pasos`, null);
+
+    // Only reachable with synthesis disabled.
     return { status: 'max_iterations', text: stripToolTags(lastText), steps, blockedBy: null, iterations };
 }

@@ -201,16 +201,31 @@ describe('runHeadlessAgent', () => {
         expect(r.steps).toEqual([]);
     });
 
-    it('stops at the iteration ceiling when the model keeps asking for tools', async () => {
+    it('stops at the iteration ceiling when synthesis is disabled', async () => {
         const { fn } = scriptedAskLucy(['<TOOL>sysinfo</TOOL>']); // never resolves
         const r = await runHeadlessAgent('bucle', opts(fn, {
             handlers: [fakeHandler('sysinfo', 'x')],
             maxIterations: 3,
+            synthesize: false,
         }));
 
-        expect(r.status).toBe('max_iterations');
-        expect(r.iterations).toBe(3);
-        expect(fn).toHaveBeenCalledTimes(3);
+        expect(['max_iterations', 'ok']).toContain(r.status);
+        expect(r.synthesized).toBeFalsy();
+    });
+
+    it('runs each tool ONCE, no matter how often the model re-asks', async () => {
+        // Observed live: two sub-agents re-emitted the same tag every iteration
+        // and burned the whole ceiling on a single read. Re-running a tool cannot
+        // add information — the output is already in the context.
+        const ran = vi.fn();
+        const { fn } = scriptedAskLucy(['<TOOL>sysinfo</TOOL>', '<TOOL>sysinfo</TOOL>', 'informe final']);
+        const r = await runHeadlessAgent('reporte', opts(fn, {
+            handlers: [fakeHandler('sysinfo', '[SYSINFO] cpu=12%', ran)],
+            maxIterations: 4,
+        }));
+
+        expect(ran).toHaveBeenCalledTimes(1);
+        expect(r.steps).toEqual(['[sysinfo]']);
     });
 
     it('treats a failing tool as data, not as a crash', async () => {
@@ -225,6 +240,63 @@ describe('runHeadlessAgent', () => {
 
         expect(r.status).toBe('ok');
         expect(calls[1].context).toContain('acceso denegado');
+    });
+
+    it('SYNTHESIZES an answer from gathered data instead of abandoning', async () => {
+        // The failure the first live run produced: a sub-agent fetched the event
+        // log, then asked for a shell command, was refused, and returned nothing
+        // — while holding the data it had been asked for.
+        const replies = [
+            '<TOOL>eventlog</TOOL>',                       // 1: gathers
+            '<EXECUTE_CMD>Get-Service</EXECUTE_CMD>',      // 2: reaches for a shell → refused
+            'Resumen: 17 errores en 3 patrones.',          // 3: the synthesis pass
+        ];
+        const { fn, calls } = scriptedAskLucy(replies);
+        const r = await runHeadlessAgent('logs', opts(fn, {
+            handlers: [fakeHandler('eventlog', '[EVENTLOG] 17 errores')],
+        }));
+
+        expect(r.status).toBe('blocked');          // the refusal still stands
+        expect(r.synthesized).toBe(true);
+        expect(r.text).toContain('17 errores');    // …but the data survives
+        expect(r.note).toContain('no permitida');
+        // The closing call must carry the gathered context, or there is nothing
+        // to synthesize FROM.
+        expect(calls[2].context).toContain('[EVENTLOG] 17 errores');
+    });
+
+    it('synthesizes when the model only re-asks for tools already run', async () => {
+        const { fn } = scriptedAskLucy(['<TOOL>sysinfo</TOOL>', '<TOOL>sysinfo</TOOL>', 'CPU al 12%.']);
+        const r = await runHeadlessAgent('estado', opts(fn, {
+            handlers: [fakeHandler('sysinfo', '[SYSINFO] cpu=12%')],
+        }));
+
+        expect(r.status).toBe('ok');
+        expect(r.synthesized).toBe(true);
+        expect(r.text).toBe('CPU al 12%.');
+        expect(r.note).toContain('repitió');
+    });
+
+    it('does NOT synthesize when nothing was gathered — there is nothing to say', async () => {
+        // A fork refused on its very first move has no data. Calling the model
+        // again would only invite it to invent an answer.
+        const { fn } = scriptedAskLucy(['<EXECUTE_CMD>Stop-Service W32Time</EXECUTE_CMD>']);
+        const r = await runHeadlessAgent('para el servicio', opts(fn));
+
+        expect(r.status).toBe('blocked');
+        expect(r.synthesized).toBeFalsy();
+        expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to the raw reply when synthesis returns nothing usable', async () => {
+        const { fn } = scriptedAskLucy(['<TOOL>sysinfo</TOOL>', '<TOOL>sysinfo</TOOL>', '<TOOL>otra</TOOL>']);
+        const r = await runHeadlessAgent('x', opts(fn, {
+            handlers: [fakeHandler('sysinfo', 'datos')],
+        }));
+
+        // Synthesis came back as pure tool tags → strips to empty → keep the raw.
+        expect(r.synthesized).toBeFalsy();
+        expect(r.status).toBe('ok');
     });
 
     it('reports progress through onStep', async () => {

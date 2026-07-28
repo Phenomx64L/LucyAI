@@ -7915,7 +7915,21 @@ Use ONE of these patterns instead:
                         // adivinar desde el catálogo completo del system prompt.
                         const _fTools = ['sysinfo', 'netconn', 'tasklist', 'eventlog:LOG:N', 'registry:HIVE|PATH|VALOR', ...SUBAGENT_DEPS_TOOLS.filter(t => t === 'system_diff'), 'threat_scan', 'daily_patterns', 'process_lineage:PID']
                             .map(t => `<TOOL>${t}</TOOL>`).join(', ');
-                        const _fPrompt = `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\nEres un agente de investigación en segundo plano con acceso de SOLO LECTURA a la máquina.\n\nHerramientas disponibles (úsalas si necesitas datos reales; una por paso, máximo 4 pasos): ${_fTools}\n\nNO tienes acceso a ejecución de comandos, escritura de ficheros ni hosts remotos. Si la tarea los requiriera, dilo y termina — el hilo principal lo hará con confirmación del operador.\n\nCuando tengas lo necesario, responde con un resumen conciso y estructurado (máximo 400 palabras, sin tags de herramientas en la respuesta final):\n\n${fInstruction}`;
+                        // Las prohibiciones van con los nombres EXACTOS de las etiquetas y
+                        // primero. En la primera prueba real, dos de cuatro sub-agentes
+                        // fueron directos a <EXECUTE_CMD> pese a que el prompt decía que no
+                        // tenían shell: el system prompt completo se lo ofrece, y una
+                        // negación genérica no compite con un catálogo entero. Nombrar la
+                        // etiqueta concreta es lo que la hace reconocible.
+                        // Y "una sola vez": otros dos repitieron la misma lectura hasta
+                        // agotar los pasos, sin darse cuenta de que ya la tenían.
+                        const _fPrompt = `[BACKGROUND SUBTASK — ID: ${fTaskId}]\n\n`
+                            + `Eres un agente de investigación en segundo plano con acceso de SOLO LECTURA.\n\n`
+                            + `PROHIBIDO en este contexto — su uso aborta tu tarea: <EXECUTE_CMD>, <EXECUTE>, <PLAN>, writefile, editfile, y cualquier comando de PowerShell o CMD. No tienes shell ni acceso a hosts remotos.\n\n`
+                            + `ÚNICAS herramientas disponibles: ${_fTools}\n\n`
+                            + `Reglas: usa como máximo 4 pasos; NO repitas una herramienta que ya ejecutaste (su salida ya está en tu contexto — vuelve a leerla en vez de pedirla otra vez); en cuanto tengas datos suficientes, responde.\n\n`
+                            + `Si la tarea exigiera una acción prohibida, NO la intentes: informa de qué falta y entrega lo que sí hayas podido averiguar — el hilo principal la ejecutará con confirmación del operador.\n\n`
+                            + `Respuesta final: resumen conciso y estructurado, máximo 400 palabras, sin etiquetas de herramienta.\n\nTAREA:\n${fInstruction}`;
                         const _fCtx = agentCtx.substring(Math.max(0, agentCtx.length - 3000));
                         // Persistir en SQLite inmediatamente como 'running'.
                         // parentTaskId: si hay un fork "padre" activo en este loop, lo asociamos.
@@ -7990,11 +8004,17 @@ Use ONE of these patterns instead:
                             // solo su conclusión: sin eso Lucy no puede juzgar si la
                             // respuesta se apoya en datos reales o en suposiciones.
                             const trail = res.steps.length ? `\n\n[herramientas: ${res.steps.join(' ')}]` : '';
+                            // Un fork que tropezó pero alcanzó a recoger datos SÍ tiene algo
+                            // que aportar. Etiquetarlo solo como fallo hacía que Lucy
+                            // descartara información buena y repitiera el trabajo ella misma.
+                            const partial = res.synthesized ? '[PARCIAL] ' : '';
                             const resultStr = res.status === 'blocked'
-                                ? `[SUB-AGENTE BLOQUEADO] Pidió una acción que un agente en segundo plano no ejecuta (${res.blockedBy}). Los sub-agentes son de solo lectura por diseño: si hace falta esa acción, hazla tú en el hilo principal, donde el operador puede confirmarla.\n\n${res.text}${trail}`
+                                ? (res.text
+                                    ? `${partial}El sub-agente no pudo completar la tarea (${res.blockedBy} — los sub-agentes son de solo lectura). Esto es lo que sí alcanzó a recoger; si hace falta la acción bloqueada, hazla en el hilo principal donde el operador puede confirmarla.\n\n${res.text}${trail}`
+                                    : `[SUB-AGENTE BLOQUEADO] Pidió una acción que un agente en segundo plano no ejecuta (${res.blockedBy}) y no llegó a recoger ningún dato. Si hace falta esa acción, hazla tú en el hilo principal.${trail}`)
                                 : res.status === 'max_iterations'
-                                    ? `[SUB-AGENTE INCOMPLETO] Agotó sus ${res.iterations} pasos sin cerrar la tarea.\n\n${res.text}${trail}`
-                                    : `${res.text}${trail}`;
+                                    ? `${partial}El sub-agente agotó sus pasos. Resultado parcial:\n\n${res.text}${trail}`
+                                    : `${partial}${res.text}${trail}`;
                             host.forks[fTaskId].status = 'done';
                             host.forks[fTaskId].result = resultStr;
                             forkFinish(fTaskId, { status: 'done', result: resultStr });
