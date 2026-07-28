@@ -16,6 +16,29 @@
   // más grave— en el informe exportado, que es un documento de cumplimiento:
   // ahí el nombre dice A QUÉ MÁQUINA se le pasaron los controles.
   import { localHostname, ensureLocalHostname, hostLabel } from './host-info';
+  import { hosts } from '$lib/stores';
+
+  // ── Host auditado ─────────────────────────────────────────────────────────
+  let selectedHost = $state('local');
+  let hostMenuOpen = $state(false);
+  const hostList = $derived([
+    { id: 'local', name: '', kind: 'local' },
+    ...$hosts.map((h) => ({ id: h.id, name: h.name, kind: h.type })),
+  ]);
+  const selectedLabel = $derived(
+    selectedHost === 'local'
+      ? hostLabel($localHostname, 'equipo local')
+      : ($hosts.find((h) => h.id === selectedHost)?.name ?? 'Host'),
+  );
+  function pickHost(id) {
+    if (id === selectedHost) { hostMenuOpen = false; return; }
+    selectedHost = id;
+    hostMenuOpen = false;
+    // Un informe de cumplimiento del host anterior bajo el nombre del nuevo
+    // sería un documento falso: limpiar antes de reauditar.
+    results = null; error = ''; live = false; lastScan = '';
+    scan();
+  }
   import { invoke } from '@tauri-apps/api/core';
   import { copyToClipboard } from '$lib/lucy-api';
   import cisWindows from '$lib/compliance/cis-windows.json';
@@ -80,7 +103,7 @@
   }
   function exportReport() {
     if (!results) return;
-    const head = `Compliance CIS — ${hostLabel($localHostname, 'equipo local')} — ${score}% conforme (${pass} conformes · ${warn} avisos · ${fail} fallas)${lastScan ? ` — ${lastScan}` : ''}`;
+    const head = `Compliance CIS — ${selectedLabel} — ${score}% conforme (${pass} conformes · ${warn} avisos · ${fail} fallas)${lastScan ? ` — ${lastScan}` : ''}`;
     const body = results.map((r) => {
       const tag = r.status === 'pass' ? 'OK  ' : r.status === 'fail' ? 'FALLA' : 'AVISO';
       const fix = r.status !== 'pass' && r.remediation ? `\n      ↳ ${r.remediation}` : '';
@@ -103,12 +126,32 @@
     { id: 'fail', label: 'Fallas',    n: fail },
   ]);
 
+  /**
+   * Igual que en Inventario: el backend tenía los tres caminos y esta vista
+   * solo usaba el local. Auditar cumplimiento únicamente en el equipo donde
+   * corre Lucy deja fuera exactamente las máquinas que hay que auditar.
+   */
+  async function runChecksOn(hostId, checksJson) {
+    if (hostId === 'local') return invoke('run_compliance_local', { checksJson });
+    const h = $hosts.find((x) => x.id === hostId);
+    if (!h) throw new Error('Host no encontrado');
+    if (h.type === 'linux') {
+      return invoke('run_compliance_linux', {
+        host: h.host, username: h.username,
+        port: h.port || 22, keyPath: h.sshKeyPath || null, checksJson,
+      });
+    }
+    let pwd = '';
+    try { pwd = await invoke('get_host_credential', { hostId: h.id }); } catch {}
+    return invoke('run_compliance_windows', { host: h.host, username: h.username, password: pwd, checksJson });
+  }
+
   async function scan() {
     if (scanning) return;
     scanning = true; error = '';
     try {
       const checksJson = JSON.stringify(CHECKS.map((c) => ({ id: c.id, command: c.command })));
-      let raw = await invoke('run_compliance_local', { checksJson });
+      let raw = await runChecksOn(selectedHost, checksJson);
       if (!Array.isArray(raw)) raw = [raw];
       results = enrich(raw, false);
       live = true;
@@ -127,7 +170,23 @@
 <div class="cmp">
   <div class="cmp-head">
     <span class="cmp-title">Compliance</span>
-    <span class="host-pill"><ShieldCheck size={14} stroke={1.75} /> CIS · {hostLabel($localHostname)} · {CHECKS.length} checks</span>
+    <span class="host-picker">
+      <button class="host-pill" onclick={() => (hostMenuOpen = !hostMenuOpen)} title="Cambiar host auditado">
+        <ShieldCheck size={14} stroke={1.75} /> CIS · {selectedLabel} · {CHECKS.length} checks
+        {#if hostList.length > 1}<ChevronDown size={13} stroke={1.75} />{/if}
+      </button>
+      {#if hostMenuOpen}
+        <button class="host-backdrop" onclick={() => (hostMenuOpen = false)} aria-label="Cerrar"></button>
+        <div class="host-menu">
+          {#each hostList as h (h.id)}
+            <button class="host-opt" class:sel={h.id === selectedHost} onclick={() => pickHost(h.id)}>
+              <span class="ho-name">{h.id === 'local' ? hostLabel($localHostname, 'Este equipo') : h.name}</span>
+              <span class="ho-kind">{h.kind === 'local' ? 'local' : h.kind === 'windows' ? 'WinRM' : 'SSH'}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </span>
     {#if live && lastScan}<span class="live"><span class="live-dot"></span>escaneado {lastScan}</span>{/if}
     <button class="scan-btn" class:busy={scanning} onclick={scan} disabled={scanning}>
       <ScanSearch size={15} stroke={1.75} /> {scanning ? 'Escaneando…' : 'Escanear'}
@@ -140,7 +199,7 @@
   </div>
 
   {#if !results && scanning}
-    <div class="cmp-loading"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Ejecutando {CHECKS.length} controles CIS en {hostLabel($localHostname, 'este equipo')}…</p></div>
+    <div class="cmp-loading"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Ejecutando {CHECKS.length} controles CIS en {selectedLabel}…</p></div>
   {:else if results}
     <div class="cmp-top">
       <div class="score {scoreBand}">
@@ -216,7 +275,16 @@
 
   .cmp-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
   .cmp-title { font-size: var(--fs-title); font-weight: var(--fw-medium); color: var(--text-primary); }
-  .host-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); }
+  .host-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); cursor: pointer; }
+  .host-pill:hover { color: var(--text-primary); border-color: var(--border-strong); }
+  .host-picker { position: relative; z-index: 5; }
+  .host-backdrop { position: fixed; inset: 0; z-index: 40; background: transparent; border: 0; cursor: default; }
+  .host-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 41; min-width: 220px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); padding: 6px; display: flex; flex-direction: column; gap: 1px; }
+  .host-opt { display: flex; align-items: center; gap: 8px; padding: 7px 9px; background: transparent; border: 0; border-radius: var(--r-sm); cursor: pointer; color: var(--text-secondary); font-size: var(--fs-footnote); text-align: left; }
+  .host-opt:hover { background: var(--surface-3); color: var(--text-primary); }
+  .host-opt.sel { color: var(--accent); }
+  .ho-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ho-kind { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-faint); }
   .live { display: flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--accent); }
   .live-dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--accent); animation: cmp-pulse 1.6s var(--ease-out) infinite; }
   @keyframes cmp-pulse { 0% { box-shadow: 0 0 0 0 rgba(61,214,164,0.5); } 70% { box-shadow: 0 0 0 5px rgba(61,214,164,0); } 100% { box-shadow: 0 0 0 0 rgba(61,214,164,0); } }

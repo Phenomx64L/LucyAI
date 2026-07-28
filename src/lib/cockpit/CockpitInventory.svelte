@@ -13,7 +13,32 @@
   import { localHostname, ensureLocalHostname, hostLabel } from './host-info';
   import { invoke } from '@tauri-apps/api/core';
   import { copyToClipboard } from '$lib/lucy-api';
+  import { hosts } from '$lib/stores';
+
+  // ── Host seleccionado ─────────────────────────────────────────────────────
+  // Mismo modelo que el Dashboard: 'local' o el id de un host configurado.
+  let selectedHost = $state('local');
+  let hostMenuOpen = $state(false);
+  const hostList = $derived([
+    { id: 'local', name: '', kind: 'local' },
+    ...$hosts.map((h) => ({ id: h.id, name: h.name, kind: h.type })),
+  ]);
+  const selectedLabel = $derived(
+    selectedHost === 'local'
+      ? `${hostLabel($localHostname)} · local`
+      : ($hosts.find((h) => h.id === selectedHost)?.name ?? 'Host'),
+  );
+  function pickHost(id) {
+    if (id === selectedHost) { hostMenuOpen = false; return; }
+    selectedHost = id;
+    hostMenuOpen = false;
+    // Los datos del host anterior no describen al nuevo: limpiar antes de
+    // escanear evita mostrar el inventario equivocado bajo un nombre nuevo.
+    snap = null; cve = null; error = ''; live = false;
+    scan();
+  }
   import Server from '@tabler/icons-svelte/icons/server';
+  import ChevronDown from '@tabler/icons-svelte/icons/chevron-down';
   import Search from '@tabler/icons-svelte/icons/search';
   import ScanSearch from '@tabler/icons-svelte/icons/scan';
   import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
@@ -135,11 +160,36 @@
     }
   }
 
+  /**
+   * Ejecuta el descubrimiento contra el host SELECCIONADO, no siempre el local.
+   *
+   * El backend tenía los tres caminos —local, WinRM y SSH— desde el principio;
+   * esta vista solo llamaba al local. En un producto cuyo propósito es
+   * administrar varios equipos, eso dejaba el inventario reducido a la máquina
+   * donde corre Lucy, y a los hosts configurados sin forma de inventariarlos.
+   */
+  async function discoverFor(hostId) {
+    if (hostId === 'local') return invoke('discover_inventory_local');
+    const h = $hosts.find((x) => x.id === hostId);
+    if (!h) throw new Error('Host no encontrado');
+    if (h.type === 'linux') {
+      return invoke('discover_inventory_linux', {
+        host: h.host, username: h.username,
+        port: h.port || 22, keyPath: h.sshKeyPath || null,
+      });
+    }
+    // La contraseña vive en el almacén de credenciales, nunca en el registro
+    // del host — igual que hace el Dashboard para la salud remota.
+    let pwd = '';
+    try { pwd = await invoke('get_host_credential', { hostId: h.id }); } catch {}
+    return invoke('discover_inventory_windows', { host: h.host, username: h.username, password: pwd });
+  }
+
   async function scan() {
     if (scanning) return;
     scanning = true; error = '';
     try {
-      const data = await invoke('discover_inventory_local');
+      const data = await discoverFor(selectedHost);
       snap = {
         ports:     Array.isArray(data.ports)     ? data.ports     : [],
         services:  Array.isArray(data.services)  ? data.services  : [],
@@ -173,7 +223,24 @@
   <div class="inv-head">
     <span class="ck-led" class:on={live && !scanning} class:warn={scanning} class:err={!!error && !scanning}></span>
     <span class="inv-title">Inventario</span>
-    <span class="host-pill"><Server size={14} stroke={1.75} /> {hostLabel($localHostname)} · local</span>
+    <span class="host-picker">
+      <button class="host-pill" onclick={() => (hostMenuOpen = !hostMenuOpen)} title="Cambiar host">
+        <Server size={14} stroke={1.75} /> {selectedLabel}
+        {#if hostList.length > 1}<ChevronDown size={13} stroke={1.75} />{/if}
+      </button>
+      {#if hostMenuOpen}
+        <button class="host-backdrop" onclick={() => (hostMenuOpen = false)} aria-label="Cerrar"></button>
+        <div class="host-menu">
+          {#each hostList as h (h.id)}
+            <button class="host-opt" class:sel={h.id === selectedHost} onclick={() => pickHost(h.id)}>
+              <Server size={14} stroke={1.75} />
+              <span class="ho-name">{h.id === 'local' ? hostLabel($localHostname, 'Este equipo') : h.name}</span>
+              <span class="ho-kind">{h.kind === 'local' ? 'local' : h.kind === 'windows' ? 'WinRM' : 'SSH'}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </span>
     {#if live && lastScan}<span class="live"><span class="live-dot"></span>escaneado {lastScan}</span>{/if}
     <span class="ck-rule" aria-hidden="true"></span>
     <button class="scan-btn" class:busy={scanning} onclick={scan} disabled={scanning}>
@@ -182,7 +249,7 @@
   </div>
 
   {#if !snap && scanning}
-    <div class="inv-loading ck-blueprint"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Escaneando el inventario de {hostLabel($localHostname, 'este equipo')}…</p></div>
+    <div class="inv-loading ck-blueprint"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Escaneando el inventario de {selectedLabel}…</p></div>
   {:else if snap}
     {#if vulnTotal > 0}
       <button class="vuln-alert" style="--sev:{sevColor(topSeverity)}" onclick={() => (activeCat = 'vulns')}>
@@ -304,7 +371,19 @@
 
   .inv-head { display: flex; align-items: center; gap: 12px; padding: 18px 22px 14px; }
   .inv-title { font-size: var(--fs-title); font-weight: var(--fw-medium); color: var(--text-primary); }
-  .host-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); }
+  .host-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); cursor: pointer; }
+  .host-pill:hover { color: var(--text-primary); border-color: var(--border-strong); }
+  /* z-index 5 por la misma razón que en el Dashboard: `.inv > *` recibe una
+     animación de entrada con transform, y sin esto el menú queda por debajo de
+     las tarjetas siguientes. */
+  .host-picker { position: relative; z-index: 5; }
+  .host-backdrop { position: fixed; inset: 0; z-index: 40; background: transparent; border: 0; cursor: default; }
+  .host-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 41; min-width: 230px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); padding: 6px; display: flex; flex-direction: column; gap: 1px; }
+  .host-opt { display: flex; align-items: center; gap: 8px; padding: 7px 9px; background: transparent; border: 0; border-radius: var(--r-sm); cursor: pointer; color: var(--text-secondary); font-size: var(--fs-footnote); text-align: left; }
+  .host-opt:hover { background: var(--surface-3); color: var(--text-primary); }
+  .host-opt.sel { color: var(--accent); }
+  .ho-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ho-kind { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-faint); }
   .live { display: flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--accent); }
   .live-dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--accent); animation: inv-pulse 1.6s var(--ease-out) infinite; }
   @keyframes inv-pulse { 0% { box-shadow: 0 0 0 0 rgba(61,214,164,0.5); } 70% { box-shadow: 0 0 0 5px rgba(61,214,164,0); } 100% { box-shadow: 0 0 0 0 rgba(61,214,164,0); } }
