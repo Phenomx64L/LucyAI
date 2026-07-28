@@ -28,10 +28,28 @@ else
     R=''; G=''; Y=''; B=''; N=''
 fi
 
-# Resolve repo root from the hook's own location so this works regardless of
-# the cwd git invoked us from.
-HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
-REPO_ROOT=$(cd "$HOOK_DIR/.." && pwd)
+# Resolve the repo root of the tree BEING COMMITTED.
+#
+# This used to derive it from the hook's own location:
+#
+#     HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
+#     REPO_ROOT=$(cd "$HOOK_DIR/.." && pwd)
+#
+# which is wrong under `git worktree`. `core.hooksPath` is a single absolute
+# path shared by every worktree, so $0 always pointed at the MAIN checkout no
+# matter which tree was committing — and every check below then ran against
+# main's files instead of the ones in the commit. The hook reported green while
+# testing code that was not being committed, which is worse than no hook: it
+# looks like a passing gate.
+#
+# `git rev-parse --show-toplevel` resolves the working tree git is actually
+# committing from, worktree or not. Fall back to the old derivation only if
+# rev-parse fails, so a broken git still gets *some* root rather than running
+# the suite against whatever cwd it inherited.
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || REPO_ROOT=""
+if [ -z "$REPO_ROOT" ]; then
+    REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+fi
 cd "$REPO_ROOT"
 
 # What's staged? Diff against the index, name-only.
