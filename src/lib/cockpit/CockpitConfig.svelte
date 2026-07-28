@@ -17,6 +17,8 @@
   import Cpu from '@tabler/icons-svelte/icons/cpu';
   import Key from '@tabler/icons-svelte/icons/key';
   import Bell from '@tabler/icons-svelte/icons/bell';
+  import Plug from '@tabler/icons-svelte/icons/plug';
+  import { loadMcpSecrets } from '$lib/page/mcp-secrets';
   import ShieldLock from '@tabler/icons-svelte/icons/shield-lock';
   import Database from '@tabler/icons-svelte/icons/database';
   import Palette from '@tabler/icons-svelte/icons/palette';
@@ -110,6 +112,43 @@
     finally { bBusy = false; }
   }
 
+  // ── Servidores MCP ──────────────────────────────────────────────────────────
+  // MCP es LA superficie de integración de Lucy y estaba en cero en el cockpit:
+  // el cliente completo (list/upsert/test/discover/call, pool y presupuesto) ya
+  // existía y solo se alcanzaba desde la UI clásica. Aquí no se construye
+  // ninguna integración — se hacen visibles y verificables las que ya hay.
+  //
+  // Alta y edición siguen en el modal clásico a propósito: son 872 líneas de
+  // formulario (comando, transporte, variables de entorno, secretos) y
+  // reimplementarlas para el cockpit duplicaría la superficie que más cuesta
+  // mantener. Este panel responde lo que un operador pregunta a diario —
+  // ¿qué hay conectado, funciona, y qué herramientas expone?
+  let mcpServers = $state([]);
+  let mcpBusy = $state(null);      // nombre del servidor en prueba
+  let mcpOpen = $state(null);      // nombre del servidor desplegado
+  let mcpMsg = $state(null);       // { name, ok, text }
+
+  const mcpToolCount = (s) => (Array.isArray(s?.tools_cache) ? s.tools_cache.length : 0);
+
+  async function loadMcp() {
+    try { const l = await invoke('mcp_server_list'); mcpServers = Array.isArray(l) ? l : []; }
+    catch { mcpServers = []; }
+  }
+  /** Prueba y descubrimiento comparten la resolución de secretos: sin ella un
+   *  servidor que necesita una API key falla con un error que parece de red. */
+  async function mcpRun(cmd, name) {
+    mcpBusy = name; mcpMsg = null;
+    try {
+      const env = await loadMcpSecrets().catch(() => ({}));
+      const r = await invoke(cmd, { name, env });
+      await loadMcp();
+      const tools = cmd === 'mcp_server_discover' ? mcpToolCount(r) : null;
+      mcpMsg = { name, ok: true, text: tools != null ? `${tools} herramienta(s) descubierta(s).` : 'Conexión correcta.' };
+    } catch (e) {
+      mcpMsg = { name, ok: false, text: String(e).slice(0, 200) };
+    } finally { mcpBusy = null; }
+  }
+
   let spendCap = $state(0);
   function saveSpendCap() { const n = Math.max(0, Number(spendCap) || 0); spendCap = n; try { localStorage.setItem('lucy_spend_cap_usd', String(n)); } catch {} }
 
@@ -173,6 +212,7 @@
     // Si falla, las filas muestran «no disponible» — nunca una ruta inventada.
     try { const info = await invoke('db_info'); if (info?.path) dbPath = String(info.path); } catch {}
     await loadBridge();
+    await loadMcp();
     try { spendCap = parseFloat(localStorage.getItem('lucy_spend_cap_usd') || '0') || 0; } catch {}
     try {
       const all = await ensureTtsVoices();
@@ -349,6 +389,63 @@
       </div>
     </section>
 
+    <!-- Servidores MCP -->
+    <section class="panel span-2">
+      <div class="panel-head"><Plug size={16} stroke={1.75} /> Servidores MCP
+        <button class="head-btn" onclick={() => onOpenSettings?.()}>Gestionar</button>
+      </div>
+      {#if mcpServers.length === 0}
+        <div class="note" style="margin-top:0">
+          Ningún servidor configurado. MCP es la vía por la que Lucy habla con herramientas
+          externas — sistemas de tickets, repositorios, bases de datos — sin escribir código
+          para cada una. Se añaden desde «Gestionar».
+        </div>
+      {:else}
+        <div class="rows">
+          {#each mcpServers as s (s.id)}
+            <div class="row col mcp-row">
+              <div class="mcp-line">
+                <!-- El estado va en un punto: una lista de filas de color compite
+                     con los propios paneles y deja de leerse como estado. -->
+                <span class="mcp-dot {s.last_status}" title={s.last_error || s.last_status}></span>
+                <span class="mcp-name" class:off={!s.enabled}>{s.name}</span>
+                {#if !s.enabled}<span class="mcp-tag">desactivado</span>{/if}
+                {#if mcpToolCount(s) > 0}
+                  <button class="mcp-tools" onclick={() => (mcpOpen = mcpOpen === s.name ? null : s.name)}>
+                    {mcpToolCount(s)} herramienta{mcpToolCount(s) === 1 ? '' : 's'}
+                  </button>
+                {/if}
+                {#if s.last_latency_ms != null}<span class="mcp-lat">{s.last_latency_ms} ms</span>{/if}
+                <span class="mcp-acts">
+                  <button class="b-btn" disabled={mcpBusy === s.name} onclick={() => mcpRun('mcp_server_test', s.name)}>Probar</button>
+                  <button class="b-btn" disabled={mcpBusy === s.name} onclick={() => mcpRun('mcp_server_discover', s.name)}>Descubrir</button>
+                </span>
+              </div>
+              <div class="mcp-cmd" title={s.command}>{s.command}</div>
+              {#if s.last_status === 'error' && s.last_error}
+                <div class="b-msg bad">{s.last_error}</div>
+              {/if}
+              {#if mcpMsg && mcpMsg.name === s.name}
+                <div class="b-msg" class:bad={!mcpMsg.ok}>{mcpMsg.text}</div>
+              {/if}
+              {#if mcpOpen === s.name && mcpToolCount(s) > 0}
+                <div class="mcp-tool-list">
+                  {#each s.tools_cache as t}
+                    <span class="mcp-tool" title={t.description || ''}>{t.name}</span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        <div class="note">
+          «Descubrir» vuelve a preguntar al servidor qué herramientas expone y refresca
+          la caché que usa el agente. Los secretos se resuelven desde el almacén de
+          credenciales — nunca se escriben en la configuración del servidor.
+        </div>
+      {/if}
+    </section>
+
     <!-- Guardarraíles -->
     <section class="panel span-2">
       <div class="panel-head"><ShieldLock size={16} stroke={1.75} /> Guardarraíles de seguridad</div>
@@ -477,6 +574,34 @@
     word-break: break-word;
   }
   .b-msg.bad { color: var(--danger); background: rgba(240,110,110,0.10); border-color: var(--danger); }
+
+  /* ── Servidores MCP ───────────────────────────────────────────────────── */
+  .mcp-row { gap: 5px; }
+  .mcp-line { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .mcp-dot { width: 7px; height: 7px; border-radius: var(--r-pill); flex-shrink: 0; background: var(--text-disabled); }
+  .mcp-dot.ok { background: var(--accent); }
+  .mcp-dot.error { background: var(--danger); }
+  .mcp-dot.pending { background: #E5B567; }
+  .mcp-name { font-size: var(--fs-footnote); color: var(--text-primary); }
+  .mcp-name.off { color: var(--text-faint); text-decoration: line-through; }
+  .mcp-tag { font-size: var(--fs-caption); color: var(--text-faint); background: var(--surface-3); padding: 1px 7px; border-radius: var(--r-pill); }
+  .mcp-tools {
+    font-size: var(--fs-caption); color: var(--accent); background: var(--accent-bg);
+    border: 1px solid var(--accent-line); border-radius: var(--r-pill);
+    padding: 1px 9px; cursor: pointer;
+  }
+  .mcp-lat { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+  .mcp-acts { margin-left: auto; display: flex; gap: 6px; }
+  .mcp-cmd {
+    font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
+  .mcp-tool-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+  .mcp-tool {
+    font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-secondary);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: 2px 7px;
+  }
   .row-warn {
     display: flex; align-items: flex-start; gap: 7px;
     margin: 2px 0 8px; padding: 8px 11px;
