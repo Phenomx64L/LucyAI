@@ -11,6 +11,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { copyToClipboard } from '$lib/lucy-api';
+  import { hosts } from '$lib/stores';
   import FileText from '@tabler/icons-svelte/icons/file-text';
   import Search from '@tabler/icons-svelte/icons/search';
   import AlertTriangle from '@tabler/icons-svelte/icons/alert-triangle';
@@ -63,20 +64,98 @@
   }
   const normalize = (e, i) => ({ id: e.id ?? -i, t: fmtTime(e), lv: levelOf(e), src: e.source || 'lucy', m: e.command || e.output_preview || '' });
 
+  // ── Modo ARCHIVO ──────────────────────────────────────────────────────────
+  // El cockpit solo mostraba la auditoría de Lucy. Leer un fichero de log —lo
+  // que un SysAdmin hace a diario, y lo que sí existía en la UI clásica— no
+  // tenía superficie en V2, ni local ni remota, pese a que los tres comandos
+  // (`read_log_tail`, `read_remote_log_windows`, `read_remote_log_linux`) están
+  // registrados desde siempre.
+  //
+  // Dos modos y no dos módulos: la auditoría responde "qué hizo Lucy" y el
+  // archivo "qué dice el sistema". Son la misma pregunta desde dos lados y se
+  // consultan en la misma sesión.
+  let mode = $state('audit');            // 'audit' | 'file'
+  let logPath = $state('');
+  let tailLines = $state(200);
+  let selectedHost = $state('local');
+  let hostMenuOpen = $state(false);
+  const hostList = $derived([
+    { id: 'local', name: 'Este equipo', kind: 'local' },
+    ...$hosts.map((h) => ({ id: h.id, name: h.name, kind: h.type })),
+  ]);
+  const hostLabelFor = $derived(
+    selectedHost === 'local' ? 'Este equipo'
+      : ($hosts.find((h) => h.id === selectedHost)?.name ?? 'Host'),
+  );
+
+  async function readFileLog() {
+    const path = logPath.trim();
+    if (!path) { rows = []; live = false; return; }
+    let lines;
+    if (selectedHost === 'local') {
+      lines = await invoke('read_log_tail', { path, lines: tailLines });
+    } else {
+      const h = $hosts.find((x) => x.id === selectedHost);
+      if (!h) throw new Error('Host no encontrado');
+      if (h.type === 'linux') {
+        lines = await invoke('read_remote_log_linux', {
+          host: h.host, username: h.username, path, lines: tailLines,
+          port: h.port || 22, keyPath: h.sshKeyPath || null,
+        });
+      } else {
+        let pwd = '';
+        try { pwd = await invoke('get_host_credential', { hostId: h.id }); } catch {}
+        lines = await invoke('read_remote_log_windows', { host: h.host, username: h.username, password: pwd, path, lines: tailLines });
+      }
+    }
+    // Las líneas crudas no traen nivel; se deriva del texto con el mismo
+    // criterio que ya usa `levelOf` para la auditoría, en vez de inventar otro.
+    const arr = Array.isArray(lines) ? lines : [];
+    rows = arr.map((ln, i) => {
+      const s = String(ln);
+      const low = s.toLowerCase();
+      const lv = /\b(error|fatal|fail|denied|exception)\b/.test(low) ? 'error'
+        : /\b(warn|warning|advertenc|aviso|deprecat)\b/.test(low) ? 'warn' : 'info';
+      return { id: -(i + 1), t: '', lv, src: hostLabelFor, m: s };
+    }).reverse();   // más reciente arriba, como la auditoría
+  }
+
+  function pickHost(id) {
+    if (id !== selectedHost) { selectedHost = id; rows = []; live = false; if (mode === 'file') load(); }
+    hostMenuOpen = false;
+  }
+  function setMode(m) {
+    if (m === mode) return;
+    mode = m; rows = []; live = false; lastUpdate = '';
+    load();
+  }
+
   async function load() {
     loading = true;
     try {
+      if (mode === 'file') {
+        await readFileLog();
+        live = !!logPath.trim();
+        lastUpdate = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return;
+      }
       const res = await invoke('query_audit_trail', { limit: 200 });
       const entries = Array.isArray(res?.entries) ? res.entries : Array.isArray(res) ? res : [];
       rows = entries.map(normalize);
       live = true;
       lastUpdate = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch {
-      if (!rows) rows = SAMPLE;
+    } catch (e) {
+      // En modo archivo un fallo es informativo (ruta inexistente, permisos,
+      // host caído) y hay que decirlo: caer al SAMPLE fingiría datos de un
+      // fichero que no se pudo leer.
+      if (mode === 'file') { rows = []; live = false; fileError = String(e); }
+      else if (!rows) rows = SAMPLE;
     } finally {
       loading = false;
+      if (mode === 'file' && !loading) { /* fileError se limpia al reintentar */ }
     }
   }
+  let fileError = $state('');
 
   const counts = $derived.by(() => {
     const l = rows || [];
@@ -119,7 +198,33 @@
   <div class="logs-head">
     <span class="ck-led" class:on={live && !paused} class:warn={live && paused} aria-hidden="true"></span>
     <span class="logs-title">Visor de logs</span>
-    <span class="src-pill"><FileText size={14} stroke={1.75} /> audit trail</span>
+    <span class="mode-seg">
+      <button class="mode-btn" class:on={mode === 'audit'} onclick={() => setMode('audit')}>Auditoría</button>
+      <button class="mode-btn" class:on={mode === 'file'} onclick={() => setMode('file')}>Archivo</button>
+    </span>
+    {#if mode === 'file'}
+      <span class="host-picker">
+        <button class="src-pill" onclick={() => (hostMenuOpen = !hostMenuOpen)} title="Cambiar host">
+          <FileText size={14} stroke={1.75} /> {hostLabelFor}
+        </button>
+        {#if hostMenuOpen}
+          <button class="host-backdrop" onclick={() => (hostMenuOpen = false)} aria-label="Cerrar"></button>
+          <div class="host-menu">
+            {#each hostList as h (h.id)}
+              <button class="host-opt" class:sel={h.id === selectedHost} onclick={() => pickHost(h.id)}>
+                <span class="ho-name">{h.name}</span>
+                <span class="ho-kind">{h.kind === 'local' ? 'local' : h.kind === 'windows' ? 'WinRM' : 'SSH'}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </span>
+      <input class="path-input" bind:value={logPath} placeholder={selectedHost === 'local' ? 'C:\\ruta\\al\\archivo.log' : '/var/log/syslog'}
+        onkeydown={(e) => { if (e.key === 'Enter') { fileError = ''; load(); } }} />
+      <button class="logs-tool" onclick={() => { fileError = ''; load(); }} title="Leer">↻</button>
+    {:else}
+      <span class="src-pill"><FileText size={14} stroke={1.75} /> audit trail</span>
+    {/if}
     {#if live && lastUpdate}
       <span class="live" class:paused>{#if paused}⏸ pausado · {lastUpdate}{:else}<span class="live-dot"></span>en vivo · {lastUpdate}{/if}</span>
     {/if}
@@ -132,6 +237,13 @@
       </button>
     </span>
   </div>
+
+  <!-- Un fallo leyendo un archivo es información útil —ruta inexistente,
+       permisos, host inalcanzable— y hay que mostrarla, no dejar la lista
+       vacía sin explicación. -->
+  {#if mode === 'file' && fileError}
+    <div class="file-err">No se pudo leer <b>{logPath}</b> en {hostLabelFor}: {fileError}</div>
+  {/if}
 
   <div class="logs-toolbar">
     <div class="filters">
@@ -172,7 +284,28 @@
 
   .logs-head { display: flex; align-items: center; gap: 12px; padding: 18px 22px 14px; }
   .logs-title { font-size: var(--fs-title); font-weight: var(--fw-medium); color: var(--text-primary); }
-  .src-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); font-family: var(--font-mono); }
+  .src-pill { display: flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: var(--r-sm); font-family: var(--font-mono); cursor: pointer; }
+  .mode-seg { display: flex; gap: 3px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 2px; }
+  .mode-btn { font-size: var(--fs-caption); color: var(--text-muted); background: transparent; border: 0; border-radius: var(--r-sm); padding: 4px 11px; cursor: pointer; }
+  .mode-btn:hover { color: var(--text-primary); }
+  .mode-btn.on { color: var(--accent-ink); background: var(--accent); }
+  .path-input {
+    flex: 1; min-width: 160px; max-width: 420px;
+    background: var(--surface-2); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+    font-family: var(--font-mono); font-size: var(--fs-caption);
+    padding: 5px 9px; outline: 0;
+  }
+  .path-input:focus { border-color: var(--border-accent); }
+  .host-picker { position: relative; z-index: 5; }
+  .host-backdrop { position: fixed; inset: 0; z-index: 40; background: transparent; border: 0; cursor: default; }
+  .host-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 41; min-width: 210px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); padding: 6px; display: flex; flex-direction: column; gap: 1px; }
+  .host-opt { display: flex; align-items: center; gap: 8px; padding: 7px 9px; background: transparent; border: 0; border-radius: var(--r-sm); cursor: pointer; color: var(--text-secondary); font-size: var(--fs-footnote); text-align: left; }
+  .host-opt:hover { background: var(--surface-3); color: var(--text-primary); }
+  .host-opt.sel { color: var(--accent); }
+  .ho-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ho-kind { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text-faint); }
+  .file-err { margin: 0 0 12px; padding: 9px 13px; background: rgba(240,110,110,0.10); border: 1px solid var(--danger); border-radius: var(--r-md); font-size: var(--fs-caption); color: var(--text-secondary); word-break: break-word; }
   .live { display: flex; align-items: center; gap: 6px; font-size: var(--fs-caption); color: var(--accent); }
   .live-dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--accent); animation: logs-pulse 1.6s var(--ease-out) infinite; }
   @keyframes logs-pulse { 0% { box-shadow: 0 0 0 0 rgba(61,214,164,0.5); } 70% { box-shadow: 0 0 0 5px rgba(61,214,164,0); } 100% { box-shadow: 0 0 0 0 rgba(61,214,164,0); } }
