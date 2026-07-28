@@ -93,6 +93,51 @@ describe('createRecordingHost', () => {
         ]);
     });
 
+    it('records checkpoint persistence (Phase 5)', () => {
+        const host = createRecordingHost();
+        host.saveCheckpoint('t1', { step: 3, goal: 'audit the DC' });
+        host.clearCheckpoint('t1');
+
+        expect(host.callsTo('saveCheckpoint')[0].args).toEqual(['t1', { step: 3, goal: 'audit the DC' }]);
+        expect(host.callsTo('clearCheckpoint')[0].args).toEqual(['t1']);
+    });
+
+    it('forks is a shared mutable registry, not a snapshot', () => {
+        // The production binding hands over the component's `forkedTasks` object
+        // BY REFERENCE. A fork is started in one turn and collected by
+        // `wait_task` in a later one, so a copy would lose the result: the
+        // second turn would find the entry still 'running' forever.
+        const host = createRecordingHost();
+        const p = Promise.resolve('done');
+
+        host.forks['task-1'] = { promise: p, status: 'running', result: null };
+        expect(host.forks['task-1'].status).toBe('running');
+
+        host.forks['task-1'].status = 'done';
+        host.forks['task-1'].result = 'RAM: 32GB';
+
+        expect(host.forks['task-1'].status).toBe('done');
+        expect(host.forks['task-1'].result).toBe('RAM: 32GB');
+    });
+
+    it('counts running forks the way the loop gates on concurrency', () => {
+        const host = createRecordingHost();
+        host.forks.a = { promise: Promise.resolve(1), status: 'running', result: null };
+        host.forks.b = { promise: Promise.resolve(2), status: 'done', result: 'x' };
+        host.forks.c = { promise: Promise.resolve(3), status: 'running', result: null };
+
+        const running = Object.values(host.forks).filter((f) => f.status === 'running').length;
+        expect(running).toBe(2);
+    });
+
+    it('each double gets its own forks — no leakage between tests', () => {
+        const a = createRecordingHost();
+        const b = createRecordingHost();
+        a.forks.x = { promise: Promise.resolve(1), status: 'running', result: null };
+
+        expect(Object.keys(b.forks)).toEqual([]);
+    });
+
     it('invoke resolves undefined by default', async () => {
         const host = createRecordingHost();
         await expect(host.invoke('get_system_health')).resolves.toBeUndefined();

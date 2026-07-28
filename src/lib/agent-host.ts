@@ -102,6 +102,20 @@ export interface LearnRequest {
 }
 
 /**
+ * One background fork started by `<TOOL>fork_task:…</TOOL>`.
+ *
+ * `promise` is what a later `wait_task` awaits — which is why the registry
+ * below cannot live inside runAI(): the fork is started in one turn and
+ * collected in another, so it must outlive the call that created it.
+ */
+export interface ForkEntry {
+    promise: Promise<any>;
+    status: 'running' | 'done' | 'error';
+    result: string | null;
+    dbId?: number | string | null;
+}
+
+/**
  * Everything runAI() needs from its environment.
  *
  * Grouped by concern so a phase being migrated can declare the narrow slice it
@@ -153,6 +167,27 @@ export interface AgentHost {
      * operator's answer is what commits it to memory.
      */
     confirmLearn(req: LearnRequest): void;
+
+    // ── Agent checkpoints (Phase 5) ─────────────────────────────────────────
+    /**
+     * Persist in-flight agent state so a crash mid-turn can be recovered.
+     * Written once the loop commits to a multi-step plan.
+     */
+    saveCheckpoint(tabId: string | number, data: Record<string, unknown>): void;
+    /** Drop a tab's checkpoint — the turn finished, there is nothing to recover. */
+    clearCheckpoint(tabId: string | number): void;
+
+    // ── Background forks (Phase 5) ──────────────────────────────────────────
+    /**
+     * Registry of running/finished forks, keyed by task id.
+     *
+     * Deliberately a PLAIN MUTABLE OBJECT rather than get/set methods: runAI()
+     * mutates it by index (`forks[id].status = 'done'`), and wrapping that in
+     * an accessor API would be a redesign, not the mechanical move these phases
+     * commit to. The environment owns it because a fork outlives the turn that
+     * started it.
+     */
+    forks: Record<string, ForkEntry>;
 
     // ── Telemetry ───────────────────────────────────────────────────────────
     logTaskEvent(
@@ -241,6 +276,10 @@ export function createRecordingHost(overrides: AgentHostOverrides = {}): Recordi
         confirmRunAs: rec('confirmRunAs'),
         confirmSecurityBlock: rec('confirmSecurityBlock'),
         confirmLearn: rec('confirmLearn'),
+        saveCheckpoint: rec('saveCheckpoint'),
+        clearCheckpoint: rec('clearCheckpoint'),
+        // Fresh per double, so one test's forks never leak into the next.
+        forks: {},
         logTaskEvent: rec('logTaskEvent'),
         invoke: async (cmd, args) => {
             calls.push({ method: 'invoke', args: [cmd, args] });

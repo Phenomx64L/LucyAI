@@ -5201,6 +5201,14 @@ REGLAS DE FORMATO:
             pendingLearnSpeak = req.doSpeak;
             $showLearnConfirm = true;
         },
+        // Phase 5 — checkpoint persistence and the fork registry.
+        // `forks` is the component's own `forkedTasks` object BY REFERENCE, not
+        // a copy: runAI() mutates it by index, and a fork started in one turn is
+        // collected by `wait_task` in a later one, so both sides must see the
+        // same object.
+        saveCheckpoint:  (tabId, data) => saveAgentCheckpoint(tabId, data),
+        clearCheckpoint: (tabId) => clearAgentCheckpoint(tabId),
+        forks: forkedTasks,
         logTaskEvent: (eventType, subtype, elapsedMs, metadata, tabId) => logTaskEvent(eventType, subtype, elapsedMs, metadata, tabId),
         invoke:       (cmd, args) => invoke(cmd, args),
     };
@@ -5898,7 +5906,7 @@ REGLAS DE FORMATO:
             }
             // Initial state: show "thinking dots" until the first token arrives, then
             // they're replaced by streamed text + the cursor. Gives feedback during TTFT.
-            t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: ahora() });
+            t.messages.push({ id: streamMsgId, role: 'streaming', html: '<div class="mn">Lucy</div><span class="stream-thinking" aria-label="Lucy is thinking"><span></span><span></span><span></span></span>', time: formatTime(agentEnv.lang) });
             if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId) statusPatch({ running: true }); // cockpit preview — mark the agent as running (rail pulse + footer)
             host.refresh(); await host.scrollChat();
 
@@ -7391,7 +7399,7 @@ Use ONE of these patterns instead:
                         if (_spendCap > 0 && agentEnv.sessionSpendUsd >= _spendCap) {
                             finishReasoning();
                             renderAgentTask(`\n\n> [!WARNING]\n> **Límite de gasto de sesión alcanzado** (~$${agentEnv.sessionSpendUsd.toFixed(2)} de $${_spendCap.toFixed(2)}). Detuve la tarea automática para no seguir gastando tokens de la nube. Sube el límite con \`/spend-cap <usd>\` (o \`/spend-cap reset\` para reiniciar el contador) y reintenta.`);
-                            clearAgentCheckpoint(tabId);
+                            host.clearCheckpoint(tabId);
                             break;
                         }
                     }
@@ -7866,13 +7874,13 @@ Use ONE of these patterns instead:
                         const fInstruction = forkM[2].trim();
 
                         // Verificar si ya existe (en memoria o en SQLite)
-                        if (forkedTasks[fTaskId]) {
+                        if (host.forks[fTaskId]) {
                             toolResults.push(`[FORK: ${fTaskId}]\nYa existe una tarea con ese ID en esta sesión. Usa <TOOL>wait_task:${fTaskId}</TOOL> para recuperar su resultado.`);
                             continue;
                         }
 
                         // Límite de concurrencia
-                        const runningCount = Object.values(forkedTasks).filter(f => f.status === 'running').length;
+                        const runningCount = Object.values(host.forks).filter(f => f.status === 'running').length;
                         if (runningCount >= MAX_CONCURRENT_FORKS) {
                             toolResults.push(`[FORK BLOCKED: ${fTaskId}]\nLímite de ${MAX_CONCURRENT_FORKS} forks simultáneos alcanzado. Espera que alguno termine antes de lanzar más.`);
                             continue;
@@ -7930,8 +7938,8 @@ Use ONE of these patterns instead:
                             images: null
                         }).then(r => {
                             const resultStr = String(r);
-                            forkedTasks[fTaskId].status = 'done';
-                            forkedTasks[fTaskId].result = resultStr;
+                            host.forks[fTaskId].status = 'done';
+                            host.forks[fTaskId].result = resultStr;
                             // Estimación de tokens — 4 chars/token approx
                             const tIn  = Math.ceil((_fPrompt.length + _fCtx.length) / 4);
                             const tOut = Math.ceil(resultStr.length / 4);
@@ -7950,8 +7958,8 @@ Use ONE of these patterns instead:
                             return resultStr;
                         }).catch(e => {
                             const errStr = String(e);
-                            forkedTasks[fTaskId].status = 'error';
-                            forkedTasks[fTaskId].result = errStr;
+                            host.forks[fTaskId].status = 'error';
+                            host.forks[fTaskId].result = errStr;
                             // Persistir error en SQLite (no token data on failure)
                             host.invoke('fork_update', {
                                 taskId: fTaskId, status: 'error',
@@ -7965,7 +7973,7 @@ Use ONE of these patterns instead:
                             return `[ERROR en sub-tarea] ${errStr}`;
                         });
 
-                        forkedTasks[fTaskId] = { promise: _fPromise, status: 'running', result: null, dbId: fDbId };
+                        host.forks[fTaskId] = { promise: _fPromise, status: 'running', result: null, dbId: fDbId };
                         toolResults.push(`[FORK LAUNCHED: ${fTaskId}] — modelo: ${forkModel}\nSub-tarea iniciada en segundo plano (resultado persiste en SQLite). Continúa con tus siguientes acciones. Usa <TOOL>wait_task:${fTaskId}</TOOL> en un paso posterior para obtener el resultado.`);
                     }
 
@@ -7981,8 +7989,8 @@ Use ONE of these patterns instead:
                                 renderAgentTask();
 
                                 // 1. En memoria (sesión actual)
-                                if (forkedTasks[wTaskId]) {
-                                    const result = await forkedTasks[wTaskId].promise;
+                                if (host.forks[wTaskId]) {
+                                    const result = await host.forks[wTaskId].promise;
                                     return `[SUBTASK RESULT: ${wTaskId}]\n${result}`;
                                 }
 
@@ -8523,7 +8531,7 @@ Use ONE of these patterns instead:
                     const cleanText = lucyText.replace(/<TOOL>[\s\S]*?<\/TOOL>/gi,'').replace('__TRUNCATED__','').trim();
 
                     // ── Checkpoint per iteration (survive reload/HMR mid-task) ──
-                    saveAgentCheckpoint(tabId, {
+                    host.saveCheckpoint(tabId, {
                         loop_i, goal: originalUserGoal, stepsHtml, agentCtx,
                         editCountsByPath, toolCallCounts, filesMod, agentToolCards,
                         model: getEffectiveModel(t), title: t.titulo || ''
@@ -8686,7 +8694,7 @@ Use ONE of these patterns instead:
                                 const badge = `<span class="verify-badge ok" title="${isEN ? 'Reviewed by ' + verModel : 'Revisado por ' + verModel}">✓ ${isEN ? 'verified' : 'verificado'}</span>`;
                                 finishReasoning();
                                 renderAgentTask(cleanText + '\n' + badge);
-                                clearAgentCheckpoint(tabId);
+                                host.clearCheckpoint(tabId);
                                 break;
                             } else {
                                 // Concerns found → feed them back to the main agent for ONE refinement pass.
@@ -8728,7 +8736,7 @@ Use ONE of these patterns instead:
                                     const badge = `<span class="verify-badge warn" title="${esc(concerns).slice(0,200)}">⚠ ${isEN ? 'concerns noted' : 'observaciones'}</span>`;
                                     finishReasoning();
                                     renderAgentTask(cleanText + '\n' + badge + `<div class="verify-concerns"><strong>${isEN ? 'Verifier concerns' : 'Observaciones del verificador'}</strong>${esc(concerns).replace(/\n/g, '<br>')}</div>`);
-                                    clearAgentCheckpoint(tabId);
+                                    host.clearCheckpoint(tabId);
                                     break;
                                 }
                             }
@@ -8740,7 +8748,7 @@ Use ONE of these patterns instead:
                             ? `\n<span class="verify-badge refined" title="${isEN ? 'Refined after self-review' : 'Refinada tras auto-revisión'}">✦ ${isEN ? 'refined' : 'refinada'}</span>`
                             : '';
                         renderAgentTask(cleanText + refinedBadge);
-                        clearAgentCheckpoint(tabId);
+                        host.clearCheckpoint(tabId);
                         break;  // ← Only exit if NO tools used AND no work remaining indicators
                     }
                     
@@ -9107,7 +9115,7 @@ times the SAME way, switch tool kind entirely.
                         renderAgentTask(isEN
                             ? `The model returned an empty response mid-task, so I stopped instead of looping or reporting a false success. The steps I completed are shown above — you can retry, rephrase, or switch models.`
                             : `El modelo devolvió una respuesta vacía a mitad de la tarea, así que me detuve en lugar de seguir en bucle o reportar un éxito falso. Los pasos que completé están arriba — puedes reintentar, reformular o cambiar de modelo.`);
-                        clearAgentCheckpoint(tabId);
+                        host.clearCheckpoint(tabId);
                         break;
                     }
 
@@ -9237,7 +9245,7 @@ times the SAME way, switch tool kind entirely.
                                     : `Completé el trabajo de arriba pero me detuve antes de resumir (me estaba repitiendo). Revisa los resultados arriba.`);
                             }
                             renderAgentTask(_finalStuck);
-                            clearAgentCheckpoint(tabId);
+                            host.clearCheckpoint(tabId);
                             break;
                         }
                     } else {
@@ -9301,7 +9309,7 @@ times the SAME way, switch tool kind entirely.
                         }
                     }
                 }
-                clearAgentCheckpoint(tabId);
+                host.clearCheckpoint(tabId);
                 if(doSpeak) host.speak("Listo.");
                 host.fin(tabId);return;
             }
@@ -9410,7 +9418,7 @@ times the SAME way, switch tool kind entirely.
             extractAndPersistMemory(resp, _persistedMemKeys);
 
             const learnM=resp.match(/<LEARN>([\s\S]*?)<\/LEARN>/i);
-            if(learnM){const p=learnM[1].split('|');if(p.length>=3){host.confirmLearn({claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim(),tabId,doSpeak});}else{host.addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}host.fin(tabId);return;}
+            if(learnM){const p=learnM[1].split('|');if(p.length>=3){host.confirmLearn({claves:p[0].split(',').map(c=>normalizeForMatch(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim(),tabId,doSpeak});}else{host.addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}host.fin(tabId);return;}
 
             // ── CODE GENERATION GUARD: if user asked for code, strip <EXECUTE> ──
             let safeResp = resp;
@@ -9889,8 +9897,8 @@ times the SAME way, switch tool kind entirely.
                         getActiveTabId: () => agentEnv.activeTabId,
                         getTab: host.getTab,
                         runProcess: (id) => process(id),
-                        setTabsExecEngine: (id, eng) => { const t2 = host.getTab(id); if (t2) { t2.execEngine = eng; tabs = tabs; } },
-                        setTabInputValue:  (id, val) => { const t2 = host.getTab(id); if (t2) { t2.inputValue = val; tabs = tabs; } },
+                        setTabsExecEngine: (id, eng) => { const t2 = host.getTab(id); if (t2) { t2.execEngine = eng; host.refresh(); } },
+                        setTabInputValue:  (id, val) => { const t2 = host.getTab(id); if (t2) { t2.inputValue = val; host.refresh(); } },
                         copyToClipboard: (text, btn) => copiarAlPortapapeles(text, btn),
                     });
                 } else {
