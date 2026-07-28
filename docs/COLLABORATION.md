@@ -1,66 +1,131 @@
 # Colaboración entre dos instancias · Lucy
 
-> Dos agentes trabajando sobre el mismo repositorio desde máquinas distintas y
-> en franjas horarias distintas. Escrito v1.8.0 · 2026-07-28.
+> Una máquina, dos sistemas operativos en SSD distintos, uno de ellos leyendo el
+> SSD donde vive Lucy. Turno de mañana (trabajo) y turno de tarde/noche
+> (personal). Escrito v1.8.0 · 2026-07-28.
 >
 > Documento operativo, no aspiracional: cada regla está aquí porque su ausencia
 > produce un problema concreto que se nombra.
 
 ---
 
-## 0. La precondición que hoy no se cumple
+## 1. La buena noticia: la concurrencia es imposible
 
-```
-main ... [origin/main: ahead 272]
-```
+Solo se arranca un sistema a la vez. Eso **elimina de raíz** el problema caro de
+dos agentes sobre el mismo código: no hay conflictos simultáneos, no hay dos
+ramas activas, no hay que reconciliar nada.
 
-`origin` existe (`github.com/Phenomx64L/LucyAI`) y **lleva 272 commits sin
-recibir nada**. Mientras eso siga así, la segunda máquina no puede ver ni un
-solo cambio: no hay colaboración posible, solo dos historias divergentes que
-después habrá que reconciliar a mano.
+El modelo de turnos aquí no es una convención que alguien pueda saltarse — lo
+impone el hardware. Lo que queda por resolver no es la coordinación, sino **qué
+se rompe al compartir un mismo árbol de trabajo entre dos sistemas**.
 
-**Nada de lo que sigue funciona sin `git push` primero.** Es el único paso
-bloqueante de todo el documento.
+Y se rompen cosas concretas.
 
 ---
 
-## 1. El modelo: turnos, no concurrencia
+## 2. Lo que se rompe, y ya hay una rota
 
-Dos instancias sobre el mismo código **al mismo tiempo** es el escenario caro:
-conflictos en ficheros grandes, dos refactors incompatibles, y un árbol que nadie
-sabe si está verde. El modelo aquí lo evita por construcción.
+### Worktrees de git — rutas absolutas
 
-| Franja | Quién | Qué hace |
+```
+C:/X/Rust_Projects/lucy-svelte/.claude/worktrees/admiring-banach-c25e04
+C:/Rust_Projects/lucy-svelte/.claude/worktrees/hopeful-gauss-b9b1d6   ← prunable
+```
+
+El segundo ya está inservible: se creó cuando el repo colgaba de otra ruta.
+Git guarda la ruta **absoluta** de cada worktree, así que si el segundo sistema
+monta el SSD en otra letra o punto de montaje, **todos los worktrees existentes
+dejan de resolver**.
+
+### El directorio de memoria del agente — derivado de la ruta
+
+```
+%USERPROFILE%\.claude\projects\C--X-Rust-Projects-lucy-svelte\memory\
+                              └── esto ES C:\X\Rust_Projects\lucy-svelte
+```
+
+El identificador del proyecto se deriva de la ruta. Montar en otra letra produce
+**otro directorio de memoria**, y el agente del otro turno arranca sin nada de lo
+aprendido. Además `%USERPROFILE%` ya es distinto por sistema, así que la memoria
+no se comparte de todas formas — ver §4.
+
+### `node_modules` y `src-tauri/target/`
+
+Ambos contienen **binarios compilados para una plataforma concreta**:
+`@esbuild/win32-x64`, `@rollup/rollup-win32-x64-msvc`, y el caché de `cargo`.
+
+- Dos Windows x64 → compatibles, se comparten sin problema.
+- Uno Linux → incompatibles. Compartir el mismo directorio hace que cada
+  arranque invalide el del otro, con reinstalaciones y recompilaciones completas
+  cada vez.
+
+Los dos están en `.gitignore`, así que git no los toca — pero **el sistema de
+ficheros sí los comparte**, y eso es lo que importa aquí.
+
+---
+
+## 3. La medida que resuelve casi todo: montar en la misma ruta
+
+**Que ambos sistemas vean el repositorio en la misma ruta absoluta.**
+
+Esa única decisión arregla de golpe los worktrees, el identificador de memoria
+del agente y cualquier configuración de editor con rutas dentro. Si un sistema
+es Windows y el otro Linux no hay ruta idéntica posible, y entonces conviene
+aceptar que **cada sistema tenga su propio clon** y sincronizar por git — que es
+el modelo del §5.
+
+Comprobación al abrir turno:
+
+```bash
+git rev-parse --show-toplevel     # ¿la ruta esperada?
+git worktree list                 # ¿alguno 'prunable'?
+git worktree prune                # limpiar los que quedaron de otra ruta
+```
+
+---
+
+## 4. Qué se comparte y qué no
+
+| Capa | ¿Se comparte? | Detalle |
 |---|---|---|
-| Horario laboral del operador | Instancia **A** | Trabajo acordado en el turno anterior |
-| Fuera de horario | Instancia **B** | Trabajo acordado en el turno anterior |
+| Código y git | **Sí** | Es el mismo SSD. No hace falta empujar para traspasar |
+| `docs/HANDOFF.md` | **Sí** | Viaja con el código, por eso vive ahí |
+| `node_modules`, `target/` | Sí, si ambos son Windows x64 | Si no, un clon por sistema |
+| Memoria del agente | **No** | `%USERPROFILE%` distinto por sistema |
+| Datos de Lucy (`lucy.db`) | **No** | `%APPDATA%\com.lucy.dev` por sistema |
+| Claves API | **No** | Credential Manager por sistema |
+| Toolchain (Node, Rust, MSVC) | **No** | Se instala en cada sistema |
 
-**Una sola instancia escribe a la vez.** La otra, si corre, es de solo lectura
-(análisis, revisión, informes) y **no commitea**.
+Las cuatro últimas filas tienen una consecuencia que conviene entender bien:
+**Lucy-la-aplicación tendrá dos cerebros separados.** Memorias distintas,
+historial distinto, claves distintas según desde qué sistema se arranque. Se
+comparte el código, no lo que Lucy ha aprendido usándolo.
 
-No es una limitación técnica: es que el coste de reconciliar dos ramas activas
-sobre un fichero de 14.000 líneas supera con creces lo que se gana paralelizando.
+Si eso importa, `lucy.db` se puede copiar entre sistemas a mano — pero nunca con
+la app abierta en el otro, porque SQLite en modo WAL no perdona dos escritores.
 
 ---
 
-## 2. Ramas
+## 5. Si los sistemas no pueden compartir ruta
+
+Entonces cada uno tiene su clon y `origin` vuelve a ser la vía de traspaso:
 
 ```
 main                        estable, siempre verde
 claude/<turno>-<fecha>      una rama por turno, se fusiona al cerrarlo
 ```
 
-Regla dura: **el turno se cierra fusionando a `main` y empujando**. Una rama que
-sobrevive a su turno es una rama que la otra instancia no ve, y el turno
-siguiente empieza sobre una base falsa.
+Hoy eso **no funcionaría**: `main` está **272 commits por delante de
+`origin/main`**. El remoto existe (`github.com/Phenomx64L/LucyAI`) y lleva mucho
+sin recibir nada. Empujar requiere el visto bueno del operador porque publica
+trabajo.
 
-Si el trabajo no cabe en un turno, se fusiona **lo que esté terminado y verde** y
-el resto se describe en el traspaso. Media función fusionada es peor que ninguna;
-una función completa aunque el conjunto no lo esté, no lo es.
+Aun compartiendo SSD, empujar sigue valiendo la pena como copia de seguridad: un
+SSD es un único punto de fallo para 30 commits de trabajo.
 
 ---
 
-## 3. El traspaso
+## 6. El traspaso
 
 Un único fichero vivo: **`docs/HANDOFF.md`** — no uno por fecha. El historial de
 git ya guarda las versiones anteriores; una carpeta de `HANDOFF_2026-05-17.md`
@@ -69,7 +134,7 @@ obliga a adivinar cuál es el vigente.
 Se reescribe **al final de cada turno**, antes del último commit:
 
 ```markdown
-# Traspaso · <instancia> · <fecha y hora> · <zona horaria>
+# Traspaso · <turno> · <fecha y hora>
 
 ## Estado
 Rama fusionada: <sha>. Árbol limpio. check 0 · vitest N · cargo N · build ok.
@@ -87,53 +152,38 @@ Rama fusionada: <sha>. Árbol limpio. check 0 · vitest N · cargo N · build ok
 - <trampas, mediciones, cosas que costaría media jornada redescubrir>
 ```
 
-La última sección es la que más vale. Este proyecto ya tiene precedente de lo
-contrario: `ARCHITECTURE.md` afirmaba durante versiones que los inputs de
-NexShell seguían con el bug de repintado **después de estar arreglados**, y eso
-puso trabajo inexistente en una hoja de ruta.
+La última sección es la que más vale, y es la que sustituye a la memoria del
+agente — que **no cruza entre sistemas**. Lo que no se escriba aquí, el turno
+siguiente no lo sabe.
+
+Este proyecto ya tiene el contraejemplo: `ARCHITECTURE.md` afirmaba durante
+versiones que los inputs de NexShell seguían con el bug de repintado **después
+de estar arreglados**, y eso puso trabajo inexistente en una hoja de ruta.
 
 ---
 
-## 4. Reparto: qué se puede tocar en paralelo y qué no
+## 7. Reparto del trabajo
 
-El riesgo real no es el número de ficheros, es **cuáles**.
+Aunque no haya concurrencia, sigue importando **qué** toca cada turno: dejar un
+fichero grande a medias obliga al turno siguiente a entender un refactor
+incompleto antes de poder hacer nada.
 
-### Zona caliente — una sola instancia por turno
+### Zona caliente — terminar dentro del turno o no empezar
 
 | Fichero | Por qué |
 |---|---|
-| `src/routes/+page.svelte` | 14.000 líneas, `runAI()` son 4.753. Dos ediciones simultáneas aquí producen conflictos irresolubles por revisión. Además tiene un **byte nulo** cerca del offset 264909: git lo trata como binario en algunos diffs, así que un conflicto no se lee bien |
+| `src/routes/+page.svelte` | 14.000 líneas, `runAI()` son 4.753. Además tiene un **byte nulo** cerca del offset 264909: git y ripgrep lo tratan como binario, así que un diff parcial no se lee bien |
 | `src-tauri/src/commands/metrics.rs` | 4.832 líneas |
 | `src/lib/page/slash-commands.ts` | 3.027 líneas |
 
-### Zona fría — repartible sin coordinación
+### Zona fría — se puede dejar a medias sin coste
 
-Módulos del cockpit (`src/lib/cockpit/*.svelte`), comandos de `src-tauri/src/commands/`
-distintos entre sí, y cualquier módulo nuevo bajo `src/lib/`.
-
-**Regla práctica:** si dos tareas tocan ficheros distintos de la zona fría, van en
-paralelo. Si alguna toca la caliente, va sola.
+Módulos del cockpit (`src/lib/cockpit/*.svelte`), comandos distintos entre sí de
+`src-tauri/src/commands/`, y cualquier módulo nuevo bajo `src/lib/`.
 
 ---
 
-## 5. Qué viaja entre máquinas y qué no
-
-| Capa | Viaja | Cómo |
-|---|---|---|
-| Código | **Sí** | `git push` / `pull` — la única fuente de verdad |
-| Traspaso | **Sí** | `docs/HANDOFF.md`, versionado con el código |
-| Memoria del agente | **No** | `%USERPROFILE%\.claude\projects\<slug>\memory\` es local. Lo que deba sobrevivir al turno va al traspaso, no a la memoria |
-| Sesión `.jsonl` | **No** | Historial de conversación de una máquina |
-| `lucy.db` | **No** | Estado de ejecución de Lucy, no del desarrollo |
-| Claves API | **No** | Credential Manager, por máquina. Cada una configura las suyas |
-
-La segunda fila es la que se olvida: **la memoria del agente no cruza**. Si una
-instancia aprende algo relevante y solo lo escribe en su memoria, la otra jamás
-lo sabrá.
-
----
-
-## 6. Cerrar un turno
+## 8. Cerrar un turno
 
 ```bash
 npm run check          # 0 errores
@@ -142,39 +192,35 @@ cd src-tauri && cargo test --lib
 npm run build
 ```
 
-Los cuatro, no una selección. Después: actualizar `HANDOFF.md`, commitear,
-fusionar a `main`, **empujar**.
+Los cuatro, no una selección. Después: actualizar `HANDOFF.md`, commitear y
+fusionar a `main`.
 
 Sobre el hook de pre-commit: valida el árbol desde el que se commitea —se
 arregló en v1.8.0, antes validaba siempre el checkout principal y daba verde
-probando código distinto del que se estaba subiendo—. Aun así, correr las
-suites a mano antes de cerrar sigue siendo lo correcto: el hook comprueba, no
-sustituye al juicio.
+probando código distinto del que se subía—. Aun así, correr las suites a mano
+antes de cerrar sigue siendo lo correcto: el hook comprueba, no sustituye al
+juicio.
 
 ---
 
-## 7. Abrir un turno
+## 9. Abrir un turno
 
-1. `git pull`
+1. Verificar la ruta y limpiar worktrees huérfanos (§3)
 2. Leer `docs/HANDOFF.md` **entero**, incluida la sección de hallazgos
-3. Verificar que el árbol arranca verde — si no, eso es la primera tarea y el
+3. Verificar que el árbol arranca verde — si no, esa es la primera tarea y el
    traspaso mintió
-4. Crear la rama del turno
-5. Trabajar solo lo listado en «Lo siguiente», salvo que el operador diga otra cosa
+4. Trabajar solo lo listado en «Lo siguiente», salvo indicación del operador
 
 El paso 3 no es burocracia: heredar un árbol roto y no notarlo hasta tres
 commits después convierte una sesión en una investigación.
 
 ---
 
-## 8. Lo que este modelo no resuelve
+## 10. Lo que este modelo no resuelve
 
-Conviene decirlo para que nadie cuente con ello:
-
-- **No hay bloqueo real.** Dos instancias que ignoren el modelo de turnos van a
-  chocar; esto es una convención, no un mecanismo.
-- **No hay traspaso automático.** El `HANDOFF.md` lo escribe quien cierra. Si lo
-  escribe mal, el turno siguiente empieza peor que desde cero — con información
-  falsa en vez de sin información.
-- **No hay memoria compartida.** Las dos instancias comparten el repositorio,
-  no lo aprendido. Todo lo que importe se escribe en el repositorio.
+- **La memoria del agente no cruza.** Es la limitación de fondo: cada turno
+  empieza sin lo aprendido en el anterior, salvo lo escrito en el traspaso.
+- **Lucy tendrá dos cerebros.** Memorias, historial y claves separados por
+  sistema. Compartes el código, no la experiencia acumulada de usarlo.
+- **El traspaso lo escribe quien cierra.** Si lo escribe mal, el turno siguiente
+  empieza peor que desde cero — con información falsa en vez de sin información.
