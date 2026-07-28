@@ -82,6 +82,26 @@ export interface SecurityBlockRequest {
 }
 
 /**
+ * A learned command/answer pair awaiting the operator's confirmation before it
+ * is written to memory (the "aprende esto" flow).
+ *
+ * The third HITL halt, added in Phase 4. Phase 1 caught confirmRunAs and
+ * confirmSecurityBlock but missed this one — it still assigned the pending
+ * state and raised the modal inline, which meant a headless caller reaching
+ * this branch would have set component variables that, for it, do not exist.
+ */
+export interface LearnRequest {
+    /** Trigger phrases the operator wants Lucy to recognise later. */
+    claves: string[];
+    /** The command/script to associate with them. */
+    script: string;
+    /** The canned answer to give. */
+    respuesta: string;
+    tabId: string | number;
+    doSpeak: boolean;
+}
+
+/**
  * Everything runAI() needs from its environment.
  *
  * Grouped by concern so a phase being migrated can declare the narrow slice it
@@ -127,6 +147,12 @@ export interface AgentHost {
      * contract as confirmRunAs.
      */
     confirmSecurityBlock(req: SecurityBlockRequest): void;
+    /**
+     * Hand a learned command/answer pair to the confirmation modal and STOP,
+     * same contract as the two above: the caller `fin()`s and returns, and the
+     * operator's answer is what commits it to memory.
+     */
+    confirmLearn(req: LearnRequest): void;
 
     // ── Telemetry ───────────────────────────────────────────────────────────
     logTaskEvent(
@@ -214,6 +240,7 @@ export function createRecordingHost(overrides: AgentHostOverrides = {}): Recordi
         speak: rec('speak'),
         confirmRunAs: rec('confirmRunAs'),
         confirmSecurityBlock: rec('confirmSecurityBlock'),
+        confirmLearn: rec('confirmLearn'),
         logTaskEvent: rec('logTaskEvent'),
         invoke: async (cmd, args) => {
             calls.push({ method: 'invoke', args: [cmd, args] });

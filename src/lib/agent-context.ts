@@ -110,6 +110,27 @@ export interface AgentContext {
     /** MCP secret values, keyed by name. */
     readonly mcpSecrets: Record<string, any>;
 
+    // ── Store-backed collections (Phase 4) ──────────────────────────────────
+    // These three are Svelte stores in the component. They are ordinary reads
+    // from runAI()'s side — `JSON.stringify(hosts)`, `hosts.find(...)` — so they
+    // belong here like any other input; the production binding is what knows
+    // they came from a store.
+    /** Configured remote hosts (WinRM / SSH). Serialized into every model call
+     *  as `hostsJson`, and searched by id or name when a turn targets one. */
+    readonly hosts: any[];
+    /** Company runbooks currently loaded. */
+    readonly runbooks: any[];
+    /**
+     * Whether local Ollama answered its last probe.
+     *
+     * TRI-STATE, and the call sites depend on it: `null` means "not probed
+     * yet", which is NOT the same as offline. runAI() tests `=== false` and
+     * `!== false` rather than truthiness precisely so an unprobed Ollama does
+     * not get treated as a confirmed absence — typing this `boolean` would
+     * invite a future `!ollamaOnline` that silently changes that.
+     */
+    readonly ollamaOnline: boolean | null;
+
     // ── Feature flags ───────────────────────────────────────────────────────
     /** Whether the 2.0 cockpit shell is the active UI. A headless caller sets
      *  this false: there is no cockpit to mirror anything into. */
@@ -139,6 +160,10 @@ export function createTestContext(overrides: Partial<AgentContext> = {}): AgentC
         sessionSpendUsd: 0,
         mcpServers: [],
         mcpSecrets: {},
+        hosts: [],
+        runbooks: [],
+        // null, not false — "not probed yet". See the note on the interface.
+        ollamaOnline: null,
         cockpitUi: true,
     };
     return { ...base, ...overrides };

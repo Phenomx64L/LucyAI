@@ -126,11 +126,66 @@ describe('AgentContext shape', () => {
             sessionSpendUsd: 0,
             mcpServers: [],
             mcpSecrets: {},
+            hosts: [],
+            runbooks: [],
+            ollamaOnline: null,
             cockpitUi: true,
         };
 
         expect(bound.lang).toBe('es');
         lang = 'en';
         expect(bound.lang).toBe('en');
+    });
+});
+
+describe('store-backed members (Phase 4)', () => {
+    it('defaults ollamaOnline to null — "not probed", not "offline"', () => {
+        // The call sites test `=== false` / `!== false` precisely so an
+        // unprobed Ollama is not mistaken for a confirmed absence. A default of
+        // `false` here would make every test start from "offline" and hide that
+        // distinction.
+        const ctx = createTestContext();
+
+        expect(ctx.ollamaOnline).toBeNull();
+        expect(ctx.ollamaOnline === false).toBe(false);
+        expect(ctx.ollamaOnline !== false).toBe(true);
+    });
+
+    it('distinguishes the three Ollama states', () => {
+        expect(createTestContext({ ollamaOnline: null }).ollamaOnline !== false).toBe(true);
+        expect(createTestContext({ ollamaOnline: true }).ollamaOnline !== false).toBe(true);
+        expect(createTestContext({ ollamaOnline: false }).ollamaOnline === false).toBe(true);
+    });
+
+    it('defaults hosts and runbooks to empty lists', () => {
+        const ctx = createTestContext();
+
+        expect(ctx.hosts).toEqual([]);
+        expect(ctx.runbooks).toEqual([]);
+    });
+
+    it('serializes hosts the way the model call does', () => {
+        const ctx = createTestContext({ hosts: [{ id: 'h1', name: 'PROD-AD-01', type: 'windows' }] });
+
+        expect(JSON.parse(JSON.stringify(ctx.hosts))).toHaveLength(1);
+        expect(ctx.hosts.find((h: any) => h.name === 'PROD-AD-01')?.type).toBe('windows');
+    });
+
+    it('reflects a host added mid-turn', () => {
+        // A turn can outlive a host being registered; freezing the list at turn
+        // start would make a just-added host unreachable for the rest of it.
+        const { ctx, set } = createMutableTestContext({ hosts: [] });
+
+        expect(ctx.hosts).toHaveLength(0);
+        set({ hosts: [{ id: 'h1', name: 'NEW-HOST' }] });
+        expect(ctx.hosts).toHaveLength(1);
+    });
+
+    it('reflects Ollama going offline mid-turn', () => {
+        const { ctx, set } = createMutableTestContext({ ollamaOnline: true });
+
+        expect(ctx.ollamaOnline === false).toBe(false);
+        set({ ollamaOnline: false });
+        expect(ctx.ollamaOnline === false).toBe(true);
     });
 });

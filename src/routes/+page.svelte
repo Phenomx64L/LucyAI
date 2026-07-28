@@ -5193,6 +5193,14 @@ REGLAS DE FORMATO:
             $showRunAsModal = true;
         },
         confirmSecurityBlock: (req) => { pendingSecurityBlock = req; },
+        // Phase 4 — the third HITL halt. Phase 1 missed it: it was still
+        // assigning pendingLearn* and raising the modal inline.
+        confirmLearn: (req) => {
+            pendingLearn = { claves: req.claves, script: req.script, respuesta: req.respuesta };
+            pendingLearnTab = req.tabId;
+            pendingLearnSpeak = req.doSpeak;
+            $showLearnConfirm = true;
+        },
         logTaskEvent: (eventType, subtype, elapsedMs, metadata, tabId) => logTaskEvent(eventType, subtype, elapsedMs, metadata, tabId),
         invoke:       (cmd, args) => invoke(cmd, args),
     };
@@ -5227,6 +5235,12 @@ REGLAS DE FORMATO:
         get mcpServers()      { return mcpServers; },
         get mcpSecrets()      { return mcpSecrets; },
         get cockpitUi()       { return COCKPIT; },
+        // Phase 4 — store-backed. `$store` inside these getters is the same
+        // compiled auto-subscription the component already holds, so the value
+        // read here is the live one, exactly as `$hosts` was at the call sites.
+        get hosts()           { return $hosts; },
+        get runbooks()        { return $runbooks; },
+        get ollamaOnline()    { return $ollamaOnline; },
     };
 
     async function runAI(tabId,raw,doSpeak,retryCount = 0,host = defaultAgentHost,agentEnv = defaultAgentContext){
@@ -5666,7 +5680,7 @@ REGLAS DE FORMATO:
                     _recallQuery.length < 8 ||
                     _raw.length > 4000 ||
                     _TRIVIAL_RE.test(_raw);
-                if (!_skipRecall && $ollamaOnline === false) {
+                if (!_skipRecall && agentEnv.ollamaOnline === false) {
                     // v1.7.235 — FALLBACK KEYWORD (Ollama caído). Antes: skip
                     // total → cero recall en uso desatendido si Ollama moría.
                     // NO usamos el fallback Gemini del backend para búsqueda:
@@ -5809,7 +5823,7 @@ REGLAS DE FORMATO:
                     const cap = await host.invoke('lucy_capabilities_skills');
                     const _totalSec = cap.cybersec_skills_bundled + cap.cybersec_skills_user;
                     const _mcpN = agentEnv.mcpServers?.length ?? 0;
-                    const _rbN = ($runbooks || []).length;
+                    const _rbN = (agentEnv.runbooks || []).length;
                     ctx += `\n\n--- INVENTARIO REAL DE LUCY (responde con estos números, no estimes) ---\n` +
                         `- Skills cybersec cargadas: ${_totalSec} (${cap.cybersec_skills_bundled} bundled de la librería Anthropic + ${cap.cybersec_skills_user} instaladas por usuario).\n` +
                         `- Dominios cubiertos: ${cap.cybersec_domains} (malware-analysis, digital-forensics, incident-response, threat-hunting, …).\n` +
@@ -5975,7 +5989,7 @@ Use ONE of these patterns instead:
             // #10 tight context compression.
             const _isLocalModel    = String(_routedLoopModel || '').startsWith('local-');
             const _localToolCapable = _isLocalModel && /code/i.test(String(_routedLoopModel || ''));
-            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:agentEnv.lang,hostsJson:JSON.stringify($hosts)};
+            const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:agentEnv.lang,hostsJson:JSON.stringify(agentEnv.hosts)};
 
             // ── TURN INTENT GATES ───────────────────────────────────────────────
             // The four booleans that decide whether ANYTHING the model emits is
@@ -7069,7 +7083,7 @@ Use ONE of these patterns instead:
                                     model: compressModel,
                                     images: null,
                                     lang: agentEnv.lang,
-                                    hostsJson: JSON.stringify($hosts),
+                                    hostsJson: JSON.stringify(agentEnv.hosts),
                                     maxTokensOverride: 300
                                 }, () => {}, tabId);
 
@@ -7912,7 +7926,7 @@ Use ONE of these patterns instead:
                             runbooksDir: agentEnv.config.runbooksDir || null,
                             model: forkModel,
                             lang: agentEnv.lang,
-                            hostsJson: JSON.stringify($hosts),
+                            hostsJson: JSON.stringify(agentEnv.hosts),
                             images: null
                         }).then(r => {
                             const resultStr = String(r);
@@ -8337,7 +8351,7 @@ Use ONE of these patterns instead:
                             try {
                                 const t0 = Date.now();
                                 const h_idClean = hostId.replace('LucyHost_', '');
-                                h = $hosts.find(x => x.id === h_idClean || x.name === hostId);
+                                h = agentEnv.hosts.find(x => x.id === h_idClean || x.name === hostId);
 
                                 if (!h) {
                                     throw new Error(`Host '${hostId}' no encontrado en NexShell.`);
@@ -8652,7 +8666,7 @@ Use ONE of these patterns instead:
                                     runbooksDir: agentEnv.config.runbooksDir || null,
                                     model: verModel,
                                     lang: agentEnv.lang,
-                                    hostsJson: JSON.stringify($hosts),
+                                    hostsJson: JSON.stringify(agentEnv.hosts),
                                     images: null
                                 }));
                             } catch (e) {
@@ -8693,7 +8707,7 @@ Use ONE of these patterns instead:
                                     runbooksDir: agentEnv.config.runbooksDir || null,
                                     model: (_routedLoopModel || getEffectiveModel(t)), // v1.7.110 H5 — pinned loop model
                                     lang: agentEnv.lang,
-                                    hostsJson: JSON.stringify($hosts),
+                                    hostsJson: JSON.stringify(agentEnv.hosts),
                                     images: null
                                 };
                                 try {
@@ -8826,7 +8840,7 @@ Use ONE of these patterns instead:
                     // ya inyectado. Los hits llevan [§id] → el refuerzo R2 también
                     // aplica. Crítico para locales no-code: no pueden pedir
                     // pdf_search por sí mismos; esta es su segunda vía automática.
-                    if (_entityRecallsLeft > 0 && $ollamaOnline !== false) {
+                    if (_entityRecallsLeft > 0 && agentEnv.ollamaOnline !== false) {
                         try {
                             const _newEnts = [];
                             for (const e of _extractEntities(toolCtx)) {
@@ -9044,7 +9058,7 @@ times the SAME way, switch tool kind entirely.
                     const _taskAnchor = (filesMod && filesMod.size > 0)
                         ? `\n=== ARCHIVOS ACTIVOS DE ESTA TAREA (los estás modificando en este run — NO los pierdas de vista ni empieces de cero) ===\n${[...filesMod].slice(0, 12).map(f => `· ${f}`).join('\n')}\n=== FIN ARCHIVOS ACTIVOS ===\n`
                         : '';
-                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n${_taskAnchor}\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:agentEnv.lang,hostsJson:JSON.stringify($hosts),maxTokensOverride:escalatedTokens};
+                    const nextParams = {prompt:`[AGENT CONTINUATION — step ${loop_i + 2}/${MAX_LOOPS}]\n\n=== ORIGINAL USER GOAL ===\n"${originalUserGoal}"\n=== END ORIGINAL GOAL ===\n${_taskAnchor}\nTool results from step ${loop_i + 1}:\n${toolCtx}\n\nCRITICAL RULES FOR THIS CONTINUATION:\n1. DO NOT repeat analysis, decisions, or explanations you already gave in previous steps. The user already saw them.\n2. DO NOT re-explain your architecture choice, crate selection, or rationale — that is DONE.\n3. Jump DIRECTLY to the NEXT concrete action: write a file, edit code, run a command, or deliver your final answer.\n4. If you have nothing new to execute or write, deliver your FINAL summary in Markdown with NO tool tags.\n5. Wrap internal reasoning in <THOUGHT>...</THOUGHT> — keep it under 100 words.\n6. You are on step ${loop_i + 2} of ${MAX_LOOPS}. Budget your remaining steps wisely.`,context:compressedCtx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:(_routedLoopModel || getEffectiveModel(t)),images:null,lang:agentEnv.lang,hostsJson:JSON.stringify(agentEnv.hosts),maxTokensOverride:escalatedTokens};
 
                     stepsHtml += `<span style="opacity:0.6">[↻ Siguiente turno...]</span>\n`;
                     renderAgentTask();
@@ -9396,7 +9410,7 @@ times the SAME way, switch tool kind entirely.
             extractAndPersistMemory(resp, _persistedMemKeys);
 
             const learnM=resp.match(/<LEARN>([\s\S]*?)<\/LEARN>/i);
-            if(learnM){const p=learnM[1].split('|');if(p.length>=3){pendingLearn={claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim()};pendingLearnTab=tabId;pendingLearnSpeak=doSpeak;$showLearnConfirm=true;}else{host.addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}host.fin(tabId);return;}
+            if(learnM){const p=learnM[1].split('|');if(p.length>=3){host.confirmLearn({claves:p[0].split(',').map(c=>limpiar(c)),script:p[1].trim(),respuesta:p.slice(2).join('|').trim(),tabId,doSpeak});}else{host.addMsg(tabId,{role:'lucy',html:`<div class="mn">!</div>Formato inválido.<pre style="color:#f59e0b;">${learnM[1]}</pre>`,style:'border-left-color:#f59e0b;'});}host.fin(tabId);return;}
 
             // ── CODE GENERATION GUARD: if user asked for code, strip <EXECUTE> ──
             let safeResp = resp;
@@ -9463,7 +9477,7 @@ times the SAME way, switch tool kind entirely.
                         raw: firstDestructive[0],
                         risk: 'high',
                         target,
-                        engine: isRemote ? ($hosts.find(h => h.id === target)?.type === 'linux' ? 'shell' : 'powershell') : 'powershell',
+                        engine: isRemote ? (agentEnv.hosts.find(h => h.id === target)?.type === 'linux' ? 'shell' : 'powershell') : 'powershell',
                         desc: 'Acción destructiva detectada (upgrade automático a PLAN — Lucy omitió el tag)',
                         cmd,
                         verify: '',
@@ -9532,7 +9546,7 @@ times the SAME way, switch tool kind entirely.
                             try {
                                 if (item.isRemote) {
                                     const hostIdClean = item.hostId.replace(/^LucyHost_/, '');
-                                    const h = $hosts.find(x => x.id === hostIdClean || x.name === item.hostId);
+                                    const h = agentEnv.hosts.find(x => x.id === hostIdClean || x.name === item.hostId);
                                     if (!h) throw new Error(`Host '${item.hostId}' not found`);
                                     const pf = await preflightHost(h);
                                     if (!pf.ok) {
@@ -9609,7 +9623,7 @@ times the SAME way, switch tool kind entirely.
                 const hostId = execRemoteM[1].trim();
                 const cmd = execRemoteM[2].trim();
                 const hostIdClean = hostId.replace(/^LucyHost_/, '');
-                const h = $hosts.find(x => x.id === hostIdClean || x.name === hostId);
+                const h = agentEnv.hosts.find(x => x.id === hostIdClean || x.name === hostId);
                 if (!h) {
                     host.addMsg(tabId, {
                         role: 'lucy',
@@ -9652,7 +9666,7 @@ times the SAME way, switch tool kind entirely.
                             prompt: followPrompt, context: '', userName: agentEnv.config.name,
                             runbooksDir: agentEnv.config.runbooksDir || null,
                             model: getEffectiveModel(t), lang: agentEnv.lang,
-                            hostsJson: JSON.stringify($hosts), images: null,
+                            hostsJson: JSON.stringify(agentEnv.hosts), images: null,
                         });
                         const followClean = (follow || '').replace(/<THOUGHT>[\s\S]*?<\/THOUGHT>/gi, '').trim();
                         if (followClean) {

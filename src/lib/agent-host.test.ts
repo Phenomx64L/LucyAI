@@ -59,6 +59,40 @@ describe('createRecordingHost', () => {
         expect(host.callsTo('confirmRunAs')[0].args[0].isDestructive).toBe(true);
     });
 
+    it('records the learn confirmation — the third halt (Phase 4)', () => {
+        // Phase 1 named confirmRunAs and confirmSecurityBlock but missed this
+        // one: it kept assigning pendingLearn* and raising the modal inline, so
+        // a headless caller reaching that branch would have written component
+        // variables that, for it, do not exist.
+        const host = createRecordingHost();
+        host.confirmLearn({
+            claves: ['reiniciar spooler', 'spooler colgado'],
+            script: 'Restart-Service Spooler',
+            respuesta: 'Reinicio el servicio de cola de impresión.',
+            tabId: 't1',
+            doSpeak: false,
+        });
+
+        const req = host.callsTo('confirmLearn')[0].args[0];
+        expect(req.claves).toHaveLength(2);
+        expect(req.script).toBe('Restart-Service Spooler');
+        expect(req.tabId).toBe('t1');
+        expect(req.doSpeak).toBe(false);
+    });
+
+    it('all three HITL halts share the same shape: recorded, and nothing else fires', () => {
+        // The contract each one relies on: the caller fin()s and returns. If a
+        // halt ever started doing work of its own, this would catch it.
+        const host = createRecordingHost();
+        host.confirmRunAs({ cmd: 'x', ctx: '', doSpeak: false, tabId: 't1' });
+        host.confirmSecurityBlock({ tabId: 't1', cmd: 'x', ctx: '', doSpeak: false, blockWord: 'format', displayCmd: 'x', execType: 'ps', token: null });
+        host.confirmLearn({ claves: ['a'], script: 'b', respuesta: 'c', tabId: 't1', doSpeak: false });
+
+        expect(host.calls.map((c) => c.method)).toEqual([
+            'confirmRunAs', 'confirmSecurityBlock', 'confirmLearn',
+        ]);
+    });
+
     it('invoke resolves undefined by default', async () => {
         const host = createRecordingHost();
         await expect(host.invoke('get_system_health')).resolves.toBeUndefined();
