@@ -58,6 +58,32 @@ export interface Artifact {
   ts?: number;      // creation time (ms epoch)
 }
 
+/**
+ * A background sub-agent launched with `<TOOL>fork_task:…</TOOL>`.
+ *
+ * Forks were the one part of a turn with NO representation in the cockpit: Lucy
+ * would launch two of them, carry on with the main task, and the operator saw
+ * an unexplained pause. `ForksMonitorPanel` exists but only in the classic UI.
+ *
+ * `collected` is a distinct state from `done` on purpose. A fork finishes on its
+ * own schedule, but its result only re-enters the main task when a later
+ * `wait_task` picks it up — and the gap between those two moments is exactly
+ * what the operator needs to see to understand why Lucy is still working.
+ */
+export type ForkStatus = 'running' | 'done' | 'error' | 'collected';
+
+export interface AgentFork {
+  /** The operator-facing id from the tool call — NOT a generated one, because
+   *  the loop and the transcript both refer to the fork by this name. */
+  id: string;
+  instruction: string;
+  model?: string;
+  status: ForkStatus;
+  result?: string;
+  ms?: number;      // filled on finish, from `ts`
+  ts?: number;      // launch time (ms epoch)
+}
+
 export interface AgentStatus {
   running: boolean;
   stepIndex: number;   // 1-based current step
@@ -88,6 +114,7 @@ export const agentPlan = writable<PlanStep[]>([]);
 export const agentExec = writable<ExecEntry[]>([]);
 export const agentTrace = writable<TraceEntry[]>([]);
 export const agentArtifacts = writable<Artifact[]>([]);
+export const agentForks = writable<AgentFork[]>([]);
 export const agentStatus = writable<AgentStatus>({
   running: false, stepIndex: 0, stepTotal: 0, host: null, model: null, costUsd: 0,
 });
@@ -104,7 +131,33 @@ export function resetWorkspace(): void {
   agentExec.set([]);
   agentTrace.set([]);
   agentArtifacts.set([]);
+  agentForks.set([]);
   agentStatus.set({ running: false, stepIndex: 0, stepTotal: 0, host: null, model: null, costUsd: 0 });
+}
+
+/** Register a fork the moment it is launched, so it is visible while it runs. */
+export function forkStart(f: Omit<AgentFork, 'status' | 'ts' | 'ms'>): void {
+  agentForks.update((l) => {
+    // Re-launching a known id replaces the old row rather than duplicating it —
+    // the loop already refuses duplicate ids, so a repeat here means a retry.
+    const rest = l.filter((x) => x.id !== f.id);
+    return [...rest, { ...f, status: 'running' as ForkStatus, ts: Date.now() }];
+  });
+}
+
+/**
+ * Settle a fork. Duration is derived from the stored launch time rather than
+ * taken from the caller, so every row measures the same thing.
+ */
+export function forkFinish(id: string, patch: { status: 'done' | 'error'; result?: string }): void {
+  agentForks.update((l) =>
+    l.map((f) => (f.id === id ? { ...f, ...patch, ms: f.ts ? Date.now() - f.ts : undefined } : f)),
+  );
+}
+
+/** Mark a finished fork as folded back into the main task by `wait_task`. */
+export function forkCollected(id: string): void {
+  agentForks.update((l) => l.map((f) => (f.id === id ? { ...f, status: 'collected' } : f)));
 }
 
 /** Replace the whole plan (e.g. once the loop has decomposed the task). */

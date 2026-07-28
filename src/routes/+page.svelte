@@ -86,7 +86,7 @@ import { listen } from '@tauri-apps/api/event';
     // Preferencia de arranque (el fab la persiste): 'v1' arranca en clasico.
     const _bootPrefV2 = (() => { try { return localStorage.getItem('lucy_ui_mode') !== 'v1'; } catch { return true; } })();
     import CockpitShell from '$lib/cockpit/CockpitShell.svelte';
-    import { execPush, resetWorkspace, planAppend, planSet, planUpdate, convoPush, convoReset, artifactPush, streamSet, streamClear, statusPatch } from '$lib/cockpit/agent-workspace';
+    import { execPush, resetWorkspace, planAppend, planSet, planUpdate, convoPush, convoReset, artifactPush, streamSet, streamClear, statusPatch, forkStart, forkFinish, forkCollected } from '$lib/cockpit/agent-workspace';
     let cockpitMode = COCKPIT && _bootPrefV2; // dev boots into the cockpit; "Salir del cockpit" returns to classic
 
     import Terminal from '@tabler/icons-svelte/icons/terminal';
@@ -7940,6 +7940,7 @@ Use ONE of these patterns instead:
                             const resultStr = String(r);
                             host.forks[fTaskId].status = 'done';
                             host.forks[fTaskId].result = resultStr;
+                            forkFinish(fTaskId, { status: 'done', result: resultStr });
                             // Estimación de tokens — 4 chars/token approx
                             const tIn  = Math.ceil((_fPrompt.length + _fCtx.length) / 4);
                             const tOut = Math.ceil(resultStr.length / 4);
@@ -7960,6 +7961,7 @@ Use ONE of these patterns instead:
                             const errStr = String(e);
                             host.forks[fTaskId].status = 'error';
                             host.forks[fTaskId].result = errStr;
+                            forkFinish(fTaskId, { status: 'error', result: errStr });
                             // Persistir error en SQLite (no token data on failure)
                             host.invoke('fork_update', {
                                 taskId: fTaskId, status: 'error',
@@ -7974,6 +7976,10 @@ Use ONE of these patterns instead:
                         });
 
                         host.forks[fTaskId] = { promise: _fPromise, status: 'running', result: null, dbId: fDbId };
+                        // Surface it in the cockpit the instant it launches. Until now a
+                        // fork was invisible there: Lucy would start two sub-agents, carry
+                        // on with the main task, and the operator saw an unexplained pause.
+                        forkStart({ id: fTaskId, instruction: fInstruction, model: forkModel });
                         toolResults.push(`[FORK LAUNCHED: ${fTaskId}] — modelo: ${forkModel}\nSub-tarea iniciada en segundo plano (resultado persiste en SQLite). Continúa con tus siguientes acciones. Usa <TOOL>wait_task:${fTaskId}</TOOL> en un paso posterior para obtener el resultado.`);
                     }
 
@@ -7991,6 +7997,11 @@ Use ONE of these patterns instead:
                                 // 1. En memoria (sesión actual)
                                 if (host.forks[wTaskId]) {
                                     const result = await host.forks[wTaskId].promise;
+                                    // The moment the sub-task's work re-enters the main one.
+                                    // Distinct from 'done': a fork can sit finished for several
+                                    // steps before Lucy comes back for it, and that gap is what
+                                    // explains to the operator why she is still working.
+                                    forkCollected(wTaskId);
                                     return `[SUBTASK RESULT: ${wTaskId}]\n${result}`;
                                 }
 

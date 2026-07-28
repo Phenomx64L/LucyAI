@@ -15,7 +15,7 @@
        · Trace: phase icons + timeline rail + phase filter chips
        · Artefactos: +N/−M diff stats + line-number gutter + type filter
      ========================================================================== */
-  import { agentPlan, agentExec, agentTrace, agentArtifacts, agentStatus, resetWorkspace } from './agent-workspace';
+  import { agentPlan, agentExec, agentTrace, agentArtifacts, agentForks, agentStatus, resetWorkspace } from './agent-workspace';
   import CircleCheck from '@tabler/icons-svelte/icons/circle-check';
   import Circle from '@tabler/icons-svelte/icons/circle';
   import AlertCircle from '@tabler/icons-svelte/icons/alert-circle';
@@ -122,6 +122,18 @@
   });
   const totalItems = $derived(counts.plan + counts.exec + counts.trace + counts.artifacts);
 
+  // ── Sub-agents (forks) ────────────────────────────────────────────────────
+  // Counted separately from `counts` because they are not rows of a tab: they
+  // are work happening BESIDE the plan. The running tally drives the Plan tab's
+  // pulse so a fork is noticeable from any tab — the operator should never have
+  // to go looking to find out why Lucy is still busy.
+  const forksRunning = $derived($agentForks.filter((f) => f.status === 'running').length);
+  const forkWaiting  = $derived($agentForks.filter((f) => f.status === 'done').length);
+  let openFork = $state(null);
+  // Finished forks show their measured duration; running ones count up off the
+  // shared 1s tick (`_now`), so the row is visibly alive rather than frozen.
+  const forkAge = (f) => (f.ms != null ? secs(f.ms) : f.ts ? `${Math.max(0, Math.round((_now - f.ts) / 1000))}s` : '');
+
   // ── Auto-scroll: stick to the newest row unless the user scrolled up ───────
   let bodyEl = $state(null);
   let _stick = true;
@@ -167,6 +179,9 @@
       >
         {t.label}
         {#if counts[t.id] > 0}<span class="tab-count">{counts[t.id]}</span>{/if}
+        <!-- Sub-agents live in the Plan panel, so the Plan tab carries their
+             signal: a running fork is visible from any tab without hunting. -->
+        {#if t.id === 'plan' && forksRunning > 0}<span class="tab-fork" title="{forksRunning} sub-agente(s) en curso">⇉{forksRunning}</span>{/if}
       </button>
     {/each}
     {#if totalItems > 0}
@@ -200,8 +215,12 @@
   <div class="ws-body" bind:this={bodyEl} onscroll={onBodyScroll}>
 
     {#if activeTab === 'plan'}
-      {#if $agentPlan.length === 0}
+      <!-- The empty state stands down as soon as there are forks: with a
+           sub-agent running, the panel is not empty — it just has no plan yet. -->
+      {#if $agentPlan.length === 0 && $agentForks.length === 0}
         <div class="empty ck-blueprint"><span class="empty-tile"><ListDetails size={28} stroke={1.4} /></span><div class="empty-title">{emptyMsg.plan.title}</div><p>{emptyMsg.plan.hint}</p></div>
+      {:else if $agentPlan.length === 0}
+        <!-- forks only — the lane below carries the whole story -->
       {:else}
         <div class="plan-head">
           <span class="ph-count">{$agentPlan.length} {$agentPlan.length === 1 ? 'paso' : 'pasos'}</span>
@@ -243,6 +262,60 @@
               </div>
             </div>
           {/if}
+        </div>
+      {/if}
+
+      <!-- ── Sub-agentes (forks) ─────────────────────────────────────────────
+           Rendered AFTER the plan and outside its empty-state branch: a fork can
+           be launched before Lucy has committed to a plan, and in that case the
+           lane is the only thing on screen explaining what she is doing. -->
+      {#if $agentForks.length > 0}
+        <div class="forks">
+          <div class="forks-head">
+            <span class="fh-title">Sub-agentes</span>
+            {#if forksRunning > 0}<span class="fh-run">{forksRunning} en curso</span>{/if}
+            {#if forkWaiting > 0}<span class="fh-wait" title="Terminados, a la espera de que Lucy los recoja">{forkWaiting} listo{forkWaiting === 1 ? '' : 's'}</span>{/if}
+          </div>
+          {#each $agentForks as f (f.id)}
+            <div class="fork" class:running={f.status === 'running'} class:is-error={f.status === 'error'}>
+              <button
+                class="fork-row"
+                onclick={() => (openFork = openFork === f.id ? null : f.id)}
+                aria-expanded={openFork === f.id}
+                disabled={!f.result}
+                title={f.result ? 'Ver resultado' : 'Aún sin resultado'}
+              >
+                <span class="fork-icon">
+                  {#if f.status === 'running'}
+                    <span class="ring" aria-label="en curso"><span class="ring-dot"></span></span>
+                  {:else if f.status === 'error'}
+                    <AlertCircle size={16} stroke={1.75} color="var(--danger)" />
+                  {:else if f.status === 'collected'}
+                    <CircleCheck size={16} stroke={1.75} color="var(--accent)" />
+                  {:else}
+                    <Circle size={16} stroke={1.9} color="var(--warn, #E5B567)" />
+                  {/if}
+                </span>
+                <span class="fork-main">
+                  <span class="fork-id">{f.id}</span>
+                  <span class="fork-inst">{f.instruction}</span>
+                </span>
+                <span class="fork-meta">
+                  {#if f.model}<span class="fork-model">{f.model.split('/').pop()}</span>{/if}
+                  <span class="fork-age">{forkAge(f)}</span>
+                  <!-- 'done' vs 'collected' is the distinction that explains the
+                       wait: finished work does not rejoin the main task until
+                       Lucy asks for it. -->
+                  {#if f.status === 'done'}<span class="fork-state wait">sin recoger</span>
+                  {:else if f.status === 'collected'}<span class="fork-state got">recogido</span>
+                  {:else if f.status === 'error'}<span class="fork-state err">error</span>{/if}
+                </span>
+              </button>
+              {#if openFork === f.id && f.result}
+                <pre class="fork-out">{f.result}</pre>
+              {/if}
+            </div>
+          {/each}
         </div>
       {/if}
 
@@ -402,6 +475,61 @@
     background: var(--surface-2); padding: 0 6px; border-radius: var(--r-pill); min-width: 16px; text-align: center;
   }
   .ws-tab.active .tab-count { color: var(--accent); background: var(--accent-bg); }
+  /* Distinct from .tab-count on purpose: a fork count is not "how many rows are
+     in this tab", it is "work is happening right now". Accent + pulse, so it
+     reads as live rather than as a tally. */
+  .tab-fork {
+    font-family: var(--font-mono); font-size: var(--fs-caption);
+    color: var(--accent-ink); background: var(--accent);
+    padding: 0 6px; border-radius: var(--r-pill);
+    animation: fork-pulse 1.8s var(--ease-out) infinite;
+  }
+  @keyframes fork-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+  @media (prefers-reduced-motion: reduce) { .tab-fork { animation: none; } }
+
+  /* ── Sub-agentes ──────────────────────────────────────────────────────── */
+  .forks { padding: 4px 12px 14px; display: flex; flex-direction: column; gap: 3px; }
+  .forks-head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 8px 2px 6px; font-size: var(--fs-caption); color: var(--text-muted);
+    border-top: 1px solid var(--border); margin-top: 6px;
+  }
+  .fh-title { font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: var(--ls-label); text-transform: uppercase; color: var(--text-faint); }
+  .fh-run { color: var(--accent); background: var(--accent-bg); padding: 1px 7px; border-radius: var(--r-pill); }
+  .fh-wait { color: #E5B567; background: rgba(229,181,103,0.12); padding: 1px 7px; border-radius: var(--r-pill); }
+
+  .fork { border-radius: var(--r-md); }
+  .fork.running { border: 1px solid var(--border-accent); background: var(--surface-inset); }
+  .fork.is-error { background: rgba(240,110,110,0.06); }
+  .fork-row {
+    width: 100%; display: flex; gap: 10px; align-items: center;
+    padding: 8px 10px; background: transparent; border: 0; cursor: pointer;
+    text-align: left; color: inherit; border-radius: var(--r-md);
+  }
+  .fork-row:disabled { cursor: default; }
+  .fork-row:not(:disabled):hover { background: var(--surface-2); }
+  .fork-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .fork-icon { flex-shrink: 0; display: flex; align-items: center; width: 19px; }
+  .fork-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .fork-id { font-family: var(--font-mono); font-size: var(--fs-footnote); color: var(--text-primary); }
+  .fork-inst {
+    font-size: var(--fs-caption); color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .fork-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: var(--fs-caption); }
+  .fork-model { font-family: var(--font-mono); color: var(--text-faint); }
+  .fork-age { font-family: var(--font-mono); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .fork-state { padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--fs-caption); }
+  .fork-state.wait { color: #E5B567; background: rgba(229,181,103,0.12); }
+  .fork-state.got  { color: var(--accent); background: var(--accent-bg); }
+  .fork-state.err  { color: var(--danger); background: rgba(240,110,110,0.12); }
+  .fork-out {
+    margin: 0 10px 10px; padding: 10px 12px;
+    background: var(--surface-inset); border: 1px solid var(--border);
+    border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-code);
+    color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
+    max-height: 260px; overflow: auto;
+  }
   .ws-tools { margin-left: auto; display: flex; gap: 2px; align-self: center; padding-bottom: 4px; }
   .ws-tool {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
