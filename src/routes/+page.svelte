@@ -344,6 +344,22 @@ import { listen } from '@tauri-apps/api/event';
         lucyConfig = { ...lucyConfig, smartRouting: !!on };
         try { localStorage.setItem('lucy_smart_routing', on ? '1' : '0'); } catch {}
     };
+    /**
+     * Envía un aviso fuera de la máquina SOLO si nadie está mirando.
+     *
+     * `document.hasFocus()` es la señal honesta aquí: si la ventana de Lucy
+     * tiene el foco, el operador ya está viendo el modal y una notificación al
+     * móvil solo enseña a silenciar el canal — y un canal silenciado tampoco
+     * entrega lo que sí importaba.
+     *
+     * Fire-and-forget: un puente sin configurar devuelve false y un fallo de red
+     * no debe estorbar a una parada de confirmación que ya está en pantalla.
+     */
+    const _notifyIfAway = (title, body, severity = 'warning') => {
+        try { if (typeof document !== 'undefined' && document.hasFocus()) return; } catch {}
+        invoke('notify_bridge_send', { title, body, severity }).catch(() => {});
+    };
+
     const setPrivacyMode = (on) => {
         lucyConfig = { ...lucyConfig, privacyMode: !!on };
         try { localStorage.setItem('lucy_privacy_mode', on ? '1' : '0'); } catch {}
@@ -5185,11 +5201,38 @@ REGLAS DE FORMATO:
         // The two HITL halts. Both set the pending state and raise the modal;
         // the caller is expected to `fin()` and return — the user's answer is
         // what resumes the turn.
+        // ── Aviso externo en las paradas HITL ────────────────────────────
+        // Una parada de confirmación es el único momento en que Lucy queda
+        // BLOQUEADA esperando a una persona. Si esa persona no está delante, el
+        // turno se queda congelado sin que nadie lo sepa — que es justo lo que
+        // el puente de notificaciones existe para evitar.
+        //
+        // Solo si la ventana NO tiene el foco: avisar al móvil a quien está
+        // mirando la pantalla es ruido, y el ruido acaba en un canal silenciado
+        // que ya no entrega lo importante.
+        //
+        // El cuerpo lleva el comando a propósito: saber QUÉ pide decidir es la
+        // mitad de la decisión. Va depurado de secretos en el backend antes de
+        // salir de la máquina.
         confirmRunAs: (req) => {
             pendingRunAsCmd = { cmd: req.cmd, ctx: req.ctx, doSpeak: req.doSpeak, tabId: req.tabId, ...(req.isDestructive ? { isDestructive: true } : {}) };
             $showRunAsModal = true;
+            _notifyIfAway(
+                'Lucy espera tu confirmación',
+                `Quiere ejecutar:\n${String(req.cmd || '').slice(0, 400)}\n\nConfírmalo en Lucy — este canal no acepta respuestas.`,
+                req.isDestructive ? 'critical' : 'warning',
+            );
         },
-        confirmSecurityBlock: (req) => { pendingSecurityBlock = req; },
+        confirmSecurityBlock: (req) => {
+            pendingSecurityBlock = req;
+            // Crítico siempre: un comando frenado por la lista de bloqueo no es
+            // rutina, y si el operador no está, el turno queda parado ahí.
+            _notifyIfAway(
+                'Lucy detuvo un comando bloqueado',
+                `Motivo: ${req.blockWord}\n${String(req.displayCmd || req.cmd || '').slice(0, 400)}\n\nAutorízalo en Lucy — este canal no acepta respuestas.`,
+                'critical',
+            );
+        },
         // Phase 4 — the third HITL halt. Phase 1 missed it: it was still
         // assigning pendingLearn* and raising the modal inline.
         confirmLearn: (req) => {
