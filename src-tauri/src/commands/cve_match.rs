@@ -367,6 +367,24 @@ mod vuln_watch {
             .title("Lucy — Vulnerabilidades detectadas")
             .body(&body)
             .show();
+
+        // Y fuera de la máquina, si hay canal configurado. Este es el caso que
+        // motivó el puente: un CRITICAL detectado a las 3 de la mañana no sirve
+        // de nada en una bandeja de notificaciones que nadie está mirando.
+        // Severidad 'critical' solo cuando de verdad hay críticas — si todo son
+        // altas, no debe saltarse un umbral puesto en 'critical'.
+        let sev = if crit > 0 { "critical" } else { "warning" };
+        let body_owned = body.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::commands::notify_bridge::deliver(
+                "Lucy — Vulnerabilidades detectadas", &body_owned, sev,
+            ).await {
+                crate::utils::logging::write_app_log(
+                    "WARNING",
+                    &format!("notify_bridge: no se pudo enviar el aviso de CVE: {}", e),
+                );
+            }
+        });
     }
 }
 

@@ -31,6 +31,7 @@ pub mod audit;
 pub mod capacity;
 pub mod diagnostics;
 pub mod notify;
+pub mod notify_bridge;
 pub mod log_analysis;
 pub mod state_snapshot;
 pub mod process_lineage;

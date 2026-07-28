@@ -1201,6 +1201,11 @@ pub fn run() {
             // OS Notifications (P0 Feature 4)
             notify::send_notification,
             notify::check_notification_permission,
+            commands::notify_bridge::notify_bridge_status,
+            commands::notify_bridge::notify_bridge_save,
+            commands::notify_bridge::notify_bridge_clear,
+            commands::notify_bridge::notify_bridge_send,
+            commands::notify_bridge::notify_bridge_test,
             notify::request_notification_permission,
             // Self-Diagnostics (P0 Feature 5)
             diagnostics::run_self_diagnostics,
