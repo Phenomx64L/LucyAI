@@ -12427,7 +12427,12 @@ if (Test-Path $src) {
   {#if showSetupOverlay}
     <SetupOverlay {LANGS} initialLang={userLang}
       on:configured={({ detail }) => {
-        lucyConfig       = { name: detail.name };
+        // Spread, don't replace. `lucyConfig` also holds smartRouting,
+        // privacyMode, economyMode, briefMode and userAvatarUrl; rebuilding it
+        // from just the name left every one of them `undefined` for the rest of
+        // the session — so a fresh install silently lost the declared defaults
+        // until the next launch re-read them.
+        lucyConfig       = { ...lucyConfig, name: detail.name };
         keyringOk        = true;
         userLang         = detail.lang;
         showSetupOverlay = false;
@@ -13508,6 +13513,35 @@ if (Test-Path $src) {
         <!-- Sección: Sistema -->
         <div class="settings-section">
           <div class="settings-section-title">{isEN ? 'System' : 'Sistema'}</div>
+
+          <!-- Your name.
+               Until now this was captured ONCE by the first-run SetupOverlay and
+               written to `lucy_user_name`, and nothing could ever change it
+               again: the overlay never reappears once a key is configured, and
+               no other surface wrote that key. A second person on the same
+               install inherited the first one's name — greeted by it every
+               launch, and stuck with their initials in the cockpit avatar. -->
+          <div class="settings-row">
+            <label class="settings-label" for="set-user-name">
+              {isEN ? 'Your name' : 'Tu nombre'}
+              <span class="help-i" title={isEN
+                ? 'How Lucy addresses you, and the initials shown in the cockpit avatar. Also sent as the user name on every model call.'
+                : 'Cómo te llama Lucy, y las iniciales del avatar en el cockpit. También se envía como nombre de usuario en cada llamada al modelo.'}>ⓘ</span>
+            </label>
+            <input id="set-user-name" type="text" class="settings-select" style="max-width:200px;"
+              maxlength="40"
+              placeholder={isEN ? 'e.g. Ada' : 'ej. Ada'}
+              value={lucyConfig.name || ''}
+              on:change={(e) => {
+                const v = String(e.currentTarget.value || '').trim().slice(0, 40);
+                // Spread, never replace: lucyConfig also carries smartRouting,
+                // privacyMode, economyMode and briefMode. Rebuilding it from a
+                // single field would silently reset every one of them.
+                lucyConfig = { ...lucyConfig, name: v };
+                safeSetLSString('lucy_user_name', v);
+                toast(isEN ? 'Name updated' : 'Nombre actualizado', 'ok');
+              }} />
+          </div>
 
           <div class="settings-row">
             <span class="settings-label">{isEN ? 'API Key' : 'Clave API'}</span>

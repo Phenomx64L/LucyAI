@@ -457,7 +457,11 @@
         >
           <Icon size={19} stroke={1.75} />
           {#if item.id === 'terminal' && $agentStatus.running}<span class="rail-pulse" aria-hidden="true"></span>{/if}
-          <span class="rail-tip" role="tooltip">{item.label}</span>
+          <!-- The name is permanently visible, so the hover tooltip that used
+               to live here is gone: a tooltip repeating text already on screen
+               is noise, and it hid the module names behind a hover the user had
+               to perform eight times to learn the rail. -->
+          <span class="rail-label">{item.label}</span>
         </button>
       {/each}
       <span class="rail-spacer"></span>
@@ -852,13 +856,21 @@
     width: var(--rail-w);
     background: var(--surface-1);
     border-right: 1px solid var(--border);
-    padding: 12px 0;
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px 0;
+    /* Gap tightened from 6px: the buttons are ~14px taller now that each
+       carries its name, and the window can be as short as 560px (tauri.conf
+       minHeight). At 6px the eight modules plus the avatar overflowed the rail
+       at that size and pushed the avatar out of view. */
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
   }
   .rail-btn {
     position: relative;
-    width: 34px; height: 34px; border-radius: var(--r-md);
-    display: flex; align-items: center; justify-content: center;
+    /* Fills the rail minus its gutters so the hit target matches what the eye
+       reads as one item — icon and name together, not an icon with a caption. */
+    width: calc(var(--rail-w) - 16px);
+    border-radius: var(--r-md);
+    padding: 7px 3px 6px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
     background: transparent; border: 0; cursor: pointer;
     color: var(--text-muted);
     transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-snap);
@@ -866,18 +878,26 @@
   .rail-btn:hover { background: var(--surface-2); color: var(--text-primary); }
   .rail-btn:active { transform: scale(0.9); }
   .rail-btn.active { background: var(--surface-3); color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
-  .rail-pulse { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--accent); animation: cockpit-pulse 1.6s var(--ease-out) infinite; }
-  @keyframes cockpit-pulse { 0% { box-shadow: 0 0 0 0 rgba(61, 214, 164, 0.5); } 70% { box-shadow: 0 0 0 6px rgba(61, 214, 164, 0); } 100% { box-shadow: 0 0 0 0 rgba(61, 214, 164, 0); } }
-  .rail-tip {
-    position: absolute; left: calc(100% + 10px); top: 50%;
-    transform: translateY(-50%) translateX(-4px);
-    padding: 4px 9px; border-radius: var(--r-sm);
-    background: var(--surface-3); color: var(--text-primary); border: 1px solid var(--border-strong);
-    font-size: var(--fs-caption); white-space: nowrap; pointer-events: none;
-    opacity: 0; z-index: 100; box-shadow: var(--shadow-pop);
-    transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+  .rail-label {
+    /* Sans, not the mono instrument treatment used elsewhere: at 10px the
+       tracked monospace makes "Configuración" ~90px, which would force either a
+       much wider rail or a truncated word. Sans fits every current label on one
+       line inside 84px. */
+    font-family: var(--font-sans);
+    font-size: 10px;
+    line-height: 1.15;
+    letter-spacing: 0.01em;
+    text-align: center;
+    color: inherit;
+    /* Safety net for a future label longer than the rail: break the word rather
+       than overflow into the conversation lane. */
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
-  .rail-btn:hover .rail-tip, .rail-btn:focus-visible .rail-tip { opacity: 1; transform: translateY(-50%) translateX(0); }
+  /* Sits on the icon, not the button — the button is now tall enough that a
+     corner dot would float away from what it annotates. */
+  .rail-pulse { position: absolute; top: 5px; right: calc(50% - 15px); width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--accent); animation: cockpit-pulse 1.6s var(--ease-out) infinite; }
+  @keyframes cockpit-pulse { 0% { box-shadow: 0 0 0 0 rgba(61, 214, 164, 0.5); } 70% { box-shadow: 0 0 0 6px rgba(61, 214, 164, 0); } 100% { box-shadow: 0 0 0 0 rgba(61, 214, 164, 0); } }
   .rail-spacer { flex: 1; }
   .rail-avatar {
     width: 30px; height: 30px; border-radius: var(--r-md);

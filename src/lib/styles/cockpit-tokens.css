@@ -118,7 +118,13 @@
   --sp-4: 16px;  --sp-5: 20px;  --sp-6: 24px;  --sp-8: 32px;
 
   /* ── Layout rails (the two-lane cockpit; widths become resizable in F3) ──── */
-  --rail-w:       48px;    /* icon-only module switcher                         */
+  /* Module switcher: icon + always-visible name. Width is set by the LONGEST
+     label, measured rather than guessed — "Configuración" renders 69px at the
+     rail's 10px Inter, and needs 91px once the button padding and rail gutters
+     are added. 96px leaves a few px so a font-metric difference between the
+     bundled Inter and a fallback cannot tip it into a mid-word break. Revisit
+     if a longer module name is ever added. */
+  --rail-w:       96px;
   --workspace-w:  340px;   /* agent workspace lane (default; user-draggable)    */
   --conversation-min: 320px;
 

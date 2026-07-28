@@ -415,7 +415,16 @@
 <style>
   .dash { height: 100%; overflow-y: auto; padding: 18px 22px; }
 
-  .dash-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  /* `position: relative; z-index: 5` is what keeps the host dropdown ON TOP of
+     the metric tiles, and it is not redundant with the menu's own z-index.
+     `.dash > *` below gives EVERY direct child an entrance animation on
+     `transform` with fill-mode `both`. A filled transform animation makes each
+     child its own stacking context, so the head and the tile rows became
+     siblings with z-index auto — and the tiles, being later in the DOM, painted
+     over the head. The menu's z-index 41 could not help: it only ordered things
+     INSIDE the head's context, which as a whole sat below the tiles. Raising the
+     head itself is what lets its descendants escape. */
+  .dash-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; position: relative; z-index: 5; }
   .dash-title { font-size: var(--fs-title); font-weight: var(--fw-medium); color: var(--text-primary); }
 
   .host-picker { position: relative; }
