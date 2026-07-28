@@ -16,6 +16,7 @@
   import Settings from '@tabler/icons-svelte/icons/settings';
   import Cpu from '@tabler/icons-svelte/icons/cpu';
   import Key from '@tabler/icons-svelte/icons/key';
+  import Bell from '@tabler/icons-svelte/icons/bell';
   import ShieldLock from '@tabler/icons-svelte/icons/shield-lock';
   import Database from '@tabler/icons-svelte/icons/database';
   import Palette from '@tabler/icons-svelte/icons/palette';
@@ -57,6 +58,57 @@
   ];
   let configured = $state([]);
   const keyOk = (matches) => matches.some((x) => configured.some((p) => String(p).toLowerCase().includes(x)));
+
+  // ── Avisos externos (Telegram / Slack / webhook) ────────────────────────────
+  // Vive junto a "Claves API" porque es la misma forma: un secreto en el keyring
+  // del SO del que la interfaz solo conoce el ESTADO. El token no vuelve nunca
+  // por IPC, así que el formulario escribe pero no puede releer — por eso el
+  // campo se limpia tras guardar en vez de mostrar lo guardado.
+  const BRIDGE_KINDS = [
+    { k: 'telegram', l: 'Telegram', hint: 'Token del bot (@BotFather)', needsTarget: true },
+    { k: 'slack',    l: 'Slack',    hint: 'URL del incoming webhook',   needsTarget: false },
+    { k: 'webhook',  l: 'Webhook',  hint: 'URL que recibirá el JSON',   needsTarget: false },
+  ];
+  const SEVERITIES = [
+    { k: 'info',     l: 'Todo' },
+    { k: 'warning',  l: 'Avisos' },
+    { k: 'critical', l: 'Solo críticos' },
+  ];
+  let bridge = $state({ configured: false, enabled: false, kind: null, min_severity: 'warning' });
+  let bForm = $state({ kind: 'telegram', secret: '', target: '', min_severity: 'warning', enabled: true });
+  let bBusy = $state(false);
+  let bMsg = $state(null);          // { ok: boolean, text: string }
+  const bKind = $derived(BRIDGE_KINDS.find((x) => x.k === bForm.kind) ?? BRIDGE_KINDS[0]);
+
+  async function loadBridge() {
+    try { bridge = await invoke('notify_bridge_status'); } catch { /* sin backend */ }
+  }
+  async function saveBridge() {
+    bBusy = true; bMsg = null;
+    try {
+      await invoke('notify_bridge_save', { config: { ...bForm } });
+      bForm.secret = ''; bForm.target = '';   // no se puede releer: no fingir que sí
+      await loadBridge();
+      bMsg = { ok: true, text: 'Canal guardado.' };
+    } catch (e) {
+      bMsg = { ok: false, text: String(e) };
+    } finally { bBusy = false; }
+  }
+  async function testBridge() {
+    bBusy = true; bMsg = null;
+    try {
+      await invoke('notify_bridge_test');
+      bMsg = { ok: true, text: 'Enviado. Revisa el canal.' };
+    } catch (e) {
+      bMsg = { ok: false, text: String(e) };
+    } finally { bBusy = false; }
+  }
+  async function clearBridge() {
+    bBusy = true; bMsg = null;
+    try { await invoke('notify_bridge_clear'); await loadBridge(); bMsg = { ok: true, text: 'Canal eliminado.' }; }
+    catch (e) { bMsg = { ok: false, text: String(e) }; }
+    finally { bBusy = false; }
+  }
 
   let spendCap = $state(0);
   function saveSpendCap() { const n = Math.max(0, Number(spendCap) || 0); spendCap = n; try { localStorage.setItem('lucy_spend_cap_usd', String(n)); } catch {} }
@@ -120,6 +172,7 @@
     try { const p = await invoke('get_configured_providers'); if (Array.isArray(p)) configured = p; } catch {}
     // Si falla, las filas muestran «no disponible» — nunca una ruta inventada.
     try { const info = await invoke('db_info'); if (info?.path) dbPath = String(info.path); } catch {}
+    await loadBridge();
     try { spendCap = parseFloat(localStorage.getItem('lucy_spend_cap_usd') || '0') || 0; } catch {}
     try {
       const all = await ensureTtsVoices();
@@ -231,6 +284,71 @@
       </div>
     </section>
 
+    <!-- Avisos externos -->
+    <section class="panel">
+      <div class="panel-head"><Bell size={16} stroke={1.75} /> Avisos externos
+        {#if bridge.configured}
+          <span class="kstat ok" style="margin-left:auto"><CircleCheck size={14} stroke={1.9} /> {bridge.kind}</span>
+        {:else}
+          <span class="kstat no" style="margin-left:auto"><CircleX size={14} stroke={1.9} /> sin configurar</span>
+        {/if}
+      </div>
+      <div class="rows">
+        <div class="row col">
+          <span class="row-l">Canal</span>
+          <div class="seg">
+            {#each BRIDGE_KINDS as k}
+              <button class="seg-btn" class:on={bForm.kind === k.k} onclick={() => (bForm.kind = k.k)}>{k.l}</button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="row col">
+          <span class="row-l">{bKind.hint}</span>
+          <!-- type=password: el token no debe quedar legible por encima del hombro.
+               Se envía al keyring y no se puede releer desde aquí. -->
+          <input class="b-input" type="password" autocomplete="off" spellcheck="false"
+            bind:value={bForm.secret}
+            placeholder={bridge.configured ? '•••••• (guardado — escribe para reemplazar)' : bKind.hint} />
+        </div>
+
+        {#if bKind.needsTarget}
+          <div class="row col">
+            <span class="row-l">Chat id</span>
+            <input class="b-input" type="text" autocomplete="off" bind:value={bForm.target} placeholder="ej. 123456789" />
+          </div>
+        {/if}
+
+        <div class="row col">
+          <span class="row-l">Qué reenviar
+            <span class="row-hint">reenviar de todo acaba en silenciarlo</span>
+          </span>
+          <div class="seg">
+            {#each SEVERITIES as s}
+              <button class="seg-btn" class:on={bForm.min_severity === s.k} onclick={() => (bForm.min_severity = s.k)}>{s.l}</button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="b-actions">
+          <button class="b-btn primary" onclick={saveBridge} disabled={bBusy || !bForm.secret.trim()}>Guardar</button>
+          <button class="b-btn" onclick={testBridge} disabled={bBusy || !bridge.configured}>Probar</button>
+          {#if bridge.configured}
+            <button class="b-btn danger" onclick={clearBridge} disabled={bBusy}>Quitar</button>
+          {/if}
+        </div>
+
+        {#if bMsg}
+          <div class="b-msg" class:bad={!bMsg.ok}>{bMsg.text}</div>
+        {/if}
+
+        <div class="note">
+          Solo salida: Lucy avisa, no recibe órdenes por este canal. Todo lo enviado pasa
+          antes por el depurador de secretos, y el destino no puede ser una dirección interna.
+        </div>
+      </div>
+    </section>
+
     <!-- Guardarraíles -->
     <section class="panel span-2">
       <div class="panel-head"><ShieldLock size={16} stroke={1.75} /> Guardarraíles de seguridad</div>
@@ -331,6 +449,34 @@
   .acc-sw.cyan { background: #4FD1E0; }
   .hint-mini { font-size: var(--fs-caption); color: var(--text-faint); }
   .row-hint { display: block; font-size: var(--fs-caption); color: var(--text-faint); margin-top: 1px; }
+
+  /* ── Avisos externos ──────────────────────────────────────────────────── */
+  .b-input {
+    width: 100%; box-sizing: border-box;
+    background: var(--surface-2); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+    font-size: var(--fs-footnote); font-family: var(--font-mono);
+    padding: 6px 9px; outline: 0;
+  }
+  .b-input:focus { border-color: var(--border-accent); }
+  .b-actions { display: flex; gap: 7px; padding: 11px 2px 2px; flex-wrap: wrap; }
+  .b-btn {
+    font-size: var(--fs-caption); color: var(--text-secondary);
+    background: var(--surface-2); border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm); padding: 5px 12px; cursor: pointer;
+  }
+  .b-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--text-primary); }
+  .b-btn:disabled { opacity: 0.45; cursor: default; }
+  .b-btn.primary { color: var(--accent-ink); background: var(--accent); border-color: transparent; }
+  .b-btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .b-btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
+  .b-msg {
+    margin-top: 9px; padding: 7px 10px; border-radius: var(--r-sm);
+    font-size: var(--fs-caption); line-height: var(--lh-tight);
+    color: var(--accent); background: var(--accent-bg); border: 1px solid var(--accent-line);
+    word-break: break-word;
+  }
+  .b-msg.bad { color: var(--danger); background: rgba(240,110,110,0.10); border-color: var(--danger); }
   .row-warn {
     display: flex; align-items: flex-start; gap: 7px;
     margin: 2px 0 8px; padding: 8px 11px;
