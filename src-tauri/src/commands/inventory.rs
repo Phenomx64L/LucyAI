@@ -142,9 +142,7 @@ $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 $services = Get-Service | Where-Object {$_.Status -eq 'Running'} | Select-Object -First 50 |
     ForEach-Object { [PSCustomObject]@{name=$_.Name; status='running'; description=$_.DisplayName} }
 
-$software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue |
-    Where-Object { $_.DisplayName } | Select-Object -First 60 |
-    ForEach-Object { [PSCustomObject]@{name=$_.DisplayName; version=$_.DisplayVersion} }
+$software = __SOFTWARE_QUERY__
 
 $certs = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
     ForEach-Object {
@@ -165,6 +163,10 @@ $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
 } | ConvertTo-Json -Depth 4
     "#;
 
+    // Single source for the software query — see cve_match::INSTALLED_SOFTWARE_PS
+    // for why this is not inlined. A placeholder rather than `format!` because the
+    // script is full of PowerShell braces that would all need escaping.
+    let script = script.replace("__SOFTWARE_QUERY__", crate::commands::cve_match::INSTALLED_SOFTWARE_PS);
     let output = run_winrm(host, username, password, script.to_string()).await?;
 
     if !output.status.success() {
@@ -190,9 +192,7 @@ $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 $services = Get-Service | Where-Object {$_.Status -eq 'Running'} | Select-Object -First 50 |
     ForEach-Object { [PSCustomObject]@{name=$_.Name; status='running'; description=$_.DisplayName} }
 
-$software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue |
-    Where-Object { $_.DisplayName } | Select-Object -First 60 |
-    ForEach-Object { [PSCustomObject]@{name=$_.DisplayName; version=$_.DisplayVersion} }
+$software = __SOFTWARE_QUERY__
 
 $certs = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
     ForEach-Object {
@@ -213,10 +213,14 @@ $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
 } | ConvertTo-Json -Depth 4
     "#;
 
+    // Same single source as the vulnerability watch. This is the divergence that
+    // produced a CRITICAL toast next to an Inventory panel reading 0.
+    let script = script.replace("__SOFTWARE_QUERY__", crate::commands::cve_match::INSTALLED_SOFTWARE_PS);
+
     let output = tokio::task::spawn_blocking(move || {
         Command::new("powershell")
             .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(script)
+            .arg("-Command").arg(&script)
             .creation_flags(CREATE_NO_WINDOW)
             .output()
     }).await

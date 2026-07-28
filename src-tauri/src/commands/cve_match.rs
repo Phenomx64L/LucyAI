@@ -282,6 +282,25 @@ pub fn cve_scan(software: Vec<SoftwareInput>) -> CveScanResult {
 // in-view scans (Inventory + Dashboard) remain; this is the "even when nobody
 // is looking" layer. Windows-only (registry-based software discovery).
 
+/// THE query for "what software is installed on this Windows box".
+///
+/// One definition because there used to be two, and they had drifted in the two
+/// ways that mattered:
+///
+///   · the inventory scan read only `Uninstall\*`, missing `Wow6432Node\…` —
+///     the 32-bit hive, which is exactly where the older software that
+///     accumulates CVEs lives;
+///   · it capped at 60 entries where the vulnerability watch took 250.
+///
+/// The visible symptom was a toast reporting a CRITICAL finding while the
+/// Inventory panel showed 0 vulnerabilities: the background watch could see the
+/// vulnerable package and the panel could not. Both now read the same hives with
+/// the same cap, so a finding in one is reachable from the other.
+///
+/// Emits `[PSCustomObject]@{name; version}` — the shape of `SoftwareInput`.
+/// Callers append their own tail (`| ConvertTo-Json …`) as needed.
+pub const INSTALLED_SOFTWARE_PS: &str = r#"Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | Select-Object -First 250 | ForEach-Object { [PSCustomObject]@{name=$_.DisplayName; version=$_.DisplayVersion} }"#;
+
 #[cfg(windows)]
 mod vuln_watch {
     use super::{cve_scan, CveScanResult, SoftwareInput};
@@ -295,7 +314,8 @@ mod vuln_watch {
     fn installed_software() -> Vec<SoftwareInput> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let script = r#"Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | Select-Object -First 250 | ForEach-Object { [PSCustomObject]@{name=$_.DisplayName; version=$_.DisplayVersion} } | ConvertTo-Json -Depth 3 -Compress"#;
+        let script = format!("{} | ConvertTo-Json -Depth 3 -Compress", super::INSTALLED_SOFTWARE_PS);
+        let script = script.as_str();
         let out = match std::process::Command::new("powershell")
             .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass").arg("-Command").arg(script)
             .creation_flags(CREATE_NO_WINDOW)
@@ -371,6 +391,32 @@ pub fn start_vuln_watch_loop(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The vulnerability watch and the inventory scan must ask the SAME
+    /// question. They did not: the inventory read only the 64-bit hive, so a
+    /// CRITICAL finding could be announced by the toast and be invisible in the
+    /// panel it told the operator to open. Both hives, one definition.
+    #[test]
+    fn installed_software_query_covers_both_registry_hives() {
+        assert!(
+            INSTALLED_SOFTWARE_PS.contains(r"HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"),
+            "missing the 64-bit uninstall hive"
+        );
+        assert!(
+            INSTALLED_SOFTWARE_PS.contains(r"HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"),
+            "missing the 32-bit (Wow6432Node) hive — where the software that accumulates CVEs lives"
+        );
+    }
+
+    /// Shape contract: callers deserialize the output straight into
+    /// `SoftwareInput`, so the projected field names are load-bearing.
+    #[test]
+    fn installed_software_query_projects_software_input_fields() {
+        assert!(INSTALLED_SOFTWARE_PS.contains("name=$_.DisplayName"));
+        assert!(INSTALLED_SOFTWARE_PS.contains("version=$_.DisplayVersion"));
+        // No JSON tail — each caller appends its own (or embeds the pipeline).
+        assert!(!INSTALLED_SOFTWARE_PS.contains("ConvertTo-Json"));
+    }
 
     #[test]
     fn version_cmp_handles_basic_cases() {
