@@ -9,6 +9,8 @@
      Additive — does not touch InventoryView.svelte.
      ========================================================================== */
   import { onMount } from 'svelte';
+  // Nombre REAL del equipo — antes aquí había la constante de la maqueta.
+  import { localHostname, ensureLocalHostname, hostLabel } from './host-info';
   import { invoke } from '@tauri-apps/api/core';
   import { copyToClipboard } from '$lib/lucy-api';
   import Server from '@tabler/icons-svelte/icons/server';
@@ -157,6 +159,7 @@
   }
 
   onMount(() => {
+    ensureLocalHostname();
     scan();
     // Periodic re-scan while this view is open — catches newly-installed
     // software and re-checks it against the CVE DB. (True background alerting
@@ -170,7 +173,7 @@
   <div class="inv-head">
     <span class="ck-led" class:on={live && !scanning} class:warn={scanning} class:err={!!error && !scanning}></span>
     <span class="inv-title">Inventario</span>
-    <span class="host-pill"><Server size={14} stroke={1.75} /> PRECISION-X · local</span>
+    <span class="host-pill"><Server size={14} stroke={1.75} /> {hostLabel($localHostname)} · local</span>
     {#if live && lastScan}<span class="live"><span class="live-dot"></span>escaneado {lastScan}</span>{/if}
     <span class="ck-rule" aria-hidden="true"></span>
     <button class="scan-btn" class:busy={scanning} onclick={scan} disabled={scanning}>
@@ -179,7 +182,7 @@
   </div>
 
   {#if !snap && scanning}
-    <div class="inv-loading ck-blueprint"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Escaneando el inventario de PRECISION-X…</p></div>
+    <div class="inv-loading ck-blueprint"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Escaneando el inventario de {hostLabel($localHostname, 'este equipo')}…</p></div>
   {:else if snap}
     {#if vulnTotal > 0}
       <button class="vuln-alert" style="--sev:{sevColor(topSeverity)}" onclick={() => (activeCat = 'vulns')}>

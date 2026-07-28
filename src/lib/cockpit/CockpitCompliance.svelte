@@ -12,6 +12,10 @@
      ComplianceView.svelte.
      ========================================================================== */
   import { onMount } from 'svelte';
+  // El nombre del equipo estaba fijo en la cabecera, el texto de carga y —lo
+  // más grave— en el informe exportado, que es un documento de cumplimiento:
+  // ahí el nombre dice A QUÉ MÁQUINA se le pasaron los controles.
+  import { localHostname, ensureLocalHostname, hostLabel } from './host-info';
   import { invoke } from '@tauri-apps/api/core';
   import { copyToClipboard } from '$lib/lucy-api';
   import cisWindows from '$lib/compliance/cis-windows.json';
@@ -25,7 +29,9 @@
   import Check from '@tabler/icons-svelte/icons/check';
   import Download from '@tabler/icons-svelte/icons/download';
 
-  const CHECKS = cisWindows; // local host = Windows (PRECISION-X)
+  // Lucy es Windows-first, así que el equipo local siempre usa el catálogo CIS
+  // de Windows. (El nombre del equipo se resuelve en runtime — ver host-info.)
+  const CHECKS = cisWindows;
   const SEV_LABEL = { critical: 'crítica', high: 'alta', medium: 'media', low: 'baja' };
   const ICON = { pass: CircleCheck, warn: AlertTriangle, fail: CircleX };
 
@@ -74,7 +80,7 @@
   }
   function exportReport() {
     if (!results) return;
-    const head = `Compliance CIS — PRECISION-X — ${score}% conforme (${pass} conformes · ${warn} avisos · ${fail} fallas)${lastScan ? ` — ${lastScan}` : ''}`;
+    const head = `Compliance CIS — ${hostLabel($localHostname, 'equipo local')} — ${score}% conforme (${pass} conformes · ${warn} avisos · ${fail} fallas)${lastScan ? ` — ${lastScan}` : ''}`;
     const body = results.map((r) => {
       const tag = r.status === 'pass' ? 'OK  ' : r.status === 'fail' ? 'FALLA' : 'AVISO';
       const fix = r.status !== 'pass' && r.remediation ? `\n      ↳ ${r.remediation}` : '';
@@ -115,13 +121,13 @@
     }
   }
 
-  onMount(() => { scan(); });
+  onMount(() => { ensureLocalHostname(); scan(); });
 </script>
 
 <div class="cmp">
   <div class="cmp-head">
     <span class="cmp-title">Compliance</span>
-    <span class="host-pill"><ShieldCheck size={14} stroke={1.75} /> CIS · PRECISION-X · {CHECKS.length} checks</span>
+    <span class="host-pill"><ShieldCheck size={14} stroke={1.75} /> CIS · {hostLabel($localHostname)} · {CHECKS.length} checks</span>
     {#if live && lastScan}<span class="live"><span class="live-dot"></span>escaneado {lastScan}</span>{/if}
     <button class="scan-btn" class:busy={scanning} onclick={scan} disabled={scanning}>
       <ScanSearch size={15} stroke={1.75} /> {scanning ? 'Escaneando…' : 'Escanear'}
@@ -134,7 +140,7 @@
   </div>
 
   {#if !results && scanning}
-    <div class="cmp-loading"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Ejecutando {CHECKS.length} controles CIS en PRECISION-X…</p></div>
+    <div class="cmp-loading"><ScanSearch size={30} stroke={1.4} /><p class="ck-shimmer">Ejecutando {CHECKS.length} controles CIS en {hostLabel($localHostname, 'este equipo')}…</p></div>
   {:else if results}
     <div class="cmp-top">
       <div class="score {scoreBand}">

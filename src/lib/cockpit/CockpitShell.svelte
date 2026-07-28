@@ -47,6 +47,7 @@
   import CockpitInventory from './CockpitInventory.svelte';
   import CockpitCompliance from './CockpitCompliance.svelte';
   import CockpitConfig from './CockpitConfig.svelte';
+  import { localHostname, ensureLocalHostname, hostLabel } from './host-info';
   import CockpitTour from './CockpitTour.svelte';
   import Help from '@tabler/icons-svelte/icons/help';
   import { agentStatus, agentConvo, agentStream, agentTrace } from './agent-workspace';
@@ -391,6 +392,9 @@
   let _raf = null;
   onMount(() => {
     if (!live) cancelDemo = runCockpitDemo();
+    // Una sola resolución para todo el cockpit; los módulos que la piden en su
+    // propio onMount comparten esta llamada.
+    ensureLocalHostname();
     refreshLocalModels().catch(() => {});   // auto-discover local Ollama models
     // First-run tour (live only — the /cockpit browser preview plays the demo).
     try { if (live && localStorage.getItem('lucy_cockpit_tour_done') !== '1') tourOpen = true; } catch {}
@@ -767,7 +771,7 @@
   </div>
 
   <footer class="footer">
-    <span class="dot-item"><span class="dot" class:running={$agentStatus.running}></span> {$agentStatus.running ? 'Ejecutando…' : 'PRECISION-X'}</span>
+    <span class="dot-item"><span class="dot" class:running={$agentStatus.running}></span> {$agentStatus.running ? 'Ejecutando…' : hostLabel($localHostname, 'equipo local')}</span>
     <span class="foot-item"><ShieldCheck size={13} stroke={1.75} /> Limpio</span>
     <span class="foot-spacer"></span>
     <span class="foot-item">{$agentStatus.model ?? 'Opus 4.8'}</span>

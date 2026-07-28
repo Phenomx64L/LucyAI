@@ -34,7 +34,10 @@
   // ── Representative fallback (until the first real fetch / browser preview) ──
   let cpu = $state(24);
   let ram = $state({ pct: 43, used: 13.4, total: 31.3 });
-  let sys = $state({ name: 'PRECISION-X', os: 'Windows 11 Pro', uptime: '11 h' });
+  // Valor inicial neutro: `apply()` lo sustituye con el hostname real en el
+  // primer refresco, pero hasta entonces mostraba el nombre de la maqueta — que
+  // en otra máquina es sencillamente falso. Un guion no engaña a nadie.
+  let sys = $state({ name: '—', os: '', uptime: '—' });
   let storage = $state({ pct: 69, free: '146 G', total: '475 G' });
   let disks = $state([{ mount: 'C:\\', pct: 69, used: 329, total: 475, free: 146 }]);
   let cores = $state([42, 20, 28, 19, 29, 25, 19, 32, 24, 30, 22, 15, 12, 24, 24, 24]);
