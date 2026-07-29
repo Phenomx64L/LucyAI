@@ -247,18 +247,28 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
                 if elapsed > 0.05 {
                     let dr = cur_recv.saturating_sub(snap.received_total) as f64;
                     let ds = cur_send.saturating_sub(snap.transmitted_total) as f64;
-                    // v1.7.2 — previously `.round() / 1.0` truncated
-                    // anything below 0.5 Mbps to 0 and showed bands like
-                    // "↓ 0.0 ↑ 1.0" all day for users on idle browsing
-                    // (typical ~0.1-0.4 Mbps download, ~0.5-1.4 upload).
-                    // Now we keep 2 decimals so the chip actually moves:
-                    // 0.34 Mbps reads as 0.3, not 0.0. The frontend
-                    // already does `.toFixed(1)` for display.
+                    // v1.7.2 — previously `.round() / 1.0` truncated anything
+                    // below 0.5 Mbps to 0 and showed "↓ 0.0 ↑ 1.0" all day.
+                    // That fix kept 2 decimals and assumed the frontend's
+                    // `.toFixed(1)` was good enough, reasoning about 0.34 Mbps.
                     //
-                    // Bytes/sec → Mbits/sec  (×8 / 1e6), then 2 decimals.
+                    // v1.8.1 — it was not. Measured on an idle desktop: 0.005
+                    // Mbps down, 0.062 up. Real idle traffic runs an ORDER OF
+                    // MAGNITUDE below the figure that fix reasoned about, so
+                    // the panel still read "↓ 0.0 ↑ 0.0" permanently. Two
+                    // decimals also floors the value at 0.01 Mbps = 10 kbps,
+                    // which is too coarse to render as kbps at all.
+                    //
+                    // 3 decimals ⇒ 1 kbps of resolution, which is what the
+                    // frontend needs to switch units below 1 Mbps and show
+                    // "5 kbps" instead of rounding an entire idle session to
+                    // zero. Keep them in step: dropping precision here silently
+                    // re-flattens the display.
+                    //
+                    // Bytes/sec → Mbits/sec  (×8 / 1e6), then 3 decimals.
                     let to_mbps = |bytes: f64| -> f64 {
                         let raw = bytes * 8.0 / 1_000_000.0 / elapsed;
-                        (raw * 100.0).round() / 100.0
+                        (raw * 1000.0).round() / 1000.0
                     };
                     (to_mbps(dr), to_mbps(ds))
                 } else { (0.0, 0.0) }
@@ -288,7 +298,13 @@ pub async fn get_system_health_json() -> Result<serde_json::Value, String> {
         Ok(json!({
             "hostname":      System::host_name().unwrap_or_else(|| "---".into()),
             "os":            System::long_os_version().unwrap_or_else(|| "---".into()),
+            // `uptime_h` is integer hours and stays for the V1 Dashboard, which
+            // reads it directly. It cannot express the case that matters most:
+            // under an hour it is "0 h", which reads identically to "unknown" —
+            // exactly when an operator is asking "did this box just reboot?".
+            // `uptime_s` is the raw value; format it at the point of display.
             "uptime_h":      System::uptime() / 3600,
+            "uptime_s":      System::uptime(),
             "timestamp":     Local::now().format("%H:%M:%S").to_string(),
             "cpu": {
                 "cores":    sys.cpus().len(),

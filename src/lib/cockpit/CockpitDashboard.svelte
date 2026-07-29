@@ -18,6 +18,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { getSystemHealthJson } from '$lib/lucy-api';
   import { hosts } from '$lib/stores';
+  import { fmtRate, fmtUptime } from '$lib/cockpit/format-metrics';
   import Bulb from '@tabler/icons-svelte/icons/bulb';
   import Cpu from '@tabler/icons-svelte/icons/cpu';
   import DeviceDesktop from '@tabler/icons-svelte/icons/device-desktop';
@@ -158,7 +159,7 @@
   function apply(h) {
     cpu = Math.round(h.cpu?.global ?? 0);
     ram = { pct: Math.round(h.memory?.percent ?? 0), used: G(h.memory?.used_mb ?? 0), total: G(h.memory?.total_mb ?? 0) };
-    sys = { name: h.hostname || '—', os: h.os || '', uptime: `${h.uptime_h ?? 0} h` };
+    sys = { name: h.hostname || '—', os: h.os || '', uptime: fmtUptime(h) };
     disks = (h.disks ?? []).map((d) => ({ mount: d.mount || d.name || '—', pct: Math.round(d.percent ?? 0), used: Math.round(d.used_gb ?? 0), total: Math.round(d.total_gb ?? 0), free: Math.round(d.free_gb ?? 0) }));
     const sd = pickSystemDisk(h.disks);
     if (sd) storage = { pct: Math.round(sd.percent ?? 0), free: `${Math.round(sd.free_gb ?? 0)} G`, total: `${Math.round(sd.total_gb ?? 0)} G` };
@@ -299,7 +300,10 @@
     }
     let recv = 0, send = 0;
     const hasRate = !isWin && rates.length >= 2;
-    if (hasRate) { recv = Math.max(0, +((rates[1].r - rates[0].r) * 8 / 1e6).toFixed(2)); send = Math.max(0, +((rates[1].t - rates[0].t) * 8 / 1e6).toFixed(2)); }
+    // 3 decimals, matching the local probe in system.rs: `fmtRate` renders
+    // anything under 1 Mbps as kbps, and 2 decimals would floor a remote host
+    // to 10 kbps steps while the local one moves in 1 kbps.
+    if (hasRate) { recv = Math.max(0, +((rates[1].r - rates[0].r) * 8 / 1e6).toFixed(3)); send = Math.max(0, +((rates[1].t - rates[0].t) * 8 / 1e6).toFixed(3)); }
     net = (ifaces.length || hasRate) ? { recv, send, ifaces: ifaces.slice(0, 6), hasRate } : null;
     temps = tArr.slice(0, 6);
   }
@@ -499,7 +503,11 @@
     {#if net}
       <div class="panel sm">
         <div class="panel-title"><Network size={14} stroke={1.75} /> Red</div>
-        {#if net.hasRate}<div class="net-rates"><span class="net-r down">↓ {net.recv.toFixed(1)} <i>Mbps</i></span><span class="net-r up">↑ {net.send.toFixed(1)} <i>Mbps</i></span></div>{/if}
+        {#if net.hasRate}
+          {@const down = fmtRate(net.recv)}
+          {@const up = fmtRate(net.send)}
+          <div class="net-rates"><span class="net-r down">↓ {down.n} <i>{down.u}</i></span><span class="net-r up">↑ {up.n} <i>{up.u}</i></span></div>
+        {/if}
         <div class="net-ifaces">{#each net.ifaces.slice(0, 4) as n}<span class="iface">{n}</span>{/each}{#if !net.ifaces.length}<span class="dim">sin interfaces activas</span>{/if}</div>
       </div>
     {/if}
@@ -540,7 +548,13 @@
       {#each cores as c, i}
         <div class="core">
           <div class="core-top"><span class="core-id">C{i}</span><span class="core-pct">{c}%</span></div>
-          <div class="core-bar"><div class="fill" class:hot={c >= 85} style="width:{c}%"></div></div>
+          <!-- A single pegged core is normal: any single-threaded task does
+               it, and on a 32-core box it is 3% of the machine. It used to
+               paint `--danger` at 85% — the same red as a disk at 93% — so a
+               healthy machine showed an emergency colour for routine work.
+               Amber from 95%, and red only when the HOST is also loaded, which
+               is the state that actually means contention. -->
+          <div class="core-bar"><div class="fill" class:warn={c >= 95} class:hot={c >= 95 && cpu >= 78} style="width:{c}%"></div></div>
         </div>
       {/each}
     </div>
