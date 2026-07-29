@@ -1,0 +1,144 @@
+# ── Lucy CI ───────────────────────────────────────────────────────────────────
+#
+# Mirrors `.githooks/pre-commit` so a `git commit --no-verify` cannot land a
+# regression the hook would have caught, and adds the two supply-chain checks
+# the hook deliberately skips (they are too slow for a <5s commit gate):
+# `cargo audit` and `npm audit`.
+#
+# Job split is deliberate:
+#   • backend runs on WINDOWS because it must — the crate is Windows-only
+#     (winapi, winreg, std::os::windows) and the shell contract tests spawn
+#     real powershell.exe processes. Linux cannot run them at all.
+#   • frontend runs on LINUX because the suites are pure TypeScript logic over
+#     jsdom, so the 2× Windows runner cost buys nothing.
+#
+# Third-party actions are avoided on purpose for a security-focused project:
+# rustup and Node are preinstalled on GitHub runners, and caching uses the
+# first-party actions/cache. The only actions used are actions/checkout,
+# actions/setup-node and actions/cache.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push to the same branch cancels the previous run — no point burning
+  # runners on a commit that is already superseded.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep CI builds lean: no incremental artifacts (they only pay off across
+  # repeated local builds) and fail fast on warnings-as-errors where we opt in.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ── Frontend: type check, unit tests, production build, npm advisories ─────
+  frontend:
+    name: Frontend (svelte-check · vitest · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Baseline is 0 errors — Sprint 3 cleared the legacy debt. Any new type
+      # error is a regression. Same gate as pre-commit step [3/4].
+      - name: svelte-check (baseline 0 errors)
+        run: npm run check
+
+      - name: vitest
+        run: npm test
+
+      # Catches breakage that only surfaces at bundle time (bad dynamic import,
+      # manualChunks misconfiguration) — the hook does not cover this.
+      - name: Production build
+        run: npm run build
+
+      # Low-severity advisories are reported but do not fail the build. The 6
+      # current lows all descend from one `cookie` advisory via SvelteKit and
+      # are unreachable in a Tauri adapter-static app (no server cookies).
+      - name: npm audit (fail on high+)
+        run: npm audit --audit-level=high
+
+  # ── Backend: Windows-only crate, contract tests, lints ────────────────────
+  backend:
+    name: Backend (cargo check · tests · clippy)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin stable toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy
+        shell: bash
+
+      # Registry + git sources ONLY — deliberately NOT src-tauri/target.
+      # A debug target dir for this crate measures ~14.5 GB, and GitHub's
+      # cache budget is 10 GB for the ENTIRE repository: caching it would
+      # fail outright and evict every other entry on the way down. The
+      # registry cache is a few hundred MB and removes the slowest part
+      # (fetching + unpacking 783 crate sources); compilation itself is
+      # ~2.5 min from cold, which is an acceptable price.
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: cargo check
+        run: cargo check --all-targets
+
+      # `--test-threads=1` is REQUIRED, not a preference: the shell contract
+      # tests spawn real powershell.exe processes, and under parallelism the
+      # Windows console host injects variable \r\n padding and occasionally
+      # blows the per-test timeout. See the rationale in .githooks/pre-commit.
+      - name: Contract + unit tests
+        run: cargo test --lib -- --test-threads=1
+
+      # Only the bug-finding lint groups are denied. The style/complexity
+      # groups still carry ~101 known warnings (21 `manual_clamp` are
+      # intentional panic-safety, per ARCHITECTURE.md §5) — denying those
+      # would make CI red on day one and train everyone to ignore it.
+      - name: clippy (deny correctness + suspicious)
+        run: cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+  # ── Supply chain: RustSec advisories ──────────────────────────────────────
+  audit:
+    name: Supply chain (cargo audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # Prebuilt binary from crates.io; --locked keeps cargo-audit's own
+      # dependency tree reproducible.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Triaged exceptions live in src-tauri/.cargo/audit.toml, each with a
+      # written reachability verdict. This step fails on any advisory that is
+      # NOT on that list — which is the whole point.
+      - name: cargo audit
+        run: cargo audit

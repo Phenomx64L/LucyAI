@@ -1,0 +1,42 @@
+# ── cargo-audit configuration ────────────────────────────────────────────────
+#
+# Purpose: let CI fail on NEW advisories while staying green on the ones we
+# have already triaged and cannot act on. Every entry below must carry a
+# reason and a reachability verdict — an ignore without justification is how
+# an advisory list rots into noise nobody reads.
+#
+# Re-triage these whenever Tauri is upgraded: most are upstream pins that
+# resolve themselves when the Tauri ecosystem moves.
+#
+# Verify locally with:  cargo audit
+
+[advisories]
+ignore = [
+    # quick-xml 7.5 (high) — quadratic runtime on duplicate attribute names,
+    # and unbounded namespace allocation in NsReader.
+    # Pinned twice by the Tauri ecosystem, neither reachable by us:
+    #   • quick-xml 0.39.4 <- plist <- tauri-utils   (bundle metadata; largely
+    #     a BUILD dependency, and .plist is macOS packaging — not runtime input
+    #     on a Windows-only app)
+    #   • quick-xml 0.37.5 <- tauri-winrt-notification <- notify-rust  (Windows
+    #     toast XML that Lucy itself generates — never attacker-supplied)
+    # The fix is quick-xml >= 0.41, a semver-major move only upstream can make.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # sqlx 0.8.0 — binary protocol misinterpretation via truncating casts.
+    # Pinned by tauri-plugin-sql 2.4.0; `cargo update -p sqlx` cannot move it.
+    # Not reachable: the advisory concerns the Postgres/MySQL binary protocols,
+    # and Lucy's data path is SQLite through rusqlite, not through sqlx.
+    "RUSTSEC-2024-0363",
+
+    # rsa 0.9.10 — Marvin timing sidechannel. Upstream states "no fixed upgrade
+    # is available". Arrives transitively through sqlx's MySQL authentication
+    # path, which Lucy never executes (SQLite only).
+    "RUSTSEC-2023-0071",
+]
+
+# Unmaintained/unsound/yanked notices are reported but do not fail the build.
+# Most are the gtk3/atk/gdk Linux bindings that Tauri pulls into the lockfile
+# and that a Windows-only build never compiles.
+informational_warnings = ["unmaintained", "unsound", "notice"]
