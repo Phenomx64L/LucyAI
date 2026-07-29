@@ -66,6 +66,50 @@ pub async fn dashboard_open_incidents(host_name: String) -> Result<OpenIncidents
     })
 }
 
+// ── Shared PowerShell runner for the Dashboard probes ────────────────────
+
+/// Run a PowerShell script and return its stdout, correctly decoded.
+///
+/// Centralises the two things every Dashboard probe needs and one of them
+/// silently got wrong for a long time.
+///
+/// **Encoding.** Lucy is a GUI process with no console, so a PowerShell it
+/// spawns writes to the pipe in the system OEM code page — CP-850 on a
+/// Spanish install, where `ó` is the single byte 0xA2. That is not valid
+/// UTF-8, so `String::from_utf8_lossy` replaced it with U+FFFD and the
+/// Dashboard displayed "selecci<?>n especificados". Forcing
+/// `[Console]::OutputEncoding` before the payload runs is the same fix
+/// `shell.rs` already applies to the main execution engine (its wrapper does
+/// this at line ~359); the Dashboard's own spawns never inherited it.
+///
+/// The assignment must come BEFORE the payload: PowerShell fixes a stream's
+/// encoding when it first writes to it, so setting it afterwards is too late.
+///
+/// **CREATE_NO_WINDOW.** Without it every refresh flashes a console window.
+fn wrap_utf8(script: &str) -> String {
+    format!(
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
+         $OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
+         {}",
+        script
+    )
+}
+
+fn run_powershell_utf8(script: &str) -> Result<String, String> {
+    let wrapped = wrap_utf8(script);
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &wrapped]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(crate::state::CREATE_NO_WINDOW);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("PowerShell spawn failed: {}", e))?;
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 // ── D17 — Failed logins (Security event log) ─────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -90,6 +134,75 @@ pub struct FailedLoginsBrief {
 /// re-implementing all that for marginal speed gain.
 ///
 /// On non-Windows hosts returns `available: false` immediately.
+///
+/// Get-WinEvent is the modern API (vs the deprecated Get-EventLog). -MaxEvents
+/// caps at 500 so even a server under attack answers quickly; we only want the
+/// COUNT, hence Measure-Object.
+///
+/// THE TRAP: `Get-WinEvent` THROWS when a filter matches nothing — it does not
+/// return 0. So the "everything is fine" case arrives as an exception and has
+/// to be told apart from a real failure. This used to be done by matching the
+/// exception TEXT against the English 'No events' / 'returned no results'.
+/// Windows localises that message, so on a Spanish install it reads "No se
+/// encontraron eventos que coincidan con los criterios de selección
+/// especificados", matched neither pattern, and fell through to the error
+/// branch. The result: a machine with a perfectly readable log and ZERO failed
+/// logons — the healthiest possible outcome — reported "Registro de seguridad
+/// no legible". The bug was invisible in English and guaranteed everywhere else.
+///
+/// `FullyQualifiedErrorId` is the locale-independent discriminator and is what
+/// we match on now. Never match on `$_.Exception.Message`.
+///
+/// Note also that reading the Security log does NOT always require elevation:
+/// verified on a non-elevated shell that a user with the right group membership
+/// reads it fine. Treat ACCESS_DENIED as one possible answer, not the default.
+const FAILED_LOGINS_COUNT_SCRIPT: &str = r#"try {
+    $events = Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 500 -ErrorAction Stop
+    ($events | Measure-Object).Count
+} catch {
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { '0' }
+    elseif ($_.Exception -is [System.UnauthorizedAccessException] -or $_.FullyQualifiedErrorId -like '*UnauthorizedAccess*') { 'ACCESS_DENIED' }
+    else { 'ERROR:' + $_.Exception.Message }
+}"#;
+
+/// Turn the script's single-token output into a brief.
+///
+/// Split out from the spawn so the mapping is unit-testable without a Windows
+/// host: the shapes it must handle are exactly the tokens the script emits.
+fn classify_failed_logins_output(raw: &str) -> FailedLoginsBrief {
+    // Last non-empty line only — PowerShell can prepend profile warnings even
+    // with -NoProfile (rare, but it has happened).
+    let last = raw
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+
+    if last == "ACCESS_DENIED" {
+        return FailedLoginsBrief {
+            available: false,
+            count_24h: 0,
+            note: "Requires admin to read Security log".to_string(),
+        };
+    }
+    if let Some(err_msg) = last.strip_prefix("ERROR:") {
+        return FailedLoginsBrief {
+            available: false,
+            count_24h: 0,
+            note: err_msg.chars().take(120).collect(),
+        };
+    }
+    match last.parse::<i64>() {
+        Ok(n) => FailedLoginsBrief { available: true, count_24h: n, note: String::new() },
+        Err(_) => FailedLoginsBrief {
+            available: false,
+            count_24h: 0,
+            note: format!("Unexpected output: {}", last.chars().take(60).collect::<String>()),
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn dashboard_failed_logins_24h() -> Result<FailedLoginsBrief, String> {
     // Non-Windows: not applicable. We could parse /var/log/auth.log on
@@ -104,68 +217,15 @@ pub async fn dashboard_failed_logins_24h() -> Result<FailedLoginsBrief, String> 
     }
 
     tokio::task::spawn_blocking(|| {
-        // Get-WinEvent is the modern API (vs the deprecated Get-EventLog).
-        // -MaxEvents caps at 500 so even on a server under attack the query
-        // returns quickly. We only want the COUNT — pipe through Measure-Object.
-        let script = "try {
-            $events = Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 500 -ErrorAction Stop
-            ($events | Measure-Object).Count
-        } catch [System.UnauthorizedAccessException] {
-            'ACCESS_DENIED'
-        } catch {
-            if ($_.Exception.Message -like '*No events*' -or $_.Exception.Message -like '*returned no results*') { '0' }
-            else { 'ERROR:' + $_.Exception.Message }
-        }";
-        // CREATE_NO_WINDOW: without it this PowerShell spawn pops a visible
-        // console window every time the Dashboard loads/refreshes (the "two cmd
-        // windows" the user saw flashing). Gated for Windows because the file
-        // compiles cross-platform even though this branch only runs on Windows.
-        let mut cmd = std::process::Command::new("powershell");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(crate::state::CREATE_NO_WINDOW);
-        }
-        let output = cmd.output();
-        let raw = match output {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        let raw = match run_powershell_utf8(FAILED_LOGINS_COUNT_SCRIPT) {
+            Ok(s) => s,
             Err(e) => return Ok(FailedLoginsBrief {
                 available: false,
                 count_24h: 0,
-                note: format!("PowerShell spawn failed: {}", e),
+                note: e,
             }),
         };
-        // Take only the last non-empty line — PowerShell can prepend warnings
-        // about profile loading even with -NoProfile (rare).
-        let last = raw.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
-        if last == "ACCESS_DENIED" {
-            return Ok(FailedLoginsBrief {
-                available: false,
-                count_24h: 0,
-                note: "Requires admin to read Security log".to_string(),
-            });
-        }
-        if let Some(err_msg) = last.strip_prefix("ERROR:") {
-            return Ok(FailedLoginsBrief {
-                available: false,
-                count_24h: 0,
-                note: err_msg.chars().take(120).collect(),
-            });
-        }
-        // Plain integer expected.
-        match last.parse::<i64>() {
-            Ok(n) => Ok(FailedLoginsBrief {
-                available: true,
-                count_24h: n,
-                note: String::new(),
-            }),
-            Err(_) => Ok(FailedLoginsBrief {
-                available: false,
-                count_24h: 0,
-                note: format!("Unexpected output: {}", last.chars().take(60).collect::<String>()),
-            }),
-        }
+        Ok(classify_failed_logins_output(&raw))
     })
     .await
     .map_err(|e| format!("Task join: {}", e))?
@@ -209,15 +269,13 @@ pub async fn dashboard_failed_logins_detail() -> Result<Vec<FailedLoginEvent>, S
             }
             if ($rows) { $rows | ConvertTo-Json -Compress } else { '[]' }
         } catch { '[]' }"#;
-        let mut cmd = std::process::Command::new("powershell");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(crate::state::CREATE_NO_WINDOW);
-        }
-        let out = cmd.output().map_err(|e| format!("PowerShell spawn: {}", e))?;
-        let raw = String::from_utf8_lossy(&out.stdout);
+        // Same UTF-8 runner as the count probe. It matters more here than it
+        // looks: these rows carry account and workstation NAMES, which on a
+        // Spanish-language domain routinely contain accents and ñ. Decoded as
+        // UTF-8 from an OEM code page they would arrive full of U+FFFD — still
+        // valid JSON, so nothing would fail, and the operator would just see a
+        // corrupted username while threat hunting.
+        let raw = run_powershell_utf8(script)?;
         let txt = raw.trim();
         if txt.is_empty() || txt == "[]" {
             return Ok(vec![]);
@@ -316,4 +374,115 @@ pub async fn dashboard_process_lineage_brief(
             .collect();
         Ok(rows)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── The locale trap ─────────────────────────────────────────────────────
+    //
+    // The defect these guard was invisible on an English Windows and certain
+    // everywhere else, which is the worst combination: it survives every
+    // developer machine and fails on every user's. Get-WinEvent THROWS when a
+    // filter matches nothing, so "all clear" arrives as an exception, and
+    // telling it apart from a real failure by reading the exception TEXT means
+    // reading a string Windows translates.
+    //
+    // A unit test cannot run Spanish PowerShell, so it guards the decision
+    // instead: match on the stable id, never on the prose.
+
+    #[test]
+    fn failed_logins_script_discriminates_on_error_id_not_message_text() {
+        assert!(
+            FAILED_LOGINS_COUNT_SCRIPT.contains("FullyQualifiedErrorId"),
+            "the no-events case must be detected by its locale-independent id",
+        );
+        assert!(
+            FAILED_LOGINS_COUNT_SCRIPT.contains("NoMatchingEventsFound"),
+            "NoMatchingEventsFound is the id Get-WinEvent raises for an empty match",
+        );
+        // The exact shape of the original bug: an English-only text match.
+        assert!(
+            !FAILED_LOGINS_COUNT_SCRIPT.contains("Exception.Message -like"),
+            "matching the exception TEXT is locale-dependent — it reported a \
+             healthy zero as 'Registro de seguridad no legible' on es-ES",
+        );
+        for english in ["No events", "returned no results"] {
+            assert!(
+                !FAILED_LOGINS_COUNT_SCRIPT.contains(english),
+                "'{}' is an English message fragment; Windows localises it",
+                english,
+            );
+        }
+    }
+
+    // ── Output classification ───────────────────────────────────────────────
+
+    #[test]
+    fn a_real_zero_is_available_not_an_error() {
+        // THE case that regressed. Zero failed logons is the healthiest
+        // possible answer and must be reported as data, not as a fault —
+        // the UI deliberately distinguishes "a real zero" from "a zero
+        // because we could not look".
+        let b = classify_failed_logins_output("0");
+        assert!(b.available);
+        assert_eq!(b.count_24h, 0);
+        assert!(b.note.is_empty());
+    }
+
+    #[test]
+    fn a_positive_count_is_parsed() {
+        let b = classify_failed_logins_output("17");
+        assert!(b.available);
+        assert_eq!(b.count_24h, 17);
+    }
+
+    #[test]
+    fn access_denied_stays_unavailable() {
+        // Distinct from a real zero on purpose: conflating them would tell an
+        // operator "no failed logons" when the truth is "I could not read it".
+        let b = classify_failed_logins_output("ACCESS_DENIED");
+        assert!(!b.available);
+        assert_eq!(b.count_24h, 0);
+        assert!(b.note.to_lowercase().contains("admin"));
+    }
+
+    #[test]
+    fn a_real_error_keeps_its_message() {
+        let b = classify_failed_logins_output("ERROR:El servicio de registro de eventos no responde");
+        assert!(!b.available);
+        assert!(b.note.contains("no responde"));
+        assert!(!b.note.starts_with("ERROR:"), "the prefix is a protocol token, not prose");
+    }
+
+    #[test]
+    fn only_the_last_non_empty_line_is_read() {
+        // -NoProfile does not always stop PowerShell prepending a warning.
+        let b = classify_failed_logins_output("WARNING: perfil omitido\n\n3\n\n");
+        assert!(b.available);
+        assert_eq!(b.count_24h, 3);
+    }
+
+    #[test]
+    fn unparseable_output_does_not_become_a_silent_zero() {
+        let b = classify_failed_logins_output("¿qué?");
+        assert!(!b.available, "garbage must not be reported as zero failed logons");
+        assert!(b.note.contains("Unexpected"));
+    }
+
+    // ── Encoding ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_utf8_preamble_precedes_the_payload() {
+        // PowerShell fixes a stream's encoding on first write, so setting it
+        // after the payload would be too late to matter. Without this, output
+        // arrives in the OEM code page (CP-850 on es-ES, where 'ó' is the
+        // single byte 0xA2) and from_utf8_lossy turns every accent into U+FFFD.
+        let w = wrap_utf8("Get-Date");
+        let enc = w.find("[Console]::OutputEncoding").expect("preamble missing");
+        let payload = w.find("Get-Date").expect("payload missing");
+        assert!(enc < payload, "the encoding assignment must run first");
+        assert!(w.contains("$OutputEncoding"), "the pipeline variable is set too");
+    }
 }
