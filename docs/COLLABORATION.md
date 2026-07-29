@@ -127,10 +127,18 @@ main                        estable, siempre verde
 claude/<turno>-<fecha>      una rama por turno, se fusiona al cerrarlo
 ```
 
-Eso ya funciona: el remoto (`github.com/Phenomx64L/LucyAI`) está **al día**
-desde 2026-07-28. Estuvo 274 commits por detrás durante tres turnos porque
-empujar publica trabajo y requiere el visto bueno del operador — pídelo, no lo
-asumas.
+Hoy eso **todavía no funciona**: `main` está **279 commits por delante de
+`origin/main`** (`github.com/Phenomx64L/LucyAI`). Han hecho falta dos puertas
+distintas, y conviene no confundirlas:
+
+1. **La decisión** — empujar publica trabajo, así que requiere el visto bueno
+   del operador. **Concedido el 2026-07-28.**
+2. **La autenticación** — el remoto es HTTPS sin credencial guardada, y el
+   entorno de agente corre con `GIT_TERMINAL_PROMPT=0`. Ninguna instancia
+   puede resolver esto: hace falta una persona que autentique una vez.
+
+Que la primera esté concedida no desbloquea la segunda. Si heredas esto, no
+vuelvas a pedir permiso — pide autenticación.
 
 Aun compartiendo SSD, empujar sigue valiendo la pena como copia de seguridad: un
 SSD es un único punto de fallo para todo el historial.

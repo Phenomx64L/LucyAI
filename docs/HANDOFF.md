@@ -33,8 +33,19 @@ fichero es lo único que sobrevive.
 `check` 0 · `vitest` 533 (37 ficheros) · `cargo` 418 · `build` ok · clippy
 limpio con los grupos que deniega el CI.
 
-`origin/main` **al día** — el push heredado de dos turnos se hizo con la
-aprobación del operador. Ya no es un punto pendiente.
+`main` va **279 commits por delante de `origin/main`**, en fast-forward limpio
+(0 por detrás — no hay divergencia ni hace falta forzar). El operador **aprobó
+el push este turno**, pero falló por autenticación, no por decisión:
+
+```
+fatal: could not read Username for 'https://github.com'
+```
+
+No hay credencial de GitHub en el Credential Manager de Windows y
+`GIT_TERMINAL_PROMPT=0` impide cualquier diálogo, así que ninguna instancia
+puede resolverlo sola. Hace falta una persona que autentique una vez
+(`gh auth login`, o un push manual que guarde la credencial). **La aprobación
+ya está dada: no vuelvas a pedirla, solo la autenticación.**
 
 Toolchain de ESTE sistema: Node 24.18, Rust stable MSVC, WebView2.
 `markitdown` **NO** está instalado, lo cual importa más de lo que parece —
