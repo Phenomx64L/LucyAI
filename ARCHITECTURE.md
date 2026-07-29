@@ -1,9 +1,15 @@
 # Lucy — Architecture & File-Root Map (for deep error scanning)
 
-> Generated v1.7.208 · 2026-06-22. Purpose: a navigable map of every subsystem
-> and its files, ranked by size/criticality, so a deep bug scan has a root to
-> start from. Line counts are LOC at generation time — they flag *where the
-> risk concentrates*, not exact current values.
+> Generated v1.7.208 · 2026-06-22 · revised v1.8.1 · 2026-07-28: new §4.1
+> attachment pipeline, §4.2 auto-execution gate, §4.3 agent-loop context, §7 CI
+> and supply chain, and gotchas 8-14. Purpose: a navigable map of every
+> subsystem and its files, ranked by size/criticality, so a deep bug scan has a
+> root to start from. Line counts are LOC at generation time — they flag *where
+> the risk concentrates*, not exact current values.
+>
+> Cross-instance work: `docs/COLLABORATION.md` is the operating model and
+> `docs/HANDOFF.md` the live transfer. The agent's own memory does NOT cross
+> systems — what is not written in those two files is lost at the turn boundary.
 >
 > Companion docs: `DESIGN.md` (conceptual design), `CHANGELOG.md` (every fix
 > carries its symptom in the subject), `INSTALLER.md`, `SETUP.md`.
@@ -198,11 +204,142 @@ See §5 CSS gotcha: real chat bubbles live in `ChatThread.svelte`'s scoped
 
 | Concern | Touches |
 |---|---|
-| **Agent loop / turn progression** | `+page.svelte::runAI`, `hooks/turn-loop.ts`, `agent-loop-util.ts`, reasoning bubble (6122+), skip-stuck |
+| **Agent loop / turn progression** | `+page.svelte::runAI`, `hooks/turn-loop.ts`, `agent-loop-util.ts`, reasoning bubble (6122+), skip-stuck — see §4.3 |
 | **Streaming render** | local `askLucyStream` (+page.svelte), `stream-parse.ts`, token queue/drain timer, `morph-html.ts`, `ChatThread.svelte`, WebView2 flags (`lib.rs`) |
 | **Memory save/recall gates** | `metrics.rs` (dedup), `memory.rs` (decay/inject), `embeddings.rs` (silent skip), `vec_search.rs` |
-| **Security / HITL** | `guardrails/*`, `auto-promote.ts` deny-list, `command-guard.ts`, `secret_scrubber.rs`, SSRF in `ai.rs`, prefill-not-autoexec |
+| **Security / HITL** | `guardrails/*`, `auto-promote.ts` deny-list, `command-guard.ts`, `secret_scrubber.rs`, SSRF in `ai.rs`, prefill-not-autoexec — see §4.2 |
 | **IPC contract** | `src/lib/types/*.ts` ↔ `#[derive(ts_rs::TS)]` structs (regen via `cargo test export_bindings`) |
+| **File attachments** | `ui.rs::pick_multiple_files` / `pdf.rs::extract_pdf_text*` → `file-inputs.ts` → `process()` → cockpit mirror → prompt builder — see §4.1 |
+
+### 4.1 Attachment pipeline (v1.8.1 — end to end)
+
+Four hops, and the contract that ties them together is the **mime → `type`
+mapping**. Get that wrong and the file silently never reaches the model.
+
+```
+ ①  INGEST            ②  CLASSIFY           ③  COMPOSE          ④  RENDER / SEND
+ picker  ─┐                                 process()           cockpit bubble
+ (ui.rs)  ├─ (name, content, mime) ─→ file-inputs.ts ─→ t.attachedFiles ─┬─→ msg.attachments
+ drop ────┘                            type: image|text                  └─→ ctx '--- ARCHIVOS ---'
+```
+
+**① Ingest — two entry points that must stay in sync.**
+`ui.rs::pick_multiple_files` (clip button) reads from a real path, so PDFs are
+extracted there via `pdf.rs::extract_pdf_text`. Drag-and-drop cannot use it:
+`tauri.conf.json` sets `dragDropEnabled: false`, so drops arrive as HTML5 `File`
+objects with **no filesystem path** — those go through
+`pdf.rs::extract_pdf_text_from_bytes` (base64 → temp file → same extractor).
+Both extraction paths share `pdf_ingest`'s markitdown → `pdf-extract` chain, so
+an attached PDF and an ingested PDF yield identical text.
+
+**② Classify — the contract.** `mime` decides `type`, and `type` is what every
+later stage dispatches on:
+
+| mime | `type` | `content` holds | Consumed by |
+|---|---|---|---|
+| `image/*` | `image` | base64 | vision payload (`imgs`) |
+| `application/pdf` | **`text`** | already-extracted text | `--- ARCHIVOS ---` |
+| anything else | `text` | file text | `--- ARCHIVOS ---` |
+| `__error__` | — | error message | toast; not attached |
+
+`type` has exactly **two** legal values. Adding a third (`'pdf'`, `'doc'`) drops
+those files from the prompt builder's `filter(f => f.type === 'text')` — that is
+precisely the v1.8.0 bug.
+
+**③ Compose.** `process()` (`+page.svelte`) must pass **`rawContent`** — the
+clean user text — alongside `html`. It also passes ALL attachments as
+`{name, kind, previewUrl?, chars?}`.
+
+**④ Render / send.** The cockpit renders images as thumbnails and documents as
+`.msg-doc` chips. The prompt builder appends text files under
+`--- ARCHIVOS ---` and pushes images into the vision array.
+
+Regression nets (v1.8.1, extended 2026-07-28):
+
+- `src/lib/file-inputs.test.ts` — the mime → `type` table for the picker, plus
+  the whole drop path. The load-bearing one is **"starts every read before
+  yielding to the event loop"**: it models Chromium's data-store teardown with
+  a fake `FileReader` (a read kicked off while the store is alive completes;
+  one started after rejects with `NotFoundError`), so the gotcha-11 timing
+  invariant fails loudly. Verified by mutation — inserting a single
+  `await Promise.resolve()` above the read fails exactly 3 tests, where before
+  it passed all four gates.
+- `pdf.rs::tests` — the extractor itself. `pdf_extract_reads_a_real_text_layer_pdf`
+  builds a valid one-page PDF (xref offsets computed, not hand-written) and
+  calls `pdf_extract::extract_text` **directly**, on purpose: the wrapper tries
+  markitdown first, so a wrapper-level test would pass through markitdown on a
+  machine that has it and mask a broken pure-Rust fallback — which is the path
+  every machine without markitdown uses. Re-run after any `pdf-extract`/`lopdf`
+  move; §7 says to expect them.
+- The drop-side backend (`extract_pdf_text_from_bytes`) pins its guards: size
+  ceiling checked before decoding, invalid base64, filename-is-cosmetic, and
+  temp-file cleanup on both the success and failure paths.
+
+**Cleanup ordering, `extract_pdf_text_from_bytes`:** the staged temp file is
+deleted BEFORE the join result is unwrapped. `pdf-extract` panics on some
+malformed PDFs, and a panic arrives as a `JoinError` — the earlier `?` on the
+joined result returned first and left the user's document bytes in `%TEMP%`
+indefinitely. "Cleanup on every exit path" has to mean every path, not just
+the ones that return a value.
+
+### 4.2 Auto-execution gate — the four layers, and where they leaked
+
+A model-emitted command reaches PowerShell through four gates. v1.8.1 closed a
+hole that went through **all four**:
+
+```
+LLM output → auto-promote.ts (frontend, no human) → execute_powershell IPC
+             → obfstr blocklist → DESTRUCTIVE_VERB_RE → guardrails::scan → run
+```
+
+`Start-Process` is allow-listed in `auto-promote.ts` (it is what "ábrelo" means),
+and the deny-list only knew the fully spelled-out `-EncodedCommand`. **PowerShell
+resolves any unambiguous prefix of a parameter name**, so `-e`, `-en`, `-enc` all
+mean the same thing — and the Rust blocklist substring-matches the literal
+`"-encodedcommand"`, which `-enc` never contains. `DESTRUCTIVE_VERB_RE` does not
+cover `Start-Process`, and the guardrail bank only flags `Start-Process … -Verb
+RunAs`. Net effect: `Start-Process powershell -enc <base64>` **auto-executed with
+no human in the loop** — one injected line in any file Lucy read was RCE.
+
+Fixed on both sides, because **the frontend is not a security boundary**: any
+caller reaching the `execute_powershell` IPC command directly skips it.
+`ENCODED_CMD_RE` (nested optional groups spelling every prefix of
+`encodedcommand`, `\b`-anchored so `-Encoding`/`-ErrorAction`/`-ea` do not match)
+lives in BOTH `auto-promote.ts` and `shell.rs`. `LAUNCH_ABUSE_RE` additionally
+refuses launchers pointed at interpreters/LOLBins, executable extensions,
+`-ArgumentList`, or UNC paths — while still promoting `Start-Process "report.pdf"`.
+
+Regression nets: `src/lib/auto-promote.test.ts` and `shell.rs::tests`
+(`encoded_cmd_backstop_*`). Both pin the false-positive cases too — over-blocking
+here costs a confirmation prompt, under-blocking costs a shell.
+
+### 4.3 Agent-loop context: three independent shrinkers (v1.8.1)
+
+Three mechanisms cut context, at different scopes. They interact, and the
+interaction is where the bugs live.
+
+| # | Mechanism | Scope | Persists? |
+|---|---|---|---|
+| 1 | **Rolling window** (`AGENT_CTX_ROLLING_MAX` 35 kB, keeps last 5 tool blocks) | `agentCtx`, per loop turn | **yes** — rewrites `agentCtx` |
+| 2 | **`compressContext`** (Ph1 local dedup free · Ph2 LLM, gated) | per continuation call | **no** — `compressedCtx` is used for the call and dropped |
+| 3 | **Tab compaction** (`pruneTabForBudget` 60 k tok + `compaction.keepFrom` + `contextMax` 50 kB) | `t.messages` → HISTORIAL, between user turns | **yes** |
+
+Consequences worth knowing before touching any of them:
+
+- **#2 recomputes every turn by design.** `agentCtx` is the running record; the
+  compacted form is a per-call view. It looks wasteful in the trace (identical
+  "Context compacted 33.8k → 25k" lines every turn) but Phase 2 — the only part
+  that spends an LLM call — is gated by `_lastPhase2InputLen`, so the repeated
+  work is the free local dedup. **Trace volume here is a symptom of a long loop,
+  not its cost.**
+- **#1 used to defeat the stall detector.** See gotcha 13.
+- **#3 evicts the biggest message first**, which is always the deliverable. See
+  gotcha 14.
+
+Anti-grind guards (`_STALL_LIMIT` 3 · `_ESCALATE_AFTER` 2 · `_EMPTY_GUARD_BAIL`
+3 · `MAX_IDENTICAL_TOOL_CALLS` 3 · `_intentOnlyStreak`) are all **consecutive**
+streaks. A failure that alternates with partial successes trips none of them and
+rides to `MAX_LOOPS` (60).
 
 ---
 
@@ -228,6 +365,88 @@ See §5 CSS gotcha: real chat bubbles live in `ChatThread.svelte`'s scoped
 6. **manual_clamp clippy (21×)** are intentional (panic-safe) — not bugs.
 7. **Skills = 4 different surfaces** with similar names (see memory
    `architecture-navigation`); `SkillsManagerModal` is dead code.
+8. **Attachment `type` is a two-value enum** — `'image' | 'text'`, nothing else
+   (§4.1). A PDF is `type: 'text'` carrying `mimeType: 'application/pdf'`,
+   because `content` already holds its EXTRACTED TEXT. Until v1.8.1 `attach()`
+   read "not `text/plain`" as "image", so PDFs became fake images and the
+   prompt builder's `filter(f => f.type === 'text')` skipped them: the composer
+   showed a chip, the model got nothing, and the symptom looked like "Lucy
+   can't read my PDFs" — users worked around it by pasting absolute paths.
+   Branch on `mimeType` for ICONS, never on `type`.
+9. **Cockpit mirror: pass `rawContent`, not just `html`.** `addMsg` mirrors user
+   messages into the cockpit with
+   `rawContent ?? content ?? stripTags(html)`. Any call site that supplies only
+   `html` gets its markup flattened into the bubble — which is how
+   `<div class="mn">Iván</div>` plus an inline `Archivos: · x.pdf` span rendered
+   as the single run-on line *"Iván mi pregunta Archivos: · x.pdf"*. The `html`
+   field is for the legacy V1 chat view; the cockpit wants clean text plus
+   structured `attachments`.
+10. **Two drop handlers exist** — `onDrop` (global overlay) and
+   `handleFileDrop` (per-tab). They drifted apart once already; both now
+   delegate to `readDroppedFile`. Change the shared reader, not one caller.
+11. **Dropped files must be read SYNCHRONOUSLY.** Chromium/WebView2 tears the
+   drag data store down when the drop handler returns, and the `File` objects
+   stop being readable (`NotFoundError: A requested file or directory could not
+   be found…`). `onDrop` in `+page.svelte` used to hand the event to the file
+   reader from inside `maybeInstallSkillFromDrop(e).then(…)` — always too late
+   — and the old readers had no `onerror`, so the drop silently did nothing.
+   Always call `startReadingDrop(e.dataTransfer)` first, await later.
+12. **The stall detector measures REAL growth, not net size.** `_noGrowthStreak`
+   compares the effective context length turn over turn, and a negative delta
+   resets it ("it shrank, so a digest ran, so there was progress"). But the
+   rolling window (§4.3 #1) also shrinks it, and that is pure bookkeeping. With
+   the window firing every 4-6 turns and `_STALL_LIMIT` at 3, the streak was
+   wiped before it could ever reach the limit — a grinding run rode 24+/60 turns
+   with every stall signal erased by the window it had itself triggered. Fixed
+   in v1.8.1 by adding `_rollingDroppedThisTurn` back into the delta. **If you
+   add a fourth shrinker, it must feed that adjustment too.**
+13. **A delivered artifact must be anchored outside the compactable window.**
+   The HISTORIAL is rebuilt from `t.messages` under two cuts (`keepFrom` and
+   `contextMax`), and a generated report is the largest message, so it is the
+   first evicted — by the very compaction its own long run triggered. The user
+   then asks Lucy to act on the report she just wrote and gets "I have no report
+   loaded in the context of our conversation", which is literally true and reads
+   as amnesia. `renderAgentTask` now stores the last substantial output on the
+   TAB (`t._lastDeliverable`, ≥600 chars), and the context builder re-injects it
+   via `buildDeliverableAnchor` (`$lib/deliverable-anchor.ts`, tested),
+   reserving its budget BEFORE the history walk so it displaces old turns
+   instead of overflowing `contextMax`.
+14. **`npm run check` does NOT type-check `+page.svelte`.** `jsconfig.json` sets
+   `"checkJs": false`, so the 14.5 kLOC monolith — agent loop included — is
+   unchecked JS: undefined identifiers, wrong arity, everything passes. The
+   "0 errors" badge only covers `.ts`/`.svelte` files with typed script blocks.
+   **When editing `+page.svelte`, verify every identifier is in lexical scope —
+   no tool will tell you.**
+
+   Reproduce the real error count with a throwaway config (do NOT flip the
+   committed one — CI would go red on day one):
+
+   ```json
+   // jsconfig.scan.json — delete after use
+   { "extends": "./jsconfig.json",
+     "compilerOptions": { "checkJs": true, "strict": false } }
+   ```
+   ```
+   npx svelte-check --tsconfig ./jsconfig.scan.json --output machine
+   ```
+
+   Measured 2026-07-28: 241 errors / 36 files, 25 `Cannot find name`. Five were
+   real `ReferenceError`s on `esc` (a local alias of `escapeHtml` declared
+   ~2000 lines below its use), crashing `/pantalla`'s error path and all of
+   `/controlar`.
+
+   **Triage of the remaining 20 completed 2026-07-28 (now 228 / 12).** The
+   pattern worth carrying forward: `typeof x === 'undefined'` guards are SAFE
+   on an undeclared identifier, a bare reference is not — and a bare one as the
+   FIRST statement of a `try` kills every statement after it.
+
+   | Identifier | Verdict |
+   |---|---|
+   | `listStaleCheckpoints` | **Real.** Imported aliased as `listStaleCkpts`; the unaliased call threw on entry, so interrupted-agent checkpoint recovery never ran once. Fixed. |
+   | `_runToken` | **Real.** Declared nowhere in the repo. The bare reference opened the tab-close cleanup `try`, so `_forkBypassByTab` / `_forkAdviceByTab` / `_lastTitledTurn` were never reclaimed — the leak-fix block leaked. Removed; `t._cancelled` already does the invalidation its comment described. |
+   | `destroyEnrichedWidgets` | **Real.** Exported by `$lib/message-render` but never imported here, so the widget teardown on tab close silently no-op'd into the detached-DOM leak it existed to prevent. Fixed by importing it. |
+   | `loop_i` (×8) | Benign, degraded. All `typeof`-guarded; it is the `for (let loop_i…)` variable at ~7523, out of scope in these callers. Cost: trace events always report `iteration: null`, and `hitLimit` is permanently false so the "límite de iteraciones con errores" fallback can never be chosen. Fixing means threading it through the agent loop — hot zone, deliberate call. |
+   | `aiParams` (×4) | Benign, degraded. `const` from a different block; `typeof`-guarded, falls back to `getEffectiveModel(t)`. Diverges only when the loop routed to `_routedLoopModel`, in which case the provider-fallback notice names the wrong model. |
 
 ---
 
@@ -245,6 +464,52 @@ See §5 CSS gotcha: real chat bubbles live in `ChatThread.svelte`'s scoped
 10. Sweep the `.test.ts`-backed pure libs last (lowest risk)
 
 Tooling for the scan: `cargo clippy --all-targets`, `cargo test`,
-`npm run check` (svelte-check), `npx vitest run`, `cargo audit`, `npm audit`.
-Known-noise advisories are catalogued in memory `integrity-audit-verdict`
-(don't re-investigate those).
+`npm run check` (svelte-check — but read gotcha 14 first), `npx vitest run`,
+`cargo audit`, `npm audit`.
+
+---
+
+## 7. CI and supply chain (v1.8.1)
+
+`.github/workflows/ci.yml` mirrors `.githooks/pre-commit` so `--no-verify`
+cannot land what the hook would have caught, and adds the two checks the hook is
+too short for. Three jobs:
+
+| Job | Runner | Gate |
+|---|---|---|
+| `frontend` | ubuntu | svelte-check · vitest · `npm run build` · `npm audit --audit-level=high` |
+| `backend` | **windows** | `cargo check` · `cargo test --lib -- --test-threads=1` · clippy |
+| `audit` | ubuntu | `cargo audit` |
+
+Three constraints that are **load-bearing** — changing them silently breaks the
+gate rather than failing loudly:
+
+1. **`backend` must stay on Windows.** The crate is Windows-only (`winapi`,
+   `winreg`, `std::os::windows`) and the `shell.rs` contract tests spawn real
+   `powershell.exe`. Linux cannot run them at all.
+2. **Clippy denies only `correctness` + `suspicious`.** The style/complexity
+   groups carry ~101 known warnings (21 `manual_clamp` are intentional, §5 #6);
+   denying everything would make CI red on day one.
+3. **`src-tauri/target` is NOT cached** — measured 14.5 GB against GitHub's
+   10 GB per-repo budget. Caching it fails and evicts everything else. Only the
+   cargo registry is cached.
+
+### Advisory triage — `src-tauri/.cargo/audit.toml`
+
+`cargo audit` fails on any advisory NOT on the written ignore list, and every
+entry there carries a reachability verdict. Current state (triaged 2026-07-28):
+
+- **Fixed**: `lopdf` (RUSTSEC-2026-0187, **7.5 high** — stack overflow on nested
+  PDF objects, directly reachable through attachments/`pdf_ingest`; escaped via
+  `pdf-extract` 0.7 → 0.12, which pulls lopdf ≥ 0.42) and `crossbeam-epoch`.
+- **Ignored, upstream pins Lucy cannot move**: `quick-xml` ×2 (via `plist` ←
+  `tauri-utils`, and `tauri-winrt-notification` ← `notify-rust`), `sqlx` (pinned
+  by `tauri-plugin-sql`; the advisory concerns the Postgres/MySQL binary
+  protocols and Lucy's path is SQLite through rusqlite), `rsa` (no fix exists;
+  arrives via sqlx's MySQL auth, never executed).
+
+**Re-triage on every Tauri upgrade** — most of these resolve themselves upstream.
+One caveat if you build on a non-Windows host: the `informational_warnings`
+rationale assumes the gtk3/atk/gdk bindings are lockfile-only ballast a
+Windows build never compiles. On Linux they ARE compiled, so that reasoning
+needs revisiting rather than inheriting.

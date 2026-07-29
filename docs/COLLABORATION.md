@@ -28,25 +28,37 @@ Y se rompen cosas concretas.
 ### Worktrees de git — rutas absolutas
 
 ```
-C:/X/Rust_Projects/lucy-svelte/.claude/worktrees/admiring-banach-c25e04
-C:/Rust_Projects/lucy-svelte/.claude/worktrees/hopeful-gauss-b9b1d6   ← prunable
+C:/X/Rust_Projects/lucy-svelte                                           ← el árbol vivo (2026-07-28, tarde)
+C:/X/Rust_Projects/lucy-svelte/.claude/worktrees/admiring-banach-c25e04  ← vivo
+C:/Rust_Projects/lucy-svelte/.claude/worktrees/hopeful-gauss-b9b1d6      ← podado
 ```
 
-El segundo ya está inservible: se creó cuando el repo colgaba de otra ruta.
-Git guarda la ruta **absoluta** de cada worktree, así que si el segundo sistema
-monta el SSD en otra letra o punto de montaje, **todos los worktrees existentes
-dejan de resolver**.
+Ya ocurrió **dos veces en dos turnos**: el repositorio pasó de `C:` a `D:`, y
+al turno siguiente volvió a `C:`. Cada salto invalidó los worktrees que
+apuntaban a la letra anterior. Git guarda la ruta **absoluta** de cada worktree,
+así que cuando el SSD se monta en otro sitio, **todos los worktrees existentes
+dejan de resolver**. `git worktree prune` los limpia.
+
+La lección no es qué letra es la buena: es que **la letra no es estable**, así
+que ningún turno debe dar por buena la ruta que lea aquí — la comprueba (§3).
+
+Efecto colateral del mismo cambio: git empezó a rechazar cada comando por
+*dubious ownership* (el árbol conserva el SID del sistema que lo creó). Se
+arregla con `git config --global --add safe.directory <ruta>`, y hay que
+repetirlo en cada sistema que lo monte en una ruta distinta.
 
 ### El directorio de memoria del agente — derivado de la ruta
 
 ```
-%USERPROFILE%\.claude\projects\C--X-Rust-Projects-lucy-svelte\memory\
-                              └── esto ES C:\X\Rust_Projects\lucy-svelte
+%USERPROFILE%\.claude\projects\D--X-Rust-Projects-lucy-svelte\memory\
+                              └── esto ES D:\X\Rust_Projects\lucy-svelte
 ```
 
 El identificador del proyecto se deriva de la ruta. Montar en otra letra produce
 **otro directorio de memoria**, y el agente del otro turno arranca sin nada de lo
-aprendido. Además `%USERPROFILE%` ya es distinto por sistema, así que la memoria
+aprendido. **Esto ya pasó** al mover el repo de `C:` a `D:`: el turno siguiente
+abrió con la memoria vacía, y todo lo que sabía tuvo que reconstruirse desde
+`HANDOFF.md`. Es la mejor demostración de por qué ese fichero importa. Además `%USERPROFILE%` ya es distinto por sistema, así que la memoria
 no se comparte de todas formas — ver §4.
 
 ### `node_modules` y `src-tauri/target/`
@@ -115,13 +127,13 @@ main                        estable, siempre verde
 claude/<turno>-<fecha>      una rama por turno, se fusiona al cerrarlo
 ```
 
-Hoy eso **no funcionaría**: `main` está **272 commits por delante de
-`origin/main`**. El remoto existe (`github.com/Phenomx64L/LucyAI`) y lleva mucho
-sin recibir nada. Empujar requiere el visto bueno del operador porque publica
-trabajo.
+Eso ya funciona: el remoto (`github.com/Phenomx64L/LucyAI`) está **al día**
+desde 2026-07-28. Estuvo 274 commits por detrás durante tres turnos porque
+empujar publica trabajo y requiere el visto bueno del operador — pídelo, no lo
+asumas.
 
 Aun compartiendo SSD, empujar sigue valiendo la pena como copia de seguridad: un
-SSD es un único punto de fallo para 30 commits de trabajo.
+SSD es un único punto de fallo para todo el historial.
 
 ---
 
