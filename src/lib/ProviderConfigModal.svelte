@@ -33,11 +33,17 @@
     let loading = false;
     let error = '';
     let success = '';
-    let activeTab = 'anthropic'; // 'anthropic', 'gemini', 'openai', 'nvidia', 'ollama', 'tavily'
+    let activeTab = 'anthropic'; // 'anthropic', 'gemini', 'openai', 'xai', 'deepseek', 'nvidia', 'ollama', 'tavily'
     let credentials = {
         anthropic: { key: '', configured: false },
         gemini: { key: '', configured: false },
         openai: { key: '', configured: false },
+        // xAI and DeepSeek are OpenAI-dialect providers — the backend routes
+        // them through the same request path with a different host, so all
+        // they need here is a key. Their slugs must match KEYED_PROVIDERS in
+        // src-tauri/src/commands/config.rs or save_llm_key rejects them.
+        xai: { key: '', configured: false },
+        deepseek: { key: '', configured: false },
         nvidia: { key: '', configured: false },
         ollama: { endpoint: 'http://localhost:11434', configured: false },
         // Tavily is the preferred backend for the `<TOOL>search_web</TOOL>`
@@ -49,6 +55,8 @@
         anthropic: null,
         gemini: null,
         openai: null,
+        xai: null,
+        deepseek: null,
         nvidia: null,
         ollama: null,
         tavily: null,
@@ -74,7 +82,19 @@
                 label: 'API Key OpenAI',
                 placeholder: 'sk-...',
                 hint: 'Obtén tu clave en https://platform.openai.com/account/api-keys',
-                feature: 'GPT-4 Vision + Análisis JSON'
+                feature: 'GPT-5.6 Sol / Terra / Luna — visión y 1M de contexto'
+            },
+            xai: {
+                label: 'API Key xAI (Grok)',
+                placeholder: 'xai-...',
+                hint: 'Obtén tu clave en https://console.x.ai → API Keys',
+                feature: 'Grok 4.5 y 4.3 — razonamiento con hasta 1M de contexto'
+            },
+            deepseek: {
+                label: 'API Key DeepSeek',
+                placeholder: 'sk-...',
+                hint: 'Obtén tu clave en https://platform.deepseek.com → API Keys',
+                feature: 'DeepSeek V4 — la nube más barata (~$0.14 por millón)'
             },
             nvidia: {
                 label: 'NVIDIA NIM API Key',
@@ -137,7 +157,19 @@
                 label: 'OpenAI API Key',
                 placeholder: 'sk-...',
                 hint: 'Get your key at https://platform.openai.com/account/api-keys',
-                feature: 'GPT-4 Vision + JSON Analysis'
+                feature: 'GPT-5.6 Sol / Terra / Luna — vision and 1M context'
+            },
+            xai: {
+                label: 'xAI (Grok) API Key',
+                placeholder: 'xai-...',
+                hint: 'Get your key at https://console.x.ai → API Keys',
+                feature: 'Grok 4.5 and 4.3 — reasoning with up to 1M context'
+            },
+            deepseek: {
+                label: 'DeepSeek API Key',
+                placeholder: 'sk-...',
+                hint: 'Get your key at https://platform.deepseek.com → API Keys',
+                feature: 'DeepSeek V4 — cheapest cloud tier (~$0.14 per million)'
             },
             nvidia: {
                 label: 'NVIDIA NIM API Key',
@@ -378,6 +410,26 @@
                     </button>
                     <button
                         class="tab"
+                        class:active={activeTab === 'xai'}
+                        on:click={() => activeTab = 'xai'}
+                    >
+                        <span style="display:inline-flex;align-items:center;gap:6px;">xAI</span>
+                        {#if credentials.xai.configured}
+                            <CheckCircle size={14} color="#10b981" />
+                        {/if}
+                    </button>
+                    <button
+                        class="tab"
+                        class:active={activeTab === 'deepseek'}
+                        on:click={() => activeTab = 'deepseek'}
+                    >
+                        <span style="display:inline-flex;align-items:center;gap:6px;">DeepSeek</span>
+                        {#if credentials.deepseek.configured}
+                            <CheckCircle size={14} color="#10b981" />
+                        {/if}
+                    </button>
+                    <button
+                        class="tab"
                         class:active={activeTab === 'nvidia'}
                         on:click={() => activeTab = 'nvidia'}
                     >
@@ -465,6 +517,36 @@
                             </label>
                             <p class="hint">
                                 <Key size={14} /> {l.openai.hint}
+                            </p>
+                        </div>
+                    {:else if activeTab === 'xai'}
+                        <div class="config-section">
+                            <div class="feature-badge">{l.xai.feature}</div>
+                            <label>
+                                <span>{l.xai.label}</span>
+                                <input
+                                    type="password"
+                                    bind:value={credentials.xai.key}
+                                    placeholder={l.xai.placeholder}
+                                />
+                            </label>
+                            <p class="hint">
+                                <Key size={14} /> {l.xai.hint}
+                            </p>
+                        </div>
+                    {:else if activeTab === 'deepseek'}
+                        <div class="config-section">
+                            <div class="feature-badge">{l.deepseek.feature}</div>
+                            <label>
+                                <span>{l.deepseek.label}</span>
+                                <input
+                                    type="password"
+                                    bind:value={credentials.deepseek.key}
+                                    placeholder={l.deepseek.placeholder}
+                                />
+                            </label>
+                            <p class="hint">
+                                <Key size={14} /> {l.deepseek.hint}
                             </p>
                         </div>
                     {:else if activeTab === 'nvidia'}

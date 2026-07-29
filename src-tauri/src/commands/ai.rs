@@ -409,6 +409,45 @@ fn apply_gemini_generation_config(payload: &mut serde_json::Value, cfg: Option<s
     }
 }
 
+/// Map a model id to the provider that serves it.
+///
+/// Extracted because this was three verbatim copies of the same if-chain, one
+/// per call path (non-streaming, streaming, vision). Adding a provider to two
+/// of the three is a silent bug of the worst shape: the model answers in chat
+/// and 404s the first time it streams, which reads as a flaky provider rather
+/// than a missing branch.
+///
+/// Order matters — `contains('/')` must stay last of the specific checks,
+/// since it is NVIDIA's `owner/model` shape and would otherwise swallow
+/// anything with a slash.
+pub(crate) fn provider_for_model(model: &str) -> &'static str {
+    if model.starts_with("gpt-")           { "openai" }
+    else if model.starts_with("claude-")   { "anthropic" }
+    else if model.starts_with("deepseek-") { "deepseek" }
+    else if model.starts_with("grok-")     { "xai" }
+    else if model.starts_with("local-")    { "local" }
+    else if model.contains('/')            { "nvidia" }
+    else                                   { "gemini" }
+}
+
+/// Chat-completions endpoint for the providers that speak the OpenAI dialect.
+///
+/// DeepSeek and xAI are drop-in compatible with `/v1/chat/completions` — same
+/// request body, same `choices[0].message.content` response — so they reuse
+/// the OpenAI request arm rather than getting one each.
+///
+/// Note on xAI: it now leads with a Responses API and labels chat-completions
+/// legacy. The legacy endpoint is fully functional and is the one Lucy needs,
+/// because every response parser here reads the `choices[]` shape. If xAI ever
+/// retires it, this becomes a real port, not a URL swap.
+fn openai_compatible_endpoint(provider: &str) -> &'static str {
+    match provider {
+        "deepseek" => "https://api.deepseek.com/chat/completions",
+        "xai"      => "https://api.x.ai/v1/chat/completions",
+        _          => "https://api.openai.com/v1/chat/completions",
+    }
+}
+
 /// Resolve a Claude (Anthropic) model selection into:
 ///   1. The REAL model id Anthropic's API expects (no "::effort" suffix)
 ///   2. The effort string to send as `output_config.effort` — None when the
@@ -1096,11 +1135,7 @@ pub async fn ask_lucy(
         ));
     }
 
-    let provider = if model.starts_with("gpt-")    { "openai" }
-                   else if model.starts_with("claude-") { "anthropic" }
-                   else if model.starts_with("local-")  { "local" }
-                   else if model.contains('/')          { "nvidia" }
-                   else                                 { "gemini" };
+    let provider = provider_for_model(&model);
 
     let entry = Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
     let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada. Configúrala en Ajustes.", provider))?;
@@ -1156,9 +1191,11 @@ pub async fn ask_lucy(
     }
 
     let req = match provider {
-        "openai" => {
+        // DeepSeek and xAI ride this arm unchanged — same body, same auth
+        // header, only the host differs (openai_compatible_endpoint).
+        "openai" | "deepseek" | "xai" => {
             let payload = json!({ "model": model, "messages": [{"role": "user", "content": final_prompt}] });
-            HTTP_CLIENT.post("https://api.openai.com/v1/chat/completions")
+            HTTP_CLIENT.post(openai_compatible_endpoint(provider))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -1267,14 +1304,14 @@ pub async fn ask_lucy(
     }
 
     let text_result = match provider {
-        "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
+        "openai" | "local" | "nvidia" | "deepseek" | "xai" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
         "anthropic" => v["content"].get(0).and_then(|c| c["text"].as_str()),
         _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
     };
 
     if let Some(t) = text_result {
         if let Some((input_tokens, output_tokens)) = match provider {
-            "openai" | "local" | "nvidia" => extract_tokens_openai(&v),
+            "openai" | "local" | "nvidia" | "deepseek" | "xai" => extract_tokens_openai(&v),
             "anthropic" => extract_tokens_anthropic(&v),
             _ => extract_tokens_gemini(&v),
         } {
@@ -1336,11 +1373,7 @@ pub async fn ask_lucy_stream(
         ));
     }
 
-    let provider = if model.starts_with("gpt-")        { "openai" }
-                   else if model.starts_with("claude-") { "anthropic" }
-                   else if model.starts_with("local-")  { "local" }
-                   else if model.contains('/')          { "nvidia" }
-                   else                                 { "gemini" };
+    let provider = provider_for_model(&model);
 
     let entry = Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
     let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada. Configúrala en Ajustes.", provider))?;
@@ -1396,9 +1429,9 @@ pub async fn ask_lucy_stream(
     }
 
     let req = match provider {
-        "openai" => {
+        "openai" | "deepseek" | "xai" => {
             let payload = json!({ "model": model, "messages": [{"role": "user", "content": final_prompt}], "stream": true });
-            HTTP_CLIENT.post("https://api.openai.com/v1/chat/completions")
+            HTTP_CLIENT.post(openai_compatible_endpoint(provider))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -1557,7 +1590,7 @@ pub async fn ask_lucy_stream(
                     }
 
                     if let Some((in_t, out_t)) = match provider {
-                        "openai" | "local" | "nvidia" => extract_tokens_openai(&v),
+                        "openai" | "local" | "nvidia" | "deepseek" | "xai" => extract_tokens_openai(&v),
                         "anthropic" => extract_tokens_anthropic(&v),
                         _ => extract_tokens_gemini(&v),
                     } {
@@ -1573,7 +1606,7 @@ pub async fn ask_lucy_stream(
                     }
 
                     let text_chunk = match provider {
-                        "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["delta"]["content"].as_str()),
+                        "openai" | "local" | "nvidia" | "deepseek" | "xai" => v["choices"].get(0).and_then(|c| c["delta"]["content"].as_str()),
                         "anthropic" => v["delta"]["text"].as_str(),
                         _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
                     };
@@ -1629,11 +1662,7 @@ pub fn log_agent_loop(message: String) {
 // ==========================================
 #[tauri::command]
 pub async fn generate_skill_template(idea: String, model: String) -> Result<String, String> {
-    let provider = if model.starts_with("gpt-")        { "openai" }
-                   else if model.starts_with("claude-") { "anthropic" }
-                   else if model.starts_with("local-")  { "local" }
-                   else if model.contains('/')          { "nvidia" }
-                   else                                 { "gemini" };
+    let provider = provider_for_model(&model);
 
     let entry = keyring::Entry::new("LucySysAdmin", &format!("{}_api_key", provider)).map_err(|e| e.to_string())?;
     let api_key = entry.get_password().map_err(|_| format!("API Key para {} no configurada.", provider))?;
@@ -1656,9 +1685,9 @@ REGLAS:
 - NO uses markdown, NO uses backticks, SOLO el objeto JSON crudo."#, idea);
 
     let req = match provider {
-        "openai" => {
+        "openai" | "deepseek" | "xai" => {
             let payload = serde_json::json!({ "model": model, "messages": [{"role": "user", "content": sys_prompt}] });
-            crate::state::HTTP_CLIENT.post("https://api.openai.com/v1/chat/completions")
+            crate::state::HTTP_CLIENT.post(openai_compatible_endpoint(provider))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
         },
@@ -1705,7 +1734,7 @@ REGLAS:
     if status.is_success() {
         if let Ok(v) = parse_json_capped(&body_text) {
             let text = match provider {
-                "openai" | "local" | "nvidia" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
+                "openai" | "local" | "nvidia" | "deepseek" | "xai" => v["choices"].get(0).and_then(|c| c["message"]["content"].as_str()),
                 "anthropic" => v["content"].get(0).and_then(|c| c["text"].as_str()),
                 _ => v["candidates"].get(0).and_then(|c| c["content"]["parts"][0]["text"].as_str())
             };
@@ -1842,6 +1871,69 @@ mod local_completion_cache_tests {
         assert!(_local_completion_get(k).is_none(), "fresh key starts empty");
         _local_completion_put(k, "cached-value-42".to_string());
         assert_eq!(_local_completion_get(k).as_deref(), Some("cached-value-42"));
+    }
+}
+
+#[cfg(test)]
+mod provider_routing_tests {
+    use super::{openai_compatible_endpoint, provider_for_model};
+
+    // This routing used to be three verbatim copies of one if-chain, one per
+    // call path. The bug that shape invites is adding a provider to two of the
+    // three: the model answers in chat and 404s the first time it streams,
+    // which looks like a flaky provider rather than a missing branch. There is
+    // one copy now, and this pins it.
+    #[test]
+    fn every_provider_prefix_routes_to_its_own_provider() {
+        for (model, want) in [
+            ("gpt-5.6-sol",       "openai"),
+            ("claude-opus-5",     "anthropic"),
+            ("grok-4.5",          "xai"),
+            ("deepseek-v4-flash", "deepseek"),
+            ("local-qwen3:8b",    "local"),
+            ("meta/llama-3.1-70b-instruct", "nvidia"),
+            ("gemini-3.6-flash",  "gemini"),
+        ] {
+            assert_eq!(provider_for_model(model), want, "model {}", model);
+        }
+    }
+
+    #[test]
+    fn effort_suffix_does_not_change_the_route() {
+        assert_eq!(provider_for_model("claude-opus-5::xhigh"), "anthropic");
+        assert_eq!(provider_for_model("gemini-3.1-pro-preview::high"), "gemini");
+    }
+
+    #[test]
+    fn unknown_ids_fall_through_to_gemini() {
+        // Deliberate: Gemini is the historical default and an unknown id is
+        // more likely a new Google model than a new anything-else.
+        assert_eq!(provider_for_model("something-brand-new"), "gemini");
+    }
+
+    #[test]
+    fn nvidia_slash_shape_does_not_capture_the_named_providers() {
+        // `contains('/')` is NVIDIA's owner/model shape and must stay LAST of
+        // the specific checks — a prefix match has to win over it.
+        assert_eq!(provider_for_model("deepseek-ai/deepseek-v4"), "deepseek");
+        assert_eq!(provider_for_model("mistralai/mistral-large"), "nvidia");
+    }
+
+    #[test]
+    fn openai_dialect_providers_get_their_own_host() {
+        assert!(openai_compatible_endpoint("openai").contains("api.openai.com"));
+        assert!(openai_compatible_endpoint("xai").contains("api.x.ai"));
+        assert!(openai_compatible_endpoint("deepseek").contains("api.deepseek.com"));
+        // All three must be the chat-completions path — every response parser
+        // in this file reads the `choices[]` shape, so a host that answered on
+        // a different path (xAI's newer Responses API, say) would parse to None
+        // and surface as an empty reply rather than an error.
+        for p in ["openai", "xai", "deepseek"] {
+            assert!(
+                openai_compatible_endpoint(p).ends_with("/chat/completions"),
+                "{} endpoint must be chat-completions shaped", p,
+            );
+        }
     }
 }
 

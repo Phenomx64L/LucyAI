@@ -11,11 +11,25 @@ use serde_json;
 
 // ── API KEY ───────────────────────────────────────────────────────────────────
 
+/// Providers whose API key lives in the Credential Manager as
+/// `<provider>_api_key` — the same name `ai.rs` derives when it needs one.
+///
+/// Single source for BOTH the save whitelist and the configured-status scan.
+/// They used to be two separate literals, and the failure mode of adding a
+/// provider to one but not the other is quiet either way: listed in the save
+/// list only, and the key saves but the settings row still reads "sin
+/// configurar"; listed in the scan only, and saving is rejected as an invalid
+/// provider with a working key in hand.
+///
+/// `tavily` is here despite not being an LLM provider — it is the web-search
+/// backend and shares the keyring scheme for UI uniformity.
+pub(crate) const KEYED_PROVIDERS: &[&str] = &[
+    "gemini", "anthropic", "openai", "xai", "deepseek", "local", "nvidia", "tavily",
+];
+
 #[tauri::command]
 pub fn save_llm_key(provider: String, api_key: String) -> Result<(), String> {
-    // `tavily` is allowed (web-search backend). Not strictly an LLM
-    // provider but lives in the same keyring scheme for UI uniformity.
-    if !["gemini", "anthropic", "openai", "local", "nvidia", "tavily"].contains(&provider.as_str()) {
+    if !KEYED_PROVIDERS.contains(&provider.as_str()) {
         return Err("Proveedor no válido.".to_string());
     }
     let key_name = format!("{}_api_key", provider);
@@ -44,7 +58,7 @@ pub fn get_configured_providers() -> Result<Vec<String>, String> {
     // `tavily` va incluido para que la UI renderice su fila de estado (es una
     // herramienta auxiliar de búsqueda web, no un proveedor LLM).
     let mut transient_err: Option<String> = None;
-    for provider in ["gemini", "anthropic", "openai", "local", "nvidia", "tavily"] {
+    for provider in KEYED_PROVIDERS.iter().copied() {
         let key_name = format!("{}_api_key", provider);
         match Entry::new("LucySysAdmin", &key_name) {
             Ok(entry) => match entry.get_password() {
@@ -88,6 +102,16 @@ pub async fn test_api_key(provider: String, api_key: String) -> Result<(), Strin
             HTTP_CLIENT.get("https://api.anthropic.com/v1/models")
                 .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01")
+        },
+        // Both speak the OpenAI dialect, so GET /models validates the key the
+        // same way it does for OpenAI — a real round trip, not a format check.
+        "xai" => {
+            HTTP_CLIENT.get("https://api.x.ai/v1/models")
+                .header("Authorization", format!("Bearer {}", key))
+        },
+        "deepseek" => {
+            HTTP_CLIENT.get("https://api.deepseek.com/models")
+                .header("Authorization", format!("Bearer {}", key))
         },
         "nvidia" => {
             // NVIDIA NIM free tier does not expose GET /v1/models on nim.api.nvidia.com.

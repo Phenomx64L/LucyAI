@@ -52,10 +52,16 @@
   const localCount = $derived(($localModels || []).filter((m) => m.id !== 'local-custom').length);
   function refreshLocal() { refreshLocalModels().catch(() => {}); }
 
+  // Order matters only for display. Each `match` entry is substring-matched
+  // against the configured-credential names, so a provider whose key is stored
+  // as `<provider>_api_key` (which is how ai.rs derives it) needs its provider
+  // slug listed here or the row reads "sin configurar" with a working key.
   const KEY_PROVIDERS = [
     { name: 'Google Gemini', match: ['gemini', 'google'] },
     { name: 'OpenAI',        match: ['openai', 'gpt'] },
     { name: 'Anthropic',     match: ['anthropic', 'claude'] },
+    { name: 'xAI (Grok)',    match: ['xai', 'grok'] },
+    { name: 'DeepSeek',      match: ['deepseek'] },
     { name: 'NVIDIA NIM',    match: ['nvidia'] },
     { name: 'Tavily (web)',  match: ['tavily'] },
   ];

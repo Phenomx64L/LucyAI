@@ -25,7 +25,7 @@ export interface ModelPricing {
     /** Conservative multiplier on predicted output tokens (default for non-effort variants). */
     iterFactor: number;
     /** Provider tag, used for grouped UI hints. */
-    provider: 'anthropic' | 'openai' | 'gemini' | 'nvidia' | 'local';
+    provider: 'anthropic' | 'openai' | 'gemini' | 'nvidia' | 'local' | 'xai' | 'deepseek';
 }
 
 // Effort multipliers — applied to iterFactor when the model id ends in "::<level>".
@@ -113,6 +113,23 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     // Legacy
     'gpt-4o':          { inputPer1K: 0.0025,  outputPer1K: 0.010,  iterFactor: 4, provider: 'openai' },
     'gpt-4o-mini':     { inputPer1K: 0.00015, outputPer1K: 0.0006, iterFactor: 3, provider: 'openai' },
+
+    // ── xAI Grok ──────────────────────────────────────────────────────
+    // Verified 2026-07-29 against docs.x.ai. Prices are TIERED BY PROMPT
+    // LENGTH — the rates below apply under 200k tokens and roughly double at
+    // or above it. Quoting the lower tier is right for Lucy: its compaction
+    // caps context well under 200k, so the upper tier would over-quote every
+    // ordinary turn to be safe on one that never happens.
+    'grok-4.5':          { inputPer1K: 0.0020,  outputPer1K: 0.0060, iterFactor: 4, provider: 'xai' },
+    'grok-4.3':          { inputPer1K: 0.00125, outputPer1K: 0.0025, iterFactor: 4, provider: 'xai' },
+
+    // ── DeepSeek ──────────────────────────────────────────────────────
+    // Verified 2026-07-29 against api-docs.deepseek.com. Cache-MISS input
+    // rates: DeepSeek also publishes a cache-hit rate ~50× lower, but Lucy
+    // cannot predict a hit, and quoting the hit rate would under-report every
+    // uncached turn.
+    'deepseek-v4-flash': { inputPer1K: 0.00014, outputPer1K: 0.00028, iterFactor: 3, provider: 'deepseek' },
+    'deepseek-v4-pro':   { inputPer1K: 0.000435, outputPer1K: 0.00087, iterFactor: 4, provider: 'deepseek' },
 };
 
 const ZERO_PRICING: ModelPricing = {

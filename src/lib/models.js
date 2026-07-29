@@ -251,6 +251,42 @@ export const LLM_GROUPS = [
         ]
     },
     {
+        label: "── xAI Grok ──",
+        provider: "xai",
+        credential_key: "xai_api_key",
+        options: [
+            // Verified 2026-07-29 against docs.x.ai. OpenAI-compatible at
+            // https://api.x.ai/v1/chat/completions — Lucy reuses the OpenAI
+            // request/parse path unchanged (see ai.rs openai_compatible_endpoint).
+            //
+            // Prices are TIERED BY PROMPT LENGTH: the lower rate applies under
+            // 200k tokens, roughly double at or above it. model-pricing.ts quotes
+            // the lower tier, which is where Lucy's compaction keeps every turn.
+            //   • grok-4.5  500k ctx  $2.00 / $6.00 per 1M  (under 200k prompt)
+            //   • grok-4.3    1M ctx  $1.25 / $2.50 per 1M
+            { id: "grok-4.5", icon: "◆", nameEn: "Grok 4.5 — Flagship reasoning",        nameEs: "Grok 4.5 — Razonamiento insignia" },
+            { id: "grok-4.3", icon: "◇", nameEn: "Grok 4.3 — 1M context, lower cost",    nameEs: "Grok 4.3 — 1M de contexto, menor costo" },
+        ]
+    },
+    {
+        label: "── DeepSeek ──",
+        provider: "deepseek",
+        credential_key: "deepseek_api_key",
+        options: [
+            // Verified 2026-07-29 against api-docs.deepseek.com. OpenAI-compatible
+            // at https://api.deepseek.com/chat/completions.
+            //
+            // By far the cheapest cloud tier Lucy offers — v4-flash is ~$0.14/$0.28
+            // per 1M against Gemini Flash-Lite's $0.25/$1.50, with a 1M context and
+            // 384K max output. Worth considering for long agent loops where token
+            // volume, not per-token quality, is what costs money.
+            //   • deepseek-v4-flash  1M ctx  $0.14  / $0.28 per 1M
+            //   • deepseek-v4-pro    1M ctx  $0.435 / $0.87 per 1M
+            { id: "deepseek-v4-flash", icon: "◇", nameEn: "DeepSeek V4 Flash — Cheapest cloud tier", nameEs: "DeepSeek V4 Flash — La nube más barata" },
+            { id: "deepseek-v4-pro",   icon: "◆", nameEn: "DeepSeek V4 Pro — Stronger reasoning",    nameEs: "DeepSeek V4 Pro — Razonamiento más fuerte" },
+        ]
+    },
+    {
         label: "── NVIDIA NIM (build.nvidia.com) ──",
         provider: "nvidia",
         credential_key: "nvidia_api_key",

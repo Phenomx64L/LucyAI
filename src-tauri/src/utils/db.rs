@@ -862,6 +862,19 @@ fn model_prices(model: &str) -> (f64, f64) {
         "gpt-4o"          => (0.0025,  0.010),
         "gpt-4o-mini"     => (0.00015, 0.0006),
 
+        // ── xAI Grok ── (docs.x.ai, 2026-07-29)
+        // Tiered by prompt length; these are the under-200k rates, which is
+        // where Lucy's compaction keeps every turn.
+        "grok-4.5"        => (0.0020,  0.0060),
+        "grok-4.3"        => (0.00125, 0.0025),
+
+        // ── DeepSeek ── (api-docs.deepseek.com, 2026-07-29)
+        // Cache-MISS input rates. The published cache-hit rate is ~50× lower,
+        // but a hit is not predictable per request, so quoting it would
+        // under-report every uncached turn.
+        "deepseek-v4-flash" => (0.00014,  0.00028),
+        "deepseek-v4-pro"   => (0.000435, 0.00087),
+
         // Fallback for unknown cloud model — conservative mid-tier estimate.
         _ => (0.001, 0.003),
     }

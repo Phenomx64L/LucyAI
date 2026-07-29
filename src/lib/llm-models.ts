@@ -119,6 +119,12 @@ const CONTEXT_WINDOWS: Record<string, number> = {
     'gpt-5.6-sol':                     1_050_000,
     'gpt-5.6-terra':                   1_050_000,
     'gpt-5.6-luna':                    1_050_000,
+    // xAI Grok (docs.x.ai) — note 4.5 is 500k, NOT 1M like the rest of the line
+    'grok-4.5':                          500_000,
+    'grok-4.3':                        1_000_000,
+    // DeepSeek V4 (api-docs.deepseek.com) — 1M input, 384K max output
+    'deepseek-v4-flash':               1_000_000,
+    'deepseek-v4-pro':                 1_000_000,
     // Gemini 2.5 family (1M for pro, 1M for flash-lite preview)
     'gemini-2.5-flash':                1_000_000,
     'gemini-2.5-pro':                  2_000_000,
