@@ -94,7 +94,13 @@ urlencoding = "2.1.3"
 # ── Cryptographically secure RNG for security tokens ─────────────────────────
 rand = "0.8"
 # ── PDF Intelligence (Sprint 4 Pillar 4) ─────────────────────────────────────
-pdf-extract = "0.7"
+# v1.8.1 SEC — bumped 0.7 → 0.12 to escape RUSTSEC-2026-0187 (severity 7.5):
+# pdf-extract 0.7.x pins lopdf 0.34, which stack-overflows on deeply nested
+# PDF objects. A stack overflow aborts the process regardless of the panic
+# strategy, so a single malicious PDF dropped into `pdf_ingest` took the whole
+# app down. lopdf >= 0.42 has the recursion guard. Only `extract_text` is used
+# from this crate, and that entry point is unchanged across the bump.
+pdf-extract = "0.12"
 
 # ── LlamaFirewall Phase 2 (May 2026) — ML guardrail ──────────────────────────
 # Optional ONNX inference for prompt-injection detection via PromptGuard 2.

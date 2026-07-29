@@ -44,6 +44,26 @@ static DESTRUCTIVE_VERB_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::syn
     ).expect("DESTRUCTIVE_VERB_RE is a valid pattern")
 });
 
+// v1.8.1 SEC — abbreviated `-EncodedCommand`, the backend half of the fix.
+//
+// The `blocklist` below contains the literal "-encodedcommand", but PowerShell
+// resolves ANY unambiguous prefix of a parameter name, so `-e`, `-en`, `-enc`
+// and `-encod` all launch the same base64 payload while containing none of the
+// blocked substring. Combined with the frontend auto-promote allow-listing
+// `Start-Process`, a single injected line in a file Lucy read could reach
+// execution with NO human in the loop. The frontend gate was fixed in
+// auto-promote.ts; this is the backend backstop, because the frontend is not a
+// security boundary — any caller reaching the `execute_powershell` IPC command
+// directly bypasses it.
+//
+// Nested optional groups spell every prefix of "encodedcommand". `\b` at the
+// cut point keeps `-Encoding` / `-ErrorAction` / `-ea` from matching. A false
+// positive costs one extra confirmation prompt; a miss is silent RCE.
+static ENCODED_CMD_RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r"(?i)-e(n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?\b")
+        .expect("ENCODED_CMD_RE is a valid pattern")
+});
+
 // ── POWERSHELL LOCAL CON AUDIT LOG ────────────────────────────────────────────
 
 #[tauri::command]
@@ -205,7 +225,17 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
         // contract the frontend already handles), so no new frontend path is needed
         // and there is no double-prompt: the frontend's isDestructiveCmd gate runs
         // BEFORE invoke(), so anything it already catches never reaches here.
-        if DESTRUCTIVE_VERB_RE.is_match(&script_norm) {
+        // v1.8.1 SEC — one shared HITL path for both backstop classifiers, so
+        // the abbreviated `-EncodedCommand` shape gets the exact same
+        // bypass-token contract the frontend already understands.
+        let backstop: Option<(&str, &str)> = if DESTRUCTIVE_VERB_RE.is_match(&script_norm) {
+            Some(("DESTRUCTIVE_VERB_PENDING_AUTH", "verbo destructivo del sistema"))
+        } else if ENCODED_CMD_RE.is_match(&script_norm) {
+            Some(("ENCODED_CMD_PENDING_AUTH", "PowerShell -EncodedCommand (payload base64 ofuscado)"))
+        } else {
+            None
+        };
+        if let Some((tag, reason)) = backstop {
             let new_token = crate::state::generate_secure_token();
             let expiry = std::time::Instant::now()
                 + std::time::Duration::from_secs(crate::state::BYPASS_TOKEN_TTL_SECS);
@@ -216,9 +246,9 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
                     return Err("Error interno: no se pudo registrar token de seguridad. Reinicia Lucy.".to_string());
                 }
             }
-            let _ = writeln!(log_file, "[{}] [HOST: {}] [DESTRUCTIVE_VERB_PENDING_AUTH] Script: {}", timestamp, user, scrub);
-            write_app_log("WARNING", "Bloqueado verbo destructivo (clasificador C1/C3)");
-            return Err(format!("SECURITY_BLOCK:{}:{}", new_token, "verbo destructivo del sistema"));
+            let _ = writeln!(log_file, "[{}] [HOST: {}] [{}] Script: {}", timestamp, user, tag, scrub);
+            write_app_log("WARNING", &format!("Bloqueado por backstop: {}", reason));
+            return Err(format!("SECURITY_BLOCK:{}:{}", new_token, reason));
         }
     }
 
@@ -883,6 +913,46 @@ mod tests {
             assert!(
                 DESTRUCTIVE_VERB_RE.is_match(&s.to_lowercase()),
                 "should flag destructive verb: {:?}", s
+            );
+        }
+    }
+
+    // ── v1.8.1 SEC: abbreviated -EncodedCommand backstop ─────────────────────
+    // PowerShell resolves any unambiguous prefix of a parameter name, so the
+    // substring blocklist entry "-encodedcommand" never saw `-enc`. Paired with
+    // the frontend fix in auto-promote.ts; this half guards the IPC command
+    // itself, which any caller can reach without going through the UI.
+    #[test]
+    fn encoded_cmd_backstop_flags_every_abbreviation() {
+        for s in [
+            "start-process powershell -e SQBFAFgA",
+            "start-process powershell -en SQBFAFgA",
+            "start-process powershell -enc SQBFAFgA",
+            "start-process powershell -encod SQBFAFgA",
+            "powershell -encodedcommand SQBFAFgA",
+            "powershell.exe -EncodedCommand SQBFAFgA",
+        ] {
+            assert!(
+                ENCODED_CMD_RE.is_match(&s.to_lowercase()),
+                "should flag encoded-command shape: {:?}", s
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_cmd_backstop_ignores_lookalike_flags() {
+        // These start with "-e" but are NOT prefixes of -EncodedCommand.
+        // A false positive here costs the user a needless confirmation modal.
+        for s in [
+            "get-content x.txt -encoding utf8",
+            "get-process -erroraction silentlycontinue",
+            "get-process -ea silentlycontinue",
+            "get-childitem -exclude *.tmp",
+            "get-childitem -expandproperty name",
+        ] {
+            assert!(
+                !ENCODED_CMD_RE.is_match(&s.to_lowercase()),
+                "should NOT flag lookalike flag: {:?}", s
             );
         }
     }
