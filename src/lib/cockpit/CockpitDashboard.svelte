@@ -125,7 +125,16 @@
       if (t.crit && t.c >= t.crit) a.push({ sev: 'bad', text: `${t.label} ${t.c}°C (crítico)` });
       else if (t.c >= 82) a.push({ sev: 'warn', text: `${t.label} ${t.c}°C` });
     }
-    if (services.failed.length) a.push({ sev: 'warn', text: `${services.failed.length} servicio(s) detenido(s)` });
+    // Only services that FAILED (non-zero exit code) reach the alert strip and
+    // therefore the host chip. A stopped-but-clean service is real information,
+    // but it is not a problem: it lives in its own panel.
+    //
+    // The global chip used to flip to Atención about a minute after every boot,
+    // because delayed-start services had not started yet and any non-empty list
+    // raised a warn. A status light that is amber on every boot is a status
+    // light nobody reads — which costs more than the signal was ever worth.
+    const crashed = services.failed.filter((s) => s.crashed);
+    if (crashed.length) a.push({ sev: 'warn', text: `${crashed.length} servicio(s) con fallo de arranque` });
     if (vulns.total > 0) a.push({
       sev: (vulns.critical || vulns.high) ? 'bad' : 'warn',
       text: `${vulns.total} vulnerabilidad${vulns.total === 1 ? '' : 'es'} en software${vulns.critical ? ` · ${vulns.critical} crítica${vulns.critical === 1 ? '' : 's'}` : vulns.high ? ` · ${vulns.high} alta${vulns.high === 1 ? '' : 's'}` : ''}`,
@@ -222,9 +231,11 @@
       // qtriggerinfo` is no help — its exit code is 0 either way and its
       // output is LOCALISED, which is the same trap that made the security
       // log read as unreadable on Spanish Windows.
+      // `name|exitcode` per line. The exit code is what separates "stopped"
+      // from "failed", and only the second deserves to colour the host chip.
       const cmd = isWin
-        ? "Get-CimInstance Win32_Service -Filter \"StartMode='Auto' AND State='Stopped'\" | Where-Object { -not $_.DelayedAutoStart -or $_.ExitCode -ne 0 } | Select-Object -First 12 -ExpandProperty Name"
-        : "systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | head -12";
+        ? "Get-CimInstance Win32_Service -Filter \"StartMode='Auto' AND State='Stopped'\" | Where-Object { -not $_.DelayedAutoStart -or $_.ExitCode -ne 0 } | Select-Object -First 12 | ForEach-Object { \"$($_.Name)|$($_.ExitCode)\" }"
+        : "systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1\"|1\"}' | head -12";
       let out;
       if (forHost === 'local') {
         if (!isWin) { services = { failed: [], checked: true }; return; }
@@ -235,7 +246,22 @@
         out = await invoke('execute_shell_cmd', { host: host.host, username: host.username, command: cmd, hostType: host.type, port: host.port || (host.type === 'linux' ? 22 : 5985), password: pwd || null, keyPath: host.sshKeyPath || null });
       }
       if (forHost !== selectedHost) return;   // host switched mid-probe
-      const failed = String(out || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^\[stderr/i.test(l)).slice(0, 12);
+      // `crashed` = the service exited with a non-zero code, i.e. it did not
+      // stop, it FAILED. That is the only half allowed to raise an alert; a
+      // service sitting idle is reported in its panel and nowhere else.
+      // A line with no `|` (an older host, an unexpected shape) is treated as
+      // NOT crashed — under-alerting is recoverable, a false alarm on every
+      // poll is what trained operators to ignore this panel.
+      const failed = String(out || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !/^\[stderr/i.test(l))
+        .slice(0, 12)
+        .map((l) => {
+          const [name, code] = l.split('|');
+          return { name: (name || l).trim(), crashed: Number(code) > 0 };
+        })
+        .filter((s) => s.name);
       services = { failed, checked: true };
     } catch { if (forHost === selectedHost) services = { failed: [], checked: true }; }
   }
@@ -496,7 +522,14 @@
       {:else if services.failed.length === 0}
         <div class="svc-ok">✓ Todos los servicios automáticos en ejecución</div>
       {:else}
-        <div class="svc-list">{#each services.failed as s}<span class="svc">{s}</span>{/each}</div>
+        <!-- A crashed service is marked, because "stopped" and "failed to
+             start" are different situations and only one needs acting on. -->
+        <div class="svc-list">
+          {#each services.failed as s}
+            <span class="svc" class:crashed={s.crashed}
+                  title={s.crashed ? 'Salió con código de error' : 'Detenido, sin error de arranque'}>{s.name}</span>
+          {/each}
+        </div>
       {/if}
     </div>
   </div>
@@ -701,10 +734,15 @@
     font-size: var(--fs-caption); color: var(--text-secondary); font-family: var(--font-mono);
   }
   .svc:last-child { border-bottom: 0; }
+  /* Neutral by default: a stopped service is information, not a warning. The
+     dot was amber for every row, so a normal machine looked like a wall of
+     warnings and the rows that mattered had nothing to stand out against. */
   .svc::before {
     content: ''; flex: 0 0 auto; width: 5px; height: 5px; border-radius: var(--r-pill);
-    background: var(--warning); box-shadow: 0 0 6px var(--warning-bg);
+    background: var(--text-faint);
   }
+  .svc.crashed { color: var(--text-primary); }
+  .svc.crashed::before { background: var(--warning); box-shadow: 0 0 6px var(--warning-bg); }
 
   .cores { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; }
   .core { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px 10px; }
