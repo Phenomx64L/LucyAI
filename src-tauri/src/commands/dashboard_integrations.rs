@@ -86,10 +86,6 @@ pub async fn dashboard_open_incidents(host_name: String) -> Result<OpenIncidents
 /// encoding when it first writes to it, so setting it afterwards is too late.
 ///
 /// **CREATE_NO_WINDOW.** Without it every refresh flashes a console window.
-fn wrap_utf8(script: &str) -> String {
-    crate::utils::shell::ps_utf8(script)
-}
-
 fn run_powershell_utf8(script: &str) -> Result<String, String> {
     crate::utils::shell::run_powershell_utf8(script).map(|(stdout, _, _)| stdout)
 }
@@ -455,18 +451,9 @@ mod tests {
         assert!(b.note.contains("Unexpected"));
     }
 
-    // ── Encoding ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn the_utf8_preamble_precedes_the_payload() {
-        // PowerShell fixes a stream's encoding on first write, so setting it
-        // after the payload would be too late to matter. Without this, output
-        // arrives in the OEM code page (CP-850 on es-ES, where 'ó' is the
-        // single byte 0xA2) and from_utf8_lossy turns every accent into U+FFFD.
-        let w = wrap_utf8("Get-Date");
-        let enc = w.find("[Console]::OutputEncoding").expect("preamble missing");
-        let payload = w.find("Get-Date").expect("payload missing");
-        assert!(enc < payload, "the encoding assignment must run first");
-        assert!(w.contains("$OutputEncoding"), "the pipeline variable is set too");
-    }
+    // Encoding is no longer tested here. The preamble moved to
+    // `utils::shell::ps_utf8` during the 2026-07-28 audit and is covered by
+    // `preamble_sets_both_encoding_handles_before_the_payload` there; the local
+    // wrapper this test drove became a pass-through with no caller outside the
+    // test itself, which is exactly the dead code `cargo` then warned about.
 }

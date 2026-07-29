@@ -223,6 +223,35 @@ fn sanitize_title(raw: &str) -> String {
     s.chars().take(48).collect()
 }
 
+/// Gemini 3.x thinks by DEFAULT, at `thinkingLevel: "medium"`, and thinking
+/// tokens are drawn from the same `maxOutputTokens` budget as the answer.
+///
+/// That combination silently broke both helpers in this file. The chip
+/// generator asked for 400 tokens and got back a single `[` — the model spent
+/// the budget reasoning and emitted one character before being cut off — which
+/// surfaced as `smart_chips parse: EOF while parsing a list`, an error that
+/// describes the symptom and hides the cause. The title generator asked for 32
+/// and could not have produced anything at all.
+///
+/// Neither task needs reasoning: one formats a fixed JSON shape, the other
+/// writes a four-word title. `minimal` is the floor for Gemini 3.x — thinking
+/// cannot be switched off entirely — and the budgets below leave room for the
+/// answer even if a future model ignores the hint.
+const GEMINI_MINIMAL_THINKING: &str = "minimal";
+
+/// Pull `finishReason` out of a generateContent response.
+///
+/// Worth the few lines: a truncated answer and a malformed one produce the
+/// same parse error downstream, and only this field tells them apart.
+fn gemini_finish_reason(body: &Value) -> Option<String> {
+    body.get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("finishReason"))
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string())
+}
+
 async fn call_gemini_for_text(
     api_key: &str,
     model: &str,
@@ -236,7 +265,14 @@ async fn call_gemini_for_text(
     let payload = json!({
         "system_instruction": { "parts": [{ "text": system }] },
         "contents": [{ "role": "user", "parts": [{ "text": user }] }],
-        "generationConfig": { "temperature": 0.3, "maxOutputTokens": 32 }
+        "generationConfig": {
+            "temperature": 0.3,
+            // 128, not 32: even at minimal thinking the budget is shared, and
+            // 32 left nothing for a title once Gemini 3.x started thinking by
+            // default. A title is ~10 tokens; the rest is headroom.
+            "maxOutputTokens": 128,
+            "thinkingConfig": { "thinkingLevel": GEMINI_MINIMAL_THINKING }
+        }
     });
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -370,7 +406,11 @@ async fn call_gemini_for_chips(
         "generationConfig": {
             "response_mime_type": "application/json",
             "temperature": 0.4,
-            "maxOutputTokens": 400,
+            // 800, not 400: the budget covers thinking AND the answer, and at
+            // 400 with default (medium) thinking the model emitted exactly one
+            // character — `[` — before running out.
+            "maxOutputTokens": 800,
+            "thinkingConfig": { "thinkingLevel": GEMINI_MINIMAL_THINKING }
         }
     });
 
@@ -403,6 +443,21 @@ async fn call_gemini_for_chips(
         .and_then(|p| p.get("text"))
         .and_then(|t| t.as_str())
         .unwrap_or("[]");
+
+    // Say WHY before saying what failed to parse. A truncated answer and a
+    // malformed one both surface as "EOF while parsing a list", and that error
+    // sent this bug's diagnosis toward the JSON parser when the cause was the
+    // token budget being eaten by thinking. `finishReason` distinguishes them.
+    if let Some(reason) = gemini_finish_reason(&body) {
+        if reason != "STOP" {
+            return Err(format!(
+                "gemini stopped early (finishReason={}, {} chars of output) — \
+                 raise maxOutputTokens or lower thinkingLevel",
+                reason,
+                text.len(),
+            ));
+        }
+    }
     parse_chip_array(text)
 }
 
