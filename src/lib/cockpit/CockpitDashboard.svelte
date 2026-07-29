@@ -202,8 +202,28 @@
     try {
       const host = forHost === 'local' ? null : $hosts.find((x) => x.id === forHost);
       const isWin = forHost === 'local' ? /windows/i.test(sys.os) : host?.type === 'windows';
+      // Windows: CIM, not Get-Service. `Get-Service`'s StartType reports
+      // "Automatic (Delayed Start)" as plain `Automatic` — the delayed flag
+      // simply is not on that object — so the old query could not tell a
+      // service that FAILED to start from one Windows deliberately starts
+      // late. On a freshly booted machine that meant asus, edgeupdate,
+      // MapsBroker and sppsvc (all DelayedAutoStart) were reported as down
+      // while behaving exactly as designed, and since any non-empty list
+      // raises a `warn` alert, the whole host flipped from Saludable to
+      // Atención roughly a minute after boot. An indicator that cries wolf
+      // on every single boot teaches the operator to stop reading it.
+      //
+      // `ExitCode -ne 0` keeps the useful half: a delayed-start service that
+      // genuinely CRASHED still surfaces. Only the "late or idle, exited
+      // cleanly" case is filtered out.
+      //
+      // Not solved here: trigger-start services (AppXSvc) idle themselves and
+      // reappear. Neither WMI nor CIM exposes triggers, and `sc.exe
+      // qtriggerinfo` is no help — its exit code is 0 either way and its
+      // output is LOCALISED, which is the same trap that made the security
+      // log read as unreadable on Spanish Windows.
       const cmd = isWin
-        ? "Get-Service | Where-Object { $_.Status -eq 'Stopped' -and $_.StartType -eq 'Automatic' } | Select-Object -First 12 -ExpandProperty Name"
+        ? "Get-CimInstance Win32_Service -Filter \"StartMode='Auto' AND State='Stopped'\" | Where-Object { -not $_.DelayedAutoStart -or $_.ExitCode -ne 0 } | Select-Object -First 12 -ExpandProperty Name"
         : "systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | head -12";
       let out;
       if (forHost === 'local') {
