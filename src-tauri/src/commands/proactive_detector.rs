@@ -250,7 +250,9 @@ fn try_insert(conn: &rusqlite::Connection, hit: &DetectionHit) -> Result<bool, S
     // El umbral de severidad lo aplica el puente: el detector emite
     // info/warning/critical, el mismo vocabulario, así que un 'info' no cruza
     // salvo que el operador lo haya pedido explícitamente.
-    let (sev, title, detail) = (hit.severity.clone(), hit.title.clone(), hit.detail.clone());
+    // `severity` is a &'static str, so cloning it copies the reference and does
+    // nothing — title and detail are Strings and genuinely need theirs.
+    let (sev, title, detail) = (hit.severity, hit.title.clone(), hit.detail.clone());
     tauri::async_runtime::spawn(async move {
         if let Err(e) = crate::commands::notify_bridge::deliver(
             &format!("Lucy — {}", title), &detail, &sev,
