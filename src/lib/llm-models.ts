@@ -117,7 +117,13 @@ const CONTEXT_WINDOWS: Record<string, number> = {
     'gemini-2.5-flash':                1_000_000,
     'gemini-2.5-pro':                  2_000_000,
     'gemini-2.5-flash-lite-preview':   1_000_000,
-    // Claude 4.x — Opus 4.8/4.7 & Sonnet 4.6 are 1M input; Haiku/older are 200k.
+    // Claude 5 & 4.x — every current model is 1M input; Haiku and the 4.5
+    // generation are 200k. An id missing from this map falls back to 128k,
+    // which makes a 1M-context model look nearly full on a normal session —
+    // so add new ids here, not just to the picker.
+    'claude-fable-5':                  1_000_000,
+    'claude-opus-5':                   1_000_000,
+    'claude-sonnet-5':                 1_000_000,
     'claude-opus-4-8':                 1_000_000,
     'claude-opus-4-7':                 1_000_000,
     'claude-sonnet-4-6':               1_000_000,

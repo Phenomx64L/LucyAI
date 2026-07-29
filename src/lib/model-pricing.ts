@@ -51,13 +51,27 @@ const EFFORT_FACTOR: Record<string, number> = {
 // When in doubt err HIGH so the cost indicator doesn't surprise the user.
 export const MODEL_PRICING: Record<string, ModelPricing> = {
     // ── Anthropic Claude ──────────────────────────────────────────────
-    'claude-opus-4-8':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
-    'claude-opus-4-7':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
-    'claude-opus-4-6':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
+    // CORRECTED: Opus 4.6/4.7/4.8 were carrying Opus 4.5's $15/$75 per 1M —
+    // 3× the real price — so the footer indicator and the pre-flight estimate
+    // both over-quoted every Opus turn by 3×. The Opus tier came down to
+    // $5/$25 with 4.6 and has stayed there through Opus 5. Opus 4.5 keeps the
+    // old numbers because for 4.5 they were correct.
+    'claude-opus-5':     { inputPer1K: 0.005,  outputPer1K: 0.025,  iterFactor: 4, provider: 'anthropic' },
+    'claude-opus-4-8':   { inputPer1K: 0.005,  outputPer1K: 0.025,  iterFactor: 4, provider: 'anthropic' },
+    'claude-opus-4-7':   { inputPer1K: 0.005,  outputPer1K: 0.025,  iterFactor: 4, provider: 'anthropic' },
+    'claude-opus-4-6':   { inputPer1K: 0.005,  outputPer1K: 0.025,  iterFactor: 4, provider: 'anthropic' },
     'claude-opus-4-5':   { inputPer1K: 0.015,  outputPer1K: 0.075,  iterFactor: 4, provider: 'anthropic' },
+    // Sonnet 5 has an introductory $2/$10 running to 2026-08-31. We quote the
+    // standard $3/$15 on purpose — this table's rule is to err HIGH, and a
+    // promotional rate that lapses would silently start under-quoting.
+    'claude-sonnet-5':   { inputPer1K: 0.003,  outputPer1K: 0.015,  iterFactor: 4, provider: 'anthropic' },
     'claude-sonnet-4-6': { inputPer1K: 0.003,  outputPer1K: 0.015,  iterFactor: 4, provider: 'anthropic' },
     'claude-sonnet-4-5': { inputPer1K: 0.003,  outputPer1K: 0.015,  iterFactor: 4, provider: 'anthropic' },
-    'claude-haiku-4-5':  { inputPer1K: 0.0008, outputPer1K: 0.004,  iterFactor: 3, provider: 'anthropic' },
+    // Fable 5 is the only model above the Opus tier: $10/$50 per 1M, double
+    // Opus 5. Its thinking is always on and always billed, hence the higher
+    // iterFactor — an under-quote here is the most expensive one in the table.
+    'claude-fable-5':    { inputPer1K: 0.010,  outputPer1K: 0.050,  iterFactor: 5, provider: 'anthropic' },
+    'claude-haiku-4-5':  { inputPer1K: 0.001,  outputPer1K: 0.005,  iterFactor: 3, provider: 'anthropic' },
 
     // ── Google Gemini ─────────────────────────────────────────────────
     'gemini-3.1-pro-preview':        { inputPer1K: 0.00125, outputPer1K: 0.010,   iterFactor: 4, provider: 'gemini' },

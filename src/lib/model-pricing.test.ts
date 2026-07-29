@@ -14,10 +14,32 @@ import { describe, it, expect } from 'vitest';
 import { getPricing, computeCost } from './model-pricing';
 
 describe('getPricing / known models', () => {
-    it('returns anthropic tier for explicit claude-opus-4-7', () => {
-        const p = getPricing('claude-opus-4-7');
+    // These pin the published per-1M rates divided by 1000. The previous
+    // version of this test asserted 0.015 for Opus — Opus 4.5's rate, carried
+    // forward onto 4.6/4.7/4.8 after the tier dropped to $5/$25, so the cost
+    // indicator over-quoted every Opus turn by 3× with a green test behind it.
+    // Keep in step with src-tauri/src/utils/db.rs::model_prices.
+    it.each([
+        ['claude-fable-5',    0.010, 0.050],   // $10 / $50 per 1M
+        ['claude-opus-5',     0.005, 0.025],   // $5  / $25
+        ['claude-opus-4-8',   0.005, 0.025],
+        ['claude-opus-4-7',   0.005, 0.025],
+        ['claude-opus-4-5',   0.015, 0.075],   // legacy tier — correct for 4.5
+        ['claude-sonnet-5',   0.003, 0.015],   // $3  / $15 (intro $2/$10 not quoted)
+        ['claude-sonnet-4-6', 0.003, 0.015],
+        ['claude-haiku-4-5',  0.001, 0.005],   // $1  / $5
+    ])('prices %s at the published rate', (model, input, output) => {
+        const p = getPricing(model as string);
         expect(p.provider).toBe('anthropic');
-        expect(p.inputPer1K).toBe(0.015);
+        expect(p.inputPer1K).toBe(input);
+        expect(p.outputPer1K).toBe(output);
+    });
+
+    it('prices Opus 5 below the 4.5 tier it replaced', () => {
+        // Direction guard: the Opus tier got CHEAPER at 4.6. Re-inheriting
+        // 4.5's numbers is the regression this catches.
+        expect(getPricing('claude-opus-5').inputPer1K)
+            .toBeLessThan(getPricing('claude-opus-4-5').inputPer1K);
     });
 
     it('returns gemini tier for explicit gemini-3-pro', () => {

@@ -101,15 +101,34 @@ export const LLM_GROUPS = [
         provider: "anthropic",
         credential_key: "anthropic_api_key",
         options: [
-            // June 2026 lineup — Opus 4.8 (flagship) / Opus 4.7 (prev gen) /
-            // Sonnet 4.6 / Haiku 4.5. Opus & Sonnet are 1M ctx.
+            // Claude 5 lineup — Opus 5 (flagship) / Sonnet 5 / Fable 5 (top tier).
+            // Opus 4.8 and Sonnet 4.6 stay as the previous generation. All 1M ctx
+            // except Haiku 4.5 (200K).
             //
             // Effort levels (from platform.claude.com/docs/en/build-with-claude/effort):
-            //   • Opus 4.8    supports low/medium/high/xhigh/max  (same surface as 4.7)
-            //   • Opus 4.7    supports low/medium/high/xhigh/max  (xhigh is exclusive)
-            //   • Sonnet 4.6  supports low/medium/high/max        (docs recommend medium default)
+            //   • Opus 5      supports low/medium/high/xhigh/max
+            //   • Sonnet 5    supports low/medium/high/xhigh/max  (first Sonnet with xhigh)
+            //   • Fable 5     supports low/medium/high/xhigh/max
+            //   • Opus 4.8    supports low/medium/high/xhigh/max
+            //   • Sonnet 4.6  supports low/medium/high/max        (no xhigh)
+            //   • Opus 4.5    supports low/medium/high            (no xhigh, no max)
             //   • Haiku 4.5   does NOT support effort (lightweight tier)
             //   • Sonnet 4.5  legacy — uses manual thinking, no effort param
+            //
+            // ── Two API facts that bite if you forget them ──
+            // 1. Opus 5 THINKS BY DEFAULT. Omitting the `thinking` parameter runs
+            //    adaptive thinking (Opus 4.8 ran without). `max_tokens` caps
+            //    thinking + response together, so a budget sized for 4.8's answer
+            //    can truncate here. Disabling thinking is accepted only at effort
+            //    `high` or below — pairing it with xhigh/max returns a 400.
+            // 2. Fable 5 thinks ALWAYS — any explicit `thinking` config is a 400 —
+            //    and requires 30-day data retention. An org on zero data retention
+            //    gets a 400 on EVERY Fable request, with nothing wrong in the body.
+            //
+            // Lucy sends neither `thinking` nor `temperature`/`top_p` to Anthropic
+            // (see build_anthropic_payload_with_cache), so both are safe today. If
+            // anyone adds them, read the two notes above first: those parameters
+            // are rejected outright on Opus 5 / 4.8 / 4.7 / Fable 5.
             //
             // We surface effort as a "<id>::<level>" suffix; the backend resolver
             // strips it and adds `output_config.effort` to the Anthropic payload.
@@ -125,21 +144,34 @@ export const LLM_GROUPS = [
             // Effort-suffix variants share the same shape — the tier ratio
             // is what matters at a glance, the effort level is in the text.
             //
-            // ── Opus 4.8 (flagship, June 2026) — start with xhigh for coding/agentic ──
-            { id: "claude-opus-4-8::xhigh",  icon: "◆", nameEn: "Claude Opus 4.8 — Extra High (coding/agentic)", nameEs: "Claude Opus 4.8 — Extra Alto (coding/agéntico)" },
-            { id: "claude-opus-4-8::high",   icon: "◆", nameEn: "Claude Opus 4.8 — High (default)",              nameEs: "Claude Opus 4.8 — Alto (predeterminado)" },
-            { id: "claude-opus-4-8::medium", icon: "◆", nameEn: "Claude Opus 4.8 — Medium (cost-sensitive)",     nameEs: "Claude Opus 4.8 — Medio (sensible al costo)" },
-            { id: "claude-opus-4-8::max",    icon: "◆", nameEn: "Claude Opus 4.8 — Max (frontier problems)",     nameEs: "Claude Opus 4.8 — Max (problemas frontera)" },
-            // ── Opus 4.7 — previous generation, kept for parity / pinning ──
-            { id: "claude-opus-4-7::high",   icon: "◇", nameEn: "Claude Opus 4.7 — High (previous gen)",         nameEs: "Claude Opus 4.7 — Alto (generación anterior)" },
-            // ── Sonnet 4.6 — docs recommend medium as default ──
-            { id: "claude-sonnet-4-6::medium", icon: "◇", nameEn: "Claude Sonnet 4.6 — Medium (recommended default)", nameEs: "Claude Sonnet 4.6 — Medio (predeterminado recomendado)" },
-            { id: "claude-sonnet-4-6::low",    icon: "◇", nameEn: "Claude Sonnet 4.6 — Low (speed-sensitive)",        nameEs: "Claude Sonnet 4.6 — Bajo (sensible a latencia)" },
-            { id: "claude-sonnet-4-6::high",   icon: "◇", nameEn: "Claude Sonnet 4.6 — High (quality first)",         nameEs: "Claude Sonnet 4.6 — Alto (calidad primero)" },
-            { id: "claude-sonnet-4-6::max",    icon: "◇", nameEn: "Claude Sonnet 4.6 — Max (deepest analysis)",       nameEs: "Claude Sonnet 4.6 — Max (análisis más profundo)" },
+            // ── Opus 5 (flagship) — $5/$25 per 1M. Start at xhigh for coding and
+            //    agentic work, high for everything else. Note low/medium punch far
+            //    above their weight on this model — worth trying before paying for
+            //    xhigh on routine work.
+            { id: "claude-opus-5::xhigh",  icon: "◆", nameEn: "Claude Opus 5 — Extra High (coding/agentic)", nameEs: "Claude Opus 5 — Extra Alto (coding/agéntico)" },
+            { id: "claude-opus-5::high",   icon: "◆", nameEn: "Claude Opus 5 — High (default)",              nameEs: "Claude Opus 5 — Alto (predeterminado)" },
+            { id: "claude-opus-5::medium", icon: "◆", nameEn: "Claude Opus 5 — Medium (cost-sensitive)",     nameEs: "Claude Opus 5 — Medio (sensible al costo)" },
+            { id: "claude-opus-5::max",    icon: "◆", nameEn: "Claude Opus 5 — Max (frontier problems)",     nameEs: "Claude Opus 5 — Max (problemas frontera)" },
+            // ── Sonnet 5 — near-Opus quality on coding/agentic at Sonnet cost
+            //    ($3/$15 per 1M). Default effort is high; xhigh for the hardest work.
+            { id: "claude-sonnet-5::high",   icon: "◇", nameEn: "Claude Sonnet 5 — High (default)",              nameEs: "Claude Sonnet 5 — Alto (predeterminado)" },
+            { id: "claude-sonnet-5::xhigh",  icon: "◇", nameEn: "Claude Sonnet 5 — Extra High (hardest tasks)",  nameEs: "Claude Sonnet 5 — Extra Alto (tareas más duras)" },
+            { id: "claude-sonnet-5::medium", icon: "◇", nameEn: "Claude Sonnet 5 — Medium (cost-saving)",        nameEs: "Claude Sonnet 5 — Medio (ahorro de costo)" },
+            { id: "claude-sonnet-5::low",    icon: "◇", nameEn: "Claude Sonnet 5 — Low (speed-sensitive)",       nameEs: "Claude Sonnet 5 — Bajo (sensible a latencia)" },
+            // ── Fable 5 — most capable, and the most expensive: $10/$50 per 1M,
+            //    DOUBLE Opus 5. Thinking is always on and cannot be configured, and
+            //    the org must allow 30-day data retention or every request 400s.
+            { id: "claude-fable-5::xhigh", icon: "◆", nameEn: "Claude Fable 5 — Extra High (2× Opus 5 cost)", nameEs: "Claude Fable 5 — Extra Alto (2× el costo de Opus 5)" },
+            { id: "claude-fable-5::high",  icon: "◆", nameEn: "Claude Fable 5 — High (2× Opus 5 cost)",       nameEs: "Claude Fable 5 — Alto (2× el costo de Opus 5)" },
+            // ── Previous generation — kept for pinning and for existing chats ──
+            { id: "claude-opus-4-8::high",     icon: "◇", nameEn: "Claude Opus 4.8 — High (previous gen)",     nameEs: "Claude Opus 4.8 — Alto (generación anterior)" },
+            { id: "claude-opus-4-8::xhigh",    icon: "◇", nameEn: "Claude Opus 4.8 — Extra High (previous gen)", nameEs: "Claude Opus 4.8 — Extra Alto (generación anterior)" },
+            { id: "claude-sonnet-4-6::medium", icon: "◇", nameEn: "Claude Sonnet 4.6 — Medium (previous gen)", nameEs: "Claude Sonnet 4.6 — Medio (generación anterior)" },
+            { id: "claude-sonnet-4-6::high",   icon: "◇", nameEn: "Claude Sonnet 4.6 — High (previous gen)",   nameEs: "Claude Sonnet 4.6 — Alto (generación anterior)" },
             // ── Haiku 4.5 — no effort param available ──
             { id: "claude-haiku-4-5",  icon: "▸", nameEn: "Claude Haiku 4.5 — Fast & Efficient",         nameEs: "Claude Haiku 4.5 — Rápido y Eficiente" },
             // Legacy — kept for backward compat with existing chats / runbooks
+            { id: "claude-opus-4-7::high", icon: "▫", nameEn: "Claude Opus 4.7 — Legacy",                nameEs: "Claude Opus 4.7 — Legado" },
             { id: "claude-sonnet-4-5", icon: "▫", nameEn: "Claude Sonnet 4.5 — Legacy",                  nameEs: "Claude Sonnet 4.5 — Legado" },
         ]
     },

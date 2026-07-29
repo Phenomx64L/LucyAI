@@ -805,13 +805,27 @@ fn model_prices(model: &str) -> (f64, f64) {
 
     match base {
         // ── Anthropic Claude ──
+        // Keep in step with src/lib/model-pricing.ts — the two are read by
+        // different halves of the UI and a drift between them shows up as the
+        // footer and the pre-flight estimate disagreeing about the same turn.
+        //
+        // CORRECTED: 4.6/4.7/4.8 were carrying Opus 4.5's $15/$75 per 1M, 3×
+        // the real price. The Opus tier dropped to $5/$25 at 4.6 and has held
+        // there through Opus 5. Opus 4.5 keeps the old numbers — for 4.5 they
+        // were right.
+        "claude-opus-5"     |
         "claude-opus-4-8"   |
         "claude-opus-4-7"   |
-        "claude-opus-4-6"   |
+        "claude-opus-4-6"     => (0.005,   0.025),
         "claude-opus-4-5"     => (0.015,   0.075),
+        // Fable 5 — the only tier above Opus, at double its price.
+        "claude-fable-5"      => (0.010,   0.050),
+        // Sonnet 5 runs an introductory $2/$10 to 2026-08-31; we bill the
+        // standard $3/$15 so a lapsed promo cannot start under-quoting.
+        "claude-sonnet-5"   |
         "claude-sonnet-4-6" |
         "claude-sonnet-4-5"   => (0.003,   0.015),
-        "claude-haiku-4-5"    => (0.0008,  0.004),
+        "claude-haiku-4-5"    => (0.001,   0.005),
 
         // ── Google Gemini ──
         "gemini-3.1-pro-preview"        => (0.00125, 0.010),
@@ -863,13 +877,38 @@ pub fn calculate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64
 mod pricing_tests {
     use super::{calculate_cost, model_prices};
 
+    // The previous test here asserted "opus is 5× sonnet" and passed for as
+    // long as the Opus rate sat at Opus 4.5's $15/$75 — 3× what 4.6 onward
+    // actually cost. A ratio cannot catch that: both sides can drift together
+    // and the assertion still holds. These pin ABSOLUTE per-1K rates, so a
+    // wrong number fails on the number that is wrong.
     #[test]
-    fn opus_47_is_5x_sonnet_46() {
-        let opus = calculate_cost("claude-opus-4-7", 1000, 1000);
-        let sonnet = calculate_cost("claude-sonnet-4-6", 1000, 1000);
-        // 1k in + 1k out: opus = 0.015 + 0.075 = 0.090; sonnet = 0.003 + 0.015 = 0.018
-        // ratio = 0.090 / 0.018 = 5.0
-        assert!((opus / sonnet - 5.0).abs() < 0.01, "opus={} sonnet={}", opus, sonnet);
+    fn anthropic_rates_match_the_published_price_list() {
+        // USD per 1K tokens = published per-1M price / 1000.
+        for (model, want_in, want_out) in [
+            ("claude-fable-5",    0.010,  0.050),   // $10 / $50 per 1M
+            ("claude-opus-5",     0.005,  0.025),   // $5  / $25
+            ("claude-opus-4-8",   0.005,  0.025),
+            ("claude-opus-4-5",   0.015,  0.075),   // legacy tier — correct for 4.5
+            ("claude-sonnet-5",   0.003,  0.015),   // $3  / $15 (intro $2/$10 not quoted)
+            ("claude-sonnet-4-6", 0.003,  0.015),
+            ("claude-haiku-4-5",  0.001,  0.005),   // $1  / $5
+        ] {
+            let (got_in, got_out) = model_prices(model);
+            assert!((got_in - want_in).abs() < 1e-9,
+                "{} input: got {} want {}", model, got_in, want_in);
+            assert!((got_out - want_out).abs() < 1e-9,
+                "{} output: got {} want {}", model, got_out, want_out);
+        }
+    }
+
+    #[test]
+    fn opus_5_costs_less_than_the_4_5_tier_it_replaced() {
+        // Guards the direction of the correction: the Opus tier got CHEAPER at
+        // 4.6, and re-inheriting 4.5's numbers is the regression to catch.
+        let now = calculate_cost("claude-opus-5", 1000, 1000);
+        let old_tier = calculate_cost("claude-opus-4-5", 1000, 1000);
+        assert!(now < old_tier, "opus-5={} opus-4-5={}", now, old_tier);
     }
 
     #[test]

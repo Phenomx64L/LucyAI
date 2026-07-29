@@ -415,16 +415,22 @@ fn apply_gemini_generation_config(payload: &mut serde_json::Value, cfg: Option<s
 ///      model doesn't support effort, the suffix is missing, or it's invalid
 ///
 /// Per platform.claude.com/docs/en/build-with-claude/effort:
-///   • Opus 4.8    accepts: low | medium | high | xhigh | max  (same surface as 4.7)
+///   • Opus 5      accepts: low | medium | high | xhigh | max
+///   • Sonnet 5    accepts: low | medium | high | xhigh | max  (first Sonnet with xhigh)
+///   • Fable 5     accepts: low | medium | high | xhigh | max
+///   • Opus 4.8    accepts: low | medium | high | xhigh | max
 ///   • Opus 4.7    accepts: low | medium | high | xhigh | max
 ///   • Sonnet 4.6  accepts: low | medium | high | max     (no xhigh)
-///   • Opus 4.5    accepts: low | medium | high | max
-///   • Mythos      accepts: low | medium | high | max
+///   • Opus 4.5    accepts: low | medium | high           (no xhigh, no max)
 ///   • Haiku 4.5   does NOT support effort
 ///
 /// We accept multilingual aliases (alto/medio/bajo) for parity with the
 /// Gemini resolver, and silently strip unsupported suffixes (e.g.
 /// `claude-haiku-4-5::high` → just `claude-haiku-4-5` with no effort).
+///
+/// Stripping rather than erroring is deliberate: an unsupported effort value
+/// is a 400 from Anthropic, and a model picker entry that 400s is worse than
+/// one that quietly runs at the model's default.
 fn resolve_anthropic_model(raw_model: &str) -> (String, Option<&'static str>) {
     let Some((base, effort_raw)) = raw_model.split_once("::") else {
         return (raw_model.to_string(), None);
@@ -440,10 +446,13 @@ fn resolve_anthropic_model(raw_model: &str) -> (String, Option<&'static str>) {
     };
     // Per-model whitelist of accepted effort values.
     let supported: &[&str] = match base {
+        "claude-opus-5"     => &["low", "medium", "high", "xhigh", "max"],
+        "claude-sonnet-5"   => &["low", "medium", "high", "xhigh", "max"],
+        "claude-fable-5"    => &["low", "medium", "high", "xhigh", "max"],
         "claude-opus-4-8"   => &["low", "medium", "high", "xhigh", "max"],
         "claude-opus-4-7"   => &["low", "medium", "high", "xhigh", "max"],
         "claude-sonnet-4-6" => &["low", "medium", "high",          "max"],
-        "claude-opus-4-5"   => &["low", "medium", "high",          "max"],
+        "claude-opus-4-5"   => &["low", "medium", "high"                ],
         // Haiku / older models: no effort param at all.
         _ => &[],
     };
@@ -575,7 +584,15 @@ fn get_max_tokens(model: &str, override_val: Option<u32>) -> u32 {
     if let Some(v) = override_val {
         if v > 0 { return v; }
     }
-    if model.contains("sonnet-4") || model.contains("opus-4") {
+    // Claude 5 family FIRST. These match none of the substrings below —
+    // `claude-opus-5` does not contain "opus-4" — so without this arm they
+    // silently fell through to the 8192 default. That is not an error anyone
+    // sees: the model just answers shorter than it should, and on Opus 5,
+    // which thinks by default, `max_tokens` caps thinking AND response
+    // together, so a long answer gets truncated mid-sentence instead.
+    if model.contains("opus-5") || model.contains("sonnet-5") || model.contains("fable-5") {
+        16384
+    } else if model.contains("sonnet-4") || model.contains("opus-4") {
         16384
     } else if model.contains("3-7") || model.contains("3.7") {
         16384

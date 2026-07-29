@@ -494,8 +494,11 @@ function needForIntent(intent: RoutingContext['detectedIntent']): LocalNeed {
     }
 }
 
-const HEAVY_MODEL_DEFAULT = 'claude-sonnet-4-6';  // strong reasoning, less $ than Opus
-const HEAVY_MODEL_PEAK    = 'claude-opus-4-8';    // flagship — for extreme contexts (>3000 tokens)
+// Sonnet 5 reaches near-Opus quality on coding and agentic work at Sonnet
+// pricing, which is exactly what this default is for: strong reasoning without
+// paying the Opus rate on every heavy turn.
+const HEAVY_MODEL_DEFAULT = 'claude-sonnet-5';  // strong reasoning, less $ than Opus
+const HEAVY_MODEL_PEAK    = 'claude-opus-5';    // flagship — for extreme contexts (>3000 tokens)
 const FAST_MODEL_DEFAULT  = 'gemini-3.1-flash-lite';  // May 2026 cheapest frontier — $0.25/$1.50 per M tok
 
 // ── Recent-failure tracking ──────────────────────────────────────────────
