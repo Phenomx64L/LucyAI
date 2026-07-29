@@ -1165,6 +1165,7 @@ pub fn run() {
             metrics::fork_clear,
             // PDF Intelligence — Sprint 4 Pillar 4
             pdf::pdf_ingest,
+            pdf::extract_pdf_text_from_bytes,
             pdf::pdf_list_docs,
             pdf::pdf_delete_doc,
             pdf::pdf_search,

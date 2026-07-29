@@ -102,44 +102,105 @@ pub fn open_shell_window(
 
 // ── SELECTOR DE ARCHIVOS ──────────────────────────────────────────────────────
 
+// v1.8.1 — Extensions offered by the attachment dialog.
+//
+// PDF was missing, which is why attaching one was impossible through the clip
+// button; users worked around it by pasting an absolute path and asking Lucy
+// to read the file herself. The text list also only covered a handful of
+// formats, so ordinary SysAdmin material (.ps1, .yaml, .conf, .sql, .reg) was
+// unattachable for no good reason.
+//
+// Keep IMAGE_EXTS in sync with the `image/*` mime built below — the frontend
+// decides "render as picture vs. feed as text" purely from that mime prefix.
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+const DOC_EXTS: &[&str] = &["pdf"];
+const TEXT_EXTS: &[&str] = &[
+    "txt", "md", "log", "trace", "csv", "tsv", "json", "xml", "yaml", "yml",
+    "toml", "ini", "conf", "cfg", "properties", "env", "sql", "reg",
+    "ps1", "psm1", "psd1", "sh", "bash", "bat", "cmd",
+    "html", "htm", "css", "js", "ts", "py", "rs", "go", "java", "c", "h", "cpp",
+];
+
+fn all_supported_exts() -> Vec<&'static str> {
+    let mut v = Vec::with_capacity(IMAGE_EXTS.len() + DOC_EXTS.len() + TEXT_EXTS.len());
+    v.extend_from_slice(TEXT_EXTS);
+    v.extend_from_slice(DOC_EXTS);
+    v.extend_from_slice(IMAGE_EXTS);
+    v
+}
+
+/// v1.8.1 — Read one user-picked file into the `(name, content, mime)` shape the
+/// frontend attachment pipeline consumes.
+///
+/// The mime is the CONTRACT that tells the frontend how to treat `content`:
+///   • `image/*`         → `content` is base64, render a thumbnail, send as vision input
+///   • `application/pdf` → `content` is ALREADY-EXTRACTED TEXT, show a PDF chip
+///   • `text/plain`      → `content` is the file text
+///
+/// That distinction matters: the old code classified anything that was not
+/// `text/plain` as an image, so a PDF became a fake "image" whose base64 was
+/// never sent anywhere useful.
+///
+/// Errors are returned rather than swallowed. Previously an unreadable file was
+/// written to the log and dropped, so the composer showed a chip for a file the
+/// model would never see — a silent failure the user could only detect by
+/// noticing Lucy answering about nothing.
+fn read_one_for_attach(path: &std::path::Path) -> Result<(String, String, String), String> {
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+
+    if IMAGE_EXTS.contains(&ext.as_str()) {
+        use base64::{Engine as _, engine::general_purpose};
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {}", file_name, e))?;
+        let b64 = general_purpose::STANDARD.encode(&bytes);
+        let mime = format!("image/{}", if ext == "jpg" { "jpeg".to_string() } else { ext.clone() });
+        return Ok((file_name, b64, mime));
+    }
+
+    if DOC_EXTS.contains(&ext.as_str()) {
+        // Extract here, in the backend, so the model receives real text instead
+        // of the mojibake `readAsText` produced from PDF bytes.
+        let text = crate::commands::pdf::extract_pdf_text(path)?;
+        return Ok((file_name, text, "application/pdf".to_string()));
+    }
+
+    // Everything else: treat as text, but fail loudly on non-UTF-8 rather than
+    // handing the model a corrupted blob.
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok((file_name, content, "text/plain".to_string())),
+        Err(e) => Err(format!(
+            "'{}' no es texto legible ({}). Si es un documento binario, conviértelo \
+             o adjunta un PDF —  Lucy extrae su texto automáticamente.",
+            file_name, e
+        )),
+    }
+}
+
 /// Abre un diálogo de selección de un archivo y devuelve (nombre, contenido/base64, mime).
-/// Para imágenes devuelve base64; para texto devuelve el contenido directamente.
+/// Para imágenes devuelve base64; para PDF el texto extraído; para texto el contenido.
 #[tauri::command]
 pub fn pick_and_read_file() -> Result<Option<(String, String, String)>, String> {
-    if let Some(path) = rfd::FileDialog::new()
-        .add_filter(
-            "Archivos Soportados",
-            &["xml","csv","txt","json","log","md","trace","png","jpg","jpeg","webp"],
-        )
+    match rfd::FileDialog::new()
+        .add_filter("Archivos soportados", &all_supported_exts())
+        .add_filter("Todos los archivos", &["*"])
         .pick_file()
     {
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-            use base64::{Engine as _, engine::general_purpose};
-            let bytes = std::fs::read(&path)
-                .map_err(|e| format!("Error leyendo imagen: {}", e))?;
-            let b64 = general_purpose::STANDARD.encode(&bytes);
-            let mime = format!("image/{}", if ext == "jpg" { "jpeg" } else { &ext });
-            Ok(Some((file_name, b64, mime)))
-        } else {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("Error leyendo texto: {}", e))?;
-            Ok(Some((file_name, content, "text/plain".to_string())))
-        }
-    } else {
-        Ok(None)
+        Some(path) => read_one_for_attach(&path).map(Some),
+        None => Ok(None),
     }
 }
 
 /// Abre un diálogo de selección múltiple y devuelve Vec de (nombre, contenido/base64, mime).
+///
+/// Partial success is intentional: with several files selected, one bad file
+/// must not lose the others. Unreadable ones are reported back through the
+/// `__error__` mime so the frontend can toast them by name — the previous
+/// behaviour (log line, silent drop) left the user with no signal at all.
 #[tauri::command]
 pub fn pick_multiple_files() -> Result<Vec<(String, String, String)>, String> {
     let paths = rfd::FileDialog::new()
-        .add_filter(
-            "Archivos Soportados",
-            &["xml","csv","txt","json","log","md","trace","png","jpg","jpeg","webp"],
-        )
+        .add_filter("Archivos soportados", &all_supported_exts())
+        .add_filter("Todos los archivos", &["*"])
         .pick_files();
     let paths = match paths {
         Some(p) if !p.is_empty() => p,
@@ -148,27 +209,11 @@ pub fn pick_multiple_files() -> Result<Vec<(String, String, String)>, String> {
     let mut results = Vec::new();
     for path in paths {
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-        if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-            use base64::{Engine as _, engine::general_purpose};
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let b64 = general_purpose::STANDARD.encode(&bytes);
-                    let mime = format!("image/{}", if ext == "jpg" { "jpeg" } else { &ext });
-                    results.push((file_name, b64, mime));
-                }
-                Err(e) => write_app_log(
-                    "WARNING",
-                    &format!("No se pudo leer imagen {}: {}", file_name, e),
-                ),
-            }
-        } else {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => results.push((file_name, content, "text/plain".to_string())),
-                Err(e) => write_app_log(
-                    "WARNING",
-                    &format!("No se pudo leer archivo {}: {}", file_name, e),
-                ),
+        match read_one_for_attach(&path) {
+            Ok(triple) => results.push(triple),
+            Err(e) => {
+                write_app_log("WARNING", &format!("Adjunto descartado {}: {}", file_name, e));
+                results.push((file_name, e, "__error__".to_string()));
             }
         }
     }

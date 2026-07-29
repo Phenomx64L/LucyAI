@@ -111,6 +111,87 @@ fn try_markitdown(path: &str) -> Option<String> {
     if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }
 
+/// v1.8.1 — Text extraction for CHAT ATTACHMENTS (as opposed to `pdf_ingest`,
+/// which is the heavyweight RAG path: chunking + embeddings + DB rows).
+///
+/// Why this exists: the attachment picker used to `read_to_string` every
+/// non-image file. On a PDF that fails outright (invalid UTF-8), and the file
+/// was silently dropped with only a log line — so the user saw the attachment
+/// chip in the composer while the model received nothing. That is what forced
+/// people to paste an absolute path and ask Lucy to read the file herself.
+///
+/// Same extractor chain as `pdf_ingest` (markitdown first for structure + OCR,
+/// pure-Rust `pdf-extract` as the always-available fallback) so an attached PDF
+/// and an ingested PDF produce the same text.
+///
+/// SECURITY: `path` comes from the OS file dialog (a real, user-chosen path),
+/// never from model output. `try_markitdown` passes it as a single argv entry
+/// with no shell involved.
+pub(crate) fn extract_pdf_text(path: &std::path::Path) -> Result<String, String> {
+    let display = path.file_name().and_then(|n| n.to_str()).unwrap_or("document.pdf").to_string();
+
+    let raw = match try_markitdown(&path.to_string_lossy()) {
+        Some(md) => md,
+        None => pdf_extract::extract_text(path)
+            .map_err(|e| format!("No se pudo extraer texto de '{}': {}", display, e))?,
+    };
+
+    if raw.trim().is_empty() {
+        return Err(format!(
+            "'{}' no tiene capa de texto (probablemente es un escaneo). \
+             Aplica OCR, o instala `markitdown` con su plugin de OCR para leerlo.",
+            display
+        ));
+    }
+    Ok(raw)
+}
+
+/// v1.8.1 — Extract PDF text from raw bytes, for DRAG-AND-DROP.
+///
+/// `tauri.conf.json` sets `dragDropEnabled: false`, so drops are handled by the
+/// webview's HTML5 DnD and Lucy receives a `File` object with NO filesystem
+/// path — the picker path above cannot be reused. The frontend base64-encodes
+/// the bytes and calls this instead.
+///
+/// The bytes are staged in a temp file because both extractors are path-based
+/// (markitdown is a subprocess; `pdf_extract::extract_text` takes a path). The
+/// temp file is removed on every exit path, including extraction failure.
+///
+/// SECURITY: the caller-supplied `name` is used ONLY for error messages, never
+/// to build the path — the temp filename is generated here. That keeps a
+/// hostile filename (`../../evil`) from steering the write anywhere.
+#[tauri::command]
+pub async fn extract_pdf_text_from_bytes(name: String, data_b64: String) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    // Guard the decode size before allocating: a 100 MB base64 blob from a
+    // stray drop should be refused, not turned into 75 MB of Vec<u8>.
+    const MAX_B64_LEN: usize = 80 * 1024 * 1024; // ~60 MB of PDF
+    if data_b64.len() > MAX_B64_LEN {
+        return Err(format!("'{}' es demasiado grande para adjuntar (>60 MB).", name));
+    }
+
+    let bytes = general_purpose::STANDARD
+        .decode(data_b64.as_bytes())
+        .map_err(|e| format!("'{}': base64 inválido ({})", name, e))?;
+
+    let tmp = std::env::temp_dir().join(format!("lucy_attach_{}.pdf", generate_id()));
+    std::fs::write(&tmp, &bytes)
+        .map_err(|e| format!("No se pudo preparar '{}' para lectura: {}", name, e))?;
+
+    let tmp_for_task = tmp.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || extract_pdf_text(&tmp_for_task)).await;
+
+    // Delete BEFORE unwrapping the join result. `pdf-extract` panics on some
+    // malformed PDFs, and a panic surfaces here as a JoinError — the previous
+    // `?` on the joined result returned early and skipped the cleanup, leaving
+    // the user's document bytes in %TEMP% indefinitely. Cleanup on every exit
+    // path now means every path, not just the ones that return a value.
+    let _ = std::fs::remove_file(&tmp);
+
+    joined.map_err(|e| format!("Fallo interno extrayendo '{}': {}", name, e))?
+}
+
 // ── Structure-aware chunking (v1.7.184, native — no external tool) ───────────
 //
 // The plain char-window `chunk_text` cuts every ~2500 chars regardless of
@@ -900,5 +981,214 @@ mod tests {
         assert!(chunks.len() >= 3);
         // Every chunk within size; consecutive chunks share the overlap region.
         for c in &chunks { assert!(c.chars().count() <= 300); }
+    }
+
+    // ── The extractor itself (v1.8.1) ───────────────────────────────────────
+    //
+    // Every other test above covers a pure helper, so until now NOTHING here
+    // ever ran the actual text extraction. That is a gap with teeth: v1.8.1
+    // bumped `pdf-extract` 0.7 → 0.12 (five major versions) to escape
+    // RUSTSEC-2026-0187, on the exact code path the attachment fix depends on.
+    // The bump's Cargo.toml note asserts "that entry point is unchanged across
+    // the bump" — these tests are what turns that assertion into something
+    // checked. A silent break makes every attached PDF report "no tiene capa
+    // de texto", which reads as a scanned-document problem, not a regression.
+    //
+    // Re-run these after ANY pdf-extract / lopdf move (ARCHITECTURE §7 says to
+    // expect them: the advisory triage is revisited on every Tauri upgrade).
+
+    /// Assemble a minimal but structurally valid one-page PDF containing
+    /// `text`. The xref offsets are computed while the body is built because
+    /// lopdf reads them; a hand-written table drifts the moment anything above
+    /// it changes by a byte.
+    fn build_text_pdf(text: &str) -> Vec<u8> {
+        let content = format!("BT /F1 24 Tf 72 700 Td ({}) Tj ET\n", text);
+        let objects: [String; 5] = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+
+        let mut buf: Vec<u8> = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(buf.len());
+            buf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", i + 1, body).as_bytes());
+        }
+
+        let xref_at = buf.len();
+        buf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        buf.extend_from_slice(b"0000000000 65535 f \n");
+        for off in &offsets {
+            // Every xref entry is exactly 20 bytes — the spec is strict here.
+            buf.extend_from_slice(format!("{:010} 00000 n \n", off).as_bytes());
+        }
+        buf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+                objects.len() + 1,
+                xref_at
+            ).as_bytes(),
+        );
+        buf
+    }
+
+    /// Canary for the crate bump: calls `pdf_extract::extract_text` DIRECTLY
+    /// rather than through `extract_pdf_text`, on purpose. The wrapper tries
+    /// markitdown first, so on a machine that has it installed a wrapper-level
+    /// test would pass through markitdown and mask a broken pure-Rust
+    /// extractor — which is the fallback every machine without it relies on.
+    #[test]
+    fn pdf_extract_reads_a_real_text_layer_pdf() {
+        const CANARY: &str = "LUCY PDF EXTRACTION CANARY";
+        let tmp = std::env::temp_dir().join(format!("lucy_pdf_test_{}.pdf", generate_id()));
+        std::fs::write(&tmp, build_text_pdf(CANARY)).expect("write temp pdf");
+
+        let got = pdf_extract::extract_text(&tmp);
+        let _ = std::fs::remove_file(&tmp);
+
+        let text = got.expect("pdf-extract failed on a valid text-layer PDF");
+        assert!(
+            text.contains("CANARY"),
+            "extractor returned text without the canary: {:?}",
+            text
+        );
+    }
+
+    /// The production wrapper on the same PDF. Covers the markitdown fallback
+    /// and the empty-text guard, and pins the attachment contract: what comes
+    /// back is TEXT, which is why an attached PDF is `type: 'text'` (§4.1).
+    #[test]
+    fn extract_pdf_text_returns_the_documents_text() {
+        const CANARY: &str = "LUCY WRAPPER CANARY";
+        let tmp = std::env::temp_dir().join(format!("lucy_pdf_wrap_{}.pdf", generate_id()));
+        std::fs::write(&tmp, build_text_pdf(CANARY)).expect("write temp pdf");
+
+        let got = extract_pdf_text(&tmp);
+        let _ = std::fs::remove_file(&tmp);
+
+        let text = got.expect("extract_pdf_text failed on a valid text-layer PDF");
+        assert!(!text.trim().is_empty());
+        assert!(text.contains("CANARY"), "wrapper lost the text: {:?}", text);
+    }
+
+    /// A file that is not a PDF must come back as `Err`, never as empty text.
+    /// The attachment path reports that error to the user in-band; returning
+    /// Ok("") instead would attach a chip carrying nothing, which is precisely
+    /// the v1.8.0 failure mode the pipeline fix set out to end.
+    #[test]
+    fn extract_pdf_text_errors_on_a_non_pdf() {
+        let tmp = std::env::temp_dir().join(format!("lucy_pdf_bad_{}.pdf", generate_id()));
+        std::fs::write(&tmp, b"this is plainly not a PDF").expect("write temp file");
+
+        let got = extract_pdf_text(&tmp);
+        let _ = std::fs::remove_file(&tmp);
+
+        assert!(got.is_err(), "a non-PDF must not extract as Ok: {:?}", got);
+    }
+
+    // ── The drag-and-drop entry point ───────────────────────────────────────
+    //
+    // `dragDropEnabled: false` means a dropped PDF arrives with no filesystem
+    // path, so it cannot reuse the picker's path — it is base64'd in the
+    // webview and staged here. That makes this the ONLY hop where Lucy writes
+    // attacker-influenced bytes to disk, so its guards get pinned: the size
+    // ceiling, the base64 validation, the filename-is-cosmetic rule, and the
+    // temp-file cleanup.
+
+    /// Names of the files this command stages, so a leak is detectable.
+    /// Exact under `--test-threads=1`, which is how CI runs the suite.
+    fn staged_temp_files() -> Vec<String> {
+        std::fs::read_dir(std::env::temp_dir())
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with("lucy_attach_"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The drag-and-drop happy path, end to end: PDF bytes → base64 → staged
+    /// temp file → extractor → text. This is what the composer chip promises
+    /// and what the prompt builder puts under `--- ARCHIVOS ---`.
+    #[tokio::test]
+    async fn extract_from_bytes_round_trips_a_dropped_pdf() {
+        use base64::{engine::general_purpose, Engine as _};
+        const CANARY: &str = "LUCY DROPPED PDF CANARY";
+
+        let b64 = general_purpose::STANDARD.encode(build_text_pdf(CANARY));
+        let before = staged_temp_files();
+
+        let text = extract_pdf_text_from_bytes("dropped.pdf".into(), b64)
+            .await
+            .expect("dropped PDF failed to extract");
+
+        assert!(text.contains("CANARY"), "drop path lost the text: {:?}", text);
+        assert_eq!(
+            staged_temp_files(), before,
+            "the staged temp file outlived a successful extraction"
+        );
+    }
+
+    /// A malformed payload must fail AND clean up after itself — the failure
+    /// path is the one that used to leave the user's bytes in %TEMP%.
+    #[tokio::test]
+    async fn extract_from_bytes_cleans_up_after_a_failed_extraction() {
+        use base64::{engine::general_purpose, Engine as _};
+
+        let b64 = general_purpose::STANDARD.encode(b"not a PDF at all");
+        let before = staged_temp_files();
+
+        let got = extract_pdf_text_from_bytes("junk.pdf".into(), b64).await;
+
+        assert!(got.is_err(), "garbage bytes must not extract as Ok: {:?}", got);
+        assert_eq!(
+            staged_temp_files(), before,
+            "a failed extraction left its staged temp file behind"
+        );
+    }
+
+    /// The size ceiling is checked on the ENCODED string, before decoding, so
+    /// a stray 100 MB drop is refused instead of first becoming 75 MB of Vec.
+    #[tokio::test]
+    async fn extract_from_bytes_refuses_an_oversized_payload() {
+        let huge = "A".repeat(80 * 1024 * 1024 + 4);
+        let before = staged_temp_files();
+
+        let got = extract_pdf_text_from_bytes("huge.pdf".into(), huge).await;
+
+        let err = got.expect_err("an oversized payload must be refused");
+        assert!(err.contains("huge.pdf"), "error should name the file: {}", err);
+        assert_eq!(staged_temp_files(), before, "a refused payload was still staged");
+    }
+
+    #[tokio::test]
+    async fn extract_from_bytes_rejects_invalid_base64() {
+        let got = extract_pdf_text_from_bytes("bad.pdf".into(), "not!valid!base64!".into()).await;
+        let err = got.expect_err("invalid base64 must be refused");
+        assert!(err.contains("base64"), "error should say what was wrong: {}", err);
+    }
+
+    /// The caller-supplied name reaches error messages only — never the path.
+    /// A traversing name must neither steer the write nor break the read.
+    #[tokio::test]
+    async fn extract_from_bytes_ignores_a_hostile_filename() {
+        use base64::{engine::general_purpose, Engine as _};
+        const CANARY: &str = "LUCY HOSTILE NAME CANARY";
+
+        let b64 = general_purpose::STANDARD.encode(build_text_pdf(CANARY));
+        let hostile = r"..\..\..\..\evil";
+        let escaped = std::env::temp_dir().join("..").join("evil.pdf");
+
+        let text = extract_pdf_text_from_bytes(hostile.into(), b64)
+            .await
+            .expect("a cosmetic-only name must not break extraction");
+
+        assert!(text.contains("CANARY"));
+        assert!(!escaped.exists(), "the filename steered the write outside temp_dir");
     }
 }

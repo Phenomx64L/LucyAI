@@ -15,6 +15,7 @@
   import Sparkles from '@tabler/icons-svelte/icons/sparkles';
   import Terminal2 from '@tabler/icons-svelte/icons/terminal-2';
   import FileText from '@tabler/icons-svelte/icons/file-text';
+  import FileTypePdf from '@tabler/icons-svelte/icons/file-type-pdf';
   import Activity from '@tabler/icons-svelte/icons/activity';
   import Server from '@tabler/icons-svelte/icons/server';
   import ShieldCheck from '@tabler/icons-svelte/icons/shield-check';
@@ -120,6 +121,17 @@
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
   });
+
+  // v1.8.1 — size label for document attachment chips. Character count, not
+  // bytes: what matters to the operator is how much of the model's context the
+  // file will occupy, and for an extracted PDF the original byte size is
+  // meaningless (a 4 MB scan can yield 2 kB of text).
+  function fmtChars(n) {
+    const v = Number(n) || 0;
+    if (v < 1000) return `${v} car.`;
+    if (v < 1_000_000) return `${(v / 1000).toFixed(v < 10_000 ? 1 : 0)}k car.`;
+    return `${(v / 1_000_000).toFixed(1)}M car.`;
+  }
 
   // ── Model picker (cloud catalog + auto-discovered local LLMs) ──────────────
   let modelMenuOpen = $state(false);
@@ -544,13 +556,30 @@
             {#each $agentConvo as m (m.id)}
               {#if m.role === 'user'}
                 <div class="msg user">
-                  <div class="avatar user">IV</div>
+                  <!-- v1.8.1: the initials were hardcoded "IV" — correct for
+                       Iván by luck, wrong for every other operator. -->
+                  <div class="avatar user" aria-label={userName || 'Usuario'} title={userName || undefined}>{userInitials}</div>
                   <div class="ubub">
                     {#if m.atts?.length}
-                      <!-- Fase A: miniaturas de las imágenes adjuntas al mensaje -->
+                      <!-- v1.8.1 — images render as thumbnails, documents as
+                           chips. Documents used to be dropped by the mirror
+                           (they carry no previewUrl) and only survived as an
+                           inline "Archivos: ·" string glued into the text. -->
                       <div class="msg-atts">
                         {#each m.atts as a (a.name)}
-                          <img class="msg-att" src={a.previewUrl} alt={a.name} title={a.name} />
+                          {#if a.kind === 'image' && a.previewUrl}
+                            <img class="msg-att" src={a.previewUrl} alt={a.name} title={a.name} />
+                          {:else}
+                            <div class="msg-doc" title={a.name}>
+                              <span class="msg-doc-ic">
+                                {#if a.kind === 'pdf'}<FileTypePdf size={16} stroke={1.75} />{:else}<FileText size={16} stroke={1.75} />{/if}
+                              </span>
+                              <span class="msg-doc-meta">
+                                <span class="msg-doc-name">{a.name}</span>
+                                <span class="msg-doc-sub">{a.kind === 'pdf' ? 'PDF' : t('Texto', 'Text')}{#if a.chars} · {fmtChars(a.chars)}{/if}</span>
+                              </span>
+                            </div>
+                          {/if}
                         {/each}
                       </div>
                     {/if}
@@ -697,6 +726,10 @@
                 <div class="attach-chip" title={f.name}>
                   {#if f.type === 'image' && f.previewUrl}
                     <img class="attach-thumb" src={f.previewUrl} alt={f.name} />
+                  {:else if f.mimeType === 'application/pdf'}
+                    <!-- v1.8.1: PDFs arrive as type 'text' (already-extracted
+                         text), so the icon keys off mimeType, not type. -->
+                    <FileTypePdf size={13} stroke={1.75} />
                   {:else}
                     <FileText size={13} stroke={1.75} />
                   {/if}
@@ -1098,6 +1131,25 @@
     border: 1px solid var(--border-strong); object-fit: cover;
     animation: msg-in-r var(--dur-slow) var(--ease-out);
   }
+  /* v1.8.1 — document attachment chip in the user bubble. Same visual family
+     as the composer's .attach-chip so a file looks identical before and after
+     sending; two lines here because the sent chip also reports how much
+     context the file consumes. */
+  .msg-doc {
+    display: inline-flex; align-items: center; gap: 8px; max-width: 240px;
+    padding: 7px 10px 7px 8px; border-radius: var(--r-md);
+    background: var(--surface-2); border: 1px solid var(--border-strong);
+    animation: msg-in-r var(--dur-slow) var(--ease-out);
+    transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  }
+  .msg-doc:hover { border-color: var(--accent); background: var(--surface-3); }
+  .msg-doc-ic { display: flex; flex: 0 0 auto; color: var(--accent); }
+  .msg-doc-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; text-align: left; }
+  .msg-doc-name {
+    font-size: var(--fs-caption); color: var(--text-primary); font-weight: var(--fw-medium);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .msg-doc-sub { font-size: 10.5px; color: var(--text-faint); }
   .msg-acts { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
   .msg:hover .msg-acts, .msg.acted .msg-acts { opacity: 1; }
   .ma-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-faint); cursor: pointer; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-snap); }
