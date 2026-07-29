@@ -74,17 +74,37 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     'claude-haiku-4-5':  { inputPer1K: 0.001,  outputPer1K: 0.005,  iterFactor: 3, provider: 'anthropic' },
 
     // ── Google Gemini ─────────────────────────────────────────────────
-    'gemini-3.1-pro-preview':        { inputPer1K: 0.00125, outputPer1K: 0.010,   iterFactor: 4, provider: 'gemini' },
-    'gemini-3.5-flash':              { inputPer1K: 0.00030, outputPer1K: 0.0025,  iterFactor: 3, provider: 'gemini' },
-    'gemini-3.1-flash-lite':         { inputPer1K: 0.00010, outputPer1K: 0.0004,  iterFactor: 3, provider: 'gemini' },
-    'gemini-3.1-flash-lite-preview': { inputPer1K: 0.00010, outputPer1K: 0.0004,  iterFactor: 3, provider: 'gemini' },
-    'gemini-3-flash-preview':        { inputPer1K: 0.00030, outputPer1K: 0.0025,  iterFactor: 3, provider: 'gemini' }, // legacy → 3.5-flash
+    // CORRECTED 2026-07-29 against ai.google.dev/gemini-api/docs/pricing. The
+    // previous numbers were "Flash-class is cheap" guesses and ran badly UNDER:
+    // gemini-3.5-flash was quoted at $0.30/$2.50 per 1M against a real
+    // $1.50/$9.00 — 5× under on input, 3.6× on output — so the footer showed a
+    // fraction of the real spend for the default Gemini model.
+    //
+    // 3.1 Pro is tier-priced by prompt size ($2/$12 at ≤200k, $4/$18 above).
+    // We quote the ≤200k tier: Lucy's own compaction keeps prompts under that,
+    // and the alternative under-quotes nothing while over-quoting long ones.
+    'gemini-3.1-pro-preview':        { inputPer1K: 0.0020,  outputPer1K: 0.012,   iterFactor: 4, provider: 'gemini' },
+    'gemini-3.6-flash':              { inputPer1K: 0.0015,  outputPer1K: 0.0075,  iterFactor: 3, provider: 'gemini' },
+    'gemini-3.5-flash':              { inputPer1K: 0.0015,  outputPer1K: 0.0090,  iterFactor: 3, provider: 'gemini' },
+    'gemini-3.5-flash-lite':         { inputPer1K: 0.00030, outputPer1K: 0.0025,  iterFactor: 3, provider: 'gemini' },
+    'gemini-3.1-flash-lite':         { inputPer1K: 0.00025, outputPer1K: 0.0015,  iterFactor: 3, provider: 'gemini' },
+    'gemini-3.1-flash-lite-preview': { inputPer1K: 0.00025, outputPer1K: 0.0015,  iterFactor: 3, provider: 'gemini' },
+    'gemini-3-flash-preview':        { inputPer1K: 0.0015,  outputPer1K: 0.0090,  iterFactor: 3, provider: 'gemini' }, // legacy → 3.5-flash
     // Legacy Gemini 2.5 (kept for old saved chats)
     'gemini-2.5-pro':                { inputPer1K: 0.00125, outputPer1K: 0.010,   iterFactor: 4, provider: 'gemini' },
     'gemini-2.5-flash':              { inputPer1K: 0.00030, outputPer1K: 0.0025,  iterFactor: 3, provider: 'gemini' },
     'gemini-2.5-flash-lite-preview': { inputPer1K: 0.00010, outputPer1K: 0.0004,  iterFactor: 3, provider: 'gemini' },
 
     // ── OpenAI ────────────────────────────────────────────────────────
+    // Verified 2026-07-29 against developers.openai.com/api/docs/pricing.
+    // Standard tier — Batch/Flex halve these, Priority doubles them; Lucy uses
+    // neither. The 5.5/5.4/5.3 entries below are legacy and unverifiable now
+    // that OpenAI no longer lists them; left at their last-known values so a
+    // saved chat still gets a cost estimate rather than the generic fallback.
+    'gpt-5.6-sol':     { inputPer1K: 0.005,   outputPer1K: 0.030,  iterFactor: 4, provider: 'openai' },
+    'gpt-5.6-terra':   { inputPer1K: 0.0025,  outputPer1K: 0.015,  iterFactor: 4, provider: 'openai' },
+    'gpt-5.6-luna':    { inputPer1K: 0.001,   outputPer1K: 0.006,  iterFactor: 3, provider: 'openai' },
+    // Legacy — last-known rates, no longer published
     'gpt-5.5':         { inputPer1K: 0.005,   outputPer1K: 0.020,  iterFactor: 4, provider: 'openai' },
     'gpt-5.5-instant': { inputPer1K: 0.002,   outputPer1K: 0.008,  iterFactor: 3, provider: 'openai' },
     'gpt-5.4-mini':    { inputPer1K: 0.00020, outputPer1K: 0.00080, iterFactor: 3, provider: 'openai' },

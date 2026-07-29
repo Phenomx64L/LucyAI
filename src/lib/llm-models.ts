@@ -106,13 +106,19 @@ export const KNOWN_GEMINI_IDS: ReadonlySet<string> = new Set([
 
 const CONTEXT_WINDOWS: Record<string, number> = {
     // Gemini 3.x family (1M tokens input across the line)
+    'gemini-3.6-flash':                1_000_000,
     'gemini-3.5-flash':                1_000_000,
+    'gemini-3.5-flash-lite':           1_000_000,
     'gemini-3.1-flash-lite-preview':   1_000_000,
     'gemini-3.1-flash-lite':           1_000_000,
     'gemini-3.1-pro-preview':          1_000_000,
     'gemini-3.1-pro-preview::high':    1_000_000,
     'gemini-3.1-pro-preview::medium':  1_000_000,
     'gemini-3-flash-preview':          1_000_000,
+    // OpenAI GPT-5.6 — 1.05M input, 128K output (developers.openai.com)
+    'gpt-5.6-sol':                     1_050_000,
+    'gpt-5.6-terra':                   1_050_000,
+    'gpt-5.6-luna':                    1_050_000,
     // Gemini 2.5 family (1M for pro, 1M for flash-lite preview)
     'gemini-2.5-flash':                1_000_000,
     'gemini-2.5-pro':                  2_000_000,

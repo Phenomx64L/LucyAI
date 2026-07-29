@@ -828,17 +828,31 @@ fn model_prices(model: &str) -> (f64, f64) {
         "claude-haiku-4-5"    => (0.001,   0.005),
 
         // ── Google Gemini ──
-        "gemini-3.1-pro-preview"        => (0.00125, 0.010),
-        "gemini-3.5-flash"              => (0.00030, 0.0025),
-        "gemini-3-flash-preview"        => (0.00030, 0.0025), // legacy alias
+        // CORRECTED 2026-07-29 from ai.google.dev/gemini-api/docs/pricing. The
+        // old numbers ran badly UNDER — gemini-3.5-flash was billed at
+        // $0.30/$2.50 per 1M against a real $1.50/$9.00 (5× / 3.6× under), and
+        // it is the default Gemini model, so the reported spend was a fraction
+        // of the real one. 3.1 Pro is tier-priced by prompt size; we quote the
+        // ≤200k tier ($2/$12) rather than the >200k one ($4/$18).
+        "gemini-3.1-pro-preview"        => (0.0020,  0.012),
+        "gemini-3.6-flash"              => (0.0015,  0.0075),
+        "gemini-3.5-flash"              => (0.0015,  0.0090),
+        "gemini-3-flash-preview"        => (0.0015,  0.0090), // legacy alias
+        "gemini-3.5-flash-lite"         => (0.00030, 0.0025),
         "gemini-3.1-flash-lite"         |
-        "gemini-3.1-flash-lite-preview" => (0.00010, 0.0004),
+        "gemini-3.1-flash-lite-preview" => (0.00025, 0.0015),
         // Legacy 2.5
         "gemini-2.5-pro"                => (0.00125, 0.010),
         "gemini-2.5-flash"              => (0.00030, 0.0025),
         "gemini-2.5-flash-lite-preview" => (0.00010, 0.0004),
 
-        // ── OpenAI GPT-5.x ──
+        // ── OpenAI GPT ──
+        // Verified 2026-07-29 from developers.openai.com/api/docs/pricing.
+        // Standard tier. The 5.5/5.4/5.3 rows are legacy last-known values —
+        // OpenAI no longer publishes them.
+        "gpt-5.6-sol"     => (0.005,   0.030),
+        "gpt-5.6-terra"   => (0.0025,  0.015),
+        "gpt-5.6-luna"    => (0.001,   0.006),
         "gpt-5.5"         => (0.005,   0.020),
         "gpt-5.5-instant" => (0.002,   0.008),
         "gpt-5.4-mini"    => (0.00020, 0.00080),
@@ -922,12 +936,28 @@ mod pricing_tests {
         assert!((plain - max).abs() < 1e-9);
     }
 
+    // This used to assert "Flash costs ≤1/3 of Pro". That stopped being true:
+    // the Flash tier moved upmarket — gemini-3.5-flash is described by Google
+    // as its most intelligent model for sustained frontier work and is priced
+    // at $1.50/$9.00 against Pro's $2.00/$12.00, roughly three quarters of it.
+    // The genuinely cheap tier is now Flash-LITE. Naming matters here: someone
+    // reaching for "flash" expecting the budget option is picking a model that
+    // costs 6× what they think it does.
     #[test]
-    fn flash_is_much_cheaper_than_pro() {
-        let pro   = model_prices("gemini-3.1-pro-preview");
-        let flash = model_prices("gemini-3.5-flash");
-        assert!(pro.0 > flash.0 * 3.0, "Pro input should cost ≥3× Flash");
-        assert!(pro.1 > flash.1 * 3.0, "Pro output should cost ≥3× Flash");
+    fn flash_lite_is_the_cheap_tier_not_flash() {
+        let pro        = model_prices("gemini-3.1-pro-preview");
+        let flash      = model_prices("gemini-3.5-flash");
+        let flash_lite = model_prices("gemini-3.1-flash-lite");
+
+        // Flash-Lite is the budget tier — comfortably under a third of Pro.
+        assert!(pro.0 > flash_lite.0 * 3.0, "Pro input should cost >3× Flash-Lite");
+        assert!(pro.1 > flash_lite.1 * 3.0, "Pro output should cost >3× Flash-Lite");
+
+        // Flash sits just below Pro, NOT near Flash-Lite. If this ever starts
+        // failing because Flash got cheap again, that is a real repricing —
+        // check the tier ordering in models.js at the same time.
+        assert!(flash.0 < pro.0,             "Flash should still be under Pro");
+        assert!(flash.0 > flash_lite.0 * 3.0, "Flash is NOT the budget tier");
     }
 
     #[test]

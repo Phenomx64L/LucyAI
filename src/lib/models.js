@@ -194,37 +194,60 @@ export const LLM_GROUPS = [
             // The "::high" / "::medium" suffix is stripped server-side and translated
             // to the right thinkingConfig payload. See ai.rs → resolve_gemini_model().
             //
-            // Notes:
-            //   • gemini-3.1-pro-preview is still in PREVIEW (1M ctx · 65K out · cutoff Jan 2025).
-            //   • gemini-3.5-flash is GENERALLY AVAILABLE (1M ctx · 65K out · cutoff Jan 2025).
-            //   • gemini-3.1-flash-lite is GA (1M ctx · 65K out · cutoff Jan 2025).
+            // Verified 2026-07-29 against ai.google.dev/gemini-api/docs/models
+            // and .../pricing. Prices are per 1M tokens, paid tier:
+            //   • gemini-3.6-flash        GA      $1.50 / $7.50   ← newest
+            //   • gemini-3.5-flash        GA      $1.50 / $9.00
+            //   • gemini-3.5-flash-lite   GA      $0.30 / $2.50
+            //   • gemini-3.1-flash-lite   GA      $0.25 / $1.50
+            //   • gemini-3.1-pro-preview  PREVIEW $2.00 / $12.00  (≤200k prompt;
+            //     $4/$18 above that — model-pricing.ts quotes the higher-volume
+            //     tier only implicitly, see the note there)
+            { id: "gemini-3.6-flash",               icon: "◐", nameEn: "Gemini 3.6 Flash — Agentic & multimodal (newest)", nameEs: "Gemini 3.6 Flash — Agéntico y multimodal (más reciente)" },
+            { id: "gemini-3.5-flash",               icon: "◐", nameEn: "Gemini 3.5 Flash — Sustained frontier performance", nameEs: "Gemini 3.5 Flash — Rendimiento de frontera sostenido" },
             { id: "gemini-3.1-pro-preview::high",   icon: "◆", nameEn: "Gemini 3.1 Pro — High Effort (deep reasoning)", nameEs: "Gemini 3.1 Pro — Esfuerzo Alto (razonamiento profundo)" },
             { id: "gemini-3.1-pro-preview::medium", icon: "◆", nameEn: "Gemini 3.1 Pro — Medium Effort (balanced)",     nameEs: "Gemini 3.1 Pro — Esfuerzo Medio (balanceado)" },
-            { id: "gemini-3.5-flash",               icon: "◐", nameEn: "Gemini 3.5 Flash — Frontier-class at lower cost", nameEs: "Gemini 3.5 Flash — Frontera a menor costo" },
-            { id: "gemini-3.1-flash-lite",          icon: "◯", nameEn: "Gemini 3.1 Flash-Lite — High-volume workhorse",   nameEs: "Gemini 3.1 Flash-Lite — Caballo de batalla de alto volumen" },
+            { id: "gemini-3.5-flash-lite",          icon: "◯", nameEn: "Gemini 3.5 Flash-Lite — High-throughput",         nameEs: "Gemini 3.5 Flash-Lite — Alto rendimiento" },
+            { id: "gemini-3.1-flash-lite",          icon: "◯", nameEn: "Gemini 3.1 Flash-Lite — Cheapest workhorse",      nameEs: "Gemini 3.1 Flash-Lite — El más barato" },
             { id: "gemini-3.1-flash-lite-preview",  icon: "◎", nameEn: "Gemini 3.1 Flash-Lite Preview",                   nameEs: "Gemini 3.1 Flash-Lite Vista Previa" },
         ]
     },
     {
-        label: "── OpenAI GPT-5 Vision ──",
+        label: "── OpenAI GPT Vision ──",
         provider: "openai",
         credential_key: "openai_api_key",
         options: [
             // ── Lucy's geometric icon system ──
             //   ◆ = frontier (top-tier reasoning)
-            //   ▸ = instant / fast tier
-            //   ◯ = mini (small but capable)
-            //   ◌ = nano (smallest)
-            //   ⌬ = codex (hex = code-specialized)
-            //   ▫ = legacy (kept for backward compat)
-            { id: "gpt-5.5",         icon: "◆",  nameEn: "GPT-5.5 — Frontier Reasoning & Coding", nameEs: "GPT-5.5 — Razonamiento y Código de Frontera" },
-            { id: "gpt-5.5-instant", icon: "▸",  nameEn: "GPT-5.5 Instant — Low-Latency Default", nameEs: "GPT-5.5 Instant — Baja Latencia por Defecto" },
-            { id: "gpt-5.4-mini",    icon: "◯",  nameEn: "GPT-5.4 Mini — Fast & Cost Effective",  nameEs: "GPT-5.4 Mini — Rápido y Económico" },
-            { id: "gpt-5.4-nano",    icon: "◌",  nameEn: "GPT-5.4 Nano — Cheapest Reasoning",     nameEs: "GPT-5.4 Nano — Razonamiento Más Barato" },
-            { id: "gpt-5.3-codex",   icon: "⌬",  nameEn: "GPT-5.3 Codex — Agentic Coding",        nameEs: "GPT-5.3 Codex — Codificación Agéntica" },
-            // Legacy
-            { id: "gpt-4o",      icon: "▫", nameEn: "GPT-4o — Legacy Multimodal",    nameEs: "GPT-4o — Legado Multimodal" },
-            { id: "gpt-4o-mini", icon: "▫", nameEn: "GPT-4o Mini — Legacy Fast",     nameEs: "GPT-4o Mini — Legado Rápido" },
+            //   ◇ = balanced mid-tier
+            //   ◯ = budget tier
+            //   ▫ = legacy (kept for backward compat with saved chats)
+            //
+            // Verified 2026-07-29 against developers.openai.com/api/docs/models
+            // and .../pricing. The GPT-5.6 family replaced the 5.5/5.4/5.3
+            // lineup wholesale — three sizes of one model rather than separate
+            // instant/mini/nano/codex variants. All three are 1.05M context and
+            // 128K max output. Prices per 1M tokens, standard tier:
+            //   • gpt-5.6-sol    $5.00 / $30.00
+            //   • gpt-5.6-terra  $2.50 / $15.00
+            //   • gpt-5.6-luna   $1.00 / $6.00
+            // (Batch and Flex halve those; Priority doubles them. Regional
+            // data-residency endpoints add 10% for models released after
+            // 2026-03-05 — Lucy does not use either, so the standard rate is
+            // what model-pricing.ts quotes.)
+            { id: "gpt-5.6-sol",   icon: "◆", nameEn: "GPT-5.6 Sol — Frontier (complex professional work)", nameEs: "GPT-5.6 Sol — Frontera (trabajo profesional complejo)" },
+            { id: "gpt-5.6-terra", icon: "◇", nameEn: "GPT-5.6 Terra — Balanced intelligence/cost",         nameEs: "GPT-5.6 Terra — Equilibrio inteligencia/costo" },
+            { id: "gpt-5.6-luna",  icon: "◯", nameEn: "GPT-5.6 Luna — Cost-sensitive workloads",            nameEs: "GPT-5.6 Luna — Cargas sensibles al costo" },
+            // Legacy — no longer listed by OpenAI as current. Kept selectable so
+            // saved chats and runbooks pinned to them still resolve; expect them
+            // to 404 once OpenAI retires the endpoints.
+            { id: "gpt-5.5",         icon: "▫", nameEn: "GPT-5.5 — Legacy",         nameEs: "GPT-5.5 — Legado" },
+            { id: "gpt-5.5-instant", icon: "▫", nameEn: "GPT-5.5 Instant — Legacy", nameEs: "GPT-5.5 Instant — Legado" },
+            { id: "gpt-5.4-mini",    icon: "▫", nameEn: "GPT-5.4 Mini — Legacy",    nameEs: "GPT-5.4 Mini — Legado" },
+            { id: "gpt-5.4-nano",    icon: "▫", nameEn: "GPT-5.4 Nano — Legacy",    nameEs: "GPT-5.4 Nano — Legado" },
+            { id: "gpt-5.3-codex",   icon: "▫", nameEn: "GPT-5.3 Codex — Legacy",   nameEs: "GPT-5.3 Codex — Legado" },
+            { id: "gpt-4o",          icon: "▫", nameEn: "GPT-4o — Legacy",          nameEs: "GPT-4o — Legado" },
+            { id: "gpt-4o-mini",     icon: "▫", nameEn: "GPT-4o Mini — Legacy",     nameEs: "GPT-4o Mini — Legado" },
         ]
     },
     {
