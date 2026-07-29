@@ -95,6 +95,13 @@ export interface CheckpointEntry {
     key: string;
     tabId: string;
     snap: Checkpoint;
+    /**
+     * Turn-loop checkpoint for the same tab, attached by the recovery scan in
+     * `+page.svelte` after the fact — this module never sets it. Declared here
+     * because the scan does, and an undeclared field is how the enrichment
+     * stayed invisible to the type-checker.
+     */
+    _turnLoop?: unknown;
 }
 export function listStaleCheckpoints(): CheckpointEntry[] {
     const out: CheckpointEntry[] = [];

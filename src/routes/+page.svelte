@@ -289,6 +289,7 @@ import { listen } from '@tauri-apps/api/event';
     import { getProviderForModel as _getProviderForModel, getDefaultModelForProvider as _getDefaultModelForProvider, isRetryableProviderError as _isRetryableProviderError } from '$lib/provider-fallback';
     import { detectElevationError as _detectElevationError, detectPlanLogicalFailure as _detectPlanLogicalFailure } from '$lib/plan-detect';
     import { selectMessagesWithinBudget } from '$lib/tab-budget';
+    import { buildDeliverableAnchor } from '$lib/deliverable-anchor';
     // v1.7.199 Phase-3 — pure agent-loop leaf helpers (tested).
     import { hashResp as _hashResp, normalizeAgentResp as _normalizeAgentResp, pickStrongerInFamily as _pickStrongerInFamily } from '$lib/agent-loop-util';
     import { classifyToolResults } from '$lib/tool-result-classify';
@@ -326,9 +327,10 @@ import { listen } from '@tauri-apps/api/event';
              costSummaryMonth, tokenBudgetConfig,
              initHostsFromKeyring,
              hostReachability, markHostReachable } from '$lib/stores';
-    import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns, applyShikiToHtml } from '$lib/message-render';
+    import { warpBlock, renderConfidenceTags, renderLucyMarkdown, addCopyBtns, applyShikiToHtml, destroyEnrichedWidgets } from '$lib/message-render';
     import { initRecognition, toggleMic as _toggleMic, speak as _speak } from '$lib/voice';
-    import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste } from '$lib/file-inputs';
+    import { attach as _attach, removeFile as _removeFile, handleFileDrop as _handleFileDrop, onDrop as _onDrop, onPaste as _onPaste,
+             startReadingDrop as _startReadingDrop, collectDroppedFiles as _collectDroppedFiles } from '$lib/file-inputs';
     import { buildWorkingMemoryDigest, slotRelevance, updateWorkingMemory, compactOldTurns, captureUserPaths } from '$lib/working-memory';
     import { toDryRunCmd, parsePlanTags, renderPlanCard, isMultiIntentPrompt } from '$lib/plan-utils';
     import { cleanStreamDisplay as _cleanStreamDisplay, detectCodeGenIntent as _detectCodeGenIntent, hasToolResponse as _hasToolResponse, needsAgentLoop as _needsAgentLoop, isMultiStepResponse as _isMultiStepResponse, extractTags as _extractTags, parseTool as _parseTool, toolHash as _toolHash, isToolLooping as _isToolLooping, askLucyStream as _askLucyStreamFn, cancelStream as _cancelStream, isStreaming as _isStreaming, isSensitiveRegistry as _isSensitiveReg, buildCodeProtocol as _buildCodeProtocol, createTokenDrain as _createTokenDrain, enqueueChunk as _enqueueChunk, drainBatch as _drainBatch, flushDrain as _flushDrain, DRAIN_MS as _DRAIN_MS, MAX_AGENT_LOOPS as _MAX_LOOPS_CONST, MAX_IDENTICAL_TOOL_CALLS as _MAX_IDENTICAL, FILE_TOOL_RE as _FILE_TOOL_RE, NATIVE_TOOL_RE as _NATIVE_TOOL_RE } from '$lib/llm-stream';
@@ -2400,7 +2402,7 @@ import { listen } from '@tauri-apps/api/event';
         } catch(e) {}
         // Detectar checkpoints de agente interrumpidos en sesiones previas
         try {
-            const stale = listStaleCheckpoints();
+            const stale = listStaleCkpts();
             if (stale.length > 0) {
                 const fresh = stale.filter(s => Date.now() - (s.snap.ts || 0) < 24 * 3600 * 1000);
                 // Enrich with turn-loop checkpoint data if available
@@ -3699,12 +3701,16 @@ import { listen } from '@tauri-apps/api/event';
         const t = getTab(id);
         if (!t) return;
         if (t.recognition && t.isListening) t.recognition.stop();
-        // P2 audit (F1+F7): bump run-token to invalidate any in-flight
-        // runAI for this tab, then tear down any mounted EnrichedOutputWidgets
-        // before the messages array goes away (avoid detached-DOM memory leaks).
-        if (typeof _runToken === 'object') {
-            _runToken[id] = (_runToken[id] || 0) + 1;
-        }
+        // P2 audit (F1+F7): tear down any mounted EnrichedOutputWidgets before
+        // the messages array goes away (avoid detached-DOM memory leaks).
+        //
+        // v1.8.1 — a `_runToken[id]++` bump used to sit here to invalidate any
+        // in-flight runAI for this tab. `_runToken` was never declared anywhere
+        // in the codebase, so the `typeof` guard was always false and the bump
+        // never ran. Its job is done twelve lines below by `t._cancelled`,
+        // which the agent loop actually checks (7524, 7547, 8855, 9491, …).
+        // Removed rather than declared: adding the token now would switch on an
+        // invalidation path that has never once executed.
         // BUG FIX (May 2026): cerrar una pestaña con streaming activo dejaba
         // el listener Tauri colgando hasta que el backend enviaba <stream-done>.
         // El runAI loop seguía consumiendo tokens del LLM sobre un tab que ya
@@ -3748,8 +3754,12 @@ import { listen } from '@tauri-apps/api/event';
         // phase-1 review — drop the in-memory per-tab keyed entries that close
         // never reclaimed. Tab ids are random uuids, so each open/close cycle
         // stranded one entry in each of these (a slow session-lifetime leak).
+        // v1.8.1 — this block did not do its job. Its first statement read the
+        // undeclared `_runToken` BARE (no `typeof` guard), so it threw a
+        // ReferenceError on entry and the empty `catch {}` swallowed it — the
+        // three deletes below never ran even once, and the leak this code was
+        // written to fix kept leaking one entry per map per tab open/close.
         try {
-            if (_runToken && typeof _runToken === 'object') delete _runToken[id];
             _forkBypassByTab.delete(id);
             _forkAdviceByTab.delete(id);
             _lastTitledTurn.delete(id);
@@ -3823,8 +3833,12 @@ import { listen } from '@tauri-apps/api/event';
             const _ct = String(m.rawContent ?? m.content ?? '').trim()
                 || String(m.html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
             if (!_ct) continue;
+            // v1.8.1 — same widening as addMsg's mirror: documents have no
+            // previewUrl and were being filtered out when a tab was re-synced.
             const _atts = Array.isArray(m.attachments)
-                ? m.attachments.filter(a => a && a.previewUrl).map(a => ({ name: a.name, previewUrl: a.previewUrl })).slice(0, 4)
+                ? m.attachments.filter(a => a && a.name)
+                    .map(a => ({ name: a.name, previewUrl: a.previewUrl, kind: a.kind || (a.previewUrl ? 'image' : 'text'), chars: a.chars }))
+                    .slice(0, 6)
                 : undefined;
             convoPush({ role: m.role, text: _ct.length > 12000 ? _ct.slice(0, 12000) + '…' : _ct, atts: _atts });
             if (m.role === 'lucy') lastLucy = m;
@@ -4128,10 +4142,26 @@ import { listen } from '@tauri-apps/api/event';
         try {
             const dropped = classifyDrop(e.dataTransfer);
             if (dropped.kind === 'files') {
+                // v1.8.1 FIX — start reading the dropped files RIGHT HERE, while
+                // we are still inside the drop event's synchronous execution.
+                //
+                // This used to call `_onDrop(e, …)` from inside
+                // `maybeInstallSkillFromDrop(e).then(…)`. By the time that
+                // promise resolved, Chromium had already torn down the drag data
+                // store, so every FileReader failed with `NotFoundError` — and
+                // since the old readers had no `onerror`, the drop just did
+                // nothing at all. That is the "sometimes I have to paste the
+                // absolute path instead" symptom.
+                //
+                // The skill check still runs and still wins; we simply pay for
+                // the reads up front and discard them when it claims the drop.
+                const _pending = _startReadingDrop(e.dataTransfer);
+                showDragOverlay = false;
                 // v1.7.15 — intercept SKILL.md files. If it's not a
                 // skill, fall through to the normal file-drop handler.
                 maybeInstallSkillFromDrop(e).then(handled => {
-                    if (!handled) _onDrop(e, _fileOpts());
+                    if (handled || !activeTabId) return;
+                    _collectDroppedFiles(activeTabId, _pending, _fileOpts());
                 });
                 return;
             }
@@ -4172,9 +4202,14 @@ import { listen } from '@tauri-apps/api/event';
         if (COCKPIT && obj.role === 'user') { // Lucy 2.0 cockpit preview — mirror USER prompts here; Lucy replies (which mostly stream, bypassing addMsg) are mirrored centrally in fin()
             const _ct = String(obj.rawContent ?? obj.content ?? '').trim()
                 || String(obj.html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-            // Fase A: las imágenes adjuntas viajan al espejo (miniaturas en la burbuja).
+            // v1.8.1 — DOCUMENTS travel too, not just images.
+            // The old filter was `a.previewUrl`, which only images ever have, so
+            // every PDF/log/config attachment was dropped from the mirror and the
+            // bubble could only show it as flattened "Archivos: ·" text.
             const _atts = Array.isArray(obj.attachments)
-                ? obj.attachments.filter(a => a && a.previewUrl).map(a => ({ name: a.name, previewUrl: a.previewUrl })).slice(0, 4)
+                ? obj.attachments.filter(a => a && a.name)
+                    .map(a => ({ name: a.name, previewUrl: a.previewUrl, kind: a.kind || (a.previewUrl ? 'image' : 'text'), chars: a.chars }))
+                    .slice(0, 6)
                 : undefined;
             if (_ct || (_atts && _atts.length)) convoPush({ role: 'user', text: _ct.length > 12000 ? _ct.slice(0, 12000) + '…' : _ct, atts: _atts });
         }
@@ -4743,7 +4778,7 @@ REGLAS DE FORMATO:
                     raw = (_sm[2] || '').trim()
                         || '¿Qué ves en mi pantalla? Descríbelo brevemente y dime si hay algo importante o accionable.';
                 } catch (e) {
-                    addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>No pude capturar tu pantalla: ${esc(String(e))}`, style: 'border-left-color:#ef4444;' });
+                    addMsg(tabId, { role: 'lucy', html: `<div class="mn">Lucy</div>No pude capturar tu pantalla: ${escapeHtml(String(e))}`, style: 'border-left-color:#ef4444;' });
                     t.isProcessing = false; refresh(); return;
                 }
             }
@@ -4790,11 +4825,11 @@ REGLAS DE FORMATO:
                 // prefixes let the user report exactly how far it got.
                 toast(isEN ? '① /controlar confirmed — launching' : '① /controlar confirmado — lanzando', 'info');
                 const _cid = 'local-agent-' + Date.now();
-                let _log = `<div class="mn">Lucy (Control local)</div><div style="font-size:12px;color:var(--txt2)">Tarea: ${esc(_task)}</div><pre style="font-size:11.5px;white-space:pre-wrap;margin-top:6px">`;
+                let _log = `<div class="mn">Lucy (Control local)</div><div style="font-size:12px;color:var(--txt2)">Tarea: ${escapeHtml(_task)}</div><pre style="font-size:11.5px;white-space:pre-wrap;margin-top:6px">`;
                 addMsg(tabId, { id: _cid, role: 'lucy', html: _log + '</pre>' });
                 refresh(); scrollChat();   // render the bubble NOW, before any await
                 const _append = (line) => {
-                    _log += esc(String(line)) + '\n';
+                    _log += escapeHtml(String(line)) + '\n';
                     const m = getTab(tabId)?.messages.find(x => x.id === _cid);
                     if (m) { m.html = _log + '</pre>'; refresh(); scrollChat(); }
                 };
@@ -4840,7 +4875,7 @@ REGLAS DE FORMATO:
                     const _ctrlModel = (t.selectedModel && t.selectedModel !== 'nvidia-custom')
                         ? t.selectedModel : getEffectiveModel(t);
                     toast((isEN ? '② Calling backend · model: ' : '② Llamando al backend · modelo: ') + _ctrlModel, 'info');
-                    _append(`▶ Enviado al backend (run_local_agent, modelo: ${esc(_ctrlModel)}). Esperando respuesta…`);
+                    _append(`▶ Enviado al backend (run_local_agent, modelo: ${escapeHtml(_ctrlModel)}). Esperando respuesta…`);
                     const _res = await invoke('run_local_agent', { task: _task, model: _ctrlModel, maxSteps: 15, confirm: true });
                     toast((isEN ? '④ Backend replied' : '④ El backend respondió') + (_res ? ': ' + String(_res).slice(0, 80) : ''), 'ok');
                     if (_res) _append('— ' + String(_res).slice(0, 300));
@@ -4867,7 +4902,7 @@ REGLAS DE FORMATO:
                 addMsg(tabId, { id: _cid, role: 'lucy', html: _log + '</pre>' });
                 refresh(); scrollChat();
                 const _put = (line) => {
-                    _log += esc(String(line)) + '\n';
+                    _log += escapeHtml(String(line)) + '\n';
                     const m = getTab(tabId)?.messages.find(x => x.id === _cid);
                     if (m) { m.html = _log + '</pre>'; refresh(); scrollChat(); }
                 };
@@ -4940,14 +4975,39 @@ REGLAS DE FORMATO:
         }
 
         let disp=raw||"Analiza los archivos adjuntos.";
+        // v1.8.1 — attachment metadata for the message bubble.
+        //
+        // ALL attachments travel now, not just images. The old code kept only
+        // `imageFiles` here and appended the document names as an inline
+        // "Archivos: · x.pdf" HTML span. In the cockpit that span was flattened
+        // back to plain text by the mirror below, so the bubble read
+        // "Iván mi pregunta Archivos: · x.pdf" as one run-on line.
+        //
+        // `kind` lets the renderer pick a thumbnail vs. a document chip without
+        // re-sniffing mime types in the view layer.
         let _msgAttachments = undefined;
         if(t.attachedFiles.length){
             const textFiles=t.attachedFiles.filter(f=>f.type!=='image');
-            const imageFiles=t.attachedFiles.filter(f=>f.type==='image');
-            if(textFiles.length){const n=textFiles.map(f=>`· ${f.name}`).join(', ');disp+=`<br><span style="font-size:0.85em;color:#10b981;">Archivos: ${n}</span>`;}
-            if(imageFiles.length){_msgAttachments=imageFiles.map(f=>({name:f.name,previewUrl:f.previewUrl}));}
+            _msgAttachments = t.attachedFiles.map(f=>({
+                name: f.name,
+                previewUrl: f.previewUrl,
+                kind: f.type === 'image' ? 'image' : (f.mimeType === 'application/pdf' ? 'pdf' : 'text'),
+                chars: f.type === 'image' ? undefined : (f.content?.length || 0),
+            }));
+            // Legacy V1 chat view still renders `html`; keep its file line, but
+            // escape the names — they were interpolated raw, so a filename
+            // containing markup was injected straight into the bubble.
+            // NOTE: use `escapeHtml` (module-level import), NOT `esc` — `esc` is a
+            // LOCAL alias declared inside another function further down this file,
+            // so calling it here throws ReferenceError and kills the whole send.
+            if(textFiles.length){const n=textFiles.map(f=>`· ${escapeHtml(f.name)}`).join(', ');disp+=`<br><span style="font-size:0.85em;color:#10b981;">Archivos: ${n}</span>`;}
         }
-        addMsg(tabId,{role:'user',html:`<div class="mn">${lucyConfig.name}</div>${disp}`,attachments:_msgAttachments});
+        // `rawContent` is what the cockpit mirror prefers; without it the mirror
+        // fell back to stripping tags out of `html`, which is how the user's
+        // display name ended up glued to the front of every attachment message.
+        // Attachment-only sends have empty `raw`; fall back to the same prompt
+        // shown in `disp` so the mirror never drops back to tag-stripping.
+        addMsg(tabId,{role:'user',html:`<div class="mn">${escapeHtml(lucyConfig.name)}</div>${disp}`,rawContent:(raw||'Analiza los archivos adjuntos.'),attachments:_msgAttachments});
         // U6: auto-rename tab con el primer mensaje del usuario (fallback heuristic).
         // The proper LLM-generated title arrives a few seconds later via
         // requestAutoTitle() — see recomputePredictiveChips. Marking
@@ -5362,17 +5422,33 @@ REGLAS DE FORMATO:
                 ? t.messages.slice(compaction.keepFrom).filter(m=>m.rawRole)
                 : validAll;
             const valid = validStart;
+            // ── v1.8.1 — DELIVERABLE ANCHOR (reader half) ─────────────────────
+            // The last substantial thing the agent delivered is kept on the tab
+            // (see renderAgentTask). It is the largest message in the tab, so it
+            // is the first casualty of BOTH cuts below — `compaction.keepFrom`
+            // and the `contextMax` walk — which is how "export this report to
+            // PDF" got answered with "I have no report loaded".
+            //
+            // We reserve its budget BEFORE the history walk instead of prepending
+            // afterwards: the anchor then DISPLACES older turns rather than
+            // pushing the total past contextMax.
+            // Decision + formatting live in $lib/deliverable-anchor.ts (tested).
+            const _anchorBlock = buildDeliverableAnchor(
+                t._lastDeliverable,
+                valid.map(m => String(m.rawContent || '')),
+            );
+            const _histBudget = Math.max(4_000, contextMax - _anchorBlock.length);
             const sel=[];
             let len=0;
             for(let i=valid.length-1;i>=0;i--){
                 const msg=valid[i];
                 const content=msg.rawRole==='Lucy'?(msg.rawContent||''):(msg.rawContent||'');
                 const l=`${msg.rawRole}: ${content}`;
-                if(len+l.length>contextMax&&sel.length)break;
+                if(len+l.length>_histBudget&&sel.length)break;
                 sel.unshift(l);len+=l.length;
             }
-            contextUsed=len;
-            let ctx='--- HISTORIAL ---\n'+sel.join('\n\n');
+            contextUsed=len+_anchorBlock.length;
+            let ctx=_anchorBlock+'--- HISTORIAL ---\n'+sel.join('\n\n');
             // 📌 Mensajes fijados — siempre se incluyen, sobreviven a la compactación
             const pinned = validAll.filter(m => m.pinned);
             if (pinned.length) {
@@ -7357,6 +7433,32 @@ Use ONE of these patterns instead:
                     `;
                     agentMsg.rawContent = displayText; // for search
 
+                    // ── v1.8.1 — DELIVERABLE ANCHOR ────────────────────────────
+                    // Remember the last substantial thing the agent DELIVERED, so
+                    // the next user turn can still refer to it ("export this report
+                    // to PDF", "resume the third finding").
+                    //
+                    // Why this is needed: the conversation history the LLM sees is
+                    // rebuilt from `t.messages` under two independent cuts — the
+                    // `compaction.keepFrom` verbatim window and the `contextMax`
+                    // character budget. A long agent run inflates the tab enough to
+                    // trigger both, and a big report is the FIRST thing they evict
+                    // because it is the single largest message. The user then asks
+                    // Lucy to act on the report she just wrote and gets "I don't
+                    // have any report loaded in the context of our conversation" —
+                    // which is literally true, and looks like amnesia.
+                    //
+                    // Stored on the TAB (not in agentCtx) so neither the rolling
+                    // window nor the tab compaction can reach it. `_MIN` skips
+                    // one-line acknowledgements; the reader below caps the size.
+                    {
+                        const _DELIVERABLE_MIN = 600;
+                        const _txt = String(displayText || '').trim();
+                        if (_txt.length >= _DELIVERABLE_MIN) {
+                            t._lastDeliverable = { text: _txt, ts: Date.now(), goal: String(originalUserGoal || '').slice(0, 200) };
+                        }
+                    }
+
                     // U3 — Chapter view: auto-build chapterData when >= 4 tool steps
                     // so the user can flip to a narrative chapter view of the investigation.
                     if (agentToolCards.length >= 4) {
@@ -9031,6 +9133,10 @@ Use ONE of these patterns instead:
                     // typical 64KB practical limit on continuation calls.
                     const AGENT_CTX_ROLLING_MAX = 35_000;
                     const AGENT_CTX_KEEP_LAST = 5; // recent TOOL RESULTS blocks
+                    // v1.8.1 — how many chars THIS turn's rolling window removed.
+                    // Read by the stall detector below so a shrink caused by the
+                    // window is not mistaken for "the model made progress".
+                    let _rollingDroppedThisTurn = 0;
                     if (agentCtx.length > AGENT_CTX_ROLLING_MAX) {
                         const _before = agentCtx.length;
                         // Split on the TOOL RESULTS marker. Index 0 is the prefix
@@ -9054,6 +9160,7 @@ Use ONE of these patterns instead:
                             const tail = agentCtx.slice(cutTo);
                             const digest = `\n\n--- OLDER TOOL RESULTS (steps ${firstStep}-${lastDroppedStep}) COLLAPSED ---\n[${dropped.toLocaleString()} chars from ${markers.length - AGENT_CTX_KEEP_LAST} earlier tool turns dropped to keep context within budget. The most recent ${AGENT_CTX_KEEP_LAST} turns remain verbatim below. If you need to reread an older result, re-call the tool.]`;
                             agentCtx = prefix + digest + tail;
+                            _rollingDroppedThisTurn = Math.max(0, _before - agentCtx.length);
                             pushTrace({
                                 phase: 'info',
                                 label: `🪟 Rolling context: ${_before.toLocaleString()} → ${agentCtx.length.toLocaleString()} chars (kept last ${AGENT_CTX_KEEP_LAST} turns)`,
@@ -9172,7 +9279,21 @@ times the SAME way, switch tool kind entirely.
                     // reset, not a stall.
                     {
                         const _eff = compressedCtx.length;
-                        const _delta = _eff - _lastEffCtxLen;
+                        // v1.8.1 FIX — measure REAL growth, not the net size change.
+                        //
+                        // The reset on a negative delta assumed a shrink could only
+                        // mean "a digest compaction happened, so there WAS progress".
+                        // But the rolling window shrinks the context too, and that is
+                        // pure bookkeeping — it says nothing about progress. With the
+                        // window firing every 4-6 turns and _STALL_LIMIT at 3, the
+                        // streak was reset before it could ever reach the limit, so a
+                        // grinding loop rode all the way to MAX_LOOPS. Observed: a
+                        // skill run ground 24+/60 turns while every stall signal was
+                        // being wiped by the window it had itself triggered.
+                        //
+                        // Adding back what the window removed leaves a delta that
+                        // reflects only content the model actually contributed.
+                        const _delta = (_eff + _rollingDroppedThisTurn) - _lastEffCtxLen;
                         if (loop_i > 0 && _delta >= 0 && _delta < _STALL_DELTA_MIN) _noGrowthStreak++;
                         else _noGrowthStreak = 0;
                         _lastEffCtxLen = _eff;
