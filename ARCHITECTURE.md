@@ -477,12 +477,30 @@ rides to `MAX_LOOPS` (60).
    $OutputEncoding = [System.Text.UTF8Encoding]::new()
    ```
 
-   `shell.rs` has done this in its wrapper (~line 359) for a long time;
-   `dashboard_integrations.rs` now does it via `run_powershell_utf8`. **There
-   are ~62 other `from_utf8_lossy` call sites across 15 backend files and it is
-   not known how many of them spawn PowerShell** — an audit worth doing. The
-   failure is silent: mangled text is still valid JSON and still parses, so
-   nothing errors, an operator just reads a corrupted username.
+   **Audited 2026-07-28** across all 64 `from_utf8_lossy` sites in 17 backend
+   files. Every hand-rolled `Command::new("powershell")` was missing the
+   preamble — all of them, not most. Only `shell.rs` had it, and only because
+   its wrapper was written for other reasons. Measured: 1 of 135
+   installed-software entries arrived as `NVIDIA Controlador de gr<?>ficos`;
+   after the fix, 0 of 135.
+
+   Use **`utils::shell::run_powershell_utf8`** — do not hand-roll a spawn. A
+   test in `utils/shell.rs` pins the migrated callers (`cve_match`,
+   `inventory`, `compliance`, `housekeeping`, `dashboard_integrations`) and
+   fails with the fix instructions. It matches a literal, so a variable program
+   name slips past — `script_verify.rs` is `Command::new(exe)` and is fixed by
+   hand.
+
+   **Still exposed, and the fix is different:** the native tools `local.rs`
+   spawns — `tasklist` and `netstat` measured as producing U+FFFD, with
+   `wevtutil`, `wmic`, `reg`, `cmd`, `netsh`, `cscript` in the same class.
+   They have no encoding switch: their output IS OEM and must be DECODED as
+   such, via `MultiByteToWideChar` + `CP_OEMCP` (winapi is already a
+   dependency). `encoding_rs` is in the lockfile but implements the WHATWG set
+   and does **not** cover CP-850 — it is not the shortcut it looks like. The
+   WinRM path in `utils/shell.rs` is also exposed and was left alone: it pipes
+   a credential through stdin and there was no WinRM host available to verify
+   against.
 
    Reproduce either one without a Spanish install by running the probe under
    `chcp 850`, and compare the raw stdout bytes (`0xA2` vs `0xC3 0xB3`) rather
