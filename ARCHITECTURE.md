@@ -448,6 +448,51 @@ rides to `MAX_LOOPS` (60).
    | `loop_i` (×8) | Benign, degraded. All `typeof`-guarded; it is the `for (let loop_i…)` variable at ~7523, out of scope in these callers. Cost: trace events always report `iteration: null`, and `hitLimit` is permanently false so the "límite de iteraciones con errores" fallback can never be chosen. Fixing means threading it through the agent loop — hot zone, deliberate call. |
    | `aiParams` (×4) | Benign, degraded. `const` from a different block; `typeof`-guarded, falls back to `getEffectiveModel(t)`. Diverges only when the loop routed to `_routedLoopModel`, in which case the provider-fallback notice names the wrong model. |
 
+15. **PowerShell output is localised AND is not UTF-8.** Two independent traps
+   that both hide on an English developer machine and both fire on a Spanish
+   user's. Found together in the Dashboard's security probe (v1.8.1).
+
+   **Never branch on `$_.Exception.Message`.** Windows translates it.
+   `Get-WinEvent` THROWS when a filter matches nothing rather than returning 0,
+   so the "all clear" path arrives as an exception and has to be told apart
+   from a real failure — and it was, by matching `'*No events*'`. On es-ES the
+   message reads *"No se encontraron eventos que coincidan con los criterios de
+   selección especificados"*, matched nothing, and a machine with a perfectly
+   readable log and ZERO failed logons reported **"Registro de seguridad no
+   legible"**. Branch on `$_.FullyQualifiedErrorId` instead
+   (`NoMatchingEventsFound,…`); it is stable across languages. The same trap
+   sits in `sc.exe qtriggerinfo`, whose output says `INICIAR SERVICIO` in
+   Spanish — and whose exit code is 0 either way, so there is no cheap
+   locale-independent substitute there at all.
+
+   **A GUI process gets OEM bytes, not UTF-8.** Lucy has no console, so a
+   spawned PowerShell writes to the pipe in the system OEM code page: CP-850 on
+   es-ES, where `ó` is the single byte `0xA2`. That is invalid UTF-8, so
+   `String::from_utf8_lossy` substitutes U+FFFD and the UI renders
+   `selecci<?>n`. Fix is to force the encoding BEFORE the payload runs (the
+   stream's encoding is fixed on first write):
+
+   ```powershell
+   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+   $OutputEncoding = [System.Text.UTF8Encoding]::new()
+   ```
+
+   `shell.rs` has done this in its wrapper (~line 359) for a long time;
+   `dashboard_integrations.rs` now does it via `run_powershell_utf8`. **There
+   are ~62 other `from_utf8_lossy` call sites across 15 backend files and it is
+   not known how many of them spawn PowerShell** — an audit worth doing. The
+   failure is silent: mangled text is still valid JSON and still parses, so
+   nothing errors, an operator just reads a corrupted username.
+
+   Reproduce either one without a Spanish install by running the probe under
+   `chcp 850`, and compare the raw stdout bytes (`0xA2` vs `0xC3 0xB3`) rather
+   than the rendered string — your terminal will lie to you about both.
+
+   One correction while here: **reading the Security log does not always need
+   admin.** Verified from a NON-elevated shell on a machine whose user had the
+   right group membership. Treat `ACCESS_DENIED` as one possible answer, not
+   the expected one.
+
 ---
 
 ## 6. Suggested deep-scan order (highest error-density first)
