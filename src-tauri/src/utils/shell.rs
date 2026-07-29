@@ -40,6 +40,52 @@ pub fn strip_ansi(input: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+// ── PowerShell, decoded correctly ────────────────────────────────────────────
+
+/// Preamble that makes a spawned PowerShell write UTF-8 to the pipe.
+///
+/// Lucy is a GUI process with no console, so a PowerShell it spawns writes its
+/// output in the system OEM code page — CP-850 on a Spanish install, where `ó`
+/// is the single byte `0xA2`. That is not valid UTF-8, so `from_utf8_lossy`
+/// substitutes U+FFFD and the text arrives corrupted. Nothing errors: mangled
+/// text is still valid JSON and still parses, so the damage is silent.
+///
+/// Measured on an es-ES host: 1 of 135 installed-software entries came back as
+/// "NVIDIA Controlador de gr<?>ficos".
+///
+/// Must run BEFORE the payload — PowerShell fixes a stream's encoding the first
+/// time it writes to it, so assigning afterwards is too late.
+pub const PS_UTF8_PREAMBLE: &str = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
+                                    $OutputEncoding = [System.Text.UTF8Encoding]::new()\n";
+
+/// Prefix a script with [`PS_UTF8_PREAMBLE`].
+pub fn ps_utf8(script: &str) -> String {
+    format!("{}{}", PS_UTF8_PREAMBLE, script)
+}
+
+/// Run a PowerShell script and return `(stdout, stderr, success)`, decoded as
+/// UTF-8 because [`ps_utf8`] made it UTF-8.
+///
+/// Use this instead of hand-rolling `Command::new("powershell")` — every
+/// hand-rolled site in this codebase was missing the preamble.
+///
+/// NOTE this does NOT cover the native Windows tools (`tasklist`, `netstat`,
+/// `wevtutil`, `wmic`, `reg`, `cmd`) that `local.rs` also spawns. They have no
+/// equivalent switch: their output is OEM-encoded and has to be DECODED as
+/// such, which is a different fix. Measured as affected: tasklist, netstat.
+pub fn run_powershell_utf8(script: &str) -> Result<(String, String, bool), String> {
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_utf8(script)])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("PowerShell spawn failed: {}", e))?;
+    Ok((
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+        out.status.success(),
+    ))
+}
+
 /// Agrega un host a TrustedHosts de WinRM (mejor-esfuerzo, requiere admin local).
 /// Necesario para conectar por IP en lugar de nombre de dominio.
 /// Si falla no interrumpe la operación — el error de WinRM se verá después.
@@ -302,4 +348,71 @@ pub fn spawn_winrm_streaming(
     }
 
     Ok(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preamble_sets_both_encoding_handles_before_the_payload() {
+        // PowerShell fixes a stream's encoding on first write, so the order is
+        // load-bearing, not cosmetic. Both handles matter: [Console] covers
+        // what the process writes to the pipe, $OutputEncoding covers what it
+        // hands to a downstream native command in a pipeline.
+        let w = ps_utf8("Get-Date");
+        let console = w.find("[Console]::OutputEncoding").expect("console handle missing");
+        let pipeline = w.find("$OutputEncoding").expect("pipeline handle missing");
+        let payload = w.find("Get-Date").expect("payload missing");
+        assert!(console < payload && pipeline < payload, "encoding must be set first");
+        assert!(w.contains("UTF8Encoding"));
+    }
+
+    #[test]
+    fn preamble_does_not_run_into_the_payload() {
+        // A missing newline would concatenate the last assignment with the
+        // first line of the script and break every caller at once.
+        assert!(PS_UTF8_PREAMBLE.ends_with('\n'));
+        assert!(ps_utf8("Write-Output 'x'").lines().count() >= 3);
+    }
+
+    // ── Architectural guard ─────────────────────────────────────────────────
+    //
+    // The 2026-07-28 audit found that EVERY hand-rolled `Command::new(
+    // "powershell")` in the codebase was missing the preamble — not some, all.
+    // The failure is silent (mangled text is still valid JSON and still
+    // parses), so nothing catches it downstream and no reviewer notices at the
+    // call site. These files are pinned to the shared runner so the next one
+    // has to be a deliberate choice rather than a copy-paste.
+    //
+    // If you legitimately need a raw spawn here (streaming, a custom stdin),
+    // add the preamble yourself and amend this list with the reason.
+    //
+    // BLIND SPOT, stated so nobody mistakes this for full coverage: it matches
+    // the literal string, so `Command::new(exe)` with a variable slips past —
+    // `script_verify.rs` does exactly that (pwsh-or-powershell) and is fixed by
+    // hand rather than by this guard. Widening it to catch variables would mean
+    // parsing Rust, which is not worth it for a net whose job is to stop
+    // copy-paste.
+
+    #[test]
+    fn migrated_callers_do_not_hand_roll_a_powershell_spawn() {
+        const GUARDED: &[(&str, &str)] = &[
+            ("cve_match.rs", include_str!("../commands/cve_match.rs")),
+            ("inventory.rs", include_str!("../commands/inventory.rs")),
+            ("compliance.rs", include_str!("../commands/compliance.rs")),
+            ("housekeeping.rs", include_str!("../commands/housekeeping.rs")),
+            ("dashboard_integrations.rs", include_str!("../commands/dashboard_integrations.rs")),
+        ];
+        for (name, src) in GUARDED {
+            for pattern in ["Command::new(\"powershell\")", "Command::new(\"powershell.exe\")"] {
+                assert!(
+                    !src.contains(pattern),
+                    "{} spawns PowerShell directly — use utils::shell::run_powershell_utf8, \
+                     or add the PS_UTF8_PREAMBLE and document why not",
+                    name,
+                );
+            }
+        }
+    }
 }

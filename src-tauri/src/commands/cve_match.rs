@@ -348,19 +348,17 @@ mod vuln_watch {
     static LAST_VULN_FP: AtomicU64 = AtomicU64::new(0);
 
     fn installed_software() -> Vec<SoftwareInput> {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let script = format!("{} | ConvertTo-Json -Depth 3 -Compress", super::INSTALLED_SOFTWARE_PS);
-        let script = script.as_str();
-        let out = match std::process::Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass").arg("-Command").arg(script)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            Ok(o) if o.status.success() => o,
+        // UTF-8 forced: DisplayName is whatever the vendor's installer wrote,
+        // and on a Spanish machine that regularly carries accents ("NVIDIA
+        // Controlador de gráficos"). Decoded from CP-850 as UTF-8 the accent
+        // became U+FFFD, the JSON still parsed, and `canonical_name` derived a
+        // different key from the corrupted string — silently, since nothing in
+        // the chain treats a replacement character as an error.
+        let raw = match crate::utils::shell::run_powershell_utf8(&script) {
+            Ok((stdout, _, true)) => stdout,
             _ => return Vec::new(),
         };
-        let raw = String::from_utf8_lossy(&out.stdout);
         let raw = raw.trim();
         if raw.is_empty() { return Vec::new(); }
         // ConvertTo-Json emits a bare object for one item, an array for many.

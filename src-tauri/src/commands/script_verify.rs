@@ -122,8 +122,14 @@ fn verify_powershell(content: &str) -> VerifyResult {
     "#, tmp.replace('\'', "''"));
     // Try pwsh (PowerShell 7) first, fall back to Windows PowerShell 5.
     let exe = if which("pwsh") { "pwsh" } else { "powershell" };
+    // UTF-8 forced: what this returns is a PowerShell PARSER error, and those
+    // are localised — "Falta el paréntesis de cierre…". Shown to the user with
+    // the accents replaced by U+FFFD it reads like a second, unrelated fault.
+    // pwsh 7 already defaults to UTF-8; Windows PowerShell 5 does not, and the
+    // fallback is the common case.
     let out = std::process::Command::new(exe)
-        .arg("-NoProfile").arg("-NonInteractive").arg("-Command").arg(&wrapper)
+        .arg("-NoProfile").arg("-NonInteractive").arg("-Command")
+        .arg(crate::utils::shell::ps_utf8(&wrapper))
         .output();
     let _ = std::fs::remove_file(&tmp);
     let ms = t0.elapsed().as_millis() as u64;

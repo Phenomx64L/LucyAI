@@ -217,21 +217,20 @@ $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
     // produced a CRITICAL toast next to an Inventory panel reading 0.
     let script = script.replace("__SOFTWARE_QUERY__", crate::commands::cve_match::INSTALLED_SOFTWARE_PS);
 
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&script)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
+    // UTF-8 forced — same reason as the vulnerability watch this shares its
+    // query with: software DisplayNames carry accents and were arriving with
+    // U+FFFD where the accent should be, straight into the Inventory panel.
+    let (stdout, stderr, ok) = tokio::task::spawn_blocking(move || {
+        crate::utils::shell::run_powershell_utf8(&script)
     }).await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Error PowerShell: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!("Error: {}", String::from_utf8_lossy(&output.stderr)));
+    if !ok {
+        return Err(format!("Error: {}", stderr));
     }
 
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let raw = stdout.trim().to_string();
     serde_json::from_str(&raw)
         .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }

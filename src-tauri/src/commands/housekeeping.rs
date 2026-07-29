@@ -1194,15 +1194,15 @@ pub mod cert_expiry {
              ConvertTo-Json -Compress -Depth 2",
             WARN_DAYS
         );
-        let output = match std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-            .output()
-        {
-            Ok(o) => o,
+        // UTF-8 forced: a certificate Subject is a DN full of organisation
+        // names, and those carry accents and ñ as a matter of course
+        // ("O=Ayuntamiento de A Coruña"). It also gains CREATE_NO_WINDOW,
+        // which this call was missing — it flashed a console on every sweep.
+        let (stdout, _, ok) = match crate::utils::shell::run_powershell_utf8(&ps) {
+            Ok(t) => t,
             Err(_) => return,   // PowerShell missing — nothing we can do
         };
-        if !output.status.success() { return; }
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !ok { return; }
         let trimmed = stdout.trim();
         if trimmed.is_empty() || trimmed == "null" { return; }
 

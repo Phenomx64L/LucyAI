@@ -132,21 +132,21 @@ $results += [PSCustomObject]@{{ id='{}'; exit_code=$ec; stdout=$out.Substring(0,
     }
     ps_script.push_str("$results | ConvertTo-Json -Depth 3\n");
 
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new("powershell")
-            .arg("-NoProfile").arg("-ExecutionPolicy").arg("Bypass")
-            .arg("-Command").arg(&ps_script)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
+    // UTF-8 forced: each check's captured stdout goes into this JSON, and a
+    // compliance check's output is exactly the localised prose most likely to
+    // carry accents. A mangled evidence string is worse than a missing one —
+    // it looks like real evidence.
+    let (stdout, stderr, ok) = tokio::task::spawn_blocking(move || {
+        crate::utils::shell::run_powershell_utf8(&ps_script)
     }).await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Error PowerShell: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!("Error: {}", String::from_utf8_lossy(&output.stderr)));
+    if !ok {
+        return Err(format!("Error: {}", stderr));
     }
 
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let raw = stdout.trim().to_string();
     serde_json::from_str(&raw)
         .map_err(|e| format!("JSON inválido: {}. Raw: {}", e, crate::utils::safe_truncate(&raw, 400)))
 }

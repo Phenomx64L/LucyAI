@@ -87,27 +87,11 @@ pub async fn dashboard_open_incidents(host_name: String) -> Result<OpenIncidents
 ///
 /// **CREATE_NO_WINDOW.** Without it every refresh flashes a console window.
 fn wrap_utf8(script: &str) -> String {
-    format!(
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
-         $OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
-         {}",
-        script
-    )
+    crate::utils::shell::ps_utf8(script)
 }
 
 fn run_powershell_utf8(script: &str) -> Result<String, String> {
-    let wrapped = wrap_utf8(script);
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &wrapped]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(crate::state::CREATE_NO_WINDOW);
-    }
-    let out = cmd
-        .output()
-        .map_err(|e| format!("PowerShell spawn failed: {}", e))?;
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    crate::utils::shell::run_powershell_utf8(script).map(|(stdout, _, _)| stdout)
 }
 
 // ── D17 — Failed logins (Security event log) ─────────────────────────────
