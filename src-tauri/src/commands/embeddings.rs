@@ -587,6 +587,27 @@ fn dim_mismatch_warning(skipped: usize, total: usize, query_dim: usize) -> Optio
     ))
 }
 
+/// Sibling of `dim_mismatch_warning` for the case dimensions cannot see: rows
+/// embedded by a DIFFERENT model that happens to share the query's dimension.
+///
+/// Separate message on purpose. The dimension warning means "your embedder
+/// changed shape"; this one means "part of your corpus was indexed while Ollama
+/// was down, and it is now unreachable from an Ollama query". Same remedy, but
+/// an operator who reads the dimension text will go looking for a setting they
+/// never touched.
+fn model_mismatch_warning(skipped: usize, total: usize, query_model: &str) -> Option<String> {
+    if skipped == 0 {
+        return None;
+    }
+    Some(format!(
+        "semantic_search: {}/{} stored embeddings came from a different embedder \
+         than the query ('{}'). Cosine across two models is noise even at equal \
+         dimensions, so they are excluded rather than ranked — re-embed them to \
+         make them recallable again.",
+        skipped, total, query_model
+    ))
+}
+
 #[tauri::command]
 pub async fn semantic_search(
     query: String,
@@ -595,7 +616,23 @@ pub async fn semantic_search(
     min_score: Option<f32>,
     model: Option<String>,
 ) -> Result<Vec<SemanticHit>, String> {
-    let (qvec, _) = embed_via_ollama(&query, model).await?;
+    // ── Why the query goes through the fallback too (v1.8) ───────────────
+    //
+    // This used to call `embed_via_ollama` directly while `upsert_embedding`
+    // used `embed_with_fallback`. Writes therefore survived a missing Ollama
+    // by going to Gemini, and reads did not: the `?` here returned before any
+    // of the three search paths below ran. A user without a local daemon
+    // indexed everything correctly and could recall none of it, and the
+    // frontend had settled into treating that as a fact of life — the
+    // `semantic` tool's error text still tells people to install Ollama.
+    //
+    // `used_model` then follows the query through every path. That half is not
+    // optional: with a fallback on both sides a corpus can hold vectors from
+    // two embedders, and BOTH of them emit 768 dimensions, so `dims` — the only
+    // guard that existed — agrees while the vectors describe different spaces.
+    // The `model` column has been written on every row since this table
+    // existed and was read by nothing.
+    let (qvec, used_model) = embed_with_fallback(&query, model).await?;
     let limit = limit.unwrap_or(5).max(1) as usize;
     let min_score = min_score.unwrap_or(0.25);
 
@@ -603,7 +640,7 @@ pub async fn semantic_search(
     // The index doesn't support per-type filtering (it indexes ALL vectors).
     // For filtered queries or when index is stale, fall through to linear scan.
     if entity_type.is_none() && vec_index::is_ready() {
-        let results = vec_index::search(&qvec, limit, min_score);
+        let results = vec_index::search(&qvec, &used_model, limit, min_score);
         if !results.is_empty() {
             let hits: Vec<SemanticHit> = results.into_iter()
                 .map(|(et, eid, text, score)| SemanticHit { entity_type: et, entity_id: eid, text, score })
@@ -633,6 +670,7 @@ pub async fn semantic_search(
             entity_type: entity_type.as_deref(),
             exclude_superseded: is_memory,
             exclude_expired: is_memory,
+            model: Some(used_model.as_str()),
             ..Default::default()
         };
         // Over-fetch 10× for memory queries: with 1000+ pdf_chunk vectors in
@@ -663,16 +701,16 @@ pub async fn semantic_search(
     }
 
     // ── Linear scan: pull all candidate rows from SQLite ─────────────────
-    let rows: Vec<(String, String, String, Vec<u8>, i64)> = shared_db(|conn| {
+    let rows: Vec<(String, String, String, Vec<u8>, i64, String)> = shared_db(|conn| {
         let sql = if entity_type.is_some() {
-            "SELECT entity_type, entity_id, text, vec, dims
+            "SELECT entity_type, entity_id, text, vec, dims, model
              FROM embeddings WHERE entity_type = ?1"
         } else {
-            "SELECT entity_type, entity_id, text, vec, dims FROM embeddings"
+            "SELECT entity_type, entity_id, text, vec, dims, model FROM embeddings"
         };
         let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
-        let mapper = |r: &rusqlite::Row| -> rusqlite::Result<(String, String, String, Vec<u8>, i64)> {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        let mapper = |r: &rusqlite::Row| -> rusqlite::Result<(String, String, String, Vec<u8>, i64, String)> {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
         };
         let iter: Vec<_> = if let Some(et) = &entity_type {
             stmt.query_map(params![et], mapper)
@@ -691,11 +729,12 @@ pub async fn semantic_search(
     // ── Opportunistic index build: if corpus crossed threshold, populate index ──
     if entity_type.is_none() && rows.len() >= vec_index::INDEX_THRESHOLD && !vec_index::is_ready() {
         let entries: Vec<vec_index::IndexEntry> = rows.iter()
-            .map(|(et, eid, text, blob, _)| vec_index::IndexEntry {
+            .map(|(et, eid, text, blob, _, model)| vec_index::IndexEntry {
                 entity_type: et.clone(),
                 entity_id: eid.clone(),
                 text: text.clone(),
                 vec: blob_to_vec(blob),
+                model: model.clone(),
             })
             .collect();
         // Build in background — this search still uses linear scan
@@ -712,10 +751,18 @@ pub async fn semantic_search(
     let qdim = qvec.len();
     let total_rows = rows.len();
     let mut dim_skips = 0usize;
+    let mut model_skips = 0usize;
     let mut scored: Vec<SemanticHit> = rows.into_iter()
-        .filter_map(|(et, eid, text, blob, dims)| {
+        .filter_map(|(et, eid, text, blob, dims, row_model)| {
             if dims as usize != qdim {
                 dim_skips += 1;
+                return None;
+            }
+            // Matching dimensions do NOT imply a shared space. This is the
+            // check `dims` cannot make, and the one that matters most for the
+            // pair Lucy actually alternates between, which agree on 768.
+            if row_model != used_model {
+                model_skips += 1;
                 return None;
             }
             let v = blob_to_vec(&blob);
@@ -726,6 +773,9 @@ pub async fn semantic_search(
         })
         .collect();
     if let Some(msg) = dim_mismatch_warning(dim_skips, total_rows, qdim) {
+        crate::utils::logging::write_app_log("WARN", &msg);
+    }
+    if let Some(msg) = model_mismatch_warning(model_skips, total_rows, &used_model) {
         crate::utils::logging::write_app_log("WARN", &msg);
     }
 
@@ -891,6 +941,30 @@ mod embed_tests {
         assert!(msg.contains("7/100"), "msg = {msg}");
         assert!(msg.contains("768"), "msg = {msg}");
         assert!(msg.contains("backfill_embeddings"), "msg = {msg}");
+    }
+
+    #[test]
+    fn model_warning_none_when_no_skips() {
+        assert!(model_mismatch_warning(0, 100, "nomic-embed-text").is_none());
+    }
+
+    #[test]
+    fn model_warning_names_the_query_embedder_and_reads_differently_from_the_dim_one() {
+        let msg = model_mismatch_warning(7, 100, "nomic-embed-text").expect("should warn");
+        assert!(msg.contains("7/100"), "msg = {msg}");
+        assert!(msg.contains("nomic-embed-text"), "msg = {msg}");
+
+        // The two warnings must not be interchangeable. A dimension mismatch
+        // means the embedder changed shape and the operator went looking for a
+        // setting; this one means part of the corpus was written while Ollama
+        // was down. Same remedy, different cause, and an operator who reads the
+        // wrong explanation searches for a problem they do not have.
+        let dim = dim_mismatch_warning(7, 100, 768).expect("should warn");
+        assert_ne!(msg, dim);
+        assert!(
+            !msg.contains("dimension ≠"),
+            "the model warning must not blame dimensions: {msg}"
+        );
     }
 
     #[test]

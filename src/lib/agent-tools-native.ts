@@ -537,7 +537,13 @@ export const NATIVE_READONLY_HANDLERS: NativeHandler[] = [
                         const lines = hits.map((h: any) => `• ${h.entity_type}:${h.entity_id} (score=${h.score.toFixed(3)})\n  ${h.text.replace(/\s+/g, ' ').slice(0, 220)}`);
                         return `[SEMANTIC SEARCH RESULT for '${semQ}']\n${lines.join('\n')}`;
                     })
-                    .catch((e: any) => `[SEMANTIC SEARCH UNAVAILABLE] ${String(e).slice(0, 180)}. Skills/memories indexing requires a local Ollama with an embedding model (e.g. 'ollama pull nomic-embed-text').`),
+                    // Reaching here now means BOTH embedders are unavailable.
+                    // This used to say "requires a local Ollama", which was
+                    // true of the read path and never of the write path — the
+                    // query was the only call in the system that skipped the
+                    // Gemini fallback. Naming only Ollama sent cloud-only users
+                    // to install a daemon they did not need.
+                    .catch((e: any) => `[SEMANTIC SEARCH UNAVAILABLE] ${String(e).slice(0, 180)}. Recall needs an embedder: either a local Ollama ('ollama pull nomic-embed-text') or a Gemini API key configured in Ajustes.`),
             };
         },
     },

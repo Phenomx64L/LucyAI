@@ -1359,13 +1359,13 @@ async fn stage2_embedding_dedup(
 
     // Embed via Ollama. If embeddings aren't available we silently skip.
     let embed_res = crate::commands::embeddings::embed_via_ollama_pub(&probe, None).await;
-    let query_vec = match embed_res {
-        Ok((v, _)) => v,
+    let (query_vec, query_model) = match embed_res {
+        Ok(pair) => pair,
         Err(_) => return Ok(None),  // Ollama offline / model missing — skip stage 2
     };
 
     // Search the in-memory vec index for high-similarity memories
-    let hits = crate::commands::vec_index::search(&query_vec, 5, 0.92);
+    let hits = crate::commands::vec_index::search(&query_vec, &query_model, 5, 0.92);
     let best_memory = hits.iter()
         .find(|(etype, _id, _text, _score)| etype == "memory");
     let Some((_etype, entity_id, _text, score)) = best_memory else {
@@ -1500,10 +1500,10 @@ Ante la duda responde NO.";
 /// candidate actually exists.
 async fn stage3_contradiction_check(title: &str, content: &str) -> Option<i64> {
     let probe = format!("{}\n{}", title, &content.chars().take(800).collect::<String>());
-    let (query_vec, _) = crate::commands::embeddings::embed_via_ollama_pub(&probe, None)
+    let (query_vec, query_model) = crate::commands::embeddings::embed_via_ollama_pub(&probe, None)
         .await
         .ok()?;
-    let hits = crate::commands::vec_index::search(&query_vec, 5, CONTRA_BAND_LOW);
+    let hits = crate::commands::vec_index::search(&query_vec, &query_model, 5, CONTRA_BAND_LOW);
     let cand = hits
         .iter()
         .find(|(etype, _id, _t, score)| etype == "memory" && *score < CONTRA_BAND_HIGH)?;
@@ -1634,8 +1634,8 @@ pub async fn search_agent_memories(
     // Skip silently if Ollama embeddings aren't available — RRF over a
     // single stream is still valid, it just reduces to bm25 ranking.
     let cosine_ids: Vec<i64> = match crate::commands::embeddings::embed_via_ollama_pub(&query, None).await {
-        Ok((qvec, _)) => {
-            crate::commands::vec_index::search(&qvec, FETCH_N, 0.50)
+        Ok((qvec, qmodel)) => {
+            crate::commands::vec_index::search(&qvec, &qmodel, FETCH_N, 0.50)
                 .into_iter()
                 .filter(|(etype, _, _, _)| etype == "memory")
                 .filter_map(|(_, eid, _, _)| eid.parse::<i64>().ok())
@@ -1919,7 +1919,7 @@ pub async fn search_agent_memories_expanded(
     let mut cosine_lists: Vec<Vec<i64>> = Vec::with_capacity(all_queries.len());
     for q in &all_queries {
         let ids = match crate::commands::embeddings::embed_via_ollama_pub(q, None).await {
-            Ok((qvec, _)) => crate::commands::vec_index::search(&qvec, FETCH_N, 0.50)
+            Ok((qvec, qmodel)) => crate::commands::vec_index::search(&qvec, &qmodel, FETCH_N, 0.50)
                 .into_iter()
                 .filter(|(etype, _, _, _)| etype == "memory")
                 .filter_map(|(_, eid, _, _)| eid.parse::<i64>().ok())

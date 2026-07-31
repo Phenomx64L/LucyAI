@@ -300,6 +300,14 @@ pub struct VecFilter<'a> {
     /// If true AND entity_type is "memory", exclude rows that
     /// have expired (expires_at > 0 AND < now).
     pub exclude_expired: bool,
+    /// If Some, restrict to vectors produced by this embedder.
+    ///
+    /// `embeddings_vec_map` does not carry the model, so this joins the source
+    /// `embeddings` table to reach it. Worth the join: `nomic-embed-text` and
+    /// Gemini's `text-embedding-004` are both 768-dim, so a mixed corpus passes
+    /// every dimension check there is and comes back with confident scores
+    /// computed across two unrelated latent spaces.
+    pub model: Option<&'a str>,
 }
 
 pub fn knn_filtered(
@@ -334,6 +342,20 @@ pub fn knn_filtered(
     if let Some(et) = filter.entity_type {
         wheres.push("m.entity_type = ?".to_string());
         params.push(Box::new(et.to_string()));
+    }
+
+    // Same-embedder guard. INNER JOIN on purpose: `embeddings.model` is NOT
+    // NULL and every vec row is mirrored from an `embeddings` row, so a map row
+    // with no source is already corrupt and has no business ranking.
+    let model_join_needed = filter.model.is_some();
+    let model_join = if model_join_needed {
+        "JOIN embeddings e ON e.entity_type = m.entity_type AND e.entity_id = m.entity_id"
+    } else {
+        ""
+    };
+    if let Some(want) = filter.model {
+        wheres.push("e.model = ?".to_string());
+        params.push(Box::new(want.to_string()));
     }
 
     // Memory-specific filters only kick in when the entity_type IS
@@ -377,10 +399,11 @@ pub fn knn_filtered(
         "SELECT m.entity_type, m.entity_id, m.text, v.distance \
          FROM embeddings_vec v \
          JOIN embeddings_vec_map m ON m.vec_rowid = v.rowid \
-         {join} \
+         {model_join} {join} \
          WHERE {where_clause} \
          ORDER BY v.distance ASC \
          LIMIT ?",
+        model_join = model_join,
         join = join_clause,
         where_clause = wheres.join(" AND ")
     );
@@ -434,7 +457,7 @@ pub async fn vec_search_query(
     let limit = limit.unwrap_or(10).clamp(1, 100) as usize;
     // Embed query through the same cache + fallback chain everything
     // else uses (v1.7.83 LRU caches identical prompts).
-    let (qvec, _model) = crate::commands::embeddings::embed_via_ollama_pub(&query_text, None).await?;
+    let (qvec, qmodel) = crate::commands::embeddings::embed_via_ollama_pub(&query_text, None).await?;
     // v1.7.94 — Filter owns its strings inside the spawn_blocking
     // closure so nothing borrows from the async frame across the
     // task boundary. (Original VecFilter<'a> needs &'a str for use by
@@ -448,6 +471,9 @@ pub async fn vec_search_query(
                 importance_min,
                 exclude_superseded: exclude_sup,
                 exclude_expired:    exclude_exp,
+                // Same latent space as the query, for the same reason as
+                // everywhere else — equal dimensions do not imply it.
+                model: Some(qmodel.as_str()),
             };
             knn_filtered(conn, &qvec, limit, filter, 5)
         })
@@ -542,5 +568,138 @@ mod tests {
         assert!(blob_to_vec(&[0u8; 3]).is_none());
         assert!(blob_to_vec(&[0u8; 7]).is_none());
         assert!(blob_to_vec(&[0u8; 8]).is_some());
+    }
+
+    // ── knn_filtered against a real vec0 table ──────────────────────────────
+    //
+    // Until now nothing executed this function's SQL. It is BUILT as a string
+    // from a dynamic WHERE chain and two optional JOINs, so the compiler checks
+    // none of it — a malformed join or a parameter bound in the wrong order
+    // fails at runtime, inside a `if let Ok(rows)` that swallows the error and
+    // silently drops the caller to the linear scan. A permanently disabled fast
+    // path is not something you notice; it just gets slower.
+    //
+    // `sqlite3_auto_extension` is process-global, so registering it here makes
+    // vec0 available to every connection opened afterwards in this process.
+
+    fn db_with_vec() -> rusqlite::Connection {
+        init_extension().expect("register sqlite-vec");
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        ensure_schema(&conn).expect("vec schema");
+        conn.execute_batch(
+            "CREATE TABLE embeddings (
+               entity_type TEXT NOT NULL,
+               entity_id   TEXT NOT NULL,
+               model       TEXT NOT NULL
+             );",
+        )
+        .expect("source table");
+        conn
+    }
+
+    /// Insert one vector into vec0 + the map + the source row that carries the
+    /// embedder name.
+    fn insert_vec(conn: &rusqlite::Connection, rowid: i64, id: &str, model: &str, v: &[f32]) {
+        conn.execute(
+            "INSERT INTO embeddings_vec (rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![rowid, vec_to_blob(v)],
+        )
+        .expect("insert vec");
+        conn.execute(
+            "INSERT INTO embeddings_vec_map (vec_rowid, entity_type, entity_id, text)
+             VALUES (?1, 'memory', ?2, ?3)",
+            rusqlite::params![rowid, id, format!("text {id}")],
+        )
+        .expect("insert map");
+        conn.execute(
+            "INSERT INTO embeddings (entity_type, entity_id, model) VALUES ('memory', ?1, ?2)",
+            rusqlite::params![id, model],
+        )
+        .expect("insert source");
+    }
+
+    fn unit_vec(seed: f32) -> Vec<f32> {
+        let mut v = vec![0.0_f32; EMBEDDING_DIM];
+        v[0] = seed;
+        v[1] = 1.0 - seed;
+        v
+    }
+
+    #[test]
+    fn knn_filtered_runs_and_returns_hits_without_a_model_filter() {
+        // Baseline: the query is well-formed and the rows are reachable. If
+        // this fails, the failures below prove nothing.
+        let conn = db_with_vec();
+        insert_vec(&conn, 1, "a", "nomic-embed-text", &unit_vec(1.0));
+        insert_vec(&conn, 2, "b", "text-embedding-004", &unit_vec(0.9));
+
+        let hits = knn_filtered(&conn, &unit_vec(1.0), 10, VecFilter::default(), 5)
+            .expect("knn_filtered should execute");
+        assert_eq!(hits.len(), 2, "both rows should be reachable unfiltered");
+    }
+
+    #[test]
+    fn knn_filtered_excludes_vectors_from_another_embedder() {
+        // The case that motivated the filter: a corpus holding rows from two
+        // embedders that agree on 768 dimensions, so no dimension check can
+        // separate them. Row "b" is the CLOSER vector — without the filter it
+        // outranks the correct answer while meaning nothing.
+        let conn = db_with_vec();
+        insert_vec(&conn, 1, "a", "nomic-embed-text", &unit_vec(0.8));
+        insert_vec(&conn, 2, "b", "text-embedding-004", &unit_vec(1.0));
+
+        let filter = VecFilter { model: Some("nomic-embed-text"), ..Default::default() };
+        let hits = knn_filtered(&conn, &unit_vec(1.0), 10, filter, 5)
+            .expect("knn_filtered should execute");
+
+        assert_eq!(hits.len(), 1, "only the query's own embedder should rank");
+        assert_eq!(hits[0].entity_id, "a");
+
+        // Both directions, so this cannot pass by returning whatever came
+        // first. Asking for the other embedder must yield the other row —
+        // including the one the previous assertion just rejected.
+        let filter = VecFilter { model: Some("text-embedding-004"), ..Default::default() };
+        let hits = knn_filtered(&conn, &unit_vec(1.0), 10, filter, 5)
+            .expect("knn_filtered should execute");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entity_id, "b");
+
+        // And an embedder nobody used matches nothing, rather than falling
+        // open to the whole table.
+        let filter = VecFilter { model: Some("mxbai-embed-large"), ..Default::default() };
+        let hits = knn_filtered(&conn, &unit_vec(1.0), 10, filter, 5)
+            .expect("knn_filtered should execute");
+        assert!(hits.is_empty(), "an unused embedder must not match: {hits:?}");
+    }
+
+    #[test]
+    fn the_model_join_composes_with_the_memory_filters() {
+        // Both optional JOINs at once — the combination that only exists when a
+        // memory-scoped recall runs, which is the common case in production and
+        // the one where a broken join would go unnoticed longest.
+        let conn = db_with_vec();
+        conn.execute_batch(
+            "CREATE TABLE agent_memories (
+               id INTEGER PRIMARY KEY, importance INTEGER,
+               superseded_by INTEGER, expires_at INTEGER
+             );
+             INSERT INTO agent_memories VALUES (1, 5, NULL, 0);
+             INSERT INTO agent_memories VALUES (2, 5, 1, 0);",
+        )
+        .expect("memories");
+        insert_vec(&conn, 1, "1", "nomic-embed-text", &unit_vec(0.8));
+        insert_vec(&conn, 2, "2", "nomic-embed-text", &unit_vec(1.0));
+
+        let filter = VecFilter {
+            entity_type: Some("memory"),
+            model: Some("nomic-embed-text"),
+            exclude_superseded: true,
+            ..Default::default()
+        };
+        let hits = knn_filtered(&conn, &unit_vec(1.0), 10, filter, 5)
+            .expect("both joins must compose into valid SQL");
+
+        assert_eq!(hits.len(), 1, "the superseded row should still be excluded");
+        assert_eq!(hits[0].entity_id, "1");
     }
 }

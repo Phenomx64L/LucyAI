@@ -39,12 +39,27 @@ pub struct IndexEntry {
     pub entity_id: String,
     pub text: String,
     pub vec: Vec<f32>,
+    /// The embedder that produced `vec`. Two models can output the same
+    /// dimension while placing the same sentence somewhere completely
+    /// different — `nomic-embed-text` and Gemini's `text-embedding-004` are
+    /// both 768-dim, which is exactly the pair Lucy alternates between when
+    /// Ollama is not running. Cosine across that boundary is a number, not a
+    /// similarity, and nothing about it looks wrong.
+    pub model: String,
 }
 
 struct VecIndex {
     entries: Vec<IndexEntry>,
     /// Adjacency list: neighbors[i] contains indices of M nearest neighbors of entries[i]
     neighbors: Vec<Vec<usize>>,
+    /// The single embedder every entry in `entries` came from.
+    ///
+    /// Filtering hits by model at query time would not be enough here: `build()`
+    /// computes cosine BETWEEN entries, so a mixed corpus produces a neighbour
+    /// graph whose edges are meaningless before any query arrives. The index
+    /// therefore holds one model's vectors and refuses queries from another,
+    /// which drops the caller to the linear scan — slower, and correct.
+    index_model: String,
     /// Generation counter — bumped on every insert/delete to invalidate
     generation: u64,
     /// Generation at which the index was last built
@@ -54,6 +69,7 @@ struct VecIndex {
 impl VecIndex {
     fn new() -> Self {
         Self {
+            index_model: String::new(),
             entries: Vec::new(),
             neighbors: Vec::new(),
             generation: 0,
@@ -168,9 +184,18 @@ pub fn invalidate() {
 /// Called during search when the index is stale.
 /// Builds the HNSW graph OUTSIDE the mutex to avoid blocking searches
 /// during the O(n²) construction phase.
+///
+/// Entries from more than one embedder are narrowed to the largest group
+/// before building — see `index_model`. Dropping the minority is the right
+/// trade: those rows stay reachable through the linear scan, whereas mixing
+/// them in would corrupt the graph for everything.
 pub fn reload(entries: Vec<IndexEntry>) {
+    let entries = keep_dominant_model(entries);
+    let model = entries.first().map(|e| e.model.clone()).unwrap_or_default();
+
     // Build the index without holding the lock
     let mut temp = VecIndex::new();
+    temp.index_model = model;
     temp.entries = entries;
     temp.generation = 1;
     temp.build();
@@ -195,15 +220,43 @@ pub fn corpus_size() -> usize {
     INDEX.lock().map(|idx| idx.entries.len()).unwrap_or(0)
 }
 
+/// Keep only the entries from whichever embedder contributed the most vectors.
+///
+/// Split out so the tie-break and the "one model wins" rule are testable
+/// without building a 500-entry graph.
+fn keep_dominant_model(entries: Vec<IndexEntry>) -> Vec<IndexEntry> {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for e in &entries {
+        *counts.entry(e.model.as_str()).or_insert(0) += 1;
+    }
+    if counts.len() <= 1 {
+        return entries;
+    }
+    // Ties break on the model name so the same corpus always yields the same
+    // index — an index that reshuffles between boots makes a recall complaint
+    // impossible to reproduce.
+    let winner = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(m, _)| m.to_string())
+        .unwrap_or_default();
+    entries.into_iter().filter(|e| e.model == winner).collect()
+}
+
 /// Search the index. Returns (entity_type, entity_id, text, score) tuples.
+///
+/// `model` is the embedder that produced `query`. A query from a different
+/// embedder than the index holds returns empty, which reads to the caller the
+/// same as a cold index: fall through to the linear scan.
+///
 /// Returns empty vec if index isn't ready (caller should fall back to linear scan).
-pub fn search(query: &[f32], limit: usize, min_score: f32) -> Vec<(String, String, String, f32)> {
+pub fn search(query: &[f32], model: &str, limit: usize, min_score: f32) -> Vec<(String, String, String, f32)> {
     let idx = match INDEX.lock() {
         Ok(idx) => idx,
         Err(_) => return Vec::new(),
     };
 
-    if !idx.is_valid() {
+    if !idx.is_valid() || idx.index_model != model {
         return Vec::new();
     }
 
@@ -235,11 +288,70 @@ mod tests {
     use super::*;
 
     fn make_entry(id: &str, vec: Vec<f32>) -> IndexEntry {
+        make_entry_from(id, vec, "nomic-embed-text")
+    }
+
+    fn make_entry_from(id: &str, vec: Vec<f32>, model: &str) -> IndexEntry {
         IndexEntry {
             entity_type: "test".into(),
             entity_id: id.into(),
             text: format!("text for {}", id),
             vec,
+            model: model.into(),
+        }
+    }
+
+    // ── One index, one embedder ─────────────────────────────────────────────
+    //
+    // These pin the rule that makes the whole same-space guard work. It is not
+    // a filter you can apply to the results: `build()` computes cosine BETWEEN
+    // entries, so a corpus holding two models produces a neighbour graph whose
+    // edges are already meaningless — the damage is done before a query exists.
+
+    #[test]
+    fn a_single_model_corpus_is_kept_whole() {
+        let entries = vec![
+            make_entry_from("a", vec![1.0, 0.0], "nomic-embed-text"),
+            make_entry_from("b", vec![0.0, 1.0], "nomic-embed-text"),
+        ];
+        assert_eq!(keep_dominant_model(entries).len(), 2);
+    }
+
+    #[test]
+    fn a_mixed_corpus_keeps_only_the_majority_embedder() {
+        // The realistic shape: a long-standing Ollama corpus with a handful of
+        // rows written during an outage, when the write path fell back to
+        // Gemini. Both models emit 768 dimensions, so nothing downstream can
+        // tell these apart — this is the only place that can.
+        let entries = vec![
+            make_entry_from("a", vec![1.0, 0.0], "nomic-embed-text"),
+            make_entry_from("b", vec![0.0, 1.0], "nomic-embed-text"),
+            make_entry_from("c", vec![1.0, 1.0], "nomic-embed-text"),
+            make_entry_from("d", vec![0.5, 0.5], "text-embedding-004"),
+        ];
+        let kept = keep_dominant_model(entries);
+        assert_eq!(kept.len(), 3, "the minority embedder should be dropped");
+        assert!(
+            kept.iter().all(|e| e.model == "nomic-embed-text"),
+            "kept entries must share one model"
+        );
+    }
+
+    #[test]
+    fn a_tie_resolves_the_same_way_every_time() {
+        // Deterministic on purpose. HashMap iteration order is not stable
+        // across runs, so without the name tie-break the index could hold a
+        // different half on each boot — and a recall complaint that changes
+        // shape between restarts is one nobody can reproduce.
+        let build = || vec![
+            make_entry_from("a", vec![1.0, 0.0], "aaa-model"),
+            make_entry_from("b", vec![0.0, 1.0], "zzz-model"),
+        ];
+        let first = keep_dominant_model(build());
+        for _ in 0..20 {
+            let again = keep_dominant_model(build());
+            assert_eq!(again.len(), 1);
+            assert_eq!(again[0].model, first[0].model, "tie-break is not stable");
         }
     }
 
