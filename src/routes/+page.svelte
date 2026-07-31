@@ -1086,7 +1086,13 @@ import { listen } from '@tauri-apps/api/event';
      * as a function so hoisting makes it available to every caller above.
      */
     function chatInput() {
-        return /** @type {HTMLElement|null} */ (chatInput());
+        // NOTE: the selector must stay literal here. Phase 2b replaced all 19
+        // occurrences of it with `chatInput()` in one pass, and the pass hit
+        // this body too — the accessor called itself, so every focus of the
+        // composer was an immediate stack overflow. Nothing caught it: it is
+        // runtime recursion, not a type error, so check, check:js, the 561
+        // tests and the build were all green.
+        return /** @type {HTMLElement|null} */ (document.querySelector('.chat-wrap.on .ibox'));
     }
 
     let kgViewerOpen = false;
