@@ -67,6 +67,19 @@ pub async fn run_self_diagnostics() -> Result<DiagnosticsReport, String> {
         });
     checks.push(db_check);
 
+    // 2b. Ingested-document embedding coverage
+    let emb_check = tokio::task::spawn_blocking(check_document_embeddings)
+        .await
+        .unwrap_or_else(|_| DiagnosticCheck {
+            name: "Document Embeddings".into(),
+            category: "memory".into(),
+            status: "error".into(),
+            message: "Failed to spawn embedding-coverage check".into(),
+            details: None,
+            elapsed_ms: 0,
+        });
+    checks.push(emb_check);
+
     // 3. Memory pipeline
     let mem_check = tokio::task::spawn_blocking(check_memory_pipeline)
         .await
@@ -416,6 +429,105 @@ fn check_memory_pipeline() -> DiagnosticCheck {
             elapsed_ms: start.elapsed().as_millis() as u64,
         },
     }
+}
+
+/// How much of every ingested PDF is actually reachable by search.
+///
+/// A chunk lands in `agent_memories` synchronously and gets its vector from a
+/// background pass that drops any batch that errors. The document then reads
+/// `status = 'done'` — which it is, for the saving phase — while part of its
+/// content is invisible to `pdf_search`. Nothing surfaced the gap except a
+/// count buried in one panel, and the failure looks like the manual simply not
+/// covering the topic you asked about, which is indistinguishable from the
+/// document being unhelpful.
+fn check_document_embeddings() -> DiagnosticCheck {
+    let start = std::time::Instant::now();
+
+    let queried = crate::commands::metrics::shared_db(|conn| {
+        // Chunk rows carry session_id 'pdf:<doc>'; their embedding, when it
+        // exists, is entity_type 'pdf_chunk' keyed by the memory row id.
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agent_memories WHERE session_id LIKE 'pdf:%'",
+            [], |r| r.get(0),
+        ).unwrap_or(0);
+        let embedded: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM agent_memories am \
+             WHERE am.session_id LIKE 'pdf:%' \
+               AND EXISTS (SELECT 1 FROM embeddings e \
+                           WHERE e.entity_type = 'pdf_chunk' \
+                             AND e.entity_id = CAST(am.id AS TEXT))",
+            [], |r| r.get(0),
+        ).unwrap_or(0);
+        Ok((total, embedded))
+    });
+
+    let (total, embedded) = match queried {
+        Ok(pair) => pair,
+        Err(e) => {
+            return DiagnosticCheck {
+                name: "Document Embeddings".into(),
+                category: "memory".into(),
+                status: "error".into(),
+                message: format!("Cannot query embedding coverage: {}", e),
+                details: None,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            }
+        }
+    };
+
+    let missing = (total - embedded).max(0);
+    // Any gap at all is worth a button. This is not a threshold like "> 100
+    // expired rows", where a backlog is normal and only a large one is a
+    // symptom — one unembedded chunk is one passage of the user's own document
+    // that no query will ever return.
+    let status = if missing > 0 { "warning" } else { "ok" };
+    let message = if total == 0 {
+        "No ingested documents.".to_string()
+    } else if missing == 0 {
+        format!("{}/{} document chunks embedded and searchable.", embedded, total)
+    } else {
+        format!(
+            "{}/{} document chunks embedded — {} chunk{} not searchable (embeddings missing)",
+            embedded, total, missing, if missing == 1 { "" } else { "s" }
+        )
+    };
+
+    DiagnosticCheck {
+        name: "Document Embeddings".into(),
+        category: "memory".into(),
+        status: status.into(),
+        message,
+        details: Some(serde_json::json!({
+            "chunks_total": total,
+            "chunks_embedded": embedded,
+            "chunks_missing": missing,
+        })),
+        elapsed_ms: start.elapsed().as_millis() as u64,
+    }
+}
+
+/// Re-embed the document chunks whose vectors never landed.
+///
+/// Delegates to `backfill_embeddings("pdf_chunk")`, which skips rows that
+/// already have an embedding — so this is idempotent and safe to press twice,
+/// and pressing it on a healthy corpus does nothing but cost a query.
+///
+/// Requires a working embedder. With neither Ollama nor a Gemini key the
+/// backfill errors, and that error is the right thing to show: the chunks stay
+/// missing and the user needs to know why rather than watch a button succeed at
+/// nothing.
+#[tauri::command]
+pub async fn repair_pdf_embeddings() -> Result<RepairResult, String> {
+    let created = crate::commands::embeddings::backfill_embeddings("pdf_chunk".into(), None).await?;
+    let msg = if created == 0 {
+        "No document chunks were missing an embedding.".to_string()
+    } else {
+        format!(
+            "Re-embedded {} document chunk{} — now searchable.",
+            created, if created == 1 { "" } else { "s" }
+        )
+    };
+    Ok(RepairResult { ok: true, rows_repaired: created as i64, message: msg })
 }
 
 fn check_stream_sessions() -> DiagnosticCheck {

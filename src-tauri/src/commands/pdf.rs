@@ -569,7 +569,18 @@ pub async fn pdf_ingest(
             for batch in items.chunks(16) {
                 match embed_and_store_batch("pdf_chunk", batch, None).await {
                     Ok(n)  => done += n,
-                    Err(e) => eprintln!("[pdf] embed batch skip ({} items): {}", batch.len(), e),
+                    Err(e) => {
+                        // Was `eprintln!` only, which in a windowed build goes
+                        // to a console nobody sees. These chunks are now
+                        // recoverable — Diagnóstico → "Re-embeber documentos"
+                        // runs backfill_embeddings("pdf_chunk") — but the
+                        // operator has to be able to find out it happened.
+                        crate::utils::logging::write_app_log("WARN", &format!(
+                            "[pdf] embed batch failed for '{}' ({} chunks): {} — \
+                             recoverable via the Document Embeddings repair",
+                            fname2, batch.len(), e
+                        ));
+                    }
                 }
                 let _ = app2.emit("pdf_progress", PdfProgress {
                     doc_id: doc2.clone(), current: done.min(total_emb), total: total_emb,
@@ -588,10 +599,23 @@ pub async fn pdf_ingest(
                     None,
                 ).await;
             }
+            // The final event used to report `current: total_emb` and "Document
+            // ready. Lucy can now answer questions about this PDF" no matter
+            // how many batches had failed — the one moment the user is looking
+            // at this document, spent asserting a completeness nobody checked.
+            // It reports what actually landed now.
             let _ = app2.emit("pdf_progress", PdfProgress {
-                doc_id: doc2.clone(), current: total_emb, total: total_emb,
+                doc_id: doc2.clone(), current: done, total: total_emb,
                 phase: "done".into(),
-                message: "Document ready. Lucy can now answer questions about this PDF.".into(),
+                message: if done >= total_emb {
+                    "Document ready. Lucy can now answer questions about this PDF.".into()
+                } else {
+                    format!(
+                        "Document saved, but {}/{} sections could not be embedded and are not \
+                         searchable. Recover them in Diagnostics → Re-embed documents.",
+                        total_emb - done, total_emb
+                    )
+                },
             });
         });
     }
@@ -716,19 +740,44 @@ pub async fn pdf_search(
 
     const RRF_K: f64 = 60.0;
     let mut fused: HashMap<String, (f64, crate::commands::embeddings::SemanticHit)> = HashMap::new();
+    // Every query failing for the same reason is not "no results".
+    //
+    // `unwrap_or_default()` on each call made "the embedder is unreachable"
+    // and "the document does not discuss this" produce the identical empty
+    // list. The agent then told the user their manual had nothing on the
+    // topic — a confident, wrong answer about the user's own document, and no
+    // trace anywhere pointing at the real cause.
+    //
+    // Per-query errors are still tolerated: the expansions are best-effort and
+    // one of them timing out should not sink a search the original satisfies.
+    // Only the case where NOTHING succeeded is escalated.
+    let mut last_err: Option<String> = None;
+    let mut any_ok = false;
     for q in &queries {
-        let hits = crate::commands::embeddings::semantic_search(
+        let hits = match crate::commands::embeddings::semantic_search(
             q.clone(),
             Some("pdf_chunk".to_string()),
             Some(8),
             Some(base_min.min(0.30)),
             None,
-        ).await.unwrap_or_default();
+        ).await {
+            Ok(h) => { any_ok = true; h }
+            Err(e) => { last_err = Some(e); continue; }
+        };
         for (rank, h) in hits.into_iter().enumerate() {
             let e = fused.entry(h.entity_id.clone()).or_insert((0.0, h));
             e.0 += 1.0 / (RRF_K + rank as f64 + 1.0);
         }
     }
+    if !any_ok {
+        return Err(format!(
+            "No se pudo consultar el índice semántico de documentos: {}. \
+             Los PDFs siguen ingeridos; hace falta un embebedor disponible \
+             (Ollama local o una clave de Gemini) para buscar en ellos.",
+            last_err.unwrap_or_else(|| "causa desconocida".into())
+        ));
+    }
+
     let mut ranked: Vec<(f64, crate::commands::embeddings::SemanticHit)> = fused.into_values().collect();
     ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     ranked.truncate(20);

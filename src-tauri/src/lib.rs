@@ -1217,6 +1217,7 @@ pub fn run() {
             // oversized app log).
             diagnostics::repair_database_vacuum,
             diagnostics::repair_memory_purge_expired,
+            diagnostics::repair_pdf_embeddings,
             diagnostics::repair_clear_leaked_stream_sessions,
             diagnostics::repair_rotate_app_log,
             // v1.7.73 — Auto-fork advisor. Scores the user prompt for

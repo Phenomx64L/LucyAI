@@ -784,6 +784,43 @@ pub async fn semantic_search(
     Ok(scored)
 }
 
+/// The `(entity_id, text-to-embed)` query for one backfillable entity type.
+///
+/// Split out of `backfill_embeddings` so the queries can be run against a real
+/// SQLite in a test. These are the only place that has to reproduce, in SQL,
+/// the text each ingest path built in Rust — and a backfill that embeds
+/// slightly different text is worse than one that does nothing: the recovered
+/// rows get vectors the original path would never have produced, so they rank
+/// unlike their siblings and the corpus is quietly inconsistent instead of
+/// visibly incomplete.
+fn backfill_source_sql(entity_type: &str) -> Result<&'static str, String> {
+    Ok(match entity_type {
+        "skill" => "SELECT id, (name || ' — ' || COALESCE(description,'') || ' — ' || COALESCE(triggers,'')) FROM skills WHERE enabled = 1",
+        // v1.7.233: exclude PDF chunks — they are already embedded as
+        // entity_type 'pdf_chunk' by pdf_ingest. Without this filter one
+        // maintenance backfill would re-embed every chunk as 'memory',
+        // letting the manual invade the pre-loop semantic recall that is
+        // deliberately scoped to entityType:'memory'.
+        "memory" => "SELECT CAST(id AS TEXT), (title || ' — ' || content) FROM agent_memories WHERE session_id NOT LIKE 'pdf:%'",
+        // v1.8 — the arm that was missing, and the reason a half-embedded PDF
+        // stayed half-embedded forever.
+        //
+        // `pdf_ingest` fires its embedding pass with `spawn` and drops any
+        // batch that errors (`eprintln!`, no retry). Ollama restarting
+        // mid-ingest, or the app closing, left chunks no search could ever
+        // reach — and this function answered "Unknown entity_type 'pdf_chunk'",
+        // so there was no way back. The UI meanwhile told people to restart
+        // Lucy for a backfill that did not exist for this type.
+        //
+        // Must reproduce pdf_ingest's "[filename] chunk", with the name joined
+        // from pdf_documents.
+        "pdf_chunk" => "SELECT CAST(am.id AS TEXT), '[' || d.filename || '] ' || am.content \
+                        FROM agent_memories am \
+                        JOIN pdf_documents d ON am.session_id = 'pdf:' || d.id",
+        other => return Err(format!("Unknown entity_type '{}' for backfill", other)),
+    })
+}
+
 /// Backfill: iterate over a table (skills or agent_memories) and ensure every
 /// row has a corresponding embedding. Idempotent; safe to call on startup.
 /// Returns the number of NEW embeddings created.
@@ -794,16 +831,7 @@ pub async fn backfill_embeddings(
 ) -> Result<u32, String> {
     // 1. Pull every (id, text-to-embed) pair from the source table.
     let pairs: Vec<(String, String)> = shared_db(|conn| {
-        let sql = match entity_type.as_str() {
-            "skill" => "SELECT id, (name || ' — ' || COALESCE(description,'') || ' — ' || COALESCE(triggers,'')) FROM skills WHERE enabled = 1",
-            // v1.7.233: exclude PDF chunks — they are already embedded as
-            // entity_type 'pdf_chunk' by pdf_ingest. Without this filter one
-            // maintenance backfill would re-embed every chunk as 'memory',
-            // letting the manual invade the pre-loop semantic recall that is
-            // deliberately scoped to entityType:'memory'.
-            "memory" => "SELECT CAST(id AS TEXT), (title || ' — ' || content) FROM agent_memories WHERE session_id NOT LIKE 'pdf:%'",
-            other => return Err(format!("Unknown entity_type '{}' for backfill", other)),
-        };
+        let sql = backfill_source_sql(&entity_type)?;
         let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
         let rows: Vec<_> = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .map_err(|e| format!("query: {}", e))?
@@ -965,6 +993,83 @@ mod embed_tests {
             !msg.contains("dimension ≠"),
             "the model warning must not blame dimensions: {msg}"
         );
+    }
+
+    // ── The backfill queries, run for real ──────────────────────────────────
+
+    #[test]
+    fn backfill_rejects_an_entity_type_it_cannot_source() {
+        let err = backfill_source_sql("runbook").expect_err("should reject");
+        assert!(err.contains("runbook"), "err = {err}");
+    }
+
+    #[test]
+    fn the_pdf_backfill_rebuilds_exactly_the_text_ingest_embedded() {
+        // pdf_ingest embeds `format!("[{}] {}", filename, chunk)` (pdf.rs,
+        // phase 4) after storing the chunk as an agent_memory whose session_id
+        // is 'pdf:<doc>'. This query has to arrive at the same string from the
+        // database alone. If it drifts — a missing space, the title instead of
+        // the raw content — the recovered chunks get vectors the ingest path
+        // would never produce and rank unlike the siblings they sit beside.
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE agent_memories (id INTEGER PRIMARY KEY, session_id TEXT, title TEXT, content TEXT);
+             CREATE TABLE pdf_documents (id TEXT PRIMARY KEY, filename TEXT);
+             INSERT INTO pdf_documents VALUES ('doc1', 'manual.pdf');
+             INSERT INTO agent_memories (id, session_id, title, content)
+               VALUES (7, 'pdf:doc1', 'PDF: manual.pdf §1/2', 'primera seccion');
+             INSERT INTO agent_memories (id, session_id, title, content)
+               VALUES (8, 'pdf:doc1', 'PDF: manual.pdf §2/2', 'segunda seccion');
+             -- An organic memory, which this query must not touch.
+             INSERT INTO agent_memories (id, session_id, title, content)
+               VALUES (9, 'chat-42', 'algo', 'contenido');",
+        )
+        .expect("fixture");
+
+        let sql = backfill_source_sql("pdf_chunk").expect("pdf_chunk must be backfillable");
+        let mut stmt = conn.prepare(sql).expect("the query must be valid SQL");
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("query")
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(rows.len(), 2, "only the document's own chunks: {rows:?}");
+        assert_eq!(rows[0], ("7".to_string(), "[manual.pdf] primera seccion".to_string()));
+        assert_eq!(rows[1], ("8".to_string(), "[manual.pdf] segunda seccion".to_string()));
+
+        // Byte-for-byte against the format! that ingest actually runs, so the
+        // two cannot drift apart without this failing.
+        let ingest_built = format!("[{}] {}", "manual.pdf", "primera seccion");
+        assert_eq!(rows[0].1, ingest_built);
+    }
+
+    #[test]
+    fn the_memory_backfill_still_refuses_to_swallow_pdf_chunks() {
+        // The pdf exclusion on the 'memory' arm is load-bearing and easy to
+        // lose while editing the arm next to it: without it a maintenance
+        // backfill re-embeds every manual chunk as entity_type 'memory', and
+        // the manual invades the pre-loop recall that is deliberately scoped
+        // away from it.
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE agent_memories (id INTEGER PRIMARY KEY, session_id TEXT, title TEXT, content TEXT);
+             INSERT INTO agent_memories (id, session_id, title, content)
+               VALUES (1, 'pdf:doc1', 'PDF: manual.pdf §1/1', 'seccion');
+             INSERT INTO agent_memories (id, session_id, title, content)
+               VALUES (2, 'chat-42', 'nota', 'algo que recordar');",
+        )
+        .expect("fixture");
+
+        let sql = backfill_source_sql("memory").expect("memory must be backfillable");
+        let mut stmt = conn.prepare(sql).expect("valid SQL");
+        let ids: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .expect("query")
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(ids, vec!["2".to_string()], "pdf chunks must stay out of 'memory'");
     }
 
     #[test]

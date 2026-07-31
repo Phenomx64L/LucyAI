@@ -70,6 +70,18 @@
             };
         }
 
+        // ── Ingested documents: chunks with no embedding ─────────────────
+        // v1.8 — any gap at all warns. A chunk without a vector is a passage
+        // of the user's own PDF that pdf_search cannot return, and it reads
+        // like the document not covering the question.
+        if (check.name === 'Document Embeddings' && check.status === 'warning') {
+            return {
+                command: 'repair_pdf_embeddings',
+                label:   isEN ? 'Re-embed documents' : 'Re-embeber documentos',
+                successDefault: isEN ? 'Documents re-embedded' : 'Documentos re-embebidos',
+            };
+        }
+
         // ── Stream sessions: leaked entries ──────────────────────────────
         // v1.7.70 — Triggered when STREAM_SESSIONS.len() > 20.
         if (check.name === 'Stream Sessions' && check.status === 'warning') {

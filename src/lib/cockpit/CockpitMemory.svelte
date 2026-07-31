@@ -536,10 +536,16 @@
                 <span class="mcard-tag">{d.chunk_count} secciones</span>
                 <span class="mcard-tag" class:warn={d.status !== 'done'}>{d.status}</span>
                 {#if d.embedded_count != null}
+                  <!-- El aviso de abajo decía "Reinicia Lucy para el backfill".
+                       No existía tal backfill: backfill_embeddings rechazaba el
+                       tipo 'pdf_chunk' y nada reanudaba los embeddings al
+                       arrancar. El usuario reiniciaba, veía el mismo número, y
+                       no tenía forma de saber que el consejo era falso. Ahora
+                       la reparación existe y el texto apunta a donde está. -->
                   <span class="mcard-tag" class:ok={d.embedded_count >= d.chunk_count} class:warn={d.embedded_count < d.chunk_count}
                         title={d.embedded_count >= d.chunk_count
                           ? 'Todas las secciones tienen embedding — búsqueda semántica (pdf_search) al 100%'
-                          : 'Embeddings incompletos — pdf_search solo ve las secciones embebidas (¿Ollama estaba apagado? Reinicia Lucy para el backfill)'}>
+                          : 'Embeddings incompletos — pdf_search no ve las secciones que faltan. Recupéralas en Diagnóstico → «Re-embeber documentos» (necesita Ollama o una clave de Gemini).'}>
                     {d.embedded_count}/{d.chunk_count} embebidos
                   </span>
                 {/if}
