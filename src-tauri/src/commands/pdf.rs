@@ -1100,7 +1100,13 @@ mod tests {
     // temp-file cleanup.
 
     /// Names of the files this command stages, so a leak is detectable.
-    /// Exact under `--test-threads=1`, which is how CI runs the suite.
+    ///
+    /// `%TEMP%` is process-global, so this census is only exact single-threaded
+    /// — a sibling test staging its own file otherwise shows up here and the
+    /// assertion fails for a reason that has nothing to do with cleanup. The
+    /// suite already required `--test-threads=1` for the shell contract tests;
+    /// `src-tauri/.cargo/config.toml` now makes that the default instead of
+    /// something you had to know.
     fn staged_temp_files() -> Vec<String> {
         std::fs::read_dir(std::env::temp_dir())
             .map(|rd| {

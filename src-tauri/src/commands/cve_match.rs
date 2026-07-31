@@ -501,7 +501,6 @@ mod tests {
         assert_eq!(version_cmp("2.4.49", "2.4.50"), Less);
     }
 
-    #[test]
     /// The reported false positive, pinned.
     #[test]
     fn smbus_driver_is_not_smb() {
