@@ -1070,11 +1070,25 @@ import { listen } from '@tauri-apps/api/event';
         t.inputValue = prompt;
         tabs = [...tabs];
         if (showWelcome) showWelcome = false;
-        setTimeout(() => {
-            const el = document.querySelector('.chat-wrap.on .ibox');
-            if (el instanceof HTMLElement) el.focus();
-        }, 30);
+        setTimeout(() => chatInput()?.focus(), 30);
     }
+
+    /**
+     * The active tab's chat input.
+     *
+     * `.chat-wrap.on .ibox` was written out verbatim 19 times in this file.
+     * Beyond the duplication, `querySelector` returns `Element`, which has no
+     * `focus()` — so 14 of those call sites were type errors that the unchecked
+     * build never reported. Two spots did narrow correctly with `instanceof
+     * HTMLElement`; the rest called `?.focus()` straight off the Element.
+     *
+     * One accessor fixes the type and gives the selector a single home. Declared
+     * as a function so hoisting makes it available to every caller above.
+     */
+    function chatInput() {
+        return /** @type {HTMLElement|null} */ (chatInput());
+    }
+
     let kgViewerOpen = false;
     let kgViewerPath = '';
     let kgViewerNeighbors = [];           // KgNeighborNode[]
@@ -1101,7 +1115,7 @@ import { listen } from '@tauri-apps/api/event';
         tabs = [...tabs];
         showSkillPicker = false;
         setTimeout(() => {
-            const el = document.querySelector('.chat-wrap.on .ibox');
+            const el = chatInput();
             if (el instanceof HTMLElement) el.focus();
         }, 30);
     }
@@ -1384,7 +1398,7 @@ import { listen } from '@tauri-apps/api/event';
                     const cur = t.inputValue || '';
                     t.inputValue = cur.endsWith(' ') || cur === '' ? `${cur}@${value} ` : `${cur} @${value} `;
                     tabs = [...tabs];
-                    setTimeout(() => document.querySelector('.chat-wrap.on .ibox')?.focus(), 30);
+                    setTimeout(() => chatInput()?.focus(), 30);
                 }
             } else if (kind === 'url') {
                 // No dedicated Tauri command for URLs — use PowerShell's
@@ -1416,14 +1430,14 @@ import { listen } from '@tauri-apps/api/event';
             if (chip.action.kind === 'fill_input') {
                 t.inputValue = chip.action.text;
                 tabs = [...tabs];
-                setTimeout(() => document.querySelector('.chat-wrap.on .ibox')?.focus(), 30);
+                setTimeout(() => chatInput()?.focus(), 30);
             } else if (chip.action.kind === 'slash') {
                 t.inputValue = chip.action.command;
                 tabs = [...tabs];
                 // Auto-submit slash commands
                 setTimeout(() => {
                     const evt = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
-                    document.querySelector('.chat-wrap.on .ibox')?.dispatchEvent(evt);
+                    chatInput()?.dispatchEvent(evt);
                 }, 30);
             } else if (chip.action.kind === 'run_command') {
                 t.inputValue = chip.action.cmd;
@@ -1879,7 +1893,7 @@ import { listen } from '@tauri-apps/api/event';
                     if (t) { t.inputValue = s.cmd + ' '; refresh(); }
                 }
                 showPalette = false;
-                tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+                tick().then(() => chatInput()?.focus());
             },
         })),
 
@@ -2517,7 +2531,7 @@ import { listen } from '@tauri-apps/api/event';
             refresh();
             // Focus the composer and put the cursor at the end.
             tick().then(() => {
-                const ibox = document.querySelector('.chat-wrap.on .ibox');
+                const ibox = chatInput();
                 if (ibox) {
                     ibox.focus();
                     try {
@@ -3554,7 +3568,7 @@ import { listen } from '@tauri-apps/api/event';
         // v1.7.51 — immediate (un-debounced) persist on structural change
         // so the new tab survives a fast Lucy close (<500ms).
         persistirNow();
-        tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+        tick().then(() => chatInput()?.focus());
     }
 
     // ── Tier B #4 — Detach a second Lucy window (dual-monitor) ─────────
@@ -3669,7 +3683,7 @@ import { listen } from '@tauri-apps/api/event';
                 : `Bifurcado a una nueva pestaña en el mensaje ${msgIdx + 1}`,
             'info',
         );
-        tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+        tick().then(() => chatInput()?.focus());
         return newId;
     }
 
@@ -3969,7 +3983,7 @@ import { listen } from '@tauri-apps/api/event';
             case 'k': case 'K':
                 e.preventDefault();
                 if (e.shiftKey) {
-                    const ibox = document.querySelector('.chat-wrap.on .ibox');
+                    const ibox = chatInput();
                     if (ibox) ibox.focus();
                 } else {
                     showPalette = !showPalette;
@@ -4123,7 +4137,7 @@ import { listen } from '@tauri-apps/api/event';
                     t.inputValue = `/sec-skill use ${result.id}`;
                     tabs = [...tabs];
                     setTimeout(() => {
-                        const el = document.querySelector('.chat-wrap.on .ibox');
+                        const el = chatInput();
                         if (el instanceof HTMLElement) el.focus();
                     }, 30);
                 }
@@ -4173,7 +4187,7 @@ import { listen } from '@tauri-apps/api/event';
                         t.inputValue = prompt;
                         tabs = [...tabs];
                         setTimeout(() => {
-                            const el = document.querySelector('.chat-wrap.on .ibox');
+                            const el = chatInput();
                             if (el instanceof HTMLElement) el.focus();
                         }, 30);
                         toast(isEN
@@ -10524,7 +10538,7 @@ times the SAME way, switch tool kind entirely.
         try { recomputePredictiveChips(tabId); } catch {}
         // Re-enfocar el input del tab activo para que el usuario pueda seguir escribiendo
         setTimeout(() => {
-            document.querySelector('.chat-wrap.on .ibox')?.focus();
+            chatInput()?.focus();
         }, 60);
         // PERF: kick off a background smart-digest regeneration for long tabs.
         // Runs only every 5 new turns and only when total > 12, so most short
@@ -11295,7 +11309,7 @@ if (Test-Path $src) {
             if (v === 'terminal') {
                 tick().then(() => {
                     scrollChat();
-                    document.querySelector('.chat-wrap.on .ibox')?.focus();
+                    chatInput()?.focus();
                 });
             }
         };
@@ -11928,7 +11942,7 @@ if (Test-Path $src) {
                 maxTokens: contextWindowFor(_swModel),
             });
         } catch (e) { console.warn('[+page] tab-switch snapshot failed:', e); }
-        tick().then(() => { scrollChat(); document.querySelector('.chat-wrap.on .ibox')?.focus(); });
+        tick().then(() => { scrollChat(); chatInput()?.focus(); });
     }}
     on:closetab={(e) => cerrarTab(e.detail.tabId, e.detail.event)}
     on:scrollleft={scrollTabsLeft}
@@ -12325,7 +12339,7 @@ if (Test-Path $src) {
                   if (e.detail.prompt.trim().startsWith('/')) {
                       process(activeTabId);
                   } else {
-                      tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+                      tick().then(() => chatInput()?.focus());
                   }
               }}
               on:reactmessage={(e) => {
@@ -12470,7 +12484,7 @@ if (Test-Path $src) {
               const _t = getTab(activeTabId);
               if (_t) { _t.inputValue = e.detail.text; refresh(); }
               setView('terminal');
-              tick().then(() => document.querySelector('.chat-wrap.on .ibox')?.focus());
+              tick().then(() => chatInput()?.focus());
           }}
         />
         {/if}
@@ -12872,7 +12886,7 @@ if (Test-Path $src) {
             const t = getTab(activeTabId);
             if (t) { t.inputValue = cmd; refresh(); }
             $showHistoryModal = false;
-            tick().then(() => { const el = document.querySelector('.chat-wrap.on .ibox'); if(el) el.focus(); });
+            tick().then(() => { const el = chatInput(); if(el) el.focus(); });
           }}
           role="button" tabindex="0" on:keydown={e => e.key==='Enter' && e.currentTarget.click()}>
           <span style="color:#334155;font-size:12px;">$</span>
@@ -12929,7 +12943,7 @@ if (Test-Path $src) {
                   : `Alerta: ${al.metric.toUpperCase()} al ${al.value}% en ${al.hostLabel} (umbral ${al.threshold}%). Diagnostica la causa raíz y sugiere cómo corregirlo.`;
                 refresh();
               }
-              tick().then(() => { const el = document.querySelector('.chat-wrap.on .ibox'); if (el) el.focus(); });
+              tick().then(() => { const el = chatInput(); if (el) el.focus(); });
             }}
             title={isEN ? 'Ask Lucy to diagnose this alert' : 'Pedir a Lucy que diagnostique esta alerta'}>
             → Ask Lucy

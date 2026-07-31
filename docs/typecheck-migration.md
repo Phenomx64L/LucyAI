@@ -57,7 +57,8 @@ npm run check:js   # this migration: checkJs, relaxed            — driving to 
 |---|---:|---:|---|
 | 2026-07-29 | 217 | 36 | Baseline |
 | 2026-07-29 | 128 | 21 | Phase 1 — `strokeWidth` → `stroke` |
-| 2026-07-29 | **115** | **12** | Phase 2a — the defects outside the monolith |
+| 2026-07-29 | 115 | 12 | Phase 2a — the defects outside the monolith |
+| 2026-07-29 | **80** | **11** | Phase 2b — `app.d.ts` globals + `chatInput()` |
 
 ### Phase 1 — the icon prop (done)
 
@@ -100,6 +101,29 @@ dead. They are required by the strict gate and only unused here because
 traded a conditional silencer for an unconditional one. Re-enabling
 `strictNullChecks` in this config was measured at **463 errors** — a separate
 and also worthwhile axis, but not this migration's.
+
+### Phase 2b — the monolith's DOM noise (done)
+
+Two systematic fixes, 35 errors, no behaviour change:
+
+- **`src/app.d.ts`** declares the globals Lucy installs on `window` —
+  `__lucyFreezeLog`, `_lucyRunFix`, `selectRunbooksDir`, `__lucyCheckpoints`,
+  `_lucyJumpToMemoryId`, `__lucy_capture_evidence`, plus the Web Speech API
+  that TypeScript's DOM lib still omits. 17 errors, and more usefully it is now
+  the only written record of that surface. Keep the types conservative: a
+  declaration that overstates what a global holds invents guarantees the
+  assignment site never made.
+
+- **`chatInput()`** replaces `document.querySelector('.chat-wrap.on .ibox')`,
+  which appeared verbatim **19 times**. `querySelector` returns `Element`,
+  which has no `focus()`, so 14 of those were type errors. Two spots narrowed
+  correctly with `instanceof HTMLElement` and the rest called `?.focus()`
+  straight off the Element — the file held both patterns at once. One accessor
+  fixes the type and gives the selector a single home.
+
+The lesson from both phases holds: **group by message before editing.** Phase 1
+was 89 errors and one `sed`; this was 35 and two edits. Going file by file
+would have been days of work for the same result.
 
 ### Remaining, in suggested order
 
