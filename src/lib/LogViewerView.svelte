@@ -178,7 +178,7 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><Search size={13} strokeWidth={2}/> Log Viewer</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><Search size={13} stroke={2}/> Log Viewer</div>
     <div style="display:flex;align-items:center;gap:8px;flex:1;margin-left:12px;min-width:0;">
       <select class="view-select" bind:value={logSelectedHost} style="flex-shrink:0;">
         <option value="local">⊡ Local</option>
@@ -217,7 +217,7 @@
     </label>
     <button class="view-btn" on:click={runAnalysis} disabled={analysisLoading || !logLines.length}
         style="display:flex;align-items:center;gap:4px;font-size:11px;" title={isEN ? 'Analyze patterns' : 'Analizar patrones'}>
-        <ChartBar size={12} strokeWidth={2}/> {analysisLoading ? '...' : (isEN ? 'Analyze' : 'Analizar')}
+        <ChartBar size={12} stroke={2}/> {analysisLoading ? '...' : (isEN ? 'Analyze' : 'Analizar')}
     </button>
     <!-- Sprint B #4 — Multi-host log timeline. Fetches the same path from
          several hosts in parallel and renders entries interleaved by ts. -->
@@ -232,7 +232,7 @@
     {/if}
     <span style="font-size:10px;color:var(--txt3);margin-left:auto;white-space:nowrap;">{filteredLog.length} {isEN ? 'lines' : 'líneas'}{logFilter?` / ${logLines.length} total`:''}</span>
   </div>
-  {#if logError}<div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {logError}</div>{/if}
+  {#if logError}<div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} stroke={2}/> {logError}</div>{/if}
   <div class="log-lines" bind:this={logLinesEl}>
     {#if !logLines.length && !logLoading}
       <div style="padding:30px;text-align:center;color:var(--txt3);font-style:italic;font-size:12px;">
@@ -253,7 +253,7 @@
   {#if showAnalysis && analysisResult}
   <div class="la-panel">
     <div class="la-hdr">
-        <ChartBar size={13} strokeWidth={2}/>
+        <ChartBar size={13} stroke={2}/>
         <span>{isEN ? 'Log Analysis' : 'Análisis de Log'}</span>
         <span class="la-meta">{analysisResult.total_lines} {isEN ? 'lines' : 'líneas'} · {analysisResult.parsed_lines} parsed · format: {analysisResult.format_detected}</span>
         <button class="la-close" on:click={() => showAnalysis = false}>✕</button>
@@ -317,7 +317,7 @@
     {/if}
   </div>
   {/if}
-  {#if analysisError}<div class="view-error" style="margin:0 16px 8px;"><AlertTriangle size={12} strokeWidth={2}/> {analysisError}</div>{/if}
+  {#if analysisError}<div class="view-error" style="margin:0 16px 8px;"><AlertTriangle size={12} stroke={2}/> {analysisError}</div>{/if}
 </div>
 
 <!-- Sprint B #4 — Multi-host log timeline overlay -->

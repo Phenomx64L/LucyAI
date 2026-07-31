@@ -694,12 +694,12 @@
                             <Plus size={16} /> {lang.add}
                         </button>
                         <button class="btn-add" style="margin-left:8px;background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;gap:5px;" on:click={openAIPrompt} disabled={loading && aiPromptOpen}>
-                            <Sparkles size={13} strokeWidth={2}/> Generar con IA
+                            <Sparkles size={13} stroke={2}/> Generar con IA
                         </button>
 
                         {#if aiPromptOpen}
                         <div style="margin-top:14px;padding:14px;background:rgba(124,58,237,.08);border:1px solid rgba(124,58,237,.3);border-radius:8px;">
-                            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#c4b5fd;display:flex;align-items:center;gap:6px;"><Sparkles size={13} strokeWidth={2}/> Generar skill con IA</div>
+                            <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#c4b5fd;display:flex;align-items:center;gap:6px;"><Sparkles size={13} stroke={2}/> Generar skill con IA</div>
                             <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Describe qué quieres que haga la skill. Lucy la generará automáticamente con script PowerShell, parámetros, triggers y tags.</div>
                             <input type="text" bind:value={aiIdea}
                                 placeholder='Ej: "reporte de uso de disco", "reiniciar IIS", "listar procesos con más CPU"'
@@ -710,7 +710,7 @@
                             {/if}
                             <div style="display:flex;gap:8px;margin-top:10px;">
                                 <button class="btn-add" style="background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;gap:5px;" on:click={generateSkillWithAI} disabled={loading}>
-                                    {#if loading}↻ Generando ({loadingSecs}s)…{:else}<Sparkles size={12} strokeWidth={2}/> Generar{/if}
+                                    {#if loading}↻ Generando ({loadingSecs}s)…{:else}<Sparkles size={12} stroke={2}/> Generar{/if}
                                 </button>
                                 <button class="btn-cancel" on:click={() => { aiPromptOpen = false; loading = false; }} disabled={loading}>
                                     Cancelar

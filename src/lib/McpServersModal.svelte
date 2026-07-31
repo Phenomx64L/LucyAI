@@ -401,7 +401,7 @@
       <div class="modal-card">
       <header class="hdr">
         <div class="hdr-left">
-          <span class="mcp-hdr-ico"><Plug size={20} strokeWidth={1.8} color="var(--acc, #10b981)" /></span>
+          <span class="mcp-hdr-ico"><Plug size={20} stroke={1.8} color="var(--acc, #10b981)" /></span>
           <div>
             <h2>{T.title}</h2>
             <p class="sub">{T.subtitle}</p>

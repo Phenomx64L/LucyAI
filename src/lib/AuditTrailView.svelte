@@ -159,7 +159,7 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title"><ClipboardList size={13} strokeWidth={2}/> {isEN ? 'Audit Trail' : 'Registro de Auditoría'}</div>
+    <div class="view-title"><ClipboardList size={13} stroke={2}/> {isEN ? 'Audit Trail' : 'Registro de Auditoría'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={filterHost}>
         <option value="all">{isEN ? 'All Hosts' : 'Todos los hosts'}</option>
@@ -174,9 +174,9 @@
         <option value="compliance">⬡ Compliance</option>
         <option value="broadcast">◎ Broadcast</option>
       </select>
-      <button class="view-btn" on:click={exportTrail} title="Export CSV" style="display:flex;align-items:center;gap:5px;"><Download size={12} strokeWidth={2}/> CSV</button>
-      <button class="view-btn" on:click={exportPdf} disabled={exportingPdf} title="Export PDF" style="display:flex;align-items:center;gap:5px;">{#if exportingPdf}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF</button>
-      <button class="view-btn" on:click={clearTrail} title="Clear" style="display:flex;align-items:center;justify-content:center;padding:4px 8px;"><Trash2 size={13} strokeWidth={1.8}/></button>
+      <button class="view-btn" on:click={exportTrail} title="Export CSV" style="display:flex;align-items:center;gap:5px;"><Download size={12} stroke={2}/> CSV</button>
+      <button class="view-btn" on:click={exportPdf} disabled={exportingPdf} title="Export PDF" style="display:flex;align-items:center;gap:5px;">{#if exportingPdf}↻{:else}<FileText size={12} stroke={2}/>{/if} PDF</button>
+      <button class="view-btn" on:click={clearTrail} title="Clear" style="display:flex;align-items:center;justify-content:center;padding:4px 8px;"><Trash2 size={13} stroke={1.8}/></button>
     </div>
   </div>
 

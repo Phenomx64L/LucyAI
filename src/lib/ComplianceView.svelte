@@ -160,18 +160,18 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ShieldCheck size={13} strokeWidth={2}/> {isEN ? 'Compliance Scanning' : 'Auditoría de Compliance'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ShieldCheck size={13} stroke={2}/> {isEN ? 'Compliance Scanning' : 'Auditoría de Compliance'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={selectedHost}>
         <option value="local">⊡ Local ({hostName})</option>
         {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       <button class="view-btn" on:click={runScan} disabled={scanning} style="display:flex;align-items:center;gap:5px;">
-        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ShieldCheck size={12} strokeWidth={2}/> Run CIS Scan{/if}
+        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ShieldCheck size={12} stroke={2}/> Run CIS Scan{/if}
       </button>
       {#if report}
         <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF" style="display:flex;align-items:center;gap:5px;">
-          {#if exporting}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF
+          {#if exporting}↻{:else}<FileText size={12} stroke={2}/>{/if} PDF
         </button>
         <span style="font-size:10px;color:#4a5a6a;">{checks.length} checks · {relTime(report.timestamp)}</span>
       {/if}
@@ -179,7 +179,7 @@
   </div>
 
   {#if error}
-    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {error}</div>
+    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} stroke={2}/> {error}</div>
   {/if}
 
   {#if report}
@@ -225,7 +225,7 @@
           <span class="comp-cat">{r.category}</span>
         </div>
         {#if !r.passed && r.remediation}
-        <div class="comp-item-rem" style="display:flex;align-items:flex-start;gap:5px;"><Lightbulb size={11} strokeWidth={2}/> {r.remediation}</div>
+        <div class="comp-item-rem" style="display:flex;align-items:flex-start;gap:5px;"><Lightbulb size={11} stroke={2}/> {r.remediation}</div>
         {/if}
         {#if r.stdout}
         <details class="comp-item-detail">

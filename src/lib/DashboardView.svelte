@@ -650,7 +650,7 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;{dashSelectedHost!=='local'?(()=>{const hc=hosts.find(h=>h.id===dashSelectedHost);return hc?.color?`border-left:3px solid ${hc.color};padding-left:10px;`:'';})():''}"><BarChart3 size={13} strokeWidth={2}/> {isEN ? 'System Dashboard' : 'Dashboard de Sistema'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;{dashSelectedHost!=='local'?(()=>{const hc=hosts.find(h=>h.id===dashSelectedHost);return hc?.color?`border-left:3px solid ${hc.color};padding-left:10px;`:'';})():''}"><BarChart3 size={13} stroke={2}/> {isEN ? 'System Dashboard' : 'Dashboard de Sistema'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={dashSelectedHost} on:change={onDashHostChange}>
         <option value="local">⊡ Local ({hostName})</option>
@@ -663,14 +663,14 @@
       {/if}
       <button class="view-btn" on:click={refreshDash} disabled={dashLoading} title={isEN ? 'Refresh now' : 'Actualizar ahora'}>{dashLoading?'⏳':'↻'}</button>
       <button class="view-btn" on:click={() => showAlertsModal=true} title={isEN ? 'Configure proactive alerts' : 'Configurar alertas proactivas'}
-        style="position:relative;display:flex;align-items:center;gap:4px;"><Bell size={13} strokeWidth={1.8}/>{#if activeAlerts.length}<span class="alert-badge-btn">{activeAlerts.length}</span>{/if}</button>
+        style="position:relative;display:flex;align-items:center;gap:4px;"><Bell size={13} stroke={1.8}/>{#if activeAlerts.length}<span class="alert-badge-btn">{activeAlerts.length}</span>{/if}</button>
       {#if dashLastUpdate}
         <span class="dash-last-update">{isEN ? 'Upd.' : 'Act.'} {dashLastUpdate}</span>
       {/if}
     </div>
   </div>
   {#if dashError}
-    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {dashError}</div>
+    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} stroke={2}/> {dashError}</div>
   {:else if !dashMetrics && dashLoading}
     <div class="dash-skeleton">
       <div class="dash-cards">
@@ -705,7 +705,7 @@
   <div class="alert-bar">
     {#each activeAlerts as al}
     <div class="alert-item">
-      <span class="alert-item-ico"><AlertTriangle size={13} strokeWidth={2} style="color:var(--red)"/></span>
+      <span class="alert-item-ico"><AlertTriangle size={13} stroke={2} style="color:var(--red)"/></span>
       <span><b>{al.metric}</b> {isEN ? 'on' : 'en'} <b>{al.hostLabel}</b>: <span style="color:var(--red);font-weight:700;">{al.value}%</span> ({isEN ? 'threshold' : 'umbral'} {al.threshold}%) · {al.ts}</span>
       <button class="alert-dismiss" on:click={() => activeAlerts = activeAlerts.filter(x=>x.id!==al.id)} title={isEN ? 'Dismiss' : 'Descartar'}>✕</button>
     </div>
@@ -724,7 +724,7 @@
             <span class="anomaly-badge"
                   class:extreme={anomalyCpu.severity === 'extreme'}
                   title={isEN ? `Statistical anomaly: ${anomalyCpu.message}` : `Anomalía estadística: ${anomalyCpu.message}`}>
-              <Heartbeat size={10} strokeWidth={2.5}/>
+              <Heartbeat size={10} stroke={2.5}/>
               {Number.isFinite(anomalyCpu.sigma) ? Math.abs(anomalyCpu.sigma).toFixed(1) + 'σ' : '∞σ'}
             </span>
           {/if}
@@ -760,7 +760,7 @@
             <span class="anomaly-badge"
                   class:extreme={anomalyRam.severity === 'extreme'}
                   title={isEN ? `Statistical anomaly: ${anomalyRam.message}` : `Anomalía estadística: ${anomalyRam.message}`}>
-              <Heartbeat size={10} strokeWidth={2.5}/>
+              <Heartbeat size={10} stroke={2.5}/>
               {Number.isFinite(anomalyRam.sigma) ? Math.abs(anomalyRam.sigma).toFixed(1) + 'σ' : '∞σ'}
             </span>
           {/if}
@@ -791,7 +791,7 @@
         <div class="dc-sub">{dashMetrics.os}</div>
         <div class="dc-sub">Uptime: {dashMetrics.uptime_h}h</div>
         {#if metricsHistory[dashSelectedHost]?.length > 1}
-        <div class="dc-sub" style="margin-top:4px;color:#4ade80;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} strokeWidth={2}/> {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
+        <div class="dc-sub" style="margin-top:4px;color:#4ade80;display:flex;align-items:center;gap:4px;"><TrendingUp size={11} stroke={2}/> {metricsHistory[dashSelectedHost].length} {isEN ? 'samples' : 'muestras'}</div>
         {/if}
       </div>
 
@@ -1030,7 +1030,7 @@
             {#if sectionKey === 'storage' && anomalyDisk}
               <span class="anomaly-badge" class:extreme={anomalyDisk.severity === 'extreme'}
                     title={isEN ? `Statistical anomaly: ${anomalyDisk.message}` : `Anomalía estadística: ${anomalyDisk.message}`}>
-                <Heartbeat size={10} strokeWidth={2.5}/> {Number.isFinite(anomalyDisk.sigma) ? Math.abs(anomalyDisk.sigma).toFixed(1) + 'σ' : '∞σ'}
+                <Heartbeat size={10} stroke={2.5}/> {Number.isFinite(anomalyDisk.sigma) ? Math.abs(anomalyDisk.sigma).toFixed(1) + 'σ' : '∞σ'}
               </span>
             {/if}
             <button class="ds-hide-btn" on:click={() => toggleSectionHidden(sectionKey)}

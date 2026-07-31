@@ -272,7 +272,7 @@
         <h2>{lang.title}</h2>
         <div class="controls">
             <button class="budget-cta" type="button" on:click={openBudgetModal} title={lang.editBudget}>
-                <Settings size={13} strokeWidth={2}/>
+                <Settings size={13} stroke={2}/>
                 <span>{lang.editBudget}</span>
             </button>
             <!-- Reset history — destructive, hence the explicit color treatment + modal confirmation. -->
@@ -306,10 +306,10 @@
     <!-- Budget Alert + inline action button -->
     {#if budgetAlert && $tokenBudgetConfig.enabled}
         <div class="budget-alert" style="display:flex;align-items:center;gap:8px;">
-            <AlertTriangle size={13} strokeWidth={2}/>
+            <AlertTriangle size={13} stroke={2}/>
             <span>{lang.budgetAlert}: {budgetPercentage}% {lang.spent}</span>
             <button class="budget-alert-action" type="button" on:click={openBudgetModal}>
-                <Settings size={11} strokeWidth={2}/> {lang.editBudget}
+                <Settings size={11} stroke={2}/> {lang.editBudget}
             </button>
         </div>
     {/if}
@@ -349,7 +349,7 @@
                                 on:click|stopPropagation={openBudgetModal}
                                 title={lang.editBudget}
                                 aria-label={lang.editBudget}>
-                            <Settings size={13} strokeWidth={2}/>
+                            <Settings size={13} stroke={2}/>
                             <span class="budget-edit-text">{lang.editBudget}</span>
                         </button>
                     </div>
@@ -374,7 +374,7 @@
                         {isEN ? 'Tracking disabled' : 'Control desactivado'}
                     </div>
                     <button class="budget-enable-btn" type="button" on:click={openBudgetModal}>
-                        <Settings size={11} strokeWidth={2}/> {lang.editBudget}
+                        <Settings size={11} stroke={2}/> {lang.editBudget}
                     </button>
                 </div>
             {/if}
@@ -542,7 +542,7 @@
                     {lang.cancel}
                 </button>
                 <button class="bm-btn bm-save" type="button" on:click={saveBudget}>
-                    <Check size={13} strokeWidth={2.5}/> {lang.save}
+                    <Check size={13} stroke={2.5}/> {lang.save}
                 </button>
             </div>
         </div>

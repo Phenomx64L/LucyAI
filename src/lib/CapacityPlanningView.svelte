@@ -63,14 +63,14 @@
 
 <div class="view-wrap">
     <div class="view-hdr">
-        <div class="view-title"><TrendingUp size={13} strokeWidth={2}/> {isEN ? 'Capacity Planning' : 'Planificación de Capacidad'}</div>
+        <div class="view-title"><TrendingUp size={13} stroke={2}/> {isEN ? 'Capacity Planning' : 'Planificación de Capacidad'}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
             {#each ranges as r}
                 <button class="cp-range-btn" class:active={selectedRange === r.value}
                     on:click={() => selectRange(r.value)}>{r.label}</button>
             {/each}
             <button class="view-btn" on:click={loadTrends} disabled={loading} style="display:flex;align-items:center;gap:4px;">
-                <RefreshCw size={12} strokeWidth={2}/> {loading ? '...' : 'Refresh'}
+                <RefreshCw size={12} stroke={2}/> {loading ? '...' : 'Refresh'}
             </button>
         </div>
     </div>
@@ -81,7 +81,7 @@
 
     {#if !trend && !loading && !error}
         <div class="cp-empty">
-            <Clock size={32} strokeWidth={1.2}/>
+            <Clock size={32} stroke={1.2}/>
             <p>{isEN ? 'No metrics data yet. Samples are recorded automatically every 5 minutes.' : 'Sin datos aún. Las muestras se graban automáticamente cada 5 minutos.'}</p>
         </div>
     {/if}
@@ -92,14 +92,14 @@
         <div class="cp-projections" in:staggerIn={{ index: 0, step: 60, duration: 200 }}>
             <div class="cp-proj-card" class:critical={diskDays !== null && diskDays < 14} class:warning={diskDays !== null && diskDays >= 14 && diskDays < 30}>
                 {#if hasCriticalProjection && diskDays !== null && diskDays < 14}
-                    <AlertTriangle size={14} strokeWidth={2}/>
+                    <AlertTriangle size={14} stroke={2}/>
                 {/if}
                 <span class="cp-proj-label">{isEN ? 'DISK FULL IN' : 'DISCO LLENO EN'}</span>
                 <span class="cp-proj-value">{formatDaysUntil(diskDays)}</span>
             </div>
             <div class="cp-proj-card" class:critical={ramDays !== null && ramDays < 14} class:warning={ramDays !== null && ramDays >= 14 && ramDays < 30}>
                 {#if ramDays !== null && ramDays < 14}
-                    <AlertTriangle size={14} strokeWidth={2}/>
+                    <AlertTriangle size={14} stroke={2}/>
                 {/if}
                 <span class="cp-proj-label">{isEN ? 'RAM CRITICAL IN' : 'RAM CRITICA EN'}</span>
                 <span class="cp-proj-value">{formatDaysUntil(ramDays)}</span>

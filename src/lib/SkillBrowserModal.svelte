@@ -54,7 +54,7 @@
   <div class="sk-modal">
     <!-- Header -->
     <div class="sk-hdr">
-      <span class="sk-hdr-ico"><Books size={18} strokeWidth={1.9} color="var(--acc, #10b981)"/></span>
+      <span class="sk-hdr-ico"><Books size={18} stroke={1.9} color="var(--acc, #10b981)"/></span>
       <span class="sk-hdr-title">{isEN ? 'Skill Browser' : 'Explorador de Skills'}</span>
       <button class="sk-close" on:click={close}>✕</button>
     </div>

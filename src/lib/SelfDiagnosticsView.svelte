@@ -144,7 +144,7 @@
 
 <div class="view-wrap">
     <div class="view-hdr">
-        <div class="view-title"><Stethoscope size={13} strokeWidth={2}/> {isEN ? 'Self-Diagnostics' : 'Auto-Diagnóstico'}</div>
+        <div class="view-title"><Stethoscope size={13} stroke={2}/> {isEN ? 'Self-Diagnostics' : 'Auto-Diagnóstico'}</div>
         <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
             {#if report}
                 <span class="sd-overall" style="color:{statusColorCSS(report.overall_status)}">
@@ -153,7 +153,7 @@
                 <span class="sd-elapsed">{report.total_elapsed_ms}ms</span>
             {/if}
             <button class="view-btn" on:click={runDiag} disabled={loading} style="display:flex;align-items:center;gap:4px;">
-                <RefreshCw size={12} strokeWidth={2}/> {loading ? (isEN ? 'Running...' : 'Ejecutando...') : (isEN ? 'Re-run' : 'Re-ejecutar')}
+                <RefreshCw size={12} stroke={2}/> {loading ? (isEN ? 'Running...' : 'Ejecutando...') : (isEN ? 'Re-run' : 'Re-ejecutar')}
             </button>
         </div>
     </div>
@@ -175,13 +175,13 @@
         <div class="sd-banner" class:ok={report.overall_status === 'ok'} class:warning={report.overall_status === 'warning'} class:err={report.overall_status === 'error'}
              in:staggerIn={{ index: 0, step: 40, duration: 200 }}>
             {#if report.overall_status === 'ok'}
-                <CircleCheck size={20} strokeWidth={2}/>
+                <CircleCheck size={20} stroke={2}/>
                 <span>{isEN ? 'All systems healthy' : 'Todos los sistemas saludables'}</span>
             {:else if report.overall_status === 'warning'}
-                <AlertTriangle size={20} strokeWidth={2}/>
+                <AlertTriangle size={20} stroke={2}/>
                 <span>{isEN ? 'Some checks have warnings' : 'Algunos chequeos tienen advertencias'}</span>
             {:else}
-                <CircleX size={20} strokeWidth={2}/>
+                <CircleX size={20} stroke={2}/>
                 <span>{isEN ? 'Issues detected — review below' : 'Se detectaron problemas — revisar abajo'}</span>
             {/if}
             <span class="sd-banner-time">{new Date(report.timestamp * 1000).toLocaleString()}</span>
@@ -206,7 +206,7 @@
                                 on:click={() => runRepair(check, _repair)}
                                 disabled={repairing.has(check.name)}
                                 title={_repair.label}>
-                            <Wrench size={11} strokeWidth={2}/>
+                            <Wrench size={11} stroke={2}/>
                             <span>{repairing.has(check.name) ? (isEN ? 'Repairing…' : 'Reparando…') : _repair.label}</span>
                         </button>
                     {/if}

@@ -366,7 +366,7 @@
         <div class="modal-content" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
             <div class="modal-header">
                 <div class="header-content">
-                    <span class="pcm-hdr-ico"><Key size={22} strokeWidth={1.8} color="var(--acc, #10b981)" /></span>
+                    <span class="pcm-hdr-ico"><Key size={22} stroke={1.8} color="var(--acc, #10b981)" /></span>
                     <div class="header-text">
                         <h2>{l.title}</h2>
                         <p class="subtitle">{l.subtitle}</p>
@@ -383,7 +383,7 @@
                         class:active={activeTab === 'anthropic'}
                         on:click={() => activeTab = 'anthropic'}
                     >
-                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconSparkles size={14} strokeWidth={1.8} color="#d97757" />Anthropic</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconSparkles size={14} stroke={1.8} color="#d97757" />Anthropic</span>
                         {#if credentials.anthropic.configured}
                             <CheckCircle size={14} color="#10b981" />
                         {/if}
@@ -393,7 +393,7 @@
                         class:active={activeTab === 'gemini'}
                         on:click={() => activeTab = 'gemini'}
                     >
-                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBrandGoogle size={14} strokeWidth={1.8} color="#4285f4" />Gemini</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBrandGoogle size={14} stroke={1.8} color="#4285f4" />Gemini</span>
                         {#if credentials.gemini.configured}
                             <CheckCircle size={14} color="#10b981" />
                         {/if}
@@ -403,7 +403,7 @@
                         class:active={activeTab === 'openai'}
                         on:click={() => activeTab = 'openai'}
                     >
-                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBrandOpenai size={14} strokeWidth={1.8} color="#10a37f" />OpenAI</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBrandOpenai size={14} stroke={1.8} color="#10a37f" />OpenAI</span>
                         {#if credentials.openai.configured}
                             <CheckCircle size={14} color="#10b981" />
                         {/if}
@@ -433,7 +433,7 @@
                         class:active={activeTab === 'nvidia'}
                         on:click={() => activeTab = 'nvidia'}
                     >
-                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBolt size={14} strokeWidth={1.8} color="#76b900" />NVIDIA</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconBolt size={14} stroke={1.8} color="#76b900" />NVIDIA</span>
                         {#if credentials.nvidia.configured}
                             <CheckCircle size={14} color="#10b981" />
                         {/if}
@@ -443,7 +443,7 @@
                         class:active={activeTab === 'ollama'}
                         on:click={() => activeTab = 'ollama'}
                     >
-                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconServer2 size={14} strokeWidth={1.8} color="#a78bfa" />Ollama</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><IconServer2 size={14} stroke={1.8} color="#a78bfa" />Ollama</span>
                         {#if credentials.ollama.configured}
                             <CheckCircle size={14} color="#10b981" />
                         {/if}
@@ -454,7 +454,7 @@
                         on:click={() => activeTab = 'tavily'}
                         title="Web search backend for <TOOL>search_web</TOOL>"
                     >
-                        <span style="display:inline-flex;align-items:center;gap:6px;"><Globe size={14} strokeWidth={1.8} color="#3b9eff" />Tavily</span>
+                        <span style="display:inline-flex;align-items:center;gap:6px;"><Globe size={14} stroke={1.8} color="#3b9eff" />Tavily</span>
                         {#if credentials.tavily.configured}
                             <CheckCircle size={14} color="#10b981" />
                         {/if}

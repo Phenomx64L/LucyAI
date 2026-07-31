@@ -192,7 +192,7 @@
                     disabled={loading || saving}
                     on:keydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadFile(); } }} />
                 <button class="rfd-btn-mini" on:click={loadFile} disabled={loading || saving} title={isEN ? 'Load (Enter)' : 'Cargar (Enter)'}>
-                    <Refresh size={13} strokeWidth={2}/>
+                    <Refresh size={13} stroke={2}/>
                 </button>
             </div>
             <button class="rfd-close" on:click={close} title="Esc">✕</button>

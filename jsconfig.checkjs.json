@@ -1,0 +1,31 @@
+{
+  // ── Second type-check pass: the untyped half of the codebase ──────────────
+  //
+  // `jsconfig.json` runs `strict: true` but `checkJs: false`, so its green "0
+  // errors" only ever covered files with a typed script block. Everything on
+  // plain `<script>` — including +page.svelte, CockpitShell and AgentWorkspace,
+  // ~16.6 kLOC of the Terminal IA surface — was never looked at.
+  //
+  // That blind spot shipped real defects, all of the same shape and all of them
+  // caught by this config: `/compare` writing to the undefined return of
+  // `addMsg`, `skillId` reading `.id` off a type whose id lives under `.meta`,
+  // an `atts` mirror type still describing its pre-v1.8.1 shape, `esc` used
+  // ~2000 lines above its declaration.
+  //
+  // WHY `strict: false` HERE. With the project's `strict: true` this pass
+  // reports 2 498 errors; with it off, 217. The 2 281-error difference is
+  // almost entirely `noImplicitAny` — unannotated callback parameters — and not
+  // one of the defects above needed it. This config buys the bugs at a tenth of
+  // the cost. The `.ts` files keep full strictness from `jsconfig.json`; this is
+  // an ADDITIONAL pass, not a replacement, and relaxing a rule never turns a
+  // passing file red.
+  //
+  // Run it with `npm run check:js`. It is NOT a CI gate yet — see
+  // docs/typecheck-migration.md for the remaining count and the order of work.
+  // Wire it into CI the moment it reaches zero, or it will silently rot back.
+  "extends": "./jsconfig.json",
+  "compilerOptions": {
+    "checkJs": true,
+    "strict": false
+  }
+}

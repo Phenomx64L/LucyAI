@@ -128,7 +128,7 @@
 <div class="scm-bg" role="presentation" on:click={close} on:keydown={(e) => { if (e.key === 'Escape') close(); }}>
   <div class="scm-box" role="dialog" aria-modal="true" tabindex="-1" on:click|stopPropagation>
     <div class="scm-hdr">
-      <span class="scm-hdr-ico"><ShieldCheck size={20} strokeWidth={1.9} color="var(--acc, #10b981)"/></span>
+      <span class="scm-hdr-ico"><ShieldCheck size={20} stroke={1.9} color="var(--acc, #10b981)"/></span>
       <div class="scm-hdr-text">
         <h2>{isEN ? 'Skills Manager' : 'Gestor de Skills'}</h2>
         <p class="scm-sub">{isEN

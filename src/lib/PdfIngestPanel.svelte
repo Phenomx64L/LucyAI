@@ -180,7 +180,7 @@
     <!-- Header -->
     <div class="pdf-header">
         <div class="hd-left">
-            <span class="hd-icon"><FileText size={15} strokeWidth={1.9} color="#818cf8"/></span>
+            <span class="hd-icon"><FileText size={15} stroke={1.9} color="#818cf8"/></span>
             <span class="hd-title">{t('Documentos PDF', 'PDF Documents')}</span>
             {#if docs.length > 0}
                 <span class="hd-badge">{docs.length}</span>

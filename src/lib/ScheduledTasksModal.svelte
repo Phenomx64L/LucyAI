@@ -169,7 +169,7 @@
              use:focusTrap on:click|stopPropagation>
             <div class="st-hdr">
                 <div class="st-hdr-l">
-                    <span class="st-hdr-ico"><Clock size={18} strokeWidth={2} /></span>
+                    <span class="st-hdr-ico"><Clock size={18} stroke={2} /></span>
                     <div>
                         <h3>{t.title}</h3>
                         <span class="st-sub">{t.subtitle}</span>
@@ -203,7 +203,7 @@
                         <div class="st-form-foot">
                             <button class="st-btn st-cancel" on:click={cancelForm}>{t.cancel}</button>
                             <button class="st-btn st-save" on:click={save}>
-                                <Check size={13} strokeWidth={2.5} /> {t.save}
+                                <Check size={13} stroke={2.5} /> {t.save}
                             </button>
                         </div>
                     </div>
@@ -211,7 +211,7 @@
 
                 {#if !formOpen}
                     <button class="st-add" on:click={openNew}>
-                        <Plus size={14} strokeWidth={2.5} /> {t.add}
+                        <Plus size={14} stroke={2.5} /> {t.add}
                     </button>
                 {/if}
 
@@ -221,7 +221,7 @@
                     <div class="st-error">{error}</div>
                 {:else if tasks.length === 0}
                     <div class="st-empty">
-                        <Calendar size={32} strokeWidth={1.4} style="opacity:.4;" />
+                        <Calendar size={32} stroke={1.4} style="opacity:.4;" />
                         <p>{t.empty}</p>
                         <span>{t.empty_hint}</span>
                     </div>
@@ -255,10 +255,10 @@
                                 </div>
                                 <div class="st-item-r">
                                     <button class="st-mini" title={task.enabled ? t.disable : t.enable} on:click={() => toggle(task)}>
-                                        {#if task.enabled}<Pause size={13} strokeWidth={2} />{:else}<Play size={13} strokeWidth={2} />{/if}
+                                        {#if task.enabled}<Pause size={13} stroke={2} />{:else}<Play size={13} stroke={2} />{/if}
                                     </button>
                                     <button class="st-mini st-del" title={t.delete} on:click={() => remove(task)}>
-                                        <Trash2 size={13} strokeWidth={2} />
+                                        <Trash2 size={13} stroke={2} />
                                     </button>
                                 </div>
                             </div>

@@ -112,7 +112,7 @@
 <div class="pm-overlay" on:click|self={close}>
   <div class="pm-modal">
     <div class="pm-hdr">
-      <span class="pm-hdr-ico"><User size={16} strokeWidth={1.9} color="var(--acc, #10b981)"/></span>
+      <span class="pm-hdr-ico"><User size={16} stroke={1.9} color="var(--acc, #10b981)"/></span>
       <span class="pm-title">{isEN ? 'Manage Profiles' : 'Gestionar Perfiles'}</span>
       <div style="display:flex;gap:6px;margin-left:auto;">
         <button class="pm-btn sm" on:click={exportProfiles} title="Export JSON">⬇ JSON</button>
@@ -126,7 +126,7 @@
     </div>
 
     {#if importError}
-    <div class="pm-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {importError}</div>
+    <div class="pm-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} stroke={2}/> {importError}</div>
     {/if}
 
     {#if showForm}
@@ -173,13 +173,13 @@
           <div class="pm-item-name">{p.name}</div>
           <div class="pm-item-meta">{p.hostIds.length} hosts · {isEN ? 'Created' : 'Creado'} {new Date(p.createdAt).toLocaleDateString()}</div>
         </div>
-        <button class="pm-btn sm" on:click={() => openEdit(p)} style="display:flex;align-items:center;justify-content:center;"><Pencil size={12} strokeWidth={2}/></button>
-        <button class="pm-btn sm danger" on:click={() => deleteProfile(p.id)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} strokeWidth={2}/></button>
+        <button class="pm-btn sm" on:click={() => openEdit(p)} style="display:flex;align-items:center;justify-content:center;"><Pencil size={12} stroke={2}/></button>
+        <button class="pm-btn sm danger" on:click={() => deleteProfile(p.id)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} stroke={2}/></button>
       </div>
       {/each}
       {#if $profiles.length === 0 && !showForm}
       <div class="pm-empty">
-        <div style="font-size:32px;margin-bottom:8px;display:flex;justify-content:center;"><User size={32} strokeWidth={1.5} style="color:var(--txt3)"/></div>
+        <div style="font-size:32px;margin-bottom:8px;display:flex;justify-content:center;"><User size={32} stroke={1.5} style="color:var(--txt3)"/></div>
         <div>{isEN ? 'No profiles yet. Create one to group your hosts.' : 'Sin perfiles. Crea uno para agrupar tus hosts.'}</div>
         <button class="pm-btn accent" style="margin-top:12px;" on:click={openNew}>+ {isEN ? 'Create Profile' : 'Crear Perfil'}</button>
       </div>

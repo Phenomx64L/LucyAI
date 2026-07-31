@@ -261,14 +261,14 @@
 
 <div class="view-wrap">
   <div class="view-hdr">
-    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ScanSearch size={13} strokeWidth={2}/> {isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura'}</div>
+    <div class="view-title" style="display:flex;align-items:center;gap:6px;"><ScanSearch size={13} stroke={2}/> {isEN ? 'Infrastructure Inventory' : 'Inventario de Infraestructura'}</div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;">
       <select class="view-select" bind:value={selectedHost}>
         <option value="local">⊡ Local ({hostName})</option>
         {#each hosts as h}<option value={h.id}>{h.type==='windows'?'⊡':'◈'} {h.name}</option>{/each}
       </select>
       <button class="view-btn" on:click={runScan} disabled={scanning} style="display:flex;align-items:center;gap:5px;">
-        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ScanSearch size={12} strokeWidth={2}/> {isEN ? 'Scan' : 'Escanear'}{/if}
+        {#if scanning}↻ {isEN ? 'Scanning...' : 'Escaneando...'}{:else}<ScanSearch size={12} stroke={2}/> {isEN ? 'Scan' : 'Escanear'}{/if}
       </button>
       {#if snapshot}
         <!-- Sprint B #2 — Drift detection group: baseline save + drift compute -->
@@ -295,7 +295,7 @@
           {#if cveScanning}↻{:else}🛡{/if} CVEs
         </button>
         <button class="view-btn" on:click={exportPdf} disabled={exporting} title="Export PDF" style="display:flex;align-items:center;gap:5px;">
-          {#if exporting}↻{:else}<FileText size={12} strokeWidth={2}/>{/if} PDF
+          {#if exporting}↻{:else}<FileText size={12} stroke={2}/>{/if} PDF
         </button>
         <span style="font-size:10px;color:#4a5a6a;">{relTime(snapshot.timestamp)}</span>
       {/if}
@@ -303,7 +303,7 @@
   </div>
 
   {#if error}
-    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} strokeWidth={2}/> {error}</div>
+    <div class="view-error" style="display:flex;align-items:center;gap:6px;"><AlertTriangle size={12} stroke={2}/> {error}</div>
   {/if}
 
   {#if snapshot}

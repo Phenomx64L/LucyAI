@@ -92,7 +92,7 @@
 
     <!-- Target -->
     <div class="dg-meta">
-      <span class="dg-meta-item" style="display:flex;align-items:center;gap:4px;"><Monitor size={12} strokeWidth={2}/> {hostName || 'local'}</span>
+      <span class="dg-meta-item" style="display:flex;align-items:center;gap:4px;"><Monitor size={12} stroke={2}/> {hostName || 'local'}</span>
       <span class="dg-meta-item">
         {#if source === 'ai'}✦ AI{:else if source === 'broadcast'}◎ Broadcast{:else if source === 'playbook'}≡ Playbook{:else}⌨ Manual{/if}
       </span>
@@ -103,7 +103,7 @@
       <div class="dg-label">{isEN ? 'Analysis' : 'Analisis'}</div>
       <div class="dg-summary">{assessment.summary}</div>
       {#if assessment.suggestion}
-        <div class="dg-suggestion" style="display:flex;align-items:flex-start;gap:5px;"><Lightbulb size={11} strokeWidth={2}/> {assessment.suggestion}</div>
+        <div class="dg-suggestion" style="display:flex;align-items:flex-start;gap:5px;"><Lightbulb size={11} stroke={2}/> {assessment.suggestion}</div>
       {/if}
     </div>
 

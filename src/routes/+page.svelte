@@ -12734,7 +12734,7 @@ if (Test-Path $src) {
               on:click={() => newActionIcon = item.key}
               title="{isEN ? item.label_en : item.label_es} ({item.key})"
               aria-label={item.key}>
-              <svelte:component this={item.icon} size={18} strokeWidth={1.8}/>
+              <svelte:component this={item.icon} size={18} stroke={1.8}/>
             </button>
           {/each}
         </div>
@@ -12779,7 +12779,7 @@ if (Test-Path $src) {
       {:else}
         {#each learnedCommands as cmd, i}
           <div class="mem-item">
-            <button class="mem-del" on:click={() => borrarComando(i)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} strokeWidth={2}/></button>
+            <button class="mem-del" on:click={() => borrarComando(i)} style="display:flex;align-items:center;justify-content:center;"><Trash2 size={12} stroke={2}/></button>
             <p class="mem-keys"><b>Activadores:</b> {cmd.claves.join(', ')}</p>
             <p class="mem-script">{cmd.script}</p>
             <p class="mem-resp"><b>Respuesta:</b> {cmd.respuesta}</p>
@@ -12839,7 +12839,7 @@ if (Test-Path $src) {
     <div role="dialog" use:focusTrap class="mbox sm" style="text-align:center;"
          aria-modal="true" aria-describedby="runas-cmd-preview" tabindex="-1"
          on:keydown={(e) => { if (e.key === 'Enter' && !(e.target instanceof HTMLElement && e.target.classList.contains('warn'))) { e.preventDefault(); cancelarRunAs(); } }}>
-      <div style="font-size:32px;margin-bottom:12px;display:flex;justify-content:center;"><ShieldCheck size={32} strokeWidth={1.5} style="color:var(--amber)"/></div>
+      <div style="font-size:32px;margin-bottom:12px;display:flex;justify-content:center;"><ShieldCheck size={32} stroke={1.5} style="color:var(--amber)"/></div>
       <h2 style="color:white;margin:0 0 8px;font-size:16px;font-weight:600;">Comando con privilegios de Administrador</h2>
       <p style="color:var(--txt2);font-size:13px;margin-bottom:8px;line-height:1.5;">
         Lucy quiere ejecutar el siguiente comando con <b style="color:var(--amber);">elevación de permisos (RunAs)</b>:
@@ -12903,14 +12903,14 @@ if (Test-Path $src) {
   <div class="mb">
     <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle" style="display:flex;align-items:center;gap:6px;"><Bell size={15} strokeWidth={2}/> Alertas Proactivas</h2>
+        <h2 class="mtitle" style="display:flex;align-items:center;gap:6px;"><Bell size={15} stroke={2}/> Alertas Proactivas</h2>
         <button class="mclose" on:click={() => $showAlertsModal=false}>✕</button>
       </div>
 
       <!-- Alertas activas -->
       {#if $activeAlerts.length}
       <div style="margin-bottom:14px;">
-        <div style="font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;display:flex;align-items:center;gap:5px;"><AlertTriangle size={11} strokeWidth={2}/> Disparadas ahora</div>
+        <div style="font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;display:flex;align-items:center;gap:5px;"><AlertTriangle size={11} stroke={2}/> Disparadas ahora</div>
         {#each $activeAlerts as al}
         <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(255,68,68,.08);border:1px solid rgba(255,68,68,.2);border-radius:6px;margin-bottom:4px;font-size:12px;">
           <span style="color:var(--red);font-weight:700;">{al.metric.toUpperCase()}</span>
@@ -12998,7 +12998,7 @@ if (Test-Path $src) {
   <div class="mb">
     <div role="dialog" use:focusTrap class="mbox md">
       <div class="mhdr">
-        <h2 class="mtitle" style="display:flex;align-items:center;gap:6px;"><ClipboardList size={15} strokeWidth={2}/> {editingRunbook ? 'Editar Runbook' : 'Nuevo Runbook'}</h2>
+        <h2 class="mtitle" style="display:flex;align-items:center;gap:6px;"><ClipboardList size={15} stroke={2}/> {editingRunbook ? 'Editar Runbook' : 'Nuevo Runbook'}</h2>
         <button class="mclose" on:click={() => $showRunbookModal=false}>✕</button>
       </div>
 
@@ -13177,7 +13177,7 @@ if (Test-Path $src) {
       {/if}
 
       <div style="display:flex;gap:10px;justify-content:flex-end;">
-        <button class="mbtn ghost" on:click={copiarDiagnostico} style="display:flex;align-items:center;gap:5px;"><ClipboardList size={13} strokeWidth={2}/> Copiar diagnóstico</button>
+        <button class="mbtn ghost" on:click={copiarDiagnostico} style="display:flex;align-items:center;gap:5px;"><ClipboardList size={13} stroke={2}/> Copiar diagnóstico</button>
         <button class="mbtn ghost" on:click={() => $showAboutModal=false}>Cerrar</button>
       </div>
     </div>

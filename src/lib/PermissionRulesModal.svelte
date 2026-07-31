@@ -227,7 +227,7 @@
             <!-- Header -->
             <div class="modal-header">
                 <div class="hdr-left">
-                    <span class="prm-hdr-ico"><Settings size={20} strokeWidth={1.8} color="var(--acc, #10b981)" /></span>
+                    <span class="prm-hdr-ico"><Settings size={20} stroke={1.8} color="var(--acc, #10b981)" /></span>
                     <h2>{lang.title}</h2>
                 </div>
                 <button class="close-btn" on:click={closeModal}>✕</button>

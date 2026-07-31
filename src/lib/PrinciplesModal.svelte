@@ -174,7 +174,7 @@
              use:focusTrap on:click|stopPropagation>
             <div class="pm-hdr">
                 <div class="pm-hdr-l">
-                    <span class="pm-hdr-ico"><Bookmark size={18} strokeWidth={2} /></span>
+                    <span class="pm-hdr-ico"><Bookmark size={18} stroke={2} /></span>
                     <div>
                         <h3>{t.title}</h3>
                         <span class="pm-sub">{t.subtitle}</span>
@@ -207,7 +207,7 @@
                         <div class="pm-form-foot">
                             <button class="pm-btn pm-cancel" on:click={cancelForm}>{t.cancel}</button>
                             <button class="pm-btn pm-save" on:click={save}>
-                                <Check size={13} strokeWidth={2.5} /> {t.save}
+                                <Check size={13} stroke={2.5} /> {t.save}
                             </button>
                         </div>
                     </div>
@@ -215,7 +215,7 @@
 
                 {#if !formOpen}
                     <button class="pm-add" on:click={openNew}>
-                        <Plus size={14} strokeWidth={2.5} /> {t.add}
+                        <Plus size={14} stroke={2.5} /> {t.add}
                     </button>
                 {/if}
 
@@ -225,7 +225,7 @@
                     <div class="pm-error">{error}</div>
                 {:else if principles.length === 0}
                     <div class="pm-empty">
-                        <ShieldCheck size={32} strokeWidth={1.4} style="opacity:.4;" />
+                        <ShieldCheck size={32} stroke={1.4} style="opacity:.4;" />
                         <p>{t.empty}</p>
                         <span>{t.empty_hint}</span>
                     </div>
@@ -248,13 +248,13 @@
                                 </div>
                                 <div class="pm-item-r">
                                     <button class="pm-mini" title={p.enabled ? 'Disable' : 'Enable'} on:click={() => toggle(p)}>
-                                        {#if p.enabled}<Check size={13} strokeWidth={2.5} />{:else}<X size={13} strokeWidth={2.5} />{/if}
+                                        {#if p.enabled}<Check size={13} stroke={2.5} />{:else}<X size={13} stroke={2.5} />{/if}
                                     </button>
                                     <button class="pm-mini" title={t.edit} on:click={() => openEdit(p)}>
-                                        <Edit2 size={13} strokeWidth={2} />
+                                        <Edit2 size={13} stroke={2} />
                                     </button>
                                     <button class="pm-mini pm-del" title={t.delete} on:click={() => remove(p)}>
-                                        <Trash2 size={13} strokeWidth={2} />
+                                        <Trash2 size={13} stroke={2} />
                                     </button>
                                 </div>
                             </div>

@@ -96,9 +96,9 @@
   {#if loop.phase === 'done' || loop.phase === 'failed'}
   <div class="tl-summary" class:ok={loop.resolved}>
     {#if loop.resolved}
-      <CheckCircle size={13} strokeWidth={2} style="color:var(--acc)"/> {isEN ? 'Problem resolved!' : 'Problema resuelto!'}
+      <CheckCircle size={13} stroke={2} style="color:var(--acc)"/> {isEN ? 'Problem resolved!' : 'Problema resuelto!'}
     {:else}
-      <AlertTriangle size={13} strokeWidth={2} style="color:var(--amber)"/> {isEN ? 'Could not fully resolve.' : 'No se pudo resolver completamente.'}
+      <AlertTriangle size={13} stroke={2} style="color:var(--amber)"/> {isEN ? 'Could not fully resolve.' : 'No se pudo resolver completamente.'}
     {/if}
     {#if loop.summary}
       <div class="tl-summary-text">{loop.summary}</div>
