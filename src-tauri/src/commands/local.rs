@@ -382,8 +382,8 @@ pub async fn execute_cmd(
         Ok(Err(e)) => Err(format!("Error spawn CMD: {}", e)),
         Ok(Ok(Err(e))) => { write_app_log("ERROR", &format!("CMD fallo: {}", e)); Err(format!("Fallo crítico CMD: {}", e)) }
         Ok(Ok(Ok(out))) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let stdout = crate::utils::shell::decode_console(&out.stdout);
+            let stderr = crate::utils::shell::decode_console(&out.stderr);
             if out.status.success() { Ok(stdout) }
             else {
                 // SCRUB-4: scrub any secret in stderr before it hits lucy_app.log.
@@ -453,7 +453,7 @@ pub async fn execute_wmic(query: String) -> Result<String, String> {
         Err(_) => Err("Timeout WMIC (60s).".to_string()),
         Ok(Err(e)) => Err(format!("Error spawn WMIC: {}", e)),
         Ok(Ok(Err(e))) => Err(format!("Error WMIC: {}", e)),
-        Ok(Ok(Ok(out))) => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
+        Ok(Ok(Ok(out))) => Ok(crate::utils::shell::decode_console(&out.stdout).trim().to_string()),
     }
 }
 
@@ -499,7 +499,7 @@ pub async fn execute_netsh(args: String) -> Result<String, String> {
         Err(_) => Err("Timeout netsh (60s).".to_string()),
         Ok(Err(e)) => Err(format!("Error spawn netsh: {}", e)),
         Ok(Ok(Err(e))) => Err(format!("Error netsh: {}", e)),
-        Ok(Ok(Ok(out))) => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
+        Ok(Ok(Ok(out))) => Ok(crate::utils::shell::decode_console(&out.stdout).trim().to_string()),
     }
 }
 
@@ -591,9 +591,9 @@ pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<S
         Ok(Ok(Err(e))) => Err(format!("Error reg: {}", e)),
         Ok(Ok(Ok(out))) => {
             if out.status.success() {
-                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                Ok(crate::utils::shell::decode_console(&out.stdout).trim().to_string())
             } else {
-                Err(format!("Reg Error: {}", String::from_utf8_lossy(&out.stderr).trim()))
+                Err(format!("Reg Error: {}", crate::utils::shell::decode_console(&out.stderr).trim()))
             }
         }
     }
@@ -722,9 +722,9 @@ pub async fn execute_cscript(script_content: String, bypass_token: Option<String
         Ok(Ok(Err(e))) => Err(format!("Error cscript: {}", e)),
         Ok(Ok(Ok(out))) => {
             if out.status.success() {
-                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                Ok(crate::utils::shell::decode_console(&out.stdout).trim().to_string())
             } else {
-                Err(format!("CScript Error:\n{}", String::from_utf8_lossy(&out.stderr).trim()))
+                Err(format!("CScript Error:\n{}", crate::utils::shell::decode_console(&out.stderr).trim()))
             }
         }
     }
@@ -753,7 +753,7 @@ pub async fn get_network_connections() -> Result<Vec<NetConnection>, String> {
             .output()
             .map_err(|e| format!("Error netstat: {}", e))?;
 
-        let text = String::from_utf8_lossy(&out.stdout);
+        let text = crate::utils::shell::decode_console(&out.stdout);
         let mut conns = Vec::new();
 
         for line in text.lines() {
@@ -837,7 +837,7 @@ pub async fn get_event_log(
         }
 
         let out = cmd.output().map_err(|e| format!("Error wevtutil: {}", e))?;
-        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let text = crate::utils::shell::decode_console(&out.stdout);
         parse_wevtutil_text(&text)
     }).await.map_err(|e| format!("Error interno wevtutil: {}", e))?
 }
@@ -921,7 +921,7 @@ pub async fn get_tasklist() -> Result<Vec<TaskEntry>, String> {
             .output()
             .map_err(|e| format!("Error tasklist: {}", e))?;
 
-        let text = String::from_utf8_lossy(&out.stdout);
+        let text = crate::utils::shell::decode_console(&out.stdout);
         let mut tasks = Vec::new();
 
         for line in text.lines() {

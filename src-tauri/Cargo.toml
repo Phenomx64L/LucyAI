@@ -129,7 +129,10 @@ ml-reranker = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 winapi = { version = "0.3", features = [
     "winuser", "wingdi", "processthreadsapi", "psapi",
     "handleapi", "windef", "minwindef", "errhandlingapi", "winnt",
-    "debugapi"
+    "debugapi",
+    # MultiByteToWideChar + CP_OEMCP — decoding what native console tools
+    # (tasklist, netstat, reg, wevtutil) actually write. See utils/shell.rs.
+    "stringapiset", "winnls"
 ] }
 # PNG encoding for screenshots
 image = { version = "0.25", default-features = false, features = ["png"] }
