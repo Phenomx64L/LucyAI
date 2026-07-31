@@ -4264,6 +4264,15 @@ import { listen } from '@tauri-apps/api/event';
         });
         // ── Persist visible turns for /recall search (fire-and-forget) ──
         persistConversationTurn(t, obj);
+        // Return the stored message so a caller can keep mutating it after the
+        // fact. `/compare` does exactly that — it drops a "running…" placeholder,
+        // fires N models in parallel, then writes the results back into it — and
+        // this function returned nothing, so `placeholder.html = …` threw
+        // `Cannot set properties of undefined`. `runMultiCompare` is async and
+        // its caller neither awaits nor catches it, so the throw became an
+        // unhandled rejection: no error surfaced, the comparison silently never
+        // rendered, and the placeholder sat at "ejecutando…" forever.
+        return obj;
     }
 
     // ── Memory v2: token-aware budget enforcement ─────────────────────────
@@ -5501,7 +5510,13 @@ REGLAS DE FORMATO:
                 const _csModelId = (t?.selectedModel || t?.model || null);
                 setContextSnapshot({
                     memoriesCount:  _csMemCount,
-                    skillId:        _csActiveSkill?.id ?? null,
+                    // `.meta.id`, not `.id` — a SecuritySkillFull nests its
+                    // identity under `meta` while a preset carries `id` at the
+                    // top level. Reading `.id` here always produced null, so
+                    // the context chip reported "no skill" with one loaded.
+                    // Note the sibling `presetId` below is correctly `.id`:
+                    // two identical-looking reads, different shapes.
+                    skillId:        _csActiveSkill?.meta?.id ?? null,
                     skillSource:    _csSkillSource,
                     presetId:       _csActivePreset?.id ?? null,
                     mcpToolsCount:  _unifiedPlan?.mcp_tools?.length ?? 0,
@@ -11902,7 +11917,8 @@ if (Test-Path $src) {
             const _swPreset = !_swSkill ? peekActivePreset() : null;
             const _swModel = _swTab?.selectedModel || _swTab?.model || null;
             setContextSnapshot({
-                skillId:   _swSkill?.id ?? null,
+                // `.meta.id` — see the same fix in the prompt-build snapshot.
+                skillId:   _swSkill?.meta?.id ?? null,
                 presetId:  _swPreset?.id ?? null,
                 modelId:   _swModel,
                 memoriesCount: _swTab?._lastMemoryHitsCount ?? 0,
@@ -12039,7 +12055,9 @@ if (Test-Path $src) {
       <PostureStrip
         hosts={$hosts.map(h => ({
           id: h.id,
-          name: h.name || h.hostname || h.id,
+          // `h.host` is the address field; `hostname` is not on Host, so that
+          // middle fallback was always undefined.
+          name: h.name || h.host || h.id,
           status: $hostReachability[h.id]?.reachable === true ? 'online'
                 : $hostReachability[h.id]?.reachable === false ? 'offline'
                 : 'unknown',
