@@ -459,15 +459,19 @@ fn check_document_embeddings() -> DiagnosticCheck {
     let queried = crate::commands::metrics::shared_db(|conn| {
         // Chunk rows carry session_id 'pdf:<doc>'; their embedding, when it
         // exists, is entity_type 'pdf_chunk' keyed by the memory row id.
+        // v1.8 — both ingested corpora. A web page whose vectors never landed
+        // fails exactly the way a PDF does, and would have been invisible here
+        // if the check had stayed PDF-only.
         let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM agent_memories WHERE session_id LIKE 'pdf:%'",
+            "SELECT COUNT(*) FROM agent_memories \
+             WHERE session_id LIKE 'pdf:%' OR session_id LIKE 'web:%'",
             [], |r| r.get(0),
         ).unwrap_or(0);
         let embedded: i64 = conn.query_row(
             "SELECT COUNT(*) FROM agent_memories am \
-             WHERE am.session_id LIKE 'pdf:%' \
+             WHERE (am.session_id LIKE 'pdf:%' OR am.session_id LIKE 'web:%') \
                AND EXISTS (SELECT 1 FROM embeddings e \
-                           WHERE e.entity_type = 'pdf_chunk' \
+                           WHERE e.entity_type IN ('pdf_chunk','web_chunk') \
                              AND e.entity_id = CAST(am.id AS TEXT))",
             [], |r| r.get(0),
         ).unwrap_or(0);
@@ -531,7 +535,8 @@ fn check_document_embeddings() -> DiagnosticCheck {
 /// nothing.
 #[tauri::command]
 pub async fn repair_pdf_embeddings() -> Result<RepairResult, String> {
-    let created = crate::commands::embeddings::backfill_embeddings("pdf_chunk".into(), None).await?;
+    let created = crate::commands::embeddings::backfill_embeddings("pdf_chunk".into(), None).await?
+        + crate::commands::embeddings::backfill_embeddings("web_chunk".into(), None).await?;
     let msg = if created == 0 {
         "No document chunks were missing an embedding.".to_string()
     } else {

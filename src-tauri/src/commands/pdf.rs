@@ -262,7 +262,7 @@ fn detect_heading(block: &str) -> Option<String> {
 /// Collect up to `max` section headings from the text, using the same
 /// block-splitting + detect_heading logic as `chunk_structured`. Feeds the
 /// per-document summary memory's mini table-of-contents (v1.7.233).
-fn collect_headings(text: &str, max: usize) -> Vec<String> {
+pub(crate) fn collect_headings(text: &str, max: usize) -> Vec<String> {
     let mut blocks: Vec<&str> = text.split("\n\n").map(|b| b.trim()).filter(|b| !b.is_empty()).collect();
     if blocks.len() <= 1 {
         blocks = text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
@@ -279,7 +279,10 @@ fn collect_headings(text: &str, max: usize) -> Vec<String> {
     out
 }
 
-fn chunk_structured(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
+/// `pub(crate)` so web ingestion chunks identically to PDF ingestion. The two
+/// corpora are searched by the same query through the same index; splitting
+/// them differently would make relevance depend on where the text came from.
+pub(crate) fn chunk_structured(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
     let mut blocks: Vec<String> = text
         .split("\n\n")
         .map(|b| b.trim().to_string())
@@ -753,20 +756,28 @@ pub async fn pdf_search(
     // Only the case where NOTHING succeeded is escalated.
     let mut last_err: Option<String> = None;
     let mut any_ok = false;
-    for q in &queries {
-        let hits = match crate::commands::embeddings::semantic_search(
-            q.clone(),
-            Some("pdf_chunk".to_string()),
-            Some(8),
-            Some(base_min.min(0.30)),
-            None,
-        ).await {
-            Ok(h) => { any_ok = true; h }
-            Err(e) => { last_err = Some(e); continue; }
-        };
-        for (rank, h) in hits.into_iter().enumerate() {
-            let e = fused.entry(h.entity_id.clone()).or_insert((0.0, h));
-            e.0 += 1.0 / (RRF_K + rank as f64 + 1.0);
+    // v1.8 — both ingested corpora. They are separate entity types on purpose
+    // (so a search CAN be scoped, and so reference material stays out of the
+    // pre-loop memory recall), but a user asking "what did that page say about
+    // X" does not care which door the text came through. Each type contributes
+    // its own ranked list and RRF fuses them, which is exactly what the
+    // fusion below already does for the query reformulations.
+    for et in ["pdf_chunk", "web_chunk"] {
+        for q in &queries {
+            let hits = match crate::commands::embeddings::semantic_search(
+                q.clone(),
+                Some(et.to_string()),
+                Some(8),
+                Some(base_min.min(0.30)),
+                None,
+            ).await {
+                Ok(h) => { any_ok = true; h }
+                Err(e) => { last_err = Some(e); continue; }
+            };
+            for (rank, h) in hits.into_iter().enumerate() {
+                let e = fused.entry(h.entity_id.clone()).or_insert((0.0, h));
+                e.0 += 1.0 / (RRF_K + rank as f64 + 1.0);
+            }
         }
     }
     if !any_ok {

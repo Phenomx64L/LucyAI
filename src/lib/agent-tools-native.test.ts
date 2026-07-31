@@ -34,6 +34,9 @@ const DEPS_SAMPLES: Record<string, string> = {
     mcp_discover:     '<TOOL>mcp_discover:filesystem</TOOL>',
     fetch:            '<TOOL>fetch:https://example.com</TOOL>',
     search_web:       '<TOOL>search_web:powershell winrm</TOOL>',
+    // v1.8 — reads a URL INTO memory, unlike `fetch` which reads it into the
+    // current turn and forgets it.
+    web_ingest:       '<TOOL>web_ingest:https://learn.microsoft.com/winrm</TOOL>',
     search_runbooks:  '<TOOL>search_runbooks:dns reset</TOOL>',
     searchfiles:      '<TOOL>searchfiles:C:\\proj|||*.rs</TOOL>',
     locate_file:      '<TOOL>locate_file:msedge.exe</TOOL>',
@@ -69,10 +72,10 @@ describe('agent-tools-native / pure registry shape', () => {
 });
 
 describe('agent-tools-native / deps registry shape', () => {
-    it('exports the 17 closure-coupled handlers, each with a unique kind', () => {
-        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(17);
+    it('exports the 18 closure-coupled handlers, each with a unique kind', () => {
+        expect(NATIVE_READONLY_HANDLERS_DEPS).toHaveLength(18);
         const kinds = NATIVE_READONLY_HANDLERS_DEPS.map(h => h.kind);
-        expect(new Set(kinds).size).toBe(17);
+        expect(new Set(kinds).size).toBe(18);
         expect(new Set(kinds)).toEqual(new Set(Object.keys(DEPS_SAMPLES)));
     });
     it('pure and deps kinds do not overlap', () => {

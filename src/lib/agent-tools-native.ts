@@ -648,6 +648,35 @@ export const NATIVE_READONLY_HANDLERS_DEPS: NativeHandlerWithDeps[] = [
         },
     },
 
+    // web_ingest — the persistent counterpart to fetch_url_content above.
+    //
+    // `fetch_url_content` reads a page INTO THIS TURN and forgets it: the same
+    // page is re-fetched and re-paid for in every session that needs it, and
+    // nothing it said is recallable afterwards. This one chunks it, embeds it,
+    // and files it beside the ingested PDFs, so `pdf_search` finds it later.
+    //
+    // Not cached through `cachedFetch`: this writes to the database, and a
+    // cache hit that skips the write would report success having stored
+    // nothing. The command is idempotent on its own terms — same URL, same
+    // content hash, no second copy.
+    {
+        kind: 'web_ingest',
+        matchRe: /<TOOL>web_ingest:([^<]+)<\/TOOL>/i,
+        stripRe: /<TOOL>web_ingest:[^<]+<\/TOOL>/gi,
+        build: (m) => {
+            const urlQ = m[1].trim();
+            return {
+                label: `[◈ Ingerir web] ${urlQ}`,
+                fn: () => invoke('web_ingest', { url: urlQ })
+                    .then((r: any) =>
+                        `[WEB INGEST OK] "${r.title}" (${r.url})\n` +
+                        `${r.chunk_count} secciones, ${r.total_chars} caracteres. ` +
+                        `Ya es consultable con pdf_search; los embeddings terminan en segundo plano.`)
+                    .catch((e: any) => `[WEB INGEST FAILED] ${String(e).slice(0, 300)}`),
+            };
+        },
+    },
+
     {
         kind: 'search_web',
         matchRe: /<TOOL>search_web:([^<]+)<\/TOOL>/i,

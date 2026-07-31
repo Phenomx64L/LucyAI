@@ -662,44 +662,6 @@ fn get_max_tokens(model: &str, override_val: Option<u32>) -> u32 {
     }
 }
 
-// ── URL CONTENT FETCHER ───────────────────────────────────────────────────────
-
-/// Strips HTML tags from a string, returning readable plain text.
-fn strip_html_tags(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag   = false;
-    let mut in_script = false;
-    let mut in_style  = false;
-
-    for (i, c) in html.char_indices() {
-        if c == '<' {
-            in_tag = true;
-            let remain = &html[i..];
-            if remain.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("<script")) {
-                in_script = true;
-            } else if remain.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("</script")) {
-                in_script = false;
-            } else if remain.get(..6).is_some_and(|s| s.eq_ignore_ascii_case("<style")) {
-                in_style = true;
-            } else if remain.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("</style")) {
-                in_style = false;
-            }
-        } else if c == '>' {
-            in_tag = false;
-            if !in_script && !in_style { out.push(' '); }
-        } else if !in_tag && !in_script && !in_style {
-            out.push(c);
-        }
-    }
-
-    // Decode common HTML entities & collapse whitespace
-    out.replace("&amp;",  "&")
-       .replace("&lt;",   "<")
-       .replace("&gt;",   ">")
-       .replace("&quot;", "\"")
-       .replace("&#39;",  "'")
-       .replace("&nbsp;", " ")
-}
 
 /// Fetches a URL and returns up to 12 000 chars of readable plain text.
 ///
@@ -749,9 +711,18 @@ pub async fn fetch_url_content(url: String) -> Result<String, String> {
     let body = res.text().await
         .map_err(|e| format!("Error al leer cuerpo: {}", e))?;
 
-    let plain = strip_html_tags(&body);
-    let clean: String = plain.split_whitespace().collect::<Vec<&str>>().join(" ");
-    let truncated = crate::utils::safe_truncate(&clean, 6_000);
+    // v1.8 — one reader for both consumers. The local `strip_html_tags` this
+    // replaces only knew about <script> and <style>, so nav, header, footer and
+    // sidebars all came through as prose: on a documentation page that is
+    // hundreds of words of menu labels wrapped around the paragraph the model
+    // was asked about, inside a 6000-char budget. `html_to_text` narrows to
+    // <article>/<main> first, drops the chrome, and keeps paragraph structure
+    // instead of flattening everything to one space-joined line.
+    //
+    // Whitespace is NOT collapsed to a single line any more. It was, and that
+    // destroyed the only structure the text had left.
+    let (_title, plain) = crate::commands::web_ingest::html_to_text(&body);
+    let truncated = crate::utils::safe_truncate(&plain, 6_000);
 
     Ok(truncated.to_string())
 }

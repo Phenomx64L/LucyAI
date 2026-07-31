@@ -1092,7 +1092,13 @@ import { listen } from '@tauri-apps/api/event';
         // composer was an immediate stack overflow. Nothing caught it: it is
         // runtime recursion, not a type error, so check, check:js, the 561
         // tests and the build were all green.
-        return /** @type {HTMLElement|null} */ (document.querySelector('.chat-wrap.on .ibox'));
+        // `HTMLTextAreaElement`, not `HTMLElement`: `.ibox` is the composer
+        // `<textarea>` (ChatInput.svelte:390), and callers read `.value` and
+        // call `.setSelectionRange`. Those four errors were invisible until the
+        // self-call above was fixed — a function that calls itself has nothing
+        // for TypeScript to infer, so the recursion was also suppressing the
+        // type errors that would have pointed at it.
+        return /** @type {HTMLTextAreaElement|null} */ (document.querySelector('.chat-wrap.on .ibox'));
     }
 
     let kgViewerOpen = false;

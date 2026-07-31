@@ -20,6 +20,10 @@ pub mod incident;
 pub mod embeddings;
 pub mod memory;
 pub mod pdf;
+// v1.8 — reading a URL into the same searchable memory PDFs land in. Shares
+// pdf.rs's chunker and the whole retrieval side; only the front end of the
+// pipeline (fetch + HTML→text) is new.
+pub mod web_ingest;
 pub mod principles;
 pub mod reflection;
 pub mod scheduled;

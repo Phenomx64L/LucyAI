@@ -295,6 +295,14 @@ pub(crate) fn run_schema_init(conn: &rusqlite::Connection) -> Result<(), String>
         "ALTER TABLE pdf_documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
         // v1.7.233 M2 — estado de la síntesis jerárquica por documento.
         "ALTER TABLE pdf_documents ADD COLUMN synth_status TEXT NOT NULL DEFAULT ''",
+        // ── v1.8 — web ingestion shares this table ───────────────────────
+        // `pdf_documents` is the ingested-DOCUMENTS table; the name is
+        // historical. Web pages live here too so they inherit the documents
+        // list, the embedded/total counter, deletion, the coverage diagnostic
+        // and the re-embed repair instead of getting a second copy of each.
+        // `kind` is what keeps that honest — DEFAULT 'pdf' so every existing
+        // row is already correct without a backfill.
+        "ALTER TABLE pdf_documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'pdf'",
         "CREATE INDEX IF NOT EXISTS idx_pdf_docs_hash \
          ON pdf_documents(content_hash) WHERE content_hash != ''",
         // ── v1.7.104 Sprint-4 perf — D3 sparkline index ─────────────────

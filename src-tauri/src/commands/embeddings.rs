@@ -817,6 +817,12 @@ fn backfill_source_sql(entity_type: &str) -> Result<&'static str, String> {
         "pdf_chunk" => "SELECT CAST(am.id AS TEXT), '[' || d.filename || '] ' || am.content \
                         FROM agent_memories am \
                         JOIN pdf_documents d ON am.session_id = 'pdf:' || d.id",
+        // v1.8 — web pages, same shape. `filename` holds the page title for a
+        // web row, which is what web_ingest prefixes each chunk with, so the
+        // rebuilt text matches byte for byte the same way the PDF arm does.
+        "web_chunk" => "SELECT CAST(am.id AS TEXT), '[' || d.filename || '] ' || am.content \
+                        FROM agent_memories am \
+                        JOIN pdf_documents d ON am.session_id = 'web:' || d.id",
         other => return Err(format!("Unknown entity_type '{}' for backfill", other)),
     })
 }
