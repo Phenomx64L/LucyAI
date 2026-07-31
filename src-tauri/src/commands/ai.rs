@@ -367,7 +367,10 @@ fn extract_tokens_gemini(json: &serde_json::Value) -> Option<(u32, u32)> {
 ///
 /// Also handles the legacy alias `gemini-3-flash-preview` → `gemini-3.5-flash`
 /// so old saved chats keep working after the May 2026 lineup refresh.
-fn resolve_gemini_model(raw_model: &str) -> (String, Option<serde_json::Value>) {
+/// `pub(crate)` for the catalog contract in utils/db.rs — same reason as
+/// `resolve_anthropic_model`: an unrecognized suffix is stripped without a
+/// word, so an entry the dropdown offers must be one this accepts.
+pub(crate) fn resolve_gemini_model(raw_model: &str) -> (String, Option<serde_json::Value>) {
     // Legacy alias — silently upgrade old chats to the GA model.
     if raw_model == "gemini-3-flash-preview" {
         return ("gemini-3.5-flash".to_string(), None);
@@ -420,12 +423,24 @@ fn apply_gemini_generation_config(payload: &mut serde_json::Value, cfg: Option<s
 /// Order matters — `contains('/')` must stay last of the specific checks,
 /// since it is NVIDIA's `owner/model` shape and would otherwise swallow
 /// anything with a slash.
+///
+/// The final `else` is Gemini, which makes every miss here silent: an id no arm
+/// claims is not rejected, it is sent to Google. `nvidia-custom` was landing
+/// there — it is the dropdown placeholder the user overwrites with their own
+/// `owner/model`, so it carries no slash until they type one. +page.svelte
+/// keeps sending it deliberately when the box is empty, with the comment
+/// "fallback keeps it invalid so Rust returns a clear error"; what came back
+/// instead talked about Gemini, or about a missing Gemini key, to someone who
+/// had picked NVIDIA. It routes to NVIDIA now, so the error names the provider
+/// the user actually chose. The catalog contract in utils/db.rs pins this and
+/// every other id in the dropdown against the group it is offered under.
 pub(crate) fn provider_for_model(model: &str) -> &'static str {
     if model.starts_with("gpt-")           { "openai" }
     else if model.starts_with("claude-")   { "anthropic" }
     else if model.starts_with("deepseek-") { "deepseek" }
     else if model.starts_with("grok-")     { "xai" }
     else if model.starts_with("local-")    { "local" }
+    else if model == "nvidia-custom"       { "nvidia" }
     else if model.contains('/')            { "nvidia" }
     else                                   { "gemini" }
 }
@@ -470,7 +485,12 @@ fn openai_compatible_endpoint(provider: &str) -> &'static str {
 /// Stripping rather than erroring is deliberate: an unsupported effort value
 /// is a 400 from Anthropic, and a model picker entry that 400s is worse than
 /// one that quietly runs at the model's default.
-fn resolve_anthropic_model(raw_model: &str) -> (String, Option<&'static str>) {
+/// `pub(crate)` for the catalog contract in utils/db.rs, which pins the
+/// dropdown's `::effort` suffixes against this whitelist. Stripping silently is
+/// right for a stray suffix from an old saved chat, but it means an entry Lucy
+/// itself offers can degrade with no signal — the user picks Extra High, pays
+/// for it in the estimate, and gets the model default.
+pub(crate) fn resolve_anthropic_model(raw_model: &str) -> (String, Option<&'static str>) {
     let Some((base, effort_raw)) = raw_model.split_once("::") else {
         return (raw_model.to_string(), None);
     };

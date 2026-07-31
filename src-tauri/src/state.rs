@@ -338,6 +338,24 @@ pub static HTTP_CLIENT_FAST: Lazy<Client> = Lazy::new(|| {
 /// Previene llamadas a endpoints arbitrarios si el frontend envía un modelo inválido.
 /// Los modelos NVIDIA NIM tienen formato "owner/model-name" y se validan
 /// por la regla `model.contains('/')` en ai.rs (no se listan aquí).
+///
+/// AÑADIR UN MODELO AL DESPLEGABLE SIN AÑADIRLO AQUÍ LO DEJA MUERTO. `ask_lucy`
+/// y `ask_lucy_stream` comparan la cadena COMPLETA — el sufijo `::effort` forma
+/// parte de la clave, así que cada nivel necesita su propia fila — y devuelven
+/// "Modelo no permitido. Selecciona un modelo válido desde el selector" a quien
+/// acaba de seleccionarlo desde el selector.
+///
+/// Es lo que pasó con las tres altas de modelos de julio de 2026: 19 entradas
+/// del catálogo (toda la gama Claude 5, GPT-5.6, Grok y DeepSeek) llegaron al
+/// desplegable sin llegar a esta lista, y ninguna funcionaba. El aviso existía
+/// desde v1.7.0, en la cabecera de `src/lib/llm-models.ts` — pero un aviso solo
+/// lo lee quien abre ESE fichero, y quien añade un modelo abre `models.js`.
+///
+/// Ahora lo sujeta un test: `catalog_contract` en utils/db.rs lee el catálogo
+/// del frontend en tiempo de compilación y falla nombrando la entrada que falta.
+/// Convención de la lista: el id base MÁS todos los niveles de esfuerzo que
+/// acepte `resolve_anthropic_model`, no solo los que el desplegable ofrezca hoy
+/// — un chat guardado o un runbook puede traer cualquiera de ellos.
 pub const ALLOWED_MODELS: &[&str] = &[
     // ── Gemini 3.x lineup (refreshed May 2026 from ai.google.dev/gemini-api/docs) ──
     // Pro accepts an effort hint via "::high" / "::medium" suffix that maps to
@@ -346,7 +364,9 @@ pub const ALLOWED_MODELS: &[&str] = &[
     "gemini-3.1-pro-preview",
     "gemini-3.1-pro-preview::high",
     "gemini-3.1-pro-preview::medium",
+    "gemini-3.6-flash",                 // GA — current default Flash
     "gemini-3.5-flash",                 // GA — 1M ctx, frontier-class at lower cost
+    "gemini-3.5-flash-lite",            // GA — cheapest 3.5 tier
     "gemini-3.1-flash-lite",            // GA — high-volume workhorse
     "gemini-3.1-flash-lite-preview",    // preview
     // Legacy alias kept for old saved chats (resolved to gemini-3.5-flash server-side)
@@ -358,6 +378,30 @@ pub const ALLOWED_MODELS: &[&str] = &[
     // ── Anthropic Claude (June 2026 lineup) ──
     // Effort suffix "::low|::medium|::high|::xhigh|::max" is supported by
     // resolve_anthropic_model() in ai.rs and stripped before the API call.
+    //
+    // ── Claude 5 (current flagship generation) ──
+    // All three accept the full effort range. Fable 5 thinks unconditionally
+    // and needs 30-day data retention enabled on the org; see the notes in
+    // src/lib/models.js.
+    "claude-opus-5",                    // flagship — $5/$25 per 1M
+    "claude-opus-5::low",
+    "claude-opus-5::medium",
+    "claude-opus-5::high",
+    "claude-opus-5::xhigh",
+    "claude-opus-5::max",
+    "claude-sonnet-5",                  // balanced — $3/$15 per 1M
+    "claude-sonnet-5::low",
+    "claude-sonnet-5::medium",
+    "claude-sonnet-5::high",
+    "claude-sonnet-5::xhigh",
+    "claude-sonnet-5::max",
+    "claude-fable-5",                   // top tier — $10/$50 per 1M, 2× Opus 5
+    "claude-fable-5::low",
+    "claude-fable-5::medium",
+    "claude-fable-5::high",
+    "claude-fable-5::xhigh",
+    "claude-fable-5::max",
+    // ── Previous generation ──
     "claude-opus-4-8",                  // flagship (June 2026) — 1M ctx
     "claude-opus-4-8::low",
     "claude-opus-4-8::medium",
@@ -383,6 +427,9 @@ pub const ALLOWED_MODELS: &[&str] = &[
     "claude-3-5-sonnet-latest",
     "claude-3-5-haiku-latest",
     // ── OpenAI GPT-5 family (April-May 2026) ──
+    "gpt-5.6-sol",                      // flagship reasoning
+    "gpt-5.6-terra",                    // balanced
+    "gpt-5.6-luna",                     // fast tier
     "gpt-5.5",
     "gpt-5.5-instant",
     "gpt-5.4-mini",
@@ -399,4 +446,10 @@ pub const ALLOWED_MODELS: &[&str] = &[
     "o1",
     "o3-mini",
     "o4-mini",
+    // ── xAI Grok ── OpenAI-dialect, via openai_compatible_endpoint() in ai.rs
+    "grok-4.5",
+    "grok-4.3",
+    // ── DeepSeek ── same dialect, api.deepseek.com
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
 ];

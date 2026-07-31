@@ -80,7 +80,9 @@ export const KNOWN_GEMINI_IDS: ReadonlySet<string> = new Set([
     'gemini-3.1-pro-preview',
     'gemini-3.1-pro-preview::high',
     'gemini-3.1-pro-preview::medium',
+    'gemini-3.6-flash',
     'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite',
     'gemini-3.1-flash-lite-preview',
     'gemini-3-flash-preview',
@@ -142,6 +144,25 @@ const CONTEXT_WINDOWS: Record<string, number> = {
     'claude-haiku-4-5':                  200_000,
     'claude-opus-4-5':                   200_000,
     'claude-sonnet-4-5':                 200_000,
+    // ── Legacy OpenAI, still selectable so pinned chats and runbooks resolve ──
+    // These were all missing, so every one of them was denominated by the 128k
+    // fallback: the chip read ~50% full on a session using a fifth of the real
+    // budget, and the fix a user reaches for when the bar goes red is to compact
+    // a conversation that did not need it.
+    //
+    // 272k is the last input window OpenAI published for the GPT-5 series (of a
+    // 400k total, 128k of it output). They stopped publishing specs for these
+    // when 5.6 replaced the line, so it cannot be re-verified — which is exactly
+    // the case this file's own rule covers: take the lower advertised number,
+    // never the total. Under-promising costs a user nothing; over-promising
+    // truncates their prompt at the API with no warning from us.
+    'gpt-5.5':                           272_000,
+    'gpt-5.5-instant':                   272_000,
+    'gpt-5.4-mini':                      272_000,
+    'gpt-5.4-nano':                      272_000,
+    'gpt-5.3-codex':                     272_000,
+    'gpt-4o':                            128_000,
+    'gpt-4o-mini':                       128_000,
 };
 
 /** Resolve the context-window (input tokens) for a model id. Strips
@@ -169,14 +190,24 @@ export function contextWindowFor(modelId: string | null | undefined): number {
  * unverified string to `ask_lucy`, since the only failure mode is
  * the 401-like backend rejection followed by a silent catch.
  *
- * NB: Claude/Ollama ids are passed through untouched — they have
- * separate validation paths in the backend.
+ * NB: non-Gemini ids are passed through untouched — they have separate
+ * validation paths in the backend, and the real gate is ALLOWED_MODELS in
+ * `src-tauri/src/state.rs`. Only Gemini is name-checked here, because the
+ * fallback below is itself a Gemini model: sending an unknown Gemini id is a
+ * plain rejection, whereas quietly rewriting someone's Grok id to Gemini is a
+ * different model answering under the name they chose. That is what this did
+ * to every OpenAI-dialect provider until the list of passthroughs caught up
+ * with the catalog.
  */
 export function resolveModelOrFallback(raw: string | null | undefined): string {
     if (!raw) return LLM.FAST;
     if (raw.includes('/'))     return raw;   // NVIDIA NIM owner/model format
     if (raw.startsWith('claude-')) return raw;
     if (raw.startsWith('ollama')) return raw;
+    if (raw.startsWith('local-')) return raw;
+    if (raw.startsWith('gpt-') || raw.startsWith('o1') || raw.startsWith('o3') || raw.startsWith('o4')) return raw;
+    if (raw.startsWith('grok-')) return raw;
+    if (raw.startsWith('deepseek-')) return raw;
     if (KNOWN_GEMINI_IDS.has(raw)) return raw;
     // Unknown id — log and fall back so the call doesn't silently
     // fail at the backend boundary.

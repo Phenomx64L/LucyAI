@@ -900,6 +900,344 @@ pub fn calculate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64
     input_cost + output_cost
 }
 
+// ── The model catalog contract ───────────────────────────────────────────────
+//
+// Adding a cloud model to Lucy means editing FOUR places that nothing ties
+// together:
+//
+//   1. src/lib/models.js        — LLM_GROUPS: which ids the dropdown offers,
+//                                 and which provider each group belongs to
+//   2. src/lib/model-pricing.ts — MODEL_PRICING: the frontend rate table
+//   3. this file                — model_prices(): the backend rate table
+//   4. commands/ai.rs           — provider_for_model(): where requests go
+//
+// The comment above model_prices() says it "MUST be kept in sync with
+// src/lib/model-pricing.ts". Saying MUST is not a mechanism, and the drift it
+// was meant to prevent had already happened twice by the time anyone measured
+// it: every Opus from 4.6 on was billed at 4.5's $15/$75 (3× real), and
+// gemini-3.5-flash — the DEFAULT Gemini model — at $0.30/$2.50 against a real
+// $1.50/$9.00. Neither is visible from inside either file. Both look like a
+// plausible number sitting next to other plausible numbers, and the only
+// symptom is a cost report that is quietly wrong, which is the one number a
+// user has no independent way to check.
+//
+// Every failure mode here is silent by construction:
+//   • A missing price does not error — it returns a "conservative mid-tier"
+//     guess and the estimate is simply wrong.
+//   • A missing provider branch does not error either. provider_for_model()
+//     ends in `else { "gemini" }`, so an unrouted id is not rejected, it is
+//     sent to Google.
+//
+// So the catalog gets read from the JS/TS sources at compile time and checked
+// against the Rust. Precedent: utils/shell.rs does the same thing to keep
+// migrated callers from hand-rolling a PowerShell spawn.
+#[cfg(test)]
+mod catalog_contract {
+    use super::model_prices;
+    use crate::commands::ai::{provider_for_model, resolve_anthropic_model, resolve_gemini_model};
+
+    const MODELS_JS: &str = include_str!("../../../src/lib/models.js");
+    const PRICING_TS: &str = include_str!("../../../src/lib/model-pricing.ts");
+    const LLM_TS: &str = include_str!("../../../src/lib/llm-models.ts");
+
+    /// Every single-quoted string between `start` and `end` in a TS source.
+    ///
+    /// Comment lines are skipped first, and that is not a nicety: the very
+    /// first prose comment added to one of these maps said "this file's own
+    /// rule", and the apostrophe in "file's" shifted the quote pairing for
+    /// everything after it. A scanner over source that cannot survive an
+    /// apostrophe in a comment will break on the next sentence someone writes.
+    fn quoted_strings_after(src: &str, start: &str, end: &str) -> Vec<String> {
+        let body = src
+            .split_once(start)
+            .unwrap_or_else(|| panic!("'{start}' disappeared from its source file"))
+            .1;
+        let body = body.split_once(end).map_or(body, |(b, _)| b);
+
+        let mut out = Vec::new();
+        for line in body.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with('*') || t.starts_with("/*") {
+                continue;
+            }
+            let mut rest = t;
+            while let Some(i) = rest.find('\'') {
+                rest = &rest[i + 1..];
+                let Some(j) = rest.find('\'') else { break };
+                out.push(rest[..j].to_string());
+                rest = &rest[j + 1..];
+            }
+        }
+        out
+    }
+
+    /// `(group provider, model id)` for every entry the dropdown offers.
+    ///
+    /// Deliberately a dumb line scanner rather than a JS parse: the point is to
+    /// fail when someone adds a model, and a scanner that only understands the
+    /// file's actual formatting fails loudly on a reformat instead of quietly
+    /// matching nothing. The empty-result assertion below is what guards that.
+    fn catalog() -> Vec<(String, String)> {
+        let body = MODELS_JS
+            .split_once("export const LLM_GROUPS")
+            .expect("LLM_GROUPS disappeared from models.js")
+            .1;
+
+        let mut provider = String::new();
+        let mut out = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("provider: \"") {
+                provider = rest.split('"').next().unwrap_or_default().to_string();
+            } else if let Some(rest) = t.strip_prefix("{ id: \"") {
+                if let Some(id) = rest.split('"').next() {
+                    out.push((provider.clone(), id.to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// `id -> (inputPer1K, outputPer1K)` from the frontend rate table.
+    fn frontend_prices() -> Vec<(String, f64, f64)> {
+        let body = PRICING_TS
+            .split_once("MODEL_PRICING")
+            .expect("MODEL_PRICING disappeared from model-pricing.ts")
+            .1;
+
+        let num_after = |line: &str, key: &str| -> Option<f64> {
+            let rest = line.split_once(key)?.1;
+            let end = rest.find(',').unwrap_or(rest.len());
+            rest[..end].trim().parse().ok()
+        };
+
+        let mut out = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            // A rate row is `'id': { inputPer1K: …, outputPer1K: … }`. Requiring
+            // both the quoted key AND inputPer1K skips ZERO_PRICING /
+            // FALLBACK_PRICING and the prefix fallbacks inside getPricing(),
+            // which are unkeyed literals.
+            if !t.starts_with('\'') || !t.contains("inputPer1K") {
+                continue;
+            }
+            let id = t[1..].split('\'').next().unwrap_or_default().to_string();
+            if let (Some(i), Some(o)) = (num_after(t, "inputPer1K:"), num_after(t, "outputPer1K:")) {
+                out.push((id, i, o));
+            }
+        }
+        out
+    }
+
+    /// Strip the `::effort` suffix. Effort changes how many tokens a turn
+    /// spends, not the per-token rate or the provider.
+    fn base(id: &str) -> &str {
+        id.split_once("::").map_or(id, |(b, _)| b)
+    }
+
+    #[test]
+    fn the_source_scanners_still_understand_their_files() {
+        // Without this, a reformat of either file turns every test below into a
+        // vacuous pass over an empty list — the failure mode where a guard
+        // reports green precisely because it has stopped looking.
+        let cat = catalog();
+        assert!(cat.len() > 30, "catalog scan found only {} entries", cat.len());
+        assert!(
+            cat.iter().any(|(p, _)| p == "anthropic") && cat.iter().any(|(p, _)| p == "deepseek"),
+            "catalog scan lost the provider grouping"
+        );
+        assert!(
+            frontend_prices().len() > 20,
+            "pricing scan found only {} rows",
+            frontend_prices().len()
+        );
+        assert!(
+            quoted_strings_after(LLM_TS, "const CONTEXT_WINDOWS", "\n};").len() > 20,
+            "context-window scan lost its map"
+        );
+        assert_eq!(
+            quoted_strings_after(LLM_TS, "export const LLM = Object.freeze({", "} as const)").len(),
+            5,
+            "the internal tier list changed shape"
+        );
+    }
+
+    #[test]
+    fn every_offered_model_routes_to_the_provider_its_group_claims() {
+        for (group, id) in catalog() {
+            // The group is named after the daemon, the router after the id
+            // prefix. Same destination, different vocabulary.
+            let want = if group == "ollama" { "local" } else { group.as_str() };
+            let got = provider_for_model(base(&id));
+            assert_eq!(
+                got, want,
+                "'{id}' is offered under provider '{group}' but routes to '{got}'"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_price_tables_agree_on_every_model() {
+        for (id, want_in, want_out) in frontend_prices() {
+            let (got_in, got_out) = model_prices(&id);
+            assert_eq!(
+                (got_in, got_out),
+                (want_in, want_out),
+                "'{id}': model-pricing.ts says {want_in}/{want_out} per 1K, db.rs says {got_in}/{got_out}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_offered_model_has_a_real_price_somewhere() {
+        // Checking the TS table by NAME is what makes this exact. Checking the
+        // Rust by value cannot be: an id missing from model_prices() returns the
+        // mid-tier guess, which is a valid-looking pair of numbers. But a model
+        // present here and absent there fails the agreement test above, since no
+        // real rate equals the (0.001, 0.003) fallback — so name-checking one
+        // side pins both.
+        let priced: Vec<String> = frontend_prices().into_iter().map(|(id, _, _)| id).collect();
+
+        for (_, id) in catalog() {
+            let b = base(&id);
+            // NVIDIA NIM is `owner/model`: hundreds of third-party models behind
+            // one endpoint, priced by an average in both tables on purpose.
+            // The two `*-custom` rows are placeholders the user overwrites with
+            // their own id, so there is nothing to price until they do.
+            if b.contains('/') || b == "nvidia-custom" || b.starts_with("local-") {
+                continue;
+            }
+            assert!(
+                priced.iter().any(|p| p == b),
+                "'{id}' is offered in the dropdown but has no entry in model-pricing.ts, \
+                 so every turn on it is billed at the generic fallback rate"
+            );
+        }
+    }
+
+    #[test]
+    fn every_offered_model_is_on_the_backend_whitelist() {
+        // `ask_lucy` and `ask_lucy_stream` reject anything not in
+        // ALLOWED_MODELS, matching the WHOLE string — `::effort` suffix
+        // included, so every suffix needs its own row. A model in the dropdown
+        // and not on that list is not degraded, it is dead: "Modelo 'x' no
+        // permitido. Selecciona un modelo válido desde el selector", from the
+        // selector.
+        //
+        // llm-models.ts already carries the warning — "keep these two files in
+        // sync — adding a new id here without registering it there will produce
+        // 'unauthorized model' errors at runtime" — which is exactly what
+        // happened three commits in a row anyway. A warning addressed to
+        // whoever edits the file next cannot be read by the person who edits a
+        // different file.
+        for (_, id) in catalog() {
+            // Admitted by shape rather than by name: NVIDIA NIM is
+            // `owner/model` for hundreds of third-party models, and Ollama ids
+            // depend on what the user has pulled locally.
+            if id.contains('/') || id.starts_with("local-") {
+                continue;
+            }
+            // The one deliberate exception: the NVIDIA placeholder is meant to
+            // be refused until the user types a real `owner/model` over it.
+            if id == "nvidia-custom" {
+                continue;
+            }
+            assert!(
+                crate::state::ALLOWED_MODELS.contains(&id.as_str()),
+                "'{id}' is in the dropdown but not in ALLOWED_MODELS — picking it \
+                 returns 'Modelo no permitido' and the entry is unusable"
+            );
+        }
+    }
+
+    #[test]
+    fn the_internal_tiers_are_models_the_backend_accepts() {
+        // llm-models.ts fixes the models Lucy picks for ITSELF — autotag, the
+        // smart filter, script verification, memory summarisation. The user
+        // never selects these, so a broken tier does not show up as "that model
+        // is broken"; it shows up as a feature that stopped working, weeks
+        // later, in a view nobody connects to a model id.
+        //
+        // This is the exact sync that file's header has warned about since
+        // v1.7.0. It is now checked instead of requested.
+        for id in quoted_strings_after(LLM_TS, "export const LLM = Object.freeze({", "} as const)") {
+            assert!(
+                crate::state::ALLOWED_MODELS.contains(&id.as_str()),
+                "llm-models.ts routes an internal tier to '{id}', which ALLOWED_MODELS rejects"
+            );
+        }
+        for id in quoted_strings_after(LLM_TS, "KNOWN_GEMINI_IDS", "]);") {
+            assert!(
+                crate::state::ALLOWED_MODELS.contains(&id.as_str()),
+                "KNOWN_GEMINI_IDS lists '{id}', which ALLOWED_MODELS rejects"
+            );
+        }
+    }
+
+    #[test]
+    fn every_offered_model_has_a_context_window() {
+        // CONTEXT_WINDOWS feeds the `used/max` chip in the Context Strip and
+        // falls back to 128k. Its own comment spells out the consequence: on a
+        // 1M-context model that fallback makes a normal session look nearly
+        // full, so the chip turns red and the user starts compacting a
+        // conversation that was using 3% of its budget.
+        let mapped = quoted_strings_after(LLM_TS, "const CONTEXT_WINDOWS", "\n};");
+        for (_, id) in catalog() {
+            // Same two shape-based exclusions as everywhere else: NIM is
+            // `owner/model` and Ollama depends on what the user has pulled.
+            if id.contains('/') || id.starts_with("local-") || id == "nvidia-custom" {
+                continue;
+            }
+            let b = base(&id);
+            assert!(
+                mapped.iter().any(|m| m == b || m == &id),
+                "'{id}' is offered in the dropdown but missing from CONTEXT_WINDOWS, \
+                 so its token chip is denominated by the 128k fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn every_offered_effort_level_survives_its_resolver() {
+        // Both resolvers strip an effort they do not recognise instead of
+        // erroring, which is the right call for a stray suffix in a saved chat
+        // from two lineups ago. It is the wrong outcome for an entry Lucy puts
+        // in its own dropdown: the request goes out at the model's default, the
+        // answer comes back looking fine, and the only trace is a bill for
+        // reasoning that never happened. Nothing distinguishes the two cases at
+        // runtime — the dropdown has to be right up front.
+        //
+        // Anthropic's whitelist is per-model and genuinely irregular: Sonnet 4.6
+        // takes max but not xhigh, Opus 4.5 takes neither, Haiku takes no effort
+        // at all. That is the shape of thing that gets one row wrong.
+        for (_, id) in catalog() {
+            if !id.contains("::") {
+                continue;
+            }
+            let b = base(&id);
+            if b.starts_with("claude-") {
+                let (got_base, effort) = resolve_anthropic_model(&id);
+                assert_eq!(got_base, b, "'{id}' resolved to the wrong base model");
+                assert!(
+                    effort.is_some(),
+                    "the dropdown offers '{id}', but resolve_anthropic_model() drops that \
+                     effort for this model — it would run at the default and bill as if not"
+                );
+            } else if b.starts_with("gemini-") {
+                let (got_base, cfg) = resolve_gemini_model(&id);
+                assert_eq!(got_base, b, "'{id}' resolved to the wrong base model");
+                assert!(
+                    cfg.is_some(),
+                    "the dropdown offers '{id}', but resolve_gemini_model() drops that \
+                     thinkingLevel — Google would pick its own budget instead"
+                );
+            } else {
+                panic!("'{id}' carries an ::effort suffix but no resolver handles its provider");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod pricing_tests {
     use super::{calculate_cost, model_prices};
