@@ -90,6 +90,37 @@
         }
     }
 
+    // ── Ingest a URL ──────────────────────────────────────────────────────
+    // Web pages land in the same documents table and are searched by the same
+    // tool, so they belong in the same panel rather than a second one that
+    // would duplicate this list, this progress bar and this delete flow.
+    //
+    // `web_ingest` emits the same `pdf_progress` events, so the bar above
+    // works unchanged.
+    let urlInput = '';
+    async function ingestUrl() {
+        const url = urlInput.trim();
+        if (!url || ingesting) return;
+        error = null;
+        ingesting = true;
+        progress = { doc_id: '', current: 0, total: 0,
+                     phase: 'extracting', message: t('Descargando…', 'Fetching…') };
+        try {
+            await invoke('web_ingest', { url });
+            urlInput = '';
+            await loadDocs();
+        } catch (e) {
+            // Surfaced verbatim on purpose. The backend distinguishes "blocked
+            // by guardrails", "not a web page", and "no readable text — the
+            // page probably renders with JavaScript"; collapsing those into
+            // "could not ingest" would throw away the only part that tells the
+            // user what to do next.
+            error = String(e);
+        } finally {
+            ingesting = false;
+        }
+    }
+
     // ── Delete ────────────────────────────────────────────────────────────
     function deleteDoc(id, filename) {
         // Show the in-app confirm modal instead of the native browser confirm()
@@ -181,7 +212,9 @@
     <div class="pdf-header">
         <div class="hd-left">
             <span class="hd-icon"><FileText size={15} stroke={1.9} color="#818cf8"/></span>
-            <span class="hd-title">{t('Documentos PDF', 'PDF Documents')}</span>
+            <!-- Not "PDF Documents" any more: the same table, list and search
+                 now hold ingested web pages too (kind='web'). -->
+            <span class="hd-title">{t('Documentos', 'Documents')}</span>
             {#if docs.length > 0}
                 <span class="hd-badge">{docs.length}</span>
             {/if}
@@ -228,6 +261,25 @@
         {/if}
     </div>
 
+    <!-- Ingest a URL — same table, same search, same panel -->
+    <div class="url-row">
+        <input
+            class="url-input"
+            type="url"
+            bind:value={urlInput}
+            disabled={ingesting}
+            placeholder={t('…o pega una URL para que Lucy la lea y la recuerde',
+                           '…or paste a URL for Lucy to read and remember')}
+            on:keydown={(e) => { if (e.key === 'Enter') ingestUrl(); }} />
+        <button
+            class="url-btn"
+            on:click={ingestUrl}
+            disabled={ingesting || !urlInput.trim()}
+            title={t('Ingerir página web', 'Ingest web page')}>
+            {t('Leer', 'Read')}
+        </button>
+    </div>
+
     <!-- Error -->
     {#if error}
         <div class="err-bar">
@@ -245,15 +297,17 @@
                 <span class="empty-ico">📚</span>
                 <p>{t('Sin documentos ingresados aún.', 'No documents ingested yet.')}</p>
                 <small>
-                    {t('Arrastra un PDF arriba o usa ＋ para que Lucy pueda responder preguntas sobre manuales y documentación.',
-                       'Drop a PDF above or use ＋ so Lucy can answer questions from manuals and documentation.')}
+                    {t('Arrastra un PDF, o pega una URL, para que Lucy pueda responder preguntas sobre manuales, documentación y páginas web.',
+                       'Drop a PDF, or paste a URL, so Lucy can answer questions from manuals, documentation and web pages.')}
                 </small>
             </div>
         {:else}
             {#each docs as doc (doc.id)}
                 {@const dp = progressMap[doc.id]}
                 <div class="doc-row">
-                    <div class="doc-ico">📄</div>
+                    <!-- A web page with a file icon, whose "path" is a URL, is
+                         the kind of small lie that makes a list untrustworthy. -->
+                    <div class="doc-ico">{doc.kind === 'web' ? '🌐' : '📄'}</div>
                     <div class="doc-info">
                         <div class="doc-name" title={doc.path}>{doc.filename}</div>
                         <div class="doc-meta">
@@ -358,6 +412,41 @@
     .dz-icon   { font-size: 22px; display: block; margin-bottom: 4px; }
     .dz-label  { margin: 0; font-size: 12px; color: var(--text-primary, #e2e8f0); }
     .dz-hint   { font-size: 10px; color: var(--text-muted, #64748b); }
+
+    /* URL ingest row — sits under the drop zone, same margins so the two
+       read as one "bring something in" area rather than two features. */
+    .url-row {
+        display: flex; gap: 6px;
+        margin: 0 12px 10px;
+        flex-shrink: 0;
+    }
+    .url-input {
+        flex: 1; min-width: 0;
+        padding: 6px 9px;
+        font-size: 11px;
+        color: var(--text, #e2e8f0);
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px;
+        outline: none;
+        transition: border-color 0.2s;
+    }
+    .url-input::placeholder { color: var(--text-muted, #64748b); font-style: italic; }
+    .url-input:focus         { border-color: rgba(99,102,241,0.5); }
+    .url-input:disabled      { opacity: 0.5; cursor: not-allowed; }
+    .url-btn {
+        padding: 6px 12px;
+        font-size: 11px; font-weight: 600;
+        color: #c7d2fe;
+        background: rgba(99,102,241,0.15);
+        border: 1px solid rgba(99,102,241,0.3);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.2s;
+        flex-shrink: 0;
+    }
+    .url-btn:hover:not(:disabled) { background: rgba(99,102,241,0.28); }
+    .url-btn:disabled             { opacity: 0.4; cursor: not-allowed; }
 
     /* Progress view inside drop-zone */
     .progress-view {

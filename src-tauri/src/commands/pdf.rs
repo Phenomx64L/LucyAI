@@ -634,11 +634,16 @@ pub async fn pdf_list_docs() -> Result<Vec<PdfDocument>, String> {
         // now show real embedding coverage ("N/M embebidos") instead of the
         // ambiguous 'done' (which only covers the chunk-saving phase).
         let mut stmt = conn.prepare(
-            "SELECT d.id, d.filename, d.path, d.page_count, d.chunk_count, d.ingested_at, d.status,
+            // v1.8 — `d.kind || ':' || d.id` reconstructs the session_id for
+            // either corpus ('pdf:<id>' or 'web:<id>'). Left PDF-only, an
+            // ingested web page would show 0/N embedded forever, which is the
+            // exact signal the coverage warning and the re-embed repair key
+            // off — a permanent false alarm on a healthy document.
+            "SELECT d.id, d.filename, d.path, d.page_count, d.chunk_count, d.ingested_at, d.status, d.kind,
                     (SELECT COUNT(*) FROM embeddings e
-                      WHERE e.entity_type = 'pdf_chunk'
+                      WHERE e.entity_type IN ('pdf_chunk','web_chunk')
                         AND e.entity_id IN (SELECT CAST(am.id AS TEXT) FROM agent_memories am
-                                             WHERE am.session_id = 'pdf:' || d.id)) AS embedded_count
+                                             WHERE am.session_id = d.kind || ':' || d.id)) AS embedded_count
              FROM pdf_documents d ORDER BY d.ingested_at DESC",
         ).map_err(|e| format!("pdf_list_docs prepare: {}", e))?;
 
@@ -651,7 +656,8 @@ pub async fn pdf_list_docs() -> Result<Vec<PdfDocument>, String> {
                 chunk_count: row.get(4)?,
                 ingested_at: row.get(5)?,
                 status:      row.get(6)?,
-                embedded_count: row.get(7)?,
+                kind:        row.get(7)?,
+                embedded_count: row.get(8)?,
             })
         }
 

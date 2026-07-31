@@ -768,6 +768,11 @@ pub struct PdfDocument {
     pub chunk_count: i64,
     pub ingested_at: i64,
     pub status:      String,  // 'ingesting' | 'done' | 'error'
+    // v1.8 — 'pdf' | 'web'. This table is the ingested-DOCUMENTS table; the
+    // name is historical. Without this the UI shows a web page with a file
+    // icon and calls its URL a path.
+    #[serde(default)]
+    pub kind: String,
     // v1.7.233 — how many of this doc's chunks have a pdf_chunk embedding.
     // `status='done'` only covers the chunk-SAVING phase; embeddings run in a
     // background task with no other visibility. embedded_count == chunk_count
