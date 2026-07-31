@@ -411,12 +411,26 @@ rides to `MAX_LOOPS` (60).
    via `buildDeliverableAnchor` (`$lib/deliverable-anchor.ts`, tested),
    reserving its budget BEFORE the history walk so it displaces old turns
    instead of overflowing `contextMax`.
-14. **`npm run check` does NOT type-check `+page.svelte`.** `jsconfig.json` sets
-   `"checkJs": false`, so the 14.5 kLOC monolith — agent loop included — is
-   unchecked JS: undefined identifiers, wrong arity, everything passes. The
-   "0 errors" badge only covers `.ts`/`.svelte` files with typed script blocks.
-   **When editing `+page.svelte`, verify every identifier is in lexical scope —
-   no tool will tell you.**
+14. **`npm run check` does NOT type-check `+page.svelte` — nor most of the
+   cockpit.** `jsconfig.json` sets `"checkJs": false`, so the "0 errors" badge
+   only covers files with a **typed** script block (`<script lang="ts">`).
+   Anything on plain `<script>` is unchecked JS: undefined identifiers, wrong
+   arity, stale types, everything passes.
+
+   It is not just the monolith. Measured 2026-07-29:
+
+   | File | Lines | Checked? |
+   |---|---|---|
+   | `src/routes/+page.svelte` | 14 500 | ❌ plain `<script>` |
+   | `src/lib/cockpit/CockpitShell.svelte` | 1 434 | ❌ plain `<script>` |
+   | `src/lib/cockpit/AgentWorkspace.svelte` | 691 | ❌ plain `<script>` |
+
+   That is the whole Terminal IA surface. **When editing any of them, verify
+   every identifier is in lexical scope and every property exists on the type —
+   no tool will tell you.** A concrete instance this blind spot hid: the
+   cockpit's `atts` mirror type still described the pre-v1.8.1 shape
+   (`{name, previewUrl}`) while the renderer branched on `kind` and read
+   `chars`, and all three senders passed them.
 
    Reproduce the real error count with a throwaway config (do NOT flip the
    committed one — CI would go red on day one):

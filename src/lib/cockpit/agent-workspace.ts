@@ -107,7 +107,23 @@ export interface ConvoMsg {
   kind?: string;     // tool: 'exec' | 'edit' | 'write' | 'read'
   ok?: boolean;      // tool: succeeded?
   detail?: string;   // tool: output / summary (shown when expanded)
-  atts?: { name: string; previewUrl?: string }[];  // user: image attachments (thumbnails)
+  /**
+   * user: attachments mirrored into the bubble.
+   *
+   * This declared only `{ name, previewUrl }` — the pre-v1.8.1 world where the
+   * mirror carried images and silently dropped documents. It shipped stale:
+   * all three senders in +page.svelte pass `kind` and `chars`, and
+   * CockpitShell reads both to choose between a thumbnail and a `.msg-doc`
+   * chip. Nothing caught it because this component is plain `<script>`, so
+   * `npm run check` never type-checks the call sites.
+   *
+   * `kind` is the mirror's own vocabulary and is NOT the composer's `type`:
+   * an AttachedFile is `type: 'image' | 'text'` (see file-inputs.ts), which
+   * the mirror widens to `'image' | 'pdf' | 'text'` so the bubble can show a
+   * PDF icon. Do not unify them — the two-value enum is load-bearing for the
+   * prompt builder's `filter(f => f.type === 'text')`.
+   */
+  atts?: { name: string; kind?: 'image' | 'pdf' | 'text'; previewUrl?: string; chars?: number }[];
 }
 
 export const agentPlan = writable<PlanStep[]>([]);
@@ -175,21 +191,70 @@ export function planAppend(step: Omit<PlanStep, 'id'>): void {
   agentPlan.update((l) => [...l, { id: nid(), ...step, ts: step.ts ?? Date.now() }]);
 }
 
+// ── Bounds ────────────────────────────────────────────────────────────────
+//
+// `artifactPush` and `convoPush` were bounded from the start; these two were
+// not, and they are the lanes carrying the LARGEST payloads.
+//
+// `execPush` stores raw command output. The same string is clipped to 4 000
+// chars for the conversation bubble and truncated to 16 000 for the model, on
+// the very same line in +page.svelte — and stored here whole. A recursive
+// directory listing or a log dump is megabytes, and `resetWorkspace()` only
+// clears at the START of a task, so one 60-turn run accumulates every byte of
+// every command it ran.
+//
+// `tracePush` is worse in kind: it is the cockpit MIRROR of `liveTrace`, whose
+// own store caps at MAX_ENTRIES = 2000 with a comment costing out the memory.
+// Mirroring into an unbounded array quietly defeats that ring buffer — the
+// source trims, the copy never does. `AgentWorkspace` then renders every entry
+// in a keyed `{#each}` with no virtualisation, while liveTrace's own panel
+// uses virtual scrolling precisely because 2000 rows is too many to paint.
+//
+// Caps chosen to match what each lane is compared against: exec output to the
+// 16 000 the model already receives (more than the UI ever shows), trace to
+// liveTrace's own 2000 so the two stay in step.
+const EXEC_MAX_ENTRIES = 200;
+const EXEC_MAX_OUTPUT = 16_000;
+const TRACE_MAX_ENTRIES = 2_000;
+const TRACE_MAX_DETAIL = 4_000;
+
+const clip = (s: string | undefined, max: number): string | undefined =>
+  s == null ? undefined : s.length > max ? s.slice(0, max) + '\n… (truncado)' : s;
+
 export function execPush(entry: Omit<ExecEntry, 'id'>): void {
-  agentExec.update((l) => [...l, { id: nid(), ...entry, ts: entry.ts ?? Date.now() }]);
+  const rec: ExecEntry = {
+    id: nid(),
+    ...entry,
+    output: clip(entry.output, EXEC_MAX_OUTPUT) ?? '',
+    ts: entry.ts ?? Date.now(),
+  };
+  agentExec.update((l) => [...l, rec].slice(-EXEC_MAX_ENTRIES));
 }
 
 export function tracePush(entry: Omit<TraceEntry, 'id'>): void {
-  agentTrace.update((l) => [...l, { id: nid(), ...entry, ts: entry.ts ?? Date.now() }]);
+  const rec: TraceEntry = {
+    id: nid(),
+    ...entry,
+    detail: clip(entry.detail, TRACE_MAX_DETAIL),
+    ts: entry.ts ?? Date.now(),
+  };
+  agentTrace.update((l) => [...l, rec].slice(-TRACE_MAX_ENTRIES));
 }
+
+const ARTIFACT_MAX_ENTRIES = 60;
+const ARTIFACT_MAX_BODY = 8_000;
 
 export function artifactPush(a: Omit<Artifact, 'id'>): void {
   // Bound the stored before/after so a big writefile can't bloat the store, and
   // keep only the last 60 artifacts (a long session can touch many files).
-  const CAP = 8000;
-  const clip = (s?: string) => (s == null ? undefined : s.length > CAP ? s.slice(0, CAP) + '\n… (truncado)' : s);
-  const rec: Artifact = { id: nid(), ...a, before: clip(a.before), after: clip(a.after), ts: a.ts ?? Date.now() };
-  agentArtifacts.update((l) => [...l, rec].slice(-60));
+  const rec: Artifact = {
+    id: nid(),
+    ...a,
+    before: clip(a.before, ARTIFACT_MAX_BODY),
+    after: clip(a.after, ARTIFACT_MAX_BODY),
+    ts: a.ts ?? Date.now(),
+  };
+  agentArtifacts.update((l) => [...l, rec].slice(-ARTIFACT_MAX_ENTRIES));
 }
 
 export function statusPatch(patch: Partial<AgentStatus>): void {
