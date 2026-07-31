@@ -356,17 +356,69 @@ pub fn render_core_sync() -> String {
         Ok(rows)
     });
     let rows = rows_res.unwrap_or_default();
+    render_core_block(&rows)
+}
+
+/// Character ceiling for the whole CORE MEMORY block.
+///
+/// Roughly 1.5k tokens. There was no ceiling at all: every row that survived
+/// decay was concatenated and shipped, on EVERY turn, through both prompt
+/// builders. Decay bounds staleness, not volume — a user who pins forty facts
+/// has forty facts pinned at score 1.0 forever, and the cost lands on each
+/// request without appearing as anything the cost view attributes to memory.
+///
+/// The number is a judgement call, not a measurement: enough for a few dozen
+/// facts, small enough that it cannot quietly become the largest thing in the
+/// prompt. Overflow is dropped lowest-decay-first, so pinned entries (which
+/// never decay) survive.
+const CORE_RENDER_MAX_CHARS: usize = 6_000;
+
+/// Pure renderer, split from the DB fetch so the decay filter and the budget
+/// can be tested without a database.
+fn render_core_block(rows: &[CoreMemoryEntry]) -> String {
     if rows.is_empty() { return String::new(); }
 
-    // Bucket by section, dropping rows below the inject threshold entirely.
-    let mut by_section: std::collections::BTreeMap<String, Vec<&CoreMemoryEntry>> = std::collections::BTreeMap::new();
+    // Drop rows below the inject threshold entirely.
+    let mut fresh: Vec<&CoreMemoryEntry> = Vec::new();
     let mut skipped_stale = 0usize;
-    for r in &rows {
+    for r in rows {
         let score = r.decay_score.unwrap_or(1.0);
         if score < DECAY_INJECT_THRESHOLD {
             skipped_stale += 1;
             continue;
         }
+        fresh.push(r);
+    }
+
+    // Enforce the budget BEFORE bucketing: freshest first, ties broken on
+    // (section, key) so the same corpus always renders the same block. A
+    // prompt prefix that reshuffles between turns also defeats prompt caching,
+    // which is the other half of why determinism matters here.
+    fresh.sort_by(|a, b| {
+        b.decay_score.unwrap_or(1.0)
+            .partial_cmp(&a.decay_score.unwrap_or(1.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.section.cmp(&b.section))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    let mut budget = CORE_RENDER_MAX_CHARS;
+    let mut dropped_for_budget = 0usize;
+    let mut kept: Vec<&CoreMemoryEntry> = Vec::new();
+    for r in fresh {
+        // +6 covers the two-space indent, " = " and the newline; the marker is
+        // counted where it applies.
+        let cost = r.key.len() + r.value.len() + 6
+            + if r.decay_score.unwrap_or(1.0) < DECAY_AGING_THRESHOLD { 9 } else { 0 };
+        if cost > budget {
+            dropped_for_budget += 1;
+            continue;
+        }
+        budget -= cost;
+        kept.push(r);
+    }
+
+    let mut by_section: std::collections::BTreeMap<String, Vec<&CoreMemoryEntry>> = std::collections::BTreeMap::new();
+    for r in kept {
         by_section.entry(r.section.clone()).or_default().push(r);
     }
     if by_section.is_empty() {
@@ -397,6 +449,17 @@ pub fn render_core_sync() -> String {
         out.push_str(&format!(
             "(Note: {} additional fact{} were filtered as stale. If relevant, ask the user to confirm.)\n",
             skipped_stale, if skipped_stale == 1 { "" } else { "s" }
+        ));
+    }
+    if dropped_for_budget > 0 {
+        // Separate note from the stale one, and it has to exist: a model that
+        // believes it has been given every core fact will answer from an
+        // incomplete set without hedging. Truncating silently is how you get a
+        // confident wrong answer about the user's own configuration.
+        out.push_str(&format!(
+            "(Note: {} further fact{} omitted for space. Core memory is over budget — \
+             ask the user rather than assuming, and suggest they prune or pin what matters.)\n",
+            dropped_for_budget, if dropped_for_budget == 1 { "" } else { "s" }
         ));
     }
     out.push_str("--- END CORE MEMORY ---");
@@ -622,8 +685,21 @@ fn jaccard(a: &std::collections::HashSet<String>, b: &std::collections::HashSet<
 
 #[tauri::command]
 pub async fn memory_consolidate(dry_run: Option<bool>) -> Result<ConsolidationReport, String> {
-    use crate::commands::metrics::shared_db;
     let is_dry = dry_run.unwrap_or(true);
+    tokio::task::spawn_blocking(move || consolidate_sync(is_dry))
+        .await
+        .map_err(|e| format!("join: {}", e))?
+}
+
+/// The consolidation pass itself, synchronous.
+///
+/// The command above was `async` without ever awaiting — its whole body sat
+/// inside `shared_db`, so an O(n²) scan over up to 1000 memories ran on an
+/// executor thread. It runs on the blocking pool now, and the split lets the
+/// diagnostics check call the same code for a dry run instead of reimplementing
+/// "how duplicated is this corpus" with a second, drifting definition.
+pub(crate) fn consolidate_sync(is_dry: bool) -> Result<ConsolidationReport, String> {
+    use crate::commands::metrics::shared_db;
 
     // Hard caps so consolidation can't pathologically iterate.
     const MAX_INPUT: usize = 1_000;           // protect O(n²) inner loop
@@ -1150,6 +1226,99 @@ pub async fn memory_graph(
             total_memories,
         })
     })
+}
+
+#[cfg(test)]
+mod core_render_tests {
+    use super::{render_core_block, CoreMemoryEntry, CORE_RENDER_MAX_CHARS};
+
+    fn entry(section: &str, key: &str, value: &str, score: f32) -> CoreMemoryEntry {
+        CoreMemoryEntry {
+            id: format!("{section}/{key}"),
+            section: section.into(),
+            key: key.into(),
+            value: value.into(),
+            pinned: score >= 1.0,
+            created_at: 0,
+            updated_at: 0,
+            decay_score: Some(score),
+        }
+    }
+
+    #[test]
+    fn a_small_corpus_renders_whole_and_says_nothing_about_budgets() {
+        let rows = vec![
+            entry("user_facts", "nombre", "Iván", 1.0),
+            entry("environment", "os", "Windows 11", 0.9),
+        ];
+        let out = render_core_block(&rows);
+        assert!(out.contains("nombre = Iván"), "{out}");
+        assert!(out.contains("os = Windows 11"), "{out}");
+        assert!(!out.contains("omitted for space"), "no budget note expected: {out}");
+    }
+
+    #[test]
+    fn the_block_stays_under_budget_and_says_so_when_it_truncates() {
+        // This block is concatenated into EVERY prompt through both builders.
+        // Before the cap, forty pinned facts meant forty pinned facts on every
+        // request forever — decay bounds staleness, never volume.
+        let rows: Vec<CoreMemoryEntry> = (0..400)
+            .map(|i| entry("user_facts", &format!("k{i:03}"), &"v".repeat(60), 0.9))
+            .collect();
+
+        let out = render_core_block(&rows);
+        assert!(
+            out.len() < CORE_RENDER_MAX_CHARS + 500,
+            "block ran to {} chars, budget is {}",
+            out.len(), CORE_RENDER_MAX_CHARS
+        );
+        assert!(out.contains("omitted for space"), "truncation must be declared: {out}");
+    }
+
+    #[test]
+    fn pinned_facts_survive_the_cut_and_the_stalest_go_first() {
+        // Overflow is dropped lowest-decay-first, so a fact the user pinned
+        // deliberately outranks one that merely has not aged out yet.
+        let mut rows: Vec<CoreMemoryEntry> = (0..300)
+            .map(|i| entry("context", &format!("filler{i:03}"), &"x".repeat(60), 0.35))
+            .collect();
+        rows.push(entry("identity", "pinned_fact", "no debe caerse", 1.0));
+
+        let out = render_core_block(&rows);
+        assert!(out.contains("pinned_fact = no debe caerse"), "pinned entry was dropped: {out}");
+        assert!(out.contains("omitted for space"));
+    }
+
+    #[test]
+    fn truncation_is_announced_separately_from_staleness() {
+        // Two different things the model must not conflate: "these facts aged
+        // out, ask to confirm" versus "there are more facts I did not show
+        // you". A model that thinks it received the complete set answers from
+        // an incomplete one without hedging.
+        let mut rows: Vec<CoreMemoryEntry> = (0..300)
+            .map(|i| entry("context", &format!("k{i:03}"), &"y".repeat(60), 0.8))
+            .collect();
+        rows.push(entry("context", "olvidado", "hace mucho", 0.05));
+
+        let out = render_core_block(&rows);
+        assert!(out.contains("filtered as stale"), "{out}");
+        assert!(out.contains("omitted for space"), "{out}");
+    }
+
+    #[test]
+    fn the_same_corpus_always_renders_the_same_block() {
+        // Determinism is not cosmetic: this text is a prompt PREFIX, so a
+        // block that reshuffles between turns breaks prompt caching on every
+        // provider that offers it, and makes any recall complaint impossible
+        // to reproduce.
+        let rows: Vec<CoreMemoryEntry> = (0..200)
+            .map(|i| entry("user_facts", &format!("k{i:03}"), &"z".repeat(60), 0.7))
+            .collect();
+        let first = render_core_block(&rows);
+        for _ in 0..10 {
+            assert_eq!(render_core_block(&rows), first, "render is not deterministic");
+        }
+    }
 }
 
 #[cfg(test)]

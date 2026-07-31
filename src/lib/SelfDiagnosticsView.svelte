@@ -82,6 +82,18 @@
             };
         }
 
+        // ── Memory: near-duplicate clusters ──────────────────────────────
+        // v1.8 — the consolidation pass existed and nothing ever ran it.
+        // Non-destructive: merged entries get a `superseded_by:` tag, which
+        // hides them from recall without deleting anything.
+        if (check.name === 'Memory Duplication' && check.status === 'warning') {
+            return {
+                command: 'repair_memory_consolidate',
+                label:   isEN ? 'Merge duplicates' : 'Fusionar duplicados',
+                successDefault: isEN ? 'Duplicates merged' : 'Duplicados fusionados',
+            };
+        }
+
         // ── Stream sessions: leaked entries ──────────────────────────────
         // v1.7.70 — Triggered when STREAM_SESSIONS.len() > 20.
         if (check.name === 'Stream Sessions' && check.status === 'warning') {

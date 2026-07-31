@@ -80,6 +80,19 @@ pub async fn run_self_diagnostics() -> Result<DiagnosticsReport, String> {
         });
     checks.push(emb_check);
 
+    // 2c. Near-duplicate memories
+    let dup_check = tokio::task::spawn_blocking(check_memory_duplication)
+        .await
+        .unwrap_or_else(|_| DiagnosticCheck {
+            name: "Memory Duplication".into(),
+            category: "memory".into(),
+            status: "error".into(),
+            message: "Failed to spawn duplication check".into(),
+            details: None,
+            elapsed_ms: 0,
+        });
+    checks.push(dup_check);
+
     // 3. Memory pipeline
     let mem_check = tokio::task::spawn_blocking(check_memory_pipeline)
         .await
@@ -528,6 +541,84 @@ pub async fn repair_pdf_embeddings() -> Result<RepairResult, String> {
         )
     };
     Ok(RepairResult { ok: true, rows_repaired: created as i64, message: msg })
+}
+
+/// How much of the memory corpus is near-duplicate.
+///
+/// `memory_consolidate` — Jaccard over tags AND content, greedy clustering,
+/// written and unit-tested — was registered as a command and called by nothing.
+/// Not "rarely": zero callers in the entire frontend. Lucy has been
+/// accumulating restatements of the same fact since the feature shipped, and
+/// every one of them competes for the same recall slots and the same prompt
+/// budget.
+///
+/// The check runs the pass in DRY-RUN mode, so the number it reports is
+/// produced by the exact code the repair will execute — not a second estimate
+/// of "how duplicated is this", which would drift from the first.
+fn check_memory_duplication() -> DiagnosticCheck {
+    let start = std::time::Instant::now();
+
+    match crate::commands::memory::consolidate_sync(true) {
+        Ok(report) => {
+            // Any cluster is worth surfacing, but this is a suggestion rather
+            // than a fault: duplicates degrade recall quality, they do not
+            // break anything, and merging is the user's call.
+            let status = if report.clusters_found > 0 { "warning" } else { "ok" };
+            let message = if report.clusters_found == 0 {
+                format!("{} memories scanned, no near-duplicates.", report.scanned)
+            } else {
+                format!(
+                    "{} memories scanned — {} duplicate cluster{} covering {} redundant entries",
+                    report.scanned,
+                    report.clusters_found,
+                    if report.clusters_found == 1 { "" } else { "s" },
+                    report.memories_merged
+                )
+            };
+            DiagnosticCheck {
+                name: "Memory Duplication".into(),
+                category: "memory".into(),
+                status: status.into(),
+                message,
+                details: Some(serde_json::json!({
+                    "scanned": report.scanned,
+                    "clusters_found": report.clusters_found,
+                    "redundant_entries": report.memories_merged,
+                })),
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            }
+        }
+        Err(e) => DiagnosticCheck {
+            name: "Memory Duplication".into(),
+            category: "memory".into(),
+            status: "error".into(),
+            message: format!("Cannot scan for duplicates: {}", e),
+            details: None,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        },
+    }
+}
+
+/// Apply the consolidation the check just previewed.
+///
+/// Non-destructive by design: merged entries are tagged `superseded_by:<id>`
+/// rather than deleted, which is what hides them from recall while leaving the
+/// audit trail intact. Nothing here is unrecoverable.
+#[tauri::command]
+pub async fn repair_memory_consolidate() -> Result<RepairResult, String> {
+    let report = crate::commands::memory::memory_consolidate(Some(false)).await?;
+    let msg = if report.memories_merged == 0 {
+        "No near-duplicate memories to consolidate.".to_string()
+    } else {
+        format!(
+            "Consolidated {} redundant memor{} into {} canonical entr{}.",
+            report.memories_merged,
+            if report.memories_merged == 1 { "y" } else { "ies" },
+            report.clusters_found,
+            if report.clusters_found == 1 { "y" } else { "ies" }
+        )
+    };
+    Ok(RepairResult { ok: true, rows_repaired: report.memories_merged as i64, message: msg })
 }
 
 fn check_stream_sessions() -> DiagnosticCheck {
