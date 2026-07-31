@@ -2456,9 +2456,52 @@ import { listen } from '@tauri-apps/api/event';
             pre.textContent = String(detail).slice(0, 2000); // cap to avoid flooding
             document.body.replaceChildren(h3, pre);
         };
+        // ── Reporte de fallos en runtime ────────────────────────────────────
+        //
+        // Ambos manejadores terminaban en `console.error`, y DevTools está
+        // bloqueado en producción — el propio código ya lo dice 30 líneas más
+        // arriba, sobre los checkpoints: "console-only pointer … was a dead
+        // end". El resultado es que un fallo inesperado no dejaba rastro que un
+        // operador pudiera encontrar.
+        //
+        // Esto costó un bug real: `/compare` escribía sobre el retorno de
+        // `addMsg`, que no devolvía nada, y el TypeError resultante llegaba
+        // aquí como promesa rechazada. El comando dejaba de funcionar por
+        // completo y no había ni un mensaje en ninguna parte — se descubrió
+        // con un verificador de tipos, no usando la app.
+        //
+        // Ahora va a la traza (que se refleja en la pestaña Trace del cockpit,
+        // donde un SysAdmin sí mira) y avisa una vez por mensaje distinto. El
+        // dedup importa: un fallo que se repite en un bucle convertiría un
+        // aviso útil en spam, y un aviso que se ignora es otro canal muerto.
+        const _seenRuntimeFailures = new Set();
+        const _reportRuntimeFailure = (kind, detail) => {
+            const text = String(detail ?? 'Unknown');
+            console.error(`[Lucy] ${kind}:`, detail);
+            try {
+                pushTrace({ phase: 'info', label: `⚠ ${kind}`, detail: text.slice(0, 2000) });
+            } catch { /* la traza no debe poder tumbar al reportero de fallos */ }
+            const key = `${kind}:${text.slice(0, 200)}`;
+            if (_seenRuntimeFailures.has(key)) return;
+            _seenRuntimeFailures.add(key);
+            try {
+                toast(`${kind}. Detalle en la pestaña Trace.`, 'error');
+            } catch { /* el toaster puede no estar montado todavía */ }
+        };
+
         window.onerror = (msg, src, line, col, err) => {
-            _safeErrorScreen('Lucy — Error de inicio',
-                `${msg}\n${src}:${line}:${col}\n${err?.stack||''}`);
+            const detail = `${msg}\n${src}:${line}:${col}\n${err?.stack || ''}`;
+            // La pantalla de error REEMPLAZA el body, así que solo puede usarse
+            // antes de que la app esté viva. Sin esta guarda —que el manejador
+            // de promesas de abajo sí tenía— un error suelto a las tres horas
+            // de sesión borraba toda la interfaz y la sustituía por una
+            // pantalla titulada "Error de inicio", perdiendo el trabajo en
+            // pantalla por algo que probablemente era recuperable.
+            if (!appReady) {
+                _safeErrorScreen('Lucy — Error de inicio', detail);
+            } else {
+                _reportRuntimeFailure('Error de JavaScript', detail);
+            }
             return false;
         };
         window.onunhandledrejection = (e) => {
@@ -2473,7 +2516,7 @@ import { listen } from '@tauri-apps/api/event';
                 _safeErrorScreen('Lucy — Promise Error',
                     e.reason?.stack || e.reason || 'Unknown');
             } else {
-                console.error('[Lucy] Unhandled rejection en runtime:', e.reason);
+                _reportRuntimeFailure('Promesa rechazada sin manejar', e.reason?.stack || msg);
             }
         };
         if (window.speechSynthesis) window.speechSynthesis.getVoices();
