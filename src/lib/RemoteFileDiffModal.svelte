@@ -28,6 +28,9 @@
 
     // Props
     export let open       = false;
+    // Annotated for the same reason as HostModal: a bare `= null` initializer
+    // infers the type as `null` and every field read reports "possibly null".
+    /** @type {import('$lib/stores').Host | null} */
     export let host       = null;     // { id, name, host, username, type, port, sshKeyPath }
     export let initialPath = '';
     export let isEN       = false;

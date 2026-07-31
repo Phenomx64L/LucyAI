@@ -74,7 +74,11 @@
         busy = s.id;
         try {
             const full = await invoke('security_skills_get', { id: s.id });
-            setSecuritySkillAsPreset(full, true);
+            // One argument — the setter never took a second. The stray `true`
+            // here was silently dropped by JS, so whatever it was meant to
+            // switch on has never happened. The other call site
+            // (slash-commands.ts) always passed one.
+            setSecuritySkillAsPreset(full);
             activeId = s.id;
             toast.success((isEN ? 'Activated: ' : 'Activada: ') + s.name);
         } catch (e) { toast.error(String(e)); }

@@ -92,10 +92,8 @@ describe('cite-chips: addCiteChips', () => {
 
     it('handles empty and null gracefully', () => {
         expect(addCiteChips('')).toBe('');
-        // @ts-expect-error testing runtime tolerance
-        expect(addCiteChips(null)).toBe(null);
-        // @ts-expect-error testing runtime tolerance
-        expect(addCiteChips(undefined)).toBe(undefined);
+        expect(addCiteChips(null as any)).toBe(null);
+        expect(addCiteChips(undefined as any)).toBe(undefined);
     });
 
     it('escapes quotes in path attribute values', () => {

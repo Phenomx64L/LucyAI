@@ -30,6 +30,9 @@
     /** Controls visibility; supports bind:show */
     export let show        = false;
     /** Host being edited, or null for a new host */
+    // Without the annotation TS infers the type as literally `null` from the
+    // initializer and flags every field read as "possibly null".
+    /** @type {import('$lib/stores').Host | null} */
     export let editingHost = null;
     export let isEN = false;
 

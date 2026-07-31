@@ -56,7 +56,7 @@ describe('classifyToolResults', () => {
 
     it('handles empty / non-array input', () => {
         expect(classifyToolResults([])).toEqual({ totalToolCalls: 0, emptyCount: 0, errorCount: 0, psParseErrorCount: 0 });
-        // @ts-expect-error — defensive: non-array
-        expect(classifyToolResults(null).totalToolCalls).toBe(0);
+        // Cast rather than a directive — see security.test.ts for why.
+        expect(classifyToolResults(null as any).totalToolCalls).toBe(0);
     });
 });

@@ -56,7 +56,8 @@ npm run check:js   # this migration: checkJs, relaxed            — driving to 
 | Date | Errors | Files | What moved |
 |---|---:|---:|---|
 | 2026-07-29 | 217 | 36 | Baseline |
-| 2026-07-29 | **128** | **21** | Phase 1 — `strokeWidth` → `stroke` |
+| 2026-07-29 | 128 | 21 | Phase 1 — `strokeWidth` → `stroke` |
+| 2026-07-29 | **115** | **12** | Phase 2a — the defects outside the monolith |
 
 ### Phase 1 — the icon prop (done)
 
@@ -72,10 +73,39 @@ asked for 1.8 / 1.9 / 2.5 were visibly wrong; the rest were accidentally right.
 The repo already used `stroke={…}` correctly in ~200 other places — this
 unified it.
 
+### Phase 2a — the defects outside the monolith (done)
+
+Two of the 26 were user-visible bugs that only a type-checker finds, because
+both read perfectly:
+
+- **`LucyCombobox` never filtered.** It read the typed text from
+  `<Combobox.Root bind:inputValue>`, but bits-ui documents that prop as
+  read-only and does not declare it `$bindable()`. A `bind:` to a non-bindable
+  prop in Svelte 5 is one-way, so the local `inputValue` stayed `''` and the
+  filter below it always returned the whole list. Reads from the input's own
+  `oninput` now.
+- **`setSecuritySkillAsPreset(full, true)`** passed a second argument to a
+  one-parameter function. JS drops it silently, so whatever the `true` was
+  meant to switch on has never happened. The other call site always passed one.
+
+The rest were shape and annotation fixes: three `export let x = null` props
+whose type TS infers as literally `null` (annotated with JSDoc rather than
+silenced), and `JSON.parse(reader.result)` where the result is
+`string | ArrayBuffer | null`.
+
+**On the five `@ts-expect-error` directives** reported as unused: they are NOT
+dead. They are required by the strict gate and only unused here because
+`strict: false` disables `strictNullChecks`. Replacing them with an explicit
+`as any` cast satisfies both configs; swapping in `@ts-ignore` would have
+traded a conditional silencer for an unconditional one. Re-enabling
+`strictNullChecks` in this config was measured at **463 errors** — a separate
+and also worthwhile axis, but not this migration's.
+
 ### Remaining, in suggested order
 
-1. **The 26 errors outside `+page.svelte`** — spread thin across ~20 files, a
-   handful each. Each file fixed is a file permanently protected.
+1. **The last ~13 outside `+page.svelte`** — library-typing friction rather
+   than defects: uPlot wanting `TypedArray`, d3's `SimulationNodeDatum`, prop
+   unions typed as `string`. Each wants a narrow local type, not a cast.
 2. **`+page.svelte` (102)** — the long tail. Triage notes for the property
    errors are in the commit message of `f1c2191`; the DOM-lib ones
    (`EventTarget`, `Element`, custom `Window` globals) are noise and want a

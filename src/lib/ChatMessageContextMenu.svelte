@@ -24,6 +24,11 @@
     export let open = false;
     export let x    = 0;
     export let y    = 0;
+    // `= null` alone makes TS infer the type as literally `null`, so every
+    // read below reports "possibly null" even through `?.`. The messages this
+    // menu acts on are the untyped tab-message objects from +page.svelte, so
+    // `any` is the honest annotation rather than a fictional interface.
+    /** @type {any} */
     export let msg  = null;       // the message object the menu acts on
     export let isEN = false;
 

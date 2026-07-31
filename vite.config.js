@@ -1,8 +1,11 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 
-// @ts-expect-error process is a nodejs global
-const host = process.env.TAURI_DEV_HOST;
+// `process` is a Node global that neither config's `lib` declares. A cast
+// rather than a @ts-expect-error, because the directive only fires under the
+// strict config and reported as unused in the checkJs pass — a silencer that
+// is itself conditional is worse than saying what the value is.
+const host = /** @type {any} */ (globalThis).process?.env?.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({

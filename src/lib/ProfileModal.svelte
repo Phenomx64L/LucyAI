@@ -87,7 +87,12 @@
         const reader = new FileReader();
         reader.onload = () => {
             try {
-                const arr = JSON.parse(reader.result);
+                // `reader.result` is `string | ArrayBuffer | null`. readAsText
+                // below always yields a string, but JSON.parse would throw on
+                // the other two — into the catch, surfacing as "invalid JSON"
+                // rather than what actually happened. Coerce so the failure
+                // mode matches the message.
+                const arr = JSON.parse(String(reader.result ?? ''));
                 if (!Array.isArray(arr)) throw new Error('Not an array');
                 let imported = 0;
                 for (const p of arr) {

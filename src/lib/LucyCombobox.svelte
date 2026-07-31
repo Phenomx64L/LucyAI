@@ -11,6 +11,16 @@
      Bind:value gets the selected value (string). Bind:inputValue gets
      the filter text — letting the parent observe it for analytics or
      debounced searches.
+
+     NOTE on how the filter text is read (v1.8.1). It used to come from
+     `<Combobox.Root bind:inputValue>`, which does not work: bits-ui documents
+     that prop as "a read-only value that can be used to programmatically
+     update the input value" and does not declare it `$bindable()`. A `bind:`
+     to a non-bindable prop in Svelte 5 is one-way — nothing flows back — so
+     `inputValue` stayed at '' no matter what was typed and `filtered` below
+     always returned the unfiltered list. The picker looked fine and simply
+     never narrowed. The typed text now comes off the input's own `oninput`,
+     which is where bits-ui expects you to read it.
 ─────────────────────────────────────────────────────────────────────── -->
 <script>
     import { Combobox } from 'bits-ui';
@@ -30,12 +40,15 @@
         : items;
 </script>
 
-<Combobox.Root bind:value bind:inputValue type="single">
+<!-- `inputValue` is passed DOWN only (read-only per bits-ui); the typed text
+     comes back up through the input's oninput. -->
+<Combobox.Root bind:value {inputValue} type="single">
     <div class="lcb-wrap">
         <Combobox.Input
             class="lcb-input"
             placeholder={placeholder}
-            aria-label={ariaLabel} />
+            aria-label={ariaLabel}
+            oninput={(e) => { inputValue = e.currentTarget.value; }} />
         <Combobox.Trigger class="lcb-chev" aria-label={ariaLabel + ' toggle'}>▾</Combobox.Trigger>
     </div>
     <Combobox.Portal>

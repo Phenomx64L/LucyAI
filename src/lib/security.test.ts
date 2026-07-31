@@ -57,8 +57,10 @@ describe('security / isDestructiveCmd — benign commands are NOT flagged', () =
 
     it('handles empty / nullish input', () => {
         expect(isDestructiveCmd('')).toBe(false);
-        // @ts-expect-error runtime guards null even though the type says string
-        expect(isDestructiveCmd(null)).toBe(false);
+        // Cast, not @ts-expect-error: the directive is only "used" when
+        // strictNullChecks is on, so it reported as unused in the checkJs pass.
+        // The cast satisfies both configs and never goes stale.
+        expect(isDestructiveCmd(null as any)).toBe(false);
     });
 });
 
