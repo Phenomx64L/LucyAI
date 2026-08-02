@@ -3032,7 +3032,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
                     : (isEN ? '/fix [problem] for auto-troubleshoot · or ask Lucy anything...' : '/fix [problema] para auto-diagnostico · o pregunta lo que sea a Lucy...')}
                   bind:value={nsInput[s.id].lucyIn}
                   on:keydown={(e) => rsKeyLucy(e, s.id)}
-                  on:input={(e) => { e.target.style.height='auto'; e.target.style.height=Math.min(e.target.scrollHeight,140)+'px'; }}
+                  on:input={(e) => { const el = e.currentTarget; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,140)+'px'; }}
                   disabled={s.lucyRunning || (!s.connected && !s.rdpMode)}></textarea>
                 <button class="rsi-send rs-lucy-send" style="align-self:flex-end;margin-bottom:2px;" on:click={() => rsEnviarLucy(s.id)}
                   disabled={s.lucyRunning || (!s.connected && !s.rdpMode) || !nsInputGet(s.id, 'lucyIn').trim()}><Play size={12}/></button>
@@ -3222,7 +3222,7 @@ Recent history:\n${s.history.slice(-6).map(h=>`[${h.type}] ${String(h.text ?? h.
               <input type="checkbox"
                 checked={broadcastSelected.has(h.id)}
                 on:change={(e) => {
-                  if (e.target.checked) broadcastSelected.add(h.id);
+                  if (e.currentTarget.checked) broadcastSelected.add(h.id);
                   else broadcastSelected.delete(h.id);
                   broadcastSelected = new Set(broadcastSelected);
                 }}>

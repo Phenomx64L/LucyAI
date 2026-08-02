@@ -1101,6 +1101,28 @@ import { listen } from '@tauri-apps/api/event';
         return /** @type {HTMLTextAreaElement|null} */ (document.querySelector('.chat-wrap.on .ibox'));
     }
 
+    /**
+     * An event's `target`, narrowed to an element.
+     *
+     * `Event.target` is typed `EventTarget`, which has no `closest`, `id`,
+     * `style` or anything else the DOM is usually reached for — 14 errors in
+     * this file were that one fact.
+     *
+     * Most of them are fixed by `e.currentTarget` instead, which Svelte types
+     * precisely and which for a void `<input>` is always the same node. This
+     * helper is for the ones where it is NOT the same node and the difference
+     * is the point: the window-level drag handlers below ask "is the pointer
+     * over the PDF panel", which is a question about the DESCENDANT under the
+     * cursor. Swapping those to `currentTarget` would type-check and silently
+     * break the exclusion they exist for.
+     *
+     * @param {Event} e
+     * @returns {HTMLElement|null}
+     */
+    function targetEl(e) {
+        return e.target instanceof HTMLElement ? e.target : null;
+    }
+
     let kgViewerOpen = false;
     let kgViewerPath = '';
     let kgViewerNeighbors = [];           // KgNeighborNode[]
@@ -5438,6 +5460,18 @@ REGLAS DE FORMATO:
         if (t && (raw || '').trim()) t._retryPrompt = (raw || '').trim();
         // Hoisted refs so catch/finally can clean up even on unexpected throws.
         let _reasoningTickerRef = null;
+        // The model this turn actually went out on, for the provider-fallback
+        // path in `catch`.
+        //
+        // That code read `typeof aiParams !== 'undefined' && aiParams.model`,
+        // but `aiParams` is `const` inside the `try` — never in scope from the
+        // `catch`, so the guard was always false and the fallback always
+        // reasoned about `getEffectiveModel(t)` instead. Those differ exactly
+        // when it matters: smart routing or an escalation can send a turn to a
+        // different model than the tab is set to, and it is the routed one that
+        // just failed. Looking for a backup to the wrong model can pick the one
+        // already failing.
+        let _turnModel = null;
         // v1.7.111 audit H4 — hoist the streaming drain timer to function
         // scope so the finally block can always clear it. Previously it was
         // declared inside the try; if askLucyStream threw (provider error) or
@@ -6198,6 +6232,7 @@ Use ONE of these patterns instead:
             const _isLocalModel    = String(_routedLoopModel || '').startsWith('local-');
             const _localToolCapable = _isLocalModel && /code/i.test(String(_routedLoopModel || ''));
             const aiParams = {prompt:_briefPrefix + (raw||"Analiza esto."),context:ctx,userName: agentEnv.config.name, runbooksDir: agentEnv.config.runbooksDir || null,model:_routedLoopModel,images:imgs.length?imgs:null,lang:agentEnv.lang,hostsJson:JSON.stringify(agentEnv.hosts)};
+            _turnModel = aiParams.model;   // readable from `catch`; see its declaration
 
             // ── TURN INTENT GATES ───────────────────────────────────────────────
             // The four booleans that decide whether ANYTHING the model emits is
@@ -6824,6 +6859,24 @@ Use ONE of these patterns instead:
                 const MAX_LOOPS = _localLoopCap != null
                     ? Math.min(_baseMaxLoops, _localLoopCap)
                     : _baseMaxLoops;
+                // Which agent iteration is running, readable from the helpers
+                // defined below but OUTSIDE the loop's block scope.
+                //
+                // Four places asked for the loop counter as
+                // `typeof loop_i !== 'undefined' ? loop_i + 1 : null` — a
+                // ReferenceError guard for a `let` that is block-scoped to the
+                // `for` further down and was never in their closure. So the
+                // guard was always false. Three of them logged `iteration: null`
+                // forever; the fourth computed `hitLimit`, which therefore never
+                // became true, so an agent that exhausted MAX_LOOPS told the
+                // user "✓ Operaciones completadas" instead of "se alcanzó el
+                // límite de pasos, escribe continúa" — done when it was cut off,
+                // and no hint about how to resume.
+                //
+                // Declared here because this scope encloses both those helpers
+                // and the loop. Per runAI invocation, not module-scoped: two
+                // tabs can be looping at once.
+                let _loopStep = null;
                 const ESCALATED_MAX_TOKENS = 64000; // openclaude pattern
                 let escalatedTokens = null; // null = usar default, número = override
                 let truncationRecoveryCount = 0;
@@ -6935,7 +6988,7 @@ Use ONE of these patterns instead:
                         // Telemetry: persistent log for "which models get stuck most"
                         host.logTaskEvent('agent_loop_block', 'tool_loop', null, {
                             model: _loopModelName, kind, args_excerpt: String(args).slice(0, 120),
-                            count: prev + 1, iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
+                            count: prev + 1, iteration: _loopStep != null ? _loopStep + 1 : null,
                         }, tabId);
                         return { blocked: true, msg: `[LOOP BLOCKED] Has llamado a "${kind}" con los mismos argumentos ${prev} veces ya. STOP. Ese camino no converge. ${hintAlt || 'Cambia de estrategia: prueba una herramienta distinta, modifica los argumentos, o entrega tu respuesta final al usuario explicando lo que encontraste hasta ahora.'}` };
                     }
@@ -7014,7 +7067,7 @@ Use ONE of these patterns instead:
                             // Telemetry: capture which models hit target-loops most
                             host.logTaskEvent('agent_loop_block', 'target_loop', null, {
                                 model: _loopModelName, target: label, count: prev + 1,
-                                iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
+                                iteration: _loopStep != null ? _loopStep + 1 : null,
                             }, tabId);
                             return {
                                 blocked: true,
@@ -7041,7 +7094,7 @@ Use ONE of these patterns instead:
                         // Telemetry: track which models trigger repeat-error blocks
                         host.logTaskEvent('agent_loop_block', 'error_repeat', null, {
                             model: _loopModelName, fingerprint: fp.slice(0, 120),
-                            count, iteration: typeof loop_i !== 'undefined' ? loop_i + 1 : null,
+                            count, iteration: _loopStep != null ? _loopStep + 1 : null,
                         }, tabId);
                         return `\n\n[⊗ REPEATED BUILD ERROR — seen ${count} times]\nThis exact error pattern has appeared ${count} times already. STOP retrying the same approach.\nYou MUST pivot: try a completely different strategy, simplify the code, remove the failing dependency, or explain to the user why this approach won't work.`;
                     }
@@ -7469,7 +7522,7 @@ Use ONE of these patterns instead:
                         const total = agentToolCards.length;
                         const allFailed = errors === total && total > 0;
                         const hasErrors = errors > 0;
-                        const hitLimit = typeof loop_i !== 'undefined' && loop_i >= MAX_LOOPS - 1;
+                        const hitLimit = _loopStep != null && _loopStep >= MAX_LOOPS - 1;
 
                         const parts = [];
                         if (writeOps.length) parts.push(`Modifiqué ${writeOps.length} archivo${writeOps.length>1?'s':''}: ${writeOps.map(w => '`' + (w.label.replace(/^(Edit|Write)\s+/,'')) + '`').join(', ')}`);
@@ -7613,6 +7666,7 @@ Use ONE of these patterns instead:
                 let verifierRefinedOnce = false;
 
                 for (let loop_i = 0; loop_i < MAX_LOOPS; loop_i++) {
+                    _loopStep = loop_i;   // see the declaration above
                     if (t._cancelled) break;
                     if (agentEnv.cockpitUi && tabId === agentEnv.activeTabId) statusPatch({ stepIndex: loop_i + 1 }); // cockpit preview — real agent step (titlebar + workspace)
                     // phase-1 review (feature) — session spend cap. Halt the
@@ -10267,9 +10321,7 @@ times the SAME way, switch tool kind entirely.
             // another configured provider AND we haven't already fallen back
             // once, swap models and retry the entire turn. The user sees a
             // single "switching to backup" notice instead of a dead error.
-            const _currentModel = (typeof aiParams !== 'undefined' && aiParams && aiParams.model)
-                ? aiParams.model
-                : getEffectiveModel(t);
+            const _currentModel = _turnModel || getEffectiveModel(t);
             if (retryCount < 1 && _isRetryableProviderError(e)) {
                 const _fb = await _findFallbackModel(_currentModel);
                 if (_fb) {
@@ -11485,7 +11537,10 @@ if (Test-Path $src) {
         inp.type = 'file';
         inp.accept = '.lucybackup,.json,application/json';
         inp.onchange = async (e) => {
-            const file = e.target.files?.[0];
+            // `inp` is the element this handler is attached to and is right
+            // here in scope — reaching for it through the event, only to lose
+            // its type on the way, was the long way round.
+            const file = inp.files?.[0];
             if (!file) return;
             try {
                 const text = await file.text();
@@ -11912,7 +11967,7 @@ if (Test-Path $src) {
       for (let i = 0; i < types.length; i++) { if (types[i] === 'Files') { isFileDrag = true; break; } }
       if (!isFileDrag) return;
       // Don't show the main drop overlay if the drag is happening over the PDF panel
-      if (showPdfPanel && e.target?.closest?.('.pdf-panel-overlay')) {
+      if (showPdfPanel && targetEl(e)?.closest('.pdf-panel-overlay')) {
         showDragOverlay = false;
         return;
       }
@@ -11924,7 +11979,7 @@ if (Test-Path $src) {
       // overlay itself. The narrow old check (target.id === 'drag-ov')
       // missed many cancellation paths.
       const rel = e.relatedTarget;
-      const targetId = e.target && e.target.id;
+      const targetId = targetEl(e)?.id;
       if (rel === null || rel === undefined || targetId === 'drag-ov') {
         showDragOverlay = false;
       }
@@ -11932,7 +11987,7 @@ if (Test-Path $src) {
     on:dragend={() => { showDragOverlay = false; }}
     on:drop|preventDefault={(e) => {
       // Let the PDF panel handle drops on itself
-      if (showPdfPanel && e.target?.closest?.('.pdf-panel-overlay')) {
+      if (showPdfPanel && targetEl(e)?.closest('.pdf-panel-overlay')) {
         showDragOverlay = false;
         return;
       }
@@ -12424,7 +12479,7 @@ if (Test-Path $src) {
                           : (isEN ? '👎 Logged — Lucy will learn' : '👎 Registrado — Lucy aprenderá'), 'info');
                   }
               }}
-              on:buttonaction={(e) => { const btn = e.detail.event.target; btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); e.detail.msg.button.action(e.detail.event); }}
+              on:buttonaction={(e) => { const btn = targetEl(e.detail.event); if (btn instanceof HTMLButtonElement) { btn.disabled = true; btn.innerText = '↗ ' + (isEN ? 'Sent to AI' : 'Enviado a IA'); } e.detail.msg.button.action(e.detail.event); }}
               on:togglereasoning={(e) => { e.detail.msg.collapsed = !e.detail.msg.collapsed; tabs = tabs; }}
               on:codeclick={(e) => invoke('open_vscode', { path: e.detail.path })}
               on:citeclick={(e) => onCiteClick(e.detail.kind, e.detail.value)}
@@ -13703,11 +13758,11 @@ if (Test-Path $src) {
               <input type="file" accept="image/png,image/jpeg,image/webp" id="set-user-avatar"
                 style="display:none;"
                 on:change={(e) => {
-                  const f = e.target.files && e.target.files[0];
+                  const f = e.currentTarget.files && e.currentTarget.files[0];
                   if (!f) return;
                   if (f.size > 600 * 1024) {
                     toast(isEN ? 'Image too large (>600 KB). Pick a smaller one.' : 'Imagen muy grande (>600 KB). Elige una más pequeña.', 'error');
-                    e.target.value = '';
+                    e.currentTarget.value = '';
                     return;
                   }
                   const fr = new FileReader();
@@ -13719,7 +13774,7 @@ if (Test-Path $src) {
                     }
                   };
                   fr.readAsDataURL(f);
-                  e.target.value = '';
+                  e.currentTarget.value = '';
                 }} />
               <button class="settings-btn" type="button"
                 on:click={() => document.getElementById('set-user-avatar')?.click()}>
