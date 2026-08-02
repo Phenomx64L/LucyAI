@@ -12,6 +12,10 @@
 
     // ── Props ────────────────────────────────────────────────────────────────
     /** Lista completa de idiomas soportados: { code, label, stt, tts } */
+    // `readonly`: the caller passes a `readonly LangSpec[]` (a frozen catalog),
+    // and a mutable `any[]` parameter refuses it — correctly, since accepting
+    // it would advertise a write this component must not perform.
+    /** @type {readonly any[]} */
     export let LANGS = [];
     /** Idioma pre-seleccionado (el código de idioma del sistema o último usado) */
     export let initialLang = 'es-MX';

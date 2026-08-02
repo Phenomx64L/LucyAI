@@ -963,8 +963,14 @@
     /** Programmatically focus the SVG so keyboard works without click. */
     function focusCanvas(): void {
         tick().then(() => {
-            const el = document.getElementById('mg-canvas') as SVGElement | null;
-            (el as unknown as HTMLElement | null)?.focus?.();
+            // `getElementById` returns `HTMLElement | null`, and TS refuses a
+            // direct cast to `SVGElement` because neither type contains the
+            // other. The element IS an <svg>, so the honest route is through
+            // `Element` — which both extend — rather than the double cast this
+            // had, which asserted SVGElement and then immediately asserted it
+            // back to HTMLElement to call focus().
+            const el = document.getElementById('mg-canvas') as Element | null;
+            (el as HTMLElement | null)?.focus?.();
         });
     }
 

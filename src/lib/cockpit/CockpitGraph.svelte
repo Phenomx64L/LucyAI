@@ -78,7 +78,13 @@
     sim?.stop();
     sim = forceSimulation(nodes)
       .force('charge', forceManyBody().strength(-190).distanceMax(360))
-      .force('link', forceLink(edges).id((d) => d.id).distance((l) => 60 + (1 - l.weight) * 90).strength((l) => 0.25 + l.weight * 0.5))
+      // d3 types `forceLink().id()`'s argument as `SimulationNodeDatum`, which
+      // declares only the simulation's own x/y/vx/vy — the caller's payload
+      // (here, `id`) is by design outside what d3 knows about. Naming the
+      // parameter `any` is the accepted way to say "this is my datum, not
+      // d3's"; the alternative is a generic parameter threaded through every
+      // force in the chain for one property read.
+      .force('link', forceLink(edges).id((/** @type {any} */ d) => d.id).distance((l) => 60 + (1 - l.weight) * 90).strength((l) => 0.25 + l.weight * 0.5))
       .force('center', forceCenter(W / 2, H / 2))
       .force('collide', forceCollide().radius((d) => nR(d) + 6))
       .alpha(1)

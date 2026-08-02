@@ -579,6 +579,7 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.98 — D5: accent picker state. Initialized properly in onMount
     // via initAccent(); we default to 'emerald' here so the first render
     // before onMount lights the swatch correctly.
+    /** @type {import('$lib/accent-store').AccentId} */
     let activeAccent = 'emerald';
     // v1.7.100 — D1: terminal side panel. State persisted to localStorage
     // so the operator's preference survives restarts. Default off — we
@@ -661,6 +662,9 @@ import { listen } from '@tauri-apps/api/event';
     let pendingLearnTab    = null;
     
     let pendingLearnSpeak  = false;
+    // `{}` infers as the empty type, not as a dictionary. The host port takes
+    // `Record<string, ForkEntry>` and mutates this by key.
+    /** @type {Record<string, import('$lib/agent-host').ForkEntry>} */
     let forkedTasks        = {};
 
     // `{}` infers as the empty type, which is not assignable to `SecretMap`
@@ -1390,7 +1394,11 @@ import { listen } from '@tauri-apps/api/event';
             if (curSig !== turnSig) return;
 
             const llmChips    = Array.isArray(llmRaw)    ? llmRaw.map((c, i)    => ({ ...backendChipToPredictive(c, i), source: 'llm' }))    : [];
-            const memoryChips = Array.isArray(memoryRaw) ? memoryRaw.map((c, i) => ({ ...backendChipToPredictive(c, 100 + i), source: 'memory' })) : [];
+            // `source: 'memory'` widens to `string` in an object literal, so
+            // the result no longer satisfies `PredictiveChip['source']`
+            // ('heuristic' | 'llm' | 'memory'). The const assertion keeps the
+            // literal type without a cast over the whole object.
+            const memoryChips = Array.isArray(memoryRaw) ? memoryRaw.map((c, i) => ({ ...backendChipToPredictive(c, 100 + i), source: /** @type {const} */ ('memory') })) : [];
 
             // No background sources returned anything → leave heuristics in place.
             if (llmChips.length === 0 && memoryChips.length === 0) return;
@@ -1702,6 +1710,9 @@ import { listen } from '@tauri-apps/api/event';
 
     // ── ALERTAS PROACTIVAS ────────────────────────
     // alertRules, activeAlerts, showAlertsModal → stores.ts
+    // `metric` widens to `string` without this, so the spread into an
+    // `AlertRule` (whose metric is 'cpu' | 'ram' | 'disk') is rejected.
+    /** @type {{ hostId: string, metric: 'cpu'|'ram'|'disk', threshold: number, enabled: boolean }} */
     let alertForm          = { hostId:'all', metric:'cpu', threshold:85, enabled:true };
 
     // ── RUNBOOKS ──────────────────────────────────
@@ -3271,7 +3282,12 @@ import { listen } from '@tauri-apps/api/event';
     // Handler global para el botón de corrección — usa Map para evitar SyntaxError con scripts complejos
     if (typeof window !== 'undefined') {
         window._lucyRunFix = async (key) => {
-            const item = _lucyFixStore.get(key);
+            // `getFix` is generic with an `unknown` default, and the wrapper
+            // object drops the type parameter. The shape is fixed at the one
+            // producer, ~15 lines above: `setFix(fixKey, { script, tabId })`.
+            const item = /** @type {{ script: string, tabId: string }|undefined} */ (
+                _lucyFixStore.get(key)
+            );
             if (!item) { console.warn('[Lucy] Fix key not found:', key); return; }
             const { script, tabId } = item;
             const t = getTab(tabId); if(!t || t.isProcessing) return;
@@ -11650,7 +11666,11 @@ if (Test-Path $src) {
                 timestamp: new Date().toISOString(),
                 userAgent: navigator.userAgent,
                 config: { name: lucyConfig.name, theme: lucyConfig.theme },
-                hosts: $hosts.map(h => ({ name: h.name, type: h.type, label: h.label })),
+                // `label` was never a field on Host (id / name / type /
+                // username), so every entry in the bug report carried
+                // `label: undefined`. `name` is the display string and is
+                // already here.
+                hosts: $hosts.map(h => ({ name: h.name, type: h.type })),
                 recentMessages: []
             };
             const currentTab = getTab(activeTabId);
@@ -11826,7 +11846,11 @@ if (Test-Path $src) {
     // ── Dashboard functions moved to DashboardView.svelte ──
     // Alert functions — persistedWritable auto-persiste, no se necesita saveAlertRules()
     function agregarAlertRule() {
-        $alertRules = [...$alertRules, { id: Date.now(), ...alertForm }];
+        // `AlertRule.id` is a string, and DashboardView's own rule editor
+        // creates `ar_<ts>`. This one used a bare `Date.now()` number, so the
+        // two editors minted ids in different types — and `eliminarAlertRule`
+        // compares with `!==`, which never matches across them.
+        $alertRules = [...$alertRules, { id: `ar_${Date.now()}`, ...alertForm }];
     }
     function eliminarAlertRule(id) {
         $alertRules = $alertRules.filter(r => r.id !== id);
