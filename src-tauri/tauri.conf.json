@@ -25,7 +25,7 @@
         "decorations": false,
         "transparent": true,
         "backgroundColor": "#00060a0f",
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,BatterySaverModeAlignWakeUps --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,BatterySaverModeAlignWakeUps --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist",
         "windowEffects": {
           "effects": ["mica"],
           "state": "active",

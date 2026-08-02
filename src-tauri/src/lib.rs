@@ -83,6 +83,8 @@ pub fn run() {
     {
         // ── v1.7.208 — RENDERING CONTINUITY (fixes "info disappears until I
         // move the mouse") ────────────────────────────────────────────────
+        // The flag set lives at module scope (WEBVIEW2_BROWSER_ARGS) so the
+        // test below can hold it against tauri.conf.json.
         // WebView2/Chromium pauses or throttles compositing + timers when it
         // believes the window is occluded or backgrounded. The symptom: the
         // DOM updates (streaming tokens land) but the screen is NOT repainted
@@ -101,15 +103,28 @@ pub fn run() {
         //   --disable-renderer-backgrounding
         //       Don't deprioritize / freeze the renderer process when the
         //       window is behind another or unfocused.
-        const GPU_FLAGS: &str = concat!(
-            "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist ",
-            "--disable-features=CalculateNativeWinOcclusion ",
-            "--disable-background-timer-throttling ",
-            "--disable-backgrounding-occluded-windows ",
-            "--disable-renderer-backgrounding"
-        );
+        // ── v1.8 — ONE source for these flags ────────────────────────────
+        //
+        // This block and `tauri.conf.json`'s `additionalBrowserArgs` both set
+        // WebView2 browser arguments, and they DID NOT AGREE: the config
+        // disables six features, this set disabled one — but added three GPU
+        // flags the config never had. Only one of the two reaches WebView2
+        // (`AdditionalBrowserArguments` and the environment variable are
+        // alternatives, not a merge), so whichever loses is dead text that
+        // still reads like it is doing something.
+        //
+        // That matters for the freeze this block exists to fix. If the config
+        // wins, `--enable-gpu-rasterization` and `--ignore-gpu-blocklist` have
+        // never been applied — and a renderer that fell back to software
+        // compositing is a plausible cause of "paints only on input" all by
+        // itself, independent of the throttling flags.
+        //
+        // The full set now lives in tauri.conf.json (the source Tauri passes
+        // explicitly). This keeps the env var as a byte-identical fallback so
+        // the two can no longer drift, and so a WebView2 build that ignores
+        // the API option still gets the same arguments.
         if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", GPU_FLAGS);
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", WEBVIEW2_BROWSER_ARGS);
         }
     }
 
@@ -1245,6 +1260,101 @@ pub fn run() {
             // v1.7.94 — Hybrid SQL+vector recall exposed to the frontend.
             commands::vec_search::vec_search_query,
         ])
-        .run(tauri::generate_context!())
+        .run(lucy_context())
         .expect("Error al iniciar Lucy");
+}
+
+/// Chromium command-line flags for the embedded WebView2.
+///
+/// MUST stay byte-identical to `app.windows[].additionalBrowserArgs` in
+/// tauri.conf.json — pinned by the test at the bottom of this file. The two are
+/// alternative delivery routes for the same arguments, not a merge: whichever
+/// one WebView2 does not take is dead text that still reads like configuration.
+/// They had already drifted, and the half that lost was the half carrying the
+/// GPU flags.
+#[cfg(windows)]
+const WEBVIEW2_BROWSER_ARGS: &str = concat!(
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,",
+    "CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,BatterySaverModeAlignWakeUps ",
+    "--disable-background-timer-throttling ",
+    "--disable-renderer-backgrounding ",
+    "--disable-backgrounding-occluded-windows ",
+    "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist"
+);
+
+/// The app context, with an opt-in diagnostic for the repaint freeze.
+///
+/// `LUCY_OPAQUE=1` starts Lucy as an ordinary opaque window: no `transparent`,
+/// no Mica. Everything else is untouched, and without the variable nothing
+/// changes — this is a switch for one measurement, not a setting.
+///
+/// WHY THIS IS WORTH MEASURING. The freeze ("streaming tokens land in the DOM
+/// but the screen does not repaint until you move the mouse") has so far been
+/// treated purely as Chromium throttling, and every flag for that is already
+/// set. But this window is `transparent: true` with a Mica backdrop, which puts
+/// it on a different DWM composition path — and "presents only when something
+/// else forces a present" is as characteristic of that path as it is of
+/// throttling. Nothing in the codebase had tested the two apart.
+///
+/// The answer decides something expensive: a native (non-WebView) frontend for
+/// an app this size is a very large rewrite, and it should not start on an
+/// untested assumption about the cause. If the freeze survives with
+/// `LUCY_OPAQUE=1`, transparency is exonerated and that rewrite has its
+/// justification closed. If it does not, the bug was never the WebView.
+///
+///     $env:LUCY_OPAQUE = "1"; npm run tauri dev
+fn lucy_context() -> tauri::Context {
+    let mut ctx = tauri::generate_context!();
+    if std::env::var_os("LUCY_OPAQUE").is_some() {
+        for w in ctx.config_mut().app.windows.iter_mut() {
+            w.transparent = false;
+            w.window_effects = None;
+        }
+        eprintln!(
+            "[lucy] LUCY_OPAQUE=1 — ventana opaca, sin Mica. \
+             Diagnóstico del congelamiento de repintado; quita la variable para volver al aspecto normal."
+        );
+    }
+    ctx
+}
+
+#[cfg(all(test, windows))]
+mod webview_args_tests {
+    use super::WEBVIEW2_BROWSER_ARGS;
+
+    const CONF: &str = include_str!("../tauri.conf.json");
+
+    /// The environment variable and `additionalBrowserArgs` must carry the same
+    /// flags.
+    ///
+    /// They are alternative routes to WebView2, not a merge — only one is
+    /// applied. So a difference between them is not a style question: it is a
+    /// set of flags that silently never reach the browser, while both sources
+    /// still read like they are configuring it. That is exactly how
+    /// `--enable-gpu-rasterization` and `--ignore-gpu-blocklist` came to be
+    /// written down in one place and absent from the one that wins — for a
+    /// renderer whose "paints only on input" symptom a missing GPU raster path
+    /// would explain on its own.
+    #[test]
+    fn the_browser_args_in_code_and_config_are_identical() {
+        let from_conf = CONF
+            .split_once("\"additionalBrowserArgs\"")
+            .expect("additionalBrowserArgs disappeared from tauri.conf.json")
+            .1
+            .split_once(':')
+            .expect("malformed additionalBrowserArgs entry")
+            .1
+            .trim()
+            .trim_start_matches('"')
+            .split('"')
+            .next()
+            .unwrap_or_default();
+
+        assert!(!from_conf.is_empty(), "read an empty arg string from the config");
+        assert_eq!(
+            from_conf, WEBVIEW2_BROWSER_ARGS,
+            "tauri.conf.json and WEBVIEW2_BROWSER_ARGS disagree; whichever WebView2 \
+             ignores is dead configuration"
+        );
+    }
 }
