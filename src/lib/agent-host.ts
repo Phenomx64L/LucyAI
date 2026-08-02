@@ -33,7 +33,13 @@
  * rest addressable without forcing a premature full typing of the tab.
  */
 export interface AgentTab {
-    id: string | number;
+    // `string`, not `string | number`. Tab ids are strings everywhere that
+    // creates or stores one — `MinimalTab.id` in page/tabs-store.ts is
+    // `string`, and `bumpTab`/`getTabRevStore`/`disposeTabRev` all take
+    // `string`. The union was defensive width that no producer ever needed,
+    // and it cost five errors at the boundary where this port hands a tabId
+    // to a function that (correctly) only accepts strings.
+    id: string;
     messages: any[];
     isProcessing?: boolean;
     execEngine?: string;
@@ -48,7 +54,7 @@ export interface AgentMessage {
     style?: string;
     rawRole?: string;
     rawContent?: string;
-    id?: string | number;
+    id?: string;
     [key: string]: any;
 }
 
@@ -65,13 +71,13 @@ export interface RunAsRequest {
     cmd: string;
     ctx: string;
     doSpeak: boolean;
-    tabId: string | number;
+    tabId: string;
     isDestructive?: boolean;
 }
 
 /** A command stopped by the security blocklist, awaiting explicit authorization. */
 export interface SecurityBlockRequest {
-    tabId: string | number;
+    tabId: string;
     cmd: string;
     ctx: string;
     doSpeak: boolean;
@@ -97,7 +103,7 @@ export interface LearnRequest {
     script: string;
     /** The canned answer to give. */
     respuesta: string;
-    tabId: string | number;
+    tabId: string;
     doSpeak: boolean;
 }
 
@@ -125,17 +131,17 @@ export interface ForkEntry {
 export interface AgentHost {
     // ── Chat surface ────────────────────────────────────────────────────────
     /** Append a message to a tab. Sanitizes `html` and mirrors to the cockpit. */
-    addMsg(tabId: string | number, msg: AgentMessage): void;
+    addMsg(tabId: string, msg: AgentMessage): void;
     /** Show the "thinking" placeholder bubble for a tab. */
-    addThinking(tabId: string | number): void;
+    addThinking(tabId: string): void;
     /** Scroll the transcript to the newest message. */
     scrollChat(): Promise<void> | void;
     /** Finalize a turn: sweep placeholders, clear processing state, mirror the reply. */
-    fin(tabId: string | number): Promise<void> | void;
+    fin(tabId: string): Promise<void> | void;
 
     // ── Reactivity / tab bookkeeping ───────────────────────────────────────
     /** Resolve a tab by id. Returns undefined once a tab has been closed. */
-    getTab(tabId: string | number): AgentTab | undefined;
+    getTab(tabId: string): AgentTab | undefined;
     /** Global re-render — reassigns the tabs array to trigger Svelte reactivity. */
     refresh(): void;
     /**
@@ -143,7 +149,7 @@ export interface AgentHost {
      * streaming, where a global invalidation re-renders every tab per token.
      * Prefer this inside hot loops.
      */
-    bumpTab(tabId: string | number): void;
+    bumpTab(tabId: string): void;
 
     // ── Notifications ───────────────────────────────────────────────────────
     toast: AgentToast;
@@ -173,9 +179,9 @@ export interface AgentHost {
      * Persist in-flight agent state so a crash mid-turn can be recovered.
      * Written once the loop commits to a multi-step plan.
      */
-    saveCheckpoint(tabId: string | number, data: Record<string, unknown>): void;
+    saveCheckpoint(tabId: string, data: Record<string, unknown>): void;
     /** Drop a tab's checkpoint — the turn finished, there is nothing to recover. */
-    clearCheckpoint(tabId: string | number): void;
+    clearCheckpoint(tabId: string): void;
 
     // ── Background forks (Phase 5) ──────────────────────────────────────────
     /**
@@ -195,7 +201,7 @@ export interface AgentHost {
         subtype: string,
         elapsedMs: number | null,
         metadata: Record<string, unknown> | null,
-        tabId: string | number,
+        tabId: string,
     ): void;
 
     // ── Backend ─────────────────────────────────────────────────────────────
@@ -219,7 +225,7 @@ export interface RecordingHost extends AgentHost {
     /** Messages passed to addMsg, in order. */
     messages(): AgentMessage[];
     /** Tabs the double knows about, keyed by id. */
-    tabs: Map<string | number, AgentTab>;
+    tabs: Map<string, AgentTab>;
 }
 
 /**
@@ -248,7 +254,7 @@ export type AgentHostOverrides =
  */
 export function createRecordingHost(overrides: AgentHostOverrides = {}): RecordingHost {
     const calls: HostCall[] = [];
-    const tabs = new Map<string | number, AgentTab>();
+    const tabs = new Map<string, AgentTab>();
     const rec = (method: string) => (...args: any[]) => { calls.push({ method, args }); };
 
     const base: AgentHost = {
@@ -308,7 +314,7 @@ export function createRecordingHost(overrides: AgentHostOverrides = {}): Recordi
 }
 
 /** Convenience for tests: register a tab the double will return from getTab. */
-export function seedTab(host: RecordingHost, tab: Partial<AgentTab> & { id: string | number }): AgentTab {
+export function seedTab(host: RecordingHost, tab: Partial<AgentTab> & { id: string }): AgentTab {
     const full: AgentTab = { messages: [], isProcessing: false, ...tab };
     host.tabs.set(full.id, full);
     return full;

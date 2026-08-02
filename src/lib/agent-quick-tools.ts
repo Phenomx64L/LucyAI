@@ -26,7 +26,7 @@ import type { AgentHost } from './agent-host';
 export type QuickToolHost = Pick<AgentHost, 'invoke' | 'addMsg' | 'fin' | 'speak'>;
 
 export interface QuickToolContext {
-    tabId: string | number;
+    tabId: string;
     /** Voice-initiated turn — speak the sysinfo confirmation. */
     doSpeak: boolean;
     host: QuickToolHost;

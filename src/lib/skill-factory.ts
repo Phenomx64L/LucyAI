@@ -64,8 +64,8 @@ interface FactoryState {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function _stateKey(tabId: string | number) { return `lucy_skill_factory_${tabId}`; }
-function _loadState(tabId: string | number): FactoryState {
+function _stateKey(tabId: string) { return `lucy_skill_factory_${tabId}`; }
+function _loadState(tabId: string): FactoryState {
     const s = safeParseLS<FactoryState>(_stateKey(tabId), {
         ring: [], proposedAt: {}, dismissed: [],
     });
@@ -75,7 +75,7 @@ function _loadState(tabId: string | number): FactoryState {
     s.dismissed  ??= [];
     return s;
 }
-function _saveState(tabId: string | number, s: FactoryState) {
+function _saveState(tabId: string, s: FactoryState) {
     safeSetLS(_stateKey(tabId), s);
 }
 
@@ -133,7 +133,7 @@ function _suggestTriggers(commands: string[]): string[] {
  * Failed execs are intentionally NOT tracked — we don't want to propose
  * skills that don't work.
  */
-export function observe(tabId: string | number, obs: CommandObservation): void {
+export function observe(tabId: string, obs: CommandObservation): void {
     if (!obs?.cmd || !obs.ok) return;
     const s = _loadState(tabId);
     s.ring.push({
@@ -153,7 +153,7 @@ export function observe(tabId: string | number, obs: CommandObservation): void {
  *
  * Returns 0..2 proposals (we cap to avoid spamming).
  */
-export function getProposals(tabId: string | number): SkillProposal[] {
+export function getProposals(tabId: string): SkillProposal[] {
     const s = _loadState(tabId);
     if (s.ring.length < SEQUENCE_MIN_COUNT * 2) return [];
 
@@ -233,14 +233,14 @@ function _buildProposal(
 /** Mark a proposal as accepted: stamps proposedAt so we don't re-suggest the
  *  same fingerprint again immediately. The actual save_skill call is the
  *  caller's responsibility. */
-export function markAccepted(tabId: string | number, fingerprint: string): void {
+export function markAccepted(tabId: string, fingerprint: string): void {
     const s = _loadState(tabId);
     s.proposedAt[fingerprint] = Date.now();
     _saveState(tabId, s);
 }
 
 /** Mark a proposal as dismissed forever — never re-suggest. */
-export function dismissProposal(tabId: string | number, fingerprint: string): void {
+export function dismissProposal(tabId: string, fingerprint: string): void {
     const s = _loadState(tabId);
     if (!s.dismissed.includes(fingerprint)) s.dismissed.push(fingerprint);
     if (s.dismissed.length > 64) s.dismissed.splice(0, s.dismissed.length - 64);
@@ -248,6 +248,6 @@ export function dismissProposal(tabId: string | number, fingerprint: string): vo
 }
 
 /** Clear everything for a tab — invoked when the tab itself is closed. */
-export function resetForTab(tabId: string | number): void {
+export function resetForTab(tabId: string): void {
     safeSetLS(_stateKey(tabId), { ring: [], proposedAt: {}, dismissed: [] });
 }
