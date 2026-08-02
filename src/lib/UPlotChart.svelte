@@ -26,7 +26,15 @@
     import uPlot from 'uplot';
 
     /** uPlot AlignedData: [xs[], ys[], ys[], ...] */
-    export let data = [[], []];
+    // uPlot's `AlignedData` is `[xs, ...ys]` where each series is a TypedArray
+    // OR a plain number array — its own runtime accepts both, but the shipped
+    // types only describe the TypedArray form. Every caller here passes plain
+    // arrays (they come from JSON), so the annotation follows the library's
+    // behaviour rather than its declaration; the alternative is converting to
+    // Float64Array at every call site to satisfy a constraint uPlot does not
+    // actually impose.
+    /** @type {import('uplot').AlignedData} */
+    export let data = /** @type {any} */ ([[], []]);
     /** Series array. First entry is the x-axis (omit stroke), rest are y-series. */
     export let series = [
         {},

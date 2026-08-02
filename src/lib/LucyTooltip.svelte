@@ -22,7 +22,11 @@
     // scopable elements; imported CSS is global, which is what .lt-content needs).
     import './LucyTooltip.css';
     export let text    = '';
-    export let side    = 'top';      // 'top' | 'right' | 'bottom' | 'left'
+    // The union was already documented in the comment; stating it in the type
+    // means a caller passing 'above' is caught here instead of by bits-ui
+    // silently falling back at runtime.
+    /** @type {'top' | 'right' | 'bottom' | 'left'} */
+    export let side    = 'top';
     export let delayMs = 350;
     export let disabled = false;
 </script>

@@ -15,7 +15,8 @@
     import { DropdownMenu } from 'bits-ui';
     export let label     = '≡';
     export let ariaLabel = 'Menu';
-    export let align     = 'end';   // 'start' | 'center' | 'end'
+    /** @type {'start' | 'center' | 'end'} */
+    export let align     = 'end';
     export let triggerClass = 'ldd-trigger';
 </script>
 

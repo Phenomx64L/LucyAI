@@ -442,6 +442,12 @@
 
     function resetForm() {
         newSkill = {
+            // The declaration above documents `id: ''` as "generated
+            // server-side if empty, preserved on edit". This reset dropped the
+            // key entirely, so after any reset the field was `undefined`
+            // instead of `''` — a different thing to serialise, and one the
+            // backend contract never described.
+            id: '',
             name: '',
             category: 'quick_cmd',
             triggers: JSON.stringify([]),

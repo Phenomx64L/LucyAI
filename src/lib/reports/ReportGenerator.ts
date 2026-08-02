@@ -191,7 +191,14 @@ export interface InventoryExportData {
     services: Array<{ name: string; status?: string; description?: string }>;
     software: Array<{ name: string; version?: string }>;
     certs: Array<{ subject?: string; issuer?: string; expiry?: string }>;
-    scheduled: Array<{ name: string; schedule?: string; status?: string }>;
+    // `entry`, not `name`: the inventory script emits
+    // `[PSCustomObject]@{entry=$_.TaskName}` (inventory.rs) and InventoryView
+    // renders `{s.entry}`. This interface was the only place claiming `name`,
+    // `schedule` and `status`, and it never got contradicted because the report
+    // only reads `.length` — so the fiction survived until a checker looked.
+    // Anyone adding a per-task row to the PDF would have rendered `undefined`
+    // for every task.
+    scheduled: Array<{ entry: string }>;
 }
 
 export async function exportInventoryPdf(data: InventoryExportData, isEN: boolean): Promise<string> {
