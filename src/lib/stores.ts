@@ -211,7 +211,33 @@ export function markHostReachable(hostId: string, ok: boolean): void {
 // ── ALERT RULES ───────────────────────────────────────────────────────────────
 
 export const alertRules   = persistedWritable<AlertRule[]>('lucy_alert_rules', []);
-export const activeAlerts = writable<string[]>([]);
+/**
+ * Threshold alerts currently firing.
+ *
+ * Was `writable<string[]>` and never written by anyone. DashboardView kept its
+ * own component-local `activeAlerts` holding objects, so the bell badge worked
+ * — while the "Disparadas ahora" section of the Alertas Proactivas modal in
+ * +page.svelte reads THIS store and was therefore permanently empty. Two
+ * sources of truth for "which alerts are firing", one of them wired to the UI
+ * and never populated.
+ *
+ * The `string[]` annotation was the tell: every consumer reached for `.metric`,
+ * `.hostLabel`, `.value` and `.threshold` on its elements. DashboardView now
+ * publishes here instead of keeping a private copy.
+ */
+export interface ActiveAlert {
+    id: string;
+    ruleId: string;
+    hostId: string;
+    hostLabel: string;
+    /** Already uppercased at construction ('CPU' | 'RAM' | 'DISK'). */
+    metric: string;
+    value: number;
+    threshold: number;
+    /** Locale time string, for display only. */
+    ts: string;
+}
+export const activeAlerts = writable<ActiveAlert[]>([]);
 
 // ── RUNBOOKS ──────────────────────────────────────────────────────────────────
 

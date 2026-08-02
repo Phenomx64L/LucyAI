@@ -19,7 +19,7 @@
     import { reportAnomaly } from '$lib/anomaly-bridge';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
     import CpuHeatmap from '$lib/CpuHeatmap.svelte';
-    import { markHostReachable } from '$lib/stores';
+    import { markHostReachable, activeAlerts } from '$lib/stores';
 
     const dispatch = createEventDispatcher();
 
@@ -137,7 +137,10 @@
 
     // ── Proactive alerts ─────────────────────────────────────────────────────
     let alertRules         = [];
-    let activeAlerts       = [];
+    // `activeAlerts` is the shared store now, not a local. It used to be both:
+    // a private array here that drove the bell badge, and an untouched store in
+    // stores.ts that the Alertas Proactivas modal in +page.svelte read — and so
+    // that modal's "Disparadas ahora" list was always empty.
     let showAlertsModal    = false;
     let alertForm          = { hostId:'all', metric:'cpu', threshold:85, enabled:true };
 
@@ -460,9 +463,9 @@
             if (rule.metric === 'disk') value = metrics.disks?.length ? Math.max(...metrics.disks.map(d => d.percent)) : 0;
             const aId = `${rule.id}_${hostId}`;
             if (value >= rule.threshold) {
-                if (!activeAlerts.find(a => a.id === aId)) {
+                if (!$activeAlerts.find(a => a.id === aId)) {
                     const al = { id: aId, ruleId: rule.id, hostId, hostLabel, metric: rule.metric.toUpperCase(), value: Math.round(value), threshold: rule.threshold, ts: new Date().toLocaleTimeString() };
-                    activeAlerts = [...activeAlerts, al];
+                    $activeAlerts = [...$activeAlerts, al];
                     toast(isEN ? `\u26a0\ufe0f ${al.metric} on ${hostLabel}: ${al.value}%` : `\u26a0\ufe0f ${al.metric} en ${hostLabel}: ${al.value}%`, 'warn');
                     try {
                         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -471,7 +474,7 @@
                     } catch(e) {}
                 }
             } else {
-                activeAlerts = activeAlerts.filter(a => a.id !== aId);
+                $activeAlerts = $activeAlerts.filter(a => a.id !== aId);
             }
         }
     }
@@ -490,7 +493,7 @@
 
     function eliminarAlertRule(id) {
         alertRules = alertRules.filter(r => r.id !== id);
-        activeAlerts = activeAlerts.filter(a => a.ruleId !== id);
+        $activeAlerts = $activeAlerts.filter(a => a.ruleId !== id);
         saveAlertRules();
     }
 
@@ -663,7 +666,7 @@
       {/if}
       <button class="view-btn" on:click={refreshDash} disabled={dashLoading} title={isEN ? 'Refresh now' : 'Actualizar ahora'}>{dashLoading?'⏳':'↻'}</button>
       <button class="view-btn" on:click={() => showAlertsModal=true} title={isEN ? 'Configure proactive alerts' : 'Configurar alertas proactivas'}
-        style="position:relative;display:flex;align-items:center;gap:4px;"><Bell size={13} stroke={1.8}/>{#if activeAlerts.length}<span class="alert-badge-btn">{activeAlerts.length}</span>{/if}</button>
+        style="position:relative;display:flex;align-items:center;gap:4px;"><Bell size={13} stroke={1.8}/>{#if $activeAlerts.length}<span class="alert-badge-btn">{$activeAlerts.length}</span>{/if}</button>
       {#if dashLastUpdate}
         <span class="dash-last-update">{isEN ? 'Upd.' : 'Act.'} {dashLastUpdate}</span>
       {/if}
@@ -701,13 +704,13 @@
     </button>
   </div>
   {/if}
-  {#if activeAlerts.length}
+  {#if $activeAlerts.length}
   <div class="alert-bar">
-    {#each activeAlerts as al}
+    {#each $activeAlerts as al}
     <div class="alert-item">
       <span class="alert-item-ico"><AlertTriangle size={13} stroke={2} style="color:var(--red)"/></span>
       <span><b>{al.metric}</b> {isEN ? 'on' : 'en'} <b>{al.hostLabel}</b>: <span style="color:var(--red);font-weight:700;">{al.value}%</span> ({isEN ? 'threshold' : 'umbral'} {al.threshold}%) · {al.ts}</span>
-      <button class="alert-dismiss" on:click={() => activeAlerts = activeAlerts.filter(x=>x.id!==al.id)} title={isEN ? 'Dismiss' : 'Descartar'}>✕</button>
+      <button class="alert-dismiss" on:click={() => $activeAlerts = $activeAlerts.filter(x=>x.id!==al.id)} title={isEN ? 'Dismiss' : 'Descartar'}>✕</button>
     </div>
     {/each}
   </div>
