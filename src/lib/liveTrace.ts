@@ -21,7 +21,14 @@ export type TracePhase =
     | 'llm.turn'      // a new LLM turn begins
     | 'react.reflect' // ReAct self-correction triggered
     | 'plan'          // a <PLAN> was parsed
-    | 'info';         // generic info line
+    | 'info'          // generic info line
+    // v1.8 — five call sites in +page.svelte already emitted 'warn' (three of
+    // them "✗ fork_… failed"). It was not in this union, so it was not in
+    // LiveTracePanel's `enabledPhases` either — and that panel drops any entry
+    // whose phase is not enabled. The warnings were written to the ring buffer
+    // and discarded before rendering: the exact failure this trace exists to
+    // make visible, invisible.
+    | 'warn';         // something went wrong but the turn continues
 
 export interface TraceEntry {
     id: number;

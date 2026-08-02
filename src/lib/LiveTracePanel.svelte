@@ -30,7 +30,7 @@
     // Filter state — what phases to show
     let enabledPhases = new Set<TracePhase>([
         'thought', 'tool.start', 'tool.end', 'exec.start', 'exec.end',
-        'llm.turn', 'react.reflect', 'plan', 'info',
+        'llm.turn', 'react.reflect', 'plan', 'info', 'warn',
     ]);
     let scopeToActiveTab = true;
     let showFilters = false;
@@ -72,6 +72,7 @@
             case 'react.reflect': return '↻';
             case 'plan':          return '⊟';
             case 'info':          return '·';
+            case 'warn':          return '⚠';
         }
     }
     function phaseColor(p: TracePhase): string {
@@ -85,6 +86,7 @@
             case 'react.reflect': return '#f87171';
             case 'plan':          return '#c4b5fd';
             case 'info':          return '#94a3b8';
+            case 'warn':          return '#fbbf24';
         }
     }
     function fmtTime(ts: number): string {
@@ -107,7 +109,7 @@
 
     const ALL_PHASES: TracePhase[] = [
         'thought', 'tool.start', 'tool.end', 'exec.start', 'exec.end',
-        'llm.turn', 'react.reflect', 'plan', 'info',
+        'llm.turn', 'react.reflect', 'plan', 'info', 'warn',
     ];
 </script>
 
