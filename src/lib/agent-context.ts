@@ -99,7 +99,7 @@ export interface AgentContext {
     readonly hostName: string;
     /** Id of the tab the operator is looking at — NOT necessarily the tab the
      *  turn runs in, which is why runAI() takes `tabId` separately. */
-    readonly activeTabId: string | number | null;
+    readonly activeTabId: string | null;
     /** Cloud spend so far this session, in USD. Climbs DURING a turn — the
      *  spend cap compares against this, so it must be read live. */
     readonly sessionSpendUsd: number;

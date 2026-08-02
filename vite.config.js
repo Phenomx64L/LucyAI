@@ -8,7 +8,13 @@ import { sveltekit } from "@sveltejs/kit/vite";
 const host = /** @type {any} */ (globalThis).process?.env?.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+//
+// Not `async`: nothing in this config awaits anything (it is a plain object
+// literal), and the async form made TypeScript reject every `defineConfig`
+// overload — a `() => Promise<config>` matches `UserConfigFnPromise`, not the
+// `UserConfigFnObject` the object shape resolves to. `sveltekit()` returning a
+// promise is fine; Vite awaits the `plugins` array itself.
+export default defineConfig(() => ({
   plugins: [sveltekit()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

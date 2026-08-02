@@ -138,6 +138,21 @@ if [ -n "$SVELTE_CHANGED" ]; then
         exit 1
     fi
     echo -e "${G}      ✓ svelte-check clean (${SC_TOTAL} errors)${N}"
+
+    # v1.8 — the checkJs pass, at 0 since 2026-08-02 and gated in CI. The run
+    # above uses the default config (strict, checkJs off), so it says nothing
+    # about the ~16.6 kLOC on plain <script> — which is where every defect this
+    # migration found actually lived. Same baseline, same failure mode.
+    CJ_OUT=$(npx --no svelte-check --tsconfig ./jsconfig.checkjs.json --threshold error 2>&1 || true)
+    CJ_TOTAL=$(echo "$CJ_OUT" | grep -oE '[0-9]+ ERRORS' | head -1 | awk '{print $1}')
+    if [ -z "$CJ_TOTAL" ]; then CJ_TOTAL=0; fi
+    if [ "$CJ_TOTAL" -gt 0 ]; then
+        echo -e "${R}      ✗ svelte-check --checkJs reports ${CJ_TOTAL} errors (baseline 0).${N}"
+        echo -e "${R}        New type errors in the untyped half.${N}"
+        echo -e "${Y}        Inspect with: npm run check:js${N}"
+        exit 1
+    fi
+    echo -e "${G}      ✓ svelte-check --checkJs clean (${CJ_TOTAL} errors)${N}"
 else
     echo -e "${Y}[3/4] No frontend changes — skipping svelte-check.${N}"
 fi

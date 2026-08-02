@@ -19,7 +19,7 @@
     import { reportAnomaly } from '$lib/anomaly-bridge';
     import { safeParseLS, safeSetLS } from '$lib/safe-ls';
     import CpuHeatmap from '$lib/CpuHeatmap.svelte';
-    import { markHostReachable, activeAlerts } from '$lib/stores';
+    import { markHostReachable, activeAlerts, alertRules } from '$lib/stores';
 
     const dispatch = createEventDispatcher();
 
@@ -136,12 +136,21 @@
     }
 
     // ── Proactive alerts ─────────────────────────────────────────────────────
-    let alertRules         = [];
+    // `alertRules` is the shared persisted store, not a local — same fix as
+    // `activeAlerts` above, and for a sharper reason: this component and the
+    // Alertas Proactivas modal in +page.svelte both persisted to the SAME
+    // localStorage key ('lucy_alert_rules') from SEPARATE in-memory arrays.
+    // Whichever saved last wrote its stale copy over the other's, so a rule
+    // added in one surface disappeared when you added one in the other.
     // `activeAlerts` is the shared store now, not a local. It used to be both:
     // a private array here that drove the bell badge, and an untouched store in
     // stores.ts that the Alertas Proactivas modal in +page.svelte read — and so
     // that modal's "Disparadas ahora" list was always empty.
     let showAlertsModal    = false;
+    // Same annotation as the modal's copy in +page.svelte: `metric` widens to
+    // `string` in a bare literal, and `AlertRule.metric` is a union. Now that
+    // both editors write the same store, both had to say so.
+    /** @type {{ hostId: string, metric: 'cpu'|'ram'|'disk', threshold: number, enabled: boolean }} */
     let alertForm          = { hostId:'all', metric:'cpu', threshold:85, enabled:true };
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -454,9 +463,9 @@
     // ── Proactive alerts ─────────────────────────────────────────────────────
 
     function checkAlerts(hostId, metrics) {
-        if (!metrics || !alertRules.length) return;
+        if (!metrics || !$alertRules.length) return;
         const hostLabel = hostId === 'local' ? 'Local' : (hosts.find(h => h.id === hostId)?.name ?? hostId);
-        for (const rule of alertRules.filter(r => r.enabled && (r.hostId === 'all' || r.hostId === hostId))) {
+        for (const rule of $alertRules.filter(r => r.enabled && (r.hostId === 'all' || r.hostId === hostId))) {
             let value = 0;
             if (rule.metric === 'cpu')  value = metrics.cpu?.global ?? 0;
             if (rule.metric === 'ram')  value = metrics.memory?.percent ?? 0;
@@ -479,22 +488,20 @@
         }
     }
 
-    function saveAlertRules() {
-        try { localStorage.setItem('lucy_alert_rules', JSON.stringify(alertRules)); } catch(e) {}
-    }
+    // `saveAlertRules()` is gone: `alertRules` is a `persistedWritable`, so it
+    // writes 'lucy_alert_rules' on every assignment. Keeping a manual save
+    // beside it was how the two copies overwrote each other.
 
     function agregarAlertRule() {
         const thr = Number(alertForm.threshold);
         if (!thr || thr < 1 || thr > 100) return;
-        alertRules = [...alertRules, { id: `ar_${Date.now()}`, hostId: alertForm.hostId, metric: alertForm.metric, threshold: thr, enabled: true }];
-        saveAlertRules();
+        $alertRules = [...$alertRules, { id: `ar_${Date.now()}`, hostId: alertForm.hostId, metric: alertForm.metric, threshold: thr, enabled: true }];
         alertForm = { hostId: 'all', metric: 'cpu', threshold: 85, enabled: true };
     }
 
     function eliminarAlertRule(id) {
-        alertRules = alertRules.filter(r => r.id !== id);
+        $alertRules = $alertRules.filter(r => r.id !== id);
         $activeAlerts = $activeAlerts.filter(a => a.ruleId !== id);
-        saveAlertRules();
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -565,7 +572,10 @@
 
     onMount(() => {
         metricsHistory = safeParseLS('lucy_metrics_history', {});
-        alertRules     = safeParseLS('lucy_alert_rules', []);
+        // No manual read of 'lucy_alert_rules': `persistedWritable` hydrates
+        // from it at module load. Re-reading here is what pinned this
+        // component to whatever was on disk at mount, ignoring anything the
+        // modal had changed since.
         try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch(e) {}
         startDashboard();
         // Tier A #3 — Capacity projection: initial fetch + 10-min refresh.

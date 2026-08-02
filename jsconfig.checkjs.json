@@ -20,9 +20,13 @@
   // an ADDITIONAL pass, not a replacement, and relaxing a rule never turns a
   // passing file red.
   //
-  // Run it with `npm run check:js`. It is NOT a CI gate yet — see
-  // docs/typecheck-migration.md for the remaining count and the order of work.
-  // Wire it into CI the moment it reaches zero, or it will silently rot back.
+  // Reached 0 on 2026-08-02 and is a CI gate from that moment
+  // (.github/workflows/ci.yml, "svelte-check --checkJs"). It is not merged into
+  // jsconfig.json and will not be: the two configs differ on TWO axes, and
+  // every single-config combination is worse. `strict: true` + `checkJs: true`
+  // is the ~2 500-error wall above; `strict: false` + `checkJs: true` would
+  // drop real coverage on the .ts half. Two passes with different trade-offs
+  // is the end state.
   "extends": "./jsconfig.json",
   "compilerOptions": {
     "checkJs": true,

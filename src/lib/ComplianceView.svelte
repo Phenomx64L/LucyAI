@@ -106,7 +106,11 @@
                 hostId: selectedHost,
                 hostName: isLocal ? hostName : (h?.name || selectedHost),
                 timestamp: Date.now(),
-                osType: isWin ? 'windows' : 'linux',
+                // A ternary between two string literals still widens to
+                // `string` in an object literal, and ComplianceScanReport
+                // types this as 'windows' | 'linux'. The assertion goes on each
+                // branch: `const` applies to literals, not to the ternary.
+                osType: isWin ? /** @type {const} */ ('windows') : /** @type {const} */ ('linux'),
                 results,
                 passRate: Math.round((passR / results.length) * 100),
             };

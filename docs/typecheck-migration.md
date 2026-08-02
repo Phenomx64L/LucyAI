@@ -58,7 +58,12 @@ npm run check:js   # this migration: checkJs, relaxed            — driving to 
 | 2026-07-29 | 217 | 36 | Baseline |
 | 2026-07-29 | 128 | 21 | Phase 1 — `strokeWidth` → `stroke` |
 | 2026-07-29 | 115 | 12 | Phase 2a — the defects outside the monolith |
-| 2026-07-29 | **80** | **11** | Phase 2b — `app.d.ts` globals + `chatInput()` |
+| 2026-07-29 | 80 | 11 | Phase 2b — `app.d.ts` globals + `chatInput()` |
+| 2026-08-02 | 54 | 10 | Phase 3 — `EventTarget`, and two always-false `typeof` guards |
+| 2026-08-02 | 37 | 10 | `TracePhase 'warn'`, and the alerts store nobody wrote |
+| 2026-08-02 | 19 | 5 | Phases 4–5 — dead branches, a report type describing no one's data |
+| 2026-08-02 | 4 | 3 | Phase 6 — tab ids are strings; two alert editors, two id types |
+| 2026-08-02 | **0** | **0** | Last shapes + `vite.config.js`; **gated in CI** |
 
 ### Phase 1 — the icon prop (done)
 
@@ -124,6 +129,42 @@ Two systematic fixes, 35 errors, no behaviour change:
 The lesson from both phases holds: **group by message before editing.** Phase 1
 was 89 errors and one `sed`; this was 35 and two edits. Going file by file
 would have been days of work for the same result.
+
+## Done — 2026-08-02
+
+Reached **0**, and `npm run check:js` is a CI gate as of the same commit.
+
+The count went 217 → 0. What it cost was mostly reading, not editing: roughly a
+third of the errors were live defects, and they only looked like typing nits
+until someone opened the line. The ones worth remembering:
+
+- **The agent said it finished when it was cut off.** `typeof loop_i !==
+  'undefined'` guarded a `let` that was block-scoped to a `for` further down and
+  never in scope, so `hitLimit` was permanently false and an agent that
+  exhausted MAX_LOOPS reported "✓ Operaciones completadas".
+- **The trace panel dropped every warning it was handed.** Five sites emitted
+  `phase: 'warn'`, the union did not declare it, and the panel filters on a Set
+  built from the union.
+- **The alerts modal read a store nobody wrote to,** and the rule editors on two
+  surfaces persisted to the SAME localStorage key from separate arrays, so each
+  overwrote the other's rules.
+- **`chatInput()` called itself** — a stack overflow on every composer focus,
+  introduced by phase 2b's own `replace_all` and invisible to all four gates.
+- **19 models in the picker were unusable** (a separate contract, `utils/db.rs`).
+
+The recurring shape: a wrong annotation was almost never a typo. It marked a
+data path that had gone dead, and stayed uncontradicted precisely because
+nothing ever ran down it.
+
+### Correction to the plan below
+
+Item 3 ("flip `checkJs: true` in `jsconfig.json` and delete
+`jsconfig.checkjs.json`") **was wrong and is not being done.** The two configs
+differ on two axes, not one. `jsconfig.json` is `strict: true` + `checkJs:
+false`; turning `checkJs` on there inherits `strict` and lands on the ~2 500
+`noImplicitAny` errors this document already measured and rejected. Dropping
+`strict` instead would lose real coverage on the `.ts` half. Two passes with
+different trade-offs is the end state, and the CI job says so.
 
 ### Remaining, in suggested order
 

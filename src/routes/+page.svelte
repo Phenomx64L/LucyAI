@@ -1393,7 +1393,7 @@ import { listen } from '@tauri-apps/api/event';
             const curSig = `${curLucy?.id || ''}::${curUser?.id || ''}`;
             if (curSig !== turnSig) return;
 
-            const llmChips    = Array.isArray(llmRaw)    ? llmRaw.map((c, i)    => ({ ...backendChipToPredictive(c, i), source: 'llm' }))    : [];
+            const llmChips    = Array.isArray(llmRaw)    ? llmRaw.map((c, i)    => ({ ...backendChipToPredictive(c, i), source: /** @type {const} */ ('llm') }))    : [];
             // `source: 'memory'` widens to `string` in an object literal, so
             // the result no longer satisfies `PredictiveChip['source']`
             // ('heuristic' | 'llm' | 'memory'). The const assertion keeps the

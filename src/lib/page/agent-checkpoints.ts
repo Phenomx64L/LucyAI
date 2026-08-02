@@ -59,7 +59,7 @@ export interface Checkpoint {
 }
 
 /** Persist a checkpoint snapshot for the given tab. Trims oversized fields. */
-export function saveCheckpoint(tabId: string | number, data: CheckpointInput): void {
+export function saveCheckpoint(tabId: string, data: CheckpointInput): void {
     try {
         const snap: Checkpoint = {
             ts:           Date.now(),
@@ -86,7 +86,7 @@ export function saveCheckpoint(tabId: string | number, data: CheckpointInput): v
 }
 
 /** Drop the checkpoint for a tab (e.g. after successful completion). */
-export function clearCheckpoint(tabId: string | number): void {
+export function clearCheckpoint(tabId: string): void {
     safeRemoveLS(CKPT_PREFIX + tabId);
 }
 

@@ -58,6 +58,25 @@ jobs:
       - name: svelte-check (baseline 0 errors)
         run: npm run check
 
+      # Second pass, and NOT a duplicate of the one above: `npm run check` runs
+      # `strict: true` with `checkJs: false`, so its green only ever covered
+      # files with a typed script block. This one turns `checkJs` on for the
+      # ~16.6 kLOC on plain `<script>` — +page.svelte, CockpitShell,
+      # AgentWorkspace — which had never been type-checked at all.
+      #
+      # The two cannot be merged into one config. `strict: true` + `checkJs:
+      # true` reports ~2 500 errors (almost entirely `noImplicitAny` on
+      # unannotated callback params, which caught none of the defects this
+      # migration found), and dropping `strict` would lose real coverage on the
+      # .ts half. Two passes with different trade-offs is the end state, not a
+      # transitional step.
+      #
+      # It reached 0 on 2026-08-02. Gated from that moment on purpose: this
+      # blind spot lasted as long as it did precisely because nothing enforced
+      # it, and an ungated check rots back to red.
+      - name: svelte-check --checkJs (untyped half, baseline 0 errors)
+        run: npm run check:js
+
       - name: vitest
         run: npm test
 
