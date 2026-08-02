@@ -971,6 +971,7 @@ pub fn run() {
             shell::send_shell_input,
             shell::kill_shell_session,
             // Log viewer
+            logs::log_frontend_event,
             logs::read_log_tail,
             logs::read_remote_log_windows,
             logs::read_remote_log_linux,

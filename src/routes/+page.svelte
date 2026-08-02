@@ -2270,6 +2270,28 @@ import { listen } from '@tauri-apps/api/event';
                         window.__lucyFreezeLog.push({ at: new Date().toISOString(), gapMs });
                         if (window.__lucyFreezeLog.length > 50) window.__lucyFreezeLog.shift();
                         if (dev) { try { toast(`⚠ Renderer congelado ${(gapMs / 1000).toFixed(1)}s (ver consola)`, 'warn'); } catch {} }
+                        // v1.8 — TO DISK. This measurement decides whether Lucy
+                        // needs a non-WebView frontend, and until now it lived
+                        // only in `console.warn` and a `window` array: on the
+                        // machine where the freeze actually happens, DevTools is
+                        // blocked, so asking for "the log" produced nothing.
+                        //
+                        // The line says which of the two causes it is, because
+                        // that is the whole question. A gap logged here means
+                        // the RENDERER stopped producing frames — a WebView2
+                        // problem, and a native toolkit would fix it. A freeze
+                        // the user SEES with no gap logged means frames kept
+                        // flowing and the DISPLAY did not show them (panel
+                        // self-refresh / driver power saving), which sits below
+                        // any toolkit and would survive the rewrite untouched.
+                        try {
+                            invoke('log_frontend_event', {
+                                level: 'WARN',
+                                message: `heartbeat: ${(gapMs / 1000).toFixed(1)}s sin frames del renderer `
+                                       + `(RENDERER-LEVEL — el compositor de WebView2 se detuvo). `
+                                       + `Un congelamiento visible SIN esta línea sería nivel pantalla/driver.`,
+                            });
+                        } catch {}
                     }
                     _hbLast = now;
                     _heartbeatRaf = requestAnimationFrame(_beat);

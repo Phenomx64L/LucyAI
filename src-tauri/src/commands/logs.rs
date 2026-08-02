@@ -6,6 +6,34 @@ use std::io::{Read, Seek, SeekFrom};
 use crate::state::CREATE_NO_WINDOW;
 use crate::utils::shell::run_winrm;
 
+/// Escribe una línea del frontend en `lucy_app.log`.
+///
+/// El frontend no tenía forma de escribir en el log de la app. Todo lo que
+/// medía terminaba en `console.warn` o en una variable de `window` — y DevTools
+/// está bloqueado en producción, así que en la máquina donde el problema ocurre
+/// de verdad esas mediciones no existen.
+///
+/// El caso que forzó esto: el watchdog de repintado (el latido de 2×2 px en
+/// +page.svelte) detecta cuándo el renderer deja de producir frames y lo
+/// distingue del caso en que los produce y la PANTALLA no los muestra —
+/// exactamente la diferencia entre "hay que dejar el WebView" y "es el panel /
+/// el driver, y reescribir la interfaz no arreglaría nada". Esa medición se
+/// escribía solo a memoria volátil, así que al pedir el log no había log.
+///
+/// El mensaje se recorta: esto es un canal de diagnóstico, no un sumidero por
+/// el que el frontend pueda inflar el fichero.
+#[tauri::command]
+pub fn log_frontend_event(level: String, message: String) {
+    const MAX: usize = 2_000;
+    let msg = if message.len() > MAX { &message[..MAX] } else { &message[..] };
+    let lvl = match level.to_uppercase().as_str() {
+        "ERROR" => "ERROR",
+        "WARN" | "WARNING" => "WARN",
+        _ => "INFO",
+    };
+    crate::utils::logging::write_app_log(lvl, &format!("[ui] {}", msg));
+}
+
 /// Lee las últimas N líneas de un archivo local de forma eficiente.
 /// Lee en chunks de 64KB desde el final — nunca carga el archivo completo en RAM.
 #[tauri::command]
