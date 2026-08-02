@@ -663,6 +663,9 @@ import { listen } from '@tauri-apps/api/event';
     let pendingLearnSpeak  = false;
     let forkedTasks        = {};
 
+    // `{}` infers as the empty type, which is not assignable to `SecretMap`
+    // (Record<string, string>) — the annotation says what it has always held.
+    /** @type {import('$lib/page/mcp-secrets').SecretMap} */
     let mcpSecrets = {};          // cargado en onMount desde OS Keyring
     let _newMcpK = '';
     let _newMcpV = '';
@@ -3949,7 +3952,10 @@ import { listen } from '@tauri-apps/api/event';
         renamingTabId = tabId;
         // Enfocar el input en el siguiente ciclo de renderizado
         tick().then(() => {
-            const el = document.getElementById(`rename-${tabId}`);
+            // `getElementById` returns HTMLElement, which has `focus` but not
+            // `select` — that one is specific to text inputs, which is what
+            // this is.
+            const el = /** @type {HTMLInputElement|null} */ (document.getElementById(`rename-${tabId}`));
             if (el) { el.focus(); el.select(); }
         });
     }
@@ -5265,7 +5271,16 @@ REGLAS DE FORMATO:
             }
         }));
         const cols = models.map((model, i) => {
-            const v = results[i].value || { ok:false, text:'(no result)', ms:0 };
+            // Narrow on `status` rather than reading `.value` and leaning on
+            // `|| fallback`. The mapper above catches its own errors so nothing
+            // should ever reject — but "should never happen" plus a property
+            // that is absent on the rejected variant is how a column silently
+            // renders "(no result)" for a reason nobody can see. If a rejection
+            // does occur, this says so.
+            const _r = results[i];
+            const v = _r.status === 'fulfilled'
+                ? _r.value
+                : { ok:false, text:`(fallo interno: ${String(_r.reason).slice(0, 120)})`, ms:0 };
             const bodyHtml = v.ok ? renderLucyMarkdown(v.text || '') : `<span style="color:#f87171">${escapeHtml(v.text)}</span>`;
             return `<div class="cmp-col" data-model="${model}">
                 <div class="cmp-head">${model}${v.ok ? '' : ' ✕'}</div>
@@ -5275,7 +5290,9 @@ REGLAS DE FORMATO:
         }).join('');
         placeholder.html = `<div class="mn">Lucy <span style="font-size:10px;opacity:.6">(compare · ${Math.round(performance.now()-t0)}ms total)</span></div><div class="cmp-grid cmp-cols-${models.length}">${cols}</div>`;
         placeholder.rawRole = 'Lucy';
-        placeholder.rawContent = results.map((r, i) => `[${models[i]}]\n${r.value?.text || ''}`).join('\n\n---\n\n');
+        placeholder.rawContent = results.map((r, i) =>
+            `[${models[i]}]\n${r.status === 'fulfilled' ? (r.value.text || '') : ''}`
+        ).join('\n\n---\n\n');
         t.isProcessing = false; refresh(); scrollChat();
     }
 
@@ -5597,9 +5614,15 @@ REGLAS DE FORMATO:
                     _unifiedPlan?.route?.method === 'manual' ? 'manual'
                   : _unifiedPlan?.route?.method && _unifiedPlan.route.method !== 'none' ? 'auto'
                   : (_csActiveSkill ? 'manual' : null);
-                const _csMemCount = (_unifiedPlan && typeof _unifiedPlan.memory_hits_count === 'number')
-                    ? _unifiedPlan.memory_hits_count
-                    : (t._lastMemoryHitsCount ?? 0);
+                // `UnifiedContextPlan` carries route / mcp_tools / est_tokens —
+                // never a `memory_hits_count`. The branch that preferred it was
+                // reading a field that has never existed, so the `typeof` test
+                // was always false and this always resolved to the tab counter
+                // anyway. That counter is the real source (set from the
+                // injection count in the memory recall path), so the behaviour
+                // is unchanged; what goes is the suggestion that a second,
+                // better source exists.
+                const _csMemCount = t._lastMemoryHitsCount ?? 0;
                 // v1.7.26 — bug fix: referenced an undefined `activeModel`
                 // variable. The reference threw a silent ReferenceError that
                 // the catch swallowed, so the snapshot never updated — the
@@ -6897,7 +6920,17 @@ Use ONE of these patterns instead:
                 // response with NO tool tag would otherwise run to
                 // MAX_LOOPS). 2 consecutive matches required so a model
                 // that briefly re-asserts a status line doesn't trip it.
-                let _lastAgentRespHash = '';
+                // `null`, not `''`: `_hashResp` returns a NUMBER, so the empty
+                // string was never a possible value of this variable — it only
+                // meant "no previous turn to compare against". Initialising it
+                // to a string of a different type made the comparison below
+                // read as `number === string`, which is always false and which
+                // a checker flags as a bug. It is not one: the `loop_i > 0`
+                // guard means the compare only runs from turn two, when both
+                // sides really are numbers. `null` says the same thing without
+                // the fiction.
+                /** @type {number|null} */
+                let _lastAgentRespHash = null;
                 let _identicalRespStreak = 0;
                 // v1.7.232 — NEAR-identical grind detector (complements the
                 // byte-identical skip-stuck above). A cloud model can re-emit the
@@ -6912,7 +6945,8 @@ Use ONE of these patterns instead:
                 // byte-identical path, which fires on the 2nd). Keeping the tags
                 // means turns on DIFFERENT targets (readfile A vs B, paged
                 // readlines) normalize differently → never a false grind.
-                let _lastNormHash = '';
+                /** @type {number|null} */
+                let _lastNormHash = null;   // see _lastAgentRespHash above
                 let _normRespStreak = 0;
                 const _NORM_GRIND_LIMIT = 2;
                 // v1.7.232 — context-stall guard. Complements the byte-identical
@@ -8810,7 +8844,14 @@ Use ONE of these patterns instead:
                                 else if (execType==='netsh')    out=await host.invoke('execute_netsh',  {args:cmd});
                                 else if (execType==='reg')      out=await host.invoke('execute_reg',    {args:cmd,bypassToken:null});
                                 else if (execType==='cscript')  out=await host.invoke('execute_cscript',{scriptContent:cmd,bypassToken:null});
-                                else if (execType==='execute_powershell') out=await host.invoke('execute_powershell',{script:cmd,});
+                                // 'powershell' is the value this discriminator
+                                // actually carries (see the engineLabel map
+                                // below). A branch for 'execute_powershell' —
+                                // the COMMAND name, not the engine name — sat
+                                // here and could never match; it invoked the
+                                // same thing as the fallback, so removing it
+                                // changes nothing except that the next reader
+                                // no longer has to work out which one runs.
                                 else                            out=await host.invoke('execute_powershell',{script:cmd,});
 
                                 const elapsed = Date.now() - t0;
