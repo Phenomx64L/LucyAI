@@ -1,0 +1,22 @@
+# ── Artefactos de compilación ────────────────────────────────────────────────
+# `target/` pesa 16 GB en este workspace (cuatro crates, eframe/wgpu/iced traen
+# árboles de dependencias enormes). Este fichero va PRIMERO, antes del `git
+# init`: un `git add -A` sin él intenta indexar los 16 GB.
+/target/
+**/target/
+
+# Cargo deja esto al construir con perfiles alternativos
+*.rs.bk
+
+# ── Windows / editores ───────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# ── NO ignorar Cargo.lock ────────────────────────────────────────────────────
+# Es un workspace de BINARIOS, no una librería publicada: el lock forma parte de
+# la reproducibilidad. Si el prototipo se convierte en la migración real, querer
+# saber con qué versión exacta de eframe se midió el bake-off deja de ser
+# curiosidad y pasa a ser la evidencia de la decisión.

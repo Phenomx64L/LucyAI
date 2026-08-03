@@ -1,0 +1,11 @@
+[package]
+name = "iced-proto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# iced 0.13: wgpu + `tiny-skia` CPU fallback (clave para máquinas sin GPU / RDP).
+# `markdown` = widget de markdown con streaming de fábrica; `highlighter` = syntect
+# para resaltar el código dentro del markdown.
+iced = { version = "0.13", features = ["markdown", "highlighter", "advanced", "tokio"] }
+proto-core = { path = "../proto-core" }

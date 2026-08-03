@@ -1,0 +1,12 @@
+[package]
+name = "egui-proto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Known-stable egui trio (0.29). A prototype must COMPILE; bleeding-edge 0.35
+# buys nothing here — the no-WebView / no-freeze properties hold identically.
+eframe = "0.29"
+egui = "0.29"
+egui_commonmark = "0.18"
+proto-core = { path = "../proto-core" }

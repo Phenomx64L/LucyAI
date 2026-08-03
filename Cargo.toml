@@ -1,0 +1,11 @@
+# ── Lucy — Fase 0: bake-off de front nativo (egui vs iced) ────────────────────
+# Prototipo AISLADO para decidir con evidencia si Lucy puede dejar el WebView.
+# Reescribe SOLO las 2 superficies más duras (chat markdown con streaming +
+# terminal PTY viva) contra el mismo `portable-pty` que ya usa la app real.
+# NO toca lucy-svelte ni su git. Correr cada proto en una máquina bloqueada/RDP.
+[workspace]
+resolver = "2"
+members = ["proto-core", "egui-proto", "iced-proto", "lucy-egui"]
+
+[workspace.dependencies]
+portable-pty = "0.8"

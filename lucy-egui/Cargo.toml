@@ -1,0 +1,20 @@
+[package]
+name = "lucy-egui"
+version = "0.1.0"
+edition = "2021"
+
+# ── Fase 1 · shell nativo egui de Lucy ────────────────────────────────────────
+# Slice `lucy-core`: el shell depende del CORAZÓN SIN-TAURI (`lucy-core`), NO del
+# backend Tauri completo. Resultado: este binario NO enlaza tauri/wry/webview2 —
+# es el objetivo real de la migración (binario nativo sin motor de navegador).
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+egui_commonmark = "0.18"
+proto-core = { path = "../proto-core" }
+dirs = "5"
+# Emulador VT real: interpreta los escapes del PTY en una pantalla de terminal
+# (limpia el "garbage" □[?25l □[2J □[93m que salía como texto crudo).
+vt100 = "0.15"
+# El corazón compartido sin-Tauri (mismo crate que adoptará la app Tauri).
+lucy-core = { path = "../../lucy-svelte/lucy-core" }
