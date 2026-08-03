@@ -80,6 +80,13 @@ subtle = "2.5"  # constant-time MAC comparison
 # serialize through one mutex. r2d2_sqlite 0.24 matches rusqlite 0.31 series.
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
+# ── v1.8 — el corazón sin-Tauri, compartido de verdad ─────────────────────────
+# `lucy-core` existía desde v1.7.238 describiéndose como "el corazón compartido",
+# pero NADIE dependía de él: solo lo consumía el prototipo nativo, así que era
+# una copia. Ya había derivado (tope de 50 filas aquí, 300 allí) antes de que
+# nada la usara. Ahora la app enlaza el crate y le presta SU pool, de modo que
+# hay un único pool, una única consulta y un único sitio donde equivocarse.
+lucy-core = { path = "../lucy-core", features = ["ts"] }
 ropey = "1.6.1"
 aho-corasick = "1.1.4"
 similar = "3.0.0"

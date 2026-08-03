@@ -133,18 +133,14 @@ pub struct ForkResult {
     pub cost_usd:   f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../src/lib/types/")]
-pub struct AgentMemory {
-    pub id:         i64,
-    pub session_id: String,
-    pub title:      String,
-    pub content:    String,
-    pub tags:       String,  // JSON array (kept as string for SQLite compat)
-    pub files:      String,  // JSON array
-    pub importance: i64,     // 1-3
-    pub created_at: i64,     // unix epoch seconds
-}
+// v1.8 — LA definición vive en `lucy-core`, no aquí.
+//
+// Estaba duplicada campo por campo entre este fichero y el crate compartido, que
+// es como una de las dos acaba perdiéndose una columna. Reexportar en vez de
+// redeclarar mantiene todos los `use crate::utils::db::AgentMemory` existentes
+// funcionando sin tocar ni un sitio de llamada, y el derive de ts-rs sigue
+// generando `src/lib/types/AgentMemory.ts` desde allí (feature `ts`).
+pub use lucy_core::AgentMemory;
 
 /// Create tables for cost tracking, permission rules, and skills
 pub const INIT_SQL: &str = r#"

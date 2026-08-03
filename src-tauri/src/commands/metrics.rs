@@ -246,6 +246,12 @@ pub fn init_with_path(path: std::path::PathBuf) -> Result<(), String> {
 
     // Release the init connection back to the pool, then publish.
     drop(conn);
+    // v1.8 — hand the SAME pool to lucy-core, the Tauri-free half that the
+    // native shell also links. Not a second pool: one file, one set of PRAGMAs,
+    // one connection budget. `init_with_pool` is idempotent, and a failure here
+    // must not stop the app — it only means the shared-heart functions fall
+    // back to being unavailable, not that the DB is broken.
+    let _ = lucy_core::init_with_pool(pool.clone());
     POOL.set(pool)
         .map_err(|_| "DB pool already initialized".to_string())?;
     Ok(())
@@ -2326,30 +2332,20 @@ pub fn get_recent_memories_filtered(limit: Option<i64>, importance: Option<i64>)
 }
 
 /// Return the most recent memories ordered by importance then date.
+///
+/// v1.8 — the body now lives in `lucy-core`, the Tauri-free crate the native
+/// shell also links, so both read the SAME rows through the SAME query.
+///
+/// It was already a copy that had drifted: the core capped the limit at 300
+/// where this capped at 50, and the core's doc comment claimed they were "la
+/// MISMA consulta". Nothing had caught it because nothing called the core's
+/// version yet — the divergence was sitting there waiting for the first person
+/// to trust it. The two exclusions in that WHERE (superseded rows, PDF chunks)
+/// each cost a real bug to discover; having them written twice is how one copy
+/// silently loses one.
 #[tauri::command]
 pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
-    with_db(|conn| {
-        let lim = limit.unwrap_or(15).max(1).min(50);
-        // v1.6.13: exclude superseded rows. Before the fix the Verify
-        // tab kept re-detecting conflicts the user had just resolved via
-        // keep_newer/keep_older — supersede_memory marked the row but
-        // this query didn't honor it.
-        // v1.7.233: exclude PDF document chunks (session_id 'pdf:<doc_id>').
-        // A single ingested manual writes 1000+ importance-2 rows in one burst;
-        // with `ORDER BY importance DESC, created_at DESC` they saturated the
-        // ≤50-row window, flooding the Memory Browser AND the ambient context
-        // injection (construirContextoMemoria feeds Lucy the top rows of this
-        // query every turn). Document chunks stay reachable via pdf_search /
-        // memoria_buscar — they are reference material, not recent memories.
-        let sql = "SELECT id, session_id, title, content, tags, files, importance, created_at
-                   FROM agent_memories
-                   WHERE (superseded_by IS NULL OR superseded_by = '')
-                     AND session_id NOT LIKE 'pdf:%'
-                   ORDER BY importance DESC, created_at DESC
-                   LIMIT ?1";
-        let mut stmt = conn.prepare(sql).map_err(|e| format!("get_recent prepare: {}", e))?;
-        map_memory_rows(&mut stmt, rusqlite::params![lim])
-    })
+    lucy_core::get_recent_memories(limit)
 }
 
 /// v1.7.236 R2 — refuerzo por citas. Tras cada respuesta, el frontend parsea

@@ -24,6 +24,18 @@ pub type DbPool = r2d2::Pool<SqliteConnectionManager>;
 static POOL: OnceCell<DbPool> = OnceCell::new();
 
 /// Una memoria de largo plazo — misma forma que la fila `agent_memories`.
+///
+/// LA definición, no una de dos: `src-tauri` la reexporta desde aquí. Existía
+/// duplicada campo por campo, y una struct copiada es una struct que acaba
+/// difiriendo en una columna que alguien añadió a un lado.
+///
+/// El derive de ts-rs va tras la feature `ts` porque exportar TypeScript es un
+/// problema de la app Tauri (sus tipos cruzan el puente IPC). El shell nativo
+/// llama funciones Rust directamente y no debe compilar ts-rs por compartir un
+/// tipo. La ruta de exportación resuelve al mismo `src/lib/types/` desde
+/// cualquiera de los dos crates.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../src/lib/types/"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMemory {
     pub id: i64,
@@ -34,6 +46,25 @@ pub struct AgentMemory {
     pub files: String,      // JSON array
     pub importance: i64,    // 1-3
     pub created_at: i64,    // unix epoch segundos
+}
+
+/// Adopta un pool YA construido en vez de abrir uno propio.
+///
+/// Es lo que usa la app Tauri. Sin esto, enlazar este crate desde `src-tauri`
+/// significaría **dos** pools r2d2 sobre el mismo fichero SQLite: el doble de
+/// conexiones, dos juegos de PRAGMA que pueden discrepar, y contención de
+/// escritura entre dos mitades del mismo proceso. Un pool, dos consumidores.
+///
+/// El shell nativo sigue usando `init(path)`, que sí construye el suyo — ahí no
+/// hay ninguno que adoptar.
+///
+/// Idempotente: si ya hay pool, no hace nada y devuelve `Ok`. Eso importa
+/// porque el arranque de Tauri puede reentrar.
+pub fn init_with_pool(pool: DbPool) -> Result<(), String> {
+    if POOL.get().is_some() {
+        return Ok(());
+    }
+    POOL.set(pool).map_err(|_| "lucy-core: pool ya inicializado".to_string())
 }
 
 /// Abre el pool compartido sobre una lucy.db EXISTENTE (la app Tauri crea el
@@ -68,11 +99,26 @@ where
     f(&conn)
 }
 
-/// Memorias vivas (no-pdf, no-superseded) más recientes — la MISMA consulta que
-/// corre `get_recent_memories` en el backend Tauri.
+/// Memorias vivas (no-pdf, no-superseded) más recientes.
+///
+/// Ésta ES la consulta que corre el backend Tauri: `metrics::get_recent_memories`
+/// delega aquí. Antes decía "la MISMA consulta" siendo una copia, y ya habían
+/// derivado — el tope estaba en 300 aquí y en 50 allí. Nadie lo notó porque
+/// nada llamaba todavía a esta versión.
+///
+/// Las dos exclusiones del `WHERE` son deliberadas y costaron bugs:
+///   • `superseded_by` — sin ella la pestaña Verify volvía a detectar conflictos
+///     que el usuario acababa de resolver (v1.6.13).
+///   • `session_id NOT LIKE 'pdf:%'` — un manual ingerido escribe 1000+ filas de
+///     importancia 2 de golpe y saturaba la ventana, inundando el navegador de
+///     memoria Y la inyección de contexto ambiental (v1.7.233). Los trozos de
+///     documento siguen siendo alcanzables por pdf_search.
+///
+/// El tope de 50 es el de la app: es lo que se ha enviado siempre, y la ventana
+/// que la inyección de contexto asume por turno.
 pub fn get_recent_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
     with_db(|conn| {
-        let lim = limit.unwrap_or(15).max(1).min(300);
+        let lim = limit.unwrap_or(15).max(1).min(50);
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, title, content, tags, files, importance, created_at \
