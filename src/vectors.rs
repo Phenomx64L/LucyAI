@@ -1,0 +1,274 @@
+//! Recuperación semántica: almacenamiento de vectores, filtros y ranking.
+//!
+//! Segundo lote hacia el corazón compartido, y con una frontera distinta a la
+//! del primero. `commands/embeddings.rs` tiene trece funciones `async` sobre
+//! `reqwest`; moverlas aquí arrastraría tokio a un crate que lo evita a
+//! propósito — y el shell nativo, que es un bucle inmediato síncrono, quiere
+//! precisamente lo contrario.
+//!
+//! Así que la costura no está en "mover embeddings.rs". Está aquí:
+//!
+//!   • Este módulo posee lo que NO debe duplicarse: el formato del blob, el
+//!     coseno, y sobre todo las reglas de filtrado que deciden qué fila puede
+//!     compararse con qué consulta.
+//!   • Cada frontend obtiene el vector de consulta como le conviene: la app
+//!     Tauri con `reqwest` async, el shell nativo con `ureq` bloqueante.
+//!
+//! Lo que se comparte es el juicio; lo que se duplica es el transporte, que es
+//! el reparto correcto.
+
+use serde::{Deserialize, Serialize};
+
+/// Un acierto de búsqueda semántica.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticHit {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub text: String,
+    pub score: f32,
+}
+
+/// Una fila candidata leída de `embeddings`, tal cual sale de la DB.
+pub struct StoredVector {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub text: String,
+    pub vec: Vec<f32>,
+    pub model: String,
+}
+
+/// f32 → bytes little-endian.
+pub fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+/// Inversa de `vec_to_blob`. Ignora una cola incompleta en vez de entrar en
+/// pánico: un blob truncado es una fila corrupta, no un fallo del proceso.
+pub fn blob_to_vec(b: &[u8]) -> Vec<f32> {
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Similitud coseno. Devuelve 0.0 si alguno tiene magnitud cero (evita NaN) o
+/// si las longitudes difieren.
+pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut na = 0.0f32;
+    let mut nb = 0.0f32;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
+}
+
+/// Por qué se descartó una fila candidata. Devuelto junto al ranking para que
+/// quien llama pueda avisar al operador en vez de tragárselo.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RankSkips {
+    /// Dimensión distinta a la de la consulta.
+    pub dims: usize,
+    /// Embebedor distinto al de la consulta.
+    pub model: usize,
+    /// Filas examinadas en total.
+    pub total: usize,
+}
+
+/// Ordena candidatos por coseno, descartando los que no son comparables.
+///
+/// LOS DOS FILTROS SON DISTINTOS Y AMBOS HACEN FALTA.
+///
+/// La dimensión es el obvio: un vector de otra longitud vive en otro espacio y
+/// `cosine` devolvería 0.0 en silencio, así que la fila desaparecería del
+/// recuerdo sin señal.
+///
+/// El modelo es el que no se ve. `nomic-embed-text` (Ollama) y
+/// `text-embedding-004` (Gemini) emiten AMBOS 768 dimensiones, y Lucy alterna
+/// entre ellos porque la escritura tiene fallback. Comparar entre esos dos
+/// espacios no da error ni un cero delator: da un número plausible que ordena
+/// mal. La columna `model` se escribía en cada fila desde que existe la tabla y
+/// no la leía nadie.
+pub fn rank_by_cosine(
+    rows: Vec<StoredVector>,
+    query: &[f32],
+    query_model: &str,
+    min_score: f32,
+    limit: usize,
+) -> (Vec<SemanticHit>, RankSkips) {
+    let qdim = query.len();
+    let mut skips = RankSkips { total: rows.len(), ..Default::default() };
+
+    let mut scored: Vec<SemanticHit> = rows
+        .into_iter()
+        .filter_map(|r| {
+            if r.vec.len() != qdim {
+                skips.dims += 1;
+                return None;
+            }
+            if r.model != query_model {
+                skips.model += 1;
+                return None;
+            }
+            let s = cosine(query, &r.vec);
+            if s >= min_score {
+                Some(SemanticHit {
+                    entity_type: r.entity_type,
+                    entity_id: r.entity_id,
+                    text: r.text,
+                    score: s,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+    (scored, skips)
+}
+
+/// Aviso para filas de otra DIMENSIÓN. `None` si no se descartó ninguna.
+pub fn dim_mismatch_warning(skipped: usize, total: usize, query_dim: usize) -> Option<String> {
+    if skipped == 0 {
+        return None;
+    }
+    Some(format!(
+        "semantic_search: {}/{} stored embeddings have a dimension ≠ {} \
+         (embedding model changed?). They are invisible to recall until \
+         re-embedded — run backfill_embeddings.",
+        skipped, total, query_dim
+    ))
+}
+
+/// Aviso para filas de otro EMBEBEDOR, que es el caso que la dimensión no ve.
+///
+/// Mensaje separado a propósito: el de dimensión significa "tu embebedor cambió
+/// de forma" y manda al operador a buscar un ajuste que no tocó; éste significa
+/// "parte del corpus se escribió mientras Ollama estaba caído". Mismo remedio,
+/// causa distinta.
+pub fn model_mismatch_warning(skipped: usize, total: usize, query_model: &str) -> Option<String> {
+    if skipped == 0 {
+        return None;
+    }
+    Some(format!(
+        "semantic_search: {}/{} stored embeddings came from a different embedder \
+         than the query ('{}'). Cosine across two models is noise even at equal \
+         dimensions, so they are excluded rather than ranked — re-embed them to \
+         make them recallable again.",
+        skipped, total, query_model
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(id: &str, v: Vec<f32>, model: &str) -> StoredVector {
+        StoredVector {
+            entity_type: "memory".into(),
+            entity_id: id.into(),
+            text: format!("texto {id}"),
+            vec: v,
+            model: model.into(),
+        }
+    }
+
+    #[test]
+    fn blob_roundtrip_survives_the_database() {
+        let v = vec![0.0_f32, 1.5, -2.25, 3.125];
+        let b = vec_to_blob(&v);
+        assert_eq!(b.len(), v.len() * 4);
+        assert_eq!(blob_to_vec(&b), v);
+    }
+
+    #[test]
+    fn a_truncated_blob_loses_the_tail_instead_of_panicking() {
+        // Una fila corrupta no debe tumbar una búsqueda.
+        let mut b = vec_to_blob(&[1.0, 2.0]);
+        b.pop();
+        assert_eq!(blob_to_vec(&b), vec![1.0]);
+    }
+
+    #[test]
+    fn cosine_refuses_mismatched_and_zero_vectors_instead_of_returning_nan() {
+        assert_eq!(cosine(&[1.0, 0.0], &[1.0, 0.0, 0.0]), 0.0);
+        assert_eq!(cosine(&[0.0, 0.0], &[1.0, 0.0]), 0.0);
+        assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rows_from_another_embedder_are_excluded_even_at_equal_dimensions() {
+        // EL caso. Ambas filas tienen la misma dimensión que la consulta, y la
+        // del embebedor equivocado está MÁS CERCA. Sin el filtro de modelo
+        // ganaría, con una puntuación alta y sin significar nada.
+        let rows = vec![
+            row("propia", vec![0.8, 0.6], "nomic-embed-text"),
+            row("ajena", vec![1.0, 0.0], "text-embedding-004"),
+        ];
+        let (hits, skips) = rank_by_cosine(rows, &[1.0, 0.0], "nomic-embed-text", 0.0, 10);
+
+        assert_eq!(hits.len(), 1, "solo el embebedor de la consulta debe rankear");
+        assert_eq!(hits[0].entity_id, "propia");
+        assert_eq!(skips.model, 1);
+        assert_eq!(skips.dims, 0);
+    }
+
+    #[test]
+    fn rows_of_another_dimension_are_excluded_and_counted_apart() {
+        let rows = vec![
+            row("ok", vec![1.0, 0.0], "m"),
+            row("otra-dim", vec![1.0, 0.0, 0.0], "m"),
+        ];
+        let (hits, skips) = rank_by_cosine(rows, &[1.0, 0.0], "m", 0.0, 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(skips.dims, 1);
+        assert_eq!(skips.model, 0, "una dimensión distinta no debe contarse como modelo distinto");
+    }
+
+    #[test]
+    fn results_come_back_best_first_and_respect_the_limit() {
+        let rows = vec![
+            row("lejos", vec![0.0, 1.0], "m"),
+            row("cerca", vec![1.0, 0.0], "m"),
+            row("medio", vec![0.7, 0.7], "m"),
+        ];
+        let (hits, _) = rank_by_cosine(rows, &[1.0, 0.0], "m", 0.0, 2);
+        assert_eq!(hits.len(), 2, "el límite se respeta");
+        assert_eq!(hits[0].entity_id, "cerca");
+        assert_eq!(hits[1].entity_id, "medio");
+    }
+
+    #[test]
+    fn min_score_drops_the_weak_matches() {
+        let rows = vec![row("ortogonal", vec![0.0, 1.0], "m")];
+        let (hits, _) = rank_by_cosine(rows, &[1.0, 0.0], "m", 0.25, 10);
+        assert!(hits.is_empty(), "un coseno de 0 no debe pasar un umbral de 0.25");
+    }
+
+    #[test]
+    fn the_two_warnings_are_not_interchangeable() {
+        // Dicen cosas distintas al operador y no deben confundirse: una manda a
+        // revisar un ajuste, la otra a re-embeber lo escrito durante una caída.
+        let dim = dim_mismatch_warning(3, 100, 768).expect("debe avisar");
+        let model = model_mismatch_warning(3, 100, "nomic-embed-text").expect("debe avisar");
+        assert_ne!(dim, model);
+        assert!(dim.contains("dimension ≠"));
+        assert!(!model.contains("dimension ≠"));
+        assert!(model.contains("nomic-embed-text"));
+        assert!(dim_mismatch_warning(0, 100, 768).is_none());
+        assert!(model_mismatch_warning(0, 100, "m").is_none());
+    }
+}
