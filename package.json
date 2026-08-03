@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:contract": "cd src-tauri && cargo test --lib",
-    "test:full": "npm run check && npm run test && cd src-tauri && cargo test --lib -- --test-threads=1",
+    "test:core": "cd lucy-core && cargo test --all-features -- --test-threads=1",
+    "test:full": "npm run check && npm run check:js && npm run test && cd src-tauri && cargo test --lib -- --test-threads=1 && cd ../lucy-core && cargo test --all-features -- --test-threads=1",
     "benchmark": "node scripts/benchmark.mjs",
     "hooks:install": "node scripts/install-hooks.cjs",
     "tauri": "tauri"
