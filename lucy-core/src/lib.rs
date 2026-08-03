@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub mod chat;
+/// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
+pub mod memory;
 pub mod system;
 
 pub type DbPool = r2d2::Pool<SqliteConnectionManager>;

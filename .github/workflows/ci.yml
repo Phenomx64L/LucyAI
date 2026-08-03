@@ -134,6 +134,17 @@ jobs:
       - name: Contract + unit tests
         run: cargo test --lib -- --test-threads=1
 
+      # v1.8 — `lucy-core` is a path DEPENDENCY, not a workspace member, so the
+      # step above does not touch it: `cargo test` in src-tauri tests src-tauri.
+      #
+      # That matters now that logic is migrating there. The first batch moved
+      # five tests out of a gated crate and into an ungated one — the gate
+      # quietly stopped covering them, which is the precise failure this whole
+      # session has been about. Every batch that follows makes the hole bigger,
+      # so it closes here.
+      - name: lucy-core (shared, Tauri-free)
+        run: cargo test --manifest-path ../lucy-core/Cargo.toml --all-features -- --test-threads=1
+
       # Only the bug-finding lint groups are denied. The style/complexity
       # groups still carry ~101 known warnings (21 `manual_clamp` are
       # intentional panic-safety, per ARCHITECTURE.md §5) — denying those

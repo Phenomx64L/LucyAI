@@ -6,6 +6,12 @@ node_modules
 /.svelte-kit
 /package
 src-tauri/target
+# v1.8 — CUALQUIER crate, no solo src-tauri. Al añadir `lucy-core` como segundo
+# crate, su `target/` no estaba cubierto por ninguna regla: un `git add
+# lucy-core/` metió 1507 ficheros de artefactos en el índice y el remoto rechazó
+# el push. Las reglas por ruta envejecen mal en cuanto el repo deja de tener un
+# solo crate; ésta cubre los que vengan.
+**/target/
 # Repo-root target/ — PGO profile data + logs written by scripts/build-pgo.ps1
 # (its default -ProfilesDir is .\target\pgo-profiles). Build artifacts only.
 /target

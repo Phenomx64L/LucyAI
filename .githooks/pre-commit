@@ -88,7 +88,12 @@ echo -e "${B}[1/4] Running Rust unit tests…${N}"
 # Single-threaded execution costs ~1.5s extra and turns the suite from
 # flaky to deterministic. Verified locally: 274/274 pass single-
 # threaded vs. 0–3 flakes per run under default parallelism.
-if ! ( cd src-tauri && cargo test --lib --quiet -- --test-threads=1 2>&1 ); then
+# v1.8 — `lucy-core` is a path dependency, not a workspace member, so
+# `cargo test` inside src-tauri does NOT run its tests. Logic is migrating
+# there for the native frontend, and the first batch already moved five tests
+# out of this gate without meaning to. Both crates, one condition.
+if ! ( cd src-tauri && cargo test --lib --quiet -- --test-threads=1 2>&1 ) \
+   || ! ( cd lucy-core && cargo test --quiet --all-features -- --test-threads=1 2>&1 ); then
     echo
     echo -e "${R}╔════════════════════════════════════════════════════════════════╗${N}"
     echo -e "${R}║  COMMIT BLOCKED — contract tests failed.                       ║${N}"
