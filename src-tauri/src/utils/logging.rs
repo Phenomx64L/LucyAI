@@ -54,7 +54,19 @@ pub fn write_app_log(level: &str, message: &str) {
     // dato clave para el post-mortem. Reusa el helper genérico rotate_log (mismo
     // criterio que el audit log, que ya guarda 3).
     rotate_log("lucy_app.log", 5 * 1024 * 1024, 5);
+    // v1.8 — BOM on creation. The lines are UTF-8 and Lucy logs in Spanish, but
+    // PowerShell 5.1's `Get-Content` assumes the system ANSI code page for a
+    // file with no byte-order mark. An operator tailing this log saw
+    // `lÃ­nea` and `â€"` where the accents and dashes were — the log is
+    // correct, every default reader of it was not.
+    //
+    // Written only when the file is new, and only at offset 0: appending a BOM
+    // to an existing log would drop the marker into the middle of the text.
+    let needs_bom = !log_path.exists();
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        if needs_bom {
+            let _ = file.write_all(&[0xEF, 0xBB, 0xBF]);
+        }
         let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
         let _ = writeln!(file, "[{}] [{}] {}", ts, level, message);
     }

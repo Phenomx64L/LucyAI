@@ -60,7 +60,13 @@ pub fn read_log_tail(path: String, lines: usize) -> Result<Vec<String>, String> 
         let mut buf = vec![0u8; read_size as usize];
         file.read_exact(&mut buf).map_err(|e| e.to_string())?;
 
-        let chunk = String::from_utf8_lossy(&buf).to_string() + &remainder;
+        // v1.8 — the log now carries a UTF-8 BOM so PowerShell and Notepad stop
+        // rendering the Spanish accents as mojibake. Strip it here: reading the
+        // final chunk backwards reaches offset 0, and the marker would
+        // otherwise surface as a stray U+FEFF glued to the first line.
+        let chunk = String::from_utf8_lossy(&buf)
+            .trim_start_matches('\u{FEFF}')
+            .to_string() + &remainder;
         let mut chunk_lines: Vec<&str> = chunk.split('\n').collect();
 
         if pos > 0 {
