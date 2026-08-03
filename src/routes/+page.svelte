@@ -2145,6 +2145,8 @@ import { listen } from '@tauri-apps/api/event';
     // v1.7.233 — presentation heartbeat (idle-freeze fix) handles.
     let _heartbeatRaf = null;
     let _heartbeatEl = null;
+    /** Temporizador de la bomba de composición — ver el bloque del latido. */
+    let _heartbeatPump = null;
     let _heartbeatVis = null;
     // ── v1.7.234 — streaming PRESENT-PUMP (WebView2 present-throttle fix) ──────
     // The 2×2 corner heartbeat keeps the RENDERER producing frames, but its
@@ -2166,12 +2168,24 @@ import { listen } from '@tauri-apps/api/event';
     // pump auto-idles ~700ms after the last chunk, so it costs nothing at rest.
     // Escape hatch shares the heartbeat's: localStorage.lucy_no_heartbeat = '1'.
     let _pumpCanvas = null, _pumpCtx = null, _pumpRaf = null, _pumpUntil = 0, _pumpFlip = false;
+    /** Marca del último frame REAL de la bomba. Distingue "en marcha" de "atascada". */
+    let _pumpLastBeat = 0;
     function kickPresent(ms = 700) {
         try {
             if (typeof performance === 'undefined' || typeof document === 'undefined') return;
             try { if (localStorage.getItem('lucy_no_heartbeat') === '1') return; } catch {}
             _pumpUntil = performance.now() + ms;
-            if (_pumpRaf) return;                    // already pumping — just extended the window
+            // Un `_pumpRaf` con valor significaba "ya hay bomba en marcha,
+            // solo extiendo la ventana". Deja de ser cierto justo cuando hace
+            // falta: si rAF se detiene, `_pump` no corre, nadie limpia
+            // `_pumpRaf`, y a partir de ahí TODA llamada a kickPresent sale por
+            // aquí sin hacer nada. La única defensa contra el congelamiento se
+            // apagaba con el primer congelamiento y no volvía sola.
+            //
+            // Si el último latido de la bomba es viejo, rAF no está corriendo:
+            // se re-arma en vez de darlo por vivo.
+            if (_pumpRaf && (performance.now() - _pumpLastBeat) < 1000) return;
+            if (_pumpRaf) { try { cancelAnimationFrame(_pumpRaf); } catch {} _pumpRaf = null; }
             if (!_pumpCanvas) {
                 const c = document.createElement('canvas');
                 c.width = 8; c.height = 8;           // tiny backing → fill is ~free
@@ -2182,6 +2196,7 @@ import { listen } from '@tauri-apps/api/event';
                 _pumpCtx = c.getContext('2d');
             }
             const _pump = (now) => {
+                _pumpLastBeat = now;   // prueba de vida de rAF — ver el re-armado arriba
                 _pumpFlip = !_pumpFlip;
                 if (_pumpCtx) {
                     _pumpCtx.clearRect(0, 0, 8, 8);
@@ -2308,7 +2323,46 @@ import { listen } from '@tauri-apps/api/event';
                     }
                 };
                 document.addEventListener('visibilitychange', _heartbeatVis);
-                console.info('[lucy-heartbeat] v2 activo (canvas, z-max)');
+
+                // ── v1.8 — BOMBA DE COMPOSICIÓN ──────────────────────────────
+                //
+                // El latido de arriba va sobre rAF, así que por definición NO
+                // corre durante el congelamiento: mide el hueco, no puede
+                // romperlo. Esto es el intento de romperlo.
+                //
+                // Medido en lucy_app.log: huecos de 1.5-2.1 s sin frames del
+                // renderer, con la ventana visible y enfocada, después de
+                // descartar el throttling (flags puestos), la transparencia y
+                // Mica (LUCY_OPAQUE=1) y el nivel panel/driver (los huecos
+                // existen, luego los frames no se producían). Queda que el
+                // compositor de WebView2 deja de programar frames por su
+                // cuenta.
+                //
+                // Un temporizador SÍ sigue corriendo — el throttling de timers
+                // está desactivado — y escribir en un canvas ensucia su capa,
+                // que es lo que obliga al compositor a programar un frame. Si
+                // esto elimina el congelamiento, es un arreglo real que evita
+                // reescribir la interfaz entera. Si no lo elimina, era la
+                // última opción barata y la migración nativa queda justificada
+                // sin más dudas.
+                //
+                // 250 ms y 4 píxeles: el coste es despreciable, pero mantiene
+                // al compositor sin quedarse dormido. Ese es el intercambio, y
+                // es deliberado.
+                _heartbeatPump = setInterval(() => {
+                    if (document.visibilityState === 'hidden') return;
+                    if (!_hbCtx) return;
+                    _hbFlip = !_hbFlip;
+                    _hbCtx.fillStyle = _hbFlip ? '#000' : '#111';
+                    _hbCtx.fillRect(0, 0, 2, 2);
+                    // Mover la capa además de ensuciarla: un cambio de
+                    // transform fuerza al compositor con más contundencia que
+                    // un repintado del contenido, que puede resolverse sin
+                    // presentar.
+                    hb.style.transform = _hbFlip ? 'translateZ(0)' : 'translateZ(0) translateX(0.01px)';
+                }, 250);
+
+                console.info('[lucy-heartbeat] v2 activo (canvas, z-max) + bomba de composición 250ms');
             }
         } catch { /* best-effort — a failed heartbeat must never block boot */ }
         // phase-1 review (feature) — connectivity awareness. A lost internet
@@ -2986,6 +3040,7 @@ import { listen } from '@tauri-apps/api/event';
         }
         // v1.7.233 — presentation heartbeat cleanup.
         if (_heartbeatRaf) { try { cancelAnimationFrame(_heartbeatRaf); } catch {} _heartbeatRaf = null; }
+        if (_heartbeatPump) { try { clearInterval(_heartbeatPump); } catch {} _heartbeatPump = null; }
         if (_heartbeatVis) { try { document.removeEventListener('visibilitychange', _heartbeatVis); } catch {} _heartbeatVis = null; }
         if (_heartbeatEl)  { try { _heartbeatEl.remove(); } catch {} _heartbeatEl = null; }
         // v1.7.234 — streaming present-pump cleanup.
