@@ -2362,7 +2362,29 @@ import { listen } from '@tauri-apps/api/event';
                     hb.style.transform = _hbFlip ? 'translateZ(0)' : 'translateZ(0) translateX(0.01px)';
                 }, 250);
 
-                console.info('[lucy-heartbeat] v2 activo (canvas, z-max) + bomba de composición 250ms');
+                console.info('[lucy-heartbeat] v3 activo (canvas, z-max) + bomba de composición 250ms');
+                // Marca de arranque EN EL LOG, no solo en consola.
+                //
+                // Sin esto, un log sin líneas de latido es ambiguo entre dos
+                // cosas opuestas: "no hubo congelamientos de renderer" y "este
+                // build ni siquiera lleva la instrumentación". Ya nos pasó —
+                // hubo una sesión con tres huecos registrados y la siguiente
+                // con cero, sin forma de distinguir si la bomba había
+                // funcionado o si el binario era viejo.
+                //
+                // Con esta línea el fichero se explica solo: si aparece, el
+                // build es actual y el camino de escritura funciona, así que la
+                // AUSENCIA de huecos posteriores significa de verdad que no los
+                // hubo. Y si el usuario ve congelarse la app con esta línea
+                // presente y ningún hueco detrás, el problema no es el renderer
+                // — son los frames que sí se produjeron y la pantalla no mostró.
+                try {
+                    invoke('log_frontend_event', {
+                        level: 'INFO',
+                        message: 'heartbeat v3 armado — bomba de composición 250ms activa. '
+                               + 'Los huecos de renderer se registran debajo; si no hay ninguno, no los hubo.',
+                    });
+                } catch {}
             }
         } catch { /* best-effort — a failed heartbeat must never block boot */ }
         // phase-1 review (feature) — connectivity awareness. A lost internet
