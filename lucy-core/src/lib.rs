@@ -21,6 +21,9 @@ pub mod chat;
 /// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
 pub mod memory;
 pub mod system;
+/// Ranking semántico: blobs, coseno y los filtros que deciden qué fila puede
+/// compararse con qué consulta. El transporte HTTP se queda en cada frontend.
+pub mod vectors;
 
 pub type DbPool = r2d2::Pool<SqliteConnectionManager>;
 static POOL: OnceCell<DbPool> = OnceCell::new();

@@ -17,7 +17,6 @@ use crate::state::HTTP_CLIENT;
 use crate::utils::db::generate_id;
 use keyring::Entry;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
 
 const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 
@@ -38,13 +37,10 @@ const GEMINI_EMBED_MODEL: &str = "text-embedding-004";
 
 // ── Types exposed to the frontend ──────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SemanticHit {
-    pub entity_type: String,
-    pub entity_id: String,
-    pub text: String,
-    pub score: f32,
-}
+// LA definición vive en `lucy-core::vectors`, junto al ranking que la produce.
+// Estaba declarada idéntica en los dos sitios; reexportar mantiene intactos los
+// `commands::embeddings::SemanticHit` que ya existen por todo el crate.
+pub use lucy_core::vectors::SemanticHit;
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -68,24 +64,19 @@ pub(crate) fn ollama_base() -> String {
 
 /// Convert a Vec<f32> into the little-endian byte representation we store
 /// in the `embeddings.vec` BLOB column.
-fn vec_to_blob(v: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(v.len() * 4);
-    for f in v {
-        out.extend_from_slice(&f.to_le_bytes());
-    }
-    out
-}
+// v1.8 — el formato del blob y las reglas de ranking viven en
+// `lucy-core::vectors`. Aquí se queda el transporte (reqwest async) y el acceso
+// a la DB; allí, el juicio que no debe duplicarse: qué fila es comparable con
+// qué consulta.
+//
+// `cosine` NO se reexporta: esta app tiene su propio despachador SIMD
+// (AVX-512/AVX2/escalar) que es más rápido y da el mismo resultado dentro del
+// epsilon de coma flotante — verificado en
+// `simd_cosine::tests::scalar_matches_dispatched_768d`. El core lleva la
+// versión escalar porque el shell nativo no arrastra ese módulo.
+use lucy_core::vectors::{blob_to_vec, vec_to_blob};
 
-/// Inverse of vec_to_blob.
-fn blob_to_vec(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
-}
-
-/// Cosine similarity. Expects equal-length vectors; returns 0.0 if either
-/// is zero-magnitude (avoids NaN). v1.7.19 — delegates to the SIMD
-/// dispatcher (AVX-512 / AVX2 / scalar) instead of the manual loop.
+/// Cosine similarity vía el despachador SIMD de esta app.
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     crate::utils::simd_cosine::cosine(a, b)
 }
@@ -575,38 +566,9 @@ pub async fn delete_embedding(entity_type: String, entity_id: String) -> Result<
 /// skips stored vectors whose dimension differs from the query. Returns
 /// `None` when nothing was skipped. Pure, so the threshold logic is unit
 /// tested without a DB. (v1.7.220)
-fn dim_mismatch_warning(skipped: usize, total: usize, query_dim: usize) -> Option<String> {
-    if skipped == 0 {
-        return None;
-    }
-    Some(format!(
-        "semantic_search: {}/{} stored embeddings have a dimension ≠ {} \
-         (embedding model changed?). They are invisible to recall until \
-         re-embedded — run backfill_embeddings.",
-        skipped, total, query_dim
-    ))
-}
+use lucy_core::vectors::dim_mismatch_warning;
+use lucy_core::vectors::model_mismatch_warning;
 
-/// Sibling of `dim_mismatch_warning` for the case dimensions cannot see: rows
-/// embedded by a DIFFERENT model that happens to share the query's dimension.
-///
-/// Separate message on purpose. The dimension warning means "your embedder
-/// changed shape"; this one means "part of your corpus was indexed while Ollama
-/// was down, and it is now unreachable from an Ollama query". Same remedy, but
-/// an operator who reads the dimension text will go looking for a setting they
-/// never touched.
-fn model_mismatch_warning(skipped: usize, total: usize, query_model: &str) -> Option<String> {
-    if skipped == 0 {
-        return None;
-    }
-    Some(format!(
-        "semantic_search: {}/{} stored embeddings came from a different embedder \
-         than the query ('{}'). Cosine across two models is noise even at equal \
-         dimensions, so they are excluded rather than ranked — re-embed them to \
-         make them recallable again.",
-        skipped, total, query_model
-    ))
-}
 
 #[tauri::command]
 pub async fn semantic_search(
