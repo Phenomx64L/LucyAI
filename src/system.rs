@@ -29,6 +29,14 @@ pub struct SysSnapshot {
     pub disks: Vec<DiskInfo>,
 }
 
+/// Nombre del host, sin necesitar un `SysMonitor` vivo.
+///
+/// La barra de estado lo pinta en cada frame y no quiere arrastrar un refresco
+/// completo de métricas para leer una cadena que no cambia.
+pub fn hostname() -> String {
+    System::host_name().unwrap_or_else(|| "desconocido".into())
+}
+
 pub struct SysMonitor {
     sys: System,
     disks: Disks,
