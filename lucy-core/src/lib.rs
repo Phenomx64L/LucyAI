@@ -23,6 +23,9 @@ pub mod chat;
 pub mod logs;
 /// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
 pub mod memory;
+/// El catálogo de modelos LLM. Duplica `src/lib/models.js` a propósito, con un
+/// test que compara los dos ficheros para que el duplicado no pueda derivar.
+pub mod models;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
