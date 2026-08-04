@@ -12,6 +12,7 @@
 //!   set WGPU_BACKEND=gl && cargo run -p lucy-egui --release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod hosts;
 mod theme;
 
 use eframe::egui;
@@ -565,6 +566,102 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
     });
 }
 
+/// La píldora del selector de equipo: icono en acento, nombre, y el chevron.
+///
+/// Se mide y se pinta a mano en vez de usar un `Button` porque el icono va en
+/// acento y el nombre en secundario — dos colores en un control, que es lo que
+/// hace que se lea como un selector y no como un botón cualquiera.
+fn host_pill(ui: &mut egui::Ui, icon: &str, name: &str) -> egui::Response {
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let tw = |ui: &egui::Ui, s: &str| {
+        ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), theme::TXT3).size().x)
+    };
+    let (iw, nw) = (tw(ui, icon), tw(ui, name));
+    let chev = 12.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(10.0 + iw + 6.0 + nw + 6.0 + chev + 10.0, 24.0),
+        egui::Sense::click(),
+    );
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(theme::R_SM),
+        if resp.hovered() { theme::BG4 } else { theme::BG3 },
+        egui::Stroke::new(1.0_f32, theme::BDR),
+    );
+    let cy = rect.center().y;
+    let mut x = rect.left() + 10.0;
+    for (s, col, adv) in [
+        (icon, theme::ACC, iw + 6.0),
+        (name, theme::TXT3, nw + 6.0),
+        ("▾", theme::TXT3, 0.0),
+    ] {
+        ui.painter().text(
+            egui::pos2(x, cy),
+            egui::Align2::LEFT_CENTER,
+            s,
+            font.clone(),
+            col,
+        );
+        x += adv;
+    }
+    resp
+}
+
+/// Una entrada del menú de equipos: icono, nombre, y la etiqueta del transporte.
+///
+/// El nombre se recorta contra la etiqueta en vez de empujarla fuera: un equipo
+/// con nombre largo no debe poder esconder CÓMO se llega a él, que es el dato
+/// que dice si va por WinRM o por SSH.
+fn host_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, kind: &str, sel: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::BG4);
+    }
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let small = egui::FontId::proportional(theme::FS_CAPTION);
+    let cy = rect.center().y;
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, cy),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        font.clone(),
+        if sel { theme::ACC } else { theme::TXT3 },
+    );
+    let chip_w = ui.fonts(|f| {
+        f.layout_no_wrap(kind.to_string(), small.clone(), theme::FAINT)
+            .size()
+            .x
+    }) + 12.0;
+    let chip = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - 10.0 - chip_w, cy - 8.0),
+        egui::vec2(chip_w, 16.0),
+    );
+    ui.painter()
+        .rect_filled(chip, egui::Rounding::same(5.0), theme::BG4);
+    ui.painter().text(
+        chip.center(),
+        egui::Align2::CENTER_CENTER,
+        kind,
+        small,
+        theme::FAINT,
+    );
+    let left = rect.left() + 30.0;
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2(chip.left() - 8.0, rect.bottom()),
+        ))
+        .text(
+            egui::pos2(left, cy),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font,
+            if sel { theme::ACC } else { theme::TXT2 },
+        );
+    resp.clicked()
+}
+
 /// Un lado de un control segmentado. Activo = relleno de acento con tinta
 /// oscura encima, que es el único sitio donde el CSS pone el acento sólido.
 fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
@@ -682,6 +779,10 @@ struct App {
     /// Historial de las líneas de tendencia de CPU y RAM.
     cpu_hist: Vec<f32>,
     ram_hist: Vec<f32>,
+    /// Los equipos dados de alta, leídos del Credential Manager. Ver `hosts`.
+    remote_hosts: Vec<hosts::Host>,
+    /// Equipo seleccionado: `"local"` o el `id` de uno remoto.
+    selected_host: String,
     /// Cuándo entró el Dashboard en pantalla. Gobierna la animación de entrada;
     /// `None` mientras la vista no está visible, y así al volver vuelve a
     /// montarse como en la V2 en vez de aparecer de golpe.
@@ -746,6 +847,8 @@ impl App {
             svc_rx: None,
             cpu_hist: Vec::new(),
             ram_hist: Vec::new(),
+            remote_hosts: hosts::load(),
+            selected_host: "local".to_string(),
             dash_shown: None,
             sys_stamp: String::from("—"),
             last: Instant::now(),
@@ -1431,6 +1534,147 @@ impl App {
     }
 
 
+    /// El selector de equipo: píldora + menú, con los equipos REALES del
+    /// operador.
+    ///
+    /// El menú se cierra al pulsar fuera, que es lo que hace el `.host-backdrop`
+    /// del CSS; aquí lo da egui con `CloseOnClickOutside` en vez de un elemento
+    /// invisible a pantalla completa.
+    fn host_picker(&mut self, ui: &mut egui::Ui) {
+        let is_local = self.selected_host == "local";
+        let name = if is_local {
+            "Este equipo".to_string()
+        } else {
+            self.remote_hosts
+                .iter()
+                .find(|h| h.id == self.selected_host)
+                // Si el equipo seleccionado ya no está en el índice —lo borraron
+                // desde la app web mientras esto estaba abierto— se dice, en vez
+                // de enseñar un dashboard sin dueño.
+                .map_or_else(|| "(equipo no encontrado)".to_string(), |h| h.name.clone())
+        };
+        let pill = host_pill(ui, if is_local { "▭" } else { "▤" }, &name);
+        let popup_id = ui.make_persistent_id("host-menu");
+        if pill.clicked() {
+            // Se relee al abrir: el operador puede haber dado de alta un equipo
+            // en la app web hace un minuto, y una lista cacheada al arrancar no
+            // lo tendría.
+            self.remote_hosts = hosts::load();
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        let mut elegido: Option<String> = None;
+        egui::popup::popup_below_widget(
+            ui,
+            popup_id,
+            &pill,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                let w = 236.0_f32;
+                ui.set_min_width(w);
+                ui.spacing_mut().item_spacing.y = 1.0;
+                if host_option(ui, w, "▭", "Este equipo", "local", is_local) {
+                    elegido = Some("local".to_string());
+                }
+                for h in &self.remote_hosts {
+                    if host_option(
+                        ui,
+                        w,
+                        "▤",
+                        &h.name,
+                        h.transport(),
+                        h.id == self.selected_host,
+                    ) {
+                        elegido = Some(h.id.clone());
+                    }
+                }
+                if self.remote_hosts.is_empty() {
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new("Sin equipos remotos dados de alta")
+                            .size(theme::FS_CAPTION)
+                            .color(theme::FAINT),
+                    );
+                }
+            },
+        );
+
+        if let Some(id) = elegido {
+            ui.memory_mut(|m| m.close_popup());
+            if id != self.selected_host {
+                self.selected_host = id;
+                // El historial es de ESTE equipo. Arrastrarlo al cambiar de host
+                // dibujaría la tendencia de una máquina bajo el nombre de otra.
+                self.cpu_hist.clear();
+                self.ram_hist.clear();
+                self.services.clear();
+                self.dash_shown = Some(Instant::now());
+            }
+        }
+    }
+
+    /// Dashboard de un equipo remoto — la parte que todavía no está migrada.
+    ///
+    /// AQUÍ NO SE ENSEÑAN LAS MÉTRICAS LOCALES. Sería trivial y sería mentir:
+    /// un panel que pone "SRV-DC01" encima de la CPU de esta máquina es peor que
+    /// uno que no está, porque el operador no tiene forma de notarlo.
+    ///
+    /// Lo que falta es concreto: el sondeo remoto va por WinRM/SSH y ese
+    /// transporte vive en `src-tauri` junto a los guardrails que revisan la
+    /// credencial antes de usarla. Se migra entero o no se migra — llevarse el
+    /// transporte y dejar atrás el control que lo protege es exactamente la
+    /// clase de atajo que no se toma con contraseñas.
+    fn remoto(&mut self, ui: &mut egui::Ui) {
+        let h = self.remote_hosts.iter().find(|h| h.id == self.selected_host);
+        let (name, dest, via) = match h {
+            Some(h) => (
+                h.name.clone(),
+                format!("{}@{}", h.username, h.host),
+                h.transport(),
+            ),
+            None => (
+                "(equipo no encontrado)".to_string(),
+                "—".to_string(),
+                "—",
+            ),
+        };
+        ui.add_space(28.0);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("▤").size(34.0).color(theme::FAINT));
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(&name).size(theme::FS_TITLE).color(theme::TXT));
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new(format!("{dest} · {via}"))
+                    .size(theme::FS_CAPTION)
+                    .monospace()
+                    .color(theme::FAINT),
+            );
+            ui.add_space(20.0);
+            card_on(ui, egui::vec2(460.0, 132.0), 16.0, theme::BG2, |ui| {
+                panel_title(ui, "◉", "Qué falta");
+                ui.add_space(10.0);
+                for line in [
+                    "El sondeo remoto (`get_remote_health_windows` / `_linux`)",
+                    "todavía vive en src-tauri, junto al transporte WinRM y a",
+                    "los guardrails que revisan la credencial antes de usarla.",
+                    "Se migra el bloque entero o no se migra.",
+                ] {
+                    row(ui, 16.0, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(line)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::TXT2),
+                            )
+                            .truncate(),
+                        );
+                    });
+                }
+            });
+        });
+    }
+
     /// Las alertas derivadas de la V2 — y de ellas sale el estado de salud.
     ///
     /// Los umbrales son distintos por métrica y eso es deliberado: una CPU al
@@ -1498,6 +1742,7 @@ impl App {
                     .size(theme::FS_TITLE)
                     .color(theme::TXT),
             );
+            self.host_picker(ui);
 
             let (sal_txt, sal_col, sal_bg) = if alerts.iter().any(|(v, _)| *v == Sev::Bad) {
                 ("Crítico", theme::RED, theme::RED_BG)
@@ -1550,6 +1795,13 @@ impl App {
             }
         });
         ui.add_space(10.0);
+
+        // El cuerpo pertenece al equipo seleccionado. Con uno remoto no se
+        // dibuja lo local: ver `remoto`.
+        if self.selected_host != "local" {
+            self.remoto(ui);
+            return;
+        }
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
