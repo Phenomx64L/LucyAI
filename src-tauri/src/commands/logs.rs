@@ -2,7 +2,6 @@
 
 use std::process::Command;
 use std::os::windows::process::CommandExt;
-use std::io::{Read, Seek, SeekFrom};
 use crate::state::CREATE_NO_WINDOW;
 use crate::utils::shell::run_winrm;
 
@@ -34,59 +33,21 @@ pub fn log_frontend_event(level: String, message: String) {
     crate::utils::logging::write_app_log(lvl, &format!("[ui] {}", msg));
 }
 
-/// Lee las últimas N líneas de un archivo local de forma eficiente.
-/// Lee en chunks de 64KB desde el final — nunca carga el archivo completo en RAM.
+
+/// Lee las últimas N líneas de un archivo local.
+///
+/// v1.8 — el mecanismo vive en `lucy-core::logs::tail`, compartido con el shell
+/// nativo. Aquí se queda la POLÍTICA, que es lo que este comando aporta de
+/// verdad: `enforce_sensitive_path` decide si la ruta puede leerse.
+///
+/// La separación importa por quién llama a cada uno. Este comando está expuesto
+/// al LLM, que puede pedir cualquier ruta; el shell nativo lee la ruta fija que
+/// él mismo construye. Bajar la guarda al crate compartido la haría invisible
+/// justo en el consumidor que la necesita.
 #[tauri::command]
 pub fn read_log_tail(path: String, lines: usize) -> Result<Vec<String>, String> {
-    // SEC-1 FIX: validate path against sensitive directories (same as read_file_content).
     let validated = crate::commands::local::enforce_sensitive_path(&path, false)?;
-    let lines = lines.min(50_000); // BUG-4 FIX: cap lines to prevent unbounded reads.
-    let mut file = std::fs::File::open(&validated)
-        .map_err(|e| format!("No se pudo abrir '{}': {}", validated.display(), e))?;
-
-    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
-    if file_size == 0 { return Ok(vec![]); }
-
-    let chunk_size: u64 = 65536;
-    let mut collected: Vec<String> = Vec::with_capacity(lines + 1);
-    let mut pos = file_size;
-    let mut remainder = String::new();
-
-    while pos > 0 && collected.len() < lines {
-        let read_size = chunk_size.min(pos);
-        pos -= read_size;
-        file.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
-
-        let mut buf = vec![0u8; read_size as usize];
-        file.read_exact(&mut buf).map_err(|e| e.to_string())?;
-
-        // v1.8 — the log now carries a UTF-8 BOM so PowerShell and Notepad stop
-        // rendering the Spanish accents as mojibake. Strip it here: reading the
-        // final chunk backwards reaches offset 0, and the marker would
-        // otherwise surface as a stray U+FEFF glued to the first line.
-        let chunk = String::from_utf8_lossy(&buf)
-            .trim_start_matches('\u{FEFF}')
-            .to_string() + &remainder;
-        let mut chunk_lines: Vec<&str> = chunk.split('\n').collect();
-
-        if pos > 0 {
-            remainder = chunk_lines.remove(0).to_string();
-        } else {
-            remainder.clear();
-        }
-
-        for line in chunk_lines.into_iter().rev() {
-            collected.push(line.trim_end_matches('\r').to_string());
-            if collected.len() >= lines { break; }
-        }
-    }
-
-    if !remainder.is_empty() && collected.len() < lines {
-        collected.push(remainder.trim_end_matches('\r').to_string());
-    }
-
-    collected.reverse();
-    Ok(collected)
+    lucy_core::logs::tail(&validated, lines)
 }
 
 /// Lee las últimas N líneas de un log remoto Windows via WinRM.
