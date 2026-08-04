@@ -165,6 +165,39 @@ fn fmt_gb(bytes: u64) -> String {
     }
 }
 
+/// Porcentaje de RAM usada. Vive aquí y no en cada tarjeta porque la V2 lo
+/// muestra en dos sitios y dos divisiones distintas acaban discrepando en el
+/// redondeo.
+fn mem_pct(s: &lucy_core::system::SysSnapshot) -> f32 {
+    if s.mem_total == 0 {
+        0.0
+    } else {
+        s.mem_used as f32 / s.mem_total as f32 * 100.0
+    }
+}
+
+/// Caudal en las unidades de la V2: kbps por debajo de 1 Mbps, Mbps por encima.
+fn fmt_rate(bps: u64) -> String {
+    let kbps = bps as f64 * 8.0 / 1000.0;
+    if kbps >= 1000.0 {
+        format!("{:.1} Mbps", kbps / 1000.0)
+    } else {
+        format!("{kbps:.0} kbps")
+    }
+}
+
+/// `HH:MM:SS` local, sin arrastrar `chrono` al prototipo por una etiqueta.
+fn stamp_now() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // UTC: el desfase local requeriría chrono o la API de zonas de Windows, y
+    // esta etiqueta responde a "¿está vivo?", no a qué hora es exactamente.
+    let t = secs % 86_400;
+    format!("{:02}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
+}
+
 fn fmt_uptime(secs: u64) -> String {
     let d = secs / 86_400;
     let h = (secs % 86_400) / 3600;
@@ -208,6 +241,21 @@ struct App {
     // sistema (métricas live vía lucy_core::system)
     sys: lucy_core::system::SysMonitor,
     sys_last: Instant,
+    /// Caudal de red de la última medición. Se guarda porque `net_rate()` es
+    /// destructivo: calcula contra la lectura anterior y la reemplaza. Llamarlo
+    /// en cada frame daría deltas de 16 ms — ruido, no caudal.
+    net: lucy_core::system::NetRate,
+    procs: Vec<lucy_core::system::ProcInfo>,
+    proc_by_cpu: bool,
+    services: Vec<lucy_core::system::DownService>,
+    /// Cadencias separadas por COSTE, no por gusto: los medidores van a 1 s,
+    /// los procesos a 3 s (`refresh_processes` recorre la tabla entera) y los
+    /// servicios a 30 s (lanza un PowerShell). Una sola cadencia obligaría a
+    /// elegir entre medidores lentos o un PowerShell por segundo.
+    procs_last: Instant,
+    svc_last: Instant,
+    /// Hora de la última actualización, para la cabecera.
+    sys_stamp: String,
     // telemetry
     last: Instant,
     fps: f32,
@@ -254,6 +302,16 @@ impl App {
             log_info: false,
             sys: lucy_core::system::SysMonitor::new(),
             sys_last: Instant::now(),
+            net: lucy_core::system::NetRate::default(),
+            procs: Vec::new(),
+            proc_by_cpu: false,
+            services: Vec::new(),
+            // Instantes en el pasado para que las tres cadencias disparen en el
+            // primer frame: el dashboard tiene que abrirse con datos, no vacío
+            // esperando 30 segundos a que aparezcan los servicios.
+            procs_last: Instant::now() - Duration::from_secs(60),
+            svc_last: Instant::now() - Duration::from_secs(60),
+            sys_stamp: String::from("—"),
             last: Instant::now(),
             fps: 0.0,
             last_activity: Instant::now(),
@@ -314,9 +372,11 @@ impl eframe::App for App {
                 live = true;
             }
         }
-        if self.sys_last.elapsed() >= Duration::from_millis(1000) {
-            self.sys.refresh(); // el % de CPU es el delta desde el último refresco
-            self.sys_last = Instant::now();
+        // Solo se mide lo que se está mirando. Refrescar métricas mientras el
+        // usuario lee el chat gasta CPU para pintar algo que no está en pantalla
+        // — y en una app que vive abierta todo el día eso se nota en la batería.
+        if self.view == View::Dashboard {
+            self.refresh_system(false);
         }
 
         // ── Política de repintado ────────────────────────────────────────────
@@ -677,88 +737,85 @@ impl App {
         self.sem_result = Some(lucy_core::vectors::search(q, "memory", 8, 0.25));
     }
 
-    /// Uso por núcleo como rejilla de celdas coloreadas.
-    ///
-    /// El color sale de `theme::usage_color`, las mismas bandas que las barras
-    /// de arriba — un núcleo al 90 % es rojo aquí igual que la CPU global al
-    /// 90 % es roja allí. Que dos vistas del mismo dato usaran cortes distintos
-    /// es precisamente lo que ese helper existe para impedir.
-    fn core_heatmap(&self, ui: &mut egui::Ui, per_core: &[f32]) {
-        if per_core.is_empty() {
-            return;
+    /// Refresca las métricas respetando cada cadencia. `force` las salta todas
+    /// — es lo que hace el botón ↻, que debe dar datos frescos ahora y no
+    /// "dentro de 27 segundos".
+    fn refresh_system(&mut self, force: bool) {
+        if force || self.sys_last.elapsed() >= Duration::from_millis(1000) {
+            self.sys.refresh(); // el % de CPU es el delta desde el último refresco
+            self.net = self.sys.net_rate();
+            self.sys_last = Instant::now();
+            self.sys_stamp = stamp_now();
         }
-        const CELL: f32 = 15.0;
-        const GAP: f32 = 3.0;
-        // Cuántas caben a lo ancho — la rejilla se adapta al panel, no al
-        // número de núcleos.
-        let per_row = (((ui.available_width() + GAP) / (CELL + GAP)).floor() as usize).max(1);
-        let rows = per_core.len().div_ceil(per_row);
-
-        let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(
-                ui.available_width(),
-                rows as f32 * CELL + (rows.saturating_sub(1)) as f32 * GAP,
-            ),
-            egui::Sense::hover(),
-        );
-        let painter = ui.painter();
-
-        for (i, pct) in per_core.iter().enumerate() {
-            let (col, row) = (i % per_row, i / per_row);
-            let min = egui::pos2(
-                rect.min.x + col as f32 * (CELL + GAP),
-                rect.min.y + row as f32 * (CELL + GAP),
-            );
-            let cell = egui::Rect::from_min_size(min, egui::vec2(CELL, CELL));
-
-            // Fondo del carril siempre visible: un núcleo al 0 % tiene que
-            // dibujarse como celda vacía, no desaparecer.
-            painter.rect_filled(cell, 2.0, theme::BG3);
-            let frac = (pct / 100.0).clamp(0.0, 1.0);
-            if frac > 0.0 {
-                // Se llena de abajo arriba, como un medidor.
-                let h = (cell.height() * frac).max(1.5);
-                painter.rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(cell.min.x, cell.max.y - h),
-                        cell.max,
-                    ),
-                    2.0,
-                    theme::usage_color(*pct),
-                );
-            }
-
-            if let Some(p) = resp.hover_pos() {
-                if cell.contains(p) {
-                    painter.rect_stroke(cell, 2.0, egui::Stroke::new(1.0_f32, theme::TXT));
-                }
-            }
+        if force || self.procs_last.elapsed() >= Duration::from_secs(3) {
+            self.procs = self.sys.top_processes(8, self.proc_by_cpu);
+            self.procs_last = Instant::now();
         }
-
-        // El número exacto, solo del núcleo señalado. Fuera de la rejilla, la
-        // sección no gasta ni un píxel en cifras que nadie está leyendo.
-        if let Some(p) = resp.hover_pos() {
-            let col = ((p.x - rect.min.x) / (CELL + GAP)).floor() as usize;
-            let row = ((p.y - rect.min.y) / (CELL + GAP)).floor() as usize;
-            if col < per_row {
-                if let Some(pct) = per_core.get(row * per_row + col) {
-                    resp.clone().on_hover_text(format!(
-                        "núcleo {} · {:.0}%",
-                        row * per_row + col,
-                        pct
-                    ));
-                }
+        #[cfg(windows)]
+        if force || self.svc_last.elapsed() >= Duration::from_secs(30) {
+            // Un fallo aquí NO se propaga: lanzar PowerShell puede fallar por
+            // política del equipo, y eso no debe vaciar un dashboard cuyo resto
+            // de datos es correcto. Se conserva la última lista buena.
+            if let Ok(v) = lucy_core::system::down_services(12) {
+                self.services = v;
             }
+            self.svc_last = Instant::now();
         }
     }
 
-    /// Panel de una vista todavía no migrada.
+    /// Tarjeta KPI: número grande, unidad pequeña, subtítulo.
     ///
-    /// No es un "próximamente". Dice QUÉ falta y de qué módulo del backend sale,
-    /// porque ese dato ya está medido: de los 370 comandos, 358 no llevan tipos
-    /// de Tauri en la firma y se mueven tal cual. Enseñarlo aquí convierte el
-    /// rail en el estado real de la migración, y no puede quedarse obsoleto sin
-    /// que se vea al abrir la app.
+    /// La jerarquía tipográfica ES el diseño de la V2: la cifra domina, el `%`
+    /// va a media altura, y el detalle queda debajo en secundario. Un panel de
+    /// monitorización se lee de un vistazo o no se lee — todo al mismo tamaño
+    /// obliga a buscar el número, que es exactamente lo que no debe pasar.
+    fn kpi_card(
+        ui: &mut egui::Ui,
+        icon: &str,
+        title: &str,
+        value: &str,
+        unit: &str,
+        color: egui::Color32,
+        sub: &str,
+        bar: Option<f32>,
+    ) {
+        egui::Frame::none()
+            .fill(theme::BG2)
+            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::same(14.0))
+            .show(ui, |ui| {
+                ui.set_min_width(190.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(icon).size(12.0).color(theme::TXT3));
+                    ui.label(
+                        egui::RichText::new(title)
+                            .size(9.5)
+                            .color(theme::TXT3)
+                            .strong(),
+                    );
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.label(egui::RichText::new(value).size(30.0).color(color).strong());
+                    if !unit.is_empty() {
+                        ui.label(egui::RichText::new(unit).size(13.0).color(color));
+                    }
+                });
+                if let Some(frac) = bar {
+                    ui.add_space(6.0);
+                    ui.add(
+                        egui::ProgressBar::new(frac.clamp(0.0, 1.0))
+                            .desired_height(4.0)
+                            .fill(theme::usage_color(frac * 100.0)),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(sub).size(10.5).color(theme::TXT3));
+            });
+    }
+
     fn pendiente(&mut self, ui: &mut egui::Ui, v: View) {
         let (glyph, label) = v.label();
         ui.add_space(48.0);
@@ -799,106 +856,320 @@ impl App {
         });
     }
 
+
+    /// Dashboard de sistema — el diseño de la V2, no uno inventado.
     fn sistema(&mut self, ui: &mut egui::Ui) {
         let s = self.sys.snapshot();
-        let accent = theme::ACC;
-        ui.label(egui::RichText::new("SISTEMA (live · sysinfo)").strong());
-        ui.separator();
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                // ── host ──────────────────────────────────────────────────────
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new(&s.host).strong().size(16.0).color(accent));
-                        ui.label(egui::RichText::new(format!("· {} {}", s.os, s.kernel)).weak());
+        let net = self.net;
+
+        // ── cabecera ─────────────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Dashboard de sistema").size(17.0).color(theme::TXT));
+            ui.add_space(10.0);
+
+            // Salud: derivada de UN criterio, el mismo del helper de umbrales.
+            // Y solo los servicios CAÍDOS (código != 0) la degradan — un
+            // servicio parado limpio se informa en su tarjeta y no tiñe nada,
+            // que es la lección que costó que el equipo pasara a "Atención" en
+            // cada arranque.
+            let crashed = self.services.iter().filter(|s| s.crashed()).count();
+            let worst = s.cpu_pct.max(mem_pct(&s));
+            let (sal_txt, sal_col) = if crashed > 0 || worst >= 85.0 {
+                ("Atención", theme::AMBER)
+            } else {
+                ("Saludable", theme::ACC)
+            };
+            egui::Frame::none()
+                .fill(sal_col.linear_multiply(0.12))
+                .rounding(egui::Rounding::same(10.0))
+                .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("●").size(8.0).color(sal_col));
+                    ui.label(egui::RichText::new(sal_txt).size(11.0).color(sal_col));
+                });
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(format!("act. {}", self.sys_stamp))
+                    .size(10.5)
+                    .monospace()
+                    .color(theme::TXT3),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("↻").on_hover_text("Actualizar ahora").clicked() {
+                    self.refresh_system(true);
+                }
+            });
+        });
+        ui.add_space(10.0);
+
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            // ── cuatro KPI ───────────────────────────────────────────────────
+            ui.horizontal_wrapped(|ui| {
+                Self::kpi_card(
+                    ui, "▣", "CPU",
+                    &format!("{:.0}", s.cpu_pct), "%",
+                    theme::usage_color(s.cpu_pct),
+                    &format!("{} núcleos", s.cores),
+                    None,
+                );
+                let mp = mem_pct(&s);
+                Self::kpi_card(
+                    ui, "◈", "RAM",
+                    &format!("{mp:.0}"), "%",
+                    theme::usage_color(mp),
+                    &format!("{} / {}", fmt_gb(s.mem_used), fmt_gb(s.mem_total)),
+                    None,
+                );
+                if let Some(d) = s.disks.first() {
+                    let used = d.total.saturating_sub(d.avail);
+                    let pct = if d.total > 0 { used as f32 / d.total as f32 * 100.0 } else { 0.0 };
+                    Self::kpi_card(
+                        ui, "▤", "DISCO SISTEMA",
+                        &format!("{pct:.0}"), "%",
+                        theme::usage_color(pct),
+                        &format!("{} libres de {}", fmt_gb(d.avail), fmt_gb(d.total)),
+                        Some(pct / 100.0),
+                    );
+                }
+                Self::kpi_card(
+                    ui, "◱", "SISTEMA",
+                    &s.host, "",
+                    theme::TXT,
+                    &format!("{}\nUptime {}", s.os, fmt_uptime(s.uptime_secs)),
+                    None,
+                );
+            });
+            ui.add_space(10.0);
+
+            // ── red + servicios ──────────────────────────────────────────────
+            ui.horizontal_wrapped(|ui| {
+                egui::Frame::none()
+                    .fill(theme::BG2)
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                    .rounding(egui::Rounding::same(8.0))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(260.0);
+                        ui.label(egui::RichText::new("◈ RED").size(9.5).color(theme::TXT3).strong());
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("↓").color(theme::ACC).size(15.0));
+                            ui.label(
+                                egui::RichText::new(fmt_rate(net.rx_bps))
+                                    .size(17.0)
+                                    .color(theme::TXT)
+                                    .strong(),
+                            );
+                            ui.add_space(10.0);
+                            ui.label(egui::RichText::new("↑").color(theme::BLUE).size(15.0));
+                            ui.label(
+                                egui::RichText::new(fmt_rate(net.tx_bps))
+                                    .size(17.0)
+                                    .color(theme::TXT)
+                                    .strong(),
+                            );
+                        });
                     });
-                    if !s.cpu_brand.is_empty() {
-                        ui.label(egui::RichText::new(&s.cpu_brand).small().weak());
-                    }
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} núcleos · uptime {}",
-                            s.cores,
-                            fmt_uptime(s.uptime_secs)
-                        ))
-                        .small()
-                        .weak(),
-                    );
-                });
-                ui.add_space(6.0);
 
-                // ── CPU ───────────────────────────────────────────────────────
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.label(egui::RichText::new("CPU").strong());
-                    ui.add(
-                        egui::ProgressBar::new((s.cpu_pct / 100.0).clamp(0.0, 1.0)).fill(theme::usage_color(s.cpu_pct))
-                            .text(format!("{:.0}%", s.cpu_pct)),
-                    );
-                    ui.add_space(6.0);
-                    // ── por núcleo: mapa de calor, no 32 barras ───────────────
-                    //
-                    // Con 32 núcleos, una barra con su porcentaje por núcleo
-                    // ocupaba casi toda la vista y empujaba memoria y discos
-                    // fuera de pantalla. Y la pregunta que se le hace de un
-                    // vistazo a esta sección no es "¿cuánto tiene el núcleo
-                    // 19?", es "¿hay alguno saturado?" — para eso el color
-                    // responde mejor que el número.
-                    //
-                    // Celdas pequeñas en rejilla, coloreadas con las MISMAS
-                    // bandas del dashboard, y el porcentaje exacto al pasar por
-                    // encima. La escala no depende del número de núcleos: en una
-                    // máquina de 8 se ve igual de bien que en ésta de 32.
-                    self.core_heatmap(ui, &s.per_core);
-                });
-                ui.add_space(6.0);
-
-                // ── memoria ───────────────────────────────────────────────────
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Memoria").strong());
-                    let frac = if s.mem_total > 0 {
-                        s.mem_used as f32 / s.mem_total as f32
-                    } else {
-                        0.0
-                    };
-                    ui.add(
-                        egui::ProgressBar::new(frac).fill(theme::usage_color(frac * 100.0))
-                            .text(format!("{} / {}", fmt_gb(s.mem_used), fmt_gb(s.mem_total))),
-                    );
-                    if s.swap_total > 0 {
-                        let sf = s.swap_used as f32 / s.swap_total as f32;
-                        ui.label(egui::RichText::new("Swap").small().weak());
-                        ui.add(
-                            egui::ProgressBar::new(sf).fill(theme::usage_color(sf * 100.0))
-                                .text(format!("{} / {}", fmt_gb(s.swap_used), fmt_gb(s.swap_total))),
+                egui::Frame::none()
+                    .fill(theme::BG2)
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                    .rounding(egui::Rounding::same(8.0))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(320.0);
+                        ui.label(
+                            egui::RichText::new("◉ SERVICIOS DETENIDOS")
+                                .size(9.5)
+                                .color(theme::TXT3)
+                                .strong(),
                         );
-                    }
-                });
-                ui.add_space(6.0);
+                        ui.add_space(6.0);
+                        if self.services.is_empty() {
+                            ui.label(
+                                egui::RichText::new("✓ Todos los servicios automáticos en ejecución")
+                                    .size(11.5)
+                                    .color(theme::ACC),
+                            );
+                        } else {
+                            for sv in &self.services {
+                                // Caído en ámbar, parado limpio en secundario:
+                                // la tarjeta distingue las dos cosas en vez de
+                                // teñirlo todo de alarma.
+                                let (c, suf) = if sv.crashed() {
+                                    (theme::AMBER, format!("  (código {})", sv.exit_code))
+                                } else {
+                                    (theme::TXT2, String::new())
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!("• {}{}", sv.name, suf))
+                                        .size(11.5)
+                                        .color(c),
+                                );
+                            }
+                        }
+                    });
+            });
+            ui.add_space(10.0);
 
-                // ── discos ────────────────────────────────────────────────────
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Discos").strong());
-                    for d in &s.disks {
-                        let used = d.total.saturating_sub(d.avail);
-                        let frac = if d.total > 0 {
-                            used as f32 / d.total as f32
-                        } else {
-                            0.0
-                        };
-                        let label = if d.name.trim().is_empty() {
-                            d.mount.clone()
-                        } else {
-                            format!("{} ({})", d.mount, d.name.trim())
-                        };
-                        ui.label(egui::RichText::new(label).small().weak());
+            // ── núcleos: tarjetas C0…Cn, como la V2 ──────────────────────────
+            ui.label(
+                egui::RichText::new(format!("NÚCLEOS {}", s.per_core.len()))
+                    .size(9.5)
+                    .color(theme::TXT3)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                for (i, pct) in s.per_core.iter().enumerate() {
+                    egui::Frame::none()
+                        .fill(theme::BG2)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                        .rounding(egui::Rounding::same(6.0))
+                        .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                        .show(ui, |ui| {
+                            ui.set_width(76.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("C{i}"))
+                                        .size(10.0)
+                                        .monospace()
+                                        .color(theme::TXT3),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("{pct:.0}%"))
+                                                .size(11.5)
+                                                .color(theme::TXT)
+                                                .strong(),
+                                        );
+                                    },
+                                );
+                            });
+                            ui.add_space(3.0);
+                            ui.add(
+                                egui::ProgressBar::new((pct / 100.0).clamp(0.0, 1.0))
+                                    .desired_height(3.0)
+                                    .fill(theme::usage_color(*pct)),
+                            );
+                        });
+                }
+            });
+            ui.add_space(12.0);
+
+            // ── discos ───────────────────────────────────────────────────────
+            ui.label(
+                egui::RichText::new(format!("DISCOS {} VOLÚMENES", s.disks.len()))
+                    .size(9.5)
+                    .color(theme::TXT3)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            for d in &s.disks {
+                let used = d.total.saturating_sub(d.avail);
+                let frac = if d.total > 0 { used as f32 / d.total as f32 } else { 0.0 };
+                egui::Frame::none()
+                    .fill(theme::BG2)
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                    .rounding(egui::Rounding::same(8.0))
+                    .inner_margin(egui::Margin::same(12.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&d.mount)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(theme::TXT),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{:.0}%", frac * 100.0))
+                                            .size(12.0)
+                                            .color(theme::usage_color(frac * 100.0))
+                                            .strong(),
+                                    );
+                                },
+                            );
+                        });
+                        ui.add_space(4.0);
                         ui.add(
-                            egui::ProgressBar::new(frac).fill(theme::usage_color(frac * 100.0))
-                                .text(format!("{} / {}", fmt_gb(used), fmt_gb(d.total))),
+                            egui::ProgressBar::new(frac)
+                                .desired_height(5.0)
+                                .fill(theme::usage_color(frac * 100.0)),
                         );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} libres · {} / {}",
+                                fmt_gb(d.avail),
+                                fmt_gb(used),
+                                fmt_gb(d.total)
+                            ))
+                            .size(10.5)
+                            .monospace()
+                            .color(theme::TXT3),
+                        );
+                    });
+                ui.add_space(6.0);
+            }
+            ui.add_space(6.0);
+
+            // ── top procesos ─────────────────────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("TOP PROCESOS").size(9.5).color(theme::TXT3).strong(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Cambiar de criterio recarga la lista al instante: ordenar
+                    // la que ya está en pantalla mostraría el top-8 por RAM
+                    // reordenado por CPU, que no es el top-8 por CPU.
+                    if ui.selectable_label(self.proc_by_cpu, "CPU").clicked() && !self.proc_by_cpu {
+                        self.proc_by_cpu = true;
+                        self.procs = self.sys.top_processes(8, true);
+                    }
+                    if ui.selectable_label(!self.proc_by_cpu, "RAM").clicked() && self.proc_by_cpu {
+                        self.proc_by_cpu = false;
+                        self.procs = self.sys.top_processes(8, false);
                     }
                 });
             });
+            ui.add_space(4.0);
+            egui::Grid::new("procs")
+                .num_columns(4)
+                .spacing([18.0, 5.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    for h in ["PROCESO", "CPU", "RAM", "PID"] {
+                        ui.label(egui::RichText::new(h).size(9.5).color(theme::TXT3).strong());
+                    }
+                    ui.end_row();
+                    for p in &self.procs {
+                        ui.label(egui::RichText::new(&p.name).size(11.5).monospace().color(theme::TXT2));
+                        ui.label(
+                            egui::RichText::new(format!("{:.0}%", p.cpu_pct))
+                                .size(11.5)
+                                .color(theme::usage_color(p.cpu_pct)),
+                        );
+                        ui.label(
+                            egui::RichText::new(fmt_gb(p.mem_bytes))
+                                .size(11.5)
+                                .color(theme::ACC),
+                        );
+                        ui.label(
+                            egui::RichText::new(p.pid.to_string())
+                                .size(11.5)
+                                .monospace()
+                                .color(theme::TXT3),
+                        );
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(10.0);
+        });
     }
 
     fn terminal(&mut self, ui: &mut egui::Ui) {
