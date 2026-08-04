@@ -188,6 +188,11 @@ struct App {
     // memoria
     mems: Result<Vec<AgentMemory>, String>,
     mem_search: String,
+    /// Último resultado semántico: `None` = no se ha buscado todavía.
+    /// Los avisos viajan CON los aciertos porque describen ese resultado
+    /// concreto — separarlos es cómo acaban desincronizados.
+    #[allow(clippy::type_complexity)]
+    sem_result: Option<Result<(Vec<lucy_core::vectors::SemanticHit>, Vec<String>), String>>,
     // sistema (métricas live vía lucy_core::system)
     sys: lucy_core::system::SysMonitor,
     sys_last: Instant,
@@ -225,6 +230,7 @@ impl App {
             term_input: String::new(),
             mems: load_memories(),
             mem_search: String::new(),
+            sem_result: None,
             sys: lucy_core::system::SysMonitor::new(),
             sys_last: Instant::now(),
             last: Instant::now(),
@@ -554,6 +560,24 @@ impl App {
             });
     }
 
+    /// Lanza la búsqueda semántica sobre `lucy-core::vectors`.
+    ///
+    /// Bloquea el frame: es una petición a Ollama en localhost, decenas de
+    /// milisegundos, y ocurre solo al pulsar. Mover esto a un hilo es correcto
+    /// cuando se note — pero un spinner sobre una espera de 30 ms es peor
+    /// experiencia que la espera, y complica el estado a cambio de nada. Si el
+    /// corpus crece hasta que se sienta, el sitio para arreglarlo es éste.
+    fn run_semantic_search(&mut self) {
+        let q = self.mem_search.trim();
+        if q.is_empty() {
+            self.sem_result = None;
+            return;
+        }
+        // 'memory' es el entity_type que escriben los dos frontends — la app
+        // Tauri en upsert_embedding y el backfill.
+        self.sem_result = Some(lucy_core::vectors::search(q, "memory", 8, 0.25));
+    }
+
     /// Uso por núcleo como rejilla de celdas coloreadas.
     ///
     /// El color sale de `theme::usage_color`, las mismas bandas que las barras
@@ -813,6 +837,13 @@ impl App {
                 self.mems = load_memories();
             }
         });
+        // La búsqueda se PIDE dentro del match (que tiene prestado `self.mems`)
+        // y se EJECUTA al salir. `run_semantic_search` necesita `&mut self`, así
+        // que llamarla ahí dentro no compila — y forzarlo con un clon de las
+        // memorias sería copiar un vector entero por frame para evitar un
+        // booleano.
+        let mut pedir_semantica = false;
+
         match &self.mems {
             Err(e) => {
                 ui.colored_label(theme::RED, format!("⚠ {e}"));
@@ -825,11 +856,74 @@ impl App {
             }
             Ok(mems) => {
                 let q = self.mem_search.to_lowercase();
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.mem_search)
-                        .hint_text("filtrar memorias…")
-                        .desired_width(f32::INFINITY),
-                );
+                ui.horizontal(|ui| {
+                    let te = ui.add(
+                        egui::TextEdit::singleline(&mut self.mem_search)
+                            .hint_text("filtrar por texto — Intro para búsqueda semántica")
+                            .desired_width(ui.available_width() - 108.0),
+                    );
+                    let enter = te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("◈ Semántica").clicked() || enter {
+                        pedir_semantica = true;
+                    }
+                });
+
+                // ── resultado semántico ───────────────────────────────────────
+                // Se enseña ENCIMA del filtro de texto, no en su lugar: son dos
+                // preguntas distintas. "Filtrar" busca una palabra que recuerdas;
+                // "semántica" busca un tema que no sabes cómo escribiste.
+                if let Some(res) = &self.sem_result {
+                    match res {
+                        Err(e) => {
+                            ui.add_space(4.0);
+                            ui.colored_label(theme::AMBER, format!("⚠ {e}"));
+                            ui.label(
+                                egui::RichText::new(
+                                    "La búsqueda semántica necesita Ollama con un modelo de \
+                                     embeddings (ollama pull nomic-embed-text).",
+                                )
+                                .small()
+                                .color(theme::TXT3),
+                            );
+                        }
+                        Ok((hits, notes)) => {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!("{} por similitud", hits.len()))
+                                    .small()
+                                    .color(theme::ACC),
+                            );
+                            // Las filas descartadas se DICEN. Enseñar menos
+                            // resultados sin explicar por qué es el fallo que
+                            // este proyecto lleva persiguiendo toda la semana.
+                            for n in notes {
+                                ui.label(
+                                    egui::RichText::new(format!("⚠ {n}"))
+                                        .small()
+                                        .color(theme::AMBER),
+                                );
+                            }
+                            for h in hits {
+                                egui::Frame::group(ui.style()).show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("{:.0}%", h.score * 100.0))
+                                                .small()
+                                                .color(theme::usage_color(h.score * 100.0)),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(
+                                                h.text.chars().take(140).collect::<String>(),
+                                            )
+                                            .color(theme::TXT2),
+                                        );
+                                    });
+                                });
+                            }
+                            ui.separator();
+                        }
+                    }
+                }
                 let filtered: Vec<&AgentMemory> = mems
                     .iter()
                     .filter(|m| {
@@ -903,6 +997,11 @@ impl App {
                         }
                     });
             }
+        }
+
+        // Fuera del préstamo de `self.mems`.
+        if pedir_semantica {
+            self.run_semantic_search();
         }
     }
 }
