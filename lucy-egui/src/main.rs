@@ -12,6 +12,8 @@
 //!   set WGPU_BACKEND=gl && cargo run -p lucy-egui --release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod theme;
+
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use lucy_core::AgentMemory;
@@ -28,7 +30,10 @@ fn main() -> eframe::Result {
         "Lucy · egui (Fase 1)",
         opts,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // El tema de Lucy, no el oscuro genérico de egui. Una vez, al
+            // arrancar: en modo inmediato el estilo se consulta en cada frame,
+            // así que fijarlo aquí lo aplica a todo lo que se dibuje después.
+            theme::apply(&cc.egui_ctx);
             Ok(Box::new(App::new()))
         }),
     )
@@ -288,7 +293,7 @@ impl eframe::App for App {
 
 impl App {
     fn chat(&mut self, ui: &mut egui::Ui) {
-        let accent = egui::Color32::from_rgb(61, 214, 164);
+        let accent = theme::ACC;
         // ── header: título + selector de modelo Ollama ───────────────────────
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("CHAT · Lucy (Ollama local)").strong());
@@ -358,7 +363,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("Tú")
                                     .strong()
-                                    .color(egui::Color32::from_rgb(120, 150, 220)),
+                                    .color(theme::BLUE),
                             );
                             ui.label(self.chat_log[i].text.clone());
                         } else {
@@ -377,7 +382,7 @@ impl App {
 
     fn sistema(&mut self, ui: &mut egui::Ui) {
         let s = self.sys.snapshot();
-        let accent = egui::Color32::from_rgb(61, 214, 164);
+        let accent = theme::ACC;
         ui.label(egui::RichText::new("SISTEMA (live · sysinfo)").strong());
         ui.separator();
         egui::ScrollArea::vertical()
@@ -513,7 +518,7 @@ impl App {
         });
         match &self.mems {
             Err(e) => {
-                ui.colored_label(egui::Color32::from_rgb(240, 110, 110), format!("⚠ {e}"));
+                ui.colored_label(theme::RED, format!("⚠ {e}"));
                 ui.label(
                     egui::RichText::new(
                         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
@@ -556,7 +561,7 @@ impl App {
                                     let dots = "●".repeat(m.importance.clamp(1, 3) as usize);
                                     ui.label(
                                         egui::RichText::new(dots)
-                                            .color(egui::Color32::from_rgb(61, 214, 164))
+                                            .color(theme::ACC)
                                             .small(),
                                     );
                                     let title = if m.title.trim().is_empty() {
@@ -589,7 +594,7 @@ impl App {
                                     ui.label(
                                         egui::RichText::new(tags.replace('"', ""))
                                             .small()
-                                            .color(egui::Color32::from_rgb(120, 140, 200)),
+                                            .color(theme::BLUE),
                                     );
                                 }
                                 ui.label(egui::RichText::new(format!("#{}", m.id)).small().weak());
