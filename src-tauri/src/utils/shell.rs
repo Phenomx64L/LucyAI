@@ -40,125 +40,23 @@ pub fn strip_ansi(input: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-// ── Native console tools, decoded correctly ─────────────────────────────────
+
+// v1.8 — el decodificador de consola y los ayudantes de PowerShell viven en
+// `lucy-core::shell`, compartidos con el shell nativo. Los tres necesitan lo
+// mismo: lanzar PowerShell y leer bien lo que devuelve.
 //
-// PowerShell can be TOLD to write UTF-8 (see the preamble below). `tasklist`,
-// `netstat`, `reg`, `wevtutil` and friends cannot: they write the system OEM
-// code page — CP-850 on a Spanish install, CP-437 on a US one — and there is no
-// switch. Every one of these was read with `from_utf8_lossy`, so a process
-// named `Diseño gráfico.exe` came back with U+FFFD where its letters were.
+// Lo que se queda en este fichero es lo que NO es genérico: WinRM, la validación
+// de hosts y los guardrails sobre credenciales. Eso es política de un anfitrión
+// que expone comandos a un LLM, no mecanismo — la misma línea que se trazó con
+// la guarda de rutas del visor de logs.
 //
-// It matters more here than in a log viewer. This output is fed to the LLM as
-// ground truth about the machine: a path with a replacement character in it is
-// a path the agent will then propose commands against, and the corruption looks
-// exactly like a filename it does not recognise. `execute_cmd` is the widest
-// door — it is how the agent runs arbitrary console tools at all.
-//
-// `encoding_rs` does not help: it implements the WHATWG encoding set, which
-// covers windows-1252 and not CP-850. The OEM code page is a Windows concept
-// and only Windows can name it, hence `MultiByteToWideChar(CP_OEMCP)`.
-
-/// Decode bytes written by a native Windows console tool.
-///
-/// UTF-8 is tried first and wins when it parses. That ordering is deliberate:
-/// pure ASCII (the overwhelming majority of this output) is valid UTF-8 and
-/// passes through untouched, and the handful of tools that do emit UTF-8 keep
-/// working. Only bytes that are NOT valid UTF-8 — which is what OEM text with
-/// accents looks like — go to the OEM decoder.
-///
-/// A short OEM sequence can in principle also be valid UTF-8 and be read as the
-/// wrong characters. That residue is unavoidable without knowing each tool's
-/// encoding, and it replaces a path that was wrong every single time.
-pub fn decode_console(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => decode_oem(bytes),
-    }
-}
-
-#[cfg(windows)]
-fn decode_oem(bytes: &[u8]) -> String {
-    use winapi::um::stringapiset::MultiByteToWideChar;
-    use winapi::um::winnls::CP_OEMCP;
-
-    if bytes.is_empty() {
-        return String::new();
-    }
-    // `i32` because that is what the API takes; a console tool that produced
-    // 2 GB of output has a different problem, and the lossy fallback is a
-    // correct answer for it rather than a panic.
-    let Ok(len) = i32::try_from(bytes.len()) else {
-        return String::from_utf8_lossy(bytes).into_owned();
-    };
-
-    unsafe {
-        // First call sizes the buffer, second fills it — the standard two-step.
-        let needed = MultiByteToWideChar(CP_OEMCP, 0, bytes.as_ptr() as *const i8, len, std::ptr::null_mut(), 0);
-        if needed <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        let mut wide: Vec<u16> = vec![0; needed as usize];
-        let written = MultiByteToWideChar(CP_OEMCP, 0, bytes.as_ptr() as *const i8, len, wide.as_mut_ptr(), needed);
-        if written <= 0 {
-            return String::from_utf8_lossy(bytes).into_owned();
-        }
-        wide.truncate(written as usize);
-        String::from_utf16_lossy(&wide)
-    }
-}
-
-#[cfg(not(windows))]
-fn decode_oem(bytes: &[u8]) -> String {
-    // There is no OEM code page off Windows, and this crate only ships there.
-    // Present so the module still compiles under a non-Windows `cargo check`.
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-// ── PowerShell, decoded correctly ────────────────────────────────────────────
-
-/// Preamble that makes a spawned PowerShell write UTF-8 to the pipe.
-///
-/// Lucy is a GUI process with no console, so a PowerShell it spawns writes its
-/// output in the system OEM code page — CP-850 on a Spanish install, where `ó`
-/// is the single byte `0xA2`. That is not valid UTF-8, so `from_utf8_lossy`
-/// substitutes U+FFFD and the text arrives corrupted. Nothing errors: mangled
-/// text is still valid JSON and still parses, so the damage is silent.
-///
-/// Measured on an es-ES host: 1 of 135 installed-software entries came back as
-/// "NVIDIA Controlador de gr<?>ficos".
-///
-/// Must run BEFORE the payload — PowerShell fixes a stream's encoding the first
-/// time it writes to it, so assigning afterwards is too late.
-pub const PS_UTF8_PREAMBLE: &str = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n\
-                                    $OutputEncoding = [System.Text.UTF8Encoding]::new()\n";
-
-/// Prefix a script with [`PS_UTF8_PREAMBLE`].
-pub fn ps_utf8(script: &str) -> String {
-    format!("{}{}", PS_UTF8_PREAMBLE, script)
-}
-
-/// Run a PowerShell script and return `(stdout, stderr, success)`, decoded as
-/// UTF-8 because [`ps_utf8`] made it UTF-8.
-///
-/// Use this instead of hand-rolling `Command::new("powershell")` — every
-/// hand-rolled site in this codebase was missing the preamble.
-///
-/// NOTE this does NOT cover the native Windows tools (`tasklist`, `netstat`,
-/// `wevtutil`, `wmic`, `reg`, `cmd`) that `local.rs` also spawns. They have no
-/// equivalent switch: their output is OEM-encoded and has to be DECODED as
-/// such, which is a different fix. Measured as affected: tasklist, netstat.
-pub fn run_powershell_utf8(script: &str) -> Result<(String, String, bool), String> {
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_utf8(script)])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("PowerShell spawn failed: {}", e))?;
-    Ok((
-        String::from_utf8_lossy(&out.stdout).to_string(),
-        String::from_utf8_lossy(&out.stderr).to_string(),
-        out.status.success(),
-    ))
-}
+// Se reexportan para que ningún sitio de llamada de este crate cambie.
+// `PS_UTF8_PREAMBLE` no lo consume nada aquí —`ps_utf8` lo aplica— pero forma
+// parte de la superficie pública que este módulo tenía antes del movimiento.
+#[allow(unused_imports)]
+pub use lucy_core::shell::{
+    decode_console, ps_utf8, run_powershell_utf8, PS_UTF8_PREAMBLE,
+};
 
 /// Agrega un host a TrustedHosts de WinRM (mejor-esfuerzo, requiere admin local).
 /// Necesario para conectar por IP en lugar de nombre de dominio.
@@ -424,56 +322,6 @@ pub fn spawn_winrm_streaming(
     Ok(child)
 }
 
-#[cfg(test)]
-mod console_decode_tests {
-    use super::decode_console;
-
-    // The accented Latin letters at 0x80–0xA5 are IDENTICAL in CP-437 (US
-    // Windows, which is what CI runs) and CP-850 (Spanish Windows, the machine
-    // this was found on). These fixtures therefore assert the same thing on
-    // both, which is what makes them safe to gate on.
-    const OEM_DISEÑO: &[u8] = &[b'D', b'i', b's', b'e', 0xA4, b'o'];        // ñ = 0xA4
-    const OEM_ACCENTS: &[u8] = &[0xA0, 0x82, 0xA1, 0xA2, 0xA3];             // á é í ó ú
-
-    #[test]
-    fn ascii_survives_untouched() {
-        // The overwhelming majority of console output. It is valid UTF-8, so
-        // it takes the fast path and never reaches the OEM decoder.
-        assert_eq!(decode_console(b"Image Name    PID Session"), "Image Name    PID Session");
-        assert_eq!(decode_console(b""), "");
-    }
-
-    #[test]
-    fn real_utf8_is_not_mangled_by_the_oem_path() {
-        // A few tools do emit UTF-8. Trying UTF-8 first is what keeps them
-        // working — decoding their bytes as OEM would turn every multi-byte
-        // character into two or three wrong ones.
-        let utf8 = "café — ñandú".as_bytes();
-        assert_eq!(decode_console(utf8), "café — ñandú");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn oem_bytes_decode_to_the_letters_the_tool_actually_printed() {
-        // This is the bug. `tasklist` on a Spanish install writes a process
-        // called "Diseño.exe" as these bytes, and `from_utf8_lossy` turned the
-        // ñ into U+FFFD before the text ever reached the model — which then
-        // reasoned about, and proposed commands against, a filename that does
-        // not exist.
-        assert_eq!(decode_console(OEM_DISEÑO), "Diseño");
-        assert_eq!(decode_console(OEM_ACCENTS), "áéíóú");
-    }
-
-    #[test]
-    fn the_old_decoder_really_did_corrupt_these_bytes() {
-        // Pins the premise rather than the fix. If a future Windows/Rust
-        // version made `from_utf8_lossy` handle this, the change above would be
-        // pointless work and this test is where that shows up.
-        let old = String::from_utf8_lossy(OEM_DISEÑO);
-        assert!(old.contains('\u{FFFD}'), "expected replacement chars, got {old:?}");
-        assert_ne!(old, "Diseño");
-    }
-}
 
 #[cfg(test)]
 mod tests {

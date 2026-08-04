@@ -462,6 +462,7 @@ dependencies = [
  "sysinfo",
  "ts-rs",
  "ureq",
+ "winapi",
 ]
 
 [[package]]

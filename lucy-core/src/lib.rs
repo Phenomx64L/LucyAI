@@ -23,6 +23,9 @@ pub mod chat;
 pub mod logs;
 /// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
 pub mod memory;
+/// PowerShell y decodificación de consola. Base de Inventario, Compliance y
+/// NexShell — ninguna migra sin esto.
+pub mod shell;
 pub mod system;
 /// Ranking semántico: blobs, coseno y los filtros que deciden qué fila puede
 /// compararse con qué consulta. El transporte HTTP se queda en cada frontend.

@@ -172,6 +172,105 @@ pub fn model_mismatch_warning(skipped: usize, total: usize, query_model: &str) -
     ))
 }
 
+// ── El lado que toca el mundo ────────────────────────────────────────────────
+//
+// Bloqueante a propósito. El shell nativo es un bucle inmediato síncrono; meter
+// tokio para una petición HTTP le añadiría un runtime entero y el `async` se
+// contagiaría hacia arriba hasta el `update()`. La app Tauri sigue usando su
+// `reqwest` async — este módulo no la toca.
+
+const OLLAMA: &str = "http://localhost:11434";
+/// Mismo modelo por defecto que `commands/embeddings.rs`. Si divergen, cada
+/// frontend escribe en un espacio latente distinto y el filtro de modelo de
+/// `rank_by_cosine` los separará — correcto, pero cada uno vería la mitad del
+/// corpus.
+pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
+
+/// Embebe un texto con Ollama. Devuelve `(vector, modelo_usado)`.
+///
+/// Sin fallback a la nube: aquí no hay claves de API ni keyring. Si Ollama no
+/// responde, quien llama decide qué enseñar — y decirlo es mejor que devolver
+/// resultados de un embebedor distinto sin avisar.
+pub fn embed_blocking(text: &str) -> Result<(Vec<f32>, String), String> {
+    let body = serde_json::json!({ "model": DEFAULT_EMBED_MODEL, "prompt": text });
+    let resp = ureq::post(&format!("{OLLAMA}/api/embeddings"))
+        .set("content-type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .send_string(&body.to_string())
+        .map_err(|e| format!("Ollama no respondió ({OLLAMA}): {e}"))?;
+    // `into_string()` + parse, igual que `chat.rs`: `into_json()` requiere la
+    // feature `json` de ureq, que este crate no activa a propósito para no
+    // duplicar el serde_json que ya trae.
+    let text_body = resp
+        .into_string()
+        .map_err(|e| format!("respuesta de Ollama ilegible: {e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&text_body)
+        .map_err(|e| format!("JSON inválido de Ollama: {e}"))?;
+    let arr = json["embedding"]
+        .as_array()
+        .ok_or("la respuesta de Ollama no trae 'embedding'")?;
+    let v: Vec<f32> = arr.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+    if v.is_empty() {
+        return Err("Ollama devolvió un vector vacío".into());
+    }
+    Ok((v, DEFAULT_EMBED_MODEL.to_string()))
+}
+
+/// Carga los vectores almacenados de un tipo de entidad.
+///
+/// Se traen todos y se ordenan en memoria. Es el mismo escaneo lineal que hace
+/// la app Tauri cuando el índice no está listo: para el tamaño de un corpus
+/// personal —miles, no millones— cuesta milisegundos y no arrastra sqlite-vec al
+/// crate compartido.
+pub fn load_stored(entity_type: &str) -> Result<Vec<StoredVector>, String> {
+    crate::with_db(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT entity_type, entity_id, text, vec, model
+                 FROM embeddings WHERE entity_type = ?1",
+            )
+            .map_err(|e| format!("prepare load_stored: {e}"))?;
+        let rows = stmt
+            .query_map([entity_type], |r| {
+                let blob: Vec<u8> = r.get(3)?;
+                Ok(StoredVector {
+                    entity_type: r.get(0)?,
+                    entity_id: r.get(1)?,
+                    text: r.get(2)?,
+                    vec: blob_to_vec(&blob),
+                    model: r.get(4)?,
+                })
+            })
+            .map_err(|e| format!("query load_stored: {e}"))?;
+        Ok(rows.flatten().collect())
+    })
+}
+
+/// Búsqueda semántica completa: embebe la consulta, carga, ordena.
+///
+/// Devuelve además los avisos de filas descartadas, para que la interfaz pueda
+/// decir "40 de tus 200 memorias no son buscables" en vez de enseñar menos
+/// resultados sin explicar por qué. Ese silencio es exactamente el fallo que
+/// esta sesión ha ido persiguiendo.
+pub fn search(
+    query: &str,
+    entity_type: &str,
+    limit: usize,
+    min_score: f32,
+) -> Result<(Vec<SemanticHit>, Vec<String>), String> {
+    let (qvec, model) = embed_blocking(query)?;
+    let rows = load_stored(entity_type)?;
+    let (hits, skips) = rank_by_cosine(rows, &qvec, &model, min_score, limit);
+    let notes = [
+        dim_mismatch_warning(skips.dims, skips.total, qvec.len()),
+        model_mismatch_warning(skips.model, skips.total, &model),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    Ok((hits, notes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

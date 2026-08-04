@@ -21,6 +21,12 @@ sysinfo    = "0.30"
 # la struct.
 ts-rs      = { version = "10", features = ["chrono-impl", "serde-compat"], optional = true }
 
+# MultiByteToWideChar + CP_OEMCP: decodificar lo que escriben las herramientas
+# nativas de consola, que no respetan el UTF-8 que sí se le puede pedir a
+# PowerShell. Ver `shell.rs`.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["stringapiset", "winnls"] }
+
 [features]
 default = []
 # Activada por src-tauri. Añade `#[derive(ts_rs::TS)]` a los tipos que cruzan
