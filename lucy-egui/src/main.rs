@@ -39,12 +39,74 @@ fn main() -> eframe::Result {
     )
 }
 
+/// Las ocho entradas del rail de Lucy, en su orden real.
+///
+/// Están TODAS, no solo las migradas. Un rail con cuatro entradas daría la
+/// impresión de que la app nativa está casi lista; con las ocho y las pendientes
+/// marcadas, el propio prototipo dice en qué punto va la migración cada vez que
+/// se abre. Eso es más útil que un documento de estado, porque no puede quedarse
+/// obsoleto sin que se note.
 #[derive(PartialEq, Clone, Copy)]
 enum View {
-    Chat,
-    Terminal,
+    Dashboard,
+    TerminalIa,
+    NexShell,
+    LogViewer,
+    Inventario,
+    Compliance,
     Memoria,
-    Sistema,
+    Configuracion,
+}
+
+impl View {
+    /// (glifo, etiqueta) — el sistema de iconos geométricos de Lucy.
+    fn label(self) -> (&'static str, &'static str) {
+        match self {
+            View::Dashboard => ("◱", "Dashboard"),
+            View::TerminalIa => ("✦", "Terminal IA"),
+            View::NexShell => ("▸", "NexShell"),
+            View::LogViewer => ("▤", "Log Viewer"),
+            View::Inventario => ("▦", "Inventario"),
+            View::Compliance => ("◈", "Compliance"),
+            View::Memoria => ("◉", "Memoria"),
+            View::Configuracion => ("⚙", "Configuración"),
+        }
+    }
+
+    /// Qué necesita del backend la vista que aún no está migrada. Se enseña en
+    /// su panel: convierte un "pendiente" vago en el trabajo concreto que falta.
+    fn pending_needs(self) -> Option<&'static str> {
+        match self {
+            View::Dashboard | View::TerminalIa | View::NexShell | View::Memoria => None,
+            View::LogViewer => Some(
+                "commands/logs.rs — read_log_tail ya es Tauri-free; \
+                 mover a lucy-core y añadir el visor con filtro por nivel.",
+            ),
+            View::Inventario => Some(
+                "commands/inventory.rs — puro, sin AppHandle. \
+                 Necesita además la tabla ordenable y el export a PDF.",
+            ),
+            View::Compliance => Some(
+                "commands/compliance.rs — puro. La vista es la tabla de checks \
+                 por host más el porcentaje de aprobados.",
+            ),
+            View::Configuracion => Some(
+                "Claves de API (keyring), catálogo de modelos, tema y umbrales. \
+                 Depende de que el catálogo se mueva a lucy-core para no duplicarlo.",
+            ),
+        }
+    }
+
+    const ALL: [View; 8] = [
+        View::Dashboard,
+        View::TerminalIa,
+        View::NexShell,
+        View::LogViewer,
+        View::Inventario,
+        View::Compliance,
+        View::Memoria,
+        View::Configuracion,
+    ];
 }
 
 /// Un mensaje del chat real (Ollama).
@@ -151,7 +213,7 @@ impl App {
             .cloned()
             .unwrap_or_else(|| "qwen3:4b".to_string());
         Self {
-            view: View::Chat,
+            view: View::TerminalIa,
             md_cache: CommonMarkCache::default(),
             chat_log: Vec::new(),
             chat_input: String::new(),
@@ -257,36 +319,148 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(1000));
         }
 
-        // ── left rail ────────────────────────────────────────────────────────
-        egui::SidePanel::left("rail")
-            .exact_width(150.0)
-            .resizable(false)
+        // ── cabecera ─────────────────────────────────────────────────────────
+        egui::TopBottomPanel::top("header")
+            .exact_height(44.0)
+            .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
             .show(ctx, |ui| {
-                ui.add_space(8.0);
-                ui.heading("Lucy");
-                ui.label(egui::RichText::new("egui · nativo").small().weak());
-                ui.separator();
-                ui.selectable_value(&mut self.view, View::Chat, "  Chat");
-                ui.selectable_value(&mut self.view, View::Terminal, "  Terminal");
-                ui.selectable_value(&mut self.view, View::Memoria, "  Memoria");
-                ui.selectable_value(&mut self.view, View::Sistema, "  Sistema");
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(format!("{:.0} FPS", self.fps)).small().weak());
-                    ui.label(
-                        egui::RichText::new(if self.pty.is_some() { "PTY ●" } else { "PTY ✕" })
-                            .small()
-                            .weak(),
-                    );
-                    ui.separator();
+                ui.horizontal_centered(|ui| {
+                    ui.label(egui::RichText::new("✦ Lucy").color(theme::ACC).strong().size(15.0));
+                    ui.add_space(14.0);
+                    let (_, title) = self.view.label();
+                    ui.label(egui::RichText::new(title).color(theme::TXT).size(13.5));
+                    if self.view == View::TerminalIa {
+                        ui.add_space(6.0);
+                        // El badge COCKPIT de la app: fondo tenue del acento,
+                        // versalitas, sin borde.
+                        egui::Frame::none()
+                            .fill(theme::ACC.linear_multiply(0.14))
+                            .rounding(egui::Rounding::same(4.0))
+                            .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new("COCKPIT")
+                                        .color(theme::ACC)
+                                        .size(9.5)
+                                        .strong(),
+                                );
+                            });
+                    }
                 });
             });
 
+        // ── barra de estado ──────────────────────────────────────────────────
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(26.0)
+            .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let host = lucy_core::system::hostname();
+                    ui.label(egui::RichText::new("●").color(theme::ACC).size(9.0));
+                    ui.label(egui::RichText::new(host.to_uppercase()).color(theme::TXT3).size(10.5));
+                    ui.add_space(10.0);
+                    let (pty_glyph, pty_color) = if self.pty.is_some() {
+                        ("▸ PTY", theme::TXT3)
+                    } else {
+                        ("✕ PTY", theme::AMBER)
+                    };
+                    ui.label(egui::RichText::new(pty_glyph).color(pty_color).size(10.5));
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // El FPS marca ~1 en reposo A PROPÓSITO: se repinta a
+                        // fondo solo cuando hay algo que animar. Se etiqueta
+                        // para que nadie lo lea como un problema.
+                        let idle = self.fps < 5.0;
+                        ui.label(
+                            egui::RichText::new(if idle {
+                                "reposo".to_string()
+                            } else {
+                                format!("{:.0} FPS", self.fps)
+                            })
+                            .color(theme::TXT3)
+                            .size(10.5),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(&self.chat_model).color(theme::TXT3).size(10.5),
+                        );
+                    });
+                });
+            });
+
+        // ── rail izquierdo ───────────────────────────────────────────────────
+        egui::SidePanel::left("rail")
+            .exact_width(96.0)
+            .resizable(false)
+            .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(0.0, 10.0)))
+            .show(ctx, |ui| {
+                for v in View::ALL {
+                    let (glyph, label) = v.label();
+                    let active = self.view == v;
+                    let pending = v.pending_needs().is_some();
+
+                    // Tres estados, no dos: activa, disponible, y pendiente de
+                    // migrar. La tercera se atenúa pero SIGUE siendo pulsable —
+                    // su panel explica qué le falta, que es información útil.
+                    let fg = if active {
+                        theme::ACC
+                    } else if pending {
+                        theme::TXT3.linear_multiply(0.55)
+                    } else {
+                        theme::TXT2
+                    };
+
+                    let resp = ui.allocate_response(
+                        egui::vec2(ui.available_width(), 46.0),
+                        egui::Sense::click(),
+                    );
+                    if resp.clicked() {
+                        self.view = v;
+                    }
+                    if active {
+                        // Barra de acento a la izquierda, como el CSS.
+                        let r = resp.rect;
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_size(r.min, egui::vec2(2.5, r.height())),
+                            0.0,
+                            theme::ACC,
+                        );
+                        ui.painter().rect_filled(
+                            r.shrink2(egui::vec2(3.0, 2.0)),
+                            4.0,
+                            theme::ACC.linear_multiply(0.10),
+                        );
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(
+                            resp.rect.shrink2(egui::vec2(3.0, 2.0)),
+                            4.0,
+                            theme::BG3,
+                        );
+                    }
+                    let c = resp.rect.center();
+                    ui.painter().text(
+                        egui::pos2(c.x, c.y - 7.0),
+                        egui::Align2::CENTER_CENTER,
+                        glyph,
+                        egui::FontId::proportional(15.0),
+                        fg,
+                    );
+                    ui.painter().text(
+                        egui::pos2(c.x, c.y + 11.0),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(9.5),
+                        fg,
+                    );
+                }
+            });
+
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
-            View::Chat => self.chat(ui),
-            View::Terminal => self.terminal(ui),
+            View::TerminalIa => self.chat(ui),
+            View::NexShell => self.terminal(ui),
             View::Memoria => self.memoria(ui),
-            View::Sistema => self.sistema(ui),
+            View::Dashboard => self.sistema(ui),
+            other => self.pendiente(ui, other),
         });
     }
 }
@@ -380,6 +554,128 @@ impl App {
             });
     }
 
+    /// Uso por núcleo como rejilla de celdas coloreadas.
+    ///
+    /// El color sale de `theme::usage_color`, las mismas bandas que las barras
+    /// de arriba — un núcleo al 90 % es rojo aquí igual que la CPU global al
+    /// 90 % es roja allí. Que dos vistas del mismo dato usaran cortes distintos
+    /// es precisamente lo que ese helper existe para impedir.
+    fn core_heatmap(&self, ui: &mut egui::Ui, per_core: &[f32]) {
+        if per_core.is_empty() {
+            return;
+        }
+        const CELL: f32 = 15.0;
+        const GAP: f32 = 3.0;
+        // Cuántas caben a lo ancho — la rejilla se adapta al panel, no al
+        // número de núcleos.
+        let per_row = (((ui.available_width() + GAP) / (CELL + GAP)).floor() as usize).max(1);
+        let rows = per_core.len().div_ceil(per_row);
+
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(
+                ui.available_width(),
+                rows as f32 * CELL + (rows.saturating_sub(1)) as f32 * GAP,
+            ),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter();
+
+        for (i, pct) in per_core.iter().enumerate() {
+            let (col, row) = (i % per_row, i / per_row);
+            let min = egui::pos2(
+                rect.min.x + col as f32 * (CELL + GAP),
+                rect.min.y + row as f32 * (CELL + GAP),
+            );
+            let cell = egui::Rect::from_min_size(min, egui::vec2(CELL, CELL));
+
+            // Fondo del carril siempre visible: un núcleo al 0 % tiene que
+            // dibujarse como celda vacía, no desaparecer.
+            painter.rect_filled(cell, 2.0, theme::BG3);
+            let frac = (pct / 100.0).clamp(0.0, 1.0);
+            if frac > 0.0 {
+                // Se llena de abajo arriba, como un medidor.
+                let h = (cell.height() * frac).max(1.5);
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(cell.min.x, cell.max.y - h),
+                        cell.max,
+                    ),
+                    2.0,
+                    theme::usage_color(*pct),
+                );
+            }
+
+            if let Some(p) = resp.hover_pos() {
+                if cell.contains(p) {
+                    painter.rect_stroke(cell, 2.0, egui::Stroke::new(1.0_f32, theme::TXT));
+                }
+            }
+        }
+
+        // El número exacto, solo del núcleo señalado. Fuera de la rejilla, la
+        // sección no gasta ni un píxel en cifras que nadie está leyendo.
+        if let Some(p) = resp.hover_pos() {
+            let col = ((p.x - rect.min.x) / (CELL + GAP)).floor() as usize;
+            let row = ((p.y - rect.min.y) / (CELL + GAP)).floor() as usize;
+            if col < per_row {
+                if let Some(pct) = per_core.get(row * per_row + col) {
+                    resp.clone().on_hover_text(format!(
+                        "núcleo {} · {:.0}%",
+                        row * per_row + col,
+                        pct
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Panel de una vista todavía no migrada.
+    ///
+    /// No es un "próximamente". Dice QUÉ falta y de qué módulo del backend sale,
+    /// porque ese dato ya está medido: de los 370 comandos, 358 no llevan tipos
+    /// de Tauri en la firma y se mueven tal cual. Enseñarlo aquí convierte el
+    /// rail en el estado real de la migración, y no puede quedarse obsoleto sin
+    /// que se vea al abrir la app.
+    fn pendiente(&mut self, ui: &mut egui::Ui, v: View) {
+        let (glyph, label) = v.label();
+        ui.add_space(48.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new(glyph)
+                    .size(38.0)
+                    .color(theme::TXT3.linear_multiply(0.5)),
+            );
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(label).size(17.0).color(theme::TXT));
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Todavía no migrada al shell nativo")
+                    .size(11.5)
+                    .color(theme::TXT3),
+            );
+            ui.add_space(18.0);
+
+            if let Some(needs) = v.pending_needs() {
+                egui::Frame::none()
+                    .fill(theme::BG2)
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                    .rounding(egui::Rounding::same(6.0))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui, |ui| {
+                        ui.set_max_width(430.0);
+                        ui.label(
+                            egui::RichText::new("QUÉ FALTA")
+                                .size(9.5)
+                                .strong()
+                                .color(theme::ACC),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new(needs).size(11.5).color(theme::TXT2));
+                    });
+            }
+        });
+    }
+
     fn sistema(&mut self, ui: &mut egui::Ui) {
         let s = self.sys.snapshot();
         let accent = theme::ACC;
@@ -413,23 +709,24 @@ impl App {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.label(egui::RichText::new("CPU").strong());
                     ui.add(
-                        egui::ProgressBar::new((s.cpu_pct / 100.0).clamp(0.0, 1.0))
+                        egui::ProgressBar::new((s.cpu_pct / 100.0).clamp(0.0, 1.0)).fill(theme::usage_color(s.cpu_pct))
                             .text(format!("{:.0}%", s.cpu_pct)),
                     );
-                    ui.add_space(4.0);
-                    let cols = 4usize;
-                    egui::Grid::new("cores").num_columns(cols).spacing([8.0, 4.0]).show(ui, |ui| {
-                        for (i, c) in s.per_core.iter().enumerate() {
-                            ui.add(
-                                egui::ProgressBar::new((c / 100.0).clamp(0.0, 1.0))
-                                    .desired_width(90.0)
-                                    .text(format!("{c:.0}%")),
-                            );
-                            if (i + 1) % cols == 0 {
-                                ui.end_row();
-                            }
-                        }
-                    });
+                    ui.add_space(6.0);
+                    // ── por núcleo: mapa de calor, no 32 barras ───────────────
+                    //
+                    // Con 32 núcleos, una barra con su porcentaje por núcleo
+                    // ocupaba casi toda la vista y empujaba memoria y discos
+                    // fuera de pantalla. Y la pregunta que se le hace de un
+                    // vistazo a esta sección no es "¿cuánto tiene el núcleo
+                    // 19?", es "¿hay alguno saturado?" — para eso el color
+                    // responde mejor que el número.
+                    //
+                    // Celdas pequeñas en rejilla, coloreadas con las MISMAS
+                    // bandas del dashboard, y el porcentaje exacto al pasar por
+                    // encima. La escala no depende del número de núcleos: en una
+                    // máquina de 8 se ve igual de bien que en ésta de 32.
+                    self.core_heatmap(ui, &s.per_core);
                 });
                 ui.add_space(6.0);
 
@@ -442,14 +739,14 @@ impl App {
                         0.0
                     };
                     ui.add(
-                        egui::ProgressBar::new(frac)
+                        egui::ProgressBar::new(frac).fill(theme::usage_color(frac * 100.0))
                             .text(format!("{} / {}", fmt_gb(s.mem_used), fmt_gb(s.mem_total))),
                     );
                     if s.swap_total > 0 {
                         let sf = s.swap_used as f32 / s.swap_total as f32;
                         ui.label(egui::RichText::new("Swap").small().weak());
                         ui.add(
-                            egui::ProgressBar::new(sf)
+                            egui::ProgressBar::new(sf).fill(theme::usage_color(sf * 100.0))
                                 .text(format!("{} / {}", fmt_gb(s.swap_used), fmt_gb(s.swap_total))),
                         );
                     }
@@ -473,7 +770,7 @@ impl App {
                         };
                         ui.label(egui::RichText::new(label).small().weak());
                         ui.add(
-                            egui::ProgressBar::new(frac)
+                            egui::ProgressBar::new(frac).fill(theme::usage_color(frac * 100.0))
                                 .text(format!("{} / {}", fmt_gb(used), fmt_gb(d.total))),
                         );
                     }
@@ -558,10 +855,14 @@ impl App {
                         for m in filtered {
                             egui::Frame::group(ui.style()).show(ui, |ui| {
                                 ui.horizontal(|ui| {
+                                    // Los puntos toman el color del NIVEL, no
+                                    // el acento fijo: así una memoria de
+                                    // importancia 3 se distingue de un vistazo
+                                    // sin tener que contar puntos.
                                     let dots = "●".repeat(m.importance.clamp(1, 3) as usize);
                                     ui.label(
                                         egui::RichText::new(dots)
-                                            .color(theme::ACC)
+                                            .color(theme::importance_color(m.importance))
                                             .small(),
                                     );
                                     let title = if m.title.trim().is_empty() {

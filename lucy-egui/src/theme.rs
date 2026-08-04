@@ -43,6 +43,11 @@ pub const BDR2: Color32 = Color32::from_rgb(0x33, 0x41, 0x55);
 
 /// `--blue` / `--purple` / `--amber` / `--red` — semánticos.
 pub const BLUE: Color32 = Color32::from_rgb(0x60, 0xa5, 0xfa);
+/// `--purple` — en la app marca la actividad del agente (`--sem-agent`).
+/// Todavía sin uso aquí: la vista del cockpit con el plan y la traza es de las
+/// que faltan. Se define ahora para que llegue con el color correcto y no con
+/// uno inventado sobre la marcha, que es lo que ya había pasado con el verde.
+#[allow(dead_code)]
 pub const PURPLE: Color32 = Color32::from_rgb(0xa7, 0x8b, 0xfa);
 pub const AMBER: Color32 = Color32::from_rgb(0xf5, 0x9e, 0x0b);
 pub const RED: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
@@ -50,14 +55,75 @@ pub const RED: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
 /// Radio de esquina. El CSS usa 6-8 px casi en todo.
 const ROUND: f32 = 6.0;
 
+/// Carga las fuentes del sistema que el tema necesita.
+///
+/// egui empaqueta un subconjunto pensado para latín y emoji. Las formas
+/// geométricas del lenguaje visual de Lucy —`◱ ✦ ▸ ▤ ▦ ◈ ◉`— no están, así que
+/// el rail se dibujaba con un `□` de tofu en cada entrada. Y el terminal
+/// heredaba una proporcional donde el CSS pide monoespaciada.
+///
+/// Se leen de `C:\Windows\Fonts` en vez de empaquetarlas:
+///   • Sin ficheros binarios en el repo ni peso en el ejecutable.
+///   • Sin problema de licencia: son las fuentes del sistema del propio usuario,
+///     no redistribuidas.
+///   • Lucy es una app de Windows; están garantizadas.
+///
+/// Es un añadido, no un reemplazo: se registran DETRÁS de las de egui, así que
+/// si alguna falta el texto sigue saliendo y solo se pierde el glifo. Un tema no
+/// debe poder dejar la app sin letras.
+fn load_system_fonts(ctx: &egui::Context) {
+    use eframe::egui::{FontData, FontFamily};
+
+    let mut fonts = egui::FontDefinitions::default();
+    let mut loaded_symbols = false;
+
+    // Símbolos: cubre las formas geométricas del rail.
+    if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\seguisym.ttf") {
+        fonts.font_data.insert("segoe_symbol".into(), FontData::from_owned(bytes));
+        for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(fam).or_default().push("segoe_symbol".into());
+        }
+        loaded_symbols = true;
+    }
+
+    // Monoespaciada real para el terminal y los bloques de código. `--mono` del
+    // CSS pide JetBrains Mono / Cascadia / Consolas; Consolas es la que siempre
+    // está.
+    if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\consola.ttf") {
+        fonts.font_data.insert("consolas".into(), FontData::from_owned(bytes));
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .insert(0, "consolas".into());
+    }
+
+    if !loaded_symbols {
+        // Sin símbolos el rail volvería al tofu. Mejor decirlo que dejar al
+        // usuario mirando cuadrados sin saber por qué.
+        eprintln!(
+            "[lucy] no se pudo leer C:\\Windows\\Fonts\\seguisym.ttf — \
+             los iconos del rail se verán como cuadros vacíos."
+        );
+    }
+    ctx.set_fonts(fonts);
+}
+
 /// Aplica el tema completo al contexto. Se llama una vez al arrancar.
 pub fn apply(ctx: &egui::Context) {
+    load_system_fonts(ctx);
+
     let mut visuals = egui::Visuals::dark();
 
     visuals.override_text_color = Some(TXT);
     visuals.panel_fill = BG;
     visuals.window_fill = BG2;
-    visuals.extreme_bg_color = BG; // fondo de campos de texto
+    // `extreme_bg_color` es el fondo de campos de texto Y el CARRIL de las
+    // barras de progreso. Puesto a BG —el mismo color del panel— la parte vacía
+    // de la barra desaparecía: un 1 % de CPU se veía como un puntito verde con
+    // el texto desbordado por fuera, en vez de como una barra casi vacía.
+    // BG3 es el mismo escalón que usan los controles en reposo.
+    visuals.extreme_bg_color = BG3;
     visuals.faint_bg_color = BG2;
     visuals.code_bg_color = BG3;
     visuals.hyperlink_color = ACC;
