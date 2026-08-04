@@ -77,11 +77,11 @@ impl View {
     /// su panel: convierte un "pendiente" vago en el trabajo concreto que falta.
     fn pending_needs(self) -> Option<&'static str> {
         match self {
-            View::Dashboard | View::TerminalIa | View::NexShell | View::Memoria => None,
-            View::LogViewer => Some(
-                "commands/logs.rs — read_log_tail ya es Tauri-free; \
-                 mover a lucy-core y añadir el visor con filtro por nivel.",
-            ),
+            View::Dashboard
+            | View::TerminalIa
+            | View::NexShell
+            | View::Memoria
+            | View::LogViewer => None,
             View::Inventario => Some(
                 "commands/inventory.rs — puro, sin AppHandle. \
                  Necesita además la tabla ordenable y el export a PDF.",
@@ -113,6 +113,13 @@ impl View {
 struct ChatMsg {
     user: bool,
     text: String,
+}
+
+/// `%APPDATA%\Lucy\logs\lucy_app.log` — el MISMO fichero que escribe
+/// `write_app_log` en el backend. Ojo: no cuelga de `com.lucy.dev` como la DB,
+/// sino de `Lucy\logs` — `get_logs_dir()` lo tiene fijo así.
+fn log_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("Lucy").join("logs").join("lucy_app.log"))
 }
 
 /// `%APPDATA%\com.lucy.dev\lucy.db` — la MISMA DB que usa la app Tauri.
@@ -193,6 +200,11 @@ struct App {
     /// concreto — separarlos es cómo acaban desincronizados.
     #[allow(clippy::type_complexity)]
     sem_result: Option<Result<(Vec<lucy_core::vectors::SemanticHit>, Vec<String>), String>>,
+    // log viewer
+    log_lines: Result<Vec<String>, String>,
+    log_error: bool,
+    log_warn: bool,
+    log_info: bool,
     // sistema (métricas live vía lucy_core::system)
     sys: lucy_core::system::SysMonitor,
     sys_last: Instant,
@@ -231,6 +243,15 @@ impl App {
             mems: load_memories(),
             mem_search: String::new(),
             sem_result: None,
+            log_lines: log_path()
+                .ok_or_else(|| "no se pudo resolver %APPDATA%".to_string())
+                .and_then(|p| lucy_core::logs::tail(&p, 2_000)),
+            // Error y Warn encendidos, Info apagado: quien abre un visor de logs
+            // suele venir buscando qué falló, no la narración completa. Se
+            // enciende con un clic.
+            log_error: true,
+            log_warn: true,
+            log_info: false,
             sys: lucy_core::system::SysMonitor::new(),
             sys_last: Instant::now(),
             last: Instant::now(),
@@ -466,6 +487,7 @@ impl eframe::App for App {
             View::NexShell => self.terminal(ui),
             View::Memoria => self.memoria(ui),
             View::Dashboard => self.sistema(ui),
+            View::LogViewer => self.log_viewer(ui),
             other => self.pendiente(ui, other),
         });
     }
@@ -558,6 +580,83 @@ impl App {
                     });
                 }
             });
+    }
+
+    /// Log Viewer — la cola de `lucy_app.log`, con filtro por nivel.
+    ///
+    /// La ruta se construye aquí, fija: `%APPDATA%\Lucy\logs\lucy_app.log`, la
+    /// misma que escribe `write_app_log`. Por eso esta vista NO necesita la
+    /// guarda de rutas sensibles que sí lleva el comando Tauri — allí la ruta la
+    /// puede pedir un modelo, aquí la pone el programa.
+    fn log_viewer(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("LOG DE LA APP").strong());
+            if ui.button("↻ Recargar").clicked() {
+                self.reload_log();
+            }
+            ui.separator();
+            // El filtro es acumulativo, no excluyente: querer ver errores Y
+            // avisos a la vez es lo normal cuando se investiga algo.
+            ui.checkbox(&mut self.log_error, "Error");
+            ui.checkbox(&mut self.log_warn, "Warn");
+            ui.checkbox(&mut self.log_info, "Info");
+        });
+
+        match &self.log_lines {
+            Err(e) => {
+                ui.add_space(6.0);
+                ui.colored_label(theme::AMBER, format!("⚠ {e}"));
+                ui.label(
+                    egui::RichText::new(
+                        "El log aparece en cuanto Lucy arranca al menos una vez.",
+                    )
+                    .small()
+                    .color(theme::TXT3),
+                );
+            }
+            Ok(lines) => {
+                let visible: Vec<&String> = lines
+                    .iter()
+                    .filter(|l| match lucy_core::logs::Level::of(l) {
+                        lucy_core::logs::Level::Error => self.log_error,
+                        lucy_core::logs::Level::Warn => self.log_warn,
+                        lucy_core::logs::Level::Info => self.log_info,
+                    })
+                    .collect();
+                ui.label(
+                    egui::RichText::new(format!("{} de {} líneas", visible.len(), lines.len()))
+                        .small()
+                        .color(theme::TXT3),
+                );
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for l in visible {
+                            let color = match lucy_core::logs::Level::of(l) {
+                                lucy_core::logs::Level::Error => theme::RED,
+                                lucy_core::logs::Level::Warn => theme::AMBER,
+                                lucy_core::logs::Level::Info => theme::TXT2,
+                            };
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(l).monospace().size(11.5).color(color),
+                                )
+                                .wrap(),
+                            );
+                        }
+                    });
+            }
+        }
+    }
+
+    /// Relee la cola del log. 2000 líneas: suficiente para una sesión larga y
+    /// lejos del tope de 50 000 del core.
+    fn reload_log(&mut self) {
+        self.log_lines = log_path()
+            .ok_or_else(|| "no se pudo resolver %APPDATA%".to_string())
+            .and_then(|p| lucy_core::logs::tail(&p, 2_000));
     }
 
     /// Lanza la búsqueda semántica sobre `lucy-core::vectors`.
