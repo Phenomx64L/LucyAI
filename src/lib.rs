@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub mod chat;
+/// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
+/// en quien expone el comando.
+pub mod logs;
 /// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
 pub mod memory;
 pub mod system;
