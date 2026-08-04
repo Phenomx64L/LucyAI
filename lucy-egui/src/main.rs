@@ -235,11 +235,17 @@ const GAP: f32 = 10.0;
 // suma de sus filas contando la altura real de línea de la fuente (≈ tamaño ×
 // 1.45) más los márgenes. Sobrar unos píxeles no se ve; faltar uno recorta el
 // texto de abajo — y los tests de `layout` miden que ninguna se pase.
-const KPI_H: f32 = 126.0; // 18 + 5 + 44 + 10 + 5 + 16 + 28
-const NET_H: f32 = 88.0; // 16 + 8 + 2×18 + 28
-const CORE_H: f32 = 44.0; // 17 + 4 + 4 + 18
-const DISK_H: f32 = 76.0; // 18 + 6 + 5 + 6 + 16 + 24
-const PROC_ROW: f32 = 20.0;
+// 18 + 8 + 41 + (10 + 26 + 6) + 16 + 28 = 153.6 medidos; 156 deja holgura.
+const KPI_H: f32 = 156.0;
+const NET_H: f32 = 106.0; // 16 + 10 + 3×18 + 28
+const CORE_H: f32 = 44.0; // 16 + 6 + 4 + 18
+const DISK_H: f32 = 78.0; // 18 + 8 + 5 + 8 + 16 + 24
+const PROC_ROW: f32 = 22.0;
+
+/// Muestras del historial de las líneas de tendencia — las mismas 44 de la V2.
+/// A una por segundo son los últimos 44 s, que es el horizonte en el que una
+/// subida todavía significa algo.
+const SPARK_SAMPLES: usize = 44;
 
 /// Ancho exacto de celda para repartir `total` en `cols` columnas.
 ///
@@ -295,15 +301,30 @@ fn right(ui: &mut egui::Ui, h: f32, add: impl FnOnce(&mut egui::Ui)) {
     );
 }
 
+/// Tarjeta de tamaño exacto sobre `--surface-2`, el escalón de las tarjetas.
+fn card(ui: &mut egui::Ui, size: egui::Vec2, pad: f32, add: impl FnOnce(&mut egui::Ui)) {
+    card_on(ui, size, pad, theme::BG3, add);
+}
+
 /// Tarjeta de tamaño exacto: el contenido no decide cuánto mide, lo decide la
 /// rejilla.
-fn card(ui: &mut egui::Ui, size: egui::Vec2, pad: f32, add: impl FnOnce(&mut egui::Ui)) {
+///
+/// El relleno es un parámetro porque el CSS distingue dos escalones: las
+/// tarjetas van sobre `--surface-2` y los paneles grandes que las contienen
+/// sobre `--surface-1`. Apilar dos superficies iguales borra la separación.
+fn card_on(
+    ui: &mut egui::Ui,
+    size: egui::Vec2,
+    pad: f32,
+    fill: egui::Color32,
+    add: impl FnOnce(&mut egui::Ui),
+) {
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_min_size(size);
         egui::Frame::none()
-            .fill(theme::BG2)
+            .fill(fill)
             .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
-            .rounding(egui::Rounding::same(8.0))
+            .rounding(egui::Rounding::same(theme::R_LG))
             .inner_margin(egui::Margin::same(pad))
             .show(ui, |ui| {
                 let inner = size - egui::Vec2::splat(pad * 2.0);
@@ -335,15 +356,232 @@ fn cell(ui: &mut egui::Ui, w: f32, h: f32, align_right: bool, txt: egui::RichTex
 }
 
 /// Rótulo de sección: el escalón tipográfico que separa bloques en la V2.
-fn section(ui: &mut egui::Ui, title: String) {
+fn section(ui: &mut egui::Ui, title: &str, sub: Option<String>) {
     ui.add_space(GAP + 4.0);
-    ui.label(
-        egui::RichText::new(title)
-            .size(9.5)
-            .color(theme::TXT3)
-            .strong(),
+    row_align(ui, 18.0, egui::Align::Center, |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.add(egui::Label::new(theme::instrument_label(title, theme::FAINT)));
+        if let Some(s) = sub {
+            ui.label(
+                egui::RichText::new(s)
+                    .size(theme::FS_CAPTION)
+                    .color(theme::FAINT),
+            );
+        }
+    });
+    ui.add_space(8.0);
+}
+
+/// Título DENTRO de una tarjeta: icono en acento + rótulo de instrumento.
+///
+/// El icono en acento y la etiqueta en `faint` es el patrón del CSS, y es lo
+/// que hace que el ojo encuentre la sección antes de leerla.
+fn panel_title(ui: &mut egui::Ui, icon: &str, title: &str) {
+    row_align(ui, 16.0, egui::Align::Center, |ui| {
+        ui.spacing_mut().item_spacing.x = 7.0;
+        ui.label(egui::RichText::new(icon).size(13.0).color(theme::ACC));
+        ui.add(egui::Label::new(theme::instrument_label(title, theme::FAINT)));
+    });
+}
+
+/// ¿Se anima? La V2 respeta `prefers-reduced-motion`; egui no expone esa
+/// preferencia del sistema, así que aquí la puerta es `LUCY_NO_MOTION=1`.
+///
+/// Se lee UNA vez: consultar el entorno en cada frame de cada barra sería una
+/// llamada al sistema por cada núcleo, sesenta veces por segundo.
+fn motion() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LUCY_NO_MOTION").unwrap_or_default() != "1")
+}
+
+/// `--ease-out`, la curva de entrada del CSS: rápida al principio y asentándose
+/// al final. Un movimiento lineal se nota mecánico justo porque nada en el
+/// mundo físico arranca y para de golpe.
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Envuelve un bloque en su opacidad de entrada.
+fn block(ui: &mut egui::Ui, t: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.scope(|ui| {
+        ui.multiply_opacity(t);
+        add(ui);
+    });
+}
+
+/// Añade una muestra al historial de una línea de tendencia.
+fn push_hist(h: &mut Vec<f32>, v: f32) {
+    h.push(v);
+    if h.len() > SPARK_SAMPLES {
+        h.remove(0);
+    }
+}
+
+/// Porcentaje de ocupación de un volumen. Una función y no la división suelta
+/// porque aparece en tres sitios y dos redondeos distintos no cuadran.
+fn disk_pct(d: &lucy_core::system::DiskInfo) -> f32 {
+    if d.total == 0 {
+        return 0.0;
+    }
+    d.total.saturating_sub(d.avail) as f32 / d.total as f32 * 100.0
+}
+
+/// Línea de tendencia. Se dibuja con el painter porque no hay widget para
+/// esto: son N puntos, un trazo, y un recorte.
+///
+/// El recorte es la animación `spark-reveal` del CSS: la línea se descubre de
+/// izquierda a derecha la primera vez que hay datos, que es lo que la convierte
+/// en "esto acaba de medirse" en vez de en un adorno.
+fn sparkline(ui: &mut egui::Ui, w: f32, h: f32, data: &[f32], color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    if data.len() < 2 {
+        return;
+    }
+    let reveal = if motion() {
+        ease_out(
+            ui.ctx()
+                .animate_bool_with_time(ui.id().with("spark"), true, theme::DUR_SLOW),
+        )
+    } else {
+        1.0
+    };
+    let step = rect.width() / (data.len() - 1) as f32;
+    let pts: Vec<egui::Pos2> = data
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            egui::pos2(
+                rect.left() + i as f32 * step,
+                rect.bottom() - v.clamp(0.0, 100.0) / 100.0 * rect.height(),
+            )
+        })
+        .collect();
+    ui.painter_at(egui::Rect::from_min_size(
+        rect.min,
+        egui::vec2(rect.width() * reveal, rect.height()),
+    ))
+    .add(egui::Shape::line(pts, egui::Stroke::new(1.5_f32, color)));
+}
+
+/// Barra de medida con el relleno animado, como la transición de `width` del
+/// CSS: al entrar crece desde cero y en cada sondeo se desliza al nuevo valor.
+///
+/// La duración es un parámetro porque el CSS usa dos: `--dur-slow` para las
+/// métricas grandes y los discos, y `--dur-base` para los núcleos. No es
+/// capricho — treinta y dos barras moviéndose a la velocidad de una sola tarjeta
+/// grande se ven pesadas, y son las que más a menudo cambian.
+fn meter(ui: &mut egui::Ui, w: f32, h: f32, frac: f32, color: egui::Color32, key: &str, dur: f32) {
+    let frac = frac.clamp(0.0, 1.0);
+    let shown = if motion() {
+        ui.ctx()
+            .animate_value_with_time(egui::Id::new(("meter", key)), frac, dur)
+    } else {
+        frac
+    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    let r = egui::Rounding::same(h / 2.0);
+    ui.painter().rect_filled(rect, r, theme::BG4);
+    if shown > 0.0 {
+        let fill = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * shown, rect.height()));
+        ui.painter().rect_filled(fill, r, color);
+    }
+}
+
+/// Fila de un servicio detenido: LED + nombre en mono.
+///
+/// El LED es neutro por defecto. Estuvo en ámbar para todas las filas, y una
+/// máquina normal parecía un muro de avisos donde las filas que importaban no
+/// tenían contra qué destacar.
+fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) {
+    let h = 18.0;
+    ui.allocate_ui_with_layout(
+        egui::vec2(w, h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_size(egui::vec2(w, h));
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let (dot, txt) = if crashed {
+                (theme::AMBER, theme::TXT)
+            } else {
+                (theme::FAINT, theme::TXT2)
+            };
+            let (r, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
+            ui.painter().circle_filled(r.center(), 2.5, dot);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(name)
+                        .size(theme::FS_CAPTION)
+                        .monospace()
+                        .color(txt),
+                )
+                .truncate(),
+            )
+            .on_hover_text(if crashed {
+                "Salió con código de error"
+            } else {
+                "Detenido, sin error de arranque"
+            });
+        },
     );
-    ui.add_space(6.0);
+}
+
+/// Tarjeta de un volumen: punto de montaje, porcentaje, barra y espacio libre.
+fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
+    let pct = disk_pct(d);
+    card(ui, egui::vec2(w, DISK_H), 12.0, |ui| {
+        row_align(ui, 18.0, egui::Align::Center, |ui| {
+            ui.label(
+                egui::RichText::new(&d.mount)
+                    .monospace()
+                    .size(theme::FS_FOOTNOTE)
+                    .color(theme::TXT),
+            );
+            right(ui, 18.0, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{pct:.0}%"))
+                        .size(theme::FS_FOOTNOTE)
+                        .monospace()
+                        .color(theme::disk_color(pct)),
+                );
+            });
+        });
+        ui.add_space(8.0);
+        meter(ui, w - 24.0, 5.0, pct / 100.0, theme::disk_color(pct), &d.mount, theme::DUR_SLOW);
+        ui.add_space(8.0);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!(
+                    "{} libres · {} / {}",
+                    fmt_gb(d.avail),
+                    fmt_gb(d.total.saturating_sub(d.avail)),
+                    fmt_gb(d.total)
+                ))
+                .size(theme::FS_CAPTION)
+                .monospace()
+                .color(theme::FAINT),
+            )
+            .truncate(),
+        );
+    });
+}
+
+/// Un lado de un control segmentado. Activo = relleno de acento con tinta
+/// oscura encima, que es el único sitio donde el CSS pone el acento sólido.
+fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
+    let b = egui::Button::new(
+        egui::RichText::new(label)
+            .size(theme::FS_CAPTION)
+            .color(if on { theme::ACC_INK } else { theme::TXT3 }),
+    )
+    .fill(if on {
+        theme::ACC
+    } else {
+        egui::Color32::TRANSPARENT
+    })
+    .stroke(egui::Stroke::NONE)
+    .rounding(egui::Rounding::same(6.0))
+    .min_size(egui::vec2(40.0, 18.0));
+    ui.add(b).clicked()
 }
 
 /// Los datos de una tarjeta KPI.
@@ -353,17 +591,22 @@ fn section(ui: &mut egui::Ui, title: String) {
 struct Kpi<'a> {
     icon: &'a str,
     title: &'a str,
-    value: String,
+    /// Cifra: se anima desde el valor anterior. Ignorada si `text` no está vacío.
+    value: f32,
     unit: &'a str,
-    /// La cifra manda a 30, pero un hostname a 30 no cabe en una columna.
-    value_size: f32,
-    color: egui::Color32,
+    /// Texto en lugar de cifra — el hostname. No se anima ni va a 28 pt: un
+    /// nombre de equipo no es una lectura, es una etiqueta.
+    text: String,
+    /// Historial de la línea de tendencia. La V2 la pone en CPU y RAM, donde el
+    /// valor se mueve; en disco no, porque un disco no cambia en 44 segundos y
+    /// la línea sería una recta. Ahí va una barra de ocupación, que sí dice algo.
+    spark: &'a [f32],
+    bar: Option<f32>,
     sub: String,
     /// Segunda línea de detalle. Existe porque la tarjeta de SISTEMA necesita
     /// dos y un `\n` no serviría: el truncado que impide que un nombre largo
     /// desborde la columna corta el texto en la primera línea.
     sub2: String,
-    bar: Option<f32>,
 }
 
 impl Default for Kpi<'_> {
@@ -371,15 +614,23 @@ impl Default for Kpi<'_> {
         Self {
             icon: "",
             title: "",
-            value: String::new(),
+            value: 0.0,
             unit: "",
-            value_size: 30.0,
-            color: theme::TXT,
+            text: String::new(),
+            spark: &[],
+            bar: None,
             sub: String::new(),
             sub2: String::new(),
-            bar: None,
         }
     }
+}
+
+/// Gravedad de una alerta derivada. Dos niveles, como la V2: uno colorea el
+/// chip del equipo de ámbar y el otro de rojo.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sev {
+    Warn,
+    Bad,
 }
 
 struct App {
@@ -425,6 +676,16 @@ struct App {
     /// elegir entre medidores lentos o un PowerShell por segundo.
     procs_last: Instant,
     svc_last: Instant,
+    /// Sonda de servicios en vuelo. `Some` = hay un hilo trabajando, que es lo
+    /// que anima el botón de refresco y lo que impide lanzar una segunda.
+    svc_rx: Option<std::sync::mpsc::Receiver<Option<Vec<lucy_core::system::DownService>>>>,
+    /// Historial de las líneas de tendencia de CPU y RAM.
+    cpu_hist: Vec<f32>,
+    ram_hist: Vec<f32>,
+    /// Cuándo entró el Dashboard en pantalla. Gobierna la animación de entrada;
+    /// `None` mientras la vista no está visible, y así al volver vuelve a
+    /// montarse como en la V2 en vez de aparecer de golpe.
+    dash_shown: Option<Instant>,
     /// Hora de la última actualización, para la cabecera.
     sys_stamp: String,
     // telemetry
@@ -482,6 +743,10 @@ impl App {
             // esperando 30 segundos a que aparezcan los servicios.
             procs_last: Instant::now() - Duration::from_secs(60),
             svc_last: Instant::now() - Duration::from_secs(60),
+            svc_rx: None,
+            cpu_hist: Vec::new(),
+            ram_hist: Vec::new(),
+            dash_shown: None,
             sys_stamp: String::from("—"),
             last: Instant::now(),
             fps: 0.0,
@@ -547,8 +812,20 @@ impl eframe::App for App {
         // usuario lee el chat gasta CPU para pintar algo que no está en pantalla
         // — y en una app que vive abierta todo el día eso se nota en la batería.
         if self.view == View::Dashboard {
+            // El reloj de la entrada arranca al ENTRAR en la vista, no al
+            // arrancar la app: la V2 monta el componente cada vez, y volver al
+            // dashboard vuelve a armarlo delante de ti.
+            if self.dash_shown.is_none() {
+                self.dash_shown = Some(now);
+            }
             self.refresh_system(false);
+        } else {
+            self.dash_shown = None;
         }
+        // Fuera del `if`: una sonda lanzada justo antes de cambiar de vista
+        // tiene que poder cerrarse igual, o el botón se quedaría girando para
+        // siempre al volver.
+        self.pump_services();
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -907,7 +1184,6 @@ impl App {
         // Tauri en upsert_embedding y el backfill.
         self.sem_result = Some(lucy_core::vectors::search(q, "memory", 8, 0.25));
     }
-
     /// Refresca las métricas respetando cada cadencia. `force` las salta todas
     /// — es lo que hace el botón ↻, que debe dar datos frescos ahora y no
     /// "dentro de 27 segundos".
@@ -917,78 +1193,145 @@ impl App {
             self.net = self.sys.net_rate();
             self.sys_last = Instant::now();
             self.sys_stamp = stamp_now();
+
+            // Historial de las líneas de tendencia. 44 muestras es lo que guarda
+            // la V2; a un segundo por muestra son los últimos 44 segundos, que
+            // es el horizonte en el que una subida todavía significa algo.
+            let s = self.sys.snapshot();
+            push_hist(&mut self.cpu_hist, s.cpu_pct);
+            push_hist(&mut self.ram_hist, mem_pct(&s));
         }
         if force || self.procs_last.elapsed() >= Duration::from_secs(3) {
             self.procs = self.sys.top_processes(8, self.proc_by_cpu);
             self.procs_last = Instant::now();
         }
+
+        // ── servicios: EN OTRO HILO ──────────────────────────────────────────
+        //
+        // Lanzar PowerShell tarda cientos de milisegundos y esto corría en el
+        // hilo de interfaz: cada 30 segundos la ventana se quedaba clavada. En
+        // una aplicación cuya razón de ser es que el WebView se congelaba, meter
+        // una congelación propia es el peor error posible.
+        //
+        // El hilo manda el resultado por un canal y `pump_services` lo recoge
+        // cuando llega. De paso, `svc_rx.is_some()` es "hay una sonda en curso",
+        // que es lo que anima el botón de refresco.
         #[cfg(windows)]
-        if force || self.svc_last.elapsed() >= Duration::from_secs(30) {
-            // Un fallo aquí NO se propaga: lanzar PowerShell puede fallar por
-            // política del equipo, y eso no debe vaciar un dashboard cuyo resto
-            // de datos es correcto. Se conserva la última lista buena.
-            if let Ok(v) = lucy_core::system::down_services(12) {
-                self.services = v;
-            }
+        if self.svc_rx.is_none() && (force || self.svc_last.elapsed() >= Duration::from_secs(30)) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                // Un fallo NO se propaga: lanzar PowerShell puede fallar por
+                // política del equipo, y eso no debe vaciar un dashboard cuyo
+                // resto de datos es correcto. Se manda `None` y quien recibe
+                // conserva la última lista buena.
+                let _ = tx.send(lucy_core::system::down_services(12).ok());
+            });
+            self.svc_rx = Some(rx);
             self.svc_last = Instant::now();
         }
     }
 
-    /// Tarjeta KPI: número grande, unidad pequeña, subtítulo.
+    /// Recoge el resultado de la sonda de servicios si ya llegó.
+    fn pump_services(&mut self) {
+        let Some(rx) = &self.svc_rx else { return };
+        match rx.try_recv() {
+            Ok(Some(v)) => {
+                self.services = v;
+                self.svc_rx = None;
+            }
+            // Sonda fallida o hilo caído: se cierra el turno y se deja intacta
+            // la última lista conocida.
+            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => self.svc_rx = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Progreso 0→1 de la animación de entrada del bloque `idx`.
     ///
-    /// La jerarquía tipográfica ES el diseño de la V2: la cifra domina, el `%`
-    /// va a media altura, y el detalle queda debajo en secundario. Un panel de
-    /// monitorización se lee de un vistazo o no se lee — todo al mismo tamaño
-    /// obliga a buscar el número, que es exactamente lo que no debe pasar.
-    /// Tarjeta KPI: número grande, unidad pequeña, detalle debajo.
+    /// La V2 escalona los hijos del dashboard 50 ms cada uno mientras aparecen y
+    /// los desliza 10 px hacia arriba. Aquí se conserva el escalonado y la
+    /// opacidad; el desplazamiento no, porque en modo inmediato la posición de
+    /// un bloque la fija el flujo, y moverlo empujaría a todos los siguientes.
+    fn entrance(&self, idx: usize) -> f32 {
+        if !motion() {
+            return 1.0;
+        }
+        let Some(t0) = self.dash_shown else { return 1.0 };
+        let delay = idx.min(6) as f32 * 0.05;
+        let t = (t0.elapsed().as_secs_f32() - delay) / theme::DUR_SLOW;
+        ease_out(t.clamp(0.0, 1.0))
+    }
+
+    /// Tarjeta KPI: rótulo de instrumento, cifra héroe, tendencia o barra, y el
+    /// detalle debajo.
     ///
-    /// La jerarquía tipográfica ES el diseño de la V2: la cifra domina, la
-    /// unidad se apoya en su base, y el detalle queda debajo en secundario. Un
-    /// panel de monitorización se lee de un vistazo o no se lee — todo al mismo
-    /// tamaño obliga a buscar el número, que es justo lo que no debe pasar.
+    /// La jerarquía tipográfica ES el diseño del Cockpit: la cifra manda en
+    /// mono a 28 —monoespaciada para que las lecturas no "bailen" al refrescar,
+    /// que es lo que hace que el panel se lea como instrumental y no como una
+    /// plantilla—, la unidad se apoya en su base, y el detalle cae a `faint`.
+    ///
+    /// La cifra NO se tiñe por umbral. En la V2 siempre es `--text-primary`: el
+    /// color vive en la barra y en la tira de alertas. Un número que cambia de
+    /// color compite con ellas y dice lo mismo dos veces.
     fn kpi_card(ui: &mut egui::Ui, size: egui::Vec2, k: Kpi<'_>) {
+        let inner_w = size.x - 28.0;
         card(ui, size, 14.0, |ui| {
-            let inner_w = size.x - 28.0;
-            row(ui, 18.0, |ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                ui.label(egui::RichText::new(k.icon).size(12.0).color(theme::TXT3));
-                ui.label(
-                    egui::RichText::new(k.title)
-                        .size(9.5)
-                        .color(theme::TXT3)
-                        .strong(),
-                );
+            row_align(ui, 18.0, egui::Align::Center, |ui| {
+                ui.spacing_mut().item_spacing.x = 7.0;
+                ui.label(egui::RichText::new(k.icon).size(14.0).color(theme::ACC));
+                ui.add(egui::Label::new(theme::instrument_label(k.title, theme::FAINT)));
             });
-            ui.add_space(5.0);
-            // La unidad se alinea por ABAJO con la cifra: centrada, el `%`
-            // flota a media altura del número y parece un exponente.
-            row_align(ui, k.value_size * 1.45, egui::Align::Max, |ui| {
+            ui.add_space(8.0);
+
+            // La unidad se alinea por ABAJO con la cifra: centrada, el `%` flota
+            // a media altura del número y parece un exponente.
+            let is_text = !k.text.is_empty();
+            let vsize = if is_text { theme::FS_HEADING } else { 28.0 };
+            row_align(ui, vsize * 1.45, egui::Align::Max, |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&k.value)
-                            .size(k.value_size)
-                            .color(k.color)
-                            .strong(),
-                    )
-                    .truncate(),
+                if is_text {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&k.text).size(vsize).color(theme::TXT),
+                        )
+                        .truncate(),
+                    );
+                    return;
+                }
+                // Cuenta desde cero al entrar y se desliza al nuevo valor en
+                // cada sondeo, como el `tweened` de la V2: una cifra que salta
+                // de golpe se lee como texto estático que alguien reemplazó.
+                let shown = ui.ctx().animate_value_with_time(
+                    egui::Id::new(("kpi", k.title)),
+                    k.value,
+                    if motion() { 0.65 } else { 0.0 },
+                );
+                ui.label(
+                    egui::RichText::new(format!("{shown:.0}"))
+                        .size(vsize)
+                        .monospace()
+                        .color(theme::TXT),
                 );
                 if !k.unit.is_empty() {
-                    ui.label(egui::RichText::new(k.unit).size(13.0).color(k.color));
+                    ui.label(
+                        egui::RichText::new(k.unit)
+                            .size(14.0)
+                            .color(theme::TXT3),
+                    );
                 }
             });
-            if let Some(frac) = k.bar {
+
+            if !k.spark.is_empty() {
+                ui.add_space(10.0);
+                sparkline(ui, inner_w, 26.0, k.spark, theme::ACC);
                 ui.add_space(6.0);
-                ui.add(
-                    egui::ProgressBar::new(frac.clamp(0.0, 1.0))
-                        // Sin ancho explícito la barra se come toda la fila y
-                        // deja la tarjeta cruzando la ventana entera.
-                        .desired_width(inner_w)
-                        .desired_height(4.0)
-                        .fill(theme::usage_color(frac * 100.0)),
-                );
             }
-            ui.add_space(5.0);
+            if let Some(frac) = k.bar {
+                ui.add_space(12.0);
+                meter(ui, inner_w, 5.0, frac, theme::meter_color(frac * 100.0), k.title, theme::DUR_SLOW);
+                ui.add_space(8.0);
+            }
+
             // Truncado, no ajustado: un texto que se parte en dos líneas dentro
             // de una tarjeta de altura fija se sale por abajo.
             for line in [&k.sub, &k.sub2] {
@@ -998,7 +1341,9 @@ impl App {
                 row(ui, 16.0, |ui| {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(line).size(10.5).color(theme::TXT3),
+                            egui::RichText::new(line)
+                                .size(theme::FS_CAPTION)
+                                .color(theme::FAINT),
                         )
                         .truncate(),
                     );
@@ -1009,33 +1354,38 @@ impl App {
 
     /// Tarjeta de un núcleo: `C7`, su porcentaje, y una barra fina.
     ///
-    /// Función aparte y no un bloque dentro del bucle porque es la pieza que
-    /// se repite 32 veces: si una sola se sale de su caja, la rejilla entera se
+    /// Función aparte y no un bloque dentro del bucle porque es la pieza que se
+    /// repite 32 veces: si una sola se sale de su caja, la rejilla entera se
     /// descuadra. Suelta, un test la puede medir.
-    fn core_card(ui: &mut egui::Ui, w: f32, i: usize, pct: f32) {
+    fn core_card(ui: &mut egui::Ui, w: f32, i: usize, pct: f32, host_cpu: f32) {
         card(ui, egui::vec2(w, CORE_H), 9.0, |ui| {
-            row_align(ui, 17.0, egui::Align::Center, |ui| {
+            row_align(ui, 16.0, egui::Align::Center, |ui| {
                 ui.label(
                     egui::RichText::new(format!("C{i}"))
-                        .size(10.0)
+                        .size(theme::FS_CAPTION)
                         .monospace()
-                        .color(theme::TXT3),
+                        .color(theme::FAINT),
                 );
-                right(ui, 17.0, |ui| {
+                right(ui, 16.0, |ui| {
                     ui.label(
                         egui::RichText::new(format!("{pct:.0}%"))
-                            .size(11.5)
-                            .color(theme::TXT)
-                            .strong(),
+                            .size(theme::FS_FOOTNOTE)
+                            .monospace()
+                            .color(theme::TXT2),
                     );
                 });
             });
-            ui.add_space(4.0);
-            ui.add(
-                egui::ProgressBar::new((pct / 100.0).clamp(0.0, 1.0))
-                    .desired_width(w - 18.0)
-                    .desired_height(4.0)
-                    .fill(theme::usage_color(pct)),
+            ui.add_space(6.0);
+            meter(
+                ui,
+                w - 18.0,
+                4.0,
+                pct / 100.0,
+                theme::core_color(pct, host_cpu),
+                // Cada núcleo necesita su propia animación: con una sola clave
+                // los 32 compartirían valor y la rejilla parpadearía a la vez.
+                &format!("core-{i}"),
+                theme::DUR_BASE,
             );
         });
     }
@@ -1081,62 +1431,125 @@ impl App {
     }
 
 
-    /// Dashboard de sistema — el diseño de la V2, sobre una rejilla explícita.
+    /// Las alertas derivadas de la V2 — y de ellas sale el estado de salud.
     ///
-    /// Todo el panel cuelga de un ancho: `full`. Las cuatro KPI reparten ese
-    /// ancho en columnas iguales, la fila de red/servicios usa las mismas
-    /// columnas, y núcleos y discos calculan las suyas con el mismo hueco. Por
-    /// eso los bordes verticales caen unos sobre otros en vez de aparecer donde
-    /// el contenido de cada tarjeta decida.
+    /// Los umbrales son distintos por métrica y eso es deliberado: una CPU al
+    /// 80 % es una máquina trabajando, un disco al 80 % es una máquina a la que
+    /// le queda poco. Un único umbral para todo es cómo un panel acaba avisando
+    /// tarde de lo que importa y pronto de lo que no.
+    fn alerts(&self, s: &lucy_core::system::SysSnapshot) -> Vec<(Sev, String)> {
+        let mut a = Vec::new();
+        let cpu = s.cpu_pct;
+        if cpu >= 90.0 {
+            a.push((Sev::Bad, format!("CPU al {cpu:.0}%")));
+        } else if cpu >= 78.0 {
+            a.push((Sev::Warn, format!("CPU alta ({cpu:.0}%)")));
+        }
+        let mp = mem_pct(s);
+        if mp >= 92.0 {
+            a.push((Sev::Bad, format!("RAM al {mp:.0}%")));
+        } else if mp >= 82.0 {
+            a.push((Sev::Warn, format!("RAM alta ({mp:.0}%)")));
+        }
+        for d in &s.disks {
+            let pct = disk_pct(d);
+            if pct >= 93.0 {
+                a.push((Sev::Bad, format!("Disco {} al {pct:.0}%", d.mount)));
+            } else if pct >= 86.0 {
+                a.push((Sev::Warn, format!("Disco {} al {pct:.0}%", d.mount)));
+            }
+        }
+        // Solo los CAÍDOS. Un servicio parado limpio se informa en su tarjeta y
+        // no levanta alerta: contarlos hacía que el equipo pasara a "Atención"
+        // un minuto después de cada arranque, y un indicador que avisa en cada
+        // arranque deja de leerse.
+        let crashed = self.services.iter().filter(|s| s.crashed()).count();
+        if crashed > 0 {
+            a.push((Sev::Warn, format!("{crashed} servicio(s) con fallo de arranque")));
+        }
+        a
+    }
+
+    /// Dashboard de sistema — el diseño del Cockpit V2, sobre una rejilla
+    /// explícita.
+    ///
+    /// Todo el panel cuelga de un ancho: `full`. Las KPI reparten ese ancho en
+    /// columnas iguales, la fila de red/servicios usa las mismas columnas, y
+    /// núcleos y discos calculan las suyas con el mismo hueco. Por eso los
+    /// bordes verticales caen unos sobre otros en vez de aparecer donde el
+    /// contenido de cada tarjeta decida.
     fn sistema(&mut self, ui: &mut egui::Ui) {
         let s = self.sys.snapshot();
         let net = self.net;
+        let alerts = self.alerts(&s);
+        let ctx = ui.ctx().clone();
+
+        // La entrada escalonada sigue corriendo aunque no llegue ningún dato:
+        // hay que pedir repintado mientras dure, o se vería a saltos de 1 Hz.
+        if self.entrance(5) < 1.0 {
+            ctx.request_repaint();
+        }
+        let ent: [f32; 6] = std::array::from_fn(|i| self.entrance(i));
 
         // ── cabecera ─────────────────────────────────────────────────────────
-        row_align(ui, 28.0, egui::Align::Center, |ui| {
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
             ui.label(
                 egui::RichText::new("Dashboard de sistema")
-                    .size(17.0)
+                    .size(theme::FS_TITLE)
                     .color(theme::TXT),
             );
 
-            // Salud: derivada de UN criterio, el mismo del helper de umbrales.
-            // Y solo los servicios CAÍDOS (código != 0) la degradan — un
-            // servicio parado limpio se informa en su tarjeta y no tiñe nada,
-            // que es la lección que costó que el equipo pasara a "Atención" en
-            // cada arranque.
-            let crashed = self.services.iter().filter(|s| s.crashed()).count();
-            let worst = s.cpu_pct.max(mem_pct(&s));
-            let (sal_txt, sal_col) = if crashed > 0 || worst >= 85.0 {
-                ("Atención", theme::AMBER)
+            let (sal_txt, sal_col, sal_bg) = if alerts.iter().any(|(v, _)| *v == Sev::Bad) {
+                ("Crítico", theme::RED, theme::RED_BG)
+            } else if alerts.is_empty() {
+                ("Saludable", theme::ACC, theme::ACC_BG)
             } else {
-                ("Saludable", theme::ACC)
+                ("Atención", theme::AMBER, theme::AMBER_BG)
             };
             egui::Frame::none()
-                .fill(sal_col.linear_multiply(0.12))
-                .rounding(egui::Rounding::same(10.0))
-                .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                .fill(sal_bg)
+                .rounding(egui::Rounding::same(999.0))
+                .inner_margin(egui::Margin::symmetric(10.0, 3.0))
                 .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    ui.label(egui::RichText::new("●").size(8.0).color(sal_col));
-                    ui.label(egui::RichText::new(sal_txt).size(11.0).color(sal_col));
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(egui::RichText::new("●").size(7.0).color(sal_col));
+                    ui.label(
+                        egui::RichText::new(sal_txt)
+                            .size(theme::FS_CAPTION)
+                            .color(sal_col),
+                    );
                 });
             ui.label(
                 egui::RichText::new(format!("act. {}", self.sys_stamp))
-                    .size(10.5)
+                    .size(theme::FS_CAPTION)
                     .monospace()
-                    .color(theme::TXT3),
+                    .color(theme::FAINT),
             );
 
             let mut pedir = false;
-            right(ui, 24.0, |ui| {
-                pedir = ui.button("↻").on_hover_text("Actualizar ahora").clicked();
+            right(ui, 26.0, |ui| {
+                // Mientras la sonda de servicios trabaja en su hilo, el botón se
+                // convierte en el indicador de que algo está en marcha. Es la
+                // versión nativa del `.spin` del CSS, y solo es posible porque
+                // la sonda dejó de bloquear el hilo de interfaz.
+                if self.svc_rx.is_some() {
+                    ui.add(egui::Spinner::new().size(15.0).color(theme::ACC));
+                } else {
+                    let b = egui::Button::new(
+                        egui::RichText::new("↻").size(14.0).color(theme::TXT3),
+                    )
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .min_size(egui::vec2(30.0, 26.0));
+                    pedir = ui.add(b).on_hover_text("Actualizar ahora").clicked();
+                }
             });
             if pedir {
                 self.refresh_system(true);
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -1144,6 +1557,46 @@ impl App {
                 // Se descuenta el canal de la barra de desplazamiento: si no,
                 // la última columna queda debajo de ella cuando aparece.
                 let full = (ui.available_width() - 8.0).max(240.0);
+
+                // ── tira de alertas ──────────────────────────────────────────
+                if !alerts.is_empty() {
+                    block(ui, ent[0], |ui| {
+                        let h = 22.0 + 16.0 * (1 + alerts.len() / 3) as f32;
+                        card_on(ui, egui::vec2(full, h), 12.0, theme::BG2, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "⚠ {} alerta{}",
+                                        alerts.len(),
+                                        if alerts.len() > 1 { "s" } else { "" }
+                                    ))
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(theme::AMBER)
+                                    .strong(),
+                                );
+                                for (sev, txt) in &alerts {
+                                    let (c, bg) = match sev {
+                                        Sev::Bad => (theme::RED, theme::RED_BG),
+                                        Sev::Warn => (theme::AMBER, theme::AMBER_BG),
+                                    };
+                                    egui::Frame::none()
+                                        .fill(bg)
+                                        .rounding(egui::Rounding::same(999.0))
+                                        .inner_margin(egui::Margin::symmetric(9.0, 2.0))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(txt)
+                                                    .size(theme::FS_CAPTION)
+                                                    .color(c),
+                                            );
+                                        });
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(GAP);
+                }
 
                 // ── KPI ──────────────────────────────────────────────────────
                 //
@@ -1154,359 +1607,312 @@ impl App {
                 let n_kpi = 3 + usize::from(disk0.is_some());
                 let kw = cell_w(full, n_kpi);
                 let mp = mem_pct(&s);
-                row(ui, KPI_H, |ui| {
-                    Self::kpi_card(
-                        ui,
-                        egui::vec2(kw, KPI_H),
-                        Kpi {
-                            icon: "▣",
-                            title: "CPU",
-                            value: format!("{:.0}", s.cpu_pct),
-                            unit: "%",
-                            color: theme::usage_color(s.cpu_pct),
-                            sub: format!("{} núcleos", s.cores),
-                            bar: Some(s.cpu_pct / 100.0),
-                            ..Default::default()
-                        },
-                    );
-                    Self::kpi_card(
-                        ui,
-                        egui::vec2(kw, KPI_H),
-                        Kpi {
-                            icon: "◈",
-                            title: "RAM",
-                            value: format!("{mp:.0}"),
-                            unit: "%",
-                            color: theme::usage_color(mp),
-                            sub: format!("{} / {}", fmt_gb(s.mem_used), fmt_gb(s.mem_total)),
-                            bar: Some(mp / 100.0),
-                            ..Default::default()
-                        },
-                    );
-                    if let Some(d) = disk0 {
-                        let used = d.total.saturating_sub(d.avail);
-                        let pct = if d.total > 0 {
-                            used as f32 / d.total as f32 * 100.0
-                        } else {
-                            0.0
-                        };
+                let cpu_hist = &self.cpu_hist;
+                let ram_hist = &self.ram_hist;
+                block(ui, ent[1], |ui| {
+                    row(ui, KPI_H, |ui| {
                         Self::kpi_card(
                             ui,
                             egui::vec2(kw, KPI_H),
                             Kpi {
-                                icon: "▤",
-                                title: "DISCO SISTEMA",
-                                value: format!("{pct:.0}"),
+                                icon: "▣",
+                                title: "CPU",
+                                value: s.cpu_pct,
                                 unit: "%",
-                                color: theme::usage_color(pct),
-                                sub: format!("{} libres de {}", fmt_gb(d.avail), fmt_gb(d.total)),
-                                bar: Some(pct / 100.0),
+                                spark: &cpu_hist,
+                                sub: format!("{} núcleos", s.cores),
                                 ..Default::default()
                             },
                         );
-                    }
-                    Self::kpi_card(
-                        ui,
-                        egui::vec2(kw, KPI_H),
-                        Kpi {
-                            icon: "◱",
-                            title: "SISTEMA",
-                            value: s.host.clone(),
-                            // Un hostname no es una cifra. A 30 pt no cabe en
-                            // una columna, y además competiría con los datos
-                            // que sí se leen de un vistazo: los porcentajes.
-                            value_size: 17.0,
-                            sub: s.os.clone(),
-                            sub2: format!("Uptime {}", fmt_uptime(s.uptime_secs)),
-                            ..Default::default()
-                        },
-                    );
+                        Self::kpi_card(
+                            ui,
+                            egui::vec2(kw, KPI_H),
+                            Kpi {
+                                icon: "◈",
+                                title: "RAM",
+                                value: mp,
+                                unit: "%",
+                                spark: &ram_hist,
+                                sub: format!("{} / {}", fmt_gb(s.mem_used), fmt_gb(s.mem_total)),
+                                ..Default::default()
+                            },
+                        );
+                        if let Some(d) = disk0 {
+                            let pct = disk_pct(d);
+                            Self::kpi_card(
+                                ui,
+                                egui::vec2(kw, KPI_H),
+                                Kpi {
+                                    icon: "▤",
+                                    title: "Disco sistema",
+                                    value: pct,
+                                    unit: "%",
+                                    // Barra y no tendencia: un disco no se mueve
+                                    // en 44 segundos, así que la línea sería una
+                                    // recta. Lo que se quiere saber es cuánto
+                                    // queda, y eso lo dice la ocupación.
+                                    bar: Some(pct / 100.0),
+                                    sub: format!(
+                                        "{} libres de {}",
+                                        fmt_gb(d.avail),
+                                        fmt_gb(d.total)
+                                    ),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                        Self::kpi_card(
+                            ui,
+                            egui::vec2(kw, KPI_H),
+                            Kpi {
+                                icon: "◱",
+                                title: "Sistema",
+                                text: s.host.clone(),
+                                sub: s.os.clone(),
+                                sub2: format!("Uptime {}", fmt_uptime(s.uptime_secs)),
+                                ..Default::default()
+                            },
+                        );
+                    });
                 });
                 ui.add_space(GAP);
 
                 // ── red + servicios ──────────────────────────────────────────
                 let netw = cell_w(full, 4);
-                row(ui, NET_H, |ui| {
-                    card(ui, egui::vec2(netw, NET_H), 14.0, |ui| {
-                        row(ui, 16.0, |ui| {
-                            ui.label(
-                                egui::RichText::new("◈ RED")
-                                    .size(9.5)
-                                    .color(theme::TXT3)
-                                    .strong(),
-                            );
-                        });
-                        ui.add_space(8.0);
-                        row_align(ui, 24.0, egui::Align::Max, |ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            ui.label(egui::RichText::new("↓").color(theme::ACC).size(15.0));
-                            ui.label(
-                                egui::RichText::new(fmt_rate(net.rx_bps))
-                                    .size(16.0)
-                                    .color(theme::TXT)
-                                    .strong(),
-                            );
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new("↑").color(theme::BLUE).size(15.0));
-                            ui.label(
-                                egui::RichText::new(fmt_rate(net.tx_bps))
-                                    .size(16.0)
-                                    .color(theme::TXT)
-                                    .strong(),
-                            );
-                        });
-                    });
-
-                    let svw = full - netw - GAP;
-                    card(ui, egui::vec2(svw, NET_H), 14.0, |ui| {
-                        row(ui, 16.0, |ui| {
-                            ui.label(
-                                egui::RichText::new("◉ SERVICIOS DETENIDOS")
-                                    .size(9.5)
-                                    .color(theme::TXT3)
-                                    .strong(),
-                            );
-                        });
-                        ui.add_space(8.0);
-                        if self.services.is_empty() {
-                            ui.label(
-                                egui::RichText::new(
-                                    "✓ Todos los servicios automáticos en ejecución",
-                                )
-                                .size(11.5)
-                                .color(theme::ACC),
-                            );
-                            return;
-                        }
-                        // Caído en ámbar, parado limpio en secundario: la
-                        // tarjeta distingue las dos cosas en vez de teñirlo
-                        // todo de alarma.
-                        let mut chips: Vec<(String, egui::Color32)> = self
-                            .services
-                            .iter()
-                            .map(|sv| {
-                                if sv.crashed() {
-                                    (
-                                        format!("• {} (código {})", sv.name, sv.exit_code),
-                                        theme::AMBER,
-                                    )
-                                } else {
-                                    (format!("• {}", sv.name), theme::TXT2)
-                                }
-                            })
-                            .collect();
-
-                        let inner = svw - 28.0;
-                        let scols = fit_cols(inner, 210.0);
-                        let cap = scols * 2;
-                        if chips.len() > cap {
-                            // Se sacrifica un hueco para decir cuántos quedan:
-                            // una lista recortada en silencio miente sobre el
-                            // estado del equipo.
-                            let hidden = chips.len() - (cap - 1);
-                            chips.truncate(cap - 1);
-                            chips.push((format!("+{hidden} más"), theme::TXT3));
-                        }
-                        let cw = cell_w(inner, scols);
-                        for line in chips.chunks(scols) {
-                            row(ui, 18.0, |ui| {
-                                for (txt, col) in line {
-                                    cell(
-                                        ui,
-                                        cw,
-                                        18.0,
-                                        false,
-                                        egui::RichText::new(txt).size(11.5).color(*col),
+                let svw = full - netw - GAP;
+                let services = &self.services;
+                block(ui, ent[2], |ui| {
+                    row(ui, NET_H, |ui| {
+                        card(ui, egui::vec2(netw, NET_H), 14.0, |ui| {
+                            panel_title(ui, "◈", "Red");
+                            ui.add_space(10.0);
+                            row_align(ui, 22.0, egui::Align::Max, |ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                for (glyph, rate, col) in [
+                                    ("↓", net.rx_bps, theme::ACC),
+                                    ("↑", net.tx_bps, theme::BLUE),
+                                ] {
+                                    ui.label(
+                                        egui::RichText::new(glyph)
+                                            .size(theme::FS_HEADING)
+                                            .color(col),
                                     );
+                                    ui.label(
+                                        egui::RichText::new(fmt_rate(rate))
+                                            .size(theme::FS_HEADING)
+                                            .monospace()
+                                            .color(col),
+                                    );
+                                    ui.add_space(10.0);
                                 }
                             });
-                        }
+                        });
+
+                        card(ui, egui::vec2(svw, NET_H), 14.0, |ui| {
+                            panel_title(ui, "◉", "Servicios detenidos");
+                            ui.add_space(10.0);
+                            if services.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "✓ Todos los servicios automáticos en ejecución",
+                                    )
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::ACC),
+                                );
+                                return;
+                            }
+                            let inner = svw - 28.0;
+                            let scols = fit_cols(inner, 230.0);
+                            let cap = scols * 3;
+                            let hidden = services.len().saturating_sub(cap);
+                            let shown = if hidden > 0 { cap - 1 } else { services.len() };
+                            let cw = cell_w(inner, scols);
+                            for line in services[..shown].chunks(scols) {
+                                row(ui, 18.0, |ui| {
+                                    for sv in line {
+                                        svc_row(ui, cw, &sv.name, sv.crashed());
+                                    }
+                                });
+                            }
+                            if hidden > 0 {
+                                // Se sacrifica un hueco para decir cuántos
+                                // quedan: una lista recortada en silencio miente
+                                // sobre el estado del equipo.
+                                ui.label(
+                                    egui::RichText::new(format!("+{} más", hidden + 1))
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::FAINT),
+                                );
+                            }
+                        });
                     });
                 });
 
-                // ── núcleos: tarjetas C0…Cn, como la V2 ──────────────────────
+                // ── núcleos ──────────────────────────────────────────────────
                 if !s.per_core.is_empty() {
-                    section(ui, format!("NÚCLEOS {}", s.per_core.len()));
-                    let ccols = fit_cols(full, 106.0);
-                    let ccw = cell_w(full, ccols);
-                    for (r, chunk) in s.per_core.chunks(ccols).enumerate() {
-                        row(ui, CORE_H, |ui| {
-                            for (c, pct) in chunk.iter().enumerate() {
-                                Self::core_card(ui, ccw, r * ccols + c, *pct);
-                            }
-                        });
-                        ui.add_space(GAP);
-                    }
+                    let cores = &s.per_core;
+                    let host_cpu = s.cpu_pct;
+                    block(ui, ent[3], |ui| {
+                        section(ui, "Núcleos", Some(cores.len().to_string()));
+                        let ccols = fit_cols(full, 100.0);
+                        let ccw = cell_w(full, ccols);
+                        for (r, chunk) in cores.chunks(ccols).enumerate() {
+                            row(ui, CORE_H, |ui| {
+                                for (c, pct) in chunk.iter().enumerate() {
+                                    Self::core_card(ui, ccw, r * ccols + c, *pct, host_cpu);
+                                }
+                            });
+                            ui.add_space(GAP);
+                        }
+                    });
                 }
 
                 // ── discos ───────────────────────────────────────────────────
                 if !s.disks.is_empty() {
-                    section(
-                        ui,
-                        if s.disks.len() == 1 {
-                            "DISCOS · 1 VOLUMEN".to_string()
-                        } else {
-                            format!("DISCOS · {} VOLÚMENES", s.disks.len())
-                        },
-                    );
-                    // Tres columnas como máximo: una barra de uso estirada a lo
-                    // ancho de una pantalla de 27" no se lee mejor, se lee peor.
-                    let dcols = fit_cols(full, 420.0).min(3);
-                    let dcw = cell_w(full, dcols);
-                    for chunk in s.disks.chunks(dcols) {
-                        row(ui, DISK_H, |ui| {
-                            for d in chunk {
-                                let used = d.total.saturating_sub(d.avail);
-                                let frac = if d.total > 0 {
-                                    used as f32 / d.total as f32
-                                } else {
-                                    0.0
-                                };
-                                card(ui, egui::vec2(dcw, DISK_H), 12.0, |ui| {
-                                    row_align(ui, 18.0, egui::Align::Center, |ui| {
-                                        ui.label(
-                                            egui::RichText::new(&d.mount)
-                                                .monospace()
-                                                .size(12.0)
-                                                .color(theme::TXT),
-                                        );
-                                        right(ui, 18.0, |ui| {
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{:.0}%",
-                                                    frac * 100.0
-                                                ))
-                                                .size(12.0)
-                                                .color(theme::usage_color(frac * 100.0))
-                                                .strong(),
-                                            );
-                                        });
-                                    });
-                                    ui.add_space(6.0);
-                                    ui.add(
-                                        egui::ProgressBar::new(frac)
-                                            .desired_width(dcw - 24.0)
-                                            .desired_height(5.0)
-                                            .fill(theme::usage_color(frac * 100.0)),
-                                    );
-                                    ui.add_space(6.0);
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!(
-                                                "{} libres · {} / {}",
-                                                fmt_gb(d.avail),
-                                                fmt_gb(used),
-                                                fmt_gb(d.total)
-                                            ))
-                                            .size(10.5)
-                                            .monospace()
-                                            .color(theme::TXT3),
-                                        )
-                                        .truncate(),
-                                    );
-                                });
-                            }
-                        });
-                        ui.add_space(GAP);
-                    }
+                    let disks = &s.disks;
+                    block(ui, ent[4], |ui| {
+                        section(
+                            ui,
+                            "Discos",
+                            Some(if disks.len() == 1 {
+                                "1 volumen".to_string()
+                            } else {
+                                format!("{} volúmenes", disks.len())
+                            }),
+                        );
+                        // Tres columnas como máximo: una barra de uso estirada a
+                        // lo ancho de una pantalla de 27" no se lee mejor.
+                        let dcols = fit_cols(full, 420.0).min(3);
+                        let dcw = cell_w(full, dcols);
+                        for chunk in disks.chunks(dcols) {
+                            row(ui, DISK_H, |ui| {
+                                for d in chunk {
+                                    disk_card(ui, dcw, d);
+                                }
+                            });
+                            ui.add_space(GAP);
+                        }
+                    });
                 }
 
                 // ── top procesos ─────────────────────────────────────────────
-                section(ui, "TOP PROCESOS".to_string());
-                let w_cpu = 64.0;
-                let w_ram = 88.0;
-                let w_pid = 72.0;
-                let w_name = (full - 28.0 - w_cpu - w_ram - w_pid - GAP * 3.0).max(140.0);
-                let table_h = 28.0 + 18.0 + 6.0 + self.procs.len() as f32 * PROC_ROW;
-                card(ui, egui::vec2(full, table_h), 14.0, |ui| {
-                    row(ui, 18.0, |ui| {
+                let t_proc = ent[5];
+                let procs = &self.procs;
+                let mut cambiar: Option<bool> = None;
+                let by_cpu = self.proc_by_cpu;
+                block(ui, t_proc, |ui| {
+                    let w_cpu = 60.0;
+                    let w_ram = 76.0;
+                    let w_pid = 60.0;
+                    let w_name = (full - 28.0 - w_cpu - w_ram - w_pid - GAP * 3.0).max(140.0);
+                    let table_h = 28.0 + 20.0 + 8.0 + procs.len() as f32 * PROC_ROW;
+                    card_on(ui, egui::vec2(full, table_h), 14.0, theme::BG2, |ui| {
+                        row_align(ui, 20.0, egui::Align::Center, |ui| {
+                            ui.add(egui::Label::new(theme::instrument_label(
+                                "Top procesos",
+                                theme::FAINT,
+                            )));
+                            // El selector va en la cabecera de la tabla, que es
+                            // donde el operador ya está mirando cuando decide
+                            // por qué columna ordenar.
+                            right(ui, 22.0, |ui| {
+                                egui::Frame::none()
+                                    .fill(theme::BG3)
+                                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                                    .rounding(egui::Rounding::same(theme::R_SM))
+                                    .inner_margin(egui::Margin::same(2.0))
+                                    .show(ui, |ui| {
+                                        ui.spacing_mut().item_spacing.x = 2.0;
+                                        // Cambiar de criterio RECARGA la lista:
+                                        // reordenar la que ya está en pantalla
+                                        // mostraría el top-8 por RAM reordenado
+                                        // por CPU, que no es el top-8 por CPU.
+                                        if seg(ui, "CPU", by_cpu) {
+                                            cambiar = Some(true);
+                                        }
+                                        if seg(ui, "RAM", !by_cpu) {
+                                            cambiar = Some(false);
+                                        }
+                                    });
+                            });
+                        });
+                        ui.add_space(8.0);
                         let head = |t: &str| {
                             egui::RichText::new(t.to_string())
-                                .size(9.5)
-                                .color(theme::TXT3)
-                                .strong()
+                                .size(theme::FS_CAPTION)
+                                .color(theme::FAINT)
                         };
-                        cell(ui, w_name, 18.0, false, head("PROCESO"));
-                        cell(ui, w_cpu, 18.0, true, head("CPU"));
-                        cell(ui, w_ram, 18.0, true, head("RAM"));
-                        cell(ui, w_pid, 18.0, true, head("PID"));
-
-                        // El selector va en la cabecera de la tabla, que es
-                        // donde el operador ya está mirando cuando decide por
-                        // qué columna quiere ordenar.
-                        let mut pedir: Option<bool> = None;
-                        right(ui, 18.0, |ui| {
-                            // Cambiar de criterio RECARGA la lista: reordenar la
-                            // que ya está en pantalla mostraría el top-8 por RAM
-                            // reordenado por CPU, que no es el top-8 por CPU.
-                            if ui.selectable_label(!self.proc_by_cpu, "RAM").clicked() {
-                                pedir = Some(false);
-                            }
-                            if ui.selectable_label(self.proc_by_cpu, "CPU").clicked() {
-                                pedir = Some(true);
-                            }
+                        row(ui, 18.0, |ui| {
+                            cell(ui, w_name, 18.0, false, head("PROCESO"));
+                            cell(ui, w_cpu, 18.0, true, head("CPU"));
+                            cell(ui, w_ram, 18.0, true, head("RAM"));
+                            cell(ui, w_pid, 18.0, true, head("PID"));
                         });
-                        if let Some(by_cpu) = pedir {
-                            if by_cpu != self.proc_by_cpu {
-                                self.proc_by_cpu = by_cpu;
-                                self.procs = self.sys.top_processes(8, by_cpu);
-                            }
+                        for (i, p) in procs.iter().enumerate() {
+                            row(ui, PROC_ROW, |ui| {
+                                if i > 0 {
+                                    // Filete fino entre filas, como el CSS. Se
+                                    // puede pintar en el sitio exacto porque la
+                                    // fila tiene altura conocida.
+                                    let r = ui.max_rect();
+                                    ui.painter().hline(
+                                        r.left()..=r.right(),
+                                        r.top(),
+                                        egui::Stroke::new(1.0_f32, theme::BDR),
+                                    );
+                                }
+                                cell(
+                                    ui,
+                                    w_name,
+                                    PROC_ROW,
+                                    false,
+                                    egui::RichText::new(&p.name)
+                                        .size(theme::FS_FOOTNOTE)
+                                        .monospace()
+                                        .color(theme::TXT2),
+                                );
+                                // La columna por la que se ordena va en acento:
+                                // dice cuál manda sin repetirlo en un rótulo.
+                                cell(
+                                    ui,
+                                    w_cpu,
+                                    PROC_ROW,
+                                    true,
+                                    egui::RichText::new(format!("{:.0}%", p.cpu_pct))
+                                        .size(theme::FS_FOOTNOTE)
+                                        .monospace()
+                                        .color(if by_cpu { theme::ACC } else { theme::TXT3 }),
+                                );
+                                cell(
+                                    ui,
+                                    w_ram,
+                                    PROC_ROW,
+                                    true,
+                                    egui::RichText::new(fmt_gb(p.mem_bytes))
+                                        .size(theme::FS_FOOTNOTE)
+                                        .monospace()
+                                        .color(if by_cpu { theme::TXT3 } else { theme::ACC }),
+                                );
+                                cell(
+                                    ui,
+                                    w_pid,
+                                    PROC_ROW,
+                                    true,
+                                    egui::RichText::new(p.pid.to_string())
+                                        .size(theme::FS_CAPTION)
+                                        .monospace()
+                                        .color(theme::FAINT),
+                                );
+                            });
                         }
                     });
-                    ui.add_space(6.0);
-                    for (i, p) in self.procs.iter().enumerate() {
-                        row(ui, PROC_ROW, |ui| {
-                            if i % 2 == 1 {
-                                // El rayado se pinta sobre el rect EXACTO de la
-                                // fila, que es justo lo que da tener filas de
-                                // altura conocida.
-                                ui.painter().rect_filled(
-                                    ui.max_rect().expand2(egui::vec2(6.0, 0.0)),
-                                    3.0,
-                                    theme::BG3.linear_multiply(0.45),
-                                );
-                            }
-                            cell(
-                                ui,
-                                w_name,
-                                PROC_ROW,
-                                false,
-                                egui::RichText::new(&p.name)
-                                    .size(11.5)
-                                    .monospace()
-                                    .color(theme::TXT2),
-                            );
-                            cell(
-                                ui,
-                                w_cpu,
-                                PROC_ROW,
-                                true,
-                                egui::RichText::new(format!("{:.0}%", p.cpu_pct))
-                                    .size(11.5)
-                                    .color(theme::usage_color(p.cpu_pct)),
-                            );
-                            cell(
-                                ui,
-                                w_ram,
-                                PROC_ROW,
-                                true,
-                                egui::RichText::new(fmt_gb(p.mem_bytes))
-                                    .size(11.5)
-                                    .color(theme::ACC),
-                            );
-                            cell(
-                                ui,
-                                w_pid,
-                                PROC_ROW,
-                                true,
-                                egui::RichText::new(p.pid.to_string())
-                                    .size(11.5)
-                                    .monospace()
-                                    .color(theme::TXT3),
-                            );
-                        });
-                    }
                 });
+                if let Some(by_cpu) = cambiar {
+                    if by_cpu != self.proc_by_cpu {
+                        self.proc_by_cpu = by_cpu;
+                        self.procs = self.sys.top_processes(8, by_cpu);
+                    }
+                }
                 ui.add_space(GAP);
             });
     }
@@ -1618,7 +2024,12 @@ impl App {
                                         ui.label(
                                             egui::RichText::new(format!("{:.0}%", h.score * 100.0))
                                                 .small()
-                                                .color(theme::usage_color(h.score * 100.0)),
+                                                // Un parecido NO es un uso: en
+                                                // la paleta de uso, más es peor,
+                                                // y aquí más es mejor. Pintaba
+                                                // de rojo justo los aciertos
+                                                // buenos.
+                                                .color(theme::match_color(h.score)),
                                         );
                                         ui.label(
                                             egui::RichText::new(
@@ -1764,7 +2175,7 @@ mod layout {
         let r = measure(w, |ui| {
             row(ui, CORE_H, |ui| {
                 for i in 0..8 {
-                    App::core_card(ui, cw, i, 50.0);
+                    App::core_card(ui, cw, i, 50.0, 20.0);
                 }
             });
         });
@@ -1782,59 +2193,72 @@ mod layout {
 
     #[test]
     fn la_tarjeta_de_nucleo_cabe_en_su_caja() {
-        let r = measure(120.0, |ui| App::core_card(ui, 120.0, 31, 100.0));
+        let r = measure(120.0, |ui| App::core_card(ui, 120.0, 31, 100.0, 90.0));
         assert!(r.height() <= CORE_H + 0.5, "mide {}", r.height());
     }
 
     #[test]
-    fn las_kpi_caben_en_su_caja_con_el_texto_mas_largo() {
+    fn las_kpi_caben_en_su_caja_con_el_contenido_mas_alto() {
         let size = egui::vec2(300.0, KPI_H);
 
-        // Con barra y una línea de detalle: el caso de CPU, RAM y disco.
+        // Con línea de tendencia: el caso de CPU y RAM, y el más alto de todos
+        // — la sparkline ocupa 42 px que la tarjeta de disco no gasta.
+        let hist: Vec<f32> = (0..SPARK_SAMPLES).map(|i| i as f32 * 2.0 % 100.0).collect();
+        let cpu = measure(300.0, |ui| {
+            App::kpi_card(
+                ui,
+                size,
+                Kpi {
+                    icon: "▣",
+                    title: "CPU",
+                    value: 100.0,
+                    unit: "%",
+                    spark: &hist,
+                    sub: "32 núcleos".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(
+            cpu.height() <= KPI_H + 0.5,
+            "la KPI con tendencia mide {} y su caja son {KPI_H}",
+            cpu.height()
+        );
+
+        // Con barra y una línea de detalle: el caso del disco.
         let disco = measure(300.0, |ui| {
             App::kpi_card(
                 ui,
                 size,
                 Kpi {
                     icon: "▤",
-                    title: "DISCO SISTEMA",
-                    value: "100".into(),
+                    title: "Disco sistema",
+                    value: 100.0,
                     unit: "%",
-                    color: theme::ACC,
-                    sub: "662.6 GB libres de 931.5 GB".into(),
                     bar: Some(1.0),
+                    sub: "662.6 GB libres de 931.5 GB".into(),
                     ..Default::default()
                 },
             )
         });
-        assert!(
-            disco.height() <= KPI_H + 0.5,
-            "la KPI con barra mide {} y su caja son {KPI_H}",
-            disco.height()
-        );
+        assert!(disco.height() <= KPI_H + 0.5, "mide {}", disco.height());
 
-        // Sin barra y con DOS líneas de detalle: el caso de SISTEMA, que es el
-        // que más alto llega por abajo.
+        // Texto y DOS líneas de detalle: el caso de SISTEMA.
         let sistema = measure(300.0, |ui| {
             App::kpi_card(
                 ui,
                 size,
                 Kpi {
                     icon: "◱",
-                    title: "SISTEMA",
-                    value: "WORKSTATION-16".into(),
-                    value_size: 17.0,
+                    title: "Sistema",
+                    text: "WORKSTATION-16".into(),
                     sub: "Windows 11 Pro 26200".into(),
                     sub2: "Uptime 12d 7h".into(),
                     ..Default::default()
                 },
             )
         });
-        assert!(
-            sistema.height() <= KPI_H + 0.5,
-            "la KPI de dos líneas mide {} y su caja son {KPI_H}",
-            sistema.height()
-        );
+        assert!(sistema.height() <= KPI_H + 0.5, "mide {}", sistema.height());
     }
 
     #[test]
@@ -1846,9 +2270,8 @@ mod layout {
                 ui,
                 size,
                 Kpi {
-                    title: "SISTEMA",
-                    value: "SRV-CONTABILIDAD-MEXICO-NORTE-0042".into(),
-                    value_size: 17.0,
+                    title: "Sistema",
+                    text: "SRV-CONTABILIDAD-MEXICO-NORTE-0042".into(),
                     sub: "Microsoft Windows Server 2022 Datacenter Edition".into(),
                     ..Default::default()
                 },
