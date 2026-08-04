@@ -29,6 +29,61 @@ pub struct SysSnapshot {
     pub disks: Vec<DiskInfo>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_nonzero_exit_code_counts_as_crashed() {
+        // La distinción que hace legible el indicador: parado limpio se informa,
+        // fallado alarma. Confundirlos es lo que hacía que la máquina pasara a
+        // Atención en cada arranque.
+        assert!(!DownService { name: "sppsvc".into(), exit_code: 0 }.crashed());
+        assert!(DownService { name: "algo".into(), exit_code: 1 }.crashed());
+        assert!(DownService { name: "otro".into(), exit_code: 1067 }.crashed());
+    }
+
+    #[test]
+    fn a_first_reading_reports_no_traffic_rather_than_a_spike() {
+        // `total_received()` es acumulado desde el arranque del equipo. Sin
+        // lectura previa no hay tasa, y devolver el acumulado como si fuera
+        // velocidad pintaría cientos de megabytes por segundo en el primer
+        // frame.
+        let mut m = SysMonitor::new();
+        let first = m.net_rate();
+        assert_eq!(first.rx_bps, 0, "la primera lectura no puede inventar caudal");
+        assert_eq!(first.tx_bps, 0);
+    }
+
+    #[test]
+    fn a_second_reading_produces_a_rate_without_overflowing() {
+        // No se afirma un valor —depende del tráfico real— sino que la resta se
+        // comporta: nada de números gigantes por envolvimiento.
+        let mut m = SysMonitor::new();
+        let _ = m.net_rate();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let r = m.net_rate();
+        // 100 Gbps es imposible en una prueba: ese valor solo aparece si un
+        // contador se reinició y la resta envolvió.
+        assert!(r.rx_bps < 12_500_000_000, "caudal absurdo: {}", r.rx_bps);
+        assert!(r.tx_bps < 12_500_000_000, "caudal absurdo: {}", r.tx_bps);
+    }
+
+    #[test]
+    fn top_processes_respects_the_limit_and_sorts_by_the_asked_key() {
+        let mut m = SysMonitor::new();
+        let by_mem = m.top_processes(5, false);
+        assert!(by_mem.len() <= 5);
+        for w in by_mem.windows(2) {
+            assert!(w[0].mem_bytes >= w[1].mem_bytes, "no está ordenado por RAM");
+        }
+        let by_cpu = m.top_processes(5, true);
+        for w in by_cpu.windows(2) {
+            assert!(w[0].cpu_pct >= w[1].cpu_pct, "no está ordenado por CPU");
+        }
+    }
+}
+
 /// Nombre del host, sin necesitar un `SysMonitor` vivo.
 ///
 /// La barra de estado lo pinta en cada frame y no quiere arrastrar un refresco
@@ -51,6 +106,77 @@ pub fn hostname() -> String {
 pub struct NetRate {
     pub rx_bps: u64,
     pub tx_bps: u64,
+}
+
+/// Un servicio automático que no está corriendo.
+#[derive(Debug, Clone)]
+pub struct DownService {
+    pub name: String,
+    /// Código de salida. `0` = parado limpiamente; distinto de `0` = FALLÓ.
+    pub exit_code: i64,
+}
+
+impl DownService {
+    /// Solo esto merece teñir el indicador del equipo.
+    ///
+    /// Un servicio parado y limpio es información real y va en su panel, pero no
+    /// es una alarma. La distinción es la diferencia entre un indicador que se
+    /// lee y uno que se ignora.
+    pub fn crashed(&self) -> bool {
+        self.exit_code != 0
+    }
+}
+
+/// Servicios automáticos detenidos, vía CIM.
+///
+/// **CIM y no `Get-Service`, y esto costó un bug.** El `StartType` de
+/// `Get-Service` reporta "Automatic (Delayed Start)" como `Automatic` a secas —
+/// la marca de retardo sencillamente no está en ese objeto—, así que no puede
+/// distinguir un servicio que FALLÓ al arrancar de uno que Windows arranca tarde
+/// a propósito. En una máquina recién encendida eso reportaba asus, edgeupdate,
+/// MapsBroker y sppsvc como caídos mientras se comportaban exactamente como
+/// están diseñados, y como cualquier lista no vacía levanta un aviso, el equipo
+/// pasaba de Saludable a Atención un minuto después de cada arranque. Un
+/// indicador que da la voz de alarma en cada encendido enseña al operador a
+/// dejar de leerlo.
+///
+/// `ExitCode -ne 0` conserva la mitad útil: un servicio de arranque retardado
+/// que se estrelló de verdad sigue apareciendo. Solo se filtra el caso "tarde o
+/// inactivo, salió limpio".
+///
+/// SIN RESOLVER: los servicios de arranque por disparador (AppXSvc) se apagan
+/// solos y reaparecen. Ni WMI ni CIM exponen los disparadores, y `sc.exe
+/// qtriggerinfo` no ayuda — su código de salida es 0 en cualquier caso y su
+/// salida está LOCALIZADA, que es la misma trampa que hizo ilegible el registro
+/// de seguridad en un Windows en español.
+#[cfg(windows)]
+pub fn down_services(limit: usize) -> Result<Vec<DownService>, String> {
+    let script = format!(
+        "Get-CimInstance Win32_Service -Filter \"StartMode='Auto' AND State='Stopped'\" | \
+         Where-Object {{ -not $_.DelayedAutoStart -or $_.ExitCode -ne 0 }} | \
+         Select-Object -First {limit} | ForEach-Object {{ \"$($_.Name)|$($_.ExitCode)\" }}"
+    );
+    let (stdout, _stderr, _ok) = crate::shell::run_powershell_utf8(&script)?;
+    Ok(stdout
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if l.is_empty() {
+                return None;
+            }
+            // `nombre|código`. Una línea sin `|` (un host más antiguo, una forma
+            // inesperada) se toma como parada-limpia en vez de descartarse: el
+            // servicio existe y merece verse, solo que sin la certeza de que
+            // falló.
+            match l.split_once('|') {
+                Some((name, code)) => Some(DownService {
+                    name: name.trim().to_string(),
+                    exit_code: code.trim().parse().unwrap_or(0),
+                }),
+                None => Some(DownService { name: l.to_string(), exit_code: 0 }),
+            }
+        })
+        .collect())
 }
 
 /// Un proceso, para la tabla de los que más consumen.
