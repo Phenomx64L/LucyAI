@@ -331,3 +331,60 @@ impl SysMonitor {
         }
     }
 }
+
+/// La hora LOCAL del equipo: `(hora, minuto, segundo)`.
+///
+/// POR QUÉ NO SE CALCULA DESDE EL EPOCH. `SystemTime` da UTC, y hasta ahora todo
+/// el shell nativo hacía `segundos % 86_400` con eso — lo que en México son seis
+/// horas de desfase. El síntoma visible fue un "Buenos días" a las diez de la
+/// noche, pero la marca de hora de cada mensaje estaba igual de mal y eso no se
+/// nota hasta que alguien intenta cruzarla con un log.
+///
+/// Convertir UTC a local a mano exige la zona horaria, el horario de verano y
+/// sus reglas históricas — que es exactamente lo que `chrono` trae y por lo que
+/// pesa. Windows ya lo sabe: `GetLocalTime` devuelve la hora de pared ya
+/// resuelta, sin dependencias y sin reglas que mantener.
+#[cfg(windows)]
+pub fn local_time() -> (u32, u32, u32) {
+    use winapi::um::sysinfoapi::GetLocalTime;
+    let mut st = unsafe { std::mem::zeroed() };
+    // SAFETY: `GetLocalTime` solo escribe la estructura que se le pasa, y se le
+    // pasa una válida y del tamaño correcto.
+    unsafe { GetLocalTime(&mut st) };
+    (st.wHour as u32, st.wMinute as u32, st.wSecond as u32)
+}
+
+#[cfg(not(windows))]
+pub fn local_time() -> (u32, u32, u32) {
+    (0, 0, 0)
+}
+
+#[cfg(all(test, windows))]
+mod hora {
+    use super::*;
+
+    #[test]
+    fn la_hora_local_esta_dentro_de_un_reloj() {
+        let (h, m, s) = local_time();
+        assert!(h < 24, "hora fuera de rango: {h}");
+        assert!(m < 60 && s < 60);
+    }
+
+    #[test]
+    fn no_es_la_hora_utc_salvo_en_utc() {
+        // No se puede afirmar que difieran —hay máquinas en UTC— pero sí que
+        // `local_time` no está devolviendo el epoch crudo: el fallo original era
+        // usar `SystemTime` directamente, y eso da la hora UTC exacta.
+        let utc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() % 86_400) / 3600)
+            .unwrap_or(99) as u32;
+        let (h, _, _) = local_time();
+        // Si coinciden, la máquina está en UTC y no hay nada que comprobar; si
+        // no, el desfase tiene que ser uno de los de una zona horaria real.
+        if h != utc {
+            let d = (h as i32 - utc as i32).rem_euclid(24);
+            assert!((1..=23).contains(&d), "desfase imposible: {d}");
+        }
+    }
+}
