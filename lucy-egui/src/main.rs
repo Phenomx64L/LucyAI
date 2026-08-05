@@ -1577,7 +1577,7 @@ impl App {
         // Los turnos que se cierran en esta pasada, con lo que llegó a escribir
         // cada uno. Se anotan y se procesan DESPUÉS del bucle: dentro, `self`
         // está prestado por las pestañas y el workspace no se puede tocar.
-        let mut cerrados: Vec<usize> = Vec::new();
+        let mut cerrados: Vec<String> = Vec::new();
         for t in &mut self.tabs {
             if t.rx.is_none() {
                 continue;
@@ -1607,11 +1607,13 @@ impl App {
             }
             if done {
                 t.rx = None;
-                cerrados.push(t.log.last().map_or(0, |m| m.text.chars().count()));
+                let reply = t.log.last().map(|m| m.text.clone()).unwrap_or_default();
+                cerrados.push(reply);
             }
         }
-        for chars in cerrados {
-            self.turn_finished(chars);
+        for reply in cerrados {
+            self.absorb_tags(&reply);
+            self.turn_finished(reply.chars().count());
         }
     }
 }
@@ -2335,14 +2337,37 @@ impl App {
                             );
                         });
                         ui.add_space(5.0);
-                        if text.is_empty() && pulse {
+                        // El marcado de acción NO llega al hilo: sin esto, el
+                        // operador ve `<TOOL>readfile:…</TOOL>` crudo en mitad
+                        // de la respuesta mientras Lucy trabaja.
+                        let shown = lucy_core::tags::clean_display(&text);
+                        if shown.text.is_empty() && pulse {
                             ui.label(
                                 egui::RichText::new("Pensando…")
                                     .size(theme::FS_FOOTNOTE)
                                     .color(theme::FAINT),
                             );
                         } else {
-                            CommonMarkViewer::new().show(ui, &mut self.md_cache, &text);
+                            CommonMarkViewer::new().show(ui, &mut self.md_cache, &shown.text);
+                        }
+                        // El razonamiento se GUARDA y se enseña plegado, nunca
+                        // se borra: es la única explicación de por qué Lucy hizo
+                        // lo que hizo. La V2 usa un `<details>` de HTML; aquí,
+                        // el desplegable nativo.
+                        for (k, th) in shown.thoughts.iter().enumerate() {
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new("Razonando…")
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::FAINT),
+                            )
+                            .id_salt(("thought", i, k))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(th)
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::TXT3),
+                                );
+                            });
                         }
                         if pulse && !text.is_empty() {
                             ui.label(egui::RichText::new("▋").color(theme::ACC));
@@ -2719,6 +2744,69 @@ impl App {
             ),
             ..Default::default()
         });
+    }
+
+    /// Vuelca lo que Lucy PIDIÓ en los carriles del workspace.
+    ///
+    /// Cada etiqueta va al carril que le corresponde: el razonamiento y las
+    /// herramientas al Trace, las ejecuciones al Plan como pasos PENDIENTES, y
+    /// los ficheros a Artefactos. Es la primera vez que esos tres paneles se
+    /// llenan con algo real.
+    ///
+    /// PENDIENTES, no hechos, y ahí está todo: este shell detecta lo que Lucy
+    /// quiere hacer y no lo hace. Marcarlos de otra forma diría que la máquina
+    /// se tocó, que es la peor mentira que puede contar un panel de auditoría.
+    fn absorb_tags(&mut self, reply: &str) {
+        use lucy_core::agent::{PlanStep, StepStatus, TraceEntry};
+        use lucy_core::tags::{self, TagKind};
+
+        for t in tags::extract_tags(reply) {
+            match t.kind {
+                TagKind::Thought => self.ws.trace_push(TraceEntry {
+                    phase: "think".into(),
+                    label: "Razonamiento".into(),
+                    detail: t.content,
+                    ..Default::default()
+                }),
+                TagKind::Tool => {
+                    let (name, args) = tags::parse_tool(&t.content);
+                    self.ws.trace_push(TraceEntry {
+                        phase: "act".into(),
+                        label: name.clone(),
+                        detail: args.clone(),
+                        ..Default::default()
+                    });
+                    // `writefile` y `editfile` tocan ficheros: eso es un
+                    // artefacto, aunque todavía no se haya escrito ninguno.
+                    if matches!(name.as_str(), "writefile" | "editfile") {
+                        self.ws.artifact_push(lucy_core::agent::Artifact {
+                            id: String::new(),
+                            kind: if name == "editfile" {
+                                lucy_core::agent::ArtifactKind::Edit
+                            } else {
+                                lucy_core::agent::ArtifactKind::Write
+                            },
+                            path: args.split("|||").next().unwrap_or(&args).to_string(),
+                            summary: "propuesto — sin escribir".into(),
+                            before: String::new(),
+                            after: String::new(),
+                            ts: 0,
+                        });
+                    }
+                }
+                k if k.is_execute() => {
+                    let host = t.attrs.get("target").cloned().unwrap_or_default();
+                    self.ws.plan_append(PlanStep {
+                        label: format!("Ejecutar ({})", k.name()),
+                        status: StepStatus::Pending,
+                        detail: t.content,
+                        host,
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Cierra el turno en el workspace cuando el stream termina.
