@@ -254,6 +254,109 @@ pub fn extract_tags(text: &str) -> Vec<Tag> {
     tags
 }
 
+/// Lo que se enseña de una respuesta, y lo que se saca aparte.
+#[derive(Debug, Default, PartialEq)]
+pub struct Cleaned {
+    /// El texto sin ninguna etiqueta de acción, listo para el hilo.
+    pub text: String,
+    /// El razonamiento de los `<THOUGHT>`, en orden.
+    pub thoughts: Vec<String>,
+}
+
+/// Todas las etiquetas que hay que quitar de lo que ve el operador.
+const HIDDEN: [&str; 12] = [
+    "execute_remote", // ANTES que `execute`: ver la nota de abajo.
+    "execute_cmd",
+    "execute_wmic",
+    "execute_netsh",
+    "execute_reg",
+    "execute_cscript",
+    "execute",
+    "tool",
+    "learn",
+    "remember",
+    "filecontent",
+    "thought",
+];
+
+/// Deja la respuesta como se enseña en el hilo.
+///
+/// Port de `cleanStreamDisplay`. Sin esto, el operador ve el marcado crudo
+/// —`<TOOL>readfile:…</TOOL>`— en mitad de la respuesta mientras Lucy trabaja,
+/// que es exactamente lo que las etiquetas están para evitar.
+///
+/// TOLERA ETIQUETAS SIN CERRAR, y aquí sí es lo correcto: esto corre MIENTRAS
+/// llega el stream, así que a mitad de una etiqueta el cierre todavía no ha
+/// llegado. Sin esa tolerancia, el marcado a medio escribir aparece en pantalla
+/// y desaparece al cerrarse — un parpadeo en cada herramienta que Lucy usa.
+/// Nótese que `extract_tags` hace lo contrario a propósito: allí una etiqueta
+/// sin cerrar no es una acción, es un trozo de texto.
+///
+/// El `<THOUGHT>` no se tira: se devuelve aparte. El original lo convierte en un
+/// `<details>` de HTML, que un frontend nativo no puede renderizar — pero la
+/// decisión de fondo es la misma y es la que importa: el razonamiento se
+/// GUARDA y se enseña plegado, no se borra.
+pub fn clean_display(text: &str) -> Cleaned {
+    let low = text.to_ascii_lowercase();
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    let mut thoughts: Vec<(usize, String)> = Vec::new();
+
+    for name in HIDDEN {
+        let open = format!("<{name}");
+        let close = format!("</{name}>");
+        let mut i = 0;
+        while let Some(rel) = low[i..].find(&open) {
+            let start = i + rel;
+            let after = start + open.len();
+            let next = low.as_bytes().get(after).copied();
+            if !matches!(next, Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')) {
+                i = start + 1;
+                continue;
+            }
+            // Ya cubierto por otra etiqueta: `execute_remote` va primero en la
+            // lista justo para esto. Sin la comprobación, `execute` volvería a
+            // encontrar el `<execute_remote…` que ya se recortó y cortaría
+            // desde ahí hasta el final del texto — el fallo que el comentario
+            // del original avisa de no reintroducir.
+            if cuts.iter().any(|(a, b)| start >= *a && start < *b) {
+                i = start + 1;
+                continue;
+            }
+            let body_start = low[after..].find('>').map_or(after, |g| after + g + 1);
+            let (end, inner_end) = match low[body_start..].find(&close) {
+                Some(c) => (body_start + c + close.len(), body_start + c),
+                // Sin cierre: se recorta hasta el final. Es el caso de estar a
+                // mitad del stream.
+                None => (text.len(), text.len()),
+            };
+            if name == "thought" {
+                thoughts.push((start, text[body_start..inner_end].trim().to_string()));
+            }
+            cuts.push((start, end));
+            i = end;
+        }
+    }
+
+    cuts.sort_unstable();
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    for (a, b) in cuts {
+        if a > pos {
+            out.push_str(&text[pos..a]);
+        }
+        pos = pos.max(b);
+    }
+    if pos < text.len() {
+        out.push_str(&text[pos..]);
+    }
+
+    thoughts.sort_by_key(|(p, _)| *p);
+    Cleaned {
+        text: out.trim().to_string(),
+        thoughts: thoughts.into_iter().map(|(_, t)| t).filter(|t| !t.is_empty()).collect(),
+    }
+}
+
 /// Parte el contenido de un `<TOOL>` en nombre y argumentos.
 ///
 /// Se corta por el PRIMER `:` y nada más. Los argumentos pueden llevar más —una
@@ -414,5 +517,58 @@ mod tests {
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0].content, "sysinfo");
         assert_eq!(tags[1].content, "netconn");
+    }
+}
+
+#[cfg(test)]
+mod display {
+    use super::*;
+
+    #[test]
+    fn el_marcado_no_llega_al_hilo() {
+        let r = clean_display(
+            "Voy a mirarlo.\n<TOOL>readfile:C:/log.txt</TOOL>\nYa está.",
+        );
+        assert_eq!(r.text, "Voy a mirarlo.\n\nYa está.");
+        assert!(!r.text.contains("<TOOL>"));
+    }
+
+    #[test]
+    fn una_etiqueta_a_medias_no_parpadea_en_pantalla() {
+        // El caso de estar A MITAD del stream: el cierre aún no ha llegado. Sin
+        // tolerarlo, el marcado a medio escribir sale en pantalla y desaparece
+        // al cerrarse — un parpadeo por cada herramienta que Lucy usa.
+        let r = clean_display("Reviso el disco.\n<EXECUTE>Get-PSDri");
+        assert_eq!(r.text, "Reviso el disco.");
+        // Y esto es LO CONTRARIO de lo que hace `extract_tags`, a propósito:
+        // allí una etiqueta sin cerrar todavía no es una acción.
+        assert!(extract_tags("<EXECUTE>Get-PSDri").is_empty());
+    }
+
+    #[test]
+    fn execute_remote_no_se_come_el_resto_del_texto() {
+        // El fallo del que avisa el comentario del original: si `execute`
+        // encontrara el `<execute_remote target=…` y cortara desde ahí sin
+        // cierre propio, se llevaría por delante todo lo que viene después.
+        let r = clean_display(
+            "Antes.\n<EXECUTE_REMOTE target=\"SRV\">Get-Service</EXECUTE_REMOTE>\nDespués.",
+        );
+        assert_eq!(r.text, "Antes.\n\nDespués.");
+    }
+
+    #[test]
+    fn el_razonamiento_se_guarda_en_vez_de_borrarse() {
+        // La decisión del original: `<THOUGHT>` NO se tira, se enseña plegado.
+        // Borrarlo pierde la única explicación de por qué Lucy hizo lo que hizo.
+        let r = clean_display("<THOUGHT>Primero el disco, luego los servicios.</THOUGHT>Listo.");
+        assert_eq!(r.text, "Listo.");
+        assert_eq!(r.thoughts, vec!["Primero el disco, luego los servicios."]);
+    }
+
+    #[test]
+    fn un_texto_normal_sale_intacto() {
+        let t = "El disco C: está al 29 % y no hay servicios caídos.";
+        assert_eq!(clean_display(t).text, t);
+        assert!(clean_display(t).thoughts.is_empty());
     }
 }
