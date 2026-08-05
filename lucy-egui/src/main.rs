@@ -12,6 +12,7 @@
 //!   set WGPU_BACKEND=gl && cargo run -p lucy-egui --release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod avatar;
 mod hosts;
 mod icons;
 mod theme;
@@ -334,6 +335,45 @@ fn greeting(name: &str) -> String {
         format!("{word}, {first}")
     }
 }
+
+/// La paleta de comandos: los mismos 29 que la V2, con su descripción.
+///
+/// Está entera aunque el shell nativo todavía no ejecute casi ninguno, y es
+/// deliberado: la paleta es una herramienta de DESCUBRIMIENTO —así se entera el
+/// operador de que `/crystallize` existe— y una lista recortada a lo ya migrado
+/// enseñaría una versión de Lucy más pequeña de la que hay. Los que aún no
+/// funcionan lo dicen al elegirlos, en vez de no aparecer.
+const SLASH: [(&str, &str, bool); 29] = [
+    ("/model", "Cambiar el modelo activo", true),
+    ("/clear", "Limpiar el chat actual", true),
+    ("/memory", "Explorador de memoria (V1)", true),
+    ("/kg", "Grafo de conocimiento (V1)", false),
+    ("/link", "Relaciones tipadas entre memorias", false),
+    ("/recall", "Recuperar memorias por consulta", true),
+    ("/crystals", "Ver crystals de memoria", false),
+    ("/crystallize", "Destilar la sesión en un crystal", false),
+    ("/insights", "Insights consolidados", false),
+    ("/consolidate", "Ejecutar consolidación ahora", false),
+    ("/playbooks", "Playbooks multi-fase curados", false),
+    ("/skills", "Picker de skills ejecutables", false),
+    ("/preset", "Presets de framing (AD, Hyper-V, SQL…)", false),
+    ("/sec-skill", "Catálogo security/forensics (200+)", false),
+    ("/skills-manager", "Gestionar skills cargadas", false),
+    ("/capabilities", "Auto-introspección: skills, MCPs, frameworks", false),
+    ("/route", "Ver la última decisión de routing", false),
+    ("/serial", "Bypass del fork advisor (esta pestaña)", false),
+    ("/smart-router", "Smart-router on/off", false),
+    ("/proactive", "Listar insights proactivos", false),
+    ("/snapshot", "Capturar snapshot del sistema", false),
+    ("/diff", "Comparar dos snapshots", false),
+    ("/detective", "Síntesis forense de incidente", false),
+    ("/runbooks", "Lista de runbooks (V1)", false),
+    ("/pantalla", "Lucy ve tu pantalla (captura + pregunta)", false),
+    ("/polarity", "Proyección de polaridad de un texto", false),
+    ("/privacy", "Modo privacidad (sólo LLM local)", false),
+    ("/theme", "Cambiar el tema visual", false),
+    ("/help", "Referencia completa de comandos", true),
+];
 
 /// Las cuatro sugerencias del empty-state: `(icono, etiqueta, la orden real)`.
 ///
@@ -1365,6 +1405,9 @@ struct App {
     chat_model: String,
     /// Texto del buscador del desplegable de modelos.
     model_query: String,
+    /// El retrato de Lucy. Se sube una vez, en el primer frame que lo necesita:
+    /// subir una textura exige el contexto, y `new` todavía no lo tiene.
+    face: Option<egui::TextureHandle>,
     /// El workspace del agente — los cuatro carriles del panel derecho.
     ws: lucy_core::agent::Workspace,
     ws_tab: WsTab,
@@ -1465,6 +1508,7 @@ impl App {
             tabs_opened: 1,
             chat_model,
             model_query: String::new(),
+            face: None,
             ws: lucy_core::agent::Workspace::default(),
             ws_tab: WsTab::Plan,
             turn_start: None,
@@ -2107,8 +2151,21 @@ impl App {
     fn empty_state(&mut self, ui: &mut egui::Ui) {
         let mut enviar: Option<String> = None;
         ui.add_space(60.0);
+        // La textura se sube la primera vez que hace falta: `new` no tiene
+        // contexto todavía, y cargarla al arrancar retrasaría la ventana por
+        // una imagen que quizá nadie mire si abre en el Dashboard.
+        if self.face.is_none() {
+            self.face = avatar::load(ui.ctx());
+        }
+        let face = self.face.clone();
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("✦").size(40.0).color(theme::ACC));
+            match &face {
+                Some(t) => avatar::show(ui, t, 84.0),
+                // Sin retrato la vista sigue en pie: el glifo de siempre.
+                None => {
+                    ui.label(egui::RichText::new("✦").size(40.0).color(theme::ACC));
+                }
+            }
             ui.add_space(14.0);
             ui.label(
                 egui::RichText::new(greeting(&user_name()))
@@ -2352,6 +2409,11 @@ impl App {
                 });
             });
 
+        // La paleta se dibuja DESPUÉS del compositor y encima: tiene que quedar
+        // por delante del hilo, y en modo inmediato lo último que se pinta es lo
+        // que está arriba.
+        self.slash_palette(ui);
+
         if let Some(i) = quitar {
             self.tabs[self.tab].attachments.remove(i);
         }
@@ -2370,6 +2432,108 @@ impl App {
             if !text.trim().is_empty() || !self.tabs[self.tab].attachments.is_empty() {
                 self.send(text);
             }
+        }
+    }
+
+    /// La paleta de comandos: aparece al escribir `/` y filtra según se teclea.
+    ///
+    /// Va ANCLADA sobre el compositor y no en un desplegable del sistema porque
+    /// tiene que moverse con él: el compositor está pegado abajo, y una lista
+    /// que apareciera en otro sitio obligaría a mirar a dos lados a la vez.
+    fn slash_palette(&mut self, ui: &mut egui::Ui) {
+        let draft = self.tabs[self.tab].input.clone();
+        if !draft.starts_with('/') {
+            return;
+        }
+        let q = draft.to_lowercase();
+        let hits: Vec<&(&str, &str, bool)> = SLASH
+            .iter()
+            .filter(|(c, d, _)| c.starts_with(&q) || d.to_lowercase().contains(q.trim_start_matches('/')))
+            .collect();
+        if hits.is_empty() {
+            return;
+        }
+
+        let composer = ui.min_rect();
+        let w = composer.width().min(620.0);
+        let row_h = 26.0;
+        let shown = hits.len().min(9);
+        let h = shown as f32 * row_h + 16.0;
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(composer.left(), composer.top() - h - 8.0),
+            egui::vec2(w, h),
+        );
+
+        let mut elegido: Option<&str> = None;
+        // Capa propia: si se dibujara en el flujo, el hilo de la conversación
+        // —que se pinta antes— se quedaría por encima.
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("slash"),
+        ));
+        painter.rect(
+            rect,
+            egui::Rounding::same(theme::R_LG),
+            theme::BG3,
+            egui::Stroke::new(1.0_f32, theme::BDR2),
+        );
+
+        let mut y = rect.top() + 8.0;
+        for (cmd, desc, ready) in hits.iter().take(shown) {
+            let r = egui::Rect::from_min_size(
+                egui::pos2(rect.left() + 6.0, y),
+                egui::vec2(w - 12.0, row_h),
+            );
+            let hover = ui.rect_contains_pointer(r);
+            if hover {
+                painter.rect_filled(r, egui::Rounding::same(theme::R_SM), theme::BG4);
+                if ui.input(|i| i.pointer.primary_clicked()) {
+                    elegido = Some(cmd);
+                }
+            }
+            painter.text(
+                egui::pos2(r.left() + 10.0, r.center().y),
+                egui::Align2::LEFT_CENTER,
+                cmd,
+                egui::FontId::monospace(theme::FS_FOOTNOTE),
+                theme::ACC,
+            );
+            painter.text(
+                egui::pos2(r.left() + 130.0, r.center().y),
+                egui::Align2::LEFT_CENTER,
+                desc,
+                egui::FontId::proportional(theme::FS_CAPTION),
+                if *ready { theme::TXT2 } else { theme::FAINT },
+            );
+            // Los que todavía no hacen nada se marcan aquí, no al pulsarlos:
+            // enterarse después de elegir es perder el movimiento.
+            if !*ready {
+                painter.text(
+                    egui::pos2(r.right() - 10.0, r.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    "sin migrar",
+                    egui::FontId::proportional(theme::FS_MICRO),
+                    theme::FAINT,
+                );
+            }
+            y += row_h;
+        }
+        if hits.len() > shown {
+            painter.text(
+                egui::pos2(rect.center().x, rect.bottom() - 4.0),
+                egui::Align2::CENTER_CENTER,
+                format!("+{} más", hits.len() - shown),
+                egui::FontId::proportional(theme::FS_MICRO),
+                theme::FAINT,
+            );
+        }
+
+        // Tab completa con el primero, como en cualquier terminal.
+        if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+            elegido = Some(hits[0].0);
+        }
+        if let Some(c) = elegido {
+            self.tabs[self.tab].input = format!("{c} ");
         }
     }
 
@@ -4248,5 +4412,33 @@ mod hilo {
         assert!(g.ends_with(", Iván"), "salió: {g}");
         // Y sin nombre, saluda igual en vez de dejar una coma colgando.
         assert!(!greeting("").contains(','));
+    }
+}
+
+#[cfg(test)]
+mod paleta {
+    use super::*;
+
+    #[test]
+    fn el_catalogo_de_comandos_es_el_de_la_v2() {
+        // 29, los mismos que `SLASH` en CockpitShell. Recortarlo a lo ya
+        // migrado enseñaría una Lucy más pequeña de la que hay: la paleta es
+        // una herramienta de descubrimiento antes que un menú.
+        assert_eq!(SLASH.len(), 29);
+        for (cmd, desc, _) in SLASH {
+            assert!(cmd.starts_with('/'), "{cmd} no empieza por barra");
+            assert!(!desc.is_empty(), "{cmd} sin descripción no se descubre");
+        }
+    }
+
+    #[test]
+    fn no_hay_comandos_repetidos() {
+        // Dos filas iguales en la paleta son dos formas de elegir lo mismo, y
+        // la segunda nunca se puede pulsar.
+        let mut v: Vec<&str> = SLASH.iter().map(|(c, _, _)| *c).collect();
+        v.sort_unstable();
+        let n = v.len();
+        v.dedup();
+        assert_eq!(v.len(), n, "hay un comando duplicado");
     }
 }

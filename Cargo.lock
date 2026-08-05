@@ -2964,6 +2964,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_commonmark",
+ "image",
  "keyring",
  "lucy-core",
  "proto-core",
