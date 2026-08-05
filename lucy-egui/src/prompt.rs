@@ -34,6 +34,50 @@ use std::fmt::Write;
 /// líneas idénticas repetidas mil veces.
 const LOG_LINES: usize = 20;
 
+/// Cuántas memorias se recuerdan por turno.
+///
+/// Cinco. Con más, el prompt se llena de cosas tangencialmente parecidas y el
+/// modelo empieza a construir sobre lo que se le recordó en vez de sobre lo que
+/// se le preguntó — el fallo típico de la recuperación semántica generosa.
+const RECALL_LIMIT: usize = 5;
+
+/// Parecido mínimo para que una memoria entre.
+///
+/// Más alto que el 0.25 del buscador de la vista de Memoria, y a propósito: allí
+/// el operador está buscando y juzga él; aquí se le mete al modelo sin que nadie
+/// lo mire, y una memoria irrelevante inyectada en silencio es peor que ninguna.
+const RECALL_MIN: f32 = 0.4;
+
+/// Recuerda memorias parecidas a la orden y las pega al prompt.
+///
+/// Es lo que hace que Lucy sea la misma entre sesiones: sin esto, cada arranque
+/// empieza sin saber nada de lo que ya se resolvió en esta máquina.
+///
+/// FALLA EN SILENCIO A PROPÓSITO. La búsqueda necesita el embebedor local, y si
+/// Ollama no está corriendo no hay recuerdo posible — pero tampoco hay nada roto
+/// que anunciar: la orden se manda igual, solo que sin memoria. Convertir eso en
+/// un error visible castigaría al operador por una función que ni pidió.
+pub fn with_memories(base: &str, query: &str) -> String {
+    let Ok((hits, _)) = lucy_core::vectors::search(query, "memory", RECALL_LIMIT, RECALL_MIN)
+    else {
+        return base.to_string();
+    };
+    if hits.is_empty() {
+        return base.to_string();
+    }
+    let mut p = String::from(base);
+    p.push_str("\n--- MEMORIAS RECORDADAS (parecidas a esta orden) ---\n");
+    for h in &hits {
+        let _ = writeln!(p, "- {}", h.text.replace('\n', " "));
+    }
+    p.push_str(
+        "--- FIN MEMORIAS ---\n\
+         Úsalas como base cuando vengan al caso. NO son parte de la orden actual: si \
+         no encajan, ignóralas sin mencionarlas.\n",
+    );
+    p
+}
+
 /// Construye el prompt de sistema con el estado real del equipo.
 pub fn system_prompt(
     s: &lucy_core::system::SysSnapshot,

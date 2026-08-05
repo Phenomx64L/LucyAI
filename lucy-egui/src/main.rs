@@ -2693,49 +2693,44 @@ impl App {
                     // conversación.
                     let lineas = self.tabs[self.tab].input.lines().count().clamp(1, 8);
 
-                    // ── Enter y Shift+Enter, ANTES de dibujar el campo ────────
+                    // ── Enter envía, Shift+Enter salta ───────────────────────
                     //
-                    // El orden es todo, y la versión anterior lo tenía al revés:
-                    // miraba la tecla DESPUÉS de `ui.add`, cuando el `TextEdit`
-                    // ya la había procesado. Resultado: Enter metía un salto y
-                    // no enviaba nunca, y Shift+Enter no hacía nada — porque el
-                    // campo de egui inserta el salto con Enter a secas y con el
-                    // modificador puesto ni siquiera casa su patrón.
+                    // `TextEdit` tiene una tecla de salto CONFIGURABLE, y por
+                    // defecto es Enter a secas. Ese era el fallo entero: con esa
+                    // configuración, Shift+Enter no casa con nada y el campo lo
+                    // ignora — no es que llegara tarde mi intercepción, es que
+                    // la combinación nunca significó nada para el widget.
                     //
-                    // Interceptando antes, las dos teclas se deciden aquí y el
-                    // campo no llega a verlas. El salto se inserta a mano, que
-                    // además quita la dependencia de cómo egui interprete la
-                    // combinación.
+                    // Decírselo es la solución correcta, y no insertar el salto
+                    // a mano como intenté antes: hecho a mano se añade al FINAL
+                    // de la cadena, no donde está el cursor, así que editar una
+                    // orden por el medio metía la línea en el sitio equivocado.
+                    // El campo sabe dónde está el cursor; yo no.
                     let id = ui.make_persistent_id(("composer", self.tab));
-                    let enfocado = ui.memory(|m| m.has_focus(id));
-                    let (enter, shift_enter) = if enfocado {
-                        ui.input_mut(|i| {
-                            (
-                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-                                i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter),
-                            )
+                    // Y el Enter a secas se quita del evento ANTES de dibujar,
+                    // para que el campo no llegue a verlo.
+                    if ui.memory(|m| m.has_focus(id))
+                        && ui.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
                         })
-                    } else {
-                        (false, false)
-                    };
-                    if shift_enter {
-                        self.tabs[self.tab].input.push('\n');
-                    }
-                    if enter {
+                    {
                         enviar = true;
                     }
 
-                    let resp = ui.add_enabled(
+                    ui.add_enabled(
                         !busy,
                         egui::TextEdit::multiline(&mut self.tabs[self.tab].input)
                             .id(id)
+                            .return_key(egui::KeyboardShortcut::new(
+                                egui::Modifiers::SHIFT,
+                                egui::Key::Enter,
+                            ))
                             .hint_text("Escribe una orden…   ·   Shift+Enter = salto de línea")
                             .desired_width(field_w)
                             .desired_rows(lineas)
                             .frame(false)
                             .font(egui::FontId::proportional(theme::FS_BODY)),
                     );
-                    let _ = &resp;
 
                     right(ui, 26.0, |ui| {
                         // Redondo y relleno de acento: es la ÚNICA acción primaria
@@ -3052,6 +3047,9 @@ _(detenido por el operador)_");
             &self.services,
             self.log_lines.as_deref().unwrap_or(&[]),
         );
+        // Memorias parecidas a ESTA orden, no a la conversación entera: la
+        // búsqueda es sobre lo que se acaba de pedir.
+        let sys_prompt = prompt::with_memories(&sys_prompt, &text);
         prompt.push_str(&text);
 
         {
