@@ -143,8 +143,22 @@ impl View {
 }
 
 /// Un mensaje del chat real (Ollama).
+/// Qué clase de línea es en el hilo.
+///
+/// Un comando ejecutado NO es un mensaje del operador, y meterlo como tal era
+/// lo que dejaba burbujas de "Resultado devuelto a Lucy" por toda la
+/// conversación: con su avatar, su hora y su ancho, ocupando lo mismo que algo
+/// que alguien escribió. Es un EVENTO, y se dibuja como una línea plegada.
+#[derive(PartialEq)]
+enum Role {
+    User,
+    Lucy,
+    /// Un comando aprobado y corrido: `(comando, ok, salida)`.
+    Exec(String, bool, String),
+}
+
 struct ChatMsg {
-    user: bool,
+    role: Role,
     text: String,
     /// Hora del mensaje. La V2 la pone junto al nombre de Lucy en mono tabular —
     /// es lo que convierte una lista de burbujas en un hilo con historia.
@@ -153,7 +167,15 @@ struct ChatMsg {
 
 impl ChatMsg {
     fn new(user: bool, text: String) -> Self {
-        Self { user, text, stamp: hhmm() }
+        Self {
+            role: if user { Role::User } else { Role::Lucy },
+            text,
+            stamp: hhmm(),
+        }
+    }
+
+    fn exec(cmd: String, ok: bool, output: String) -> Self {
+        Self { role: Role::Exec(cmd, ok, output), text: String::new(), stamp: hhmm() }
     }
 }
 
@@ -1243,6 +1265,43 @@ fn with_key(provider: &str) -> bool {
     v
 }
 
+/// Un comando ejecutado, en UNA línea plegable.
+///
+/// Antes esto era una burbuja de operador con avatar, hora y ancho completo que
+/// decía "Resultado devuelto a Lucy" — y no decía nada más. Ocupaba lo mismo que
+/// algo que una persona había escrito, se acumulaba una por comando, y para ver
+/// la salida había que irse al panel de Ejecución.
+///
+/// Ahora es lo que es: una línea con el comando, si fue bien, y la salida
+/// dentro. Plegada por defecto porque en el 90 % de los casos basta con saber
+/// que corrió; abierta cuando hace falta mirar.
+fn exec_row(ui: &mut egui::Ui, i: usize, cmd: &str, ok: bool, out: &str) {
+    ui.add_space(6.0);
+    let (col, glyph) = if ok {
+        (theme::ACC, "✓")
+    } else {
+        (theme::RED, "✕")
+    };
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("{glyph}  {cmd}"))
+            .size(theme::FS_CAPTION)
+            .monospace()
+            .color(col),
+    )
+    .id_salt(("exec", i))
+    .show(ui, |ui| {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(out)
+                    .size(theme::FS_CAPTION)
+                    .monospace()
+                    .color(theme::TXT3),
+            )
+            .wrap(),
+        );
+    });
+}
+
 /// Avatar cuadrado de 28 px con esquinas redondeadas, como el del CSS.
 fn avatar(ui: &mut egui::Ui, txt: &str, fg: egui::Color32, bg: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
@@ -2088,10 +2147,21 @@ impl App {
                 if r.clicked() {
                     activar = Some(i);
                 }
-                // Solo se puede cerrar con más de una abierta: quedarse sin
-                // ninguna dejaría la vista sin nada donde escribir.
-                if self.tabs.len() > 1 && r.middle_clicked() {
-                    cerrar = Some(i);
+                // La ✕ es VISIBLE, no solo clic central. El atajo estaba y no
+                // lo sabía nadie: una acción que solo existe en un gesto que no
+                // se ve es una acción que no existe.
+                //
+                // Solo con más de una abierta: quedarse sin ninguna dejaría la
+                // vista sin nada donde escribir.
+                if self.tabs.len() > 1 {
+                    ui.add_space(-4.0);
+                    let (xr, xresp) =
+                        ui.allocate_exact_size(egui::vec2(18.0, 26.0), egui::Sense::click());
+                    let c = if xresp.hovered() { theme::RED } else { theme::FAINT };
+                    icons::draw(ui.painter(), icons::Icon::Close, xr.center(), 11.0, c);
+                    if xresp.on_hover_text("Cerrar terminal").clicked() || r.middle_clicked() {
+                        cerrar = Some(i);
+                    }
                 }
             }
             let (pr, presp) =
@@ -2340,13 +2410,21 @@ impl App {
             .log
             .iter()
             .rev()
-            .find(|m| m.user)
+            .find(|m| m.role == Role::User)
             .map(|m| lucy_core::tags::detect_code_gen_intent(&m.text))
             .unwrap_or(false);
 
         for i in 0..n {
             let m = &self.tabs[self.tab].log[i];
-            let (user, text, stamp) = (m.user, m.text.clone(), m.stamp.clone());
+            let (text, stamp) = (m.text.clone(), m.stamp.clone());
+            // Un comando ejecutado se dibuja plegado y en una línea: es un
+            // evento del flujo, no algo que alguien dijo.
+            if let Role::Exec(cmd, ok, out) = &m.role {
+                let (cmd, ok, out) = (cmd.clone(), *ok, out.clone());
+                exec_row(ui, i, &cmd, ok, &out);
+                continue;
+            }
+            let user = m.role == Role::User;
             ui.add_space(10.0);
 
             // Cada mensaje entra con un fundido, como el `msg-in` del CSS. Un
@@ -2826,6 +2904,16 @@ impl App {
 
         {
             let t = &mut self.tabs[self.tab];
+            // Lo que quede por revelar se vuelca YA en el mensaje al que
+            // pertenece. La cola escribe siempre en el último mensaje del hilo,
+            // así que empezar un turno nuevo con texto pendiente lo pegaría a
+            // la respuesta siguiente — mezclando dos respuestas en una.
+            let resto = t.drain.flush();
+            if !resto.is_empty() {
+                if let Some(last) = t.log.last_mut() {
+                    last.text.push_str(&resto);
+                }
+            }
             // El título de la pestaña pasa a ser la primera orden: con tres
             // terminales abiertas, "Terminal 2" no dice cuál era cuál.
             if t.log.is_empty() {
@@ -2963,7 +3051,14 @@ impl App {
             self.log_lines.as_deref().unwrap_or(&[]),
         );
         let t = &mut self.tabs[ti];
-        t.log.push(ChatMsg::new(true, "▸ Resultado devuelto a Lucy".into()));
+        let resto = t.drain.flush();
+        if !resto.is_empty() {
+            if let Some(last) = t.log.last_mut() {
+                last.text.push_str(&resto);
+            }
+        }
+        // La línea del comando ya se añadió en `pump_exec`: aquí solo se abre el
+        // hueco de la respuesta.
         t.log.push(ChatMsg::new(false, String::new()));
         t.rx = Some(lucy_core::cloud::start(
             self.chat_model.clone(),
@@ -2981,14 +3076,20 @@ impl App {
     /// mientras el operador mira si su comando funcionó. Ya cometí ese error una
     /// vez con la sonda de servicios.
     #[cfg(windows)]
-    fn run_step(&mut self, id: String, cmd: String) {
+    fn run_step(&mut self, id: String, cmd: String, elevated: bool) {
         use lucy_core::agent::StepStatus;
         self.tabs[self.tab].ws.plan_update(&id, StepStatus::Running, None);
         self.ws_tab = WsTab::Exec; // se mira la salida, no el plan
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let t0 = Instant::now();
-            let r = lucy_core::shell::run_powershell_utf8(&cmd);
+            // Elevado va por otro camino entero: proceso nuevo, UAC, y la
+            // salida por fichero. Ver `lucy_core::elevate`.
+            let r = if elevated {
+                lucy_core::elevate::run_elevated(&cmd).map(|(o, ok)| (o, String::new(), ok))
+            } else {
+                lucy_core::shell::run_powershell_utf8(&cmd)
+            };
             let ms = t0.elapsed().as_millis() as u64;
             let _ = tx.send(match r {
                 Ok((out, err, ok)) => (out, err, ok, ms),
@@ -3002,7 +3103,7 @@ impl App {
     }
 
     #[cfg(not(windows))]
-    fn run_step(&mut self, _id: String, _cmd: String) {}
+    fn run_step(&mut self, _id: String, _cmd: String, _elevated: bool) {}
 
     /// Recoge el resultado de un comando aprobado.
     fn pump_exec(&mut self) {
@@ -3067,6 +3168,10 @@ impl App {
             Some(ms),
         );
         self.exec_rx = None;
+
+        // La línea del comando entra en el hilo como EVENTO, plegada: el
+        // comando, si fue bien, y su salida dentro.
+        self.tabs[ti].log.push(ChatMsg::exec(cmd.clone(), ok, body.clone()));
 
         // Y VUELVE A LUCY. Sin esto, el operador tiene la salida cruda en un
         // panel y sigue sin la respuesta que pidió — que es exactamente lo que
@@ -3194,7 +3299,18 @@ impl App {
     fn ws_plan(&mut self, ui: &mut egui::Ui) {
         use lucy_core::agent::{ForkStatus, StepStatus};
         let busy = self.exec_rx.is_some();
-        let mut aprobado: Option<(String, String)> = None;
+        // Los comandos cuya última ejecución murió por permisos. Se mira la
+        // SALIDA real y no se adivina por el texto del comando: `Start-Service`
+        // funciona sin elevar en muchos servicios y falla en otros.
+        let denegado: Vec<String> = self.tabs[self.tab]
+            .ws
+            .exec
+            .iter()
+            .filter(|e| !e.ok && lucy_core::elevate::looks_like_access_denied(&e.output))
+            .map(|e| e.cmd.clone())
+            .collect();
+        // `(id, comando, elevado)`.
+        let mut aprobado: Option<(String, String, bool)> = None;
 
         for s in &self.tabs[self.tab].ws.plan {
             let (glyph, col) = match s.status {
@@ -3232,6 +3348,29 @@ impl App {
                     // sin que alguien lo pulse: en este shell no hay ejecución
                     // automática. El operador lee el comando y decide — que es
                     // el único guardrail que no hace falta portar.
+                    // Tras un fallo por permisos se OFRECE la elevación, no antes.
+                    // Un UAC que salta sin saber si hace falta enseña a
+                    // aceptarlo sin leerlo, y ese hábito es peor que el comando
+                    // que se quería correr.
+                    if s.status == StepStatus::Error && denegado.contains(&s.detail) {
+                        ui.add_space(4.0);
+                        let b = egui::Button::new(
+                            egui::RichText::new("⇈ Reintentar como administrador")
+                                .size(theme::FS_CAPTION)
+                                .color(theme::AMBER),
+                        )
+                        .fill(theme::AMBER_BG)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::AMBER.linear_multiply(0.4)))
+                        .rounding(egui::Rounding::same(6.0))
+                        .min_size(egui::vec2(0.0, 22.0));
+                        if ui
+                            .add_enabled(!busy, b)
+                            .on_hover_text("Windows pedirá confirmación (UAC)")
+                            .clicked()
+                        {
+                            aprobado = Some((s.id.clone(), s.detail.clone(), true));
+                        }
+                    }
                     if s.status == StepStatus::Pending && !s.detail.is_empty() {
                         ui.add_space(4.0);
                         let b = egui::Button::new(
@@ -3248,14 +3387,14 @@ impl App {
                             .on_hover_text("Correr este comando en este equipo")
                             .clicked()
                         {
-                            aprobado = Some((s.id.clone(), s.detail.clone()));
+                            aprobado = Some((s.id.clone(), s.detail.clone(), false));
                         }
                     }
                 });
             });
         }
-        if let Some((id, cmd)) = aprobado {
-            self.run_step(id, cmd);
+        if let Some((id, cmd, elev)) = aprobado {
+            self.run_step(id, cmd, elev);
         }
         // Los forks van DESPUÉS del plan y fuera de su estado vacío: con un
         // sub-agente corriendo el panel no está vacío, solo no tiene plan.
