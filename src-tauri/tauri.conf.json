@@ -63,7 +63,7 @@
     "windows": {
       "digestAlgorithm": "sha256",
       "certificateThumbprint": null,
-      "timestampUrl": "",
+      "timestampUrl": "http://timestamp.digicert.com",
       "webviewInstallMode": {
         "type": "offlineInstaller"
       },
