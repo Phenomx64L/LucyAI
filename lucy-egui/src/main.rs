@@ -116,6 +116,103 @@ struct ChatMsg {
     text: String,
 }
 
+/// Una terminal abierta. Cada pestaña es una conversación INDEPENDIENTE.
+///
+/// El receptor del stream vive aquí y no en la aplicación a propósito: una
+/// respuesta pertenece a la conversación que la pidió. Con un único receptor
+/// global, cambiar de pestaña mientras Lucy escribe mandaría los tokens a la
+/// conversación equivocada — y en la V2 las pestañas de fondo siguen corriendo.
+struct ChatTab {
+    title: String,
+    log: Vec<ChatMsg>,
+    input: String,
+    rx: Option<std::sync::mpsc::Receiver<lucy_core::chat::ChatEvent>>,
+}
+
+impl ChatTab {
+    fn new(n: usize) -> Self {
+        Self {
+            title: if n == 0 {
+                "Nueva Terminal".to_string()
+            } else {
+                format!("Terminal {}", n + 1)
+            },
+            log: Vec::new(),
+            input: String::new(),
+            rx: None,
+        }
+    }
+
+    /// ¿Está Lucy escribiendo en ESTA pestaña?
+    fn busy(&self) -> bool {
+        self.rx.is_some()
+    }
+}
+
+/// Con quién habla Lucy.
+///
+/// La V2 usa `lucyConfig.name`, que el operador escribe en Configuración… y que
+/// vive en el `localStorage` del WebView. Un shell nativo no puede leerlo, así
+/// que aquí se usa el usuario de Windows. Es el mismo dato el 99 % de las veces
+/// en una estación de trabajo, pero NO es lo mismo, y queda anotado: la
+/// configuración del usuario es lo siguiente que tiene que salir del navegador
+/// —igual que el índice de equipos ya salió al Credential Manager— o el shell
+/// nativo llegará a producción sin la mitad de los ajustes.
+fn user_name() -> String {
+    std::env::var("USERNAME").unwrap_or_default()
+}
+
+/// Saludo por franja horaria, como el `empty-state` de la V2.
+fn greeting(name: &str) -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let h = (secs % 86_400) / 3600;
+    let word = if h < 12 {
+        "Buenos días"
+    } else if h < 19 {
+        "Buenas tardes"
+    } else {
+        "Buenas noches"
+    };
+    let first = name.split_whitespace().next().unwrap_or("");
+    if first.is_empty() {
+        word.to_string()
+    } else {
+        format!("{word}, {first}")
+    }
+}
+
+/// Las cuatro sugerencias del empty-state: `(icono, etiqueta, la orden real)`.
+///
+/// La etiqueta es corta y la orden es larga porque no son lo mismo: el chip dice
+/// de qué va, y lo que se envía es una instrucción completa. Un chip que enviara
+/// su propio texto —"Salud del sistema"— le daría a Lucy tres palabras sueltas
+/// en lugar de una tarea.
+const SUGGESTIONS: [(&str, &str, &str); 4] = [
+    (
+        "◈",
+        "Salud del sistema",
+        "Revisa la salud del sistema (CPU, RAM, disco, servicios) y dame un resumen del estado.",
+    ),
+    (
+        "◉",
+        "Vulnerabilidades",
+        "Escanea el software instalado en busca de vulnerabilidades conocidas y dime cómo parcharlas.",
+    ),
+    (
+        "▤",
+        "Servicios detenidos",
+        "¿Qué servicios de inicio automático están detenidos ahora mismo? Muéstramelos.",
+    ),
+    (
+        "▥",
+        "Errores recientes",
+        "Resume los errores más recientes del registro de eventos del sistema (últimas 24 h).",
+    ),
+];
+
 /// `%APPDATA%\Lucy\logs\lucy_app.log` — el MISMO fichero que escribe
 /// `write_app_log` en el backend. Ojo: no cuelga de `com.lucy.dev` como la DB,
 /// sino de `Lucy\logs` — `get_logs_dir()` lo tiene fijo así.
@@ -662,6 +759,133 @@ fn host_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, kind: &str, se
     resp.clicked()
 }
 
+/// La píldora del selector de modelo. Como la del host, pero el nombre se
+/// recorta: "Gemini 3.5 Flash — Rendimiento de frontera sostenido" no cabe, y
+/// truncarlo es mejor que dejar que empuje la cabecera entera.
+fn model_pill(ui: &mut egui::Ui, icon: &str, name: &str, max_w: f32) -> egui::Response {
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let tw = |ui: &egui::Ui, s: &str| {
+        ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), theme::TXT3).size().x)
+    };
+    let (iw, chev) = (tw(ui, icon), 12.0);
+    let fixed = 10.0 + iw + 6.0 + 6.0 + chev + 10.0;
+    let name_w = tw(ui, name).min((max_w - fixed).max(60.0));
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(fixed + name_w, 26.0), egui::Sense::click());
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(theme::R_SM),
+        if resp.hovered() { theme::BG4 } else { theme::BG3 },
+        egui::Stroke::new(1.0_f32, theme::BDR),
+    );
+    let cy = rect.center().y;
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, cy),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        font.clone(),
+        theme::ACC,
+    );
+    let nx = rect.left() + 10.0 + iw + 6.0;
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(nx, rect.top()),
+            egui::pos2(nx + name_w, rect.bottom()),
+        ))
+        .text(
+            egui::pos2(nx, cy),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font.clone(),
+            theme::TXT3,
+        );
+    ui.painter().text(
+        egui::pos2(rect.right() - 10.0, cy),
+        egui::Align2::RIGHT_CENTER,
+        "▾",
+        font,
+        theme::TXT3,
+    );
+    resp
+}
+
+/// Una entrada del desplegable de modelos.
+fn model_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, sel: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::BG4);
+    }
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let cy = rect.center().y;
+    let col = if sel { theme::ACC } else { theme::TXT2 };
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, cy),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        font.clone(),
+        col,
+    );
+    let nx = rect.left() + 28.0;
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(nx, rect.top()),
+            egui::pos2(rect.right() - 8.0, rect.bottom()),
+        ))
+        .text(egui::pos2(nx, cy), egui::Align2::LEFT_CENTER, name, font, col);
+    resp.clicked()
+}
+
+/// Ancho que ocupará un chip de sugerencia. Se necesita ANTES de dibujarlo para
+/// poder centrar la fila: egui no sabe cuánto mide una fila hasta que la coloca.
+fn chip_w(ui: &egui::Ui, label: &str) -> f32 {
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let w = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, theme::TXT2).size().x);
+    w + 46.0
+}
+
+/// Chip de sugerencia del estado vacío.
+fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> bool {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(chip_w(ui, label), 30.0), egui::Sense::click());
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(999.0),
+        if resp.hovered() { theme::BG4 } else { theme::BG3 },
+        egui::Stroke::new(
+            1.0_f32,
+            if resp.hovered() { theme::ACC_LINE } else { theme::BDR },
+        ),
+    );
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let cy = rect.center().y;
+    ui.painter().text(
+        egui::pos2(rect.left() + 14.0, cy),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        font.clone(),
+        theme::ACC,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 32.0, cy),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        theme::TXT2,
+    );
+    resp.clicked()
+}
+
+/// Botón de icono sin relleno ni borde — los del compositor.
+fn ghost_icon(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(glyph).size(15.0).color(theme::TXT3))
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::NONE)
+            .min_size(egui::vec2(24.0, 24.0)),
+    )
+}
+
 /// Un lado de un control segmentado. Activo = relleno de acento con tinta
 /// oscura encima, que es el único sitio donde el CSS pone el acento sólido.
 fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
@@ -734,10 +958,15 @@ struct App {
     view: View,
     // chat — Ollama local REAL (streaming vía lucy_core::chat)
     md_cache: CommonMarkCache,
-    chat_log: Vec<ChatMsg>,
-    chat_input: String,
+    /// Las terminales abiertas. Siempre hay al menos una.
+    tabs: Vec<ChatTab>,
+    tab: usize,
+    /// Cuántas se han abierto en total — numera las nuevas sin reutilizar el
+    /// nombre de una que se cerró.
+    tabs_opened: usize,
     chat_model: String,
-    chat_rx: Option<std::sync::mpsc::Receiver<lucy_core::chat::ChatEvent>>,
+    /// Texto del buscador del desplegable de modelos.
+    model_query: String,
     models: Vec<String>,
     // terminal — VT real: el PTY emite bytes crudos, el parser los interpreta en
     // una pantalla de terminal (sin escapes visibles).
@@ -813,10 +1042,11 @@ impl App {
         Self {
             view: View::TerminalIa,
             md_cache: CommonMarkCache::default(),
-            chat_log: Vec::new(),
-            chat_input: String::new(),
+            tabs: vec![ChatTab::new(0)],
+            tab: 0,
+            tabs_opened: 1,
             chat_model,
-            chat_rx: None,
+            model_query: String::new(),
             models,
             pty: Pty::spawn(140, 44).ok(),
             vt: vt100::Parser::new(44, 140, 4000),
@@ -858,35 +1088,43 @@ impl App {
     }
 
     /// Drena los tokens que va emitiendo el hilo del chat de Ollama.
+    /// Vacía los canales de TODAS las pestañas, no solo la visible.
+    ///
+    /// Una pestaña de fondo tiene que seguir recibiendo: en la V2 se lanza una
+    /// tarea larga, se cambia de terminal a trabajar en otra cosa y se vuelve
+    /// con la respuesta ya escrita. Bombear solo la activa dejaría el canal
+    /// llenándose y la respuesta llegaría de golpe al volver.
     fn pump_chat(&mut self) {
-        if self.chat_rx.is_none() {
-            return;
-        }
-        let mut done = false;
-        if let Some(rx) = &self.chat_rx {
-            while let Ok(ev) = rx.try_recv() {
-                match ev {
-                    lucy_core::chat::ChatEvent::Token(t) => {
-                        if let Some(last) = self.chat_log.last_mut() {
-                            last.text.push_str(&t);
+        for t in &mut self.tabs {
+            if t.rx.is_none() {
+                continue;
+            }
+            let mut done = false;
+            if let Some(rx) = &t.rx {
+                while let Ok(ev) = rx.try_recv() {
+                    match ev {
+                        lucy_core::chat::ChatEvent::Token(tok) => {
+                            if let Some(last) = t.log.last_mut() {
+                                last.text.push_str(&tok);
+                            }
                         }
-                    }
-                    lucy_core::chat::ChatEvent::Done => {
-                        done = true;
-                        break;
-                    }
-                    lucy_core::chat::ChatEvent::Error(e) => {
-                        if let Some(last) = self.chat_log.last_mut() {
-                            last.text.push_str(&format!("\n\n⚠ {e}"));
+                        lucy_core::chat::ChatEvent::Done => {
+                            done = true;
+                            break;
                         }
-                        done = true;
-                        break;
+                        lucy_core::chat::ChatEvent::Error(e) => {
+                            if let Some(last) = t.log.last_mut() {
+                                last.text.push_str(&format!("\n\n⚠ {e}"));
+                            }
+                            done = true;
+                            break;
+                        }
                     }
                 }
             }
-        }
-        if done {
-            self.chat_rx = None;
+            if done {
+                t.rx = None;
+            }
         }
     }
 }
@@ -901,9 +1139,11 @@ impl eframe::App for App {
         }
 
         self.pump_chat();
+        // Cualquier pestaña con stream abierto cuenta, no solo la visible: la de
+        // fondo también está escribiendo y su texto tiene que llegar entero.
         // `chat_rx` está en Some mientras corre un stream: eso ES actividad,
         // aunque este frame concreto no traiga token.
-        let mut live = self.chat_rx.is_some();
+        let mut live = self.tabs.iter().any(ChatTab::busy);
         if let Some(pty) = &self.pty {
             let bytes = pty.drain_bytes();
             if !bytes.is_empty() {
@@ -1094,7 +1334,7 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
-            View::TerminalIa => self.chat(ui),
+            View::TerminalIa => self.terminal_ia(ui),
             View::NexShell => self.terminal(ui),
             View::Memoria => self.memoria(ui),
             View::Dashboard => self.sistema(ui),
@@ -1105,92 +1345,406 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn chat(&mut self, ui: &mut egui::Ui) {
-        let accent = theme::ACC;
-        // ── header: título + selector de modelo Ollama ───────────────────────
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("CHAT · Lucy (Ollama local)").strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("↻").on_hover_text("Redetectar modelos").clicked() {
-                    self.models = lucy_core::chat::list_models();
-                }
-                egui::ComboBox::from_id_salt("modelo")
-                    .selected_text(self.chat_model.clone())
-                    .show_ui(ui, |ui| {
-                        if self.models.is_empty() {
-                            ui.label(egui::RichText::new("(Ollama no responde)").weak());
-                        }
-                        for m in &self.models {
-                            ui.selectable_value(&mut self.chat_model, m.clone(), m);
-                        }
-                    });
-            });
-        });
-        ui.separator();
+    /// Terminal IA — la vista principal del Cockpit.
+    ///
+    /// Orden de arriba abajo, como la V2: barra de pestañas, rótulo de la
+    /// conversación con el selector de modelo a la derecha, la conversación, y
+    /// el compositor abajo. El compositor VA ABAJO y no arriba: es donde está la
+    /// mano cuando se acaba de leer una respuesta.
+    fn terminal_ia(&mut self, ui: &mut egui::Ui) {
+        self.tab_bar(ui);
+        ui.add_space(6.0);
 
-        // ── input (arriba, para que el foco quede fijo) ──────────────────────
-        let busy = self.chat_rx.is_some();
-        let mut do_send = false;
-        ui.horizontal(|ui| {
-            let resp = ui.add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut self.chat_input)
-                    .hint_text("pregúntale a Lucy…  (Enter para enviar)")
-                    .desired_width(f32::INFINITY),
+        row_align(ui, 20.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 7.0;
+            ui.label(egui::RichText::new("●").size(7.0).color(theme::ACC));
+            ui.add(egui::Label::new(theme::instrument_label(
+                "Conversación",
+                theme::FAINT,
+            )));
+            let mut w = ui.available_width();
+            // El selector se ancla a la derecha con su ancho real, no con un
+            // hueco a ojo: el nombre del modelo cambia de largo al elegir otro.
+            w = w.min(420.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 26.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.set_max_width(ui.available_width());
+                    self.model_picker(ui, w);
+                },
             );
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                do_send = true;
-            }
-            if ui.add_enabled(!busy, egui::Button::new("➤")).clicked() {
-                do_send = true;
-            }
         });
-        if do_send && !self.chat_input.trim().is_empty() && !busy {
-            let prompt = std::mem::take(&mut self.chat_input);
-            self.chat_log.push(ChatMsg { user: true, text: prompt.clone() });
-            self.chat_log.push(ChatMsg { user: false, text: String::new() });
-            self.chat_rx = Some(lucy_core::chat::start_ollama(self.chat_model.clone(), prompt));
-        }
-        ui.separator();
+        ui.add_space(8.0);
 
-        // ── conversación ─────────────────────────────────────────────────────
+        // El compositor se reserva ABAJO antes de dibujar la conversación: con
+        // el orden natural, una conversación larga lo empujaría fuera de la
+        // ventana justo cuando hace falta escribir.
+        egui::TopBottomPanel::bottom("composer")
+            .frame(egui::Frame::none().inner_margin(egui::Margin {
+                top: 10.0,
+                bottom: 4.0,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show_inside(ui, |ui| self.composer(ui));
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                if self.chat_log.is_empty() {
-                    ui.add_space(20.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new("Lucy nativa · sin WebView").heading());
-                        ui.label(
-                            egui::RichText::new("Escribe arriba y Lucy responde vía Ollama local.")
-                                .weak(),
-                        );
-                    });
+                if self.tabs[self.tab].log.is_empty() {
+                    self.empty_state(ui);
+                    return;
                 }
-                let n = self.chat_log.len();
-                for i in 0..n {
-                    let is_user = self.chat_log[i].user;
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        if is_user {
-                            ui.label(
-                                egui::RichText::new("Tú")
-                                    .strong()
-                                    .color(theme::BLUE),
-                            );
-                            ui.label(self.chat_log[i].text.clone());
-                        } else {
-                            ui.label(egui::RichText::new("Lucy").strong().color(accent));
-                            let body = self.chat_log[i].text.clone();
-                            CommonMarkViewer::new().show(ui, &mut self.md_cache, &body);
-                            // cursor de escritura en el último mensaje mientras llega
-                            if busy && i == n - 1 {
-                                ui.label(egui::RichText::new("▋").color(accent));
+                self.transcript(ui);
+            });
+    }
+
+    /// La barra de pestañas: una por conversación, más el botón de abrir otra.
+    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        let mut activar: Option<usize> = None;
+        let mut cerrar: Option<usize> = None;
+        let mut abrir = false;
+
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (i, t) in self.tabs.iter().enumerate() {
+                let on = i == self.tab;
+                // Un punto de acento marca la pestaña donde Lucy está
+                // escribiendo. Sin él, lanzar una tarea y cambiar de pestaña
+                // deja al operador sin saber si sigue viva.
+                let label = if t.busy() {
+                    format!("● {}", t.title)
+                } else {
+                    format!("▭ {}", t.title)
+                };
+                let b = egui::Button::new(
+                    egui::RichText::new(label)
+                        .size(theme::FS_FOOTNOTE)
+                        .color(if on { theme::ACC } else { theme::TXT3 }),
+                )
+                .fill(if on { theme::ACC_BG } else { theme::BG3 })
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    if on { theme::ACC_LINE } else { theme::BDR },
+                ))
+                .rounding(egui::Rounding::same(theme::R_SM))
+                .min_size(egui::vec2(0.0, 26.0));
+                let r = ui.add(b);
+                if r.clicked() {
+                    activar = Some(i);
+                }
+                // Solo se puede cerrar con más de una abierta: quedarse sin
+                // ninguna dejaría la vista sin nada donde escribir.
+                if self.tabs.len() > 1 && r.middle_clicked() {
+                    cerrar = Some(i);
+                }
+            }
+            let plus = egui::Button::new(
+                egui::RichText::new("+").size(15.0).color(theme::TXT3),
+            )
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .rounding(egui::Rounding::same(theme::R_SM))
+            .min_size(egui::vec2(28.0, 26.0));
+            if ui
+                .add(plus)
+                .on_hover_text("Nueva terminal")
+                .clicked()
+            {
+                abrir = true;
+            }
+        });
+
+        if let Some(i) = activar {
+            self.tab = i;
+        }
+        if let Some(i) = cerrar {
+            self.tabs.remove(i);
+            self.tab = self.tab.min(self.tabs.len() - 1);
+        }
+        if abrir {
+            self.tabs.push(ChatTab::new(self.tabs_opened));
+            self.tabs_opened += 1;
+            self.tab = self.tabs.len() - 1;
+        }
+    }
+
+    /// El selector de modelo: píldora con el icono del proveedor + desplegable
+    /// con buscador.
+    ///
+    /// El buscador no es adorno: son 51 modelos en siete grupos, y sin él elegir
+    /// uno concreto es recorrer una lista con la rueda del ratón.
+    fn model_picker(&mut self, ui: &mut egui::Ui, max_w: f32) {
+        let icon = lucy_core::models::icon(&self.chat_model);
+        let label = lucy_core::models::describe(&self.chat_model);
+        let pill = model_pill(ui, icon, label, max_w);
+        let popup_id = ui.make_persistent_id("model-menu");
+        if pill.clicked() {
+            self.model_query.clear();
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        let mut elegido: Option<String> = None;
+        egui::popup::popup_below_widget(
+            ui,
+            popup_id,
+            &pill,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                let w = 330.0_f32;
+                ui.set_min_width(w);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.model_query)
+                        .hint_text("Buscar modelo…")
+                        .desired_width(w),
+                );
+                ui.add_space(6.0);
+
+                let grupos = lucy_core::models::filter(&self.model_query);
+                egui::ScrollArea::vertical()
+                    .max_height(330.0)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        for (g, opts) in &grupos {
+                            ui.add_space(4.0);
+                            ui.add(egui::Label::new(theme::instrument_label(
+                                g.label,
+                                theme::FAINT,
+                            )));
+                            ui.add_space(2.0);
+                            for o in opts {
+                                if model_option(ui, w, o.icon, o.name, o.id == self.chat_model) {
+                                    elegido = Some(o.id.to_string());
+                                }
                             }
                         }
+                        // Los modelos de Ollama se DESCUBREN, no están en el
+                        // catálogo: lo que hay instalado depende de la máquina.
+                        for m in &self.models {
+                            let q = self.model_query.trim().to_lowercase();
+                            if !q.is_empty() && !m.to_lowercase().contains(&q) {
+                                continue;
+                            }
+                            if model_option(ui, w, "⌂", m, m == &self.chat_model) {
+                                elegido = Some(m.clone());
+                            }
+                        }
+                        if grupos.is_empty() && self.models.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new("Ningún modelo coincide")
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::FAINT),
+                            );
+                        }
                     });
+
+                // Pie: estado de Ollama y redetección, igual que la V2.
+                ui.add_space(6.0);
+                ui.separator();
+                row_align(ui, 20.0, egui::Align::Center, |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let online = !self.models.is_empty();
+                    ui.label(
+                        egui::RichText::new("●")
+                            .size(8.0)
+                            .color(if online { theme::ACC } else { theme::FAINT }),
+                    );
+                    ui.label(
+                        egui::RichText::new(if online {
+                            format!("Ollama · {} modelos", self.models.len())
+                        } else {
+                            "Ollama offline".to_string()
+                        })
+                        .size(theme::FS_CAPTION)
+                        .color(theme::TXT3),
+                    );
+                    right(ui, 20.0, |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("↻ redetectar")
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::ACC),
+                                )
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            self.models = lucy_core::chat::list_models();
+                        }
+                    });
+                });
+            },
+        );
+
+        if let Some(id) = elegido {
+            self.chat_model = id;
+            ui.memory_mut(|m| m.close_popup());
+        }
+    }
+
+    /// El estado vacío: el saludo, qué hace Lucy, y cuatro tareas de un clic.
+    fn empty_state(&mut self, ui: &mut egui::Ui) {
+        let mut enviar: Option<String> = None;
+        ui.add_space(60.0);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("✦").size(40.0).color(theme::ACC));
+            ui.add_space(14.0);
+            ui.label(
+                egui::RichText::new(greeting(&user_name()))
+                    .size(22.0)
+                    .color(theme::TXT),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Escribe una orden y Lucy la ejecuta — el plan, la salida y el trace\n\
+                     se llenan en el workspace →",
+                )
+                .size(theme::FS_BODY)
+                .color(theme::TXT3),
+            );
+            ui.add_space(22.0);
+
+            // Dos filas de dos, como la V2. En una sola fila los cuatro chips
+            // se estiran a lo ancho de la ventana y dejan de leerse como
+            // botones.
+            for par in SUGGESTIONS.chunks(2) {
+                ui.horizontal(|ui| {
+                    // `vertical_centered` deja el cursor a la izquierda; hay que
+                    // centrar la fila a mano contra el ancho que ocupa.
+                    let w: f32 = par.iter().map(|(_, l, _)| chip_w(ui, l)).sum::<f32>() + 8.0;
+                    ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+                    for (icon, label, order) in par {
+                        if chip(ui, icon, label) {
+                            enviar = Some(order.to_string());
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+            }
+        });
+        if let Some(o) = enviar {
+            self.send(o);
+        }
+    }
+
+    /// La conversación.
+    fn transcript(&mut self, ui: &mut egui::Ui) {
+        let busy = self.tabs[self.tab].busy();
+        let n = self.tabs[self.tab].log.len();
+        for i in 0..n {
+            let user = self.tabs[self.tab].log[i].user;
+            let text = self.tabs[self.tab].log[i].text.clone();
+            ui.add_space(6.0);
+            if user {
+                // La orden del operador va en una burbuja teñida de su color,
+                // como en el CSS; la respuesta de Lucy va plana sobre el lienzo
+                // para que el markdown respire.
+                egui::Frame::none()
+                    .fill(theme::BLUE.linear_multiply(0.10))
+                    .rounding(egui::Rounding::same(theme::R_LG))
+                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&text).size(theme::FS_BODY).color(theme::TXT));
+                    });
+            } else {
+                row_align(ui, 18.0, egui::Align::Center, |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(egui::RichText::new("✦").size(12.0).color(theme::ACC));
+                    ui.add(egui::Label::new(theme::instrument_label("Lucy", theme::FAINT)));
+                });
+                ui.add_space(4.0);
+                CommonMarkViewer::new().show(ui, &mut self.md_cache, &text);
+                if busy && i == n - 1 {
+                    ui.label(egui::RichText::new("▋").color(theme::ACC));
                 }
+            }
+        }
+    }
+
+    /// El compositor: adjuntar, dictar, escribir, enviar.
+    fn composer(&mut self, ui: &mut egui::Ui) {
+        let busy = self.tabs[self.tab].busy();
+        let mut enviar = false;
+
+        egui::Frame::none()
+            .fill(theme::BG3)
+            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .rounding(egui::Rounding::same(theme::R_LG))
+            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+            .show(ui, |ui| {
+                row_align(ui, 26.0, egui::Align::Center, |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+
+                    // Adjuntar y dictar existen pero todavía no hacen nada, y lo
+                    // dicen al pasar el cursor. Un botón que no responde y no
+                    // explica por qué es peor que uno ausente.
+                    if ghost_icon(ui, "⎘")
+                        .on_hover_text("Adjuntar fichero — pendiente de migrar")
+                        .clicked()
+                    {}
+                    if ghost_icon(ui, "⏺")
+                        .on_hover_text("Dictado por voz — pendiente: la V2 usa la API del navegador")
+                        .clicked()
+                    {}
+
+                    let mut send_w = 34.0;
+                    send_w += 8.0;
+                    let field_w = (ui.available_width() - send_w).max(80.0);
+                    let resp = ui.add_enabled(
+                        !busy,
+                        egui::TextEdit::singleline(&mut self.tabs[self.tab].input)
+                            .hint_text("Escribe una orden…   ·   Shift+Enter = salto de línea")
+                            .desired_width(field_w)
+                            .frame(false)
+                            .font(egui::FontId::proportional(theme::FS_BODY)),
+                    );
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        enviar = true;
+                    }
+
+                    right(ui, 26.0, |ui| {
+                        let b = egui::Button::new(
+                            egui::RichText::new("↑").size(15.0).color(theme::ACC_INK),
+                        )
+                        .fill(theme::ACC)
+                        .stroke(egui::Stroke::NONE)
+                        .rounding(egui::Rounding::same(999.0))
+                        .min_size(egui::vec2(30.0, 26.0));
+                        if ui.add_enabled(!busy, b).clicked() {
+                            enviar = true;
+                        }
+                    });
+                });
             });
+
+        if enviar && !busy {
+            let text = std::mem::take(&mut self.tabs[self.tab].input);
+            if !text.trim().is_empty() {
+                self.send(text);
+            }
+        }
+    }
+
+    /// Manda una orden por la pestaña activa.
+    fn send(&mut self, text: String) {
+        let t = &mut self.tabs[self.tab];
+        if t.busy() {
+            return;
+        }
+        // El título de la pestaña pasa a ser la primera orden: con tres
+        // terminales abiertas, "Terminal 2" no dice cuál era cuál.
+        if t.log.is_empty() {
+            t.title = text.chars().take(28).collect::<String>().trim().to_string();
+        }
+        t.log.push(ChatMsg { user: true, text: text.clone() });
+        t.log.push(ChatMsg { user: false, text: String::new() });
+        t.rx = Some(lucy_core::chat::start_ollama(self.chat_model.clone(), text));
     }
 
     /// Log Viewer — la cola de `lucy_app.log`, con filtro por nivel.
