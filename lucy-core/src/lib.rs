@@ -21,6 +21,9 @@ use std::path::Path;
 /// `src/lib/cockpit/agent-workspace.ts` — el modelo, y sobre todo sus topes.
 pub mod agent;
 pub mod chat;
+/// Los proveedores de nube. Sin esto, el catálogo de modelos ofrece cincuenta y
+/// uno y solo funcionan los locales.
+pub mod cloud;
 /// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
 /// en quien expone el comando.
 pub mod logs;
