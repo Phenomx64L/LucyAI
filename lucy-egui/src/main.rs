@@ -317,6 +317,9 @@ struct ChatTab {
     ws: lucy_core::agent::Workspace,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
+    /// Interruptor de parada del turno en curso. El hilo del stream lo mira
+    /// entre trama y trama.
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// El texto recibido y aún no enseñado del turno en curso. Ver `drain`.
     drain: drain::Drain,
     /// Adjuntos de ESTA pestaña. Por pestaña y no globales: los ficheros
@@ -333,6 +336,7 @@ impl ChatTab {
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
             drain: drain::Drain::default(),
+            stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             title: if n == 0 {
                 "Nueva Terminal".to_string()
             } else {
@@ -417,7 +421,7 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/memory", "Explorador de memoria (V1)", true),
     ("/kg", "Grafo de conocimiento (V1)", false),
     ("/link", "Relaciones tipadas entre memorias", false),
-    ("/recall", "Recuperar memorias por consulta", true),
+    ("/recall", "Recuperar memorias por consulta", false),
     ("/crystals", "Ver crystals de memoria", false),
     ("/crystallize", "Destilar la sesión en un crystal", false),
     ("/insights", "Insights consolidados", false),
@@ -2632,6 +2636,7 @@ impl App {
     fn composer(&mut self, ui: &mut egui::Ui) {
         let busy = self.tabs[self.tab].busy();
         let mut enviar = false;
+        let mut detener = false;
         let mut abrir_dialogo = false;
         let mut quitar: Option<usize> = None;
 
@@ -2711,27 +2716,46 @@ impl App {
                     right(ui, 26.0, |ui| {
                         // Redondo y relleno de acento: es la ÚNICA acción primaria
                         // de la vista, y el CSS le da el único acento sólido.
-                        let (sr, sresp) = ui.allocate_exact_size(
-                            egui::vec2(30.0, 30.0),
-                            if busy { egui::Sense::hover() } else { egui::Sense::click() },
-                        );
+                        // Mientras Lucy escribe, el MISMO botón detiene. En el
+                        // mismo sitio y no como un control extra: es la única
+                        // acción que tiene sentido en ese momento, y buscar un
+                        // segundo botón mientras el texto corre es lo que hace
+                        // que uno acabe esperando a que termine.
+                        let (sr, sresp) =
+                            ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
                         let fill = if busy {
-                            theme::ACC.linear_multiply(0.4)
+                            theme::BG4
                         } else if sresp.hovered() {
                             theme::ACC_HOVER
                         } else {
                             theme::ACC
                         };
                         ui.painter().circle_filled(sr.center(), 15.0, fill);
-                        icons::draw(
-                            ui.painter(),
-                            icons::Icon::ArrowUp,
-                            sr.center(),
-                            17.0,
-                            theme::ACC_INK,
-                        );
-                        if sresp.clicked() {
-                            enviar = true;
+                        if busy {
+                            // Un cuadrado, que es el símbolo universal de parar.
+                            ui.painter().rect_filled(
+                                egui::Rect::from_center_size(sr.center(), egui::vec2(10.0, 10.0)),
+                                egui::Rounding::same(2.0),
+                                theme::TXT,
+                            );
+                        } else {
+                            icons::draw(
+                                ui.painter(),
+                                icons::Icon::ArrowUp,
+                                sr.center(),
+                                17.0,
+                                theme::ACC_INK,
+                            );
+                        }
+                        if sresp
+                            .on_hover_text(if busy { "Detener" } else { "Enviar" })
+                            .clicked()
+                        {
+                            if busy {
+                                detener = true;
+                            } else {
+                                enviar = true;
+                            }
                         }
                     });
                 });
@@ -2751,6 +2775,23 @@ impl App {
             // no hay nada que animar detrás.
             if let Some(paths) = rfd::FileDialog::new().pick_files() {
                 self.attach(&paths);
+            }
+        }
+        if detener {
+            // Se marca la bandera y se cierra el turno EN EL SITIO: el hilo la
+            // verá entre tramas, pero la interfaz tiene que responder al clic
+            // ahora, no cuando llegue la siguiente trama de la red.
+            let t = &mut self.tabs[self.tab];
+            t.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            t.rx = None;
+            let resto = t.drain.flush();
+            if let Some(last) = t.log.last_mut() {
+                last.text.push_str(&resto);
+                // Se dice que se paró. Una respuesta cortada sin marca se lee
+                // como una respuesta que terminó mal.
+                last.text.push_str("
+
+_(detenido por el operador)_");
             }
         }
         if enviar && !busy {
@@ -2910,7 +2951,39 @@ impl App {
             elegido = Some(hits[0].0);
         }
         if let Some(c) = elegido {
-            self.tabs[self.tab].input = format!("{c} ");
+            // Los que ESTA versión sabe hacer se ejecutan al elegirlos; los
+            // demás rellenan el campo, que es lo único honesto que se puede
+            // hacer con un comando que todavía no existe.
+            self.tabs[self.tab].input.clear();
+            match c {
+                "/clear" => {
+                    let t = &mut self.tabs[self.tab];
+                    t.log.clear();
+                    t.ws.reset();
+                    t.drain.flush();
+                }
+                // Abre el desplegable de modelos donde ya está, en vez de
+                // duplicar el selector en otro sitio.
+                "/model" => {
+                    let id = ui.make_persistent_id("model-menu");
+                    ui.memory_mut(|m| m.open_popup(id));
+                }
+                "/memory" => self.view = View::Memoria,
+                "/help" => {
+                    let mut s = String::from("Comandos disponibles:
+
+");
+                    for (cmd, desc, listo) in SLASH {
+                        s.push_str(&format!(
+                            "- `{cmd}` — {desc}{}
+",
+                            if listo { "" } else { "  _(sin migrar)_" }
+                        ));
+                    }
+                    self.tabs[self.tab].log.push(ChatMsg::new(false, s));
+                }
+                otro => self.tabs[self.tab].input = format!("{otro} "),
+            }
         }
     }
 
@@ -2956,9 +3029,6 @@ impl App {
             self.log_lines.as_deref().unwrap_or(&[]),
         );
         prompt.push_str(&text);
-        let prompt = format!("{sys_prompt}
---- ORDEN DEL OPERADOR ---
-{prompt}");
 
         {
             let t = &mut self.tabs[self.tab];
@@ -2989,9 +3059,34 @@ impl App {
                 shown.push_str(&format!("\n⎘ {n}"));
             }
             t.log.push(ChatMsg::new(true, shown));
-            t.log.push(ChatMsg::new(false, String::new()));
             t.attachments.clear();
-            t.rx = Some(lucy_core::cloud::start(self.chat_model.clone(), prompt));
+        }
+
+        // La conversación ENTERA, no solo la orden. Se construye después de
+        // meter el mensaje en el hilo para que el turno actual vaya dentro, y
+        // antes de abrir el hueco de la respuesta para que no viaje un turno
+        // vacío del asistente.
+        //
+        // El prompt que se manda al modelo lleva los ficheros pegados; el que se
+        // ve en el hilo, no. Por eso se sustituye el último turno.
+        let mut conv = self.history(self.tab);
+        if let Some(last) = conv.last_mut() {
+            last.text = prompt;
+        }
+        let turns = lucy_core::turns::fit(
+            &sys_prompt,
+            &conv,
+            lucy_core::turns::MAX_HISTORY_CHARS,
+        );
+        {
+            let t = &mut self.tabs[self.tab];
+            t.log.push(ChatMsg::new(false, String::new()));
+            t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            t.rx = Some(lucy_core::cloud::start_cancellable(
+                self.chat_model.clone(),
+                turns,
+                t.stop.clone(),
+            ));
         }
 
         for (n, blocked) in &adjuntos {
@@ -3093,6 +3188,30 @@ impl App {
         }
     }
 
+    /// La conversación de una pestaña, en la forma que entiende el modelo.
+    ///
+    /// Las líneas de comando ejecutado entran como turno del OPERADOR, no del
+    /// asistente: la salida es un hecho del mundo que se le está contando a
+    /// Lucy, no algo que ella dijera. Atribuírselo la llevaría a creer que ya
+    /// había visto y comentado esa salida.
+    fn history(&self, ti: usize) -> Vec<lucy_core::turns::Turn> {
+        use lucy_core::turns::Turn;
+        self.tabs[ti]
+            .log
+            .iter()
+            .filter(|m| !(m.role == Role::Lucy && m.text.trim().is_empty()))
+            .map(|m| match &m.role {
+                Role::User => Turn::user(m.text.clone()),
+                Role::Lucy => Turn::assistant(m.text.clone()),
+                Role::Exec(cmd, ok, out) => Turn::user(format!(
+                    "[salida del comando `{cmd}` · {}]
+{out}",
+                    if *ok { "correcto" } else { "con error" }
+                )),
+            })
+            .collect()
+    }
+
     /// Manda un turno cuyo texto NO lo escribió el operador.
     ///
     /// En el hilo se ve una línea corta —"resultado devuelto"— y no el volcado
@@ -3108,19 +3227,30 @@ impl App {
             &self.services,
             self.log_lines.as_deref().unwrap_or(&[]),
         );
-        let t = &mut self.tabs[ti];
-        let resto = t.drain.flush();
-        if !resto.is_empty() {
-            if let Some(last) = t.log.last_mut() {
-                last.text.push_str(&resto);
+        {
+            let t = &mut self.tabs[ti];
+            let resto = t.drain.flush();
+            if !resto.is_empty() {
+                if let Some(last) = t.log.last_mut() {
+                    last.text.push_str(&resto);
+                }
             }
         }
+        // Con la conversación entera: la salida del comando se entiende contra
+        // la pregunta que la provocó, y sin ella Lucy resume a ciegas.
+        let mut conv = self.history(ti);
+        conv.push(lucy_core::turns::Turn::user(prompt));
+        let turns =
+            lucy_core::turns::fit(&sys, &conv, lucy_core::turns::MAX_HISTORY_CHARS);
+        let t = &mut self.tabs[ti];
         // La línea del comando ya se añadió en `pump_exec`: aquí solo se abre el
         // hueco de la respuesta.
         t.log.push(ChatMsg::new(false, String::new()));
-        t.rx = Some(lucy_core::cloud::start(
+        t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        t.rx = Some(lucy_core::cloud::start_cancellable(
             self.chat_model.clone(),
-            format!("{sys}\n--- ORDEN DEL OPERADOR ---\n{prompt}"),
+            turns,
+            t.stop.clone(),
         ));
         self.tabs[ti].ws.status.running = true;
         self.tabs[ti].turn_start = Some(Instant::now());
