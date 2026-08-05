@@ -110,6 +110,73 @@ pub fn run_elevated(_cmd: &str) -> Result<(String, bool), String> {
     Err("La elevación solo existe en Windows".into())
 }
 
+/// Qué se puede hacer con la elevación en ESTE equipo y ESTA sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Elevation {
+    /// El proceso YA tiene privilegios de administrador. Pedir elevación no
+    /// haría nada: si un comando falló por permisos, no es por eso.
+    Already,
+    /// Sin privilegios, pero con UAC activo: `RunAs` lanzará el diálogo.
+    CanPrompt,
+    /// Sin privilegios y sin UAC. No hay forma de elevar sobre la marcha: la
+    /// cuenta no es administradora y el mecanismo de consentimiento está
+    /// apagado. Hay que abrir Lucy con otra cuenta.
+    Unavailable,
+}
+
+/// La consulta que responde las dos preguntas de una vez.
+///
+/// `IsInRole(Administrator)` es exactamente lo que se necesita y no la
+/// comprobación de grupo a secas: devuelve verdadero cuando el token está
+/// ELEVADO, o cuando UAC está apagado y la cuenta es administradora — es decir,
+/// "¿mando en esta máquina AHORA MISMO?". `EnableLUA` distingue los dos noes.
+pub const PROBE: &str = "$e = ([Security.Principal.WindowsPrincipal]\
+    [Security.Principal.WindowsIdentity]::GetCurrent())\
+    .IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); \
+    $u = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' \
+    -Name EnableLUA -ErrorAction SilentlyContinue).EnableLUA; \
+    Write-Output \"$e|$u\"";
+
+/// Interpreta la salida de `PROBE`.
+///
+/// Ante una lectura que no se entiende se asume `CanPrompt`: ofrecer un botón
+/// que quizá no haga falta cuesta un clic, y esconderlo cuando sí hacía falta
+/// deja al operador sin salida.
+pub fn parse_probe(out: &str) -> Elevation {
+    let s = out.trim().to_lowercase();
+    let (admin, uac) = s.split_once('|').unwrap_or((s.as_str(), ""));
+    if admin.trim() == "true" {
+        return Elevation::Already;
+    }
+    // `EnableLUA` ausente significa activo: es el valor por defecto de Windows,
+    // y solo aparece explícitamente cuando alguien lo tocó.
+    if uac.trim() == "0" {
+        Elevation::Unavailable
+    } else {
+        Elevation::CanPrompt
+    }
+}
+
+/// Estado de elevación de esta sesión, consultado UNA vez.
+///
+/// Una vez porque no cambia mientras el proceso vive: ni el token ni la
+/// política de UAC se mueven bajo los pies de una aplicación en marcha, y la
+/// consulta lanza un PowerShell que no hay por qué repetir en cada frame.
+#[cfg(windows)]
+pub fn state() -> Elevation {
+    use std::sync::OnceLock;
+    static S: OnceLock<Elevation> = OnceLock::new();
+    *S.get_or_init(|| match crate::shell::run_powershell_utf8(PROBE) {
+        Ok((out, _, _)) => parse_probe(&out),
+        Err(_) => Elevation::CanPrompt,
+    })
+}
+
+#[cfg(not(windows))]
+pub fn state() -> Elevation {
+    Elevation::Unavailable
+}
+
 /// ¿La salida de un comando dice que le faltaron privilegios?
 ///
 /// Sirve para OFRECER la elevación después de un fallo, en vez de pedirla por
@@ -190,5 +257,45 @@ mod tests {
         let (a, _) = temp_pair();
         let (b, _) = temp_pair();
         assert_ne!(a, b);
+    }
+}
+
+#[cfg(test)]
+mod estado {
+    use super::*;
+
+    #[test]
+    fn ya_administrador_no_necesita_pedir_nada() {
+        // Con UAC apagado y cuenta de administrador, `IsInRole` da true: el
+        // proceso YA manda. Ofrecer "reintentar como administrador" ahí sería
+        // una promesa falsa — el reintento fallaría igual, porque lo que falló
+        // no fueron los permisos.
+        assert_eq!(parse_probe("True|0"), Elevation::Already);
+        assert_eq!(parse_probe("True|1"), Elevation::Already);
+        assert_eq!(parse_probe("true|"), Elevation::Already);
+    }
+
+    #[test]
+    fn sin_privilegios_y_con_uac_se_puede_pedir() {
+        assert_eq!(parse_probe("False|1"), Elevation::CanPrompt);
+        // `EnableLUA` ausente es UAC ACTIVO: es el valor por defecto de Windows
+        // y solo aparece escrito cuando alguien lo cambió.
+        assert_eq!(parse_probe("False|"), Elevation::CanPrompt);
+    }
+
+    #[test]
+    fn sin_privilegios_y_sin_uac_no_hay_nada_que_pedir() {
+        // Cuenta estándar con el consentimiento apagado: no existe forma de
+        // elevar sobre la marcha, y el botón mentiría. Hay que abrir Lucy con
+        // otra cuenta, y eso es lo que hay que decir.
+        assert_eq!(parse_probe("False|0"), Elevation::Unavailable);
+    }
+
+    #[test]
+    fn una_lectura_ilegible_prefiere_ofrecer_el_boton() {
+        // Ofrecer un botón que quizá no hacía falta cuesta un clic; esconderlo
+        // cuando sí hacía falta deja al operador sin salida.
+        assert_eq!(parse_probe(""), Elevation::CanPrompt);
+        assert_eq!(parse_probe("basura"), Elevation::CanPrompt);
     }
 }
