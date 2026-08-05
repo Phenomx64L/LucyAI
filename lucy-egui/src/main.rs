@@ -26,7 +26,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn main() -> eframe::Result {
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1180.0, 760.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1180.0, 760.0])
+            // Por debajo de esto la rejilla del dashboard empieza a apilar
+            // columnas de 48 px y el compositor se queda sin sitio para el
+            // campo de texto.
+            .with_min_inner_size([900.0, 560.0])
+            // Sin barra de título del sistema: la cabecera de la aplicación ES
+            // la barra de título. Con las dos, Lucy tendría dos cabeceras de
+            // distinto color y distinta altura, una encima de la otra.
+            //
+            // Lo que hay que reponer a mano está en `window_buttons` y en el
+            // manejador de arrastre de la cabecera. El redimensionado NO: winit
+            // sigue dando los bordes mientras la ventana sea `resizable`.
+            .with_decorations(false)
+            .with_resizable(true),
         ..Default::default()
     };
     eframe::run_native(
@@ -1679,10 +1693,20 @@ impl eframe::App for App {
         }
 
         // ── cabecera ─────────────────────────────────────────────────────────
+        //
+        // ES la barra de título de la ventana. La del sistema está apagada
+        // (`with_decorations(false)`), y esta ocupa su sitio: la V2 no enseña
+        // una barra de Windows encima de su propio cromo, y con las dos la
+        // aplicación tiene dos cabeceras de distinto color y dos alturas.
+        //
+        // Lo que había que reponer a mano al quitarla: arrastrar la ventana,
+        // maximizar con doble clic, y los tres botones. El redimensionado lo
+        // sigue dando winit por los bordes mientras la ventana sea `resizable`.
         egui::TopBottomPanel::top("header")
             .exact_height(44.0)
             .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
             .show(ctx, |ui| {
+                let bar = ui.max_rect();
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("✦ Lucy").color(theme::ACC).strong().size(15.0));
                     ui.add_space(14.0);
@@ -1704,7 +1728,24 @@ impl eframe::App for App {
                                 );
                             });
                     }
+                    right(ui, 30.0, |ui| self.window_buttons(ui));
                 });
+
+                // El arrastre se comprueba sobre la franja ENTERA y después de
+                // dibujar: así los botones se quedan con sus clics y el resto
+                // de la barra mueve la ventana, que es como se comporta
+                // cualquier barra de título.
+                let drag = ui.interact(
+                    bar,
+                    egui::Id::new("titlebar-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if drag.double_clicked() {
+                    let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+                } else if drag.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
             });
 
         // ── barra de estado ──────────────────────────────────────────────────
@@ -2431,6 +2472,55 @@ impl App {
             // enviar es una petición perfectamente clara.
             if !text.trim().is_empty() || !self.tabs[self.tab].attachments.is_empty() {
                 self.send(text);
+            }
+        }
+    }
+
+    /// Minimizar, maximizar y cerrar, a la derecha de la barra de título.
+    ///
+    /// En el orden de Windows —cerrar el ÚLTIMO, pegado a la esquina— porque el
+    /// músculo del operador ya está entrenado ahí, y el botón que no se puede
+    /// deshacer es el peor sitio para innovar. Como la fila se dibuja de derecha
+    /// a izquierda, se piden en ese mismo orden.
+    fn window_buttons(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+
+        for (icon, tip, danger) in [
+            (icons::Icon::Close, "Cerrar", true),
+            (
+                if maximized { icons::Icon::Restore } else { icons::Icon::Maximize },
+                if maximized { "Restaurar" } else { "Maximizar" },
+                false,
+            ),
+            (icons::Icon::Minimize, "Minimizar", false),
+        ] {
+            let (r, resp) =
+                ui.allocate_exact_size(egui::vec2(34.0, 30.0), egui::Sense::click());
+            if resp.hovered() {
+                // El de cerrar se tiñe de rojo al pasar por encima, como toda
+                // ventana de Windows. Es la única señal antes de un clic que no
+                // se puede deshacer.
+                ui.painter().rect_filled(
+                    r,
+                    egui::Rounding::same(6.0),
+                    if danger { theme::RED.linear_multiply(0.85) } else { theme::BG4 },
+                );
+            }
+            let fg = if resp.hovered() && danger {
+                theme::TXT
+            } else if resp.hovered() {
+                theme::TXT
+            } else {
+                theme::TXT3
+            };
+            icons::draw(ui.painter(), icon, r.center(), 15.0, fg);
+            if resp.on_hover_text(tip).clicked() {
+                ctx.send_viewport_cmd(match tip {
+                    "Cerrar" => egui::ViewportCommand::Close,
+                    "Minimizar" => egui::ViewportCommand::Minimized(true),
+                    _ => egui::ViewportCommand::Maximized(!maximized),
+                });
             }
         }
     }

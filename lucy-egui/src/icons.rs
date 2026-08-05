@@ -65,6 +65,13 @@ pub enum Icon {
     Desktop,
     /// `server` — un equipo remoto.
     Server,
+    /// `minus` — minimizar la ventana.
+    Minimize,
+    /// `square` — maximizar.
+    Maximize,
+    /// `copy` desplazado — restaurar desde maximizada, dos rectángulos como en
+    /// cualquier ventana de Windows.
+    Restore,
 }
 
 impl Icon {
@@ -220,6 +227,12 @@ impl Icon {
                 Seg::Path(&[(7.0, 7.0), (7.01, 7.0)]),
                 Seg::Path(&[(7.0, 17.0), (7.01, 17.0)]),
             ],
+            Self::Minimize => &[Seg::Path(&[(6.0, 12.0), (18.0, 12.0)])],
+            Self::Maximize => &[Seg::Rect((6.0, 6.0), (18.0, 18.0), 1.5)],
+            Self::Restore => &[
+                Seg::Rect((5.0, 8.0), (16.0, 19.0), 1.5),
+                Seg::Path(&[(8.0, 5.0), (19.0, 5.0), (19.0, 16.0)]),
+            ],
         }
     }
 }
@@ -268,12 +281,12 @@ pub fn show(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) -> egui::R
 mod tests {
     use super::*;
 
-    /// Los 18 iconos, uno por uno.
-    const ALL: [Icon; 18] = [
+    /// Los 21 iconos, uno por uno.
+    const ALL: [Icon; 21] = [
         Icon::Grid, Icon::Sparkles, Icon::Terminal, Icon::FileText, Icon::Database,
         Icon::Shield, Icon::Memory, Icon::Settings, Icon::Refresh, Icon::ChevronDown,
         Icon::Clip, Icon::Mic, Icon::ArrowUp, Icon::Plus, Icon::Close, Icon::Copy,
-        Icon::Desktop, Icon::Server,
+        Icon::Desktop, Icon::Server, Icon::Minimize, Icon::Maximize, Icon::Restore,
     ];
 
     #[test]
