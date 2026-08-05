@@ -19,6 +19,7 @@ mod icons;
 mod prompt;
 mod theme;
 mod voice;
+mod whisper;
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -2785,8 +2786,16 @@ impl App {
                         17.0,
                         if grabando { theme::RED } else { theme::TXT3 },
                     );
+                    // El estado del modelo se dice EN EL BOTÓN, antes de grabar.
+                    // Descubrir que falta después de hablar treinta segundos es
+                    // perder los treinta segundos.
+                    let modelo = whisper::status();
                     if mresp
-                        .on_hover_text(if grabando { "Detener el dictado" } else { "Dictar" })
+                        .on_hover_text(if grabando {
+                            "Detener el dictado".to_string()
+                        } else {
+                            format!("Dictar — {}", modelo.message())
+                        })
                         .clicked()
                     {
                         dictar = true;
