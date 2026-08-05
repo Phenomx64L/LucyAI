@@ -62,7 +62,6 @@ pub const DISABLED: Color32 = Color32::from_rgb(0x3C, 0x45, 0x50);
 /// `--accent`.
 pub const ACC: Color32 = Color32::from_rgb(0x3D, 0xD6, 0xA4);
 /// `--accent-hover`.
-#[allow(dead_code)]
 pub const ACC_HOVER: Color32 = Color32::from_rgb(0x34, 0xC2, 0x96);
 /// `--accent-ink` — texto SOBRE un relleno de acento sólido.
 pub const ACC_INK: Color32 = Color32::from_rgb(0x07, 0x13, 0x0E);

@@ -13,6 +13,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod hosts;
+mod icons;
 mod theme;
 
 use eframe::egui;
@@ -60,17 +61,31 @@ enum View {
 }
 
 impl View {
-    /// (glifo, etiqueta) — el sistema de iconos geométricos de Lucy.
-    fn label(self) -> (&'static str, &'static str) {
+    /// El nombre que ve el operador.
+    fn label(self) -> &'static str {
         match self {
-            View::Dashboard => ("◱", "Dashboard"),
-            View::TerminalIa => ("✦", "Terminal IA"),
-            View::NexShell => ("▸", "NexShell"),
-            View::LogViewer => ("▤", "Log Viewer"),
-            View::Inventario => ("▦", "Inventario"),
-            View::Compliance => ("◈", "Compliance"),
-            View::Memoria => ("◉", "Memoria"),
-            View::Configuracion => ("⚙", "Configuración"),
+            View::Dashboard => "Dashboard",
+            View::TerminalIa => "Terminal IA",
+            View::NexShell => "NexShell",
+            View::LogViewer => "Log Viewer",
+            View::Inventario => "Inventario",
+            View::Compliance => "Compliance",
+            View::Memoria => "Memoria",
+            View::Configuracion => "Configuración",
+        }
+    }
+
+    /// Su icono, el mismo que usa la V2.
+    fn icon(self) -> icons::Icon {
+        match self {
+            View::Dashboard => icons::Icon::Grid,
+            View::TerminalIa => icons::Icon::Sparkles,
+            View::NexShell => icons::Icon::Terminal,
+            View::LogViewer => icons::Icon::FileText,
+            View::Inventario => icons::Icon::Database,
+            View::Compliance => icons::Icon::Shield,
+            View::Memoria => icons::Icon::Memory,
+            View::Configuracion => icons::Icon::Settings,
         }
     }
 
@@ -804,13 +819,10 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
 /// Se mide y se pinta a mano en vez de usar un `Button` porque el icono va en
 /// acento y el nombre en secundario — dos colores en un control, que es lo que
 /// hace que se lea como un selector y no como un botón cualquiera.
-fn host_pill(ui: &mut egui::Ui, icon: &str, name: &str) -> egui::Response {
+fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response {
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
-    let tw = |ui: &egui::Ui, s: &str| {
-        ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), theme::TXT3).size().x)
-    };
-    let (iw, nw) = (tw(ui, icon), tw(ui, name));
-    let chev = 12.0;
+    let nw = ui.fonts(|f| f.layout_no_wrap(name.to_string(), font.clone(), theme::TXT3).size().x);
+    let (iw, chev) = (15.0, 13.0);
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(10.0 + iw + 6.0 + nw + 6.0 + chev + 10.0, 24.0),
         egui::Sense::click(),
@@ -822,21 +834,27 @@ fn host_pill(ui: &mut egui::Ui, icon: &str, name: &str) -> egui::Response {
         egui::Stroke::new(1.0_f32, theme::BDR),
     );
     let cy = rect.center().y;
-    let mut x = rect.left() + 10.0;
-    for (s, col, adv) in [
-        (icon, theme::ACC, iw + 6.0),
-        (name, theme::TXT3, nw + 6.0),
-        ("▾", theme::TXT3, 0.0),
-    ] {
-        ui.painter().text(
-            egui::pos2(x, cy),
-            egui::Align2::LEFT_CENTER,
-            s,
-            font.clone(),
-            col,
-        );
-        x += adv;
-    }
+    icons::draw(
+        ui.painter(),
+        icon,
+        egui::pos2(rect.left() + 10.0 + iw / 2.0, cy),
+        15.0,
+        theme::ACC,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0 + iw + 6.0, cy),
+        egui::Align2::LEFT_CENTER,
+        name,
+        font,
+        theme::TXT3,
+    );
+    icons::draw(
+        ui.painter(),
+        icons::Icon::ChevronDown,
+        egui::pos2(rect.right() - 11.0, cy),
+        13.0,
+        theme::TXT3,
+    );
     resp
 }
 
@@ -845,7 +863,14 @@ fn host_pill(ui: &mut egui::Ui, icon: &str, name: &str) -> egui::Response {
 /// El nombre se recorta contra la etiqueta en vez de empujarla fuera: un equipo
 /// con nombre largo no debe poder esconder CÓMO se llega a él, que es el dato
 /// que dice si va por WinRM o por SSH.
-fn host_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, kind: &str, sel: bool) -> bool {
+fn host_option(
+    ui: &mut egui::Ui,
+    w: f32,
+    icon: icons::Icon,
+    name: &str,
+    kind: &str,
+    sel: bool,
+) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
     if resp.hovered() {
         ui.painter()
@@ -854,11 +879,11 @@ fn host_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, kind: &str, se
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
     let small = egui::FontId::proportional(theme::FS_CAPTION);
     let cy = rect.center().y;
-    ui.painter().text(
-        egui::pos2(rect.left() + 10.0, cy),
-        egui::Align2::LEFT_CENTER,
+    icons::draw(
+        ui.painter(),
         icon,
-        font.clone(),
+        egui::pos2(rect.left() + 17.0, cy),
+        16.0,
         if sel { theme::ACC } else { theme::TXT3 },
     );
     let chip_w = ui.fonts(|f| {
@@ -935,11 +960,11 @@ fn model_pill(ui: &mut egui::Ui, icon: &str, name: &str, max_w: f32) -> egui::Re
             font.clone(),
             theme::TXT3,
         );
-    ui.painter().text(
-        egui::pos2(rect.right() - 10.0, cy),
-        egui::Align2::RIGHT_CENTER,
-        "▾",
-        font,
+    icons::draw(
+        ui.painter(),
+        icons::Icon::ChevronDown,
+        egui::pos2(rect.right() - 11.0, cy),
+        13.0,
         theme::TXT3,
     );
     resp
@@ -1193,13 +1218,18 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> bool {
 }
 
 /// Botón de icono sin relleno ni borde — los del compositor.
-fn ghost_icon(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(glyph).size(15.0).color(theme::TXT3))
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(egui::Stroke::NONE)
-            .min_size(egui::vec2(24.0, 24.0)),
-    )
+///
+/// Se aclara al pasar el cursor. Es la única respuesta que tiene un botón sin
+/// fondo, y sin ella no hay forma de saber que es pulsable hasta pulsarlo.
+fn ghost_icon(ui: &mut egui::Ui, icon: icons::Icon) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    let c = if resp.hovered() { theme::TXT } else { theme::TXT3 };
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::Rounding::same(6.0), theme::BG4);
+    }
+    icons::draw(ui.painter(), icon, rect.center(), 17.0, c);
+    resp
 }
 
 /// Un lado de un control segmentado. Activo = relleno de acento con tinta
@@ -1612,8 +1642,7 @@ impl eframe::App for App {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("✦ Lucy").color(theme::ACC).strong().size(15.0));
                     ui.add_space(14.0);
-                    let (_, title) = self.view.label();
-                    ui.label(egui::RichText::new(title).color(theme::TXT).size(13.5));
+                    ui.label(egui::RichText::new(self.view.label()).color(theme::TXT).size(13.5));
                     if self.view == View::TerminalIa {
                         ui.add_space(6.0);
                         // El badge COCKPIT de la app: fondo tenue del acento,
@@ -1680,7 +1709,7 @@ impl eframe::App for App {
             .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(0.0, 10.0)))
             .show(ctx, |ui| {
                 for v in View::ALL {
-                    let (glyph, label) = v.label();
+                    let label = v.label();
                     let active = self.view == v;
                     let pending = v.pending_needs().is_some();
 
@@ -1723,15 +1752,15 @@ impl eframe::App for App {
                         );
                     }
                     let c = resp.rect.center();
-                    ui.painter().text(
-                        egui::pos2(c.x, c.y - 7.0),
-                        egui::Align2::CENTER_CENTER,
-                        glyph,
-                        egui::FontId::proportional(15.0),
+                    icons::draw(
+                        ui.painter(),
+                        v.icon(),
+                        egui::pos2(c.x, c.y - 8.0),
+                        20.0,
                         fg,
                     );
                     ui.painter().text(
-                        egui::pos2(c.x, c.y + 11.0),
+                        egui::pos2(c.x, c.y + 12.0),
                         egui::Align2::CENTER_CENTER,
                         label,
                         egui::FontId::proportional(9.5),
@@ -1910,18 +1939,22 @@ impl App {
                     cerrar = Some(i);
                 }
             }
-            let plus = egui::Button::new(
-                egui::RichText::new("+").size(15.0).color(theme::TXT3),
-            )
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
-            .rounding(egui::Rounding::same(theme::R_SM))
-            .min_size(egui::vec2(28.0, 26.0));
-            if ui
-                .add(plus)
-                .on_hover_text("Nueva terminal")
-                .clicked()
-            {
+            let (pr, presp) =
+                ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
+            ui.painter().rect(
+                pr,
+                egui::Rounding::same(theme::R_SM),
+                if presp.hovered() { theme::BG4 } else { egui::Color32::TRANSPARENT },
+                egui::Stroke::new(1.0_f32, theme::BDR),
+            );
+            icons::draw(
+                ui.painter(),
+                icons::Icon::Plus,
+                pr.center(),
+                15.0,
+                if presp.hovered() { theme::TXT } else { theme::TXT3 },
+            );
+            if presp.on_hover_text("Nueva terminal").clicked() {
                 abrir = true;
             }
         });
@@ -2258,7 +2291,7 @@ impl App {
                 row_align(ui, 26.0, egui::Align::Center, |ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
 
-                    if ghost_icon(ui, "⎘")
+                    if ghost_icon(ui, icons::Icon::Clip)
                         .on_hover_text("Adjuntar fichero — o arrastra uno a la ventana")
                         .clicked()
                     {
@@ -2267,7 +2300,7 @@ impl App {
                     // El dictado sigue sin hacer nada, y lo dice. Un botón que
                     // ignora los clics en silencio es peor que uno ausente, y
                     // este además nombra el obstáculo real.
-                    if ghost_icon(ui, "⏺")
+                    if ghost_icon(ui, icons::Icon::Mic)
                         .on_hover_text(
                             "Dictado por voz — pendiente: la V2 usa la API del navegador y \
                              un shell nativo necesita otro motor",
@@ -2291,14 +2324,28 @@ impl App {
                     }
 
                     right(ui, 26.0, |ui| {
-                        let b = egui::Button::new(
-                            egui::RichText::new("↑").size(15.0).color(theme::ACC_INK),
-                        )
-                        .fill(theme::ACC)
-                        .stroke(egui::Stroke::NONE)
-                        .rounding(egui::Rounding::same(999.0))
-                        .min_size(egui::vec2(30.0, 26.0));
-                        if ui.add_enabled(!busy, b).clicked() {
+                        // Redondo y relleno de acento: es la ÚNICA acción primaria
+                        // de la vista, y el CSS le da el único acento sólido.
+                        let (sr, sresp) = ui.allocate_exact_size(
+                            egui::vec2(30.0, 30.0),
+                            if busy { egui::Sense::hover() } else { egui::Sense::click() },
+                        );
+                        let fill = if busy {
+                            theme::ACC.linear_multiply(0.4)
+                        } else if sresp.hovered() {
+                            theme::ACC_HOVER
+                        } else {
+                            theme::ACC
+                        };
+                        ui.painter().circle_filled(sr.center(), 15.0, fill);
+                        icons::draw(
+                            ui.painter(),
+                            icons::Icon::ArrowUp,
+                            sr.center(),
+                            17.0,
+                            theme::ACC_INK,
+                        );
+                        if sresp.clicked() {
                             enviar = true;
                         }
                     });
@@ -2491,10 +2538,10 @@ impl App {
         if !self.ws.is_empty() {
             row_align(ui, 22.0, egui::Align::Center, |ui| {
                 right(ui, 22.0, |ui| {
-                    if ghost_icon(ui, "✕").on_hover_text("Limpiar el workspace").clicked() {
+                    if ghost_icon(ui, icons::Icon::Close).on_hover_text("Limpiar el workspace").clicked() {
                         self.ws.reset();
                     }
-                    if ghost_icon(ui, "⎘")
+                    if ghost_icon(ui, icons::Icon::Copy)
                         .on_hover_text("Exportar el run (copia al portapapeles)")
                         .clicked()
                     {
@@ -3041,14 +3088,11 @@ impl App {
     }
 
     fn pendiente(&mut self, ui: &mut egui::Ui, v: View) {
-        let (glyph, label) = v.label();
+        let label = v.label();
         ui.add_space(48.0);
         ui.vertical_centered(|ui| {
-            ui.label(
-                egui::RichText::new(glyph)
-                    .size(38.0)
-                    .color(theme::TXT3.linear_multiply(0.5)),
-            );
+            // El icono de la vista, atenuado: dice CUÁL falta sin gritarlo.
+            icons::show(ui, v.icon(), 34.0, theme::TXT3.linear_multiply(0.5));
             ui.add_space(10.0);
             ui.label(egui::RichText::new(label).size(17.0).color(theme::TXT));
             ui.add_space(4.0);
@@ -3100,7 +3144,11 @@ impl App {
                 // de enseñar un dashboard sin dueño.
                 .map_or_else(|| "(equipo no encontrado)".to_string(), |h| h.name.clone())
         };
-        let pill = host_pill(ui, if is_local { "▭" } else { "▤" }, &name);
+        let pill = host_pill(
+            ui,
+            if is_local { icons::Icon::Desktop } else { icons::Icon::Server },
+            &name,
+        );
         let popup_id = ui.make_persistent_id("host-menu");
         if pill.clicked() {
             // Se relee al abrir: el operador puede haber dado de alta un equipo
@@ -3120,14 +3168,14 @@ impl App {
                 let w = 236.0_f32;
                 ui.set_min_width(w);
                 ui.spacing_mut().item_spacing.y = 1.0;
-                if host_option(ui, w, "▭", "Este equipo", "local", is_local) {
+                if host_option(ui, w, icons::Icon::Desktop, "Este equipo", "local", is_local) {
                     elegido = Some("local".to_string());
                 }
                 for h in &self.remote_hosts {
                     if host_option(
                         ui,
                         w,
-                        "▤",
+                        icons::Icon::Server,
                         &h.name,
                         h.transport(),
                         h.id == self.selected_host,
@@ -3327,14 +3375,22 @@ impl App {
                 if self.svc_rx.is_some() {
                     ui.add(egui::Spinner::new().size(15.0).color(theme::ACC));
                 } else {
-                    let b = egui::Button::new(
-                        egui::RichText::new("↻").size(14.0).color(theme::TXT3),
-                    )
-                    .fill(egui::Color32::TRANSPARENT)
-                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
-                    .rounding(egui::Rounding::same(theme::R_MD))
-                    .min_size(egui::vec2(30.0, 26.0));
-                    pedir = ui.add(b).on_hover_text("Actualizar ahora").clicked();
+                    let (rr, rresp) =
+                        ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
+                    ui.painter().rect(
+                        rr,
+                        egui::Rounding::same(theme::R_MD),
+                        if rresp.hovered() { theme::BG3 } else { egui::Color32::TRANSPARENT },
+                        egui::Stroke::new(1.0_f32, theme::BDR),
+                    );
+                    icons::draw(
+                        ui.painter(),
+                        icons::Icon::Refresh,
+                        rr.center(),
+                        16.0,
+                        if rresp.hovered() { theme::TXT } else { theme::TXT3 },
+                    );
+                    pedir = rresp.on_hover_text("Actualizar ahora").clicked();
                 }
             });
             if pedir {
