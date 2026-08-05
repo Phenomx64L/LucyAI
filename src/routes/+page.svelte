@@ -11429,7 +11429,7 @@ if (Test-Path $src) {
     async function verificarDependencias() {
         const checks = [
             { name: 'PowerShell 5+', script: '$PSVersionTable.PSVersion.Major', min: 5 },
-            { name: 'OpenSSH',       script: '(Get-Command ssh -ErrorAction SilentlyContinue)?.Source', min: null },
+            { name: 'OpenSSH',       script: '$c = Get-Command ssh -ErrorAction SilentlyContinue; if ($c) { $c.Source }', min: null },
             { name: 'WinRM',         script: '(Get-Service WinRM).Status', min: null },
         ];
         const results = [];
