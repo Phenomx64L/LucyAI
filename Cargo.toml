@@ -13,6 +13,9 @@ serde_json = "1"
 once_cell  = "1"
 # Cliente HTTP bloqueante (ligero, sin tokio) para el chat con Ollama local.
 ureq       = "2"
+# El almacén de secretos del SO — las claves de API viven ahí, escritas por la
+# app real bajo el servicio "LucySysAdmin". Misma versión que `src-tauri`.
+keyring    = "2.3"
 # Métricas del sistema (CPU/RAM/discos/host) — misma versión que src-tauri.
 sysinfo    = "0.30"
 # Opcional: exportación del tipo a TypeScript. Solo la app Tauri la necesita —
