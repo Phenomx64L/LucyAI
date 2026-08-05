@@ -15,6 +15,7 @@
 mod avatar;
 mod hosts;
 mod icons;
+mod prompt;
 mod theme;
 
 use eframe::egui;
@@ -1708,7 +1709,28 @@ impl eframe::App for App {
             .exact_height(44.0)
             .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
             .show(ctx, |ui| {
+                // EL ORDEN ES AL REVÉS DE LO QUE PARECE, y equivocarse deja la
+                // ventana muerta. egui resuelve un solapamiento a favor del
+                // widget registrado MÁS TARDE, así que la franja de arrastre va
+                // PRIMERO y los botones después: registrada al final se quedaba
+                // con todos los clics de la barra y ni cerrar funcionaba.
                 let bar = ui.max_rect();
+                let drag = ui.interact(
+                    bar,
+                    egui::Id::new("titlebar-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if drag.double_clicked() {
+                    let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+                } else if drag.is_pointer_button_down_on() {
+                    // `is_pointer_button_down_on` y no `drag_started`: winit se
+                    // queda con el ratón en cuanto empieza el arrastre nativo,
+                    // así que egui nunca llega a ver el movimiento que
+                    // convertiría la pulsación en arrastre.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("✦ Lucy").color(theme::ACC).strong().size(15.0));
                     ui.add_space(14.0);
@@ -1732,22 +1754,6 @@ impl eframe::App for App {
                     }
                     right(ui, 30.0, |ui| self.window_buttons(ui));
                 });
-
-                // El arrastre se comprueba sobre la franja ENTERA y después de
-                // dibujar: así los botones se quedan con sus clics y el resto
-                // de la barra mueve la ventana, que es como se comporta
-                // cualquier barra de título.
-                let drag = ui.interact(
-                    bar,
-                    egui::Id::new("titlebar-drag"),
-                    egui::Sense::click_and_drag(),
-                );
-                if drag.double_clicked() {
-                    let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-                } else if drag.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
             });
 
         // ── barra de estado ──────────────────────────────────────────────────
@@ -2685,7 +2691,18 @@ impl App {
                 ));
             }
         }
+        // El prompt de sistema va DELANTE en cada turno: quién es Lucy y en qué
+        // equipo está. Sin él, un modelo de nube contesta lo único que puede —
+        // "no tengo acceso a tu computadora"— y tiene razón.
+        let sys_prompt = prompt::system_prompt(
+            &self.sys.snapshot(),
+            &self.services,
+            self.log_lines.as_deref().unwrap_or(&[]),
+        );
         prompt.push_str(&text);
+        let prompt = format!("{sys_prompt}
+--- ORDEN DEL OPERADOR ---
+{prompt}");
 
         {
             let t = &mut self.tabs[self.tab];
