@@ -239,6 +239,12 @@ fn stream(
         })?;
 
     let reader = BufReader::new(resp.into_reader());
+    // Un turno que no produce NADA tiene que decir por qué. Sin esto, un
+    // bloqueo del proveedor se ve como una burbuja vacía y diez segundos
+    // perdidos: ni error, ni respuesta, ni pista. Es lo que pasó.
+    let mut tokens = 0usize;
+    let mut motivo: Option<String> = None;
+
     for line in reader.lines() {
         let line = line.map_err(|e| format!("Se cortó el flujo de {}: {e}", p.label()))?;
         let Some(data) = line.strip_prefix("data:") else {
@@ -251,15 +257,84 @@ fn stream(
         let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
             continue;
         };
+        if let Some(r) = stop_reason(p, &v) {
+            motivo = Some(r);
+        }
         if let Some(t) = extract_delta(p, &v) {
-            if !t.is_empty() && tx.send(ChatEvent::Token(t)).is_err() {
-                // El receptor se fue —se cerró la pestaña— y no tiene sentido
-                // seguir consumiendo el flujo.
-                return Ok(());
+            if !t.is_empty() {
+                tokens += 1;
+                if tx.send(ChatEvent::Token(t)).is_err() {
+                    // El receptor se fue —se cerró la pestaña— y no tiene
+                    // sentido seguir consumiendo el flujo.
+                    return Ok(());
+                }
             }
         }
     }
+
+    if tokens == 0 {
+        return Err(match motivo {
+            Some(r) => format!(
+                "{} aceptó la petición pero no devolvió texto ({r}). \
+                 Prueba a reformular la orden o a cambiar de modelo.",
+                p.label()
+            ),
+            None => format!(
+                "{} aceptó la petición y cerró el flujo sin devolver texto ni motivo. \
+                 Suele ser un filtro de contenido del proveedor.",
+                p.label()
+            ),
+        });
+    }
     Ok(())
+}
+
+/// Por qué se paró la generación, cuando el proveedor lo dice.
+///
+/// Cada casa lo pone en un sitio y con otro nombre, y un `STOP` normal no
+/// interesa: solo se devuelve lo que explica una respuesta que NO llegó.
+pub fn stop_reason(p: Provider, v: &serde_json::Value) -> Option<String> {
+    let s = match p {
+        Provider::Gemini => {
+            // El bloqueo del prompt viene aparte del de la respuesta, y es el
+            // que deja el turno completamente vacío.
+            if let Some(b) = v
+                .get("promptFeedback")
+                .and_then(|f| f.get("blockReason"))
+                .and_then(|r| r.as_str())
+            {
+                return Some(format!("prompt bloqueado: {b}"));
+            }
+            v.get("candidates")?
+                .get(0)?
+                .get("finishReason")?
+                .as_str()?
+                .to_string()
+        }
+        Provider::Anthropic => {
+            if v.get("type").and_then(|t| t.as_str()) == Some("error") {
+                let m = v
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("error sin mensaje");
+                return Some(m.to_string());
+            }
+            v.get("delta")?.get("stop_reason")?.as_str()?.to_string()
+        }
+        _ => v
+            .get("choices")?
+            .get(0)?
+            .get("finish_reason")?
+            .as_str()?
+            .to_string(),
+    };
+    // `stop` y `end_turn` son el final normal y no explican nada.
+    if matches!(s.to_lowercase().as_str(), "stop" | "end_turn" | "") {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Saca el trozo de texto de un evento SSE. Cada casa lo pone en otro sitio.
@@ -389,5 +464,66 @@ mod tests {
     fn el_sufijo_de_gemini_se_limpia() {
         assert_eq!(clean_gemini("gemini-3.1-pro-preview::high"), "gemini-3.1-pro-preview");
         assert_eq!(clean_gemini("gemini-3.5-flash"), "gemini-3.5-flash");
+    }
+}
+
+#[cfg(test)]
+mod motivos {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn un_final_normal_no_explica_nada() {
+        // `STOP` es que terminó bien: devolverlo haría que un turno correcto
+        // llevara un motivo pegado como si algo hubiera fallado.
+        assert_eq!(
+            stop_reason(Provider::Gemini, &json!({"candidates":[{"finishReason":"STOP"}]})),
+            None
+        );
+        assert_eq!(
+            stop_reason(Provider::OpenAi, &json!({"choices":[{"finish_reason":"stop"}]})),
+            None
+        );
+        assert_eq!(
+            stop_reason(Provider::Anthropic, &json!({"delta":{"stop_reason":"end_turn"}})),
+            None
+        );
+    }
+
+    #[test]
+    fn un_bloqueo_de_gemini_se_nombra() {
+        // El caso real: 9.7 segundos, cero caracteres y ninguna explicación en
+        // pantalla. El bloqueo del PROMPT llega aparte del de la respuesta y es
+        // el que deja el turno completamente vacío.
+        assert_eq!(
+            stop_reason(
+                Provider::Gemini,
+                &json!({"promptFeedback":{"blockReason":"SAFETY"}})
+            ),
+            Some("prompt bloqueado: SAFETY".into())
+        );
+        assert_eq!(
+            stop_reason(Provider::Gemini, &json!({"candidates":[{"finishReason":"SAFETY"}]})),
+            Some("SAFETY".into())
+        );
+        assert_eq!(
+            stop_reason(Provider::Gemini, &json!({"candidates":[{"finishReason":"MAX_TOKENS"}]})),
+            Some("MAX_TOKENS".into())
+        );
+    }
+
+    #[test]
+    fn un_evento_de_error_de_anthropic_trae_su_mensaje() {
+        let v = json!({"type":"error","error":{"message":"overloaded_error"}});
+        assert_eq!(
+            stop_reason(Provider::Anthropic, &v),
+            Some("overloaded_error".into())
+        );
+    }
+
+    #[test]
+    fn una_trama_cualquiera_no_inventa_motivo() {
+        assert_eq!(stop_reason(Provider::Gemini, &json!({"foo":1})), None);
+        assert_eq!(stop_reason(Provider::OpenAi, &json!({"choices":[{"delta":{}}]})), None);
     }
 }
