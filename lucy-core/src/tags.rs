@@ -261,6 +261,38 @@ pub struct Cleaned {
     pub text: String,
     /// El razonamiento de los `<THOUGHT>`, en orden.
     pub thoughts: Vec<String>,
+    /// Cuántos comandos se quitaron del texto.
+    ///
+    /// Existe porque quitarlos EN SILENCIO deja la prosa colgando: el modelo
+    /// escribe "usa esta sintaxis:" y debajo no hay nada, y la respuesta parece
+    /// cortada. Con la cuenta, quien dibuja puede decir a dónde fueron.
+    pub commands: usize,
+}
+
+/// ¿El operador está pidiendo CÓDIGO en vez de una acción?
+///
+/// Port de `detectCodeGenIntent`. La diferencia importa: "reinicia el spooler"
+/// quiere que algo pase, y el comando es fontanería; "dame un script para
+/// reiniciar el spooler" quiere el comando EN LA RESPUESTA, y esconderlo
+/// convierte la respuesta en un texto que señala a un hueco.
+pub fn detect_code_gen_intent(text: &str) -> bool {
+    let t = text.to_lowercase();
+    // Las mismas familias que la expresión del original, en forma de pares
+    // "verbo + objeto": pedir un script, o pedir código/powershell.
+    const VERBS: [&str; 12] = [
+        "dame", "escribe", "escriba", "crea", "genera", "hazme", "haz", "necesito", "quiero",
+        "give me", "write", "create",
+    ];
+    for v in VERBS {
+        let Some(i) = t.find(v) else { continue };
+        let rest = &t[i + v.len()..];
+        if rest.contains("script") || rest.contains("código") || rest.contains("codigo")
+            || rest.contains("powershell") || rest.contains("comando")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Todas las etiquetas que hay que quitar de lo que ve el operador.
@@ -297,9 +329,21 @@ const HIDDEN: [&str; 12] = [
 /// decisión de fondo es la misma y es la que importa: el razonamiento se
 /// GUARDA y se enseña plegado, no se borra.
 pub fn clean_display(text: &str) -> Cleaned {
+    clean_display_with(text, false)
+}
+
+/// Igual, pero con la decisión de qué hacer con los comandos.
+///
+/// Con `code_gen`, un `<EXECUTE>` se convierte en un bloque de código en vez de
+/// desaparecer — es lo que hace el original cuando el operador ha PEDIDO el
+/// comando. Sin ese modo, una respuesta a "dame un script" sale sin el script.
+pub fn clean_display_with(text: &str, code_gen: bool) -> Cleaned {
     let low = text.to_ascii_lowercase();
     let mut cuts: Vec<(usize, usize)> = Vec::new();
     let mut thoughts: Vec<(usize, String)> = Vec::new();
+    // `(inicio, reemplazo)` — los trozos que no se borran sino que se cambian.
+    let mut swaps: Vec<(usize, String)> = Vec::new();
+    let mut commands = 0usize;
 
     for name in HIDDEN {
         let open = format!("<{name}");
@@ -332,6 +376,16 @@ pub fn clean_display(text: &str) -> Cleaned {
             if name == "thought" {
                 thoughts.push((start, text[body_start..inner_end].trim().to_string()));
             }
+            if name.starts_with("execute") {
+                commands += 1;
+                if code_gen {
+                    let lang = if name == "execute_cmd" { "cmd" } else { "powershell" };
+                    swaps.push((
+                        start,
+                        format!("\n```{lang}\n{}\n```\n", text[body_start..inner_end].trim()),
+                    ));
+                }
+            }
             cuts.push((start, end));
             i = end;
         }
@@ -344,6 +398,9 @@ pub fn clean_display(text: &str) -> Cleaned {
         if a > pos {
             out.push_str(&text[pos..a]);
         }
+        if let Some((_, rep)) = swaps.iter().find(|(s, _)| *s == a) {
+            out.push_str(rep);
+        }
         pos = pos.max(b);
     }
     if pos < text.len() {
@@ -354,6 +411,7 @@ pub fn clean_display(text: &str) -> Cleaned {
     Cleaned {
         text: out.trim().to_string(),
         thoughts: thoughts.into_iter().map(|(_, t)| t).filter(|t| !t.is_empty()).collect(),
+        commands,
     }
 }
 
@@ -570,5 +628,52 @@ mod display {
         let t = "El disco C: está al 29 % y no hay servicios caídos.";
         assert_eq!(clean_display(t).text, t);
         assert!(clean_display(t).thoughts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod codegen {
+    use super::*;
+
+    #[test]
+    fn pedir_un_script_no_es_lo_mismo_que_pedir_una_accion() {
+        // "reinicia el spooler" quiere que algo pase y el comando es
+        // fontanería; "dame un script para reiniciarlo" quiere el comando EN la
+        // respuesta, y esconderlo deja un texto señalando a un hueco.
+        assert!(detect_code_gen_intent("dame un script para reiniciar el spooler"));
+        assert!(detect_code_gen_intent("Escribe un script de limpieza"));
+        assert!(detect_code_gen_intent("dame el comando de powershell"));
+        assert!(detect_code_gen_intent("necesito código para esto"));
+        assert!(detect_code_gen_intent("write a script that lists services"));
+
+        assert!(!detect_code_gen_intent("reinicia el spooler"));
+        assert!(!detect_code_gen_intent("¿qué servicios están detenidos?"));
+        // La palabra suelta no basta: hace falta que la PIDA.
+        assert!(!detect_code_gen_intent("el script que corrió ayer falló"));
+    }
+
+    #[test]
+    fn en_modo_codigo_el_comando_se_ve_en_vez_de_desaparecer() {
+        let t = "Aquí tienes:\n<EXECUTE>Get-Service</EXECUTE>\nEso lista todo.";
+        let oculto = clean_display_with(t, false);
+        assert!(!oculto.text.contains("Get-Service"));
+        assert_eq!(oculto.commands, 1, "se quitó uno y hay que poder decirlo");
+
+        let visible = clean_display_with(t, true);
+        assert!(visible.text.contains("```powershell"));
+        assert!(visible.text.contains("Get-Service"));
+        // Y `EXECUTE_CMD` va con su propio lenguaje, no con el de PowerShell.
+        let c = clean_display_with("<EXECUTE_CMD>dir</EXECUTE_CMD>", true);
+        assert!(c.text.contains("```cmd"), "salió: {}", c.text);
+    }
+
+    #[test]
+    fn la_cuenta_de_comandos_permite_no_dejar_la_prosa_colgando() {
+        // El síntoma real: el modelo escribe "usa esta sintaxis:" y debajo no
+        // hay nada, porque el comando se fue al panel. Con la cuenta, quien
+        // dibuja puede decir a dónde fue.
+        let c = clean_display("<EXECUTE>uno</EXECUTE><EXECUTE_REG>dos</EXECUTE_REG>");
+        assert_eq!(c.commands, 2);
+        assert_eq!(clean_display("sin comandos").commands, 0);
     }
 }
