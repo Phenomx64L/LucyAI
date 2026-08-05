@@ -20,6 +20,8 @@ use std::path::Path;
 /// El workspace del agente: plan, ejecución, trace y artefactos. Port de
 /// `src/lib/cockpit/agent-workspace.ts` — el modelo, y sobre todo sus topes.
 pub mod agent;
+/// Elevación a administrador con UAC. El mecanismo que faltaba en la V1 y la V2.
+pub mod elevate;
 pub mod chat;
 /// Los proveedores de nube. Sin esto, el catálogo de modelos ofrece cincuenta y
 /// uno y solo funcionan los locales.
