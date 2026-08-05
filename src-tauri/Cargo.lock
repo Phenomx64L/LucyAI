@@ -2944,6 +2944,7 @@ dependencies = [
 name = "lucy-core"
 version = "0.1.0"
 dependencies = [
+ "keyring",
  "once_cell",
  "r2d2",
  "r2d2_sqlite",
@@ -2953,6 +2954,7 @@ dependencies = [
  "sysinfo",
  "ts-rs",
  "ureq",
+ "winapi",
 ]
 
 [[package]]
