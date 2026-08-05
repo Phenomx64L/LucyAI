@@ -16,8 +16,11 @@
 //! selector y la realidad.
 
 use crate::chat::ChatEvent;
+use crate::turns::{Turn, Who};
 use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
 
 /// A quién se le pregunta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,14 +161,27 @@ fn api_key(p: Provider) -> Result<String, String> {
 ///
 /// Devuelve el mismo `Receiver<ChatEvent>` que `chat::start_ollama`, así que
 /// quien lo consume no tiene que saber con quién está hablando.
-pub fn start(model: String, prompt: String) -> Receiver<ChatEvent> {
+pub fn start(model: String, turns: Vec<Turn>) -> Receiver<ChatEvent> {
+    start_cancellable(model, turns, Arc::new(AtomicBool::new(false)))
+}
+
+/// Igual, pero con un interruptor de parada.
+///
+/// El hilo lo mira entre trama y trama. Parar de verdad —cerrar el socket— no
+/// hace falta ni conviene: lo que el operador quiere es dejar de VER la
+/// respuesta, y el flujo se acaba solo en cuanto nadie lo consume.
+pub fn start_cancellable(
+    model: String,
+    turns: Vec<Turn>,
+    stop: Arc<AtomicBool>,
+) -> Receiver<ChatEvent> {
     let p = provider_of(&model);
     if p == Provider::Ollama {
-        return crate::chat::start_ollama(model, prompt);
+        return crate::chat::start_ollama(model, turns, stop);
     }
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        if let Err(e) = stream(p, &model, &prompt, &tx) {
+        if let Err(e) = stream(p, &model, &turns, &tx, &stop) {
             let _ = tx.send(ChatEvent::Error(e));
         }
         let _ = tx.send(ChatEvent::Done);
@@ -173,22 +189,57 @@ pub fn start(model: String, prompt: String) -> Receiver<ChatEvent> {
     rx
 }
 
+/// Separa el mensaje de sistema del resto.
+///
+/// Las tres APIs lo tratan aparte y ninguna lo acepta como un mensaje más:
+/// Anthropic tiene un campo `system`, Gemini un `systemInstruction`, y solo los
+/// compatibles con OpenAI lo admiten dentro de `messages` — pero también con su
+/// propio rol. Meterlo en la lista sin más es cómo las instrucciones acaban
+/// leyéndose como algo que dijo el usuario.
+fn split_system(turns: &[Turn]) -> (String, &[Turn]) {
+    match turns.first() {
+        Some(t) if t.who == Who::System => (t.text.clone(), &turns[1..]),
+        _ => (String::new(), turns),
+    }
+}
+
+/// El nombre que cada casa le da al turno del modelo.
+///
+/// Gemini dice "model" donde los demás dicen "assistant". Mandarle "assistant"
+/// no da error: se acepta y el turno se atribuye mal, que es peor.
+fn role_name(p: Provider, w: Who) -> &'static str {
+    match (p, w) {
+        (Provider::Gemini, Who::Assistant) => "model",
+        (_, Who::Assistant) => "assistant",
+        _ => "user",
+    }
+}
+
 fn stream(
     p: Provider,
     model: &str,
-    prompt: &str,
+    turns: &[Turn],
     tx: &std::sync::mpsc::Sender<ChatEvent>,
+    stop: &AtomicBool,
 ) -> Result<(), String> {
     let key = api_key(p)?;
+    let (system, hist) = split_system(turns);
     let (req, body) = match p {
         Provider::Anthropic => {
             let (id, effort) = resolve_anthropic(model);
+            let msgs: Vec<serde_json::Value> = hist
+                .iter()
+                .map(|t| serde_json::json!({ "role": role_name(p, t.who), "content": t.text }))
+                .collect();
             let mut body = serde_json::json!({
                 "model": id,
                 "max_tokens": 4096,
                 "stream": true,
-                "messages": [{ "role": "user", "content": prompt }],
+                "messages": msgs,
             });
+            if !system.is_empty() {
+                body["system"] = serde_json::json!(system);
+            }
             if let Some(e) = effort {
                 body["output_config"] = serde_json::json!({ "effort": e });
             }
@@ -204,21 +255,43 @@ fn stream(
                 "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse",
                 clean_gemini(model)
             );
+            let contents: Vec<serde_json::Value> = hist
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "role": role_name(p, t.who),
+                        "parts": [{ "text": t.text }],
+                    })
+                })
+                .collect();
+            let mut body = serde_json::json!({ "contents": contents });
+            if !system.is_empty() {
+                body["systemInstruction"] =
+                    serde_json::json!({ "parts": [{ "text": system }] });
+            }
             (
                 // La clave va en cabecera y no en la query: una URL con el
                 // secreto dentro acaba en cualquier log de proxy.
                 ureq::post(&url).set("x-goog-api-key", &key),
-                serde_json::json!({ "contents": [{ "parts": [{ "text": prompt }] }] }),
+                body,
             )
         }
-        _ => (
-            ureq::post(p.openai_endpoint()).set("Authorization", &format!("Bearer {key}")),
-            serde_json::json!({
-                "model": model,
-                "stream": true,
-                "messages": [{ "role": "user", "content": prompt }],
-            }),
-        ),
+        _ => {
+            // Los compatibles con OpenAI SÍ aceptan el sistema dentro de la
+            // lista, y es el único sitio donde va.
+            let mut msgs: Vec<serde_json::Value> = Vec::with_capacity(hist.len() + 1);
+            if !system.is_empty() {
+                msgs.push(serde_json::json!({ "role": "system", "content": system }));
+            }
+            msgs.extend(
+                hist.iter()
+                    .map(|t| serde_json::json!({ "role": role_name(p, t.who), "content": t.text })),
+            );
+            (
+                ureq::post(p.openai_endpoint()).set("Authorization", &format!("Bearer {key}")),
+                serde_json::json!({ "model": model, "stream": true, "messages": msgs }),
+            )
+        }
     };
 
     let resp = req
@@ -246,6 +319,11 @@ fn stream(
     let mut motivo: Option<String> = None;
 
     for line in reader.lines() {
+        // El operador pidió parar. No se cierra el socket a mano: basta con
+        // dejar de leer, y lo que quería era dejar de VER la respuesta.
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let line = line.map_err(|e| format!("Se cortó el flujo de {}: {e}", p.label()))?;
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -272,7 +350,7 @@ fn stream(
         }
     }
 
-    if tokens == 0 {
+    if tokens == 0 && !stop.load(Ordering::Relaxed) {
         return Err(match motivo {
             Some(r) => format!(
                 "{} aceptó la petición pero no devolvió texto ({r}). \
