@@ -13,6 +13,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod avatar;
+mod drain;
 mod hosts;
 mod icons;
 mod prompt;
@@ -301,6 +302,8 @@ struct ChatTab {
     ws: lucy_core::agent::Workspace,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
+    /// El texto recibido y aún no enseñado del turno en curso. Ver `drain`.
+    drain: drain::Drain,
     /// Adjuntos de ESTA pestaña. Por pestaña y no globales: los ficheros
     /// pertenecen a la orden que se está escribiendo, y en la V2 cada terminal
     /// tiene los suyos.
@@ -314,6 +317,7 @@ impl ChatTab {
             uid: n,
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
+            drain: drain::Drain::default(),
             title: if n == 0 {
                 "Nueva Terminal".to_string()
             } else {
@@ -327,8 +331,12 @@ impl ChatTab {
     }
 
     /// ¿Está Lucy escribiendo en ESTA pestaña?
+    ///
+    /// La cola cuenta: el stream puede haber terminado y quedar texto por
+    /// revelar, y durante ese rato Lucy SIGUE escribiendo en pantalla. Sin
+    /// esto, el cursor desaparecería a mitad de la última frase.
     fn busy(&self) -> bool {
-        self.rx.is_some()
+        self.rx.is_some() || self.drain.busy()
     }
 }
 
@@ -1609,11 +1617,10 @@ impl App {
             if let Some(rx) = &t.rx {
                 while let Ok(ev) = rx.try_recv() {
                     match ev {
-                        lucy_core::chat::ChatEvent::Token(tok) => {
-                            if let Some(last) = t.log.last_mut() {
-                                last.text.push_str(&tok);
-                            }
-                        }
+                        // NO va directo al mensaje: entra en la cola y se
+                        // revela a ritmo. Pintarlo en cuanto llega es lo que
+                        // hace que el texto salte en bloques.
+                        lucy_core::chat::ChatEvent::Token(tok) => t.drain.push(&tok),
                         lucy_core::chat::ChatEvent::Done => {
                             done = true;
                             break;
@@ -1630,7 +1637,15 @@ impl App {
             }
             if done {
                 t.rx = None;
-                let reply = t.log.last().map(|m| m.text.clone()).unwrap_or_default();
+                // El turno se cierra con el texto COMPLETO, no con lo que se
+                // haya alcanzado a enseñar: los carriles del workspace y el
+                // recuento son del contenido, no del ritmo al que se pinta. Lo
+                // que quede en cola sigue escribiéndose después.
+                let reply = format!(
+                    "{}{}",
+                    t.log.last().map(|m| m.text.clone()).unwrap_or_default(),
+                    t.drain.peek()
+                );
                 cerrados.push((t.uid, reply));
             }
         }
@@ -1638,6 +1653,24 @@ impl App {
             self.absorb_tags(uid, &reply);
             self.turn_finished(uid, reply.chars().count());
         }
+    }
+
+    /// Mueve al mensaje visible lo que la cola deje salir en este frame.
+    ///
+    /// Sobre TODAS las pestañas: una de fondo que sigue escribiendo tiene que
+    /// terminar de hacerlo, o al volver aparecería el resto de golpe.
+    fn pump_drain(&mut self, now: Instant) -> bool {
+        let mut vivo = false;
+        for t in &mut self.tabs {
+            let out = t.drain.tick(now);
+            if !out.is_empty() {
+                if let Some(last) = t.log.last_mut() {
+                    last.text.push_str(&out);
+                }
+            }
+            vivo |= t.drain.busy();
+        }
+        vivo
     }
 }
 
@@ -1663,7 +1696,10 @@ impl eframe::App for App {
         // fondo también está escribiendo y su texto tiene que llegar entero.
         // `chat_rx` está en Some mientras corre un stream: eso ES actividad,
         // aunque este frame concreto no traiga token.
+        // La cola cuenta como actividad: mientras quede texto por revelar hay
+        // que repintar, aunque el stream ya haya terminado.
         let mut live = self.tabs.iter().any(ChatTab::busy);
+        live |= self.pump_drain(now);
         if let Some(pty) = &self.pty {
             let bytes = pty.drain_bytes();
             if !bytes.is_empty() {
@@ -2313,6 +2349,21 @@ impl App {
             let (user, text, stamp) = (m.user, m.text.clone(), m.stamp.clone());
             ui.add_space(10.0);
 
+            // Cada mensaje entra con un fundido, como el `msg-in` del CSS. Un
+            // bloque que aparece de golpe en mitad de un hilo se lee como un
+            // salto; con 200 ms se lee como algo que llega.
+            let t_in = if motion() {
+                ease_out(ui.ctx().animate_bool_with_time(
+                    egui::Id::new(("msg", self.tabs[self.tab].uid, i)),
+                    true,
+                    theme::DUR_BASE,
+                ))
+            } else {
+                1.0
+            };
+            ui.scope(|ui| {
+            ui.multiply_opacity(t_in);
+
             if user {
                 // Fila invertida: burbuja a la izquierda del avatar, las dos
                 // pegadas al borde derecho.
@@ -2452,6 +2503,7 @@ impl App {
                     });
                 });
             }
+            });
         }
         if let Some(t) = copiar {
             ui.ctx().copy_text(t);
