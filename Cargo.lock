@@ -2944,6 +2944,7 @@ checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
 name = "lucy-core"
 version = "0.1.0"
 dependencies = [
+ "keyring",
  "once_cell",
  "r2d2",
  "r2d2_sqlite",

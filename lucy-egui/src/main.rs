@@ -1078,6 +1078,30 @@ fn fmt_chars(n: usize) -> String {
     }
 }
 
+/// ¿Hay clave guardada para este proveedor?
+///
+/// Se pregunta al almacén del sistema una sola vez por proveedor y por sesión.
+/// El desplegable redibuja sesenta veces por segundo mientras está abierto, y
+/// consultar el Credential Manager en cada frame son siete llamadas al sistema
+/// por fotograma. El valor de la clave NUNCA sale de aquí — solo si existe.
+fn with_key(provider: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut c) = cache.lock() else { return true };
+    if let Some(v) = c.get(provider) {
+        return *v;
+    }
+    // Ollama no lleva clave: es local.
+    let v = provider == "ollama"
+        || keyring::Entry::new("LucySysAdmin", &format!("{provider}_api_key"))
+            .and_then(|e| e.get_password())
+            .is_ok();
+    c.insert(provider.to_string(), v);
+    v
+}
+
 /// Botón de icono sin relleno ni borde — los del compositor.
 fn ghost_icon(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
     ui.add(
@@ -1841,10 +1865,24 @@ impl App {
                         ui.spacing_mut().item_spacing.y = 1.0;
                         for (g, opts) in &grupos {
                             ui.add_space(4.0);
-                            ui.add(egui::Label::new(theme::instrument_label(
-                                g.label,
-                                theme::FAINT,
-                            )));
+                            row_align(ui, 16.0, egui::Align::Center, |ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.add(egui::Label::new(theme::instrument_label(
+                                    g.label,
+                                    theme::FAINT,
+                                )));
+                                // Sin clave guardada, el grupo entero lo dice
+                                // aquí. Descubrirlo al enviar la primera orden
+                                // significa perder el turno para averiguar algo
+                                // que se sabía antes de escribirlo.
+                                if !with_key(g.provider) {
+                                    ui.label(
+                                        egui::RichText::new("sin clave")
+                                            .size(theme::FS_CAPTION)
+                                            .color(theme::AMBER),
+                                    );
+                                }
+                            });
                             ui.add_space(2.0);
                             for o in opts {
                                 if model_option(ui, w, o.icon, o.name, o.id == self.chat_model) {
@@ -2153,7 +2191,7 @@ impl App {
             t.log.push(ChatMsg { user: true, text: shown });
             t.log.push(ChatMsg { user: false, text: String::new() });
             t.attachments.clear();
-            t.rx = Some(lucy_core::chat::start_ollama(self.chat_model.clone(), prompt));
+            t.rx = Some(lucy_core::cloud::start(self.chat_model.clone(), prompt));
         }
 
         for (n, blocked) in &adjuntos {
@@ -2182,7 +2220,8 @@ impl App {
             phase: "info".into(),
             label: "Orden enviada".into(),
             detail: format!(
-                "{} · {} caracteres",
+                "{} · {} · {} caracteres",
+                lucy_core::cloud::provider_of(&self.chat_model).label(),
                 lucy_core::models::describe(&self.chat_model),
                 text.chars().count()
             ),
