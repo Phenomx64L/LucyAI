@@ -285,9 +285,22 @@ impl Attachment {
 /// global, cambiar de pestaña mientras Lucy escribe mandaría los tokens a la
 /// conversación equivocada — y en la V2 las pestañas de fondo siguen corriendo.
 struct ChatTab {
+    /// Identidad estable de la pestaña. NO su índice: cerrar una pestaña
+    /// desplaza los índices de las de después, y un resultado que llegara
+    /// después de ese cierre acabaría en la conversación equivocada.
+    uid: usize,
     title: String,
     log: Vec<ChatMsg>,
     input: String,
+    /// El workspace de ESTA pestaña.
+    ///
+    /// Por pestaña y no global, que es como estaba y era un fallo: con dos
+    /// órdenes en marcha, el plan de una salía en el panel de la otra y el
+    /// resultado de un comando se imprimía en la conversación equivocada. El
+    /// workspace describe UN turno, y los turnos son de su pestaña.
+    ws: lucy_core::agent::Workspace,
+    /// Cuándo empezó el turno en curso de esta pestaña.
+    turn_start: Option<Instant>,
     /// Adjuntos de ESTA pestaña. Por pestaña y no globales: los ficheros
     /// pertenecen a la orden que se está escribiendo, y en la V2 cada terminal
     /// tiene los suyos.
@@ -298,6 +311,9 @@ struct ChatTab {
 impl ChatTab {
     fn new(n: usize) -> Self {
         Self {
+            uid: n,
+            ws: lucy_core::agent::Workspace::default(),
+            turn_start: None,
             title: if n == 0 {
                 "Nueva Terminal".to_string()
             } else {
@@ -1423,11 +1439,9 @@ struct App {
     /// El retrato de Lucy. Se sube una vez, en el primer frame que lo necesita:
     /// subir una textura exige el contexto, y `new` todavía no lo tiene.
     face: Option<egui::TextureHandle>,
-    /// El workspace del agente — los cuatro carriles del panel derecho.
-    ws: lucy_core::agent::Workspace,
+    /// Qué carril del workspace se está mirando. Global a propósito: es una
+    /// preferencia de quien mira, no un dato de la conversación.
     ws_tab: WsTab,
-    /// Cuándo empezó el turno en curso, para medir cuánto tardó.
-    turn_start: Option<Instant>,
     models: Vec<String>,
     // terminal — VT real: el PTY emite bytes crudos, el parser los interpreta en
     // una pantalla de terminal (sin escapes visibles).
@@ -1469,7 +1483,7 @@ struct App {
     /// Uno cada vez. Dos comandos a la vez sobre la misma máquina es lo que
     /// convierte un diagnóstico en una carrera, y no hay ninguna prisa que lo
     /// justifique cuando cada uno lo aprueba una persona.
-    exec_rx: Option<(String, std::sync::mpsc::Receiver<(String, String, bool, u64)>)>,
+    exec_rx: Option<(usize, String, std::sync::mpsc::Receiver<(String, String, bool, u64)>)>,
     /// Sonda de servicios en vuelo. `Some` = hay un hilo trabajando, que es lo
     /// que anima el botón de refresco y lo que impide lanzar una segunda.
     svc_rx: Option<std::sync::mpsc::Receiver<Option<Vec<lucy_core::system::DownService>>>>,
@@ -1531,9 +1545,7 @@ impl App {
             chat_model,
             model_query: String::new(),
             face: None,
-            ws: lucy_core::agent::Workspace::default(),
             ws_tab: WsTab::Plan,
-            turn_start: None,
             models,
             pty: Pty::spawn(140, 44).ok(),
             vt: vt100::Parser::new(44, 140, 4000),
@@ -1586,7 +1598,9 @@ impl App {
         // Los turnos que se cierran en esta pasada, con lo que llegó a escribir
         // cada uno. Se anotan y se procesan DESPUÉS del bucle: dentro, `self`
         // está prestado por las pestañas y el workspace no se puede tocar.
-        let mut cerrados: Vec<String> = Vec::new();
+        // Con el UID de su pestaña: el turno que se cierra puede no ser el de la
+        // pestaña que se está mirando.
+        let mut cerrados: Vec<(usize, String)> = Vec::new();
         for t in &mut self.tabs {
             if t.rx.is_none() {
                 continue;
@@ -1617,12 +1631,12 @@ impl App {
             if done {
                 t.rx = None;
                 let reply = t.log.last().map(|m| m.text.clone()).unwrap_or_default();
-                cerrados.push(reply);
+                cerrados.push((t.uid, reply));
             }
         }
-        for reply in cerrados {
-            self.absorb_tags(&reply);
-            self.turn_finished(reply.chars().count());
+        for (uid, reply) in cerrados {
+            self.absorb_tags(uid, &reply);
+            self.turn_finished(uid, reply.chars().count());
         }
     }
 }
@@ -2783,7 +2797,7 @@ impl App {
         }
 
         for (n, blocked) in &adjuntos {
-            self.ws.trace_push(lucy_core::agent::TraceEntry {
+            self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
                 phase: "info".into(),
                 label: format!("Adjunto · {n}"),
                 detail: if blocked.is_empty() {
@@ -2801,10 +2815,10 @@ impl App {
         // cierto que contar —el ciclo de vida del turno— y va como `info`, que
         // es una de las fases del propio modelo. Inventar pasos de un plan que
         // nadie planificó sería teatro.
-        self.ws.status.running = true;
-        self.ws.status.model = self.chat_model.clone();
-        self.turn_start = Some(Instant::now());
-        self.ws.trace_push(lucy_core::agent::TraceEntry {
+        self.tabs[self.tab].ws.status.running = true;
+        self.tabs[self.tab].ws.status.model = self.chat_model.clone();
+        self.tabs[self.tab].turn_start = Some(Instant::now());
+        self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
             phase: "info".into(),
             label: "Orden enviada".into(),
             detail: format!(
@@ -2827,13 +2841,14 @@ impl App {
     /// PENDIENTES, no hechos, y ahí está todo: este shell detecta lo que Lucy
     /// quiere hacer y no lo hace. Marcarlos de otra forma diría que la máquina
     /// se tocó, que es la peor mentira que puede contar un panel de auditoría.
-    fn absorb_tags(&mut self, reply: &str) {
+    fn absorb_tags(&mut self, uid: usize, reply: &str) {
+        let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
         use lucy_core::agent::{PlanStep, StepStatus, TraceEntry};
         use lucy_core::tags::{self, TagKind};
 
         for t in tags::extract_tags(reply) {
             match t.kind {
-                TagKind::Thought => self.ws.trace_push(TraceEntry {
+                TagKind::Thought => self.tabs[ti].ws.trace_push(TraceEntry {
                     phase: "think".into(),
                     label: "Razonamiento".into(),
                     detail: t.content,
@@ -2841,7 +2856,7 @@ impl App {
                 }),
                 TagKind::Tool => {
                     let (name, args) = tags::parse_tool(&t.content);
-                    self.ws.trace_push(TraceEntry {
+                    self.tabs[ti].ws.trace_push(TraceEntry {
                         phase: "act".into(),
                         label: name.clone(),
                         detail: args.clone(),
@@ -2850,7 +2865,7 @@ impl App {
                     // `writefile` y `editfile` tocan ficheros: eso es un
                     // artefacto, aunque todavía no se haya escrito ninguno.
                     if matches!(name.as_str(), "writefile" | "editfile") {
-                        self.ws.artifact_push(lucy_core::agent::Artifact {
+                        self.tabs[ti].ws.artifact_push(lucy_core::agent::Artifact {
                             id: String::new(),
                             kind: if name == "editfile" {
                                 lucy_core::agent::ArtifactKind::Edit
@@ -2867,7 +2882,7 @@ impl App {
                 }
                 k if k.is_execute() => {
                     let host = t.attrs.get("target").cloned().unwrap_or_default();
-                    self.ws.plan_append(PlanStep {
+                    self.tabs[ti].ws.plan_append(PlanStep {
                         label: format!("Ejecutar ({})", k.name()),
                         status: StepStatus::Pending,
                         detail: t.content,
@@ -2886,8 +2901,8 @@ impl App {
     /// entero: la salida ya está en el panel de Ejecución, y repetirla en la
     /// conversación empujaría fuera de pantalla la pregunta original. Al modelo
     /// sí le va completa.
-    fn send_raw(&mut self, prompt: String) {
-        if self.tabs[self.tab].busy() {
+    fn send_raw(&mut self, ti: usize, prompt: String) {
+        if self.tabs[ti].busy() {
             return;
         }
         let sys = prompt::system_prompt(
@@ -2895,15 +2910,15 @@ impl App {
             &self.services,
             self.log_lines.as_deref().unwrap_or(&[]),
         );
-        let t = &mut self.tabs[self.tab];
+        let t = &mut self.tabs[ti];
         t.log.push(ChatMsg::new(true, "▸ Resultado devuelto a Lucy".into()));
         t.log.push(ChatMsg::new(false, String::new()));
         t.rx = Some(lucy_core::cloud::start(
             self.chat_model.clone(),
             format!("{sys}\n--- ORDEN DEL OPERADOR ---\n{prompt}"),
         ));
-        self.ws.status.running = true;
-        self.turn_start = Some(Instant::now());
+        self.tabs[ti].ws.status.running = true;
+        self.tabs[ti].turn_start = Some(Instant::now());
     }
 
     /// Corre un paso que el operador acaba de aprobar.
@@ -2916,7 +2931,7 @@ impl App {
     #[cfg(windows)]
     fn run_step(&mut self, id: String, cmd: String) {
         use lucy_core::agent::StepStatus;
-        self.ws.plan_update(&id, StepStatus::Running, None);
+        self.tabs[self.tab].ws.plan_update(&id, StepStatus::Running, None);
         self.ws_tab = WsTab::Exec; // se mira la salida, no el plan
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -2931,7 +2946,7 @@ impl App {
                 Err(e) => (String::new(), e, false, ms),
             });
         });
-        self.exec_rx = Some((id, rx));
+        self.exec_rx = Some((self.tabs[self.tab].uid, id, rx));
     }
 
     #[cfg(not(windows))]
@@ -2940,19 +2955,29 @@ impl App {
     /// Recoge el resultado de un comando aprobado.
     fn pump_exec(&mut self) {
         use lucy_core::agent::{ExecEntry, StepStatus};
-        let Some((id, rx)) = &self.exec_rx else { return };
+        // El resultado vuelve a LA PESTAÑA que lo pidió, no a la que esté
+        // delante. Con dos órdenes en marcha, mandarlo a la activa imprimía la
+        // salida de una en la conversación de la otra — que es lo que pasaba.
+        let Some((uid, id, rx)) = &self.exec_rx else { return };
+        let (uid, id) = (*uid, id.clone());
         let (out, err, ok, ms) = match rx.try_recv() {
             Ok(v) => v,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                let id = id.clone();
-                self.ws.plan_update(&id, StepStatus::Error, None);
+                if let Some(t) = self.tabs.iter_mut().find(|t| t.uid == uid) {
+                    t.ws.plan_update(&id, StepStatus::Error, None);
+                }
                 self.exec_rx = None;
                 return;
             }
         };
-        let id = id.clone();
-        let cmd = self
+        // La pestaña puede haberse cerrado mientras el comando corría. No es un
+        // error: se ejecutó igual, y no hay a quién contárselo.
+        let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else {
+            self.exec_rx = None;
+            return;
+        };
+        let cmd = self.tabs[ti]
             .ws
             .plan
             .iter()
@@ -2974,7 +2999,7 @@ impl App {
             body = "(sin salida)".into();
         }
 
-        self.ws.exec_push(ExecEntry {
+        self.tabs[ti].ws.exec_push(ExecEntry {
             id: String::new(),
             cmd: cmd.clone(),
             output: body.clone(),
@@ -2984,7 +3009,7 @@ impl App {
             code: None,
             ts: 0,
         });
-        self.ws.plan_update(
+        self.tabs[ti].ws.plan_update(
             &id,
             if ok { StepStatus::Done } else { StepStatus::Error },
             Some(ms),
@@ -2996,7 +3021,7 @@ impl App {
         // pasaba: el comando se proponía, se quedaba ahí, y nadie cerraba el
         // círculo. La aprobación fue el clic; devolver el resultado es la otra
         // mitad de ese mismo gesto.
-        self.send_raw(format!(
+        self.send_raw(ti, format!(
             "He ejecutado el comando que propusiste y esta es su salida literal. \
              Resúmela y dime qué significa. No propongas ejecutarlo otra vez.\n\n\
              $ {cmd}\n\n{body}"
@@ -3004,10 +3029,11 @@ impl App {
     }
 
     /// Cierra el turno en el workspace cuando el stream termina.
-    fn turn_finished(&mut self, chars: usize) {
-        let ms = self.turn_start.take().map(|t| t.elapsed().as_millis() as u64);
-        self.ws.status.running = false;
-        self.ws.trace_push(lucy_core::agent::TraceEntry {
+    fn turn_finished(&mut self, uid: usize, chars: usize) {
+        let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
+        let ms = self.tabs[ti].turn_start.take().map(|t| t.elapsed().as_millis() as u64);
+        self.tabs[ti].ws.status.running = false;
+        self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
             phase: "info".into(),
             label: "Respuesta completa".into(),
             detail: match ms {
@@ -3021,12 +3047,12 @@ impl App {
     /// El panel derecho: los cuatro carriles del agente.
     fn workspace(&mut self, ui: &mut egui::Ui) {
         let counts = [
-            self.ws.plan.len(),
-            self.ws.exec.len(),
-            self.ws.trace.len(),
-            self.ws.artifacts.len(),
+            self.tabs[self.tab].ws.plan.len(),
+            self.tabs[self.tab].ws.exec.len(),
+            self.tabs[self.tab].ws.trace.len(),
+            self.tabs[self.tab].ws.artifacts.len(),
         ];
-        let forks = self.ws.forks_running();
+        let forks = self.tabs[self.tab].ws.forks_running();
 
         // ── pestañas ─────────────────────────────────────────────────────────
         row_align(ui, 30.0, egui::Align::Center, |ui| {
@@ -3071,11 +3097,11 @@ impl App {
         ui.separator();
 
         // ── herramientas: solo cuando hay algo que exportar o limpiar ─────────
-        if !self.ws.is_empty() {
+        if !self.tabs[self.tab].ws.is_empty() {
             row_align(ui, 22.0, egui::Align::Center, |ui| {
                 right(ui, 22.0, |ui| {
                     if ghost_icon(ui, icons::Icon::Close).on_hover_text("Limpiar el workspace").clicked() {
-                        self.ws.reset();
+                        self.tabs[self.tab].ws.reset();
                     }
                     if ghost_icon(ui, icons::Icon::Copy)
                         .on_hover_text("Exportar el run (copia al portapapeles)")
@@ -3091,10 +3117,10 @@ impl App {
 
         let tab = self.ws_tab;
         let empty = match tab {
-            WsTab::Plan => self.ws.plan.is_empty() && self.ws.forks.is_empty(),
-            WsTab::Exec => self.ws.exec.is_empty(),
-            WsTab::Trace => self.ws.trace.is_empty(),
-            WsTab::Artifacts => self.ws.artifacts.is_empty(),
+            WsTab::Plan => self.tabs[self.tab].ws.plan.is_empty() && self.tabs[self.tab].ws.forks.is_empty(),
+            WsTab::Exec => self.tabs[self.tab].ws.exec.is_empty(),
+            WsTab::Trace => self.tabs[self.tab].ws.trace.is_empty(),
+            WsTab::Artifacts => self.tabs[self.tab].ws.artifacts.is_empty(),
         };
 
         egui::ScrollArea::vertical()
@@ -3118,7 +3144,7 @@ impl App {
         let busy = self.exec_rx.is_some();
         let mut aprobado: Option<(String, String)> = None;
 
-        for s in &self.ws.plan {
+        for s in &self.tabs[self.tab].ws.plan {
             let (glyph, col) = match s.status {
                 StepStatus::Done => ("✓", theme::ACC),
                 StepStatus::Running => ("▸", theme::ACC),
@@ -3181,13 +3207,13 @@ impl App {
         }
         // Los forks van DESPUÉS del plan y fuera de su estado vacío: con un
         // sub-agente corriendo el panel no está vacío, solo no tiene plan.
-        if !self.ws.forks.is_empty() {
+        if !self.tabs[self.tab].ws.forks.is_empty() {
             ui.add_space(10.0);
             ui.add(egui::Label::new(theme::instrument_label(
                 "Sub-agentes",
                 theme::FAINT,
             )));
-            for f in &self.ws.forks {
+            for f in &self.tabs[self.tab].ws.forks {
                 let (txt, col) = match f.status {
                     ForkStatus::Running => ("en curso", theme::ACC),
                     ForkStatus::Done => ("terminado", theme::TXT3),
@@ -3210,7 +3236,7 @@ impl App {
     }
 
     fn ws_exec(&mut self, ui: &mut egui::Ui) {
-        for e in &self.ws.exec {
+        for e in &self.tabs[self.tab].ws.exec {
             ui.add_space(6.0);
             egui::Frame::none()
                 .fill(theme::BG3)
@@ -3245,7 +3271,7 @@ impl App {
     }
 
     fn ws_trace(&mut self, ui: &mut egui::Ui) {
-        for t in &self.ws.trace {
+        for t in &self.tabs[self.tab].ws.trace {
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -3282,7 +3308,7 @@ impl App {
     }
 
     fn ws_artifacts(&mut self, ui: &mut egui::Ui) {
-        for a in &self.ws.artifacts {
+        for a in &self.tabs[self.tab].ws.artifacts {
             ui.add_space(6.0);
             egui::Frame::none()
                 .fill(theme::BG3)
@@ -3324,15 +3350,15 @@ impl App {
     fn export_run(&self) -> String {
         let mut s = String::new();
         s.push_str(&format!("# Run de Lucy · {}\n", self.chat_model));
-        if !self.ws.plan.is_empty() {
+        if !self.tabs[self.tab].ws.plan.is_empty() {
             s.push_str("\n## Plan\n");
-            for p in &self.ws.plan {
+            for p in &self.tabs[self.tab].ws.plan {
                 s.push_str(&format!("- [{:?}] {}\n", p.status, p.label));
             }
         }
-        if !self.ws.exec.is_empty() {
+        if !self.tabs[self.tab].ws.exec.is_empty() {
             s.push_str("\n## Ejecución\n");
-            for e in &self.ws.exec {
+            for e in &self.tabs[self.tab].ws.exec {
                 s.push_str(&format!(
                     "\n$ {}\n{}\n",
                     e.cmd,
@@ -3340,15 +3366,15 @@ impl App {
                 ));
             }
         }
-        if !self.ws.trace.is_empty() {
+        if !self.tabs[self.tab].ws.trace.is_empty() {
             s.push_str("\n## Trace\n");
-            for t in &self.ws.trace {
+            for t in &self.tabs[self.tab].ws.trace {
                 s.push_str(&format!("- {} · {} — {}\n", t.phase, t.label, t.detail));
             }
         }
-        if !self.ws.artifacts.is_empty() {
+        if !self.tabs[self.tab].ws.artifacts.is_empty() {
             s.push_str("\n## Artefactos\n");
-            for a in &self.ws.artifacts {
+            for a in &self.tabs[self.tab].ws.artifacts {
                 s.push_str(&format!("- {} {}\n", a.kind.label(), a.path));
             }
         }
