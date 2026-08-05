@@ -116,6 +116,100 @@ struct ChatMsg {
     text: String,
 }
 
+/// Tope del contenido de un adjunto de texto.
+///
+/// El mismo número que `file-inputs.ts`, y por la misma razón dicha de otra
+/// forma: un log de 400 MB arrastrado a la ventana no puede tumbar el proceso.
+/// Cambia la memoria que se protege, no el problema.
+const ATTACH_MAX_CHARS: usize = 200_000;
+
+/// Qué clase de fichero es. La V2 distingue `image | text` en el compositor —
+/// dos valores, no tres — porque el constructor del prompt filtra por
+/// `type === 'text'`. El PDF es un texto que todavía hay que extraer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachKind {
+    Text,
+    Image,
+    Pdf,
+}
+
+impl AttachKind {
+    fn of(path: &std::path::Path) -> Self {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff" => Self::Image,
+            "pdf" => Self::Pdf,
+            _ => Self::Text,
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Text => "▤",
+            Self::Image => "▣",
+            Self::Pdf => "▥",
+        }
+    }
+}
+
+/// Un fichero adjunto a la orden.
+struct Attachment {
+    name: String,
+    kind: AttachKind,
+    /// Contenido, ya recortado. Vacío para imagen y PDF — ver `attach`.
+    content: String,
+    /// Por qué no se puede mandar, cuando no se puede. Vacío = se manda.
+    blocked: String,
+}
+
+impl Attachment {
+    /// Lee un fichero del disco y decide qué se puede hacer con él.
+    ///
+    /// Un adjunto que no se va a poder mandar SE ACEPTA IGUAL y dice por qué.
+    /// Rechazarlo en silencio al soltarlo deja al operador pensando que el
+    /// arrastre no funciona; aceptarlo y mandarlo vacío es peor todavía.
+    fn read(path: &std::path::Path) -> Self {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("(sin nombre)")
+            .to_string();
+        let kind = AttachKind::of(path);
+        match kind {
+            AttachKind::Image => Self {
+                name,
+                kind,
+                content: String::new(),
+                blocked: "las imágenes necesitan la ruta de visión del backend".into(),
+            },
+            AttachKind::Pdf => Self {
+                name,
+                kind,
+                content: String::new(),
+                blocked: "el PDF se extrae en el backend (`extract_pdf_text`)".into(),
+            },
+            AttachKind::Text => match std::fs::read_to_string(path) {
+                Ok(s) => {
+                    let content: String = s.chars().take(ATTACH_MAX_CHARS).collect();
+                    Self { name, kind, content, blocked: String::new() }
+                }
+                // Un binario cualquiera cae aquí: no es UTF-8 y no hay nada
+                // sensato que mandarle al modelo.
+                Err(e) => Self {
+                    name,
+                    kind,
+                    content: String::new(),
+                    blocked: format!("no se pudo leer como texto: {e}"),
+                },
+            },
+        }
+    }
+}
+
 /// Una terminal abierta. Cada pestaña es una conversación INDEPENDIENTE.
 ///
 /// El receptor del stream vive aquí y no en la aplicación a propósito: una
@@ -126,6 +220,10 @@ struct ChatTab {
     title: String,
     log: Vec<ChatMsg>,
     input: String,
+    /// Adjuntos de ESTA pestaña. Por pestaña y no globales: los ficheros
+    /// pertenecen a la orden que se está escribiendo, y en la V2 cada terminal
+    /// tiene los suyos.
+    attachments: Vec<Attachment>,
     rx: Option<std::sync::mpsc::Receiver<lucy_core::chat::ChatEvent>>,
 }
 
@@ -139,6 +237,7 @@ impl ChatTab {
             },
             log: Vec::new(),
             input: String::new(),
+            attachments: Vec::new(),
             rx: None,
         }
     }
@@ -876,6 +975,109 @@ fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> bool {
     resp.clicked()
 }
 
+/// El estado vacío de un carril del workspace: el glifo en su baldosa, el
+/// título, y para qué sirve el panel.
+fn ws_empty(ui: &mut egui::Ui, tab: WsTab) {
+    let (glyph, title, hint) = tab.empty();
+    ui.add_space(40.0);
+    ui.vertical_centered(|ui| {
+        egui::Frame::none()
+            .fill(theme::BG3)
+            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .rounding(egui::Rounding::same(theme::R_MD))
+            .inner_margin(egui::Margin::same(14.0))
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(glyph).size(24.0).color(theme::FAINT));
+            });
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new(title)
+                .size(theme::FS_FOOTNOTE)
+                .color(theme::TXT2),
+        );
+        ui.add_space(6.0);
+        ui.set_max_width(230.0);
+        ui.label(
+            egui::RichText::new(hint)
+                .size(theme::FS_CAPTION)
+                .color(theme::TXT3),
+        );
+    });
+}
+
+/// Duración legible. Por debajo de un segundo, en milisegundos: un turno de
+/// 800 ms redondeado a "1 s" oculta justo la diferencia que se quería medir.
+fn fmt_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 60_000 {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    } else {
+        format!("{} m {} s", ms / 60_000, (ms % 60_000) / 1000)
+    }
+}
+
+/// Chip de un fichero adjunto. Devuelve `true` si se pulsó la ✕.
+///
+/// Un adjunto que no se va a mandar se dibuja en ámbar y explica por qué al
+/// pasar el cursor. Ir tachado y en silencio sería lo mismo que no estar.
+fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
+    let ok = a.blocked.is_empty();
+    let col = if ok { theme::TXT2 } else { theme::AMBER };
+    let mut quitar = false;
+    let r = egui::Frame::none()
+        .fill(theme::BG4)
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            if ok { theme::BDR } else { theme::AMBER.linear_multiply(0.4) },
+        ))
+        .rounding(egui::Rounding::same(999.0))
+        .inner_margin(egui::Margin::symmetric(9.0, 3.0))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(egui::RichText::new(a.kind.glyph()).size(11.0).color(col));
+            ui.label(
+                egui::RichText::new(&a.name)
+                    .size(theme::FS_CAPTION)
+                    .color(col),
+            );
+            // El tamaño en CARACTERES y no en bytes: es lo que le va a costar al
+            // modelo, que es la única unidad que importa aquí.
+            if ok {
+                ui.label(
+                    egui::RichText::new(fmt_chars(a.content.chars().count()))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::FAINT),
+                );
+            }
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new("✕").size(10.0).color(theme::FAINT))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE)
+                        .min_size(egui::vec2(14.0, 14.0)),
+                )
+                .clicked()
+            {
+                quitar = true;
+            }
+        })
+        .response;
+    if !ok {
+        r.on_hover_text(format!("No se enviará: {}", a.blocked));
+    }
+    quitar
+}
+
+/// Cuenta de caracteres abreviada.
+fn fmt_chars(n: usize) -> String {
+    if n >= 1000 {
+        format!("{:.0}k", n as f64 / 1000.0)
+    } else {
+        format!("{n}")
+    }
+}
+
 /// Botón de icono sin relleno ni borde — los del compositor.
 fn ghost_icon(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
     ui.add(
@@ -946,6 +1148,58 @@ impl Default for Kpi<'_> {
     }
 }
 
+/// Los cuatro carriles del workspace del agente.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WsTab {
+    Plan,
+    Exec,
+    Trace,
+    Artifacts,
+}
+
+impl WsTab {
+    const ALL: [WsTab; 4] = [WsTab::Plan, WsTab::Exec, WsTab::Trace, WsTab::Artifacts];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Plan => "Plan",
+            Self::Exec => "Ejecución",
+            Self::Trace => "Trace",
+            Self::Artifacts => "Artefactos",
+        }
+    }
+
+    /// El estado vacío de cada carril: glifo, título y qué llenará el panel.
+    ///
+    /// La pista importa más que el título: un panel vacío que solo dice "sin
+    /// nada" no enseña para qué sirve, y estos cuatro solo se llenan cuando el
+    /// agente trabaja — es decir, casi nunca la primera vez que se miran.
+    fn empty(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Plan => (
+                "▤",
+                "Sin plan todavía",
+                "Lucy desglosa la tarea en pasos y los va marcando conforme avanza.",
+            ),
+            Self::Exec => (
+                "▸",
+                "Nada ejecutado aún",
+                "La salida de cada comando aparece aquí en vivo mientras el agente trabaja.",
+            ),
+            Self::Trace => (
+                "◈",
+                "Trace vacío",
+                "El razonamiento del agente — pensar · actuar · observar — se registra aquí.",
+            ),
+            Self::Artifacts => (
+                "▥",
+                "Sin artefactos",
+                "Los archivos que Lucy edita o escribe aparecen aquí con su diff.",
+            ),
+        }
+    }
+}
+
 /// Gravedad de una alerta derivada. Dos niveles, como la V2: uno colorea el
 /// chip del equipo de ámbar y el otro de rojo.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -967,6 +1221,11 @@ struct App {
     chat_model: String,
     /// Texto del buscador del desplegable de modelos.
     model_query: String,
+    /// El workspace del agente — los cuatro carriles del panel derecho.
+    ws: lucy_core::agent::Workspace,
+    ws_tab: WsTab,
+    /// Cuándo empezó el turno en curso, para medir cuánto tardó.
+    turn_start: Option<Instant>,
     models: Vec<String>,
     // terminal — VT real: el PTY emite bytes crudos, el parser los interpreta en
     // una pantalla de terminal (sin escapes visibles).
@@ -1047,6 +1306,9 @@ impl App {
             tabs_opened: 1,
             chat_model,
             model_query: String::new(),
+            ws: lucy_core::agent::Workspace::default(),
+            ws_tab: WsTab::Plan,
+            turn_start: None,
             models,
             pty: Pty::spawn(140, 44).ok(),
             vt: vt100::Parser::new(44, 140, 4000),
@@ -1095,6 +1357,10 @@ impl App {
     /// con la respuesta ya escrita. Bombear solo la activa dejaría el canal
     /// llenándose y la respuesta llegaría de golpe al volver.
     fn pump_chat(&mut self) {
+        // Los turnos que se cierran en esta pasada, con lo que llegó a escribir
+        // cada uno. Se anotan y se procesan DESPUÉS del bucle: dentro, `self`
+        // está prestado por las pestañas y el workspace no se puede tocar.
+        let mut cerrados: Vec<usize> = Vec::new();
         for t in &mut self.tabs {
             if t.rx.is_none() {
                 continue;
@@ -1124,7 +1390,11 @@ impl App {
             }
             if done {
                 t.rx = None;
+                cerrados.push(t.log.last().map_or(0, |m| m.text.chars().count()));
             }
+        }
+        for chars in cerrados {
+            self.turn_finished(chars);
         }
     }
 }
@@ -1332,6 +1602,68 @@ impl eframe::App for App {
                     );
                 }
             });
+
+        // ── ficheros soltados en la ventana ──────────────────────────────────
+        //
+        // eframe los entrega sin que haya que registrar nada: winit ya escucha
+        // el arrastre del sistema. Solo se recogen en Terminal IA — soltar un
+        // log sobre el dashboard no significa nada, y aceptarlo ahí lo metería
+        // en una conversación que no se está viendo.
+        if self.view == View::TerminalIa {
+            let soltados: Vec<std::path::PathBuf> = ctx.input(|i| {
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .filter_map(|f| f.path.clone())
+                    .collect()
+            });
+            if !soltados.is_empty() {
+                self.attach(&soltados);
+            }
+            // Mientras el fichero está en el aire, la ventana lo dice. Sin esta
+            // señal, arrastrar sobre una aplicación es adivinar si va a aceptar.
+            let encima = ctx.input(|i| i.raw.hovered_files.len());
+            if encima > 0 {
+                let r = ctx.screen_rect();
+                let p = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("drop"),
+                ));
+                p.rect_filled(r, 0.0, theme::BG.linear_multiply(0.75));
+                p.rect_stroke(
+                    r.shrink(10.0),
+                    egui::Rounding::same(theme::R_LG),
+                    egui::Stroke::new(2.0_f32, theme::ACC),
+                );
+                p.text(
+                    r.center(),
+                    egui::Align2::CENTER_CENTER,
+                    if encima == 1 {
+                        "Soltar para adjuntar".to_string()
+                    } else {
+                        format!("Soltar para adjuntar {encima} ficheros")
+                    },
+                    egui::FontId::proportional(18.0),
+                    theme::ACC,
+                );
+            }
+        }
+
+        // ── carril derecho: el workspace del agente ──────────────────────────
+        //
+        // Solo en Terminal IA. En las demás vistas no hay turno del que enseñar
+        // el plan, y un panel vacío permanente enseña a no mirarlo.
+        if self.view == View::TerminalIa {
+            egui::SidePanel::right("workspace")
+                .exact_width(340.0)
+                .resizable(false)
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme::BG2)
+                        .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+                )
+                .show(ctx, |ui| self.workspace(ui));
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
             View::TerminalIa => self.terminal_ia(ui),
@@ -1671,6 +2003,8 @@ impl App {
     fn composer(&mut self, ui: &mut egui::Ui) {
         let busy = self.tabs[self.tab].busy();
         let mut enviar = false;
+        let mut abrir_dialogo = false;
+        let mut quitar: Option<usize> = None;
 
         egui::Frame::none()
             .fill(theme::BG3)
@@ -1678,18 +2012,37 @@ impl App {
             .rounding(egui::Rounding::same(theme::R_LG))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
+                // Los adjuntos van ENCIMA del campo, como en el CSS: son
+                // contexto de lo que se está a punto de escribir, no un
+                // resultado de haberlo escrito.
+                if !self.tabs[self.tab].attachments.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                        for (i, a) in self.tabs[self.tab].attachments.iter().enumerate() {
+                            if attach_chip(ui, a) {
+                                quitar = Some(i);
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
                 row_align(ui, 26.0, egui::Align::Center, |ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
 
-                    // Adjuntar y dictar existen pero todavía no hacen nada, y lo
-                    // dicen al pasar el cursor. Un botón que no responde y no
-                    // explica por qué es peor que uno ausente.
                     if ghost_icon(ui, "⎘")
-                        .on_hover_text("Adjuntar fichero — pendiente de migrar")
+                        .on_hover_text("Adjuntar fichero — o arrastra uno a la ventana")
                         .clicked()
-                    {}
+                    {
+                        abrir_dialogo = true;
+                    }
+                    // El dictado sigue sin hacer nada, y lo dice. Un botón que
+                    // ignora los clics en silencio es peor que uno ausente, y
+                    // este además nombra el obstáculo real.
                     if ghost_icon(ui, "⏺")
-                        .on_hover_text("Dictado por voz — pendiente: la V2 usa la API del navegador")
+                        .on_hover_text(
+                            "Dictado por voz — pendiente: la V2 usa la API del navegador y \
+                             un shell nativo necesita otro motor",
+                        )
                         .clicked()
                     {}
 
@@ -1723,28 +2076,438 @@ impl App {
                 });
             });
 
+        if let Some(i) = quitar {
+            self.tabs[self.tab].attachments.remove(i);
+        }
+        if abrir_dialogo {
+            // Bloqueante a propósito: es el diálogo modal del sistema, el mismo
+            // que abre cualquier aplicación de Windows, y mientras está abierto
+            // no hay nada que animar detrás.
+            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                self.attach(&paths);
+            }
+        }
         if enviar && !busy {
             let text = std::mem::take(&mut self.tabs[self.tab].input);
-            if !text.trim().is_empty() {
+            // Se permite enviar SOLO con adjuntos: arrastrar un log y pulsar
+            // enviar es una petición perfectamente clara.
+            if !text.trim().is_empty() || !self.tabs[self.tab].attachments.is_empty() {
                 self.send(text);
             }
         }
     }
 
+    /// Añade ficheros a la pestaña activa, sin repetir los que ya están.
+    fn attach(&mut self, paths: &[std::path::PathBuf]) {
+        for p in paths {
+            let a = Attachment::read(p);
+            let t = &mut self.tabs[self.tab];
+            if t.attachments.iter().any(|x| x.name == a.name) {
+                continue;
+            }
+            t.attachments.push(a);
+        }
+    }
+
     /// Manda una orden por la pestaña activa.
     fn send(&mut self, text: String) {
-        let t = &mut self.tabs[self.tab];
-        if t.busy() {
+        if self.tabs[self.tab].busy() {
             return;
         }
-        // El título de la pestaña pasa a ser la primera orden: con tres
-        // terminales abiertas, "Terminal 2" no dice cuál era cuál.
-        if t.log.is_empty() {
-            t.title = text.chars().take(28).collect::<String>().trim().to_string();
+        // Los adjuntos de TEXTO se anteponen a la orden, que es lo que hace el
+        // constructor de prompts de la V2 con `type === 'text'`. Imágenes y PDF
+        // no: la primera necesita la ruta de visión y el segundo el extractor
+        // del backend, y meterlos vacíos le daría al modelo un fichero que
+        // parece estar y no está.
+        let mut prompt = String::new();
+        let mut adjuntos = Vec::new();
+        for a in &self.tabs[self.tab].attachments {
+            adjuntos.push((a.name.clone(), a.blocked.clone()));
+            if a.blocked.is_empty() {
+                prompt.push_str(&format!(
+                    "--- fichero adjunto: {} ---\n{}\n\n",
+                    a.name, a.content
+                ));
+            }
         }
-        t.log.push(ChatMsg { user: true, text: text.clone() });
-        t.log.push(ChatMsg { user: false, text: String::new() });
-        t.rx = Some(lucy_core::chat::start_ollama(self.chat_model.clone(), text));
+        prompt.push_str(&text);
+
+        {
+            let t = &mut self.tabs[self.tab];
+            // El título de la pestaña pasa a ser la primera orden: con tres
+            // terminales abiertas, "Terminal 2" no dice cuál era cuál.
+            if t.log.is_empty() {
+                let base = if text.trim().is_empty() {
+                    adjuntos.first().map(|(n, _)| n.clone()).unwrap_or_default()
+                } else {
+                    text.clone()
+                };
+                t.title = base.chars().take(28).collect::<String>().trim().to_string();
+            }
+            // En la conversación se ve la orden del operador, no el prompt con
+            // los ficheros pegados: eso es fontanería, no lo que él escribió.
+            let mut shown = text.clone();
+            for (n, _) in &adjuntos {
+                shown.push_str(&format!("\n⎘ {n}"));
+            }
+            t.log.push(ChatMsg { user: true, text: shown });
+            t.log.push(ChatMsg { user: false, text: String::new() });
+            t.attachments.clear();
+            t.rx = Some(lucy_core::chat::start_ollama(self.chat_model.clone(), prompt));
+        }
+
+        for (n, blocked) in &adjuntos {
+            self.ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "info".into(),
+                label: format!("Adjunto · {n}"),
+                detail: if blocked.is_empty() {
+                    "incluido en el prompt".into()
+                } else {
+                    blocked.clone()
+                },
+                ..Default::default()
+            });
+        }
+
+        // El workspace registra lo que DE VERDAD pasa en este shell. Sin bucle
+        // de agente no hay plan que desglosar ni comandos que ejecutar, así que
+        // esos carriles se quedan vacíos y lo dicen; el trace sí tiene algo
+        // cierto que contar —el ciclo de vida del turno— y va como `info`, que
+        // es una de las fases del propio modelo. Inventar pasos de un plan que
+        // nadie planificó sería teatro.
+        self.ws.status.running = true;
+        self.ws.status.model = self.chat_model.clone();
+        self.turn_start = Some(Instant::now());
+        self.ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: "info".into(),
+            label: "Orden enviada".into(),
+            detail: format!(
+                "{} · {} caracteres",
+                lucy_core::models::describe(&self.chat_model),
+                text.chars().count()
+            ),
+            ..Default::default()
+        });
+    }
+
+    /// Cierra el turno en el workspace cuando el stream termina.
+    fn turn_finished(&mut self, chars: usize) {
+        let ms = self.turn_start.take().map(|t| t.elapsed().as_millis() as u64);
+        self.ws.status.running = false;
+        self.ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: "info".into(),
+            label: "Respuesta completa".into(),
+            detail: match ms {
+                Some(ms) => format!("{chars} caracteres en {}", fmt_ms(ms)),
+                None => format!("{chars} caracteres"),
+            },
+            ..Default::default()
+        });
+    }
+
+    /// El panel derecho: los cuatro carriles del agente.
+    fn workspace(&mut self, ui: &mut egui::Ui) {
+        let counts = [
+            self.ws.plan.len(),
+            self.ws.exec.len(),
+            self.ws.trace.len(),
+            self.ws.artifacts.len(),
+        ];
+        let forks = self.ws.forks_running();
+
+        // ── pestañas ─────────────────────────────────────────────────────────
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, t) in WsTab::ALL.iter().enumerate() {
+                let on = self.ws_tab == *t;
+                let mut label = t.label().to_string();
+                if counts[i] > 0 {
+                    label.push_str(&format!("  {}", counts[i]));
+                }
+                // Los sub-agentes viven en el panel de Plan, así que su pestaña
+                // lleva la señal: un fork corriendo se ve desde cualquier otra.
+                if *t == WsTab::Plan && forks > 0 {
+                    label.push_str(&format!("  ⇉{forks}"));
+                }
+                let b = egui::Button::new(
+                    egui::RichText::new(label)
+                        .size(theme::FS_FOOTNOTE)
+                        .color(if on { theme::ACC } else { theme::TXT3 }),
+                )
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE)
+                .min_size(egui::vec2(0.0, 26.0));
+                let r = ui.add(b);
+                if on {
+                    // Subrayado de acento, como el CSS: la pestaña activa se
+                    // marca por debajo y no con un relleno que compita con el
+                    // contenido del panel.
+                    let x = r.rect;
+                    ui.painter().hline(
+                        x.left()..=x.right(),
+                        x.bottom() - 1.0,
+                        egui::Stroke::new(2.0_f32, theme::ACC),
+                    );
+                }
+                if r.clicked() {
+                    self.ws_tab = *t;
+                }
+            }
+        });
+        ui.add_space(4.0);
+        ui.separator();
+
+        // ── herramientas: solo cuando hay algo que exportar o limpiar ─────────
+        if !self.ws.is_empty() {
+            row_align(ui, 22.0, egui::Align::Center, |ui| {
+                right(ui, 22.0, |ui| {
+                    if ghost_icon(ui, "✕").on_hover_text("Limpiar el workspace").clicked() {
+                        self.ws.reset();
+                    }
+                    if ghost_icon(ui, "⎘")
+                        .on_hover_text("Exportar el run (copia al portapapeles)")
+                        .clicked()
+                    {
+                        let r = self.export_run();
+                        ui.ctx().copy_text(r);
+                    }
+                });
+            });
+        }
+        ui.add_space(4.0);
+
+        let tab = self.ws_tab;
+        let empty = match tab {
+            WsTab::Plan => self.ws.plan.is_empty() && self.ws.forks.is_empty(),
+            WsTab::Exec => self.ws.exec.is_empty(),
+            WsTab::Trace => self.ws.trace.is_empty(),
+            WsTab::Artifacts => self.ws.artifacts.is_empty(),
+        };
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if empty {
+                    ws_empty(ui, tab);
+                    return;
+                }
+                match tab {
+                    WsTab::Plan => self.ws_plan(ui),
+                    WsTab::Exec => self.ws_exec(ui),
+                    WsTab::Trace => self.ws_trace(ui),
+                    WsTab::Artifacts => self.ws_artifacts(ui),
+                }
+            });
+    }
+
+    fn ws_plan(&mut self, ui: &mut egui::Ui) {
+        use lucy_core::agent::{ForkStatus, StepStatus};
+        for s in &self.ws.plan {
+            let (glyph, col) = match s.status {
+                StepStatus::Done => ("✓", theme::ACC),
+                StepStatus::Running => ("▸", theme::ACC),
+                StepStatus::Error => ("✕", theme::RED),
+                StepStatus::Pending => ("○", theme::DISABLED),
+            };
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(egui::RichText::new(glyph).size(12.0).color(col));
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(&s.label)
+                            .size(theme::FS_FOOTNOTE)
+                            .color(if s.status == StepStatus::Pending {
+                                theme::TXT3
+                            } else {
+                                theme::TXT
+                            }),
+                    );
+                    if !s.detail.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&s.detail)
+                                .size(theme::FS_CAPTION)
+                                .monospace()
+                                .color(theme::FAINT),
+                        );
+                    }
+                });
+            });
+        }
+        // Los forks van DESPUÉS del plan y fuera de su estado vacío: con un
+        // sub-agente corriendo el panel no está vacío, solo no tiene plan.
+        if !self.ws.forks.is_empty() {
+            ui.add_space(10.0);
+            ui.add(egui::Label::new(theme::instrument_label(
+                "Sub-agentes",
+                theme::FAINT,
+            )));
+            for f in &self.ws.forks {
+                let (txt, col) = match f.status {
+                    ForkStatus::Running => ("en curso", theme::ACC),
+                    ForkStatus::Done => ("terminado", theme::TXT3),
+                    ForkStatus::Error => ("error", theme::RED),
+                    ForkStatus::Collected => ("recogido", theme::FAINT),
+                };
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⇉").size(11.0).color(col));
+                    ui.label(
+                        egui::RichText::new(&f.id)
+                            .size(theme::FS_CAPTION)
+                            .monospace()
+                            .color(theme::TXT2),
+                    );
+                    ui.label(egui::RichText::new(txt).size(theme::FS_CAPTION).color(col));
+                });
+            }
+        }
+    }
+
+    fn ws_exec(&mut self, ui: &mut egui::Ui) {
+        for e in &self.ws.exec {
+            ui.add_space(6.0);
+            egui::Frame::none()
+                .fill(theme::BG3)
+                .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                .rounding(egui::Rounding::same(theme::R_SM))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(if e.ok { "✓" } else { "✕" })
+                                .size(11.0)
+                                .color(if e.ok { theme::ACC } else { theme::RED }),
+                        );
+                        ui.label(
+                            egui::RichText::new(&e.cmd)
+                                .size(theme::FS_CAPTION)
+                                .monospace()
+                                .color(theme::TXT),
+                        );
+                    });
+                    if !e.output.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(&e.output)
+                                .size(theme::FS_CAPTION)
+                                .monospace()
+                                .color(theme::TXT3),
+                        );
+                    }
+                });
+        }
+    }
+
+    fn ws_trace(&mut self, ui: &mut egui::Ui) {
+        for t in &self.ws.trace {
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                // La fase va en su propio chip: en una lista larga es por lo
+                // que se busca, no por la etiqueta.
+                egui::Frame::none()
+                    .fill(theme::BG4)
+                    .rounding(egui::Rounding::same(4.0))
+                    .inner_margin(egui::Margin::symmetric(6.0, 1.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(&t.phase)
+                                .size(theme::FS_CAPTION)
+                                .monospace()
+                                .color(theme::TXT3),
+                        );
+                    });
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(&t.label)
+                            .size(theme::FS_CAPTION)
+                            .color(theme::TXT2),
+                    );
+                    if !t.detail.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&t.detail)
+                                .size(theme::FS_CAPTION)
+                                .color(theme::FAINT),
+                        );
+                    }
+                });
+            });
+        }
+    }
+
+    fn ws_artifacts(&mut self, ui: &mut egui::Ui) {
+        for a in &self.ws.artifacts {
+            ui.add_space(6.0);
+            egui::Frame::none()
+                .fill(theme::BG3)
+                .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                .rounding(egui::Rounding::same(theme::R_SM))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(a.kind.label())
+                                .size(theme::FS_CAPTION)
+                                .color(theme::ACC),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&a.path)
+                                    .size(theme::FS_CAPTION)
+                                    .monospace()
+                                    .color(theme::TXT),
+                            )
+                            .truncate(),
+                        );
+                    });
+                    if !a.summary.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&a.summary)
+                                .size(theme::FS_CAPTION)
+                                .color(theme::FAINT),
+                        );
+                    }
+                });
+        }
+    }
+
+    /// El run en texto plano, para el portapapeles.
+    ///
+    /// Texto y no JSON porque el destino es un ticket o un mensaje a un
+    /// compañero, no otro programa.
+    fn export_run(&self) -> String {
+        let mut s = String::new();
+        s.push_str(&format!("# Run de Lucy · {}\n", self.chat_model));
+        if !self.ws.plan.is_empty() {
+            s.push_str("\n## Plan\n");
+            for p in &self.ws.plan {
+                s.push_str(&format!("- [{:?}] {}\n", p.status, p.label));
+            }
+        }
+        if !self.ws.exec.is_empty() {
+            s.push_str("\n## Ejecución\n");
+            for e in &self.ws.exec {
+                s.push_str(&format!(
+                    "\n$ {}\n{}\n",
+                    e.cmd,
+                    if e.output.is_empty() { "(sin salida)" } else { &e.output }
+                ));
+            }
+        }
+        if !self.ws.trace.is_empty() {
+            s.push_str("\n## Trace\n");
+            for t in &self.ws.trace {
+                s.push_str(&format!("- {} · {} — {}\n", t.phase, t.label, t.detail));
+            }
+        }
+        if !self.ws.artifacts.is_empty() {
+            s.push_str("\n## Artefactos\n");
+            for a in &self.ws.artifacts {
+                s.push_str(&format!("- {} {}\n", a.kind.label(), a.path));
+            }
+        }
+        s
     }
 
     /// Log Viewer — la cola de `lucy_app.log`, con filtro por nivel.
@@ -3124,5 +3887,54 @@ mod layout {
                 n + 1
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod adjuntos {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn la_clase_sale_de_la_extension() {
+        assert_eq!(AttachKind::of(Path::new("captura.PNG")), AttachKind::Image);
+        assert_eq!(AttachKind::of(Path::new("informe.pdf")), AttachKind::Pdf);
+        assert_eq!(AttachKind::of(Path::new("lucy_app.log")), AttachKind::Text);
+        // Sin extensión se asume texto: un `Dockerfile` o un `.env` son texto,
+        // y equivocarse hacia texto solo cuesta un aviso de lectura fallida.
+        assert_eq!(AttachKind::of(Path::new("Dockerfile")), AttachKind::Text);
+    }
+
+    #[test]
+    fn un_adjunto_que_no_se_puede_mandar_dice_por_que() {
+        // Se ACEPTA igual. Rechazarlo al soltarlo deja al operador pensando que
+        // el arrastre no funciona, y mandarlo vacío es peor: el modelo cree que
+        // tiene el fichero.
+        let img = Attachment::read(Path::new("foto.jpg"));
+        assert_eq!(img.kind, AttachKind::Image);
+        assert!(!img.blocked.is_empty(), "una imagen sin ruta de visión avisa");
+        assert!(img.content.is_empty());
+
+        let pdf = Attachment::read(Path::new("manual.pdf"));
+        assert!(pdf.blocked.contains("extract_pdf_text"), "nombra lo que falta");
+    }
+
+    #[test]
+    fn un_fichero_que_no_existe_no_rompe_nada() {
+        let a = Attachment::read(Path::new("no-existe-este-fichero.txt"));
+        assert!(!a.blocked.is_empty());
+        assert_eq!(a.name, "no-existe-este-fichero.txt");
+    }
+
+    #[test]
+    fn el_texto_se_recorta_al_tope() {
+        let dir = std::env::temp_dir().join("lucy-egui-test-adjunto.txt");
+        std::fs::write(&dir, "á".repeat(ATTACH_MAX_CHARS + 500)).unwrap();
+        let a = Attachment::read(&dir);
+        assert!(a.blocked.is_empty());
+        // Por CARACTERES, no por bytes: con acentos, `á` ocupa dos bytes y
+        // cortar por byte partiría uno por la mitad.
+        assert_eq!(a.content.chars().count(), ATTACH_MAX_CHARS);
+        let _ = std::fs::remove_file(&dir);
     }
 }

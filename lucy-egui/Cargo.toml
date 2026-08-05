@@ -22,5 +22,8 @@ lucy-core = { path = "../../lucy-svelte/lucy-core" }
 # app real bajo el servicio "LucySysAdmin". Se lee con el MISMO crate y la misma
 # versión que usa `src-tauri`, para que no haya dos formatos de entrada.
 keyring = "2.3"
+# Diálogo de ficheros NATIVO del sistema. El arrastre lo entrega eframe por su
+# cuenta; para el botón hace falta el diálogo del SO, y no hay uno en egui.
+rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
