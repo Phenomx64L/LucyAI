@@ -17,6 +17,9 @@ use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// El workspace del agente: plan, ejecución, trace y artefactos. Port de
+/// `src/lib/cockpit/agent-workspace.ts` — el modelo, y sobre todo sus topes.
+pub mod agent;
 pub mod chat;
 /// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
 /// en quien expone el comando.
