@@ -35,7 +35,7 @@ fn main() -> eframe::Result {
             // arrancar: en modo inmediato el estilo se consulta en cada frame,
             // así que fijarlo aquí lo aplica a todo lo que se dibuje después.
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(App::new()))
+            Ok(Box::new(App::new(cc.storage)))
         }),
     )
 }
@@ -114,6 +114,43 @@ impl View {
 struct ChatMsg {
     user: bool,
     text: String,
+    /// Hora del mensaje. La V2 la pone junto al nombre de Lucy en mono tabular —
+    /// es lo que convierte una lista de burbujas en un hilo con historia.
+    stamp: String,
+}
+
+impl ChatMsg {
+    fn new(user: bool, text: String) -> Self {
+        Self { user, text, stamp: hhmm() }
+    }
+}
+
+/// `HH:MM` local. Formato corto a propósito: en un hilo interesa el orden y el
+/// hueco entre mensajes, no el segundo exacto.
+fn hhmm() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let t = secs % 86_400;
+    format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
+}
+
+/// Iniciales del operador para su avatar.
+///
+/// Estaban escritas a mano como "IV" en la V2 —correcto para Iván por
+/// casualidad, falso para cualquier otro—. Aquí salen del nombre real.
+fn initials(name: &str) -> String {
+    let parts: Vec<&str> = name.split_whitespace().collect();
+    match parts.len() {
+        0 => "U".to_string(),
+        1 => parts[0].chars().take(2).collect::<String>().to_uppercase(),
+        _ => {
+            let a = parts[0].chars().next().unwrap_or('U');
+            let b = parts[1].chars().next().unwrap_or(' ');
+            format!("{a}{b}").to_uppercase()
+        }
+    }
 }
 
 /// Tope del contenido de un adjunto de texto.
@@ -1102,6 +1139,59 @@ fn with_key(provider: &str) -> bool {
     v
 }
 
+/// Avatar cuadrado de 28 px con esquinas redondeadas, como el del CSS.
+fn avatar(ui: &mut egui::Ui, txt: &str, fg: egui::Color32, bg: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::Rounding::same(theme::R_SM), bg);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        txt,
+        egui::FontId::proportional(theme::FS_CAPTION),
+        fg,
+    );
+}
+
+/// La fila de acciones de un mensaje: la hora y el botón de copiar.
+///
+/// En el CSS aparecen al pasar el cursor. Aquí están siempre pero en `faint`:
+/// egui no sabe si el cursor está sobre un bloque hasta después de dibujarlo,
+/// así que ocultarlas costaría un frame de retraso y un parpadeo — peor negocio
+/// que un icono discreto que no se mueve.
+fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> bool {
+    let mut copiar = false;
+    let layout = if right_aligned {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 20.0), layout, |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new("⎘").size(11.0).color(theme::FAINT))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE)
+                    .min_size(egui::vec2(20.0, 18.0)),
+            )
+            .on_hover_text("Copiar")
+            .clicked()
+        {
+            copiar = true;
+        }
+        if !stamp.is_empty() {
+            ui.label(
+                egui::RichText::new(stamp)
+                    .size(theme::FS_MICRO)
+                    .monospace()
+                    .color(theme::FAINT),
+            );
+        }
+    });
+    copiar
+}
+
 /// Botón de icono sin relleno ni borde — los del compositor.
 fn ghost_icon(ui: &mut egui::Ui, glyph: &str) -> egui::Response {
     ui.add(
@@ -1315,13 +1405,28 @@ struct App {
     last_activity: Instant,
 }
 
+/// Clave del modelo elegido en el almacén de eframe.
+const K_MODEL: &str = "lucy.chat_model";
+
+/// El modelo con el que arranca una instalación nueva.
+///
+/// Antes era "el primero que devolviera Ollama, y si no `qwen3:4b`", que es una
+/// forma de decir "el que sea": en una máquina sin Ollama arrancaba apuntando a
+/// un modelo local que no existe, y la primera orden fallaba antes de llegar a
+/// ninguna parte. Gemini 3.5 Flash es la elección de la V2 y aguanta el trabajo
+/// de agente sin ser el más caro del catálogo.
+const DEFAULT_MODEL: &str = "gemini-3.5-flash";
+
 impl App {
-    fn new() -> Self {
+    fn new(storage: Option<&dyn eframe::Storage>) -> Self {
         let models = lucy_core::chat::list_models();
-        let chat_model = models
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "qwen3:4b".to_string());
+        // Lo que el operador eligió la última vez manda sobre el valor por
+        // defecto: cambiar de modelo en cada arranque es la clase de fricción
+        // que hace que se deje de cambiar.
+        let chat_model = storage
+            .and_then(|s| s.get_string(K_MODEL))
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         Self {
             view: View::TerminalIa,
             md_cache: CommonMarkCache::default(),
@@ -1424,6 +1529,14 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// eframe lo llama al cerrar y cada pocos minutos. Solo se guarda la
+    /// elección de modelo: las conversaciones son de la sesión, y persistirlas
+    /// sin que nadie lo haya pedido es guardar en disco lo que el operador
+    /// escribió sin decírselo.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(K_MODEL, self.chat_model.clone());
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32();
@@ -2003,37 +2116,115 @@ impl App {
         }
     }
 
-    /// La conversación.
+    /// La conversación, con el formato del hilo de la V2.
+    ///
+    /// Dos formas distintas y no una con el color cambiado: la orden del
+    /// operador es una BURBUJA alineada a la derecha, con su avatar y un ancho
+    /// máximo del 76 % para que una orden larga no ocupe la línea entera; la
+    /// respuesta de Lucy va PLANA sobre el lienzo, con su nombre y la hora
+    /// encima, porque lleva markdown y una burbuja lo estrangula.
+    ///
+    /// El color del operador vive en su AVATAR, no en la burbuja. Teñir la
+    /// burbuja —que es lo que había aquí— compite con el acento y hace que dos
+    /// órdenes seguidas parezcan un bloque de color.
     fn transcript(&mut self, ui: &mut egui::Ui) {
         let busy = self.tabs[self.tab].busy();
         let n = self.tabs[self.tab].log.len();
+        let full = ui.available_width();
+        let me = initials(&user_name());
+        let mut copiar: Option<String> = None;
+
         for i in 0..n {
-            let user = self.tabs[self.tab].log[i].user;
-            let text = self.tabs[self.tab].log[i].text.clone();
-            ui.add_space(6.0);
+            let m = &self.tabs[self.tab].log[i];
+            let (user, text, stamp) = (m.user, m.text.clone(), m.stamp.clone());
+            ui.add_space(10.0);
+
             if user {
-                // La orden del operador va en una burbuja teñida de su color,
-                // como en el CSS; la respuesta de Lucy va plana sobre el lienzo
-                // para que el markdown respire.
-                egui::Frame::none()
-                    .fill(theme::BLUE.linear_multiply(0.10))
-                    .rounding(egui::Rounding::same(theme::R_LG))
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new(&text).size(theme::FS_BODY).color(theme::TXT));
+                // Fila invertida: burbuja a la izquierda del avatar, las dos
+                // pegadas al borde derecho.
+                let bubble_w = (full * 0.76).min(full - 44.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    right(ui, 0.0, |ui| {
+                        avatar(ui, &me, theme::BLUE, theme::BLUE.linear_multiply(0.14));
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(bubble_w, 0.0),
+                            egui::Layout::top_down(egui::Align::Max),
+                            |ui| {
+                                ui.set_max_width(bubble_w);
+                                egui::Frame::none()
+                                    .fill(theme::BG3)
+                                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                                    .rounding(egui::Rounding::same(theme::R_LG))
+                                    .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(&text)
+                                                .size(13.5)
+                                                .color(theme::TXT),
+                                        );
+                                    });
+                                if msg_actions(ui, &stamp, true) {
+                                    copiar = Some(text.clone());
+                                }
+                            },
+                        );
                     });
-            } else {
-                row_align(ui, 18.0, egui::Align::Center, |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(egui::RichText::new("✦").size(12.0).color(theme::ACC));
-                    ui.add(egui::Label::new(theme::instrument_label("Lucy", theme::FAINT)));
                 });
-                ui.add_space(4.0);
-                CommonMarkViewer::new().show(ui, &mut self.md_cache, &text);
-                if busy && i == n - 1 {
-                    ui.label(egui::RichText::new("▋").color(theme::ACC));
-                }
+            } else {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    // Mientras escribe, el avatar de Lucy late. Es la señal de
+                    // que sigue viva cuando la respuesta tarda en arrancar.
+                    let pulse = busy && i == n - 1;
+                    let bg = if pulse {
+                        let t = ui.ctx().animate_bool_with_time(
+                            egui::Id::new(("pulse", i)),
+                            (ui.input(|x| x.time) * 1.6) as i64 % 2 == 0,
+                            0.5,
+                        );
+                        theme::ACC.linear_multiply(0.10 + 0.14 * t)
+                    } else {
+                        theme::ACC_BG
+                    };
+                    avatar(ui, "✦", theme::ACC, bg);
+                    ui.vertical(|ui| {
+                        row_align(ui, 18.0, egui::Align::Max, |ui| {
+                            ui.spacing_mut().item_spacing.x = 7.0;
+                            ui.label(
+                                egui::RichText::new("Lucy")
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(theme::TXT),
+                            );
+                            ui.label(
+                                egui::RichText::new(&stamp)
+                                    .size(theme::FS_MICRO)
+                                    .monospace()
+                                    .color(theme::FAINT),
+                            );
+                        });
+                        ui.add_space(5.0);
+                        if text.is_empty() && pulse {
+                            ui.label(
+                                egui::RichText::new("Pensando…")
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(theme::FAINT),
+                            );
+                        } else {
+                            CommonMarkViewer::new().show(ui, &mut self.md_cache, &text);
+                        }
+                        if pulse && !text.is_empty() {
+                            ui.label(egui::RichText::new("▋").color(theme::ACC));
+                        }
+                        if !pulse && msg_actions(ui, "", false) {
+                            copiar = Some(text.clone());
+                        }
+                    });
+                });
             }
+        }
+        if let Some(t) = copiar {
+            ui.ctx().copy_text(t);
         }
     }
 
@@ -2188,8 +2379,8 @@ impl App {
             for (n, _) in &adjuntos {
                 shown.push_str(&format!("\n⎘ {n}"));
             }
-            t.log.push(ChatMsg { user: true, text: shown });
-            t.log.push(ChatMsg { user: false, text: String::new() });
+            t.log.push(ChatMsg::new(true, shown));
+            t.log.push(ChatMsg::new(false, String::new()));
             t.attachments.clear();
             t.rx = Some(lucy_core::cloud::start(self.chat_model.clone(), prompt));
         }
@@ -3975,5 +4166,31 @@ mod adjuntos {
         // cortar por byte partiría uno por la mitad.
         assert_eq!(a.content.chars().count(), ATTACH_MAX_CHARS);
         let _ = std::fs::remove_file(&dir);
+    }
+}
+
+#[cfg(test)]
+mod hilo {
+    use super::*;
+
+    #[test]
+    fn las_iniciales_salen_del_nombre_real() {
+        // En la V2 estaban escritas a mano como "IV": correcto para Iván por
+        // casualidad y falso para cualquier otro operador.
+        assert_eq!(initials("Iván Eduardo Luna"), "IE");
+        assert_eq!(initials("Ada"), "AD");
+        assert_eq!(initials("ada lovelace"), "AL");
+        // Sin nombre no se inventa uno.
+        assert_eq!(initials(""), "U");
+        assert_eq!(initials("   "), "U");
+    }
+
+    #[test]
+    fn el_saludo_lleva_solo_el_nombre_de_pila() {
+        // "Buenas tardes, Iván Eduardo Luna" no es un saludo, es un registro.
+        let g = greeting("Iván Eduardo Luna");
+        assert!(g.ends_with(", Iván"), "salió: {g}");
+        // Y sin nombre, saluda igual en vez de dejar una coma colgando.
+        assert!(!greeting("").contains(','));
     }
 }
