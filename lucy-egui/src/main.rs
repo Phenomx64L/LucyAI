@@ -179,12 +179,8 @@ impl ChatMsg {
 /// `HH:MM` local. Formato corto a propósito: en un hilo interesa el orden y el
 /// hueco entre mensajes, no el segundo exacto.
 fn hhmm() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let t = secs % 86_400;
-    format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
+    let (h, m, _) = lucy_core::system::local_time();
+    format!("{h:02}:{m:02}")
 }
 
 /// Iniciales del operador para su avatar.
@@ -369,16 +365,30 @@ impl ChatTab {
 /// —igual que el índice de equipos ya salió al Credential Manager— o el shell
 /// nativo llegará a producción sin la mitad de los ajustes.
 fn user_name() -> String {
-    std::env::var("USERNAME").unwrap_or_default()
+    NAME.lock()
+        .ok()
+        .map(|n| n.clone())
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| std::env::var("USERNAME").unwrap_or_default())
+}
+
+/// El nombre que el operador puso en Configuración.
+///
+/// Vacío hasta que lo escriba, y entonces manda sobre el usuario de Windows:
+/// "eleue" es una cuenta, no cómo se llama una persona.
+static NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn set_user_name(n: &str) {
+    if let Ok(mut g) = NAME.lock() {
+        *g = n.to_string();
+    }
 }
 
 /// Saludo por franja horaria, como el `empty-state` de la V2.
 fn greeting(name: &str) -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let h = (secs % 86_400) / 3600;
+    // LOCAL, no UTC. Con UTC el saludo decía "Buenos días" a las diez de la
+    // noche en México — seis horas de desfase.
+    let (h, _, _) = lucy_core::system::local_time();
     let word = if h < 12 {
         "Buenos días"
     } else if h < 19 {
@@ -439,24 +449,24 @@ const SLASH: [(&str, &str, bool); 29] = [
 /// de qué va, y lo que se envía es una instrucción completa. Un chip que enviara
 /// su propio texto —"Salud del sistema"— le daría a Lucy tres palabras sueltas
 /// en lugar de una tarea.
-const SUGGESTIONS: [(&str, &str, &str); 4] = [
+const SUGGESTIONS: [(icons::Icon, &str, &str); 4] = [
     (
-        "◈",
+        icons::Icon::Grid,
         "Salud del sistema",
         "Revisa la salud del sistema (CPU, RAM, disco, servicios) y dame un resumen del estado.",
     ),
     (
-        "◉",
+        icons::Icon::Shield,
         "Vulnerabilidades",
         "Escanea el software instalado en busca de vulnerabilidades conocidas y dime cómo parcharlas.",
     ),
     (
-        "▤",
+        icons::Icon::Server,
         "Servicios detenidos",
         "¿Qué servicios de inicio automático están detenidos ahora mismo? Muéstramelos.",
     ),
     (
-        "▥",
+        icons::Icon::FileText,
         "Errores recientes",
         "Resume los errores más recientes del registro de eventos del sistema (últimas 24 h).",
     ),
@@ -535,14 +545,10 @@ fn fmt_rate(bps: u64) -> String {
 
 /// `HH:MM:SS` local, sin arrastrar `chrono` al prototipo por una etiqueta.
 fn stamp_now() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // UTC: el desfase local requeriría chrono o la API de zonas de Windows, y
-    // esta etiqueta responde a "¿está vivo?", no a qué hora es exactamente.
-    let t = secs % 86_400;
-    format!("{:02}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
+    // Local, como todo lo demás: una marca de "última actualización" que va seis
+    // horas desplazada no se puede cruzar con ningún log.
+    let (h, m, s) = lucy_core::system::local_time();
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn fmt_uptime(secs: u64) -> String {
@@ -1111,11 +1117,11 @@ fn model_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, sel: bool) ->
 fn chip_w(ui: &egui::Ui, label: &str) -> f32 {
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
     let w = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, theme::TXT2).size().x);
-    w + 46.0
+    w + 54.0
 }
 
 /// Chip de sugerencia del estado vacío.
-fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> bool {
+fn chip(ui: &mut egui::Ui, icon: icons::Icon, label: &str) -> bool {
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(chip_w(ui, label), 30.0), egui::Sense::click());
     ui.painter().rect(
@@ -1129,15 +1135,15 @@ fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> bool {
     );
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
     let cy = rect.center().y;
-    ui.painter().text(
-        egui::pos2(rect.left() + 14.0, cy),
-        egui::Align2::LEFT_CENTER,
+    icons::draw(
+        ui.painter(),
         icon,
-        font.clone(),
+        egui::pos2(rect.left() + 21.0, cy),
+        15.0,
         theme::ACC,
     );
     ui.painter().text(
-        egui::pos2(rect.left() + 32.0, cy),
+        egui::pos2(rect.left() + 36.0, cy),
         egui::Align2::LEFT_CENTER,
         label,
         font,
@@ -1593,6 +1599,8 @@ struct App {
 const K_MODEL: &str = "lucy.chat_model";
 /// Clave del interruptor de movimiento.
 const K_MOTION: &str = "lucy.motion";
+/// Clave del nombre del operador.
+const K_NAME: &str = "lucy.user_name";
 
 /// El modelo con el que arranca una instalación nueva.
 ///
@@ -1612,6 +1620,9 @@ impl App {
         // El arranque sin movimiento puede venir del entorno o de lo que el
         // operador dejó marcado en Configuración. Manda lo guardado; el entorno
         // es el respaldo para arrancar así sin haber entrado nunca.
+        if let Some(n) = storage.and_then(|s| s.get_string(K_NAME)) {
+            set_user_name(&n);
+        }
         set_motion(
             storage
                 .and_then(|s| s.get_string(K_MOTION))
@@ -1762,6 +1773,7 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(K_MODEL, self.chat_model.clone());
         storage.set_string(K_MOTION, motion().to_string());
+        storage.set_string(K_NAME, user_name());
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -2397,7 +2409,7 @@ impl App {
                     let w: f32 = par.iter().map(|(_, l, _)| chip_w(ui, l)).sum::<f32>() + 8.0;
                     ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                     for (icon, label, order) in par {
-                        if chip(ui, icon, label) {
+                        if chip(ui, *icon, label) {
                             enviar = Some(order.to_string());
                         }
                     }
@@ -2581,8 +2593,13 @@ impl App {
                         // lo que hizo. La V2 usa un `<details>` de HTML; aquí,
                         // el desplegable nativo.
                         for (k, th) in shown.thoughts.iter().enumerate() {
+                            // "Razonamiento" y no "Razonando…": los puntos
+                            // suspensivos dicen que sigue en marcha, y esto es lo
+                            // que Lucy YA pensó. El bloque se queda ahí después de
+                            // terminar, y con el gerundio parecía que no había
+                            // acabado.
                             egui::CollapsingHeader::new(
-                                egui::RichText::new("Razonando…")
+                                egui::RichText::new("Razonamiento")
                                     .size(theme::FS_CAPTION)
                                     .color(theme::FAINT),
                             )
@@ -2658,19 +2675,37 @@ impl App {
                         .clicked()
                     {}
 
-                    let mut send_w = 34.0;
-                    send_w += 8.0;
-                    let field_w = (ui.available_width() - send_w).max(80.0);
+                    let field_w = (ui.available_width() - 42.0).max(80.0);
+                    // MULTILÍNEA, no `singleline`. La pista prometía
+                    // "Shift+Enter = salto de línea" sobre un campo de una sola
+                    // línea, que no puede contener un salto de ninguna manera —
+                    // ni crecer con el texto. Las dos cosas que faltaban eran la
+                    // misma cosa.
+                    //
+                    // El alto sale de las líneas que hay, con tope: una orden
+                    // larga se ve entera hasta ocho líneas y a partir de ahí el
+                    // propio campo hace scroll, en vez de comerse la
+                    // conversación.
+                    let lineas = self.tabs[self.tab].input.lines().count().clamp(1, 8);
                     let resp = ui.add_enabled(
                         !busy,
-                        egui::TextEdit::singleline(&mut self.tabs[self.tab].input)
+                        egui::TextEdit::multiline(&mut self.tabs[self.tab].input)
                             .hint_text("Escribe una orden…   ·   Shift+Enter = salto de línea")
                             .desired_width(field_w)
+                            .desired_rows(lineas)
                             .frame(false)
                             .font(egui::FontId::proportional(theme::FS_BODY)),
                     );
-                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        enviar = true;
+                    // Enter envía, Shift+Enter salta de línea. El orden importa:
+                    // hay que MIRAR la tecla antes de que el campo la consuma, y
+                    // quitarla del evento para que no meta también el salto.
+                    if resp.has_focus() {
+                        let enter = ui.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                        });
+                        if enter {
+                            enviar = true;
+                        }
                     }
 
                     right(ui, 26.0, |ui| {
@@ -3955,6 +3990,30 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let full = (ui.available_width() - 8.0).clamp(240.0, 760.0);
+
+                // ── quién eres ───────────────────────────────────────────────
+                section(ui, "Operador", None);
+                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::BG2, |ui| {
+                    let mut n = user_name();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut n)
+                                .hint_text("Tu nombre")
+                                .desired_width(260.0),
+                        )
+                        .changed()
+                    {
+                        set_user_name(&n);
+                    }
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Con esto te saluda Lucy y salen tus iniciales en el hilo. Si se \n                             deja vacío usa el usuario de Windows, que es una cuenta y no un \n                             nombre.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::FAINT),
+                    );
+                });
 
                 // ── modelo ───────────────────────────────────────────────────
                 section(ui, "Modelo por defecto", None);
