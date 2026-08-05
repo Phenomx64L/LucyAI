@@ -29,5 +29,8 @@ rfd = "0.15"
 # las características por defecto de `image` arrastran una docena de
 # descodificadores que nadie va a usar.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Captura de micrófono. Es la mitad del dictado que NO depende del motor: da
+# igual que transcriba Whisper local, Windows o un servicio de nube.
+cpal = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

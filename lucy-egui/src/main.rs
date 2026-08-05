@@ -18,6 +18,7 @@ mod hosts;
 mod icons;
 mod prompt;
 mod theme;
+mod voice;
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -317,6 +318,9 @@ struct ChatTab {
     ws: lucy_core::agent::Workspace,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
+    /// Grabación de voz en curso, si la hay. Vive en la pestaña porque el
+    /// dictado acaba en SU compositor.
+    rec: Option<voice::Recording>,
     /// Interruptor de parada del turno en curso. El hilo del stream lo mira
     /// entre trama y trama.
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -336,6 +340,7 @@ impl ChatTab {
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
             drain: drain::Drain::default(),
+            rec: None,
             stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             title: if n == 0 {
                 "Nueva Terminal".to_string()
@@ -2719,6 +2724,7 @@ impl App {
         let busy = self.tabs[self.tab].busy();
         let mut enviar = false;
         let mut detener = false;
+        let mut dictar = false;
         let mut abrir_dialogo = false;
         let mut quitar: Option<usize> = None;
 
@@ -2751,16 +2757,40 @@ impl App {
                     {
                         abrir_dialogo = true;
                     }
-                    // El dictado sigue sin hacer nada, y lo dice. Un botón que
-                    // ignora los clics en silencio es peor que uno ausente, y
-                    // este además nombra el obstáculo real.
-                    if ghost_icon(ui, icons::Icon::Mic)
-                        .on_hover_text(
-                            "Dictado por voz — pendiente: la V2 usa la API del navegador y \
-                             un shell nativo necesita otro motor",
-                        )
+                    // El micrófono GRABA de verdad. Transcribir es el paso
+                    // siguiente, y el botón lo dice al soltar en vez de tragarse
+                    // el audio en silencio.
+                    let grabando = self.tabs[self.tab].rec.is_some();
+                    let (mr, mresp) =
+                        ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+                    if grabando {
+                        // El aro crece con el nivel. Sin señal visible no hay
+                        // forma de saber si Windows eligió el micrófono que
+                        // tienes delante o uno que no existe.
+                        let n = self.tabs[self.tab].rec.as_ref().map_or(0.0, |r| r.level());
+                        ui.painter().circle_filled(
+                            mr.center(),
+                            9.0 + 5.0 * n,
+                            theme::RED.linear_multiply(0.25),
+                        );
+                        ui.ctx().request_repaint();
+                    } else if mresp.hovered() {
+                        ui.painter()
+                            .rect_filled(mr, egui::Rounding::same(6.0), theme::BG4);
+                    }
+                    icons::draw(
+                        ui.painter(),
+                        icons::Icon::Mic,
+                        mr.center(),
+                        17.0,
+                        if grabando { theme::RED } else { theme::TXT3 },
+                    );
+                    if mresp
+                        .on_hover_text(if grabando { "Detener el dictado" } else { "Dictar" })
                         .clicked()
-                    {}
+                    {
+                        dictar = true;
+                    }
 
                     let field_w = (ui.available_width() - 42.0).max(80.0);
                     // MULTILÍNEA, no `singleline`. La pista prometía
@@ -2876,6 +2906,34 @@ impl App {
             // no hay nada que animar detrás.
             if let Some(paths) = rfd::FileDialog::new().pick_files() {
                 self.attach(&paths);
+            }
+        }
+        if dictar {
+            let t = &mut self.tabs[self.tab];
+            match t.rec.take() {
+                // Al soltar: el audio ya está en mono a 16 kHz, listo para el
+                // motor. Todavía no hay motor, y se dice — tragarse la
+                // grabación en silencio sería peor que no grabar.
+                Some(r) => {
+                    let audio = r.finish();
+                    let s = voice::duration_s(&audio);
+                    t.log.push(ChatMsg::new(
+                        false,
+                        format!(
+                            "Grabados {s:.1} s de audio ({} muestras a 16 kHz, mono). \n                             La transcripción es el paso siguiente: falta el motor \n                             Whisper local.",
+                            audio.len()
+                        ),
+                    ));
+                }
+                None => match voice::Recording::start() {
+                    Ok(r) => t.rec = Some(r),
+                    // Un micrófono que no abre es casi siempre un permiso de
+                    // Windows, y decirlo ahorra el viaje a Configuración.
+                    Err(e) => t.log.push(ChatMsg::new(
+                        false,
+                        format!("No se pudo grabar: {e}"),
+                    )),
+                },
             }
         }
         if detener {
