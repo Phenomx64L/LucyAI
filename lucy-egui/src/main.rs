@@ -1283,6 +1283,19 @@ fn with_key(provider: &str) -> bool {
     v
 }
 
+/// Lo que se puede hacer con un mensaje ya escrito.
+#[derive(Clone, Copy, PartialEq)]
+enum MsgAction {
+    None,
+    Copy,
+    /// Rehacer la respuesta de Lucy: se tira y se vuelve a pedir con la misma
+    /// conversación detrás.
+    Regenerate,
+    /// Devolver una orden al compositor y borrar desde ahí. Es "me expliqué
+    /// mal", no "añade esto".
+    Edit,
+}
+
 /// Un comando ejecutado, en UNA línea plegable.
 ///
 /// Antes esto era una burbuja de operador con avatar, hora y ancho completo que
@@ -1340,28 +1353,35 @@ fn avatar(ui: &mut egui::Ui, txt: &str, fg: egui::Color32, bg: egui::Color32) {
 /// egui no sabe si el cursor está sobre un bloque hasta después de dibujarlo,
 /// así que ocultarlas costaría un frame de retraso y un parpadeo — peor negocio
 /// que un icono discreto que no se mueve.
-fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> bool {
-    let mut copiar = false;
+fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> MsgAction {
+    let mut act = MsgAction::None;
     let layout = if right_aligned {
         egui::Layout::right_to_left(egui::Align::Center)
     } else {
         egui::Layout::left_to_right(egui::Align::Center)
     };
+    // El operador puede EDITAR lo suyo y REHACER lo de Lucy — nunca al revés.
+    // Editar una respuesta ajena convertiría el hilo en un documento en vez de
+    // en una conversación, y rehacer la propia orden es lo que ya hace enviarla
+    // otra vez.
+    let extra = if right_aligned {
+        (icons::Icon::Pencil, "Editar y reenviar", MsgAction::Edit)
+    } else {
+        (icons::Icon::Refresh, "Volver a responder", MsgAction::Regenerate)
+    };
     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 20.0), layout, |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        if ui
-            .add(
-                egui::Button::new(egui::RichText::new("⎘").size(11.0).color(theme::FAINT))
-                    .fill(egui::Color32::TRANSPARENT)
-                    .stroke(egui::Stroke::NONE)
-                    .min_size(egui::vec2(20.0, 18.0)),
-            )
-            .on_hover_text("Copiar")
-            .clicked()
-        {
-            copiar = true;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (icon, tip, a) in [(icons::Icon::Copy, "Copiar", MsgAction::Copy), extra] {
+            let (r, resp) =
+                ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::click());
+            let c = if resp.hovered() { theme::TXT2 } else { theme::FAINT };
+            icons::draw(ui.painter(), icon, r.center(), 12.0, c);
+            if resp.on_hover_text(tip).clicked() {
+                act = a;
+            }
         }
         if !stamp.is_empty() {
+            ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(stamp)
                     .size(theme::FS_MICRO)
@@ -1370,7 +1390,7 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> bool {
             );
         }
     });
-    copiar
+    act
 }
 
 /// Botón de icono sin relleno ni borde — los del compositor.
@@ -2443,6 +2463,9 @@ impl App {
         let full = ui.available_width();
         let me = initials(&user_name());
         let mut copiar: Option<String> = None;
+        // `(índice, acción)` — se aplica DESPUÉS del bucle: tocar el registro
+        // mientras se dibuja es cómo se sale del índice a media pasada.
+        let mut accion: Option<(usize, MsgAction)> = None;
         // La intención la marca la ÚLTIMA orden del operador, no la respuesta:
         // es él quien decide si quería un comando o una acción.
         let code_gen = self.tabs[self.tab]
@@ -2506,8 +2529,10 @@ impl App {
                                                 .color(theme::TXT),
                                         );
                                     });
-                                if msg_actions(ui, &stamp, true) {
-                                    copiar = Some(text.clone());
+                                match msg_actions(ui, &stamp, true) {
+                                    MsgAction::Copy => copiar = Some(text.clone()),
+                                    MsgAction::None => {}
+                                    a => accion = Some((i, a)),
                                 }
                             },
                         );
@@ -2619,8 +2644,12 @@ impl App {
                         if pulse && !text.is_empty() {
                             ui.label(egui::RichText::new("▋").color(theme::ACC));
                         }
-                        if !pulse && msg_actions(ui, "", false) {
-                            copiar = Some(text.clone());
+                        if !pulse {
+                            match msg_actions(ui, "", false) {
+                                MsgAction::Copy => copiar = Some(text.clone()),
+                                MsgAction::None => {}
+                                a => accion = Some((i, a)),
+                            }
                         }
                     });
                 });
@@ -2630,6 +2659,59 @@ impl App {
         if let Some(t) = copiar {
             ui.ctx().copy_text(t);
         }
+        if let Some((i, a)) = accion {
+            match a {
+                // Rehacer: se tira la respuesta y todo lo que vino después. Lo
+                // de después se apoyaba en ella, así que dejarlo produciría una
+                // conversación donde una respuesta contesta a otra que ya no
+                // existe.
+                MsgAction::Regenerate => {
+                    self.tabs[self.tab].log.truncate(i);
+                    self.resend();
+                }
+                // Editar: la orden vuelve al compositor y el hilo se corta ahí.
+                // Es "me expliqué mal", no "añade esto": conservar lo que vino
+                // después dejaría en pantalla respuestas a una pregunta que el
+                // operador acaba de retirar.
+                MsgAction::Edit => {
+                    let t = &mut self.tabs[self.tab];
+                    t.input = t.log[i].text.clone();
+                    t.log.truncate(i);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Vuelve a pedir respuesta con la conversación tal como está ahora.
+    ///
+    /// No añade ningún mensaje del operador: lo usa "rehacer", donde la orden ya
+    /// está en el hilo y lo único que falta es la respuesta.
+    fn resend(&mut self) {
+        if self.tabs[self.tab].busy() {
+            return;
+        }
+        let sys = prompt::system_prompt(
+            &self.sys.snapshot(),
+            &self.services,
+            self.log_lines.as_deref().unwrap_or(&[]),
+        );
+        let conv = self.history(self.tab);
+        if conv.is_empty() {
+            return;
+        }
+        let turns = lucy_core::turns::fit(&sys, &conv, lucy_core::turns::MAX_HISTORY_CHARS);
+        let t = &mut self.tabs[self.tab];
+        t.drain.flush();
+        t.log.push(ChatMsg::new(false, String::new()));
+        t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        t.rx = Some(lucy_core::cloud::start_cancellable(
+            self.chat_model.clone(),
+            turns,
+            t.stop.clone(),
+        ));
+        t.ws.status.running = true;
+        t.turn_start = Some(Instant::now());
     }
 
     /// El compositor: adjuntar, dictar, escribir, enviar.
