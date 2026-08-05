@@ -2284,6 +2284,15 @@ impl App {
         let full = ui.available_width();
         let me = initials(&user_name());
         let mut copiar: Option<String> = None;
+        // La intención la marca la ÚLTIMA orden del operador, no la respuesta:
+        // es él quien decide si quería un comando o una acción.
+        let code_gen = self.tabs[self.tab]
+            .log
+            .iter()
+            .rev()
+            .find(|m| m.user)
+            .map(|m| lucy_core::tags::detect_code_gen_intent(&m.text))
+            .unwrap_or(false);
 
         for i in 0..n {
             let m = &self.tabs[self.tab].log[i];
@@ -2358,7 +2367,10 @@ impl App {
                         // El marcado de acción NO llega al hilo: sin esto, el
                         // operador ve `<TOOL>readfile:…</TOOL>` crudo en mitad
                         // de la respuesta mientras Lucy trabaja.
-                        let shown = lucy_core::tags::clean_display(&text);
+                        // Si el operador PIDIÓ el comando, se enseña como
+                        // bloque de código; si pidió una acción, se esconde y
+                        // va al panel. La intención sale de su último mensaje.
+                        let shown = lucy_core::tags::clean_display_with(&text, code_gen);
                         if shown.text.is_empty() && pulse {
                             ui.label(
                                 egui::RichText::new("Pensando…")
@@ -2367,6 +2379,36 @@ impl App {
                             );
                         } else {
                             CommonMarkViewer::new().show(ui, &mut self.md_cache, &shown.text);
+                        }
+                        // A DÓNDE FUE EL COMANDO. Quitarlo en silencio deja la
+                        // prosa colgando: Lucy escribe "usa esta sintaxis:" y
+                        // debajo no hay nada, y la respuesta parece cortada a
+                        // media frase. Es lo que se veía. Con esta línea, el
+                        // texto apunta a un sitio que existe.
+                        if !code_gen && shown.commands > 0 {
+                            ui.add_space(6.0);
+                            egui::Frame::none()
+                                .fill(theme::ACC_BG)
+                                .rounding(egui::Rounding::same(theme::R_SM))
+                                .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.x = 7.0;
+                                    icons::show(ui, icons::Icon::Terminal, 13.0, theme::ACC);
+                                    ui.label(
+                                        egui::RichText::new(if shown.commands == 1 {
+                                            "1 comando propuesto — apruébalo en el panel de Plan"
+                                                .to_string()
+                                        } else {
+                                            format!(
+                                                "{} comandos propuestos — apruébalos en el panel \
+                                                 de Plan",
+                                                shown.commands
+                                            )
+                                        })
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::ACC),
+                                    );
+                                });
                         }
                         // El razonamiento se GUARDA y se enseña plegado, nunca
                         // se borra: es la única explicación de por qué Lucy hizo
