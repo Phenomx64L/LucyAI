@@ -114,7 +114,8 @@ impl View {
             | View::TerminalIa
             | View::NexShell
             | View::Memoria
-            | View::LogViewer => None,
+            | View::LogViewer
+            | View::Configuracion => None,
             View::Inventario => Some(
                 "commands/inventory.rs — puro, sin AppHandle. \
                  Necesita además la tabla ordenable y el export a PDF.",
@@ -122,10 +123,6 @@ impl View {
             View::Compliance => Some(
                 "commands/compliance.rs — puro. La vista es la tabla de checks \
                  por host más el porcentaje de aprobados.",
-            ),
-            View::Configuracion => Some(
-                "Claves de API (keyring), catálogo de modelos, tema y umbrales. \
-                 Depende de que el catálogo se mueva a lucy-core para no duplicarlo.",
             ),
         }
     }
@@ -740,8 +737,19 @@ fn panel_title(ui: &mut egui::Ui, icon: &str, title: &str) {
 /// Se lee UNA vez: consultar el entorno en cada frame de cada barra sería una
 /// llamada al sistema por cada núcleo, sesenta veces por segundo.
 fn motion() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("LUCY_NO_MOTION").unwrap_or_default() != "1")
+    MOTION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Interruptor global del movimiento.
+///
+/// Empieza por la variable de entorno —así se puede arrancar sin animaciones sin
+/// tocar nada— y luego lo manda Configuración. Atómico y no `OnceLock` porque
+/// ahora se puede cambiar en caliente, y `Relaxed` basta: es un booleano que se
+/// lee para decidir si dibujar un fundido, no un cerrojo.
+static MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn set_motion(on: bool) {
+    MOTION.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// `--ease-out`, la curva de entrada del CSS: rápida al principio y asentándose
@@ -1583,6 +1591,8 @@ struct App {
 
 /// Clave del modelo elegido en el almacén de eframe.
 const K_MODEL: &str = "lucy.chat_model";
+/// Clave del interruptor de movimiento.
+const K_MOTION: &str = "lucy.motion";
 
 /// El modelo con el que arranca una instalación nueva.
 ///
@@ -1599,6 +1609,17 @@ impl App {
         // Lo que el operador eligió la última vez manda sobre el valor por
         // defecto: cambiar de modelo en cada arranque es la clase de fricción
         // que hace que se deje de cambiar.
+        // El arranque sin movimiento puede venir del entorno o de lo que el
+        // operador dejó marcado en Configuración. Manda lo guardado; el entorno
+        // es el respaldo para arrancar así sin haber entrado nunca.
+        set_motion(
+            storage
+                .and_then(|s| s.get_string(K_MOTION))
+                .map_or_else(
+                    || std::env::var("LUCY_NO_MOTION").unwrap_or_default() != "1",
+                    |v| v == "true",
+                ),
+        );
         let chat_model = storage
             .and_then(|s| s.get_string(K_MODEL))
             .filter(|m| !m.trim().is_empty())
@@ -1740,6 +1761,7 @@ impl eframe::App for App {
     /// escribió sin decírselo.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(K_MODEL, self.chat_model.clone());
+        storage.set_string(K_MOTION, motion().to_string());
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -2051,6 +2073,7 @@ impl eframe::App for App {
             View::Memoria => self.memoria(ui),
             View::Dashboard => self.sistema(ui),
             View::LogViewer => self.log_viewer(ui),
+            View::Configuracion => self.configuracion(ui),
             other => self.pendiente(ui, other),
         });
     }
@@ -3908,6 +3931,212 @@ impl App {
                 theme::DUR_BASE,
             );
         });
+    }
+
+    /// Configuración — lo que Lucy sabe de sí misma en este equipo.
+    ///
+    /// SOLO LECTURA en lo que toca a secretos. Las claves de API se ven como
+    /// "guardada" o "sin guardar" y nunca se muestran ni se editan aquí: esta
+    /// vista dice QUÉ hay configurado, y quien las escribe es la Configuración
+    /// de la app real, que además valida lo que guarda. Un segundo sitio donde
+    /// meter una clave es un segundo sitio donde equivocarse.
+    fn configuracion(&mut self, ui: &mut egui::Ui) {
+        let s = self.sys.snapshot();
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
+            ui.label(
+                egui::RichText::new("Configuración")
+                    .size(theme::FS_TITLE)
+                    .color(theme::TXT),
+            );
+        });
+        ui.add_space(10.0);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let full = (ui.available_width() - 8.0).clamp(240.0, 760.0);
+
+                // ── modelo ───────────────────────────────────────────────────
+                section(ui, "Modelo por defecto", None);
+                card_on(ui, egui::vec2(full, 66.0), 14.0, theme::BG2, |ui| {
+                    row_align(ui, 20.0, egui::Align::Center, |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(
+                            egui::RichText::new(lucy_core::models::icon(&self.chat_model))
+                                .size(14.0)
+                                .color(theme::ACC),
+                        );
+                        ui.label(
+                            egui::RichText::new(lucy_core::models::describe(&self.chat_model))
+                                .size(theme::FS_BODY)
+                                .color(theme::TXT),
+                        );
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Se recuerda entre arranques. Se cambia desde el selector de \
+                             Terminal IA.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::FAINT),
+                    );
+                });
+
+                // ── proveedores ──────────────────────────────────────────────
+                section(ui, "Proveedores", Some("solo lectura".into()));
+                let n = lucy_core::models::GROUPS.len();
+                card_on(
+                    ui,
+                    egui::vec2(full, 28.0 + n as f32 * 24.0),
+                    14.0,
+                    theme::BG2,
+                    |ui| {
+                        for g in lucy_core::models::GROUPS {
+                            let local = g.provider == "ollama";
+                            let ok = with_key(g.provider);
+                            row_align(ui, 24.0, egui::Align::Center, |ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                ui.label(
+                                    egui::RichText::new("●")
+                                        .size(8.0)
+                                        .color(if ok { theme::ACC } else { theme::FAINT }),
+                                );
+                                cell(
+                                    ui,
+                                    170.0,
+                                    24.0,
+                                    false,
+                                    egui::RichText::new(g.label)
+                                        .size(theme::FS_FOOTNOTE)
+                                        .color(theme::TXT2),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{} modelos", g.options.len()))
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::FAINT),
+                                );
+                                right(ui, 24.0, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(if local {
+                                            "local · sin clave"
+                                        } else if ok {
+                                            "clave guardada"
+                                        } else {
+                                            "sin clave"
+                                        })
+                                        .size(theme::FS_CAPTION)
+                                        .color(
+                                            if ok || local { theme::TXT3 } else { theme::AMBER },
+                                        ),
+                                    );
+                                });
+                            });
+                        }
+                    },
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Las claves viven en el Credential Manager de Windows y se escriben \
+                         desde la app principal. Aquí no se muestran ni se editan.",
+                    )
+                    .size(theme::FS_CAPTION)
+                    .color(theme::FAINT),
+                );
+
+                // ── equipo ───────────────────────────────────────────────────
+                section(ui, "Este equipo", None);
+                let elev = match lucy_core::elevate::state() {
+                    lucy_core::elevate::Elevation::Already => ("Administrador", theme::ACC),
+                    lucy_core::elevate::Elevation::CanPrompt => {
+                        ("Sin privilegios · UAC disponible", theme::TXT3)
+                    }
+                    lucy_core::elevate::Elevation::Unavailable => {
+                        ("Sin privilegios · UAC desactivado", theme::AMBER)
+                    }
+                };
+                card_on(ui, egui::vec2(full, 96.0), 14.0, theme::BG2, |ui| {
+                    for (k, v, c) in [
+                        ("Equipo", s.host.clone(), theme::TXT2),
+                        ("Sistema", s.os.clone(), theme::TXT2),
+                        ("Privilegios", elev.0.to_string(), elev.1),
+                    ] {
+                        row_align(ui, 22.0, egui::Align::Center, |ui| {
+                            cell(
+                                ui,
+                                110.0,
+                                22.0,
+                                false,
+                                egui::RichText::new(k)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::FAINT),
+                            );
+                            ui.label(egui::RichText::new(v).size(theme::FS_FOOTNOTE).color(c));
+                        });
+                    }
+                });
+
+                // ── interfaz ─────────────────────────────────────────────────
+                section(ui, "Interfaz", None);
+                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::BG2, |ui| {
+                    let mut on = motion();
+                    if ui
+                        .checkbox(&mut on, "Animaciones y escritura progresiva")
+                        .changed()
+                    {
+                        set_motion(on);
+                    }
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Al apagarlo, el texto aparece de golpe y nada se desvanece. \
+                             LUCY_NO_MOTION=1 hace lo mismo desde el arranque.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::FAINT),
+                    );
+                });
+
+                // ── rutas ────────────────────────────────────────────────────
+                section(ui, "Rutas", None);
+                let db = db_path().map(|p| p.display().to_string()).unwrap_or_default();
+                let lg = log_path().map(|p| p.display().to_string()).unwrap_or_default();
+                card_on(ui, egui::vec2(full, 76.0), 14.0, theme::BG2, |ui| {
+                    for (k, v) in [("Base de datos", db), ("Log", lg)] {
+                        row_align(ui, 26.0, egui::Align::Center, |ui| {
+                            cell(
+                                ui,
+                                110.0,
+                                26.0,
+                                false,
+                                egui::RichText::new(k)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::FAINT),
+                            );
+                            let mut copiar = false;
+                            right(ui, 26.0, |ui| {
+                                copiar = ghost_icon(ui, icons::Icon::Copy)
+                                    .on_hover_text("Copiar la ruta")
+                                    .clicked();
+                            });
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&v)
+                                        .size(theme::FS_CAPTION)
+                                        .monospace()
+                                        .color(theme::TXT3),
+                                )
+                                .truncate(),
+                            );
+                            if copiar {
+                                ui.ctx().copy_text(v.clone());
+                            }
+                        });
+                    }
+                });
+                ui.add_space(GAP);
+            });
     }
 
     fn pendiente(&mut self, ui: &mut egui::Ui, v: View) {
