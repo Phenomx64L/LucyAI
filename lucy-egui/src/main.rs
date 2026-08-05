@@ -1463,6 +1463,13 @@ struct App {
     /// elegir entre medidores lentos o un PowerShell por segundo.
     procs_last: Instant,
     svc_last: Instant,
+    /// Un comando aprobado que se está ejecutando: el id de su paso del plan y
+    /// el canal por el que llegará `(salida, error, ok, ms)`.
+    ///
+    /// Uno cada vez. Dos comandos a la vez sobre la misma máquina es lo que
+    /// convierte un diagnóstico en una carrera, y no hay ninguna prisa que lo
+    /// justifique cuando cada uno lo aprueba una persona.
+    exec_rx: Option<(String, std::sync::mpsc::Receiver<(String, String, bool, u64)>)>,
     /// Sonda de servicios en vuelo. `Some` = hay un hilo trabajando, que es lo
     /// que anima el botón de refresco y lo que impide lanzar una segunda.
     svc_rx: Option<std::sync::mpsc::Receiver<Option<Vec<lucy_core::system::DownService>>>>,
@@ -1554,6 +1561,7 @@ impl App {
             // esperando 30 segundos a que aparezcan los servicios.
             procs_last: Instant::now() - Duration::from_secs(60),
             svc_last: Instant::now() - Duration::from_secs(60),
+            exec_rx: None,
             svc_rx: None,
             cpu_hist: Vec::new(),
             ram_hist: Vec::new(),
@@ -1667,6 +1675,10 @@ impl eframe::App for App {
         // tiene que poder cerrarse igual, o el botón se quedaría girando para
         // siempre al volver.
         self.pump_services();
+        // Fuera de la vista de Terminal IA también: un comando aprobado tiene
+        // que poder terminar aunque el operador se vaya al Dashboard a mirar
+        // otra cosa mientras corre.
+        self.pump_exec();
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -2826,6 +2838,129 @@ impl App {
         }
     }
 
+    /// Manda un turno cuyo texto NO lo escribió el operador.
+    ///
+    /// En el hilo se ve una línea corta —"resultado devuelto"— y no el volcado
+    /// entero: la salida ya está en el panel de Ejecución, y repetirla en la
+    /// conversación empujaría fuera de pantalla la pregunta original. Al modelo
+    /// sí le va completa.
+    fn send_raw(&mut self, prompt: String) {
+        if self.tabs[self.tab].busy() {
+            return;
+        }
+        let sys = prompt::system_prompt(
+            &self.sys.snapshot(),
+            &self.services,
+            self.log_lines.as_deref().unwrap_or(&[]),
+        );
+        let t = &mut self.tabs[self.tab];
+        t.log.push(ChatMsg::new(true, "▸ Resultado devuelto a Lucy".into()));
+        t.log.push(ChatMsg::new(false, String::new()));
+        t.rx = Some(lucy_core::cloud::start(
+            self.chat_model.clone(),
+            format!("{sys}\n--- ORDEN DEL OPERADOR ---\n{prompt}"),
+        ));
+        self.ws.status.running = true;
+        self.turn_start = Some(Instant::now());
+    }
+
+    /// Corre un paso que el operador acaba de aprobar.
+    ///
+    /// EN OTRO HILO, siempre. PowerShell tarda cientos de milisegundos como
+    /// mínimo y un `Get-Service` sobre una máquina cargada puede irse a varios
+    /// segundos: hacerlo en el hilo de interfaz congelaría la ventana justo
+    /// mientras el operador mira si su comando funcionó. Ya cometí ese error una
+    /// vez con la sonda de servicios.
+    #[cfg(windows)]
+    fn run_step(&mut self, id: String, cmd: String) {
+        use lucy_core::agent::StepStatus;
+        self.ws.plan_update(&id, StepStatus::Running, None);
+        self.ws_tab = WsTab::Exec; // se mira la salida, no el plan
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let t0 = Instant::now();
+            let r = lucy_core::shell::run_powershell_utf8(&cmd);
+            let ms = t0.elapsed().as_millis() as u64;
+            let _ = tx.send(match r {
+                Ok((out, err, ok)) => (out, err, ok, ms),
+                // Que PowerShell no arranque también es un resultado, y el
+                // operador tiene que verlo: si no, el paso se queda "en curso"
+                // para siempre sin explicación.
+                Err(e) => (String::new(), e, false, ms),
+            });
+        });
+        self.exec_rx = Some((id, rx));
+    }
+
+    #[cfg(not(windows))]
+    fn run_step(&mut self, _id: String, _cmd: String) {}
+
+    /// Recoge el resultado de un comando aprobado.
+    fn pump_exec(&mut self) {
+        use lucy_core::agent::{ExecEntry, StepStatus};
+        let Some((id, rx)) = &self.exec_rx else { return };
+        let (out, err, ok, ms) = match rx.try_recv() {
+            Ok(v) => v,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let id = id.clone();
+                self.ws.plan_update(&id, StepStatus::Error, None);
+                self.exec_rx = None;
+                return;
+            }
+        };
+        let id = id.clone();
+        let cmd = self
+            .ws
+            .plan
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.detail.clone())
+            .unwrap_or_default();
+
+        // La salida y el error van JUNTOS. PowerShell escribe avisos por stderr
+        // en comandos que funcionan, y separarlos hace que un comando correcto
+        // parezca fallido y uno fallido parezca vacío.
+        let mut body = out.trim().to_string();
+        if !err.trim().is_empty() {
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            body.push_str(&format!("[stderr]\n{}", err.trim()));
+        }
+        if body.is_empty() {
+            body = "(sin salida)".into();
+        }
+
+        self.ws.exec_push(ExecEntry {
+            id: String::new(),
+            cmd: cmd.clone(),
+            output: body.clone(),
+            ok,
+            ms: Some(ms),
+            engine: "PS".into(),
+            code: None,
+            ts: 0,
+        });
+        self.ws.plan_update(
+            &id,
+            if ok { StepStatus::Done } else { StepStatus::Error },
+            Some(ms),
+        );
+        self.exec_rx = None;
+
+        // Y VUELVE A LUCY. Sin esto, el operador tiene la salida cruda en un
+        // panel y sigue sin la respuesta que pidió — que es exactamente lo que
+        // pasaba: el comando se proponía, se quedaba ahí, y nadie cerraba el
+        // círculo. La aprobación fue el clic; devolver el resultado es la otra
+        // mitad de ese mismo gesto.
+        self.send_raw(format!(
+            "He ejecutado el comando que propusiste y esta es su salida literal. \
+             Resúmela y dime qué significa. No propongas ejecutarlo otra vez.\n\n\
+             $ {cmd}\n\n{body}"
+        ));
+    }
+
     /// Cierra el turno en el workspace cuando el stream termina.
     fn turn_finished(&mut self, chars: usize) {
         let ms = self.turn_start.take().map(|t| t.elapsed().as_millis() as u64);
@@ -2938,6 +3073,9 @@ impl App {
 
     fn ws_plan(&mut self, ui: &mut egui::Ui) {
         use lucy_core::agent::{ForkStatus, StepStatus};
+        let busy = self.exec_rx.is_some();
+        let mut aprobado: Option<(String, String)> = None;
+
         for s in &self.ws.plan {
             let (glyph, col) = match s.status {
                 StepStatus::Done => ("✓", theme::ACC),
@@ -2945,7 +3083,7 @@ impl App {
                 StepStatus::Error => ("✕", theme::RED),
                 StepStatus::Pending => ("○", theme::DISABLED),
             };
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(egui::RichText::new(glyph).size(12.0).color(col));
@@ -2960,15 +3098,44 @@ impl App {
                             }),
                     );
                     if !s.detail.is_empty() {
+                        // El comando ENTERO y en monoespaciada. Es lo que se va
+                        // a correr en la máquina, y aprobar algo recortado con
+                        // puntos suspensivos no es aprobar nada.
                         ui.label(
                             egui::RichText::new(&s.detail)
                                 .size(theme::FS_CAPTION)
                                 .monospace()
-                                .color(theme::FAINT),
+                                .color(theme::TXT2),
                         );
+                    }
+                    // El botón SOLO existe en los pasos pendientes, y nada corre
+                    // sin que alguien lo pulse: en este shell no hay ejecución
+                    // automática. El operador lee el comando y decide — que es
+                    // el único guardrail que no hace falta portar.
+                    if s.status == StepStatus::Pending && !s.detail.is_empty() {
+                        ui.add_space(4.0);
+                        let b = egui::Button::new(
+                            egui::RichText::new("▸ Ejecutar")
+                                .size(theme::FS_CAPTION)
+                                .color(theme::ACC_INK),
+                        )
+                        .fill(theme::ACC)
+                        .stroke(egui::Stroke::NONE)
+                        .rounding(egui::Rounding::same(6.0))
+                        .min_size(egui::vec2(0.0, 22.0));
+                        if ui
+                            .add_enabled(!busy, b)
+                            .on_hover_text("Correr este comando en este equipo")
+                            .clicked()
+                        {
+                            aprobado = Some((s.id.clone(), s.detail.clone()));
+                        }
                     }
                 });
             });
+        }
+        if let Some((id, cmd)) = aprobado {
+            self.run_step(id, cmd);
         }
         // Los forks van DESPUÉS del plan y fuera de su estado vacío: con un
         // sub-agente corriendo el panel no está vacío, solo no tiene plan.

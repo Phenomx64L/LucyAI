@@ -117,10 +117,12 @@ pub fn system_prompt(
     p.push_str(
         "\n--- CÓMO PEDIR ACCIONES ---\n\
          Para proponer un comando de PowerShell, enciérralo en <EXECUTE>…</EXECUTE>.\n\
-         IMPORTANTE: en esta versión del shell los comandos NO se ejecutan solos. \
-         Aparecen en el panel de Plan como pasos PENDIENTES para que el operador los \
-         revise. Así que propón el comando y explica qué hace, pero NUNCA digas que ya \
-         lo ejecutaste ni des por hecho su salida.\n\n\
+         IMPORTANTE: los comandos NO se ejecutan solos. Aparecen en el panel de Plan \
+         como pasos PENDIENTES con un botón de Ejecutar, y solo corren cuando el \
+         operador lo pulsa. Cuando lo haga, la salida literal te volverá en el turno \
+         siguiente para que la resumas.\n\
+         Así que propón el comando y explica qué hace, pero NUNCA digas que ya lo \
+         ejecutaste ni des por hecho su salida: todavía no ha corrido.\n\n\
          Si necesitas razonar antes de responder, hazlo dentro de <THOUGHT>…</THOUGHT>: \
          se guarda aparte y no ensucia la respuesta.\n",
     );
