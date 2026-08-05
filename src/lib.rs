@@ -38,6 +38,8 @@ pub mod models;
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
 pub mod system;
+/// La conversación que viaja al modelo, y su recorte.
+pub mod turns;
 /// Las etiquetas de acción de una respuesta de Lucy. Detecta, no ejecuta.
 pub mod tags;
 /// Ranking semántico: blobs, coseno y los filtros que deciden qué fila puede

@@ -20,12 +20,31 @@ pub enum ChatEvent {
 /// Lanza un turno de chat en STREAMING. Devuelve un `Receiver` que el GUI drena
 /// por frame. El hilo hace `POST /api/chat` (stream) y parsea el NDJSON de Ollama
 /// token a token.
-pub fn start_ollama(model: String, prompt: String) -> Receiver<ChatEvent> {
+pub fn start_ollama(
+    model: String,
+    turns: Vec<crate::turns::Turn>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Receiver<ChatEvent> {
     let (tx, rx) = channel();
     thread::spawn(move || {
+        // Ollama habla el mismo dialecto que OpenAI: sistema, usuario y
+        // asistente dentro de la misma lista.
+        let msgs: Vec<serde_json::Value> = turns
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "role": match t.who {
+                        crate::turns::Who::System => "system",
+                        crate::turns::Who::Assistant => "assistant",
+                        crate::turns::Who::User => "user",
+                    },
+                    "content": t.text,
+                })
+            })
+            .collect();
         let body = serde_json::json!({
             "model": model,
-            "messages": [{ "role": "user", "content": prompt }],
+            "messages": msgs,
             "stream": true,
         });
         let resp = match ureq::post(&format!("{OLLAMA}/api/chat"))
@@ -42,6 +61,9 @@ pub fn start_ollama(model: String, prompt: String) -> Receiver<ChatEvent> {
         };
         let reader = BufReader::new(resp.into_reader());
         for line in reader.lines() {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             let line = match line {
                 Ok(l) => l,
                 Err(_) => break,
