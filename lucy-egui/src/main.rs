@@ -3298,6 +3298,9 @@ impl App {
 
     fn ws_plan(&mut self, ui: &mut egui::Ui) {
         use lucy_core::agent::{ForkStatus, StepStatus};
+        use lucy_core::elevate::Elevation;
+        // Se consulta una vez por sesión y se cachea dentro.
+        let elev = lucy_core::elevate::state();
         let busy = self.exec_rx.is_some();
         // Los comandos cuya última ejecución murió por permisos. Se mira la
         // SALIDA real y no se adivina por el texto del comando: `Start-Service`
@@ -3354,21 +3357,56 @@ impl App {
                     // que se quería correr.
                     if s.status == StepStatus::Error && denegado.contains(&s.detail) {
                         ui.add_space(4.0);
-                        let b = egui::Button::new(
-                            egui::RichText::new("⇈ Reintentar como administrador")
-                                .size(theme::FS_CAPTION)
-                                .color(theme::AMBER),
-                        )
-                        .fill(theme::AMBER_BG)
-                        .stroke(egui::Stroke::new(1.0_f32, theme::AMBER.linear_multiply(0.4)))
-                        .rounding(egui::Rounding::same(6.0))
-                        .min_size(egui::vec2(0.0, 22.0));
-                        if ui
-                            .add_enabled(!busy, b)
-                            .on_hover_text("Windows pedirá confirmación (UAC)")
-                            .clicked()
-                        {
-                            aprobado = Some((s.id.clone(), s.detail.clone(), true));
+                        match elev {
+                            // El único caso en que el botón puede cumplir.
+                            Elevation::CanPrompt => {
+                                let b = egui::Button::new(
+                                    egui::RichText::new("⇈ Reintentar como administrador")
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::AMBER),
+                                )
+                                .fill(theme::AMBER_BG)
+                                .stroke(egui::Stroke::new(
+                                    1.0_f32,
+                                    theme::AMBER.linear_multiply(0.4),
+                                ))
+                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, 22.0));
+                                if ui
+                                    .add_enabled(!busy, b)
+                                    .on_hover_text("Windows pedirá confirmación (UAC)")
+                                    .clicked()
+                                {
+                                    aprobado = Some((s.id.clone(), s.detail.clone(), true));
+                                }
+                            }
+                            // Lucy YA manda en esta máquina. Ofrecer elevación
+                            // sería una promesa falsa: el reintento fallaría
+                            // igual, porque lo que falló no fueron los
+                            // permisos. `gpsvc` es el ejemplo — Windows
+                            // restringe su control manual hasta al
+                            // administrador.
+                            Elevation::Already => {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Lucy ya corre como administrador: esto no es \n                                         un problema de privilegios.",
+                                    )
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::FAINT),
+                                );
+                            }
+                            // Cuenta estándar y consentimiento apagado: no hay
+                            // mecanismo que pedir. Decirlo es más útil que un
+                            // botón que no puede funcionar.
+                            Elevation::Unavailable => {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Sin privilegios y con UAC desactivado: hay que \n                                         abrir Lucy con una cuenta de administrador.",
+                                    )
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::AMBER),
+                                );
+                            }
                         }
                     }
                     if s.status == StepStatus::Pending && !s.detail.is_empty() {
