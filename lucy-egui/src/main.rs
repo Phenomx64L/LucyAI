@@ -2692,26 +2692,50 @@ impl App {
                     // propio campo hace scroll, en vez de comerse la
                     // conversación.
                     let lineas = self.tabs[self.tab].input.lines().count().clamp(1, 8);
+
+                    // ── Enter y Shift+Enter, ANTES de dibujar el campo ────────
+                    //
+                    // El orden es todo, y la versión anterior lo tenía al revés:
+                    // miraba la tecla DESPUÉS de `ui.add`, cuando el `TextEdit`
+                    // ya la había procesado. Resultado: Enter metía un salto y
+                    // no enviaba nunca, y Shift+Enter no hacía nada — porque el
+                    // campo de egui inserta el salto con Enter a secas y con el
+                    // modificador puesto ni siquiera casa su patrón.
+                    //
+                    // Interceptando antes, las dos teclas se deciden aquí y el
+                    // campo no llega a verlas. El salto se inserta a mano, que
+                    // además quita la dependencia de cómo egui interprete la
+                    // combinación.
+                    let id = ui.make_persistent_id(("composer", self.tab));
+                    let enfocado = ui.memory(|m| m.has_focus(id));
+                    let (enter, shift_enter) = if enfocado {
+                        ui.input_mut(|i| {
+                            (
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                                i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter),
+                            )
+                        })
+                    } else {
+                        (false, false)
+                    };
+                    if shift_enter {
+                        self.tabs[self.tab].input.push('\n');
+                    }
+                    if enter {
+                        enviar = true;
+                    }
+
                     let resp = ui.add_enabled(
                         !busy,
                         egui::TextEdit::multiline(&mut self.tabs[self.tab].input)
+                            .id(id)
                             .hint_text("Escribe una orden…   ·   Shift+Enter = salto de línea")
                             .desired_width(field_w)
                             .desired_rows(lineas)
                             .frame(false)
                             .font(egui::FontId::proportional(theme::FS_BODY)),
                     );
-                    // Enter envía, Shift+Enter salta de línea. El orden importa:
-                    // hay que MIRAR la tecla antes de que el campo la consuma, y
-                    // quitarla del evento para que no meta también el salto.
-                    if resp.has_focus() {
-                        let enter = ui.input_mut(|i| {
-                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                        });
-                        if enter {
-                            enviar = true;
-                        }
-                    }
+                    let _ = &resp;
 
                     right(ui, 26.0, |ui| {
                         // Redondo y relleno de acento: es la ÚNICA acción primaria
