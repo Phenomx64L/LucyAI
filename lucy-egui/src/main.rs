@@ -299,9 +299,19 @@ fn start_turn(
     query: String,
     conv: Vec<lucy_core::turns::Turn>,
     model: String,
+    privacy: bool,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::sync::mpsc::Receiver<lucy_core::chat::ChatEvent> {
     let (tx, rx) = std::sync::mpsc::channel();
+    // EL MODO PRIVACIDAD SE MIRA AQUÍ, antes de montar nada. Comprobarlo dentro
+    // del hilo daría igual de resultado y peor de forma: el prompt ya se habría
+    // construido —con el recuerdo, que consulta la base de memorias— para una
+    // petición que nunca iba a salir.
+    if let Err(e) = lucy_core::cloud::allowed(&model, privacy) {
+        let _ = tx.send(lucy_core::chat::ChatEvent::Error(e));
+        let _ = tx.send(lucy_core::chat::ChatEvent::Done);
+        return rx;
+    }
     std::thread::spawn(move || {
         let sys = pi.build(&query);
         let turns = lucy_core::turns::fit(&sys, &conv, lucy_core::turns::MAX_HISTORY_CHARS);
@@ -613,7 +623,7 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/runbooks", "Lista de runbooks (V1)", false),
     ("/pantalla", "Lucy ve tu pantalla (captura + pregunta)", true),
     ("/polarity", "Proyección de polaridad de un texto", false),
-    ("/privacy", "Modo privacidad (sólo LLM local)", false),
+    ("/privacy", "Modo privacidad (sólo LLM local)", true),
     ("/theme", "Cambiar el tema visual", false),
     ("/help", "Referencia completa de comandos", true),
 ];
@@ -1747,6 +1757,15 @@ struct App {
     chat_model: String,
     /// Tope de pasos que Lucy puede encadenar sola. Ajustable en Configuración.
     max_loops: u32,
+    /// Ancho del carril del agente. Se arrastra y se recuerda.
+    ws_width: f32,
+    /// Modo privacidad: nada sale de esta máquina. Ver `lucy_core::cloud::allowed`.
+    ///
+    /// Es GLOBAL y no por pestaña, al revés que el automático. La diferencia no
+    /// es de gusto: el automático dice cómo trabaja una conversación, y esto
+    /// dice si los datos de este equipo pueden viajar. Un ajuste así con dos
+    /// valores a la vez es un ajuste en el que no se puede confiar.
+    privacy: bool,
     /// Texto del buscador del desplegable de modelos.
     model_query: String,
     /// El retrato de Lucy. Se sube una vez, en el primer frame que lo necesita:
@@ -1837,6 +1856,19 @@ const K_NAME: &str = "lucy.user_name";
 const K_LOOPS: &str = "lucy.max_loops";
 /// Clave de las conversaciones abiertas. Ver `lucy_core::session`.
 const K_SESSION: &str = "lucy.session";
+/// Clave del ancho del carril del workspace.
+const K_WS_WIDTH: &str = "lucy.ws_width";
+/// Clave del modo privacidad.
+const K_PRIVACY: &str = "lucy.privacy";
+
+/// Los topes del carril del agente, los mismos que la V2.
+///
+/// Abajo, 280: por debajo, un comando en monoespaciada se parte en cada palabra
+/// y el panel deja de servir para lo que está. Arriba, 560: más allá se come la
+/// conversación, que es lo que uno está leyendo mientras mira el plan.
+const WS_MIN: f32 = 280.0;
+const WS_MAX: f32 = 560.0;
+const WS_DEF: f32 = 340.0;
 
 /// Cuántos pasos seguidos puede dar Lucy sola antes de parar a preguntar.
 ///
@@ -1880,6 +1912,15 @@ impl App {
                     |v| v == "true",
                 ),
         );
+        let privacy = storage
+            .and_then(|s| s.get_string(K_PRIVACY))
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let ws_width = storage
+            .and_then(|s| s.get_string(K_WS_WIDTH))
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(|v| v.clamp(WS_MIN, WS_MAX))
+            .unwrap_or(WS_DEF);
         let max_loops = storage
             .and_then(|s| s.get_string(K_LOOPS))
             .and_then(|v| v.parse::<u32>().ok())
@@ -1931,6 +1972,8 @@ impl App {
             att_rx,
             chat_model,
             max_loops,
+            ws_width,
+            privacy,
             model_query: String::new(),
             face: None,
             ws_tab: WsTab::Plan,
@@ -2075,6 +2118,8 @@ impl eframe::App for App {
         storage.set_string(K_MOTION, motion().to_string());
         storage.set_string(K_NAME, user_name());
         storage.set_string(K_LOOPS, self.max_loops.to_string());
+        storage.set_string(K_WS_WIDTH, self.ws_width.to_string());
+        storage.set_string(K_PRIVACY, self.privacy.to_string());
         // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
         // cerrar, así que un cuelgue pierde medio minuto de charla y no la
         // sesión entera — que es la diferencia entre un incordio y volver a
@@ -2274,6 +2319,20 @@ impl eframe::App for App {
                         ui.label(
                             egui::RichText::new(&self.chat_model).color(theme::TXT3).size(10.5),
                         );
+                        // El candado, siempre que el modo esté puesto. Un modo
+                        // que decide si los datos de este equipo pueden viajar
+                        // no puede depender de que alguien recuerde haberlo
+                        // encendido hace tres días.
+                        if self.privacy {
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new("privado").color(theme::ACC).size(10.5),
+                            )
+                            .on_hover_text(
+                                "Modo privacidad: nada sale de este equipo. Solo modelos \
+                                 locales de Ollama. Se apaga con /privacy.",
+                            );
+                        }
                         // El contador de pasos SOLO aparece con el automático
                         // encendido, y entonces siempre. Es la única señal
                         // permanente de que la máquina puede estar ejecutando
@@ -2443,15 +2502,32 @@ impl eframe::App for App {
         // Solo en Terminal IA. En las demás vistas no hay turno del que enseñar
         // el plan, y un panel vacío permanente enseña a no mirarlo.
         if self.view == View::TerminalIa {
+            // Se puede arrastrar el borde, con los mismos topes que la V2 (280 a
+            // 560). No es capricho: el carril enseña comandos completos en
+            // monoespaciada, y un `Get-WinEvent` con seis parámetros no cabe en
+            // 340 px. Estrecharlo también sirve —cuando lo que importa es la
+            // conversación y el plan es una línea— y por eso el tope de abajo
+            // existe: por debajo de 280 los comandos se parten en cada palabra y
+            // el panel deja de servir para lo que está.
+            let mut ancho = self.ws_width;
             egui::SidePanel::right("workspace")
-                .exact_width(340.0)
-                .resizable(false)
+                .default_width(ancho)
+                .width_range(WS_MIN..=WS_MAX)
+                .resizable(true)
                 .frame(
                     egui::Frame::none()
                         .fill(theme::BG2)
                         .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
                 )
-                .show(ctx, |ui| self.workspace(ui));
+                .show(ctx, |ui| {
+                    // El ancho de VERDAD, no el pedido: egui lo recorta contra
+                    // el espacio que hay, así que guardar el pedido devolvería
+                    // una ventana estrecha con un panel imposible. Los 28 son el
+                    // margen interior, que `available_width` ya ha descontado.
+                    ancho = ui.available_width() + 28.0;
+                    self.workspace(ui);
+                });
+            self.ws_width = ancho;
         }
 
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
@@ -3048,13 +3124,14 @@ impl App {
         }
         let pi = self.prompt_input();
         let modelo = self.chat_model.clone();
+        let privado = self.privacy;
         let t = &mut self.tabs[self.tab];
         t.drain.flush();
         t.log.push(ChatMsg::new(false, String::new()));
         t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         // Sin consulta: reintentar no es una pregunta nueva, así que no hay
         // memorias que buscar y el hilo arranca de inmediato.
-        t.rx = Some(start_turn(pi, String::new(), conv, modelo, t.stop.clone()));
+        t.rx = Some(start_turn(pi, String::new(), conv, modelo, privado, t.stop.clone()));
         t.ws.status.running = true;
         t.turn_start = Some(Instant::now());
     }
@@ -3622,6 +3699,32 @@ _(detenido por el operador)_");
                     ui.memory_mut(|m| m.open_popup(id));
                 }
                 "/memory" => self.view = View::Memoria,
+                // Se dice en el hilo, y con el modelo actual delante. Un
+                // interruptor que solo cambia un icono en la barra deja al
+                // operador sin saber si le va a dejar seguir trabajando con lo
+                // que tiene elegido — que es la única pregunta que importa al
+                // encenderlo.
+                "/privacy" => {
+                    self.privacy = !self.privacy;
+                    let m = if self.privacy {
+                        match lucy_core::cloud::allowed(&self.chat_model, true) {
+                            Ok(()) => format!(
+                                "Modo privacidad **activado**. Nada sale de este equipo. \
+                                 El modelo actual (`{}`) es local, así que puedes seguir.",
+                                self.chat_model
+                            ),
+                            Err(e) => format!(
+                                "Modo privacidad **activado**. Nada sale de este equipo.\n\n\
+                                 ⚠ {e}"
+                            ),
+                        }
+                    } else {
+                        "Modo privacidad **apagado**. Vuelven a estar disponibles los \
+                         modelos de nube."
+                            .to_string()
+                    };
+                    self.tabs[self.tab].log.push(ChatMsg::new(false, m));
+                }
                 // La captura se hace AL ELEGIR el comando, no al enviar. Entre
                 // una cosa y otra el operador escribe su pregunta, y la pantalla
                 // que quiere enseñar es la de ahora — no la de dentro de veinte
@@ -3846,11 +3949,12 @@ _(detenido por el operador)_");
             last.text = prompt;
         }
         let modelo = self.chat_model.clone();
+        let privado = self.privacy;
         {
             let t = &mut self.tabs[self.tab];
             t.log.push(ChatMsg::new(false, String::new()));
             t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            t.rx = Some(start_turn(pi, consulta, conv, modelo, t.stop.clone()));
+            t.rx = Some(start_turn(pi, consulta, conv, modelo, privado, t.stop.clone()));
         }
 
         for (n, blocked) in &adjuntos {
@@ -4134,13 +4238,14 @@ _(detenido por el operador)_");
         let mut conv = self.history(ti);
         conv.push(lucy_core::turns::Turn::user(prompt));
         let modelo = self.chat_model.clone();
+        let privado = self.privacy;
         let t = &mut self.tabs[ti];
         // La línea del comando ya se añadió en `pump_exec`: aquí solo se abre el
         // hueco de la respuesta.
         t.log.push(ChatMsg::new(false, String::new()));
         t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         // Sin consulta: la salida de un comando no es una pregunta nueva.
-        t.rx = Some(start_turn(pi, String::new(), conv, modelo, t.stop.clone()));
+        t.rx = Some(start_turn(pi, String::new(), conv, modelo, privado, t.stop.clone()));
         self.tabs[ti].ws.status.running = true;
         self.tabs[ti].turn_start = Some(Instant::now());
     }
