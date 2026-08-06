@@ -10,10 +10,14 @@
 //!
 //! El transporte es deliberadamente fino: una petición, un flujo SSE, y un
 //! extractor de texto por proveedor. Lo que NO se trae de `commands/ai.rs` es
-//! todo lo demás —caché de prompt, reintentos con backoff, conteo de tokens,
-//! herramientas, imágenes— porque cada una de esas cosas es una decisión de
-//! producto con su propia migración. Aquí solo se cierra el agujero entre el
-//! selector y la realidad.
+//! todo lo demás —caché de prompt, reintentos con backoff, herramientas— porque
+//! cada una de esas cosas es una decisión de producto con su propia migración.
+//! Aquí solo se cierra el agujero entre el selector y la realidad.
+//!
+//! SÍ están las imágenes y el conteo de tokens: sin las primeras, adjuntar una
+//! captura la enseña en el compositor y no la manda —y el modelo contesta que
+//! no ve nada, teniendo razón—; sin el segundo, no hay forma de saber lo que
+//! cuesta una conversación hasta que llega la factura.
 
 use crate::chat::ChatEvent;
 use crate::turns::{Turn, Who};
@@ -215,6 +219,65 @@ fn role_name(p: Provider, w: Who) -> &'static str {
     }
 }
 
+/// El contenido de un turno de Anthropic: cadena a secas, o bloques si lleva
+/// imágenes.
+///
+/// La forma de cadena se conserva cuando no hay ninguna —que es casi siempre—
+/// porque es la que la API documenta como normal y la que menos ruido mete en
+/// un cuerpo que a veces hay que leer a mano para diagnosticar un 400.
+///
+/// El TEXTO VA PRIMERO. Anthropic recomienda lo contrario para una sola imagen,
+/// pero aquí el texto es la orden y las imágenes el adjunto: invertirlo hace que
+/// una conversación con capturas se lea como una tira de imágenes sueltas.
+fn anthropic_content(t: &Turn) -> serde_json::Value {
+    if t.images.is_empty() {
+        return serde_json::json!(t.text);
+    }
+    let mut blocks = vec![serde_json::json!({ "type": "text", "text": t.text })];
+    for img in &t.images {
+        blocks.push(serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": img.media_type,
+                "data": img.b64,
+            }
+        }));
+    }
+    serde_json::Value::Array(blocks)
+}
+
+/// Las `parts` de un turno de Gemini. Aquí SIEMPRE es una lista, así que la
+/// imagen es una parte más — con el nombre que ellos le dan, `inline_data`.
+fn gemini_parts(t: &Turn) -> serde_json::Value {
+    let mut parts = vec![serde_json::json!({ "text": t.text })];
+    for img in &t.images {
+        parts.push(serde_json::json!({
+            "inline_data": { "mime_type": img.media_type, "data": img.b64 }
+        }));
+    }
+    serde_json::Value::Array(parts)
+}
+
+/// El contenido de un turno para los compatibles con OpenAI.
+///
+/// Su forma para imágenes es una URL de datos dentro de `image_url`, no un
+/// campo de base64 con su tipo al lado. El mismo dato, con otro envoltorio:
+/// `data:image/png;base64,...`.
+fn openai_content(t: &Turn) -> serde_json::Value {
+    if t.images.is_empty() {
+        return serde_json::json!(t.text);
+    }
+    let mut blocks = vec![serde_json::json!({ "type": "text", "text": t.text })];
+    for img in &t.images {
+        blocks.push(serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": format!("data:{};base64,{}", img.media_type, img.b64) }
+        }));
+    }
+    serde_json::Value::Array(blocks)
+}
+
 fn stream(
     p: Provider,
     model: &str,
@@ -229,7 +292,12 @@ fn stream(
             let (id, effort) = resolve_anthropic(model);
             let msgs: Vec<serde_json::Value> = hist
                 .iter()
-                .map(|t| serde_json::json!({ "role": role_name(p, t.who), "content": t.text }))
+                .map(|t| {
+                    serde_json::json!({
+                        "role": role_name(p, t.who),
+                        "content": anthropic_content(t),
+                    })
+                })
                 .collect();
             let mut body = serde_json::json!({
                 "model": id,
@@ -260,7 +328,7 @@ fn stream(
                 .map(|t| {
                     serde_json::json!({
                         "role": role_name(p, t.who),
-                        "parts": [{ "text": t.text }],
+                        "parts": gemini_parts(t),
                     })
                 })
                 .collect();
@@ -284,8 +352,12 @@ fn stream(
                 msgs.push(serde_json::json!({ "role": "system", "content": system }));
             }
             msgs.extend(
-                hist.iter()
-                    .map(|t| serde_json::json!({ "role": role_name(p, t.who), "content": t.text })),
+                hist.iter().map(|t| {
+                    serde_json::json!({
+                        "role": role_name(p, t.who),
+                        "content": openai_content(t),
+                    })
+                }),
             );
             (
                 ureq::post(p.openai_endpoint()).set("Authorization", &format!("Bearer {key}")),
@@ -635,5 +707,87 @@ mod motivos {
     fn una_trama_cualquiera_no_inventa_motivo() {
         assert_eq!(stop_reason(Provider::Gemini, &json!({"foo":1})), None);
         assert_eq!(stop_reason(Provider::OpenAi, &json!({"choices":[{"delta":{}}]})), None);
+    }
+
+    /// Construye la parte de mensajes del cuerpo tal como lo haría `stream`,
+    /// sin salir a la red. Es donde vive la diferencia entre los tres; lo demás
+    /// —clave, endpoint, cabeceras— no se puede probar sin llamar.
+    fn cuerpo(p: Provider, t: &Turn) -> serde_json::Value {
+        match p {
+            Provider::Anthropic => json!({ "content": anthropic_content(t) }),
+            Provider::Gemini => json!({ "parts": gemini_parts(t) }),
+            _ => json!({ "content": openai_content(t) }),
+        }
+    }
+
+    fn con_imagen() -> Turn {
+        Turn::user("¿qué ves aquí?").with_images(vec![crate::turns::Image {
+            media_type: "image/png".into(),
+            b64: "SG9sYQ==".into(),
+        }])
+    }
+
+    #[test]
+    fn sin_imagenes_el_contenido_sigue_siendo_una_cadena() {
+        // La forma de lista también valdría, pero la de cadena es la que cada
+        // API documenta como normal y la que deja legible un cuerpo que hay que
+        // mirar a mano cuando llega un 400.
+        let t = Turn::user("hola");
+        assert!(cuerpo(Provider::Anthropic, &t)["content"].is_string());
+        assert!(cuerpo(Provider::OpenAi, &t)["content"].is_string());
+    }
+
+    #[test]
+    fn anthropic_recibe_la_imagen_como_bloque_base64_con_su_tipo() {
+        // Sin esto la imagen se caía del cuerpo en silencio: el adjunto se veía
+        // en el compositor y Claude contestaba "no puedo ver la imagen".
+        let v = cuerpo(Provider::Anthropic, &con_imagen());
+        let b = &v["content"][1];
+        assert_eq!(b["type"], "image");
+        assert_eq!(b["source"]["type"], "base64");
+        assert_eq!(b["source"]["media_type"], "image/png");
+        assert_eq!(b["source"]["data"], "SG9sYQ==");
+        // El texto va primero: es la orden, la imagen es el adjunto.
+        assert_eq!(v["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn gemini_la_recibe_como_inline_data_y_no_como_source() {
+        // Cada casa le da otro nombre. Mandarle a Gemini la forma de Anthropic
+        // no da error de campo desconocido: acepta el turno y no ve la imagen.
+        let v = cuerpo(Provider::Gemini, &con_imagen());
+        assert_eq!(v["parts"][1]["inline_data"]["mime_type"], "image/png");
+        assert_eq!(v["parts"][1]["inline_data"]["data"], "SG9sYQ==");
+    }
+
+    #[test]
+    fn los_compatibles_con_openai_la_reciben_como_url_de_datos() {
+        let v = cuerpo(Provider::OpenAi, &con_imagen());
+        assert_eq!(v["content"][1]["type"], "image_url");
+        assert_eq!(v["content"][1]["image_url"]["url"], "data:image/png;base64,SG9sYQ==");
+    }
+
+    #[test]
+    fn el_uso_se_lee_del_sitio_de_cada_proveedor() {
+        // Ninguno lo manda en el mismo campo y ninguno lo manda siempre. Leerlo
+        // del sitio equivocado no falla: sale cero, y un contador a cero se lee
+        // como "gratis" en vez de como "no lo dijo".
+        assert_eq!(
+            usage(Provider::Anthropic, &json!({"usage":{"input_tokens":10,"output_tokens":3}})),
+            Some((10, 3))
+        );
+        assert_eq!(
+            usage(
+                Provider::Gemini,
+                &json!({"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":2}})
+            ),
+            Some((7, 2))
+        );
+        assert_eq!(
+            usage(Provider::OpenAi, &json!({"usage":{"prompt_tokens":5,"completion_tokens":1}})),
+            Some((5, 1))
+        );
+        // Una trama normal de texto no trae uso, y no debe inventarlo.
+        assert_eq!(usage(Provider::OpenAi, &json!({"choices":[{"delta":{"content":"x"}}]})), None);
     }
 }

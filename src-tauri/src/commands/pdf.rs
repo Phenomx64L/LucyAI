@@ -127,23 +127,14 @@ fn try_markitdown(path: &str) -> Option<String> {
 /// SECURITY: `path` comes from the OS file dialog (a real, user-chosen path),
 /// never from model output. `try_markitdown` passes it as a single argv entry
 /// with no shell involved.
+///
+/// v1.8.x — the body now lives in `lucy_core::pdf`. The native egui shell needs
+/// the same extraction and cannot call a Tauri command, and a second copy of a
+/// two-extractor chain is a second copy that drifts: an attached PDF would have
+/// produced different text depending on which shell was open. This stays as the
+/// command-side name so callers here don't have to change.
 pub(crate) fn extract_pdf_text(path: &std::path::Path) -> Result<String, String> {
-    let display = path.file_name().and_then(|n| n.to_str()).unwrap_or("document.pdf").to_string();
-
-    let raw = match try_markitdown(&path.to_string_lossy()) {
-        Some(md) => md,
-        None => pdf_extract::extract_text(path)
-            .map_err(|e| format!("No se pudo extraer texto de '{}': {}", display, e))?,
-    };
-
-    if raw.trim().is_empty() {
-        return Err(format!(
-            "'{}' no tiene capa de texto (probablemente es un escaneo). \
-             Aplica OCR, o instala `markitdown` con su plugin de OCR para leerlo.",
-            display
-        ));
-    }
-    Ok(raw)
+    lucy_core::pdf::extract_text(path)
 }
 
 /// v1.8.1 — Extract PDF text from raw bytes, for DRAG-AND-DROP.

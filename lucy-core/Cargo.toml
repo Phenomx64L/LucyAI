@@ -16,6 +16,10 @@ ureq       = "2"
 # El almacén de secretos del SO — las claves de API viven ahí, escritas por la
 # app real bajo el servicio "LucySysAdmin". Misma versión que `src-tauri`.
 keyring    = "2.3"
+# El extractor de PDF de los adjuntos. Misma versión que `src-tauri`: la 0.7
+# fija lopdf 0.34, que desborda la pila con PDF muy anidados —sin guardia de
+# recursión— y un solo fichero hostil tumbaba el proceso entero.
+pdf-extract = "0.12"
 # Métricas del sistema (CPU/RAM/discos/host) — misma versión que src-tauri.
 sysinfo    = "0.30"
 # Opcional: exportación del tipo a TypeScript. Solo la app Tauri la necesita —
