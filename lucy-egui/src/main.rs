@@ -288,6 +288,62 @@ fn next_auto(
     NextAuto::Run(step.id.clone(), step.detail.clone())
 }
 
+impl ChatMsg {
+    /// El mensaje en la forma que se guarda en disco.
+    ///
+    /// La conversión es explícita y no un `derive` sobre `ChatMsg` a propósito:
+    /// `Role` es de la vista y puede cambiar con ella; `SavedRole` es un formato
+    /// en disco, y cambiarlo rompe los ficheros de todo el mundo. Que haya que
+    /// escribir esta función es lo que hace visible cuál de las dos se está
+    /// tocando.
+    fn to_saved(&self) -> lucy_core::session::SavedMsg {
+        use lucy_core::session::{SavedMsg, SavedRole};
+        SavedMsg {
+            role: match &self.role {
+                Role::User => SavedRole::User,
+                Role::Lucy => SavedRole::Lucy,
+                Role::Exec(cmd, ok, out) => SavedRole::Exec {
+                    cmd: cmd.clone(),
+                    ok: *ok,
+                    out: out.clone(),
+                },
+            },
+            text: self.text.clone(),
+            stamp: self.stamp.clone(),
+            images: self.images.len(),
+        }
+    }
+
+    /// Y de vuelta.
+    ///
+    /// Las imágenes NO vuelven: solo se guardó cuántas había. El hilo enseña que
+    /// las hubo —para que la conversación se entienda— pero no viajan al modelo,
+    /// así que una pregunta nueva sobre esa captura hay que hacerla adjuntándola
+    /// otra vez. Guardar los píxeles convertiría el fichero de sesión en decenas
+    /// de megabytes por una conversación normal.
+    fn from_saved(s: &lucy_core::session::SavedMsg) -> Self {
+        use lucy_core::session::SavedRole;
+        let mut text = s.text.clone();
+        if s.images > 0 {
+            text.push_str(&format!(
+                "\n\n_({} imagen{} de este mensaje no se guardaron al cerrar)_",
+                s.images,
+                if s.images == 1 { "" } else { "es" }
+            ));
+        }
+        Self {
+            role: match &s.role {
+                SavedRole::User => Role::User,
+                SavedRole::Lucy => Role::Lucy,
+                SavedRole::Exec { cmd, ok, out } => Role::Exec(cmd.clone(), *ok, out.clone()),
+            },
+            text,
+            stamp: s.stamp.clone(),
+            images: Vec::new(),
+        }
+    }
+}
+
 /// Una terminal abierta. Cada pestaña es una conversación INDEPENDIENTE.
 ///
 /// El receptor del stream vive aquí y no en la aplicación a propósito: una
@@ -1692,6 +1748,8 @@ const K_MOTION: &str = "lucy.motion";
 const K_NAME: &str = "lucy.user_name";
 /// Clave del tope de pasos automáticos.
 const K_LOOPS: &str = "lucy.max_loops";
+/// Clave de las conversaciones abiertas. Ver `lucy_core::session`.
+const K_SESSION: &str = "lucy.session";
 
 /// Cuántos pasos seguidos puede dar Lucy sola antes de parar a preguntar.
 ///
@@ -1745,12 +1803,43 @@ impl App {
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let (att_tx, att_rx) = std::sync::mpsc::channel();
+        // Las conversaciones de la vez pasada. Una sesión que no se entiende no
+        // se anuncia ni se repara: se arranca de cero, que es lo que hace falta
+        // en ese momento.
+        let guardada = storage
+            .and_then(|s| s.get_string(K_SESSION))
+            .and_then(|j| lucy_core::session::Session::from_json(&j))
+            .filter(|s| !s.tabs.is_empty());
+        let (tabs, tab, abiertas) = match guardada {
+            Some(s) => {
+                let activa = s.active;
+                let n = s.tabs.len();
+                let tabs: Vec<ChatTab> = s
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        let mut c = ChatTab::new(i);
+                        // El título guardado manda sobre el que inventa `new`:
+                        // es la primera orden de esa conversación, que es lo
+                        // que la hace reconocible entre tres pestañas.
+                        if !t.title.trim().is_empty() {
+                            c.title = t.title.clone();
+                        }
+                        c.log = t.msgs.iter().map(ChatMsg::from_saved).collect();
+                        c
+                    })
+                    .collect();
+                (tabs, activa, n)
+            }
+            None => (vec![ChatTab::new(0)], 0, 1),
+        };
         Self {
             view: View::TerminalIa,
             md_cache: CommonMarkCache::default(),
-            tabs: vec![ChatTab::new(0)],
-            tab: 0,
-            tabs_opened: 1,
+            tabs,
+            tab,
+            tabs_opened: abiertas,
             att_tx,
             att_rx,
             chat_model,
@@ -1899,6 +1988,29 @@ impl eframe::App for App {
         storage.set_string(K_MOTION, motion().to_string());
         storage.set_string(K_NAME, user_name());
         storage.set_string(K_LOOPS, self.max_loops.to_string());
+        // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
+        // cerrar, así que un cuelgue pierde medio minuto de charla y no la
+        // sesión entera — que es la diferencia entre un incordio y volver a
+        // empezar.
+        //
+        // El modo automático NO se guarda: `ChatTab::new` lo deja apagado y la
+        // restauración no lo toca. Un modo que ejecuta comandos sin que nadie
+        // los apruebe no puede volver encendido solo, y menos tras un cierre que
+        // a lo mejor fue justo un cuelgue.
+        storage.set_string(
+            K_SESSION,
+            lucy_core::session::Session::new(
+                self.tabs
+                    .iter()
+                    .map(|t| lucy_core::session::SavedTab {
+                        title: t.title.clone(),
+                        msgs: t.log.iter().map(|m| m.to_saved()).collect(),
+                    })
+                    .collect(),
+                self.tab,
+            )
+            .to_json(),
+        );
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -3182,6 +3294,24 @@ impl App {
             let t = &mut self.tabs[self.tab];
             t.stop.store(true, std::sync::atomic::Ordering::Relaxed);
             t.rx = None;
+            // DETENER TAMBIÉN DETIENE LA CADENA, y las dos cosas que hace aquí
+            // son por el mismo motivo dicho dos veces.
+            //
+            // Apagar el modo: quien pulsa detener está diciendo "esto no". Que
+            // la orden siguiente volviera a arrancar sola convertiría el botón
+            // en una pausa de un segundo.
+            //
+            // Y marcar los pasos pendientes: son de la respuesta que se acaba de
+            // cortar. Sin esto se quedan en el plan, y el día que el operador
+            // vuelva a encender el automático el bucle empezaría por ellos —
+            // ejecutando, un turno más tarde, justo el comando que detuvo.
+            t.auto = false;
+            for s in t.ws.plan.iter_mut() {
+                if s.status == lucy_core::agent::StepStatus::Pending {
+                    s.status = lucy_core::agent::StepStatus::Error;
+                    s.label = "Cancelado — el operador detuvo la respuesta".into();
+                }
+            }
             let resto = t.drain.flush();
             if let Some(last) = t.log.last_mut() {
                 last.text.push_str(&resto);
