@@ -58,6 +58,13 @@ pub struct Ctx<'a> {
     /// Si este shell puede ejecutar lo que proponga. Cambia el contrato entero:
     /// con `false`, un comando es una propuesta que el operador aprueba.
     pub can_execute: bool,
+    /// Si la cadena avanza sola. Solo significa algo junto a `can_execute`.
+    ///
+    /// Decírselo NO es cortesía. Con el automático encendido y sin esta línea,
+    /// Lucy sigue escribiendo «¿quieres que lo ejecute?» y esperando una
+    /// respuesta que ya no hace falta: se gasta una vuelta del presupuesto en
+    /// pedir un permiso que el operador dio al encender el modo.
+    pub auto: bool,
 }
 
 impl Default for Ctx<'_> {
@@ -73,6 +80,7 @@ impl Default for Ctx<'_> {
             memories: "",
             weak_model: false,
             can_execute: false,
+            auto: false,
         }
     }
 }
@@ -293,7 +301,23 @@ impl Section for Actions {
              Si necesitas razonar antes de responder, hazlo dentro de <THOUGHT>…</THOUGHT>: \
              se guarda aparte y no ensucia la respuesta.",
         );
-        if c.can_execute {
+        // El automático se mira ANTES que `can_execute` y no en conjunción con
+        // él. Los dos describen quién aprieta el gatillo, y el shell nativo pone
+        // `can_execute: false` para decir «yo propongo, ejecuta el operador» —
+        // que es cierto hasta el momento en que el operador delega justamente
+        // eso. Exigir las dos banderas dejaba a Lucy leyendo «los comandos NO se
+        // ejecutan solos» mientras se ejecutaban solos.
+        if c.auto {
+            s.push_str(
+                "\nEl operador ha encendido el modo AUTOMÁTICO: tus comandos se ejecutan \
+                 sin que nadie los apruebe, y su salida literal te vuelve en el turno \
+                 siguiente. Encadena los pasos que hagan falta hasta poder responder, uno \
+                 por turno, y para en cuanto tengas la respuesta. Hay un tope de pasos, \
+                 así que no explores de más. Algunos comandos —elevación, formas raras— \
+                 seguirán parándose para que los apruebe una persona: si eso pasa, dilo y \
+                 espera, no busques otra forma de darlos.",
+            );
+        } else if c.can_execute {
             s.push_str(
                 "\nLos comandos se ejecutan cuando el operador los aprueba en el panel de \
                  Plan, y su salida literal te vuelve en el turno siguiente.",
@@ -666,6 +690,23 @@ mod tests {
         // Y cuando el shell SÍ ejecuta, no se le dice lo contrario.
         let p2 = build(&Ctx { can_execute: true, ..Default::default() });
         assert!(!p2.contains("NUNCA digas que ya"));
+    }
+
+    #[test]
+    fn el_automatico_cambia_el_contrato_aunque_can_execute_siga_en_falso() {
+        let _s = serie();
+        // El shell nativo pone `can_execute: false` para decir "yo propongo,
+        // ejecuta el operador", y eso deja de ser cierto en cuanto el operador
+        // delega. Si las dos banderas tuvieran que coincidir, Lucy leería "los
+        // comandos NO se ejecutan solos" mientras se ejecutaban solos — y
+        // seguiría pidiendo un permiso ya concedido, gastando una vuelta del
+        // presupuesto en cada paso.
+        let p = build(&Ctx { auto: true, ..Default::default() });
+        assert!(p.contains("AUTOMÁTICO"), "no se le dice en qué modo está");
+        assert!(!p.contains("NO se ejecutan solos"), "se le dice lo contrario de lo que pasa");
+        // Y se le avisa de que algunos pasos van a pararse igual: sin esto,
+        // ante una pausa del guardrail busca otra forma de dar el mismo paso.
+        assert!(p.contains("apruebe una persona"), "no se le avisa de las pausas");
     }
 
     #[test]
