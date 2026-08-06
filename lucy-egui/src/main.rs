@@ -364,6 +364,18 @@ fn encolar(slot: &mut Option<String>, nuevo: String) {
     }
 }
 
+/// Recorta un texto para una etiqueta estrecha, con puntos suspensivos.
+///
+/// Para la BARRA, no para el dato: lo que se recorta aquí sigue entero en la
+/// sesión y al pasar el ratón. Recortar el dato de verdad fue el fallo que
+/// escondió el motivo de un error de WinRM.
+fn recorta_visual(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    s.chars().take(n).collect::<String>() + "…"
+}
+
 /// Lo que se sabe de un equipo remoto tras llamar a su puerta.
 ///
 /// TRES ESTADOS Y NO UN BOOLEANO. «No lo hemos probado» no es lo mismo que «no
@@ -7120,7 +7132,16 @@ _(detenido por el operador)_");
                     );
                 }
                 Some(Conexion::Fallo(e)) => {
-                    ui.label(egui::RichText::new(e).size(theme::FS_MICRO).color(theme::red()));
+                    // En la barra, corto; entero al pasar el ratón y entero en
+                    // la sesión. Un mensaje de WinRM son varias líneas y aquí
+                    // solo cabe una — dejarlo suelto lo cortaba por donde
+                    // tocara, que fue justo lo que escondió el motivo real.
+                    ui.label(
+                        egui::RichText::new(recorta_visual(e, 60))
+                            .size(theme::FS_MICRO)
+                            .color(theme::red()),
+                    )
+                    .on_hover_text(e);
                 }
                 Some(Conexion::Probando) => {
                     ui.label(
@@ -7268,11 +7289,18 @@ _(detenido por el operador)_");
                                 'i' => ("", theme::txt3()),
                                 _ => ("", theme::txt2()),
                             };
-                            ui.label(
-                                egui::RichText::new(format!("{prefijo}{texto}"))
-                                    .monospace()
-                                    .size(theme::FS_FOOTNOTE)
-                                    .color(color),
+                            // Con salto de línea EXPLÍCITO. Un error de WinRM no
+                            // cabe a lo ancho, y sin esto se sale del panel en
+                            // vez de partirse — que es la otra mitad de por qué
+                            // el motivo no se leía entero.
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("{prefijo}{texto}"))
+                                        .monospace()
+                                        .size(theme::FS_FOOTNOTE)
+                                        .color(color),
+                                )
+                                .wrap(),
                             );
                         }
                     });
