@@ -2944,6 +2944,18 @@ impl App {
                 // grabación en silencio sería peor que no grabar.
                 Some(r) => {
                     let audio = r.finish();
+                    // Un toque accidental no arranca a Whisper. Cargar medio
+                    // giga de pesos para transcribir dos décimas de silencio
+                    // son varios segundos de espera por un clic que nadie
+                    // quiso dar.
+                    if voice::duration_s(&audio) < 0.4 {
+                        t.log.push(ChatMsg::new(
+                            false,
+                            "Grabación demasiado corta: mantén pulsado mientras hablas."
+                                .into(),
+                        ));
+                        return;
+                    }
                     match whisper::status() {
                         whisper::Status::Ready(dir) => {
                             // En OTRO HILO: cargar los pesos y decodificar

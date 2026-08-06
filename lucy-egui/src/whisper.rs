@@ -82,10 +82,6 @@ impl Status {
             ),
         }
     }
-
-    pub fn ready(&self) -> bool {
-        matches!(self, Self::Ready(_))
-    }
 }
 
 /// Mira los sitios conocidos y dice qué hay.
@@ -144,7 +140,6 @@ mod tests {
 
         let s = Status::Incomplete { dir: d.clone(), missing: m };
         assert!(s.message().contains("model.safetensors"));
-        assert!(!s.ready());
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -155,7 +150,6 @@ mod tests {
             std::fs::write(d.join(f), "x").unwrap();
         }
         assert!(missing_files(&d).is_empty());
-        assert!(Status::Ready(d.clone()).ready());
         let _ = std::fs::remove_dir_all(&d);
     }
 
