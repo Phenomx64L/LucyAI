@@ -48,6 +48,8 @@ pub mod pricing;
 /// `commands/prompt_sections.rs`, no de su texto: allí se describen herramientas
 /// que este shell todavía no tiene.
 pub mod prompt;
+/// Las conversaciones abiertas, para que sobrevivan al cierre.
+pub mod session;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
