@@ -13,6 +13,12 @@ const OLLAMA: &str = "http://localhost:11434";
 #[derive(Debug)]
 pub enum ChatEvent {
     Token(String),
+    /// Tokens de entrada y salida que el proveedor dice haber cobrado.
+    ///
+    /// Llega al final y solo si el proveedor los manda. Es un evento y no un
+    /// campo de `Done` porque no todos los mandan, y un `Done` que llevara
+    /// ceros obligatorios haría indistinguible "no lo dijo" de "salió gratis".
+    Usage(u32, u32),
     Done,
     Error(String),
 }

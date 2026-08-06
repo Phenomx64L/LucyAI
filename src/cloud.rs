@@ -338,6 +338,11 @@ fn stream(
         if let Some(r) = stop_reason(p, &v) {
             motivo = Some(r);
         }
+        // El uso llega en la última trama y solo a veces. Se manda en cuanto
+        // aparece: esperar al final del bucle lo perdería si el flujo se corta.
+        if let Some((i, o)) = usage(p, &v) {
+            let _ = tx.send(ChatEvent::Usage(i, o));
+        }
         if let Some(t) = extract_delta(p, &v) {
             if !t.is_empty() {
                 tokens += 1;
@@ -365,6 +370,33 @@ fn stream(
         });
     }
     Ok(())
+}
+
+/// Tokens de entrada y salida, cuando el proveedor los declara.
+///
+/// Cada casa lo llama distinto y ninguna lo manda siempre: Anthropic reparte el
+/// de entrada en `message_start` y el de salida en `message_delta`, Gemini usa
+/// `usageMetadata`, y los compatibles con OpenAI solo mandan `usage` si se les
+/// pide. Por eso se acumula fuera en vez de esperar un total.
+pub fn usage(p: Provider, v: &serde_json::Value) -> Option<(u32, u32)> {
+    let n = |x: Option<&serde_json::Value>| x.and_then(|t| t.as_u64()).unwrap_or(0) as u32;
+    match p {
+        Provider::Anthropic => {
+            let u = v.get("usage").or_else(|| v.get("message")?.get("usage"))?;
+            Some((n(u.get("input_tokens")), n(u.get("output_tokens"))))
+        }
+        Provider::Gemini => {
+            let u = v.get("usageMetadata")?;
+            Some((
+                n(u.get("promptTokenCount")),
+                n(u.get("candidatesTokenCount")),
+            ))
+        }
+        _ => {
+            let u = v.get("usage")?;
+            Some((n(u.get("prompt_tokens")), n(u.get("completion_tokens"))))
+        }
+    }
 }
 
 /// Por qué se paró la generación, cuando el proveedor lo dice.
