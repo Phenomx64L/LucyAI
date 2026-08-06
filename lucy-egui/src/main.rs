@@ -162,6 +162,13 @@ struct ChatMsg {
     /// Hora del mensaje. La V2 la pone junto al nombre de Lucy en mono tabular —
     /// es lo que convierte una lista de burbujas en un hilo con historia.
     stamp: String,
+    /// Las imágenes que se adjuntaron a ESTE mensaje, ya codificadas.
+    ///
+    /// Se guardan en el hilo y no solo en el turno que se acaba de mandar
+    /// porque la conversación se reconstruye entera en cada vuelta: si vivieran
+    /// únicamente en la petición, la segunda pregunta sobre la misma captura
+    /// llegaría sin ella y Lucy contestaría que no ve ninguna imagen.
+    images: Vec<lucy_core::turns::Image>,
 }
 
 impl ChatMsg {
@@ -170,11 +177,17 @@ impl ChatMsg {
             role: if user { Role::User } else { Role::Lucy },
             text,
             stamp: hhmm(),
+            images: Vec::new(),
         }
     }
 
     fn exec(cmd: String, ok: bool, output: String) -> Self {
-        Self { role: Role::Exec(cmd, ok, output), text: String::new(), stamp: hhmm() }
+        Self {
+            role: Role::Exec(cmd, ok, output),
+            text: String::new(),
+            stamp: hhmm(),
+            images: Vec::new(),
+        }
     }
 }
 
@@ -202,97 +215,17 @@ fn initials(name: &str) -> String {
     }
 }
 
-/// Tope del contenido de un adjunto de texto.
-///
-/// El mismo número que `file-inputs.ts`, y por la misma razón dicha de otra
-/// forma: un log de 400 MB arrastrado a la ventana no puede tumbar el proceso.
-/// Cambia la memoria que se protege, no el problema.
-const ATTACH_MAX_CHARS: usize = 200_000;
+/// La clase de un adjunto y su lectura viven en el núcleo: decidir que un `.bmp`
+/// no se puede mandar, o que un PDF hay que extraerlo, no es una decisión de
+/// interfaz. Lo que se queda aquí es el chip — su icono, su aspa y dónde va.
+use lucy_core::attach::{Attachment, Kind as AttachKind};
 
-/// Qué clase de fichero es. La V2 distingue `image | text` en el compositor —
-/// dos valores, no tres — porque el constructor del prompt filtra por
-/// `type === 'text'`. El PDF es un texto que todavía hay que extraer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AttachKind {
-    Text,
-    Image,
-    Pdf,
-}
-
-impl AttachKind {
-    fn of(path: &std::path::Path) -> Self {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff" => Self::Image,
-            "pdf" => Self::Pdf,
-            _ => Self::Text,
-        }
-    }
-
-    fn glyph(self) -> &'static str {
-        match self {
-            Self::Text => "▤",
-            Self::Image => "▣",
-            Self::Pdf => "▥",
-        }
-    }
-}
-
-/// Un fichero adjunto a la orden.
-struct Attachment {
-    name: String,
-    kind: AttachKind,
-    /// Contenido, ya recortado. Vacío para imagen y PDF — ver `attach`.
-    content: String,
-    /// Por qué no se puede mandar, cuando no se puede. Vacío = se manda.
-    blocked: String,
-}
-
-impl Attachment {
-    /// Lee un fichero del disco y decide qué se puede hacer con él.
-    ///
-    /// Un adjunto que no se va a poder mandar SE ACEPTA IGUAL y dice por qué.
-    /// Rechazarlo en silencio al soltarlo deja al operador pensando que el
-    /// arrastre no funciona; aceptarlo y mandarlo vacío es peor todavía.
-    fn read(path: &std::path::Path) -> Self {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("(sin nombre)")
-            .to_string();
-        let kind = AttachKind::of(path);
-        match kind {
-            AttachKind::Image => Self {
-                name,
-                kind,
-                content: String::new(),
-                blocked: "las imágenes necesitan la ruta de visión del backend".into(),
-            },
-            AttachKind::Pdf => Self {
-                name,
-                kind,
-                content: String::new(),
-                blocked: "el PDF se extrae en el backend (`extract_pdf_text`)".into(),
-            },
-            AttachKind::Text => match std::fs::read_to_string(path) {
-                Ok(s) => {
-                    let content: String = s.chars().take(ATTACH_MAX_CHARS).collect();
-                    Self { name, kind, content, blocked: String::new() }
-                }
-                // Un binario cualquiera cae aquí: no es UTF-8 y no hay nada
-                // sensato que mandarle al modelo.
-                Err(e) => Self {
-                    name,
-                    kind,
-                    content: String::new(),
-                    blocked: format!("no se pudo leer como texto: {e}"),
-                },
-            },
-        }
+/// El glifo del chip. Esto SÍ es de interfaz.
+fn attach_glyph(k: AttachKind) -> &'static str {
+    match k {
+        AttachKind::Text => "▤",
+        AttachKind::Image => "▣",
+        AttachKind::Pdf => "▥",
     }
 }
 
@@ -317,8 +250,17 @@ struct ChatTab {
     /// resultado de un comando se imprimía en la conversación equivocada. El
     /// workspace describe UN turno, y los turnos son de su pestaña.
     ws: lucy_core::agent::Workspace,
+    /// El operador pulsó enviar mientras un PDF se estaba extrayendo.
+    ///
+    /// La orden no se pierde ni se manda coja: espera a que el adjunto esté y
+    /// sale sola. Es de la PESTAÑA porque el operador puede irse a otra
+    /// mientras tanto, y la que espera es esta.
+    send_al_terminar: bool,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
+    /// Tokens cobrados en esta pestaña, para el contador de coste.
+    tokens_in: u32,
+    tokens_out: u32,
     /// Transcripción en vuelo: el canal por el que llegará el texto.
     tr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Grabación de voz en curso, si la hay. Vive en la pestaña porque el
@@ -342,9 +284,12 @@ impl ChatTab {
             uid: n,
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
+            send_al_terminar: false,
             drain: drain::Drain::default(),
             rec: None,
             tr_rx: None,
+            tokens_in: 0,
+            tokens_out: 0,
             stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             title: if n == 0 {
                 "Nueva Terminal".to_string()
@@ -1211,9 +1156,17 @@ fn fmt_ms(ms: u64) -> String {
 ///
 /// Un adjunto que no se va a mandar se dibuja en ámbar y explica por qué al
 /// pasar el cursor. Ir tachado y en silencio sería lo mismo que no estar.
+/// Un adjunto que todavía se está leyendo —siempre un PDF— se dibuja atenuado y
+/// con puntos que giran. Ni ámbar ni completo: no es un error y aún no está.
 fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
     let ok = a.blocked.is_empty();
-    let col = if ok { theme::TXT2 } else { theme::AMBER };
+    let col = if a.pending {
+        theme::FAINT
+    } else if ok {
+        theme::TXT2
+    } else {
+        theme::AMBER
+    };
     let mut quitar = false;
     let r = egui::Frame::none()
         .fill(theme::BG4)
@@ -1225,20 +1178,37 @@ fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
         .inner_margin(egui::Margin::symmetric(9.0, 3.0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(egui::RichText::new(a.kind.glyph()).size(11.0).color(col));
+            ui.label(egui::RichText::new(attach_glyph(a.kind)).size(11.0).color(col));
             ui.label(
                 egui::RichText::new(&a.name)
                     .size(theme::FS_CAPTION)
                     .color(col),
             );
             // El tamaño en CARACTERES y no en bytes: es lo que le va a costar al
-            // modelo, que es la única unidad que importa aquí.
-            if ok {
+            // modelo, que es la única unidad que importa aquí. Una imagen no
+            // tiene caracteres, así que se dice lo que es — poner "0" al lado
+            // de una captura de dos megas parecería que no se cargó.
+            if a.pending {
+                // Tres puntos que van y vienen. Un PDF grande tarda decenas de
+                // segundos, y un chip quieto durante ese rato se lee como uno
+                // colgado.
+                let fase = (ui.input(|i| i.time) * 2.0) as usize % 4;
                 ui.label(
-                    egui::RichText::new(fmt_chars(a.content.chars().count()))
+                    egui::RichText::new("·".repeat(fase.max(1)))
                         .size(theme::FS_CAPTION)
                         .color(theme::FAINT),
                 );
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            } else if ok {
+                let medida = match &a.image {
+                    Some(img) => {
+                        // Del base64 a los bytes reales: cuatro caracteres por
+                        // cada tres bytes.
+                        format!("{:.1} MB", img.b64.len() as f64 * 0.75 / 1_048_576.0)
+                    }
+                    None => fmt_chars(a.text.chars().count()),
+                };
+                ui.label(egui::RichText::new(medida).size(theme::FS_CAPTION).color(theme::FAINT));
             }
             if ui
                 .add(
@@ -1253,7 +1223,9 @@ fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
             }
         })
         .response;
-    if !ok {
+    if a.pending {
+        r.on_hover_text("Extrayendo el texto del PDF…");
+    } else if !ok {
         r.on_hover_text(format!("No se enviará: {}", a.blocked));
     }
     quitar
@@ -1547,6 +1519,14 @@ struct App {
     /// Cuántas se han abierto en total — numera las nuevas sin reutilizar el
     /// nombre de una que se cerró.
     tabs_opened: usize,
+    /// Por donde vuelven los adjuntos que se leyeron en otro hilo, con el UID de
+    /// la pestaña a la que pertenecen.
+    ///
+    /// Uno solo para toda la aplicación y no uno por pestaña: mientras se
+    /// extrae un PDF el operador puede cambiar de terminal, cerrarla o abrir
+    /// otra, y el UID basta para devolver cada cosa a su sitio.
+    att_tx: std::sync::mpsc::Sender<(usize, Attachment)>,
+    att_rx: std::sync::mpsc::Receiver<(usize, Attachment)>,
     chat_model: String,
     /// Texto del buscador del desplegable de modelos.
     model_query: String,
@@ -1668,12 +1648,15 @@ impl App {
             .and_then(|s| s.get_string(K_MODEL))
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let (att_tx, att_rx) = std::sync::mpsc::channel();
         Self {
             view: View::TerminalIa,
             md_cache: CommonMarkCache::default(),
             tabs: vec![ChatTab::new(0)],
             tab: 0,
             tabs_opened: 1,
+            att_tx,
+            att_rx,
             chat_model,
             model_query: String::new(),
             face: None,
@@ -1745,6 +1728,13 @@ impl App {
                         // revela a ritmo. Pintarlo en cuanto llega es lo que
                         // hace que el texto salte en bloques.
                         lucy_core::chat::ChatEvent::Token(tok) => t.drain.push(&tok),
+                        // El coste se acumula por PESTAÑA: cada conversación
+                        // es una tarea, y saber que una costó dos dólares es
+                        // útil de una forma que un total global no.
+                        lucy_core::chat::ChatEvent::Usage(i, o) => {
+                            t.tokens_in += i;
+                            t.tokens_out += o;
+                        }
                         lucy_core::chat::ChatEvent::Done => {
                             done = true;
                             break;
@@ -1818,6 +1808,9 @@ impl eframe::App for App {
         }
 
         self.pump_chat();
+        // Antes de dibujar: un PDF que terminó de leerse mientras se pintaba el
+        // frame anterior tiene que verse ya en su chip.
+        self.recoger_adjuntos();
         // Cualquier pestaña con stream abierto cuenta, no solo la visible: la de
         // fondo también está escribiendo y su texto tiene que llegar entero.
         // `chat_rx` está en Some mientras corre un stream: eso ES actividad,
@@ -1980,6 +1973,34 @@ impl eframe::App for App {
                         ui.label(
                             egui::RichText::new(&self.chat_model).color(theme::TXT3).size(10.5),
                         );
+                        // El coste va a la IZQUIERDA del modelo porque se lee
+                        // junto a él: cuánto llevas gastado con cuál.
+                        ui.add_space(10.0);
+                        let t = &self.tabs[self.tab];
+                        match lucy_core::pricing::cost(
+                            &self.chat_model,
+                            t.tokens_in,
+                            t.tokens_out,
+                        ) {
+                            Some(c) => ui.label(
+                                egui::RichText::new(lucy_core::pricing::fmt_usd(c))
+                                    .color(if c > 0.0 { theme::TXT3 } else { theme::FAINT })
+                                    .monospace()
+                                    .size(10.5),
+                            )
+                            .on_hover_text(format!(
+                                "{} tokens de entrada, {} de salida en esta terminal",
+                                t.tokens_in, t.tokens_out
+                            )),
+                            // Sin precio conocido se dice, en vez de enseñar un
+                            // cero que parecería gratis.
+                            None => ui.label(
+                                egui::RichText::new("coste n/d")
+                                    .color(theme::FAINT)
+                                    .size(10.5),
+                            )
+                            .on_hover_text("Este modelo no tiene precio en el catálogo"),
+                        };
                     });
                 });
             });
@@ -3002,7 +3023,12 @@ impl App {
 _(detenido por el operador)_");
             }
         }
-        if enviar && !busy {
+        // Enviar con un PDF a medio extraer lo mandaría sin él y borraría el
+        // chip: el operador vería marcharse su adjunto sin que llegara nunca.
+        // La orden se queda en el compositor y sale sola en cuanto termine.
+        if enviar && self.tabs[self.tab].attachments.iter().any(|a| a.pending) {
+            self.tabs[self.tab].send_al_terminar = true;
+        } else if enviar && !busy {
             let text = std::mem::take(&mut self.tabs[self.tab].input);
             // Se permite enviar SOLO con adjuntos: arrastrar un log y pulsar
             // enviar es una petición perfectamente clara.
@@ -3196,14 +3222,71 @@ _(detenido por el operador)_");
     }
 
     /// Añade ficheros a la pestaña activa, sin repetir los que ya están.
+    ///
+    /// LOS PDF SE LEEN EN OTRO HILO. Extraer su texto lanza `markitdown` —un
+    /// subproceso de Python— y en un manual de doscientas páginas eso son
+    /// decenas de segundos. Hacerlo aquí congelaría la ventana entera durante
+    /// ese rato, que es justamente lo que esta migración existe para no hacer.
+    /// El resto —un texto o una imagen— es una lectura de disco que vuelve en
+    /// microsegundos, y darle un hilo solo serviría para que el chip parpadeara.
     fn attach(&mut self, paths: &[std::path::PathBuf]) {
         for p in paths {
-            let a = Attachment::read(p);
+            let nombre = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("(sin nombre)")
+                .to_string();
+            let uid = self.tabs[self.tab].uid;
             let t = &mut self.tabs[self.tab];
-            if t.attachments.iter().any(|x| x.name == a.name) {
+            if t.attachments.iter().any(|x| x.name == nombre) {
                 continue;
             }
-            t.attachments.push(a);
+            let kind = lucy_core::attach::Kind::of(p);
+            if kind == lucy_core::attach::Kind::Pdf {
+                t.attachments.push(Attachment::pending(&nombre, kind));
+                let tx = self.att_tx.clone();
+                let ruta = p.clone();
+                std::thread::spawn(move || {
+                    // Si nadie escucha —la pestaña se cerró mientras se leía—
+                    // el envío falla y no pasa nada más.
+                    let _ = tx.send((uid, Attachment::read(&ruta)));
+                });
+            } else {
+                t.attachments.push(Attachment::read(p));
+            }
+        }
+    }
+
+    /// Recoge los adjuntos que terminaron de leerse en otro hilo.
+    ///
+    /// Por UID y por nombre, no por índice: entre que se suelta un PDF y
+    /// termina de extraerse, el operador puede haber quitado otros chips,
+    /// cambiado de pestaña o abierto una nueva.
+    fn recoger_adjuntos(&mut self) {
+        let mut listas = Vec::new();
+        while let Ok((uid, a)) = self.att_rx.try_recv() {
+            let Some(t) = self.tabs.iter_mut().find(|t| t.uid == uid) else {
+                continue;
+            };
+            if let Some(hueco) = t.attachments.iter_mut().find(|x| x.name == a.name && x.pending) {
+                *hueco = a;
+            }
+            if t.send_al_terminar && !t.attachments.iter().any(|x| x.pending) {
+                t.send_al_terminar = false;
+                listas.push(uid);
+            }
+        }
+        // La orden que se pulsó mientras se extraía sale ahora. `send` trabaja
+        // sobre la pestaña ACTIVA, así que se cambia a ella y se vuelve: si el
+        // operador se había ido a otra terminal, ver la suya salir sola en
+        // primer plano es lo que explica lo que acaba de pasar.
+        for uid in listas {
+            let Some(i) = self.tabs.iter().position(|t| t.uid == uid) else {
+                continue;
+            };
+            self.tab = i;
+            let text = std::mem::take(&mut self.tabs[i].input);
+            self.send(text);
         }
     }
 
@@ -3212,20 +3295,27 @@ _(detenido por el operador)_");
         if self.tabs[self.tab].busy() {
             return;
         }
-        // Los adjuntos de TEXTO se anteponen a la orden, que es lo que hace el
-        // constructor de prompts de la V2 con `type === 'text'`. Imágenes y PDF
-        // no: la primera necesita la ruta de visión y el segundo el extractor
-        // del backend, y meterlos vacíos le daría al modelo un fichero que
-        // parece estar y no está.
+        // El texto de los adjuntos —el del fichero, o el que se extrajo del
+        // PDF— se antepone a la orden, que es lo que hace el constructor de
+        // prompts de la V2 con `type === 'text'`. Las imágenes no van en el
+        // texto: viajan colgadas del turno, que es donde las tres APIs las
+        // esperan.
         let mut prompt = String::new();
         let mut adjuntos = Vec::new();
+        let mut imagenes = Vec::new();
         for a in &self.tabs[self.tab].attachments {
             adjuntos.push((a.name.clone(), a.blocked.clone()));
-            if a.blocked.is_empty() {
-                prompt.push_str(&format!(
-                    "--- fichero adjunto: {} ---\n{}\n\n",
-                    a.name, a.content
-                ));
+            if !a.ready() {
+                continue;
+            }
+            if let Some(img) = &a.image {
+                imagenes.push(img.clone());
+                // El modelo ve la imagen, pero no su nombre. Decírselo importa
+                // cuando van tres: "en captura-2" es una frase que el operador
+                // puede escribir y que si no, no significa nada.
+                prompt.push_str(&format!("--- imagen adjunta: {} ---\n", a.name));
+            } else {
+                prompt.push_str(&format!("--- fichero adjunto: {} ---\n{}\n\n", a.name, a.text));
             }
         }
         // El prompt de sistema va DELANTE en cada turno: quién es Lucy y en qué
@@ -3269,7 +3359,9 @@ _(detenido por el operador)_");
             for (n, _) in &adjuntos {
                 shown.push_str(&format!("\n⎘ {n}"));
             }
-            t.log.push(ChatMsg::new(true, shown));
+            let mut msg = ChatMsg::new(true, shown);
+            msg.images = imagenes;
+            t.log.push(msg);
             t.attachments.clear();
         }
 
@@ -3412,7 +3504,7 @@ _(detenido por el operador)_");
             .iter()
             .filter(|m| !(m.role == Role::Lucy && m.text.trim().is_empty()))
             .map(|m| match &m.role {
-                Role::User => Turn::user(m.text.clone()),
+                Role::User => Turn::user(m.text.clone()).with_images(m.images.clone()),
                 Role::Lucy => Turn::assistant(m.text.clone()),
                 Role::Exec(cmd, ok, out) => Turn::user(format!(
                     "[salida del comando `{cmd}` · {}]
@@ -5653,55 +5745,6 @@ mod layout {
                 n + 1
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod adjuntos {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn la_clase_sale_de_la_extension() {
-        assert_eq!(AttachKind::of(Path::new("captura.PNG")), AttachKind::Image);
-        assert_eq!(AttachKind::of(Path::new("informe.pdf")), AttachKind::Pdf);
-        assert_eq!(AttachKind::of(Path::new("lucy_app.log")), AttachKind::Text);
-        // Sin extensión se asume texto: un `Dockerfile` o un `.env` son texto,
-        // y equivocarse hacia texto solo cuesta un aviso de lectura fallida.
-        assert_eq!(AttachKind::of(Path::new("Dockerfile")), AttachKind::Text);
-    }
-
-    #[test]
-    fn un_adjunto_que_no_se_puede_mandar_dice_por_que() {
-        // Se ACEPTA igual. Rechazarlo al soltarlo deja al operador pensando que
-        // el arrastre no funciona, y mandarlo vacío es peor: el modelo cree que
-        // tiene el fichero.
-        let img = Attachment::read(Path::new("foto.jpg"));
-        assert_eq!(img.kind, AttachKind::Image);
-        assert!(!img.blocked.is_empty(), "una imagen sin ruta de visión avisa");
-        assert!(img.content.is_empty());
-
-        let pdf = Attachment::read(Path::new("manual.pdf"));
-        assert!(pdf.blocked.contains("extract_pdf_text"), "nombra lo que falta");
-    }
-
-    #[test]
-    fn un_fichero_que_no_existe_no_rompe_nada() {
-        let a = Attachment::read(Path::new("no-existe-este-fichero.txt"));
-        assert!(!a.blocked.is_empty());
-        assert_eq!(a.name, "no-existe-este-fichero.txt");
-    }
-
-    #[test]
-    fn el_texto_se_recorta_al_tope() {
-        let dir = std::env::temp_dir().join("lucy-egui-test-adjunto.txt");
-        std::fs::write(&dir, "á".repeat(ATTACH_MAX_CHARS + 500)).unwrap();
-        let a = Attachment::read(&dir);
-        assert!(a.blocked.is_empty());
-        // Por CARACTERES, no por bytes: con acentos, `á` ocupa dos bytes y
-        // cortar por byte partiría uno por la mitad.
-        assert_eq!(a.content.chars().count(), ATTACH_MAX_CHARS);
-        let _ = std::fs::remove_file(&dir);
     }
 }
 
