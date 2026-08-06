@@ -182,3 +182,145 @@ mod tests {
         }
     }
 }
+
+// ── Banco de filtros mel ─────────────────────────────────────────────────────
+//
+// `pcm_to_mel` necesita el banco, y `candle-transformers` no lo trae: su ejemplo
+// lo empotra desde un binario propio. Calcularlo evita meter 64 KB opacos en el
+// árbol, y sobre todo permite que un error salte en un test en vez de en una
+// transcripción mediocre que nadie sabe explicar.
+//
+// Es la escala mel de SLANEY, no la de HTK. Son dos fórmulas distintas y las dos
+// se llaman "mel": librosa usa Slaney por defecto y Whisper se entrenó con eso.
+// Con la de HTK el banco sale plausible —triángulos crecientes, todo positivo— y
+// las bandas caen en frecuencias equivocadas, que es justo la clase de fallo que
+// no se ve mirando.
+
+/// Frecuencia (Hz) → mel, escala Slaney.
+///
+/// Lineal por debajo de 1000 Hz y logarítmica por encima. El punto de corte no
+/// es redondo por casualidad: 1000 Hz son exactamente 15 mel, y las dos ramas se
+/// encuentran ahí sin salto.
+fn hz_to_mel(f: f64) -> f64 {
+    const F_SP: f64 = 200.0 / 3.0;
+    const MIN_LOG_HZ: f64 = 1000.0;
+    const MIN_LOG_MEL: f64 = MIN_LOG_HZ / F_SP; // 15
+    if f < MIN_LOG_HZ {
+        f / F_SP
+    } else {
+        MIN_LOG_MEL + (f / MIN_LOG_HZ).ln() / (6.4f64.ln() / 27.0)
+    }
+}
+
+/// La inversa exacta de `hz_to_mel`.
+fn mel_to_hz(m: f64) -> f64 {
+    const F_SP: f64 = 200.0 / 3.0;
+    const MIN_LOG_HZ: f64 = 1000.0;
+    const MIN_LOG_MEL: f64 = MIN_LOG_HZ / F_SP;
+    if m < MIN_LOG_MEL {
+        F_SP * m
+    } else {
+        MIN_LOG_HZ * ((6.4f64.ln() / 27.0) * (m - MIN_LOG_MEL)).exp()
+    }
+}
+
+/// El banco de `n_mels` filtros triangulares, aplanado por filas.
+///
+/// Cada fila mide `1 + n_fft/2` — 201 para el n_fft de 400 de Whisper — porque
+/// es como lo indexa `pcm_to_mel`: `filters[fila * 201 + bin]`. Aplanarlo con
+/// otra anchura produce un espectrograma que no falla y no significa nada.
+pub fn mel_filters(sr: usize, n_fft: usize, n_mels: usize) -> Vec<f32> {
+    let bins = 1 + n_fft / 2;
+    // Los centros de las bandas van repartidos por igual EN MEL, que es toda la
+    // idea: en Hz se apiñan abajo, donde el oído distingue.
+    let (m0, m1) = (hz_to_mel(0.0), hz_to_mel(sr as f64 / 2.0));
+    let pts: Vec<f64> = (0..n_mels + 2)
+        .map(|i| mel_to_hz(m0 + (m1 - m0) * i as f64 / (n_mels + 1) as f64))
+        .collect();
+
+    let mut w = vec![0.0f32; n_mels * bins];
+    for i in 0..n_mels {
+        let (lo, mid, hi) = (pts[i], pts[i + 1], pts[i + 2]);
+        // Normalización de Slaney: cada filtro cubre el mismo ÁREA, no la misma
+        // altura. Sin ella las bandas anchas de arriba pesarían más que las
+        // estrechas de abajo solo por ser anchas.
+        let enorm = 2.0 / (hi - lo);
+        for k in 0..bins {
+            let f = k as f64 * sr as f64 / n_fft as f64;
+            let up = (f - lo) / (mid - lo);
+            let down = (hi - f) / (hi - mid);
+            w[i * bins + k] = (up.min(down).max(0.0) * enorm) as f32;
+        }
+    }
+    w
+}
+
+#[cfg(test)]
+mod mel {
+    use super::*;
+
+    #[test]
+    fn mil_hercios_son_quince_mel_exactos() {
+        // El ancla de la escala de Slaney: es donde la rama lineal y la
+        // logarítmica se encuentran, y sale de la definición, no de una tabla.
+        // Si esto se mueve, la escala es otra — probablemente la de HTK, que da
+        // un banco de aspecto correcto en frecuencias equivocadas.
+        assert!((hz_to_mel(1000.0) - 15.0).abs() < 1e-9);
+        assert!((mel_to_hz(15.0) - 1000.0).abs() < 1e-9);
+        assert!((hz_to_mel(0.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ir_y_volver_devuelve_la_misma_frecuencia() {
+        // Una inversa mal escrita produce centros de banda desplazados, y eso no
+        // rompe nada: transcribe peor y punto.
+        for f in [50.0, 440.0, 999.0, 1000.0, 1001.0, 4000.0, 8000.0] {
+            let ida_vuelta = mel_to_hz(hz_to_mel(f));
+            assert!((ida_vuelta - f).abs() < 1e-6, "{f} → {ida_vuelta}");
+        }
+    }
+
+    #[test]
+    fn la_forma_es_la_que_espera_candle() {
+        // 80 filas de 201: `pcm_to_mel` indexa `filters[fila * 201 + bin]`.
+        // Aplanarlo con otra anchura da un espectrograma que no falla y no
+        // significa nada.
+        let w = mel_filters(16_000, 400, 80);
+        assert_eq!(w.len(), 80 * 201);
+        assert!(w.iter().all(|v| v.is_finite() && *v >= 0.0));
+    }
+
+    #[test]
+    fn cada_filtro_es_un_triangulo_y_sube_de_frecuencia() {
+        let (bins, n) = (201usize, 80usize);
+        let w = mel_filters(16_000, 400, n);
+        let pico = |i: usize| {
+            (0..bins)
+                .max_by(|a, b| w[i * bins + a].total_cmp(&w[i * bins + b]))
+                .unwrap()
+        };
+        // Los centros suben: el filtro i escucha más agudo que el i-1. Un banco
+        // desordenado es el síntoma de haber repartido los puntos en Hz en vez
+        // de en mel.
+        for i in 1..n {
+            assert!(pico(i) >= pico(i - 1), "el filtro {i} no sube");
+        }
+        // Y cada uno tiene una sola cuesta arriba y una abajo.
+        let i = 40;
+        let p = pico(i);
+        assert!(w[i * bins + p] > 0.0);
+        for k in 1..p {
+            assert!(w[i * bins + k] >= w[i * bins + k - 1] - 1e-6, "sube y baja");
+        }
+    }
+
+    #[test]
+    fn las_bandas_bajas_son_mas_estrechas_que_las_altas() {
+        // Es LA propiedad de la escala mel — resolución fina donde el oído
+        // distingue. Un banco con bandas uniformes es un banco lineal disfrazado.
+        let (bins, n) = (201usize, 80usize);
+        let w = mel_filters(16_000, 400, n);
+        let ancho = |i: usize| (0..bins).filter(|k| w[i * bins + k] > 0.0).count();
+        assert!(ancho(70) > ancho(5), "{} vs {}", ancho(70), ancho(5));
+    }
+}
