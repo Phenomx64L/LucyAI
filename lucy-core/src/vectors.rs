@@ -258,8 +258,17 @@ pub fn search(
     limit: usize,
     min_score: f32,
 ) -> Result<(Vec<SemanticHit>, Vec<String>), String> {
-    let (qvec, model) = embed_blocking(query)?;
+    // LAS FILAS PRIMERO, Y SI NO HAY, NI SE PREGUNTA. Estaba al revés, y el
+    // orden importa por lo que cuesta cada mitad: `load_stored` es una consulta
+    // local de microsegundos, y `embed_blocking` es una petición HTTP a Ollama
+    // con treinta segundos de espera. Con la tabla vacía —que es como está una
+    // instalación nueva, y como estaba la de esta máquina— se pagaba un viaje a
+    // la red en CADA turno para buscar entre cero vectores.
     let rows = load_stored(entity_type)?;
+    if rows.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let (qvec, model) = embed_blocking(query)?;
     let (hits, skips) = rank_by_cosine(rows, &qvec, &model, min_score, limit);
     let notes = [
         dim_mismatch_warning(skips.dims, skips.total, qvec.len()),
