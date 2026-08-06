@@ -34,6 +34,8 @@ pub mod memory;
 /// El catálogo de modelos LLM. Duplica `src/lib/models.js` a propósito, con un
 /// test que compara los dos ficheros para que el duplicado no pueda derivar.
 pub mod models;
+/// Lo que cuesta cada turno. Duplica `src/lib/model-pricing.ts`, con test.
+pub mod pricing;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
