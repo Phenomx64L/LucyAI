@@ -51,9 +51,19 @@ fn main() -> eframe::Result {
         "Lucy · egui (Fase 1)",
         opts,
         Box::new(|cc| {
-            // El tema de Lucy, no el oscuro genérico de egui. Una vez, al
-            // arrancar: en modo inmediato el estilo se consulta en cada frame,
-            // así que fijarlo aquí lo aplica a todo lo que se dibuje después.
+            // El tema de Lucy, no el oscuro genérico de egui. En modo inmediato
+            // el estilo se consulta en cada frame, así que fijarlo aquí lo
+            // aplica a todo lo que se dibuje después.
+            //
+            // El MODO se pone antes de aplicar: `apply` lo lee para elegir la
+            // base de egui, así que hacerlo al revés dejaría un primer arranque
+            // en claro con los widgets del tema oscuro.
+            theme::set_mode(
+                cc.storage
+                    .and_then(|s| s.get_string(K_THEME))
+                    .map(|v| theme::Mode::from_key(&v))
+                    .unwrap_or(theme::Mode::Dark),
+            );
             theme::apply(&cc.egui_ctx);
             Ok(Box::new(App::new(cc.storage)))
         }),
@@ -624,7 +634,7 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/pantalla", "Lucy ve tu pantalla (captura + pregunta)", true),
     ("/polarity", "Proyección de polaridad de un texto", false),
     ("/privacy", "Modo privacidad (sólo LLM local)", true),
-    ("/theme", "Cambiar el tema visual", false),
+    ("/theme", "Cambiar el tema visual", true),
     ("/help", "Referencia completa de comandos", true),
 ];
 
@@ -841,7 +851,7 @@ fn right(ui: &mut egui::Ui, h: f32, add: impl FnOnce(&mut egui::Ui)) {
 
 /// Tarjeta de tamaño exacto sobre `--surface-2`, el escalón de las tarjetas.
 fn card(ui: &mut egui::Ui, size: egui::Vec2, pad: f32, add: impl FnOnce(&mut egui::Ui)) {
-    card_on(ui, size, pad, theme::BG3, add);
+    card_on(ui, size, pad, theme::bg3(), add);
 }
 
 /// Tarjeta de tamaño exacto: el contenido no decide cuánto mide, lo decide la
@@ -861,7 +871,7 @@ fn card_on(
         ui.set_min_size(size);
         egui::Frame::none()
             .fill(fill)
-            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
             .rounding(egui::Rounding::same(theme::R_LG))
             .inner_margin(egui::Margin::same(pad))
             .show(ui, |ui| {
@@ -898,12 +908,12 @@ fn section(ui: &mut egui::Ui, title: &str, sub: Option<String>) {
     ui.add_space(GAP + 4.0);
     row_align(ui, 18.0, egui::Align::Center, |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        ui.add(egui::Label::new(theme::instrument_label(title, theme::FAINT)));
+        ui.add(egui::Label::new(theme::instrument_label(title, theme::faint())));
         if let Some(s) = sub {
             ui.label(
                 egui::RichText::new(s)
                     .size(theme::FS_CAPTION)
-                    .color(theme::FAINT),
+                    .color(theme::faint()),
             );
         }
     });
@@ -917,8 +927,8 @@ fn section(ui: &mut egui::Ui, title: &str, sub: Option<String>) {
 fn panel_title(ui: &mut egui::Ui, icon: &str, title: &str) {
     row_align(ui, 16.0, egui::Align::Center, |ui| {
         ui.spacing_mut().item_spacing.x = 7.0;
-        ui.label(egui::RichText::new(icon).size(13.0).color(theme::ACC));
-        ui.add(egui::Label::new(theme::instrument_label(title, theme::FAINT)));
+        ui.label(egui::RichText::new(icon).size(13.0).color(theme::acc()));
+        ui.add(egui::Label::new(theme::instrument_label(title, theme::faint())));
     });
 }
 
@@ -1029,7 +1039,7 @@ fn meter(ui: &mut egui::Ui, w: f32, h: f32, frac: f32, color: egui::Color32, key
     };
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     let r = egui::Rounding::same(h / 2.0);
-    ui.painter().rect_filled(rect, r, theme::BG4);
+    ui.painter().rect_filled(rect, r, theme::bg4());
     if shown > 0.0 {
         let fill = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * shown, rect.height()));
         ui.painter().rect_filled(fill, r, color);
@@ -1050,9 +1060,9 @@ fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) {
             ui.set_min_size(egui::vec2(w, h));
             ui.spacing_mut().item_spacing.x = 8.0;
             let (dot, txt) = if crashed {
-                (theme::AMBER, theme::TXT)
+                (theme::amber(), theme::txt())
             } else {
-                (theme::FAINT, theme::TXT2)
+                (theme::faint(), theme::txt2())
             };
             let (r, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
             ui.painter().circle_filled(r.center(), 2.5, dot);
@@ -1083,7 +1093,7 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
                 egui::RichText::new(&d.mount)
                     .monospace()
                     .size(theme::FS_FOOTNOTE)
-                    .color(theme::TXT),
+                    .color(theme::txt()),
             );
             right(ui, 18.0, |ui| {
                 ui.label(
@@ -1107,7 +1117,7 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
                 ))
                 .size(theme::FS_CAPTION)
                 .monospace()
-                .color(theme::FAINT),
+                .color(theme::faint()),
             )
             .truncate(),
         );
@@ -1121,7 +1131,7 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
 /// hace que se lea como un selector y no como un botón cualquiera.
 fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response {
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
-    let nw = ui.fonts(|f| f.layout_no_wrap(name.to_string(), font.clone(), theme::TXT3).size().x);
+    let nw = ui.fonts(|f| f.layout_no_wrap(name.to_string(), font.clone(), theme::txt3()).size().x);
     let (iw, chev) = (15.0, 13.0);
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(10.0 + iw + 6.0 + nw + 6.0 + chev + 10.0, 24.0),
@@ -1130,8 +1140,8 @@ fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response
     ui.painter().rect(
         rect,
         egui::Rounding::same(theme::R_SM),
-        if resp.hovered() { theme::BG4 } else { theme::BG3 },
-        egui::Stroke::new(1.0_f32, theme::BDR),
+        if resp.hovered() { theme::bg4() } else { theme::bg3() },
+        egui::Stroke::new(1.0_f32, theme::bdr()),
     );
     let cy = rect.center().y;
     icons::draw(
@@ -1139,21 +1149,21 @@ fn host_pill(ui: &mut egui::Ui, icon: icons::Icon, name: &str) -> egui::Response
         icon,
         egui::pos2(rect.left() + 10.0 + iw / 2.0, cy),
         15.0,
-        theme::ACC,
+        theme::acc(),
     );
     ui.painter().text(
         egui::pos2(rect.left() + 10.0 + iw + 6.0, cy),
         egui::Align2::LEFT_CENTER,
         name,
         font,
-        theme::TXT3,
+        theme::txt3(),
     );
     icons::draw(
         ui.painter(),
         icons::Icon::ChevronDown,
         egui::pos2(rect.right() - 11.0, cy),
         13.0,
-        theme::TXT3,
+        theme::txt3(),
     );
     resp
 }
@@ -1174,7 +1184,7 @@ fn host_option(
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::BG4);
+            .rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::bg4());
     }
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
     let small = egui::FontId::proportional(theme::FS_CAPTION);
@@ -1184,10 +1194,10 @@ fn host_option(
         icon,
         egui::pos2(rect.left() + 17.0, cy),
         16.0,
-        if sel { theme::ACC } else { theme::TXT3 },
+        if sel { theme::acc() } else { theme::txt3() },
     );
     let chip_w = ui.fonts(|f| {
-        f.layout_no_wrap(kind.to_string(), small.clone(), theme::FAINT)
+        f.layout_no_wrap(kind.to_string(), small.clone(), theme::faint())
             .size()
             .x
     }) + 12.0;
@@ -1196,13 +1206,13 @@ fn host_option(
         egui::vec2(chip_w, 16.0),
     );
     ui.painter()
-        .rect_filled(chip, egui::Rounding::same(5.0), theme::BG4);
+        .rect_filled(chip, egui::Rounding::same(5.0), theme::bg4());
     ui.painter().text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         kind,
         small,
-        theme::FAINT,
+        theme::faint(),
     );
     let left = rect.left() + 30.0;
     ui.painter()
@@ -1215,7 +1225,7 @@ fn host_option(
             egui::Align2::LEFT_CENTER,
             name,
             font,
-            if sel { theme::ACC } else { theme::TXT2 },
+            if sel { theme::acc() } else { theme::txt2() },
         );
     resp.clicked()
 }
@@ -1226,7 +1236,7 @@ fn host_option(
 fn model_pill(ui: &mut egui::Ui, icon: &str, name: &str, max_w: f32) -> egui::Response {
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
     let tw = |ui: &egui::Ui, s: &str| {
-        ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), theme::TXT3).size().x)
+        ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), theme::txt3()).size().x)
     };
     let (iw, chev) = (tw(ui, icon), 12.0);
     let fixed = 10.0 + iw + 6.0 + 6.0 + chev + 10.0;
@@ -1236,8 +1246,8 @@ fn model_pill(ui: &mut egui::Ui, icon: &str, name: &str, max_w: f32) -> egui::Re
     ui.painter().rect(
         rect,
         egui::Rounding::same(theme::R_SM),
-        if resp.hovered() { theme::BG4 } else { theme::BG3 },
-        egui::Stroke::new(1.0_f32, theme::BDR),
+        if resp.hovered() { theme::bg4() } else { theme::bg3() },
+        egui::Stroke::new(1.0_f32, theme::bdr()),
     );
     let cy = rect.center().y;
     ui.painter().text(
@@ -1245,7 +1255,7 @@ fn model_pill(ui: &mut egui::Ui, icon: &str, name: &str, max_w: f32) -> egui::Re
         egui::Align2::LEFT_CENTER,
         icon,
         font.clone(),
-        theme::ACC,
+        theme::acc(),
     );
     let nx = rect.left() + 10.0 + iw + 6.0;
     ui.painter()
@@ -1258,14 +1268,14 @@ fn model_pill(ui: &mut egui::Ui, icon: &str, name: &str, max_w: f32) -> egui::Re
             egui::Align2::LEFT_CENTER,
             name,
             font.clone(),
-            theme::TXT3,
+            theme::txt3(),
         );
     icons::draw(
         ui.painter(),
         icons::Icon::ChevronDown,
         egui::pos2(rect.right() - 11.0, cy),
         13.0,
-        theme::TXT3,
+        theme::txt3(),
     );
     resp
 }
@@ -1275,11 +1285,11 @@ fn model_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, sel: bool) ->
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::BG4);
+            .rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::bg4());
     }
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
     let cy = rect.center().y;
-    let col = if sel { theme::ACC } else { theme::TXT2 };
+    let col = if sel { theme::acc() } else { theme::txt2() };
     ui.painter().text(
         egui::pos2(rect.left() + 10.0, cy),
         egui::Align2::LEFT_CENTER,
@@ -1301,7 +1311,7 @@ fn model_option(ui: &mut egui::Ui, w: f32, icon: &str, name: &str, sel: bool) ->
 /// poder centrar la fila: egui no sabe cuánto mide una fila hasta que la coloca.
 fn chip_w(ui: &egui::Ui, label: &str) -> f32 {
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
-    let w = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, theme::TXT2).size().x);
+    let w = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, theme::txt2()).size().x);
     w + 54.0
 }
 
@@ -1312,10 +1322,10 @@ fn chip(ui: &mut egui::Ui, icon: icons::Icon, label: &str) -> bool {
     ui.painter().rect(
         rect,
         egui::Rounding::same(999.0),
-        if resp.hovered() { theme::BG4 } else { theme::BG3 },
+        if resp.hovered() { theme::bg4() } else { theme::bg3() },
         egui::Stroke::new(
             1.0_f32,
-            if resp.hovered() { theme::ACC_LINE } else { theme::BDR },
+            if resp.hovered() { theme::acc_line() } else { theme::bdr() },
         ),
     );
     let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
@@ -1325,14 +1335,14 @@ fn chip(ui: &mut egui::Ui, icon: icons::Icon, label: &str) -> bool {
         icon,
         egui::pos2(rect.left() + 21.0, cy),
         15.0,
-        theme::ACC,
+        theme::acc(),
     );
     ui.painter().text(
         egui::pos2(rect.left() + 36.0, cy),
         egui::Align2::LEFT_CENTER,
         label,
         font,
-        theme::TXT2,
+        theme::txt2(),
     );
     resp.clicked()
 }
@@ -1344,25 +1354,25 @@ fn ws_empty(ui: &mut egui::Ui, tab: WsTab) {
     ui.add_space(40.0);
     ui.vertical_centered(|ui| {
         egui::Frame::none()
-            .fill(theme::BG3)
-            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .fill(theme::bg3())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
             .rounding(egui::Rounding::same(theme::R_MD))
             .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
-                ui.label(egui::RichText::new(glyph).size(24.0).color(theme::FAINT));
+                ui.label(egui::RichText::new(glyph).size(24.0).color(theme::faint()));
             });
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new(title)
                 .size(theme::FS_FOOTNOTE)
-                .color(theme::TXT2),
+                .color(theme::txt2()),
         );
         ui.add_space(6.0);
         ui.set_max_width(230.0);
         ui.label(
             egui::RichText::new(hint)
                 .size(theme::FS_CAPTION)
-                .color(theme::TXT3),
+                .color(theme::txt3()),
         );
     });
 }
@@ -1388,18 +1398,18 @@ fn fmt_ms(ms: u64) -> String {
 fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
     let ok = a.blocked.is_empty();
     let col = if a.pending {
-        theme::FAINT
+        theme::faint()
     } else if ok {
-        theme::TXT2
+        theme::txt2()
     } else {
-        theme::AMBER
+        theme::amber()
     };
     let mut quitar = false;
     let r = egui::Frame::none()
-        .fill(theme::BG4)
+        .fill(theme::bg4())
         .stroke(egui::Stroke::new(
             1.0_f32,
-            if ok { theme::BDR } else { theme::AMBER.linear_multiply(0.4) },
+            if ok { theme::bdr() } else { theme::amber().linear_multiply(0.4) },
         ))
         .rounding(egui::Rounding::same(999.0))
         .inner_margin(egui::Margin::symmetric(9.0, 3.0))
@@ -1423,7 +1433,7 @@ fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
                 ui.label(
                     egui::RichText::new("·".repeat(fase.max(1)))
                         .size(theme::FS_CAPTION)
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                 );
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
             } else if ok {
@@ -1435,11 +1445,11 @@ fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
                     }
                     None => fmt_chars(a.text.chars().count()),
                 };
-                ui.label(egui::RichText::new(medida).size(theme::FS_CAPTION).color(theme::FAINT));
+                ui.label(egui::RichText::new(medida).size(theme::FS_CAPTION).color(theme::faint()));
             }
             if ui
                 .add(
-                    egui::Button::new(egui::RichText::new("✕").size(10.0).color(theme::FAINT))
+                    egui::Button::new(egui::RichText::new("✕").size(10.0).color(theme::faint()))
                         .fill(egui::Color32::TRANSPARENT)
                         .stroke(egui::Stroke::NONE)
                         .min_size(egui::vec2(14.0, 14.0)),
@@ -1517,9 +1527,9 @@ enum MsgAction {
 fn exec_row(ui: &mut egui::Ui, i: usize, cmd: &str, ok: bool, out: &str) {
     ui.add_space(6.0);
     let (col, glyph) = if ok {
-        (theme::ACC, "✓")
+        (theme::acc(), "✓")
     } else {
-        (theme::RED, "✕")
+        (theme::red(), "✕")
     };
     egui::CollapsingHeader::new(
         egui::RichText::new(format!("{glyph}  {cmd}"))
@@ -1534,7 +1544,7 @@ fn exec_row(ui: &mut egui::Ui, i: usize, cmd: &str, ok: bool, out: &str) {
                 egui::RichText::new(out)
                     .size(theme::FS_CAPTION)
                     .monospace()
-                    .color(theme::TXT3),
+                    .color(theme::txt3()),
             )
             .wrap(),
         );
@@ -1582,7 +1592,7 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> MsgAction
         for (icon, tip, a) in [(icons::Icon::Copy, "Copiar", MsgAction::Copy), extra] {
             let (r, resp) =
                 ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::click());
-            let c = if resp.hovered() { theme::TXT2 } else { theme::FAINT };
+            let c = if resp.hovered() { theme::txt2() } else { theme::faint() };
             icons::draw(ui.painter(), icon, r.center(), 12.0, c);
             if resp.on_hover_text(tip).clicked() {
                 act = a;
@@ -1594,7 +1604,7 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> MsgAction
                 egui::RichText::new(stamp)
                     .size(theme::FS_MICRO)
                     .monospace()
-                    .color(theme::FAINT),
+                    .color(theme::faint()),
             );
         }
     });
@@ -1607,10 +1617,10 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> MsgAction
 /// fondo, y sin ella no hay forma de saber que es pulsable hasta pulsarlo.
 fn ghost_icon(ui: &mut egui::Ui, icon: icons::Icon) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-    let c = if resp.hovered() { theme::TXT } else { theme::TXT3 };
+    let c = if resp.hovered() { theme::txt() } else { theme::txt3() };
     if resp.hovered() {
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(6.0), theme::BG4);
+            .rect_filled(rect, egui::Rounding::same(6.0), theme::bg4());
     }
     icons::draw(ui.painter(), icon, rect.center(), 17.0, c);
     resp
@@ -1622,10 +1632,10 @@ fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
     let b = egui::Button::new(
         egui::RichText::new(label)
             .size(theme::FS_CAPTION)
-            .color(if on { theme::ACC_INK } else { theme::TXT3 }),
+            .color(if on { theme::acc_ink() } else { theme::txt3() }),
     )
     .fill(if on {
-        theme::ACC
+        theme::acc()
     } else {
         egui::Color32::TRANSPARENT
     })
@@ -1860,6 +1870,8 @@ const K_SESSION: &str = "lucy.session";
 const K_WS_WIDTH: &str = "lucy.ws_width";
 /// Clave del modo privacidad.
 const K_PRIVACY: &str = "lucy.privacy";
+/// Clave del tema visual.
+const K_THEME: &str = "lucy.theme";
 
 /// Los topes del carril del agente, los mismos que la V2.
 ///
@@ -2120,6 +2132,7 @@ impl eframe::App for App {
         storage.set_string(K_LOOPS, self.max_loops.to_string());
         storage.set_string(K_WS_WIDTH, self.ws_width.to_string());
         storage.set_string(K_PRIVACY, self.privacy.to_string());
+        storage.set_string(K_THEME, theme::mode().key().to_string());
         // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
         // cerrar, así que un cuelgue pierde medio minuto de charla y no la
         // sesión entera — que es la diferencia entre un incordio y volver a
@@ -2235,7 +2248,7 @@ impl eframe::App for App {
         // sigue dando winit por los bordes mientras la ventana sea `resizable`.
         egui::TopBottomPanel::top("header")
             .exact_height(44.0)
-            .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
+            .frame(egui::Frame::none().fill(theme::bg2()).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
             .show(ctx, |ui| {
                 // EL ORDEN ES AL REVÉS DE LO QUE PARECE, y equivocarse deja la
                 // ventana muerta. egui resuelve un solapamiento a favor del
@@ -2260,21 +2273,21 @@ impl eframe::App for App {
                 }
 
                 ui.horizontal_centered(|ui| {
-                    ui.label(egui::RichText::new("✦ Lucy").color(theme::ACC).strong().size(15.0));
+                    ui.label(egui::RichText::new("✦ Lucy").color(theme::acc()).strong().size(15.0));
                     ui.add_space(14.0);
-                    ui.label(egui::RichText::new(self.view.label()).color(theme::TXT).size(13.5));
+                    ui.label(egui::RichText::new(self.view.label()).color(theme::txt()).size(13.5));
                     if self.view == View::TerminalIa {
                         ui.add_space(6.0);
                         // El badge COCKPIT de la app: fondo tenue del acento,
                         // versalitas, sin borde.
                         egui::Frame::none()
-                            .fill(theme::ACC.linear_multiply(0.14))
+                            .fill(theme::acc().linear_multiply(0.14))
                             .rounding(egui::Rounding::same(4.0))
                             .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new("COCKPIT")
-                                        .color(theme::ACC)
+                                        .color(theme::acc())
                                         .size(9.5)
                                         .strong(),
                                 );
@@ -2287,17 +2300,17 @@ impl eframe::App for App {
         // ── barra de estado ──────────────────────────────────────────────────
         egui::TopBottomPanel::bottom("status")
             .exact_height(26.0)
-            .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
+            .frame(egui::Frame::none().fill(theme::bg2()).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     let host = lucy_core::system::hostname();
-                    ui.label(egui::RichText::new("●").color(theme::ACC).size(9.0));
-                    ui.label(egui::RichText::new(host.to_uppercase()).color(theme::TXT3).size(10.5));
+                    ui.label(egui::RichText::new("●").color(theme::acc()).size(9.0));
+                    ui.label(egui::RichText::new(host.to_uppercase()).color(theme::txt3()).size(10.5));
                     ui.add_space(10.0);
                     let (pty_glyph, pty_color) = if self.pty.is_some() {
-                        ("▸ PTY", theme::TXT3)
+                        ("▸ PTY", theme::txt3())
                     } else {
-                        ("✕ PTY", theme::AMBER)
+                        ("✕ PTY", theme::amber())
                     };
                     ui.label(egui::RichText::new(pty_glyph).color(pty_color).size(10.5));
 
@@ -2312,12 +2325,12 @@ impl eframe::App for App {
                             } else {
                                 format!("{:.0} FPS", self.fps)
                             })
-                            .color(theme::TXT3)
+                            .color(theme::txt3())
                             .size(10.5),
                         );
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new(&self.chat_model).color(theme::TXT3).size(10.5),
+                            egui::RichText::new(&self.chat_model).color(theme::txt3()).size(10.5),
                         );
                         // El candado, siempre que el modo esté puesto. Un modo
                         // que decide si los datos de este equipo pueden viajar
@@ -2326,7 +2339,7 @@ impl eframe::App for App {
                         if self.privacy {
                             ui.add_space(10.0);
                             ui.label(
-                                egui::RichText::new("privado").color(theme::ACC).size(10.5),
+                                egui::RichText::new("privado").color(theme::acc()).size(10.5),
                             )
                             .on_hover_text(
                                 "Modo privacidad: nada sale de este equipo. Solo modelos \
@@ -2343,7 +2356,7 @@ impl eframe::App for App {
                             let (usados, tope) = (self.tabs[self.tab].loops, self.max_loops);
                             ui.label(
                                 egui::RichText::new(format!("auto {usados}/{tope}"))
-                                    .color(if usados >= tope { theme::AMBER } else { theme::ACC })
+                                    .color(if usados >= tope { theme::amber() } else { theme::acc() })
                                     .monospace()
                                     .size(10.5),
                             )
@@ -2363,7 +2376,7 @@ impl eframe::App for App {
                         ) {
                             Some(c) => ui.label(
                                 egui::RichText::new(lucy_core::pricing::fmt_usd(c))
-                                    .color(if c > 0.0 { theme::TXT3 } else { theme::FAINT })
+                                    .color(if c > 0.0 { theme::txt3() } else { theme::faint() })
                                     .monospace()
                                     .size(10.5),
                             )
@@ -2375,7 +2388,7 @@ impl eframe::App for App {
                             // cero que parecería gratis.
                             None => ui.label(
                                 egui::RichText::new("coste n/d")
-                                    .color(theme::FAINT)
+                                    .color(theme::faint())
                                     .size(10.5),
                             )
                             .on_hover_text("Este modelo no tiene precio en el catálogo"),
@@ -2388,7 +2401,7 @@ impl eframe::App for App {
         egui::SidePanel::left("rail")
             .exact_width(96.0)
             .resizable(false)
-            .frame(egui::Frame::none().fill(theme::BG2).inner_margin(egui::Margin::symmetric(0.0, 10.0)))
+            .frame(egui::Frame::none().fill(theme::bg2()).inner_margin(egui::Margin::symmetric(0.0, 10.0)))
             .show(ctx, |ui| {
                 for v in View::ALL {
                     let label = v.label();
@@ -2399,11 +2412,11 @@ impl eframe::App for App {
                     // migrar. La tercera se atenúa pero SIGUE siendo pulsable —
                     // su panel explica qué le falta, que es información útil.
                     let fg = if active {
-                        theme::ACC
+                        theme::acc()
                     } else if pending {
-                        theme::TXT3.linear_multiply(0.55)
+                        theme::txt3().linear_multiply(0.55)
                     } else {
-                        theme::TXT2
+                        theme::txt2()
                     };
 
                     let resp = ui.allocate_response(
@@ -2419,18 +2432,18 @@ impl eframe::App for App {
                         ui.painter().rect_filled(
                             egui::Rect::from_min_size(r.min, egui::vec2(2.5, r.height())),
                             0.0,
-                            theme::ACC,
+                            theme::acc(),
                         );
                         ui.painter().rect_filled(
                             r.shrink2(egui::vec2(3.0, 2.0)),
                             4.0,
-                            theme::ACC.linear_multiply(0.10),
+                            theme::acc().linear_multiply(0.10),
                         );
                     } else if resp.hovered() {
                         ui.painter().rect_filled(
                             resp.rect.shrink2(egui::vec2(3.0, 2.0)),
                             4.0,
-                            theme::BG3,
+                            theme::bg3(),
                         );
                     }
                     let c = resp.rect.center();
@@ -2477,11 +2490,11 @@ impl eframe::App for App {
                     egui::Order::Foreground,
                     egui::Id::new("drop"),
                 ));
-                p.rect_filled(r, 0.0, theme::BG.linear_multiply(0.75));
+                p.rect_filled(r, 0.0, theme::bg().linear_multiply(0.75));
                 p.rect_stroke(
                     r.shrink(10.0),
                     egui::Rounding::same(theme::R_LG),
-                    egui::Stroke::new(2.0_f32, theme::ACC),
+                    egui::Stroke::new(2.0_f32, theme::acc()),
                 );
                 p.text(
                     r.center(),
@@ -2492,7 +2505,7 @@ impl eframe::App for App {
                         format!("Soltar para adjuntar {encima} ficheros")
                     },
                     egui::FontId::proportional(18.0),
-                    theme::ACC,
+                    theme::acc(),
                 );
             }
         }
@@ -2516,7 +2529,7 @@ impl eframe::App for App {
                 .resizable(true)
                 .frame(
                     egui::Frame::none()
-                        .fill(theme::BG2)
+                        .fill(theme::bg2())
                         .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
                 )
                 .show(ctx, |ui| {
@@ -2555,10 +2568,10 @@ impl App {
 
         row_align(ui, 20.0, egui::Align::Center, |ui| {
             ui.spacing_mut().item_spacing.x = 7.0;
-            ui.label(egui::RichText::new("●").size(7.0).color(theme::ACC));
+            ui.label(egui::RichText::new("●").size(7.0).color(theme::acc()));
             ui.add(egui::Label::new(theme::instrument_label(
                 "Conversación",
-                theme::FAINT,
+                theme::faint(),
             )));
             let mut w = ui.available_width();
             // El selector se ancla a la derecha con su ancho real, no con un
@@ -2620,12 +2633,12 @@ impl App {
                 let b = egui::Button::new(
                     egui::RichText::new(label)
                         .size(theme::FS_FOOTNOTE)
-                        .color(if on { theme::ACC } else { theme::TXT3 }),
+                        .color(if on { theme::acc() } else { theme::txt3() }),
                 )
-                .fill(if on { theme::ACC_BG } else { theme::BG3 })
+                .fill(if on { theme::acc_bg() } else { theme::bg3() })
                 .stroke(egui::Stroke::new(
                     1.0_f32,
-                    if on { theme::ACC_LINE } else { theme::BDR },
+                    if on { theme::acc_line() } else { theme::bdr() },
                 ))
                 .rounding(egui::Rounding::same(theme::R_SM))
                 .min_size(egui::vec2(0.0, 26.0));
@@ -2643,7 +2656,7 @@ impl App {
                     ui.add_space(-4.0);
                     let (xr, xresp) =
                         ui.allocate_exact_size(egui::vec2(18.0, 26.0), egui::Sense::click());
-                    let c = if xresp.hovered() { theme::RED } else { theme::FAINT };
+                    let c = if xresp.hovered() { theme::red() } else { theme::faint() };
                     icons::draw(ui.painter(), icons::Icon::Close, xr.center(), 11.0, c);
                     if xresp.on_hover_text("Cerrar terminal").clicked() || r.middle_clicked() {
                         cerrar = Some(i);
@@ -2655,15 +2668,15 @@ impl App {
             ui.painter().rect(
                 pr,
                 egui::Rounding::same(theme::R_SM),
-                if presp.hovered() { theme::BG4 } else { egui::Color32::TRANSPARENT },
-                egui::Stroke::new(1.0_f32, theme::BDR),
+                if presp.hovered() { theme::bg4() } else { egui::Color32::TRANSPARENT },
+                egui::Stroke::new(1.0_f32, theme::bdr()),
             );
             icons::draw(
                 ui.painter(),
                 icons::Icon::Plus,
                 pr.center(),
                 15.0,
-                if presp.hovered() { theme::TXT } else { theme::TXT3 },
+                if presp.hovered() { theme::txt() } else { theme::txt3() },
             );
             if presp.on_hover_text("Nueva terminal").clicked() {
                 abrir = true;
@@ -2726,7 +2739,7 @@ impl App {
                                 ui.spacing_mut().item_spacing.x = 6.0;
                                 ui.add(egui::Label::new(theme::instrument_label(
                                     g.label,
-                                    theme::FAINT,
+                                    theme::faint(),
                                 )));
                                 // Sin clave guardada, el grupo entero lo dice
                                 // aquí. Descubrirlo al enviar la primera orden
@@ -2736,7 +2749,7 @@ impl App {
                                     ui.label(
                                         egui::RichText::new("sin clave")
                                             .size(theme::FS_CAPTION)
-                                            .color(theme::AMBER),
+                                            .color(theme::amber()),
                                     );
                                 }
                             });
@@ -2763,7 +2776,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("Ningún modelo coincide")
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                             );
                         }
                     });
@@ -2777,7 +2790,7 @@ impl App {
                     ui.label(
                         egui::RichText::new("●")
                             .size(8.0)
-                            .color(if online { theme::ACC } else { theme::FAINT }),
+                            .color(if online { theme::acc() } else { theme::faint() }),
                     );
                     ui.label(
                         egui::RichText::new(if online {
@@ -2786,7 +2799,7 @@ impl App {
                             "Ollama offline".to_string()
                         })
                         .size(theme::FS_CAPTION)
-                        .color(theme::TXT3),
+                        .color(theme::txt3()),
                     );
                     right(ui, 20.0, |ui| {
                         if ui
@@ -2794,7 +2807,7 @@ impl App {
                                 egui::Button::new(
                                     egui::RichText::new("↻ redetectar")
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::ACC),
+                                        .color(theme::acc()),
                                 )
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE),
@@ -2830,14 +2843,14 @@ impl App {
                 Some(t) => avatar::show(ui, t, 84.0),
                 // Sin retrato la vista sigue en pie: el glifo de siempre.
                 None => {
-                    ui.label(egui::RichText::new("✦").size(40.0).color(theme::ACC));
+                    ui.label(egui::RichText::new("✦").size(40.0).color(theme::acc()));
                 }
             }
             ui.add_space(14.0);
             ui.label(
                 egui::RichText::new(greeting(&user_name()))
                     .size(22.0)
-                    .color(theme::TXT),
+                    .color(theme::txt()),
             );
             ui.add_space(8.0);
             ui.label(
@@ -2846,7 +2859,7 @@ impl App {
                      se llenan en el workspace →",
                 )
                 .size(theme::FS_BODY)
-                .color(theme::TXT3),
+                .color(theme::txt3()),
             );
             ui.add_space(22.0);
 
@@ -2938,22 +2951,22 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     right(ui, 0.0, |ui| {
-                        avatar(ui, &me, theme::BLUE, theme::BLUE.linear_multiply(0.14));
+                        avatar(ui, &me, theme::blue(), theme::blue().linear_multiply(0.14));
                         ui.allocate_ui_with_layout(
                             egui::vec2(bubble_w, 0.0),
                             egui::Layout::top_down(egui::Align::Max),
                             |ui| {
                                 ui.set_max_width(bubble_w);
                                 egui::Frame::none()
-                                    .fill(theme::BG3)
-                                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                                    .fill(theme::bg3())
+                                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
                                     .rounding(egui::Rounding::same(theme::R_LG))
                                     .inner_margin(egui::Margin::symmetric(12.0, 9.0))
                                     .show(ui, |ui| {
                                         ui.label(
                                             egui::RichText::new(&text)
                                                 .size(13.5)
-                                                .color(theme::TXT),
+                                                .color(theme::txt()),
                                         );
                                     });
                                 match msg_actions(ui, &stamp, true) {
@@ -2977,24 +2990,24 @@ impl App {
                             (ui.input(|x| x.time) * 1.6) as i64 % 2 == 0,
                             0.5,
                         );
-                        theme::ACC.linear_multiply(0.10 + 0.14 * t)
+                        theme::acc().linear_multiply(0.10 + 0.14 * t)
                     } else {
-                        theme::ACC_BG
+                        theme::acc_bg()
                     };
-                    avatar(ui, "✦", theme::ACC, bg);
+                    avatar(ui, "✦", theme::acc(), bg);
                     ui.vertical(|ui| {
                         row_align(ui, 18.0, egui::Align::Max, |ui| {
                             ui.spacing_mut().item_spacing.x = 7.0;
                             ui.label(
                                 egui::RichText::new("Lucy")
                                     .size(theme::FS_FOOTNOTE)
-                                    .color(theme::TXT),
+                                    .color(theme::txt()),
                             );
                             ui.label(
                                 egui::RichText::new(&stamp)
                                     .size(theme::FS_MICRO)
                                     .monospace()
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                             );
                         });
                         ui.add_space(5.0);
@@ -3009,7 +3022,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("Pensando…")
                                     .size(theme::FS_FOOTNOTE)
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                             );
                         } else {
                             CommonMarkViewer::new().show(ui, &mut self.md_cache, &shown.text);
@@ -3022,12 +3035,12 @@ impl App {
                         if !code_gen && shown.commands > 0 {
                             ui.add_space(6.0);
                             egui::Frame::none()
-                                .fill(theme::ACC_BG)
+                                .fill(theme::acc_bg())
                                 .rounding(egui::Rounding::same(theme::R_SM))
                                 .inner_margin(egui::Margin::symmetric(10.0, 5.0))
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing.x = 7.0;
-                                    icons::show(ui, icons::Icon::Terminal, 13.0, theme::ACC);
+                                    icons::show(ui, icons::Icon::Terminal, 13.0, theme::acc());
                                     ui.label(
                                         egui::RichText::new(if shown.commands == 1 {
                                             "1 comando propuesto — apruébalo en el panel de Plan"
@@ -3040,7 +3053,7 @@ impl App {
                                             )
                                         })
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::ACC),
+                                        .color(theme::acc()),
                                     );
                                 });
                         }
@@ -3057,19 +3070,19 @@ impl App {
                             egui::CollapsingHeader::new(
                                 egui::RichText::new("Razonamiento")
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                             )
                             .id_salt(("thought", i, k))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(th)
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::TXT3),
+                                        .color(theme::txt3()),
                                 );
                             });
                         }
                         if pulse && !text.is_empty() {
-                            ui.label(egui::RichText::new("▋").color(theme::ACC));
+                            ui.label(egui::RichText::new("▋").color(theme::acc()));
                         }
                         if !pulse {
                             match msg_actions(ui, "", false) {
@@ -3146,8 +3159,8 @@ impl App {
         let mut quitar: Option<usize> = None;
 
         egui::Frame::none()
-            .fill(theme::BG3)
-            .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+            .fill(theme::bg3())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
             .rounding(egui::Rounding::same(theme::R_LG))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -3184,7 +3197,7 @@ impl App {
                     if transcribiendo {
                         // Transcribiendo: el mismo sitio, otro estado. Sin esto,
                         // los segundos que tarda Whisper parecen que no pasó nada.
-                        ui.painter().circle_filled(mr.center(), 11.0, theme::ACC_BG);
+                        ui.painter().circle_filled(mr.center(), 11.0, theme::acc_bg());
                         ui.ctx().request_repaint();
                     } else if grabando {
                         // El aro crece con el nivel. Sin señal visible no hay
@@ -3194,12 +3207,12 @@ impl App {
                         ui.painter().circle_filled(
                             mr.center(),
                             9.0 + 5.0 * n,
-                            theme::RED.linear_multiply(0.25),
+                            theme::red().linear_multiply(0.25),
                         );
                         ui.ctx().request_repaint();
                     } else if mresp.hovered() {
                         ui.painter()
-                            .rect_filled(mr, egui::Rounding::same(6.0), theme::BG4);
+                            .rect_filled(mr, egui::Rounding::same(6.0), theme::bg4());
                     }
                     icons::draw(
                         ui.painter(),
@@ -3207,11 +3220,11 @@ impl App {
                         mr.center(),
                         17.0,
                         if grabando {
-                            theme::RED
+                            theme::red()
                         } else if transcribiendo {
-                            theme::ACC
+                            theme::acc()
                         } else {
-                            theme::TXT3
+                            theme::txt3()
                         },
                     );
                     // El estado del modelo se dice EN EL BOTÓN, antes de grabar.
@@ -3247,16 +3260,16 @@ impl App {
                     let (ar, aresp) =
                         ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
                     if auto {
-                        ui.painter().rect_filled(ar, egui::Rounding::same(6.0), theme::ACC_BG);
+                        ui.painter().rect_filled(ar, egui::Rounding::same(6.0), theme::acc_bg());
                     } else if aresp.hovered() {
-                        ui.painter().rect_filled(ar, egui::Rounding::same(6.0), theme::BG4);
+                        ui.painter().rect_filled(ar, egui::Rounding::same(6.0), theme::bg4());
                     }
                     icons::draw(
                         ui.painter(),
                         icons::Icon::Bolt,
                         ar.center(),
                         17.0,
-                        if auto { theme::ACC } else { theme::TXT3 },
+                        if auto { theme::acc() } else { theme::txt3() },
                     );
                     let usados = self.tabs[self.tab].loops;
                     if aresp
@@ -3382,11 +3395,11 @@ impl App {
                         let (sr, sresp) =
                             ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
                         let fill = if busy {
-                            theme::BG4
+                            theme::bg4()
                         } else if sresp.hovered() {
-                            theme::ACC_HOVER
+                            theme::acc_hover()
                         } else {
-                            theme::ACC
+                            theme::acc()
                         };
                         ui.painter().circle_filled(sr.center(), 15.0, fill);
                         if busy {
@@ -3394,7 +3407,7 @@ impl App {
                             ui.painter().rect_filled(
                                 egui::Rect::from_center_size(sr.center(), egui::vec2(10.0, 10.0)),
                                 egui::Rounding::same(2.0),
-                                theme::TXT,
+                                theme::txt(),
                             );
                         } else {
                             icons::draw(
@@ -3402,7 +3415,7 @@ impl App {
                                 icons::Icon::ArrowUp,
                                 sr.center(),
                                 17.0,
-                                theme::ACC_INK,
+                                theme::acc_ink(),
                             );
                         }
                         if sresp
@@ -3562,15 +3575,15 @@ _(detenido por el operador)_");
                 ui.painter().rect_filled(
                     r,
                     egui::Rounding::same(6.0),
-                    if danger { theme::RED.linear_multiply(0.85) } else { theme::BG4 },
+                    if danger { theme::red().linear_multiply(0.85) } else { theme::bg4() },
                 );
             }
             let fg = if resp.hovered() && danger {
-                theme::TXT
+                theme::txt()
             } else if resp.hovered() {
-                theme::TXT
+                theme::txt()
             } else {
-                theme::TXT3
+                theme::txt3()
             };
             icons::draw(ui.painter(), icon, r.center(), 15.0, fg);
             if resp.on_hover_text(tip).clicked() {
@@ -3622,8 +3635,8 @@ _(detenido por el operador)_");
         painter.rect(
             rect,
             egui::Rounding::same(theme::R_LG),
-            theme::BG3,
-            egui::Stroke::new(1.0_f32, theme::BDR2),
+            theme::bg3(),
+            egui::Stroke::new(1.0_f32, theme::bdr2()),
         );
 
         let mut y = rect.top() + 8.0;
@@ -3634,7 +3647,7 @@ _(detenido por el operador)_");
             );
             let hover = ui.rect_contains_pointer(r);
             if hover {
-                painter.rect_filled(r, egui::Rounding::same(theme::R_SM), theme::BG4);
+                painter.rect_filled(r, egui::Rounding::same(theme::R_SM), theme::bg4());
                 if ui.input(|i| i.pointer.primary_clicked()) {
                     elegido = Some(cmd);
                 }
@@ -3644,14 +3657,14 @@ _(detenido por el operador)_");
                 egui::Align2::LEFT_CENTER,
                 cmd,
                 egui::FontId::monospace(theme::FS_FOOTNOTE),
-                theme::ACC,
+                theme::acc(),
             );
             painter.text(
                 egui::pos2(r.left() + 130.0, r.center().y),
                 egui::Align2::LEFT_CENTER,
                 desc,
                 egui::FontId::proportional(theme::FS_CAPTION),
-                if *ready { theme::TXT2 } else { theme::FAINT },
+                if *ready { theme::txt2() } else { theme::faint() },
             );
             // Los que todavía no hacen nada se marcan aquí, no al pulsarlos:
             // enterarse después de elegir es perder el movimiento.
@@ -3661,7 +3674,7 @@ _(detenido por el operador)_");
                     egui::Align2::RIGHT_CENTER,
                     "sin migrar",
                     egui::FontId::proportional(theme::FS_MICRO),
-                    theme::FAINT,
+                    theme::faint(),
                 );
             }
             y += row_h;
@@ -3672,7 +3685,7 @@ _(detenido por el operador)_");
                 egui::Align2::CENTER_CENTER,
                 format!("+{} más", hits.len() - shown),
                 egui::FontId::proportional(theme::FS_MICRO),
-                theme::FAINT,
+                theme::faint(),
             );
         }
 
@@ -3699,6 +3712,23 @@ _(detenido por el operador)_");
                     ui.memory_mut(|m| m.open_popup(id));
                 }
                 "/memory" => self.view = View::Memoria,
+                // Rota entre los tres en vez de abrir un menú. Un comando de
+                // barra se escribe para no levantar las manos del teclado, y
+                // hacerlo desembocar en un desplegable que hay que apuntar con
+                // el ratón deshace justo eso. El selector completo está en
+                // Configuración, para quien prefiera verlos los tres.
+                "/theme" => {
+                    let siguiente = match theme::mode() {
+                        theme::Mode::Dark => theme::Mode::Light,
+                        theme::Mode::Light => theme::Mode::Auto,
+                        theme::Mode::Auto => theme::Mode::Dark,
+                    };
+                    theme::switch(ui.ctx(), siguiente);
+                    self.tabs[self.tab].log.push(ChatMsg::new(
+                        false,
+                        format!("Tema: **{}**.", siguiente.label()),
+                    ));
+                }
                 // Se dice en el hilo, y con el modelo actual delante. Un
                 // interruptor que solo cambia un icono en la barra deja al
                 // operador sin saber si le va a dejar seguir trabajando con lo
@@ -4456,7 +4486,7 @@ _(detenido por el operador)_");
                 let b = egui::Button::new(
                     egui::RichText::new(label)
                         .size(theme::FS_FOOTNOTE)
-                        .color(if on { theme::ACC } else { theme::TXT3 }),
+                        .color(if on { theme::acc() } else { theme::txt3() }),
                 )
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE)
@@ -4470,7 +4500,7 @@ _(detenido por el operador)_");
                     ui.painter().hline(
                         x.left()..=x.right(),
                         x.bottom() - 1.0,
-                        egui::Stroke::new(2.0_f32, theme::ACC),
+                        egui::Stroke::new(2.0_f32, theme::acc()),
                     );
                 }
                 if r.clicked() {
@@ -4545,10 +4575,10 @@ _(detenido por el operador)_");
 
         for s in &self.tabs[self.tab].ws.plan {
             let (glyph, col) = match s.status {
-                StepStatus::Done => ("✓", theme::ACC),
-                StepStatus::Running => ("▸", theme::ACC),
-                StepStatus::Error => ("✕", theme::RED),
-                StepStatus::Pending => ("○", theme::DISABLED),
+                StepStatus::Done => ("✓", theme::acc()),
+                StepStatus::Running => ("▸", theme::acc()),
+                StepStatus::Error => ("✕", theme::red()),
+                StepStatus::Pending => ("○", theme::disabled()),
             };
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -4559,9 +4589,9 @@ _(detenido por el operador)_");
                         egui::RichText::new(&s.label)
                             .size(theme::FS_FOOTNOTE)
                             .color(if s.status == StepStatus::Pending {
-                                theme::TXT3
+                                theme::txt3()
                             } else {
-                                theme::TXT
+                                theme::txt()
                             }),
                     );
                     if !s.detail.is_empty() {
@@ -4572,7 +4602,7 @@ _(detenido por el operador)_");
                             egui::RichText::new(&s.detail)
                                 .size(theme::FS_CAPTION)
                                 .monospace()
-                                .color(theme::TXT2),
+                                .color(theme::txt2()),
                         );
                     }
                     // Por qué ESTE paso no lo va a dar Lucy sola.
@@ -4586,11 +4616,11 @@ _(detenido por el operador)_");
                         ui.add_space(3.0);
                         row(ui, 15.0, |ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
-                            icons::show(ui, icons::Icon::Shield, 12.0, theme::AMBER);
+                            icons::show(ui, icons::Icon::Shield, 12.0, theme::amber());
                             ui.label(
                                 egui::RichText::new(motivo)
                                     .size(theme::FS_MICRO)
-                                    .color(theme::AMBER),
+                                    .color(theme::amber()),
                             );
                         });
                     }
@@ -4611,12 +4641,12 @@ _(detenido por el operador)_");
                                 let b = egui::Button::new(
                                     egui::RichText::new("⇈ Reintentar como administrador")
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::AMBER),
+                                        .color(theme::amber()),
                                 )
-                                .fill(theme::AMBER_BG)
+                                .fill(theme::amber_bg())
                                 .stroke(egui::Stroke::new(
                                     1.0_f32,
-                                    theme::AMBER.linear_multiply(0.4),
+                                    theme::amber().linear_multiply(0.4),
                                 ))
                                 .rounding(egui::Rounding::same(6.0))
                                 .min_size(egui::vec2(0.0, 22.0));
@@ -4640,7 +4670,7 @@ _(detenido por el operador)_");
                                         "Lucy ya corre como administrador: esto no es \n                                         un problema de privilegios.",
                                     )
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                                 );
                             }
                             // Cuenta estándar y consentimiento apagado: no hay
@@ -4652,7 +4682,7 @@ _(detenido por el operador)_");
                                         "Sin privilegios y con UAC desactivado: hay que \n                                         abrir Lucy con una cuenta de administrador.",
                                     )
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::AMBER),
+                                    .color(theme::amber()),
                                 );
                             }
                         }
@@ -4662,9 +4692,9 @@ _(detenido por el operador)_");
                         let b = egui::Button::new(
                             egui::RichText::new("▸ Ejecutar")
                                 .size(theme::FS_CAPTION)
-                                .color(theme::ACC_INK),
+                                .color(theme::acc_ink()),
                         )
-                        .fill(theme::ACC)
+                        .fill(theme::acc())
                         .stroke(egui::Stroke::NONE)
                         .rounding(egui::Rounding::same(6.0))
                         .min_size(egui::vec2(0.0, 22.0));
@@ -4688,14 +4718,14 @@ _(detenido por el operador)_");
             ui.add_space(10.0);
             ui.add(egui::Label::new(theme::instrument_label(
                 "Sub-agentes",
-                theme::FAINT,
+                theme::faint(),
             )));
             for f in &self.tabs[self.tab].ws.forks {
                 let (txt, col) = match f.status {
-                    ForkStatus::Running => ("en curso", theme::ACC),
-                    ForkStatus::Done => ("terminado", theme::TXT3),
-                    ForkStatus::Error => ("error", theme::RED),
-                    ForkStatus::Collected => ("recogido", theme::FAINT),
+                    ForkStatus::Running => ("en curso", theme::acc()),
+                    ForkStatus::Done => ("terminado", theme::txt3()),
+                    ForkStatus::Error => ("error", theme::red()),
+                    ForkStatus::Collected => ("recogido", theme::faint()),
                 };
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -4704,7 +4734,7 @@ _(detenido por el operador)_");
                         egui::RichText::new(&f.id)
                             .size(theme::FS_CAPTION)
                             .monospace()
-                            .color(theme::TXT2),
+                            .color(theme::txt2()),
                     );
                     ui.label(egui::RichText::new(txt).size(theme::FS_CAPTION).color(col));
                 });
@@ -4716,8 +4746,8 @@ _(detenido por el operador)_");
         for e in &self.tabs[self.tab].ws.exec {
             ui.add_space(6.0);
             egui::Frame::none()
-                .fill(theme::BG3)
-                .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                .fill(theme::bg3())
+                .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
                 .rounding(egui::Rounding::same(theme::R_SM))
                 .inner_margin(egui::Margin::same(10.0))
                 .show(ui, |ui| {
@@ -4725,13 +4755,13 @@ _(detenido por el operador)_");
                         ui.label(
                             egui::RichText::new(if e.ok { "✓" } else { "✕" })
                                 .size(11.0)
-                                .color(if e.ok { theme::ACC } else { theme::RED }),
+                                .color(if e.ok { theme::acc() } else { theme::red() }),
                         );
                         ui.label(
                             egui::RichText::new(&e.cmd)
                                 .size(theme::FS_CAPTION)
                                 .monospace()
-                                .color(theme::TXT),
+                                .color(theme::txt()),
                         );
                     });
                     if !e.output.is_empty() {
@@ -4740,7 +4770,7 @@ _(detenido por el operador)_");
                             egui::RichText::new(&e.output)
                                 .size(theme::FS_CAPTION)
                                 .monospace()
-                                .color(theme::TXT3),
+                                .color(theme::txt3()),
                         );
                     }
                 });
@@ -4755,7 +4785,7 @@ _(detenido por el operador)_");
                 // La fase va en su propio chip: en una lista larga es por lo
                 // que se busca, no por la etiqueta.
                 egui::Frame::none()
-                    .fill(theme::BG4)
+                    .fill(theme::bg4())
                     .rounding(egui::Rounding::same(4.0))
                     .inner_margin(egui::Margin::symmetric(6.0, 1.0))
                     .show(ui, |ui| {
@@ -4763,20 +4793,20 @@ _(detenido por el operador)_");
                             egui::RichText::new(&t.phase)
                                 .size(theme::FS_CAPTION)
                                 .monospace()
-                                .color(theme::TXT3),
+                                .color(theme::txt3()),
                         );
                     });
                 ui.vertical(|ui| {
                     ui.label(
                         egui::RichText::new(&t.label)
                             .size(theme::FS_CAPTION)
-                            .color(theme::TXT2),
+                            .color(theme::txt2()),
                     );
                     if !t.detail.is_empty() {
                         ui.label(
                             egui::RichText::new(&t.detail)
                                 .size(theme::FS_CAPTION)
-                                .color(theme::FAINT),
+                                .color(theme::faint()),
                         );
                     }
                 });
@@ -4788,8 +4818,8 @@ _(detenido por el operador)_");
         for a in &self.tabs[self.tab].ws.artifacts {
             ui.add_space(6.0);
             egui::Frame::none()
-                .fill(theme::BG3)
-                .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                .fill(theme::bg3())
+                .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
                 .rounding(egui::Rounding::same(theme::R_SM))
                 .inner_margin(egui::Margin::same(10.0))
                 .show(ui, |ui| {
@@ -4797,14 +4827,14 @@ _(detenido por el operador)_");
                         ui.label(
                             egui::RichText::new(a.kind.label())
                                 .size(theme::FS_CAPTION)
-                                .color(theme::ACC),
+                                .color(theme::acc()),
                         );
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(&a.path)
                                     .size(theme::FS_CAPTION)
                                     .monospace()
-                                    .color(theme::TXT),
+                                    .color(theme::txt()),
                             )
                             .truncate(),
                         );
@@ -4813,7 +4843,7 @@ _(detenido por el operador)_");
                         ui.label(
                             egui::RichText::new(&a.summary)
                                 .size(theme::FS_CAPTION)
-                                .color(theme::FAINT),
+                                .color(theme::faint()),
                         );
                     }
                 });
@@ -4881,13 +4911,13 @@ _(detenido por el operador)_");
         match &self.log_lines {
             Err(e) => {
                 ui.add_space(6.0);
-                ui.colored_label(theme::AMBER, format!("⚠ {e}"));
+                ui.colored_label(theme::amber(), format!("⚠ {e}"));
                 ui.label(
                     egui::RichText::new(
                         "El log aparece en cuanto Lucy arranca al menos una vez.",
                     )
                     .small()
-                    .color(theme::TXT3),
+                    .color(theme::txt3()),
                 );
             }
             Ok(lines) => {
@@ -4902,7 +4932,7 @@ _(detenido por el operador)_");
                 ui.label(
                     egui::RichText::new(format!("{} de {} líneas", visible.len(), lines.len()))
                         .small()
-                        .color(theme::TXT3),
+                        .color(theme::txt3()),
                 );
                 ui.separator();
                 egui::ScrollArea::vertical()
@@ -4911,9 +4941,9 @@ _(detenido por el operador)_");
                     .show(ui, |ui| {
                         for l in visible {
                             let color = match lucy_core::logs::Level::of(l) {
-                                lucy_core::logs::Level::Error => theme::RED,
-                                lucy_core::logs::Level::Warn => theme::AMBER,
-                                lucy_core::logs::Level::Info => theme::TXT2,
+                                lucy_core::logs::Level::Error => theme::red(),
+                                lucy_core::logs::Level::Warn => theme::amber(),
+                                lucy_core::logs::Level::Info => theme::txt2(),
                             };
                             ui.add(
                                 egui::Label::new(
@@ -5074,8 +5104,8 @@ _(detenido por el operador)_");
         card(ui, size, 14.0, |ui| {
             row_align(ui, 18.0, egui::Align::Center, |ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
-                ui.label(egui::RichText::new(k.icon).size(14.0).color(theme::ACC));
-                ui.add(egui::Label::new(theme::instrument_label(k.title, theme::FAINT)));
+                ui.label(egui::RichText::new(k.icon).size(14.0).color(theme::acc()));
+                ui.add(egui::Label::new(theme::instrument_label(k.title, theme::faint())));
             });
             ui.add_space(8.0);
 
@@ -5088,7 +5118,7 @@ _(detenido por el operador)_");
                 if is_text {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(&k.text).size(vsize).color(theme::TXT),
+                            egui::RichText::new(&k.text).size(vsize).color(theme::txt()),
                         )
                         .truncate(),
                     );
@@ -5106,20 +5136,20 @@ _(detenido por el operador)_");
                     egui::RichText::new(format!("{shown:.0}"))
                         .size(vsize)
                         .monospace()
-                        .color(theme::TXT),
+                        .color(theme::txt()),
                 );
                 if !k.unit.is_empty() {
                     ui.label(
                         egui::RichText::new(k.unit)
                             .size(14.0)
-                            .color(theme::TXT3),
+                            .color(theme::txt3()),
                     );
                 }
             });
 
             if !k.spark.is_empty() {
                 ui.add_space(10.0);
-                sparkline(ui, inner_w, 26.0, k.spark, theme::ACC);
+                sparkline(ui, inner_w, 26.0, k.spark, theme::acc());
                 ui.add_space(6.0);
             }
             if let Some(frac) = k.bar {
@@ -5139,7 +5169,7 @@ _(detenido por el operador)_");
                         egui::Label::new(
                             egui::RichText::new(line)
                                 .size(theme::FS_CAPTION)
-                                .color(theme::FAINT),
+                                .color(theme::faint()),
                         )
                         .truncate(),
                     );
@@ -5160,14 +5190,14 @@ _(detenido por el operador)_");
                     egui::RichText::new(format!("C{i}"))
                         .size(theme::FS_CAPTION)
                         .monospace()
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                 );
                 right(ui, 16.0, |ui| {
                     ui.label(
                         egui::RichText::new(format!("{pct:.0}%"))
                             .size(theme::FS_FOOTNOTE)
                             .monospace()
-                            .color(theme::TXT2),
+                            .color(theme::txt2()),
                     );
                 });
             });
@@ -5199,7 +5229,7 @@ _(detenido por el operador)_");
             ui.label(
                 egui::RichText::new("Configuración")
                     .size(theme::FS_TITLE)
-                    .color(theme::TXT),
+                    .color(theme::txt()),
             );
         });
         ui.add_space(10.0);
@@ -5211,7 +5241,7 @@ _(detenido por el operador)_");
 
                 // ── quién eres ───────────────────────────────────────────────
                 section(ui, "Operador", None);
-                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::BG2, |ui| {
+                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::bg2(), |ui| {
                     let mut n = user_name();
                     if ui
                         .add(
@@ -5229,24 +5259,24 @@ _(detenido por el operador)_");
                             "Con esto te saluda Lucy y salen tus iniciales en el hilo. Si se \n                             deja vacío usa el usuario de Windows, que es una cuenta y no un \n                             nombre.",
                         )
                         .size(theme::FS_CAPTION)
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                     );
                 });
 
                 // ── modelo ───────────────────────────────────────────────────
                 section(ui, "Modelo por defecto", None);
-                card_on(ui, egui::vec2(full, 66.0), 14.0, theme::BG2, |ui| {
+                card_on(ui, egui::vec2(full, 66.0), 14.0, theme::bg2(), |ui| {
                     row_align(ui, 20.0, egui::Align::Center, |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         ui.label(
                             egui::RichText::new(lucy_core::models::icon(&self.chat_model))
                                 .size(14.0)
-                                .color(theme::ACC),
+                                .color(theme::acc()),
                         );
                         ui.label(
                             egui::RichText::new(lucy_core::models::describe(&self.chat_model))
                                 .size(theme::FS_BODY)
-                                .color(theme::TXT),
+                                .color(theme::txt()),
                         );
                     });
                     ui.add_space(4.0);
@@ -5256,7 +5286,7 @@ _(detenido por el operador)_");
                              Terminal IA.",
                         )
                         .size(theme::FS_CAPTION)
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                     );
                 });
 
@@ -5267,7 +5297,7 @@ _(detenido por el operador)_");
                     ui,
                     egui::vec2(full, 28.0 + n as f32 * 24.0),
                     14.0,
-                    theme::BG2,
+                    theme::bg2(),
                     |ui| {
                         for g in lucy_core::models::GROUPS {
                             let local = g.provider == "ollama";
@@ -5277,7 +5307,7 @@ _(detenido por el operador)_");
                                 ui.label(
                                     egui::RichText::new("●")
                                         .size(8.0)
-                                        .color(if ok { theme::ACC } else { theme::FAINT }),
+                                        .color(if ok { theme::acc() } else { theme::faint() }),
                                 );
                                 cell(
                                     ui,
@@ -5286,12 +5316,12 @@ _(detenido por el operador)_");
                                     false,
                                     egui::RichText::new(g.label)
                                         .size(theme::FS_FOOTNOTE)
-                                        .color(theme::TXT2),
+                                        .color(theme::txt2()),
                                 );
                                 ui.label(
                                     egui::RichText::new(format!("{} modelos", g.options.len()))
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::FAINT),
+                                        .color(theme::faint()),
                                 );
                                 right(ui, 24.0, |ui| {
                                     ui.label(
@@ -5304,7 +5334,7 @@ _(detenido por el operador)_");
                                         })
                                         .size(theme::FS_CAPTION)
                                         .color(
-                                            if ok || local { theme::TXT3 } else { theme::AMBER },
+                                            if ok || local { theme::txt3() } else { theme::amber() },
                                         ),
                                     );
                                 });
@@ -5319,24 +5349,24 @@ _(detenido por el operador)_");
                          desde la app principal. Aquí no se muestran ni se editan.",
                     )
                     .size(theme::FS_CAPTION)
-                    .color(theme::FAINT),
+                    .color(theme::faint()),
                 );
 
                 // ── equipo ───────────────────────────────────────────────────
                 section(ui, "Este equipo", None);
                 let elev = match lucy_core::elevate::state() {
-                    lucy_core::elevate::Elevation::Already => ("Administrador", theme::ACC),
+                    lucy_core::elevate::Elevation::Already => ("Administrador", theme::acc()),
                     lucy_core::elevate::Elevation::CanPrompt => {
-                        ("Sin privilegios · UAC disponible", theme::TXT3)
+                        ("Sin privilegios · UAC disponible", theme::txt3())
                     }
                     lucy_core::elevate::Elevation::Unavailable => {
-                        ("Sin privilegios · UAC desactivado", theme::AMBER)
+                        ("Sin privilegios · UAC desactivado", theme::amber())
                     }
                 };
-                card_on(ui, egui::vec2(full, 96.0), 14.0, theme::BG2, |ui| {
+                card_on(ui, egui::vec2(full, 96.0), 14.0, theme::bg2(), |ui| {
                     for (k, v, c) in [
-                        ("Equipo", s.host.clone(), theme::TXT2),
-                        ("Sistema", s.os.clone(), theme::TXT2),
+                        ("Equipo", s.host.clone(), theme::txt2()),
+                        ("Sistema", s.os.clone(), theme::txt2()),
                         ("Privilegios", elev.0.to_string(), elev.1),
                     ] {
                         row_align(ui, 22.0, egui::Align::Center, |ui| {
@@ -5347,7 +5377,7 @@ _(detenido por el operador)_");
                                 false,
                                 egui::RichText::new(k)
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                             );
                             ui.label(egui::RichText::new(v).size(theme::FS_FOOTNOTE).color(c));
                         });
@@ -5356,7 +5386,34 @@ _(detenido por el operador)_");
 
                 // ── interfaz ─────────────────────────────────────────────────
                 section(ui, "Interfaz", None);
-                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::BG2, |ui| {
+                card_on(ui, egui::vec2(full, 62.0), 14.0, theme::bg2(), |ui| {
+                    row_align(ui, 26.0, egui::Align::Center, |ui| {
+                        ui.label(
+                            egui::RichText::new("Tema")
+                                .size(theme::FS_FOOTNOTE)
+                                .color(theme::txt2()),
+                        );
+                        ui.add_space(10.0);
+                        let actual = theme::mode();
+                        for m in theme::Mode::ALL {
+                            if ui.selectable_label(actual == m, m.label()).clicked() && actual != m
+                            {
+                                theme::switch(ui.ctx(), m);
+                            }
+                        }
+                    });
+                    ui.add_space(5.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "«Del sistema» sigue a Windows: mira si las aplicaciones \
+                             están en claro, no la barra de tareas — mucha gente las \
+                             tiene cruzadas.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                    );
+                });
+                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::bg2(), |ui| {
                     let mut on = motion();
                     if ui
                         .checkbox(&mut on, "Animaciones y escritura progresiva")
@@ -5371,7 +5428,7 @@ _(detenido por el operador)_");
                              LUCY_NO_MOTION=1 hace lo mismo desde el arranque.",
                         )
                         .size(theme::FS_CAPTION)
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                     );
                 });
 
@@ -5383,12 +5440,12 @@ _(detenido por el operador)_");
                 // por orden. Ponerlos juntos haría que encender el automático
                 // costara tres clics y un cambio de vista.
                 section(ui, "Ejecución automática", None);
-                card_on(ui, egui::vec2(full, 88.0), 14.0, theme::BG2, |ui| {
+                card_on(ui, egui::vec2(full, 88.0), 14.0, theme::bg2(), |ui| {
                     row_align(ui, 24.0, egui::Align::Center, |ui| {
                         ui.label(
                             egui::RichText::new("Tope de pasos seguidos")
                                 .size(theme::FS_FOOTNOTE)
-                                .color(theme::TXT2),
+                                .color(theme::txt2()),
                         );
                         ui.add_space(10.0);
                         ui.add(
@@ -5409,7 +5466,7 @@ _(detenido por el operador)_");
                              en este equipo.",
                         )
                         .size(theme::FS_CAPTION)
-                        .color(theme::FAINT),
+                        .color(theme::faint()),
                     );
                 });
 
@@ -5417,7 +5474,7 @@ _(detenido por el operador)_");
                 section(ui, "Rutas", None);
                 let db = db_path().map(|p| p.display().to_string()).unwrap_or_default();
                 let lg = log_path().map(|p| p.display().to_string()).unwrap_or_default();
-                card_on(ui, egui::vec2(full, 76.0), 14.0, theme::BG2, |ui| {
+                card_on(ui, egui::vec2(full, 76.0), 14.0, theme::bg2(), |ui| {
                     for (k, v) in [("Base de datos", db), ("Log", lg)] {
                         row_align(ui, 26.0, egui::Align::Center, |ui| {
                             cell(
@@ -5427,7 +5484,7 @@ _(detenido por el operador)_");
                                 false,
                                 egui::RichText::new(k)
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::FAINT),
+                                    .color(theme::faint()),
                             );
                             let mut copiar = false;
                             right(ui, 26.0, |ui| {
@@ -5440,7 +5497,7 @@ _(detenido por el operador)_");
                                     egui::RichText::new(&v)
                                         .size(theme::FS_CAPTION)
                                         .monospace()
-                                        .color(theme::TXT3),
+                                        .color(theme::txt3()),
                                 )
                                 .truncate(),
                             );
@@ -5459,21 +5516,21 @@ _(detenido por el operador)_");
         ui.add_space(48.0);
         ui.vertical_centered(|ui| {
             // El icono de la vista, atenuado: dice CUÁL falta sin gritarlo.
-            icons::show(ui, v.icon(), 34.0, theme::TXT3.linear_multiply(0.5));
+            icons::show(ui, v.icon(), 34.0, theme::txt3().linear_multiply(0.5));
             ui.add_space(10.0);
-            ui.label(egui::RichText::new(label).size(17.0).color(theme::TXT));
+            ui.label(egui::RichText::new(label).size(17.0).color(theme::txt()));
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("Todavía no migrada al shell nativo")
                     .size(11.5)
-                    .color(theme::TXT3),
+                    .color(theme::txt3()),
             );
             ui.add_space(18.0);
 
             if let Some(needs) = v.pending_needs() {
                 egui::Frame::none()
-                    .fill(theme::BG2)
-                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                    .fill(theme::bg2())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
                     .rounding(egui::Rounding::same(6.0))
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
@@ -5482,10 +5539,10 @@ _(detenido por el operador)_");
                             egui::RichText::new("QUÉ FALTA")
                                 .size(9.5)
                                 .strong()
-                                .color(theme::ACC),
+                                .color(theme::acc()),
                         );
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(needs).size(11.5).color(theme::TXT2));
+                        ui.label(egui::RichText::new(needs).size(11.5).color(theme::txt2()));
                     });
             }
         });
@@ -5555,7 +5612,7 @@ _(detenido por el operador)_");
                     ui.label(
                         egui::RichText::new("Sin equipos remotos dados de alta")
                             .size(theme::FS_CAPTION)
-                            .color(theme::FAINT),
+                            .color(theme::faint()),
                     );
                 }
             },
@@ -5602,18 +5659,18 @@ _(detenido por el operador)_");
         };
         ui.add_space(28.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("▤").size(34.0).color(theme::FAINT));
+            ui.label(egui::RichText::new("▤").size(34.0).color(theme::faint()));
             ui.add_space(10.0);
-            ui.label(egui::RichText::new(&name).size(theme::FS_TITLE).color(theme::TXT));
+            ui.label(egui::RichText::new(&name).size(theme::FS_TITLE).color(theme::txt()));
             ui.add_space(3.0);
             ui.label(
                 egui::RichText::new(format!("{dest} · {via}"))
                     .size(theme::FS_CAPTION)
                     .monospace()
-                    .color(theme::FAINT),
+                    .color(theme::faint()),
             );
             ui.add_space(20.0);
-            card_on(ui, egui::vec2(460.0, 132.0), 16.0, theme::BG2, |ui| {
+            card_on(ui, egui::vec2(460.0, 132.0), 16.0, theme::bg2(), |ui| {
                 panel_title(ui, "◉", "Qué falta");
                 ui.add_space(10.0);
                 for line in [
@@ -5627,7 +5684,7 @@ _(detenido por el operador)_");
                             egui::Label::new(
                                 egui::RichText::new(line)
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::TXT2),
+                                    .color(theme::txt2()),
                             )
                             .truncate(),
                         );
@@ -5702,16 +5759,16 @@ _(detenido por el operador)_");
             ui.label(
                 egui::RichText::new("Dashboard de sistema")
                     .size(theme::FS_TITLE)
-                    .color(theme::TXT),
+                    .color(theme::txt()),
             );
             self.host_picker(ui);
 
             let (sal_txt, sal_col, sal_bg) = if alerts.iter().any(|(v, _)| *v == Sev::Bad) {
-                ("Crítico", theme::RED, theme::RED_BG)
+                ("Crítico", theme::red(), theme::red_bg())
             } else if alerts.is_empty() {
-                ("Saludable", theme::ACC, theme::ACC_BG)
+                ("Saludable", theme::acc(), theme::acc_bg())
             } else {
-                ("Atención", theme::AMBER, theme::AMBER_BG)
+                ("Atención", theme::amber(), theme::amber_bg())
             };
             egui::Frame::none()
                 .fill(sal_bg)
@@ -5730,7 +5787,7 @@ _(detenido por el operador)_");
                 egui::RichText::new(format!("act. {}", self.sys_stamp))
                     .size(theme::FS_CAPTION)
                     .monospace()
-                    .color(theme::FAINT),
+                    .color(theme::faint()),
             );
 
             let mut pedir = false;
@@ -5740,22 +5797,22 @@ _(detenido por el operador)_");
                 // versión nativa del `.spin` del CSS, y solo es posible porque
                 // la sonda dejó de bloquear el hilo de interfaz.
                 if self.svc_rx.is_some() {
-                    ui.add(egui::Spinner::new().size(15.0).color(theme::ACC));
+                    ui.add(egui::Spinner::new().size(15.0).color(theme::acc()));
                 } else {
                     let (rr, rresp) =
                         ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
                     ui.painter().rect(
                         rr,
                         egui::Rounding::same(theme::R_MD),
-                        if rresp.hovered() { theme::BG3 } else { egui::Color32::TRANSPARENT },
-                        egui::Stroke::new(1.0_f32, theme::BDR),
+                        if rresp.hovered() { theme::bg3() } else { egui::Color32::TRANSPARENT },
+                        egui::Stroke::new(1.0_f32, theme::bdr()),
                     );
                     icons::draw(
                         ui.painter(),
                         icons::Icon::Refresh,
                         rr.center(),
                         16.0,
-                        if rresp.hovered() { theme::TXT } else { theme::TXT3 },
+                        if rresp.hovered() { theme::txt() } else { theme::txt3() },
                     );
                     pedir = rresp.on_hover_text("Actualizar ahora").clicked();
                 }
@@ -5784,7 +5841,7 @@ _(detenido por el operador)_");
                 if !alerts.is_empty() {
                     block(ui, ent[0], |ui| {
                         let h = 22.0 + 16.0 * (1 + alerts.len() / 3) as f32;
-                        card_on(ui, egui::vec2(full, h), 12.0, theme::BG2, |ui| {
+                        card_on(ui, egui::vec2(full, h), 12.0, theme::bg2(), |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
                                 ui.label(
@@ -5794,13 +5851,13 @@ _(detenido por el operador)_");
                                         if alerts.len() > 1 { "s" } else { "" }
                                     ))
                                     .size(theme::FS_FOOTNOTE)
-                                    .color(theme::AMBER)
+                                    .color(theme::amber())
                                     .strong(),
                                 );
                                 for (sev, txt) in &alerts {
                                     let (c, bg) = match sev {
-                                        Sev::Bad => (theme::RED, theme::RED_BG),
-                                        Sev::Warn => (theme::AMBER, theme::AMBER_BG),
+                                        Sev::Bad => (theme::red(), theme::red_bg()),
+                                        Sev::Warn => (theme::amber(), theme::amber_bg()),
                                     };
                                     egui::Frame::none()
                                         .fill(bg)
@@ -5911,8 +5968,8 @@ _(detenido por el operador)_");
                             row_align(ui, 22.0, egui::Align::Max, |ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
                                 for (glyph, rate, col) in [
-                                    ("↓", net.rx_bps, theme::ACC),
-                                    ("↑", net.tx_bps, theme::BLUE),
+                                    ("↓", net.rx_bps, theme::acc()),
+                                    ("↑", net.tx_bps, theme::blue()),
                                 ] {
                                     ui.label(
                                         egui::RichText::new(glyph)
@@ -5939,7 +5996,7 @@ _(detenido por el operador)_");
                                         "✓ Todos los servicios automáticos en ejecución",
                                     )
                                     .size(theme::FS_CAPTION)
-                                    .color(theme::ACC),
+                                    .color(theme::acc()),
                                 );
                                 return;
                             }
@@ -5963,7 +6020,7 @@ _(detenido por el operador)_");
                                 ui.label(
                                     egui::RichText::new(format!("+{} más", hidden + 1))
                                         .size(theme::FS_CAPTION)
-                                        .color(theme::FAINT),
+                                        .color(theme::faint()),
                                 );
                             }
                         });
@@ -6028,19 +6085,19 @@ _(detenido por el operador)_");
                     let w_pid = 60.0;
                     let w_name = (full - 28.0 - w_cpu - w_ram - w_pid - GAP * 3.0).max(140.0);
                     let table_h = 28.0 + 20.0 + 8.0 + procs.len() as f32 * PROC_ROW;
-                    card_on(ui, egui::vec2(full, table_h), 14.0, theme::BG2, |ui| {
+                    card_on(ui, egui::vec2(full, table_h), 14.0, theme::bg2(), |ui| {
                         row_align(ui, 20.0, egui::Align::Center, |ui| {
                             ui.add(egui::Label::new(theme::instrument_label(
                                 "Top procesos",
-                                theme::FAINT,
+                                theme::faint(),
                             )));
                             // El selector va en la cabecera de la tabla, que es
                             // donde el operador ya está mirando cuando decide
                             // por qué columna ordenar.
                             right(ui, 22.0, |ui| {
                                 egui::Frame::none()
-                                    .fill(theme::BG3)
-                                    .stroke(egui::Stroke::new(1.0_f32, theme::BDR))
+                                    .fill(theme::bg3())
+                                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
                                     .rounding(egui::Rounding::same(theme::R_SM))
                                     .inner_margin(egui::Margin::same(2.0))
                                     .show(ui, |ui| {
@@ -6062,7 +6119,7 @@ _(detenido por el operador)_");
                         let head = |t: &str| {
                             egui::RichText::new(t.to_string())
                                 .size(theme::FS_CAPTION)
-                                .color(theme::FAINT)
+                                .color(theme::faint())
                         };
                         row(ui, 18.0, |ui| {
                             cell(ui, w_name, 18.0, false, head("PROCESO"));
@@ -6080,7 +6137,7 @@ _(detenido por el operador)_");
                                     ui.painter().hline(
                                         r.left()..=r.right(),
                                         r.top(),
-                                        egui::Stroke::new(1.0_f32, theme::BDR),
+                                        egui::Stroke::new(1.0_f32, theme::bdr()),
                                     );
                                 }
                                 cell(
@@ -6091,7 +6148,7 @@ _(detenido por el operador)_");
                                     egui::RichText::new(&p.name)
                                         .size(theme::FS_FOOTNOTE)
                                         .monospace()
-                                        .color(theme::TXT2),
+                                        .color(theme::txt2()),
                                 );
                                 // La columna por la que se ordena va en acento:
                                 // dice cuál manda sin repetirlo en un rótulo.
@@ -6103,7 +6160,7 @@ _(detenido por el operador)_");
                                     egui::RichText::new(format!("{:.0}%", p.cpu_pct))
                                         .size(theme::FS_FOOTNOTE)
                                         .monospace()
-                                        .color(if by_cpu { theme::ACC } else { theme::TXT3 }),
+                                        .color(if by_cpu { theme::acc() } else { theme::txt3() }),
                                 );
                                 cell(
                                     ui,
@@ -6113,7 +6170,7 @@ _(detenido por el operador)_");
                                     egui::RichText::new(fmt_gb(p.mem_bytes))
                                         .size(theme::FS_FOOTNOTE)
                                         .monospace()
-                                        .color(if by_cpu { theme::TXT3 } else { theme::ACC }),
+                                        .color(if by_cpu { theme::txt3() } else { theme::acc() }),
                                 );
                                 cell(
                                     ui,
@@ -6123,7 +6180,7 @@ _(detenido por el operador)_");
                                     egui::RichText::new(p.pid.to_string())
                                         .size(theme::FS_CAPTION)
                                         .monospace()
-                                        .color(theme::FAINT),
+                                        .color(theme::faint()),
                                 );
                             });
                         }
@@ -6183,7 +6240,7 @@ _(detenido por el operador)_");
 
         match &self.mems {
             Err(e) => {
-                ui.colored_label(theme::RED, format!("⚠ {e}"));
+                ui.colored_label(theme::red(), format!("⚠ {e}"));
                 ui.label(
                     egui::RichText::new(
                         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
@@ -6213,14 +6270,14 @@ _(detenido por el operador)_");
                     match res {
                         Err(e) => {
                             ui.add_space(4.0);
-                            ui.colored_label(theme::AMBER, format!("⚠ {e}"));
+                            ui.colored_label(theme::amber(), format!("⚠ {e}"));
                             ui.label(
                                 egui::RichText::new(
                                     "La búsqueda semántica necesita Ollama con un modelo de \
                                      embeddings (ollama pull nomic-embed-text).",
                                 )
                                 .small()
-                                .color(theme::TXT3),
+                                .color(theme::txt3()),
                             );
                         }
                         Ok((hits, notes)) => {
@@ -6228,7 +6285,7 @@ _(detenido por el operador)_");
                             ui.label(
                                 egui::RichText::new(format!("{} por similitud", hits.len()))
                                     .small()
-                                    .color(theme::ACC),
+                                    .color(theme::acc()),
                             );
                             // Las filas descartadas se DICEN. Enseñar menos
                             // resultados sin explicar por qué es el fallo que
@@ -6237,7 +6294,7 @@ _(detenido por el operador)_");
                                 ui.label(
                                     egui::RichText::new(format!("⚠ {n}"))
                                         .small()
-                                        .color(theme::AMBER),
+                                        .color(theme::amber()),
                                 );
                             }
                             for h in hits {
@@ -6257,7 +6314,7 @@ _(detenido por el operador)_");
                                             egui::RichText::new(
                                                 h.text.chars().take(140).collect::<String>(),
                                             )
-                                            .color(theme::TXT2),
+                                            .color(theme::txt2()),
                                         );
                                     });
                                 });
@@ -6331,7 +6388,7 @@ _(detenido por el operador)_");
                                     ui.label(
                                         egui::RichText::new(tags.replace('"', ""))
                                             .small()
-                                            .color(theme::BLUE),
+                                            .color(theme::blue()),
                                     );
                                 }
                                 ui.label(egui::RichText::new(format!("#{}", m.id)).small().weak());

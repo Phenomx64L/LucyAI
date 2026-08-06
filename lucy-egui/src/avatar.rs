@@ -64,6 +64,6 @@ pub fn show(ui: &mut egui::Ui, tex: &TextureHandle, size: f32) {
     ui.painter().circle_stroke(
         rect.center(),
         size / 2.0 - 1.5,
-        egui::Stroke::new(1.5_f32, crate::theme::ACC.linear_multiply(0.55)),
+        egui::Stroke::new(1.5_f32, crate::theme::acc().linear_multiply(0.55)),
     );
 }
