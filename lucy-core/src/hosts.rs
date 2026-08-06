@@ -427,13 +427,25 @@ pub fn run_remote(
 /// una ejecución de más.
 pub fn winrm_wrapper(h: &Host, script: &str) -> String {
     format!(
-        "$pass_plain = [Console]::In.ReadLine(); \
-         $pass = ConvertTo-SecureString $pass_plain -AsPlainText -Force; \
-         $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
-         Invoke-Command -ComputerName '{}' -Port {} -Credential $cred -ScriptBlock {{ \
-           $s = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{}')); \
-           Invoke-Expression $s \
-         }} -ErrorAction Stop",
+        // El try/catch NO es cortesía. Sin él, PowerShell formatea el error para
+        // una consola: lo parte al ancho del búfer y le añade `+ CategoryInfo` y
+        // `+ FullyQualifiedErrorId`. Lo que llega es un mensaje troceado del que
+        // hay que reconstruir la frase. Con él llega `$_.Exception.Message`, que
+        // es el texto tal cual lo escribió WinRM, entero y en una pieza — que es
+        // justo lo que el operador necesita leer para saber qué arreglar.
+        "$ErrorActionPreference = 'Stop'; \
+         $pass_plain = [Console]::In.ReadLine(); \
+         try {{ \
+           $pass = ConvertTo-SecureString $pass_plain -AsPlainText -Force; \
+           $cred = New-Object System.Management.Automation.PSCredential('{}', $pass); \
+           Invoke-Command -ComputerName '{}' -Port {} -Credential $cred -ScriptBlock {{ \
+             $s = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{}')); \
+             Invoke-Expression $s \
+           }} \
+         }} catch {{ \
+           [Console]::Error.WriteLine($_.Exception.Message); \
+           exit 1 \
+         }}",
         h.username.replace('\'', "''"),
         h.host.replace('\'', "''"),
         h.port,
@@ -597,6 +609,42 @@ fn wrapper_for(h: &Host, password: &str, script: &str) -> Result<String, String>
     }
 }
 
+/// El motivo de un fallo, reconstruido de lo que escribió PowerShell.
+///
+/// SE JUNTAN TODAS LAS LÍNEAS, y esto es lo que estaba mal. Antes se cogía la
+/// primera —«la que dice qué pasó, el resto es rastro de pila»— y esa premisa es
+/// falsa: PowerShell PARTE los mensajes largos al ancho de la consola. El de
+/// WinRM ocupa cuatro o cinco renglones, así que el operador leía
+/// «El cliente WinRM no puede» y ahí se acababa la explicación, justo antes de
+/// la parte que dice qué hacer.
+///
+/// El rastro de pila sí se descarta, pero por lo que es —las líneas de
+/// `+ CategoryInfo`, `+ FullyQualifiedErrorId` y las que empiezan por `at `— y
+/// no por venir después.
+pub fn motivo_de(err: &str, contesto: bool) -> String {
+    let cuerpo: Vec<&str> = err
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take_while(|l| {
+            !l.starts_with('+')
+                && !l.starts_with("at ")
+                && !l.starts_with("En línea")
+                && !l.starts_with("At line")
+        })
+        .collect();
+    if cuerpo.is_empty() {
+        return if contesto {
+            "el equipo contestó algo que no reconozco".into()
+        } else {
+            "sin respuesta del equipo".into()
+        };
+    }
+    // Unidas por un espacio: eran un párrafo antes de que la consola las
+    // partiera, y volver a juntarlas es lo que deja leerlo como una frase.
+    truncar(&cuerpo.join(" "), 600)
+}
+
 /// Recorta un texto por caracteres, con puntos suspensivos.
 ///
 /// Lo que llega de un equipo remoto no tiene tope: un rastro de pila de WinRM
@@ -643,14 +691,7 @@ pub fn probe(h: &Host, password: &str) -> Result<Probe, String> {
         let os = l.split('|').nth(1).unwrap_or("").trim().to_string();
         return Ok(Probe { os: truncar(&os, 80), ms });
     }
-    // La PRIMERA línea del error. WinRM devuelve media pantalla de rastro de
-    // pila y lo que dice qué pasó está arriba del todo.
-    let motivo = err
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or(if ok { "el equipo contestó algo que no reconozco" } else { "sin respuesta del equipo" });
-    Err(truncar(motivo, 200))
+    Err(motivo_de(&err, ok))
 }
 
 /// QuÃ© sistema corre en el equipo remoto. Una vista de `probe`.
@@ -818,6 +859,50 @@ mod tests {
         h.host = "srv".into();
         h.port = 5986;
         assert!(winrm_wrapper(&h, "x").contains("-Port 5986"));
+    }
+
+    #[test]
+    fn un_error_partido_por_la_consola_se_vuelve_a_juntar() {
+        // EL FALLO QUE ESTO ARREGLA. Se cogía la primera línea, «la que dice qué
+        // pasó», y esa premisa es falsa: PowerShell parte los mensajes largos al
+        // ancho del búfer. El operador leía «El cliente WinRM no puede» y ahí se
+        // acababa — justo antes de la parte que dice qué hacer.
+        let real = "[192.168.1.100] Error de conexión al servidor remoto 192.168.1.100. \
+                    Mensaje de error: El cliente WinRM no puede\nprocesar la solicitud. No se \
+                    puede usar la autenticación Kerberos.\n";
+        let m = motivo_de(real, false);
+        assert!(m.contains("El cliente WinRM no puede procesar"), "{m}");
+        assert!(m.contains("Kerberos"), "se perdió el final: {m}");
+    }
+
+    #[test]
+    fn el_rastro_de_pila_no_entra() {
+        // Se descarta por lo que ES —las líneas de `+ CategoryInfo` y compañía—
+        // y no por venir después, que era la regla equivocada.
+        let e = "No se puede conectar al host.\n    + CategoryInfo : OpenError\n    \
+                 + FullyQualifiedErrorId : CannotConnect";
+        let m = motivo_de(e, false);
+        assert_eq!(m, "No se puede conectar al host.");
+    }
+
+    #[test]
+    fn sin_nada_que_decir_se_distingue_no_contesto_de_contesto_raro() {
+        // Son dos problemas distintos y llevan a mirar sitios distintos: la red
+        // por un lado, el propio comando por el otro.
+        assert!(motivo_de("", false).contains("sin respuesta"));
+        assert!(motivo_de("   \n  ", true).contains("no reconozco"));
+    }
+
+    #[test]
+    fn el_envoltorio_devuelve_el_mensaje_limpio_y_no_el_formateado() {
+        // Sin el try/catch, PowerShell formatea el error para una consola: lo
+        // parte y le añade sus dos líneas de categoría. Con él llega
+        // `$_.Exception.Message`, entero y en una pieza.
+        let mut h = Host::nuevo(Protocol::Winrm, 1);
+        h.host = "srv".into();
+        let w = winrm_wrapper(&h, "x");
+        assert!(w.contains("$_.Exception.Message"), "{w}");
+        assert!(w.contains("[Console]::Error.WriteLine"), "no lo manda por la salida de error");
     }
 
     #[test]
