@@ -1909,6 +1909,16 @@ struct App {
     pty: Option<Pty>,
     vt: vt100::Parser,
     term_input: String,
+    /// Lo que el operador ha escrito en NexShell, en orden. Para las flechas.
+    nx_history: Vec<String>,
+    /// Por donde va el recorrido del historial. `None` = escribiendo una linea
+    /// nueva, que es un estado distinto de "en la mas reciente".
+    nx_hist_idx: Option<usize>,
+    /// Un comando destructivo esperando confirmacion.
+    nx_confirm: Option<String>,
+    /// Traduccion en vuelo.
+    nx_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    nx_busy: bool,
     // memoria
     mems: Result<Vec<AgentMemory>, String>,
     mem_search: String,
@@ -2114,6 +2124,11 @@ impl App {
             pty: Pty::spawn(140, 44).ok(),
             vt: vt100::Parser::new(44, 140, 4000),
             term_input: String::new(),
+            nx_history: Vec::new(),
+            nx_hist_idx: None,
+            nx_confirm: None,
+            nx_rx: None,
+            nx_busy: false,
             mems: load_memories(),
             mem_search: String::new(),
             sem_result: None,
@@ -2687,7 +2702,7 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| match self.view {
             View::TerminalIa => self.terminal_ia(ui),
-            View::NexShell => self.terminal(ui),
+            View::NexShell => self.nexshell(ui),
             View::Memoria => self.memoria(ui),
             View::Dashboard => self.sistema(ui),
             View::LogViewer => self.log_viewer(ui),
@@ -6691,32 +6706,346 @@ _(detenido por el operador)_");
             });
     }
 
-    fn terminal(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("TERMINAL (PowerShell · portable-pty)").strong());
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut self.term_input)
-                .hint_text("comando + Enter…")
-                .desired_width(f32::INFINITY)
-                .font(egui::TextStyle::Monospace),
-        );
-        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            if let Some(pty) = &mut self.pty {
-                let line = std::mem::take(&mut self.term_input);
-                pty.send(&format!("{line}\r"));
-            }
-            resp.request_focus();
-        }
-        ui.separator();
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                // La pantalla VT ya viene limpia (sin secuencias de escape).
-                let contents = self.vt.screen().contents();
-                ui.add(
-                    egui::Label::new(egui::RichText::new(contents).monospace().size(12.0)).wrap(),
+    /// NexShell: una terminal que además entiende lo que le pides en español.
+    ///
+    /// Lo que la distingue de una consola es que en el MISMO campo caben un
+    /// comando y una frase, y ella decide. `Get-Service` se ejecuta;
+    /// «¿qué servicios están caídos?» se traduce, se comprueba, y entonces se
+    /// ejecuta. Sin dos campos ni un botón de modo que haya que recordar.
+    ///
+    /// Sobre un PTY de verdad, que es más de lo que tiene la V2: allí cada
+    /// comando es una llamada que va y vuelve, aquí hay una sesión viva. Por eso
+    /// una respuesta interactiva —una `y` a una pregunta del programa— sale
+    /// gratis, y allí hacía falta un camino aparte.
+    fn nexshell(&mut self, ui: &mut egui::Ui) {
+        // ── barra ────────────────────────────────────────────────────────────
+        row_align(ui, 28.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 7.0;
+            icons::show(ui, icons::Icon::Terminal, 15.0, theme::acc());
+            ui.label(
+                egui::RichText::new(&self.sys.snapshot().host)
+                    .size(theme::FS_FOOTNOTE)
+                    .color(theme::txt()),
+            );
+            ui.label(theme::instrument_label("PowerShell", theme::faint()));
+            if self.nx_busy {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("traduciendo…")
+                        .size(theme::FS_CAPTION)
+                        .color(theme::acc()),
                 );
+                ui.ctx().request_repaint();
+            }
+            right(ui, 24.0, |ui| {
+                if ui
+                    .add(egui::Button::new("⌫").small())
+                    .on_hover_text("Limpiar la pantalla")
+                    .clicked()
+                {
+                    // El emulador se rehace: limpiar es empezar de cero, y
+                    // reutilizarlo dejaría el cursor donde estaba.
+                    self.vt = vt100::Parser::new(44, 140, 4000);
+                }
+                if ui
+                    .add(egui::Button::new("⧉").small())
+                    .on_hover_text("Copiar toda la salida")
+                    .clicked()
+                {
+                    ui.output_mut(|o| o.copied_text = self.vt.screen().contents());
+                }
             });
+        });
+        ui.add_space(6.0);
+
+        // ── el compositor, reservado abajo ───────────────────────────────────
+        //
+        // Igual que en Terminal IA: con el orden natural, una sesión larga lo
+        // empujaría fuera de la ventana justo cuando hace falta escribir.
+        let mut enviar = false;
+        egui::TopBottomPanel::bottom("nx-input")
+            .frame(egui::Frame::none().inner_margin(egui::Margin {
+                top: 8.0,
+                bottom: 4.0,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show_inside(ui, |ui| {
+                // La confirmación va PEGADA al campo, no en un diálogo aparte.
+                // Un modal tapa el comando que se está juzgando, que es
+                // justamente lo que hay que leer para decidir.
+                if let Some(cmd) = self.nx_confirm.clone() {
+                    egui::Frame::none()
+                        .fill(theme::amber_bg())
+                        .stroke(egui::Stroke::new(1.0_f32, theme::amber()))
+                        .rounding(egui::Rounding::same(theme::R_SM))
+                        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(lucy_core::destructive::reason())
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::amber()),
+                            );
+                            ui.add_space(3.0);
+                            ui.label(
+                                egui::RichText::new(&cmd)
+                                    .size(theme::FS_FOOTNOTE)
+                                    .monospace()
+                                    .color(theme::txt()),
+                            );
+                            ui.add_space(6.0);
+                            row(ui, 24.0, |ui| {
+                                if ui.button("Ejecutar").clicked() {
+                                    self.nx_run(&cmd);
+                                    self.nx_confirm = None;
+                                }
+                                if ui.button("Cancelar").clicked() {
+                                    self.nx_confirm = None;
+                                }
+                            });
+                        });
+                    ui.add_space(6.0);
+                }
+                egui::Frame::none()
+                    .fill(theme::bg3())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        row_align(ui, 26.0, egui::Align::Center, |ui| {
+                            ui.spacing_mut().item_spacing.x = 9.0;
+                            icons::show(ui, icons::Icon::Terminal, 15.0, theme::txt3());
+                            let id = ui.make_persistent_id("nx-input-field");
+                            // ── Historial ────────────────────────────────────
+                            //
+                            // Las flechas se consumen ANTES de dibujar el campo,
+                            // o el propio `TextEdit` las usa para mover el cursor
+                            // y el historial no llega a verlas.
+                            if ui.memory(|m| m.has_focus(id)) {
+                                let (arriba, abajo) = ui.input_mut(|i| {
+                                    (
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                                    )
+                                });
+                                if arriba || abajo {
+                                    self.nx_recall(if arriba { -1 } else { 1 });
+                                }
+                            }
+                            let te = ui.add(
+                                egui::TextEdit::singleline(&mut self.term_input)
+                                    .id(id)
+                                    .hint_text(
+                                        "Un comando, o pídemelo en español…   ·   ↑↓ historial",
+                                    )
+                                    .desired_width(ui.available_width() - 34.0)
+                                    .frame(false)
+                                    .font(egui::FontId::monospace(theme::FS_FOOTNOTE)),
+                            );
+                            if te.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                enviar = true;
+                                te.request_focus();
+                            }
+                            right(ui, 26.0, |ui| {
+                                if ui.add(egui::Button::new("▸").small()).clicked() {
+                                    enviar = true;
+                                }
+                            });
+                        });
+                    });
+            });
+
+        // ── la pantalla ──────────────────────────────────────────────────────
+        egui::Frame::none()
+            .fill(theme::bg())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+            .rounding(egui::Rounding::same(theme::R_MD))
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        // La pantalla VT ya viene limpia, sin secuencias de
+                        // escape: las interpretó el emulador.
+                        let contents = self.vt.screen().contents();
+                        if contents.trim().is_empty() && self.nx_history.is_empty() {
+                            ui.add_space(30.0);
+                            ui.vertical_centered(|ui| {
+                                icons::show(ui, icons::Icon::Terminal, 26.0, theme::faint());
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new("Listo para operar")
+                                        .size(theme::FS_HEADING)
+                                        .color(theme::txt2()),
+                                );
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Escribe un comando, o dime qué quieres saber y lo \
+                                         traduzco.",
+                                    )
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::faint()),
+                                );
+                            });
+                        } else {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(contents)
+                                        .monospace()
+                                        .size(theme::FS_FOOTNOTE)
+                                        .color(theme::txt2()),
+                                )
+                                .wrap(),
+                            );
+                        }
+                    });
+            });
+
+        if enviar {
+            self.nx_submit();
+        }
+        self.pump_nx();
+    }
+
+    /// Decide qué hacer con lo escrito: ejecutarlo o mandarlo a traducir.
+    fn nx_submit(&mut self) {
+        let texto = std::mem::take(&mut self.term_input).trim().to_string();
+        if texto.is_empty() || self.nx_busy {
+            return;
+        }
+        // Al historial va lo que ESCRIBIÓ el operador, no lo que se ejecutó. Si
+        // guardara el comando traducido, la flecha arriba devolvería algo que él
+        // nunca tecleó y no reconocería.
+        self.nx_history.push(texto.clone());
+        self.nx_hist_idx = None;
+
+        if lucy_core::nexshell::looks_like_command(&texto) {
+            self.nx_maybe_run(texto);
+            return;
+        }
+        // Es una frase: se traduce. En otro hilo, que es una petición de red.
+        let so = self.sys.snapshot().os;
+        let prompt = lucy_core::nexshell::translate_prompt(&texto, "PowerShell", &so);
+        let modelo = self.chat_model.clone();
+        let privado = self.privacy;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.nx_busy = true;
+        self.nx_rx = Some(rx);
+        std::thread::spawn(move || {
+            let r = match lucy_core::cloud::allowed(&modelo, privado) {
+                Ok(()) => {
+                    // Se acumula el flujo entero: aquí no hay nada que enseñar
+                    // token a token, es una línea de comando.
+                    let mut out = String::new();
+                    let mut err = None;
+                    for ev in lucy_core::cloud::start(
+                        modelo,
+                        vec![lucy_core::turns::Turn::user(prompt)],
+                    ) {
+                        match ev {
+                            lucy_core::chat::ChatEvent::Token(t) => out.push_str(&t),
+                            lucy_core::chat::ChatEvent::Error(e) => err = Some(e),
+                            _ => {}
+                        }
+                    }
+                    match err {
+                        Some(e) => Err(e),
+                        None => Ok(lucy_core::nexshell::clean_command(&out)),
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(r);
+        });
+    }
+
+    /// Recoge la traducción cuando llega.
+    fn pump_nx(&mut self) {
+        let Some(rx) = &self.nx_rx else { return };
+        match rx.try_recv() {
+            Ok(Ok(cmd)) => {
+                self.nx_rx = None;
+                self.nx_busy = false;
+                if cmd.is_empty() || cmd.contains(lucy_core::nexshell::NO_COMMAND) {
+                    self.nx_say("No supe convertir eso en un comando.");
+                    return;
+                }
+                self.nx_maybe_run(cmd);
+            }
+            // Se dice en la propia pantalla y no en un diálogo: el operador está
+            // mirando ahí, y un error de traducción es parte de la sesión.
+            Ok(Err(e)) => {
+                self.nx_rx = None;
+                self.nx_busy = false;
+                self.nx_say(&format!("No se pudo traducir: {e}"));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.nx_rx = None;
+                self.nx_busy = false;
+            }
+        }
+    }
+
+    /// Corre el comando, o pide confirmación si no se deshace.
+    ///
+    /// La comprobación es la MISMA que usa el bucle automático. Que un comando
+    /// escrito a mano y uno propuesto por Lucy pasen por el mismo filtro es lo
+    /// que hace que la respuesta sea previsible: si `format D:` pregunta en un
+    /// sitio, pregunta en los dos.
+    fn nx_maybe_run(&mut self, cmd: String) {
+        if lucy_core::destructive::is_destructive(&cmd) {
+            self.nx_confirm = Some(cmd);
+        } else {
+            self.nx_run(&cmd);
+        }
+    }
+
+    fn nx_run(&mut self, cmd: &str) {
+        if let Some(pty) = &mut self.pty {
+            pty.send(&format!("{cmd}\r"));
+        }
+    }
+
+    /// Escribe una línea de Lucy en la pantalla del terminal.
+    ///
+    /// Por el PTY con `Write-Host` y no pintándola aparte: así queda EN la
+    /// sesión, en su sitio y en su orden, y el «copiar salida» se la lleva
+    /// también. Una línea flotante fuera del emulador se saldría del orden en
+    /// cuanto el comando anterior siguiera escribiendo.
+    fn nx_say(&mut self, texto: &str) {
+        // Las comillas simples del propio texto se doblan: es la única forma de
+        // escaparlas dentro de un literal de PowerShell, y sin ello un mensaje
+        // con un apóstrofo rompe la línea.
+        let seguro = texto.replace('\'', "''");
+        self.nx_run(&format!("Write-Host '{seguro}' -ForegroundColor DarkYellow"));
+    }
+
+    /// Recorre el historial. `-1` hacia atrás, `1` hacia delante.
+    fn nx_recall(&mut self, dir: i32) {
+        if self.nx_history.is_empty() {
+            return;
+        }
+        let n = self.nx_history.len();
+        self.nx_hist_idx = match (self.nx_hist_idx, dir) {
+            // Desde una línea nueva, arriba lleva a lo último escrito.
+            (None, -1) => Some(n - 1),
+            (None, _) => None,
+            (Some(0), -1) => Some(0),
+            (Some(i), -1) => Some(i - 1),
+            // Y bajar desde lo último devuelve la línea EN BLANCO, no se queda
+            // clavado en el último comando: es lo que hace cualquier shell y lo
+            // que uno espera para escribir algo nuevo.
+            (Some(i), _) if i + 1 >= n => None,
+            (Some(i), _) => Some(i + 1),
+        };
+        self.term_input = match self.nx_hist_idx {
+            Some(i) => self.nx_history[i].clone(),
+            None => String::new(),
+        };
     }
 
     fn memoria(&mut self, ui: &mut egui::Ui) {
@@ -7231,6 +7560,64 @@ mod teclado {
         let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
         assert_eq!(atajo.logical_key, Key::Enter);
         assert!(atajo.modifiers.shift);
+    }
+}
+
+#[cfg(test)]
+mod historial {
+    /// El mismo recorrido que hace `nx_recall`, suelto para poder probarlo.
+    fn mover(idx: Option<usize>, n: usize, dir: i32) -> Option<usize> {
+        if n == 0 {
+            return None;
+        }
+        match (idx, dir) {
+            (None, -1) => Some(n - 1),
+            (None, _) => None,
+            (Some(0), -1) => Some(0),
+            (Some(i), -1) => Some(i - 1),
+            (Some(i), _) if i + 1 >= n => None,
+            (Some(i), _) => Some(i + 1),
+        }
+    }
+
+    #[test]
+    fn arriba_desde_una_linea_nueva_trae_lo_ultimo() {
+        assert_eq!(mover(None, 3, -1), Some(2));
+    }
+
+    #[test]
+    fn bajar_desde_lo_ultimo_deja_la_linea_en_blanco() {
+        // Lo que hace cualquier shell, y lo que uno espera para escribir algo
+        // nuevo. Quedarse clavado en el último comando obliga a borrarlo a mano.
+        assert_eq!(mover(Some(2), 3, 1), None);
+    }
+
+    #[test]
+    fn arriba_del_todo_se_queda_arriba() {
+        // `Some(0)` menos uno sería una resta con acarreo en `usize`: pánico, no
+        // tope. Es el fallo clásico de esta función.
+        assert_eq!(mover(Some(0), 3, -1), Some(0));
+    }
+
+    #[test]
+    fn sin_historial_no_pasa_nada() {
+        assert_eq!(mover(None, 0, -1), None);
+        assert_eq!(mover(Some(0), 0, 1), None);
+    }
+
+    #[test]
+    fn el_recorrido_completo_va_y_vuelve() {
+        // Tres arriba y tres abajo tienen que dejarlo donde empezó.
+        let n = 3;
+        let mut i = None;
+        for _ in 0..3 {
+            i = mover(i, n, -1);
+        }
+        assert_eq!(i, Some(0));
+        for _ in 0..3 {
+            i = mover(i, n, 1);
+        }
+        assert_eq!(i, None, "no volvió a la línea en blanco");
     }
 }
 
