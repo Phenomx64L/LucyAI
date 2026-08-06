@@ -3511,6 +3511,7 @@ _(detenido por el operador)_");
         // El directorio desde el que se lanzó Lucy, para que un fichero nombrado
         // sin ruta se resuelva contra algo en vez de contra nada.
         let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+        let nombre = user_name();
         lucy_core::prompt::build(&lucy_core::prompt::Ctx {
             machine: Some(&snap),
             services: &self.services,
@@ -3518,6 +3519,10 @@ _(detenido por el operador)_");
             hosts: &hosts,
             memories: &mems,
             working_dir: &cwd,
+            // El nombre que el operador puso en Configuración, o su cuenta de
+            // Windows si no lo ha puesto. Que Lucy sepa a quién le habla no es
+            // cortesía: cambia a quién atribuye lo que se hizo en esta máquina.
+            user_name: &nombre,
             // El nivel del modelo se decide por su id: uno flojo se ahoga con el
             // prompt entero y contesta en prosa sin emitir ninguna etiqueta.
             weak_model: lucy_core::prompt::model_is_weak(&self.chat_model),
