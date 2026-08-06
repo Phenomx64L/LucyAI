@@ -53,6 +53,148 @@ impl ToolResult {
     }
 }
 
+/// Prepara un `writefile:RUTA|||CONTENIDO` sin tocar el disco.
+///
+/// Devuelve el artefacto con el antes y el después, para que el operador vea
+/// exactamente qué cambia antes de decidir. NO escribe: eso es `apply`.
+pub fn prepare_write(args: &str) -> crate::agent::Artifact {
+    let (path, content) = match args.split_once("|||") {
+        Some((p, c)) => (p.trim().to_string(), c.to_string()),
+        None => {
+            return bloqueado(
+                crate::agent::ArtifactKind::Write,
+                args.trim(),
+                "Falta el separador `|||`. El formato es writefile:RUTA|||CONTENIDO.",
+            )
+        }
+    };
+    if path.is_empty() {
+        return bloqueado(crate::agent::ArtifactKind::Write, "", "No se dijo qué fichero.");
+    }
+    // Se lee lo que hay para poder enseñar el diff. Que no exista no es un
+    // error —crear un fichero nuevo es escribir— y entonces el "antes" es vacío.
+    let before = std::fs::read_to_string(&path).unwrap_or_default();
+    let nuevo = before.is_empty() && !std::path::Path::new(&path).exists();
+    crate::agent::Artifact {
+        id: String::new(),
+        kind: crate::agent::ArtifactKind::Write,
+        summary: if nuevo {
+            format!("crear · {} líneas", content.lines().count())
+        } else {
+            format!("sobrescribir · {} → {} líneas", before.lines().count(), content.lines().count())
+        },
+        path,
+        before,
+        after: content,
+        ts: 0,
+        applied: false,
+        blocked: String::new(),
+    }
+}
+
+/// Prepara un `editfile:RUTA|||VIEJO|||NUEVO` sin tocar el disco.
+///
+/// AQUÍ VIVE EL FALLO QUE HUNDE A TODAS LAS HERRAMIENTAS DE EDICIÓN: qué hacer
+/// cuando el texto viejo aparece MÁS DE UNA VEZ. Sustituir la primera es lo
+/// cómodo y es lo que produce el bug que nadie encuentra — se cambia una línea
+/// que se parecía, en otro sitio del fichero, y el diff que el operador aprobó
+/// no es el que se aplicó. Aquí es un error: que Lucy dé más contexto.
+pub fn prepare_edit(args: &str) -> crate::agent::Artifact {
+    let kind = crate::agent::ArtifactKind::Edit;
+    let mut partes = args.splitn(3, "|||");
+    let (Some(path), Some(viejo), Some(nuevo)) = (partes.next(), partes.next(), partes.next())
+    else {
+        return bloqueado(
+            kind,
+            args.trim(),
+            "Faltan partes. El formato es editfile:RUTA|||TEXTO_VIEJO|||TEXTO_NUEVO.",
+        );
+    };
+    let path = path.trim().to_string();
+    let before = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => return bloqueado(kind, &path, &format!("No se pudo leer '{path}': {e}")),
+    };
+
+    let veces = before.matches(viejo).count();
+    if veces == 0 {
+        return bloqueado(
+            kind,
+            &path,
+            "El texto que quieres sustituir no aparece en el fichero. Léelo con \
+             readfile y copia el fragmento exacto.",
+        );
+    }
+    if veces > 1 {
+        return bloqueado(
+            kind,
+            &path,
+            &format!(
+                "El texto aparece {veces} veces y no se puede saber cuál cambiar. \
+                 Incluye más contexto —la línea de antes y la de después— para que sea único."
+            ),
+        );
+    }
+    let after = before.replacen(viejo, nuevo, 1);
+    crate::agent::Artifact {
+        id: String::new(),
+        kind,
+        summary: format!("editar · {} → {} líneas", before.lines().count(), after.lines().count()),
+        path,
+        before,
+        after,
+        ts: 0,
+        applied: false,
+        blocked: String::new(),
+    }
+}
+
+fn bloqueado(
+    kind: crate::agent::ArtifactKind,
+    path: &str,
+    por_que: &str,
+) -> crate::agent::Artifact {
+    crate::agent::Artifact {
+        id: String::new(),
+        kind,
+        path: path.to_string(),
+        summary: "no se puede aplicar".into(),
+        before: String::new(),
+        after: String::new(),
+        ts: 0,
+        applied: false,
+        blocked: por_que.to_string(),
+    }
+}
+
+/// Escribe el artefacto en el disco. Es lo único de este módulo que MODIFICA.
+///
+/// Se comprueba que el fichero no haya cambiado desde que se preparó la
+/// propuesta. Entre que Lucy la propone y el operador la aprueba pueden pasar
+/// minutos, y en ese hueco cabe otro editor guardando: aplicar el `after` tal
+/// cual borraría ese trabajo sin que nadie se enterara.
+pub fn apply(a: &crate::agent::Artifact) -> Result<(), String> {
+    if !a.blocked.is_empty() {
+        return Err(a.blocked.clone());
+    }
+    let actual = std::fs::read_to_string(&a.path).unwrap_or_default();
+    if actual != a.before {
+        return Err(format!(
+            "'{}' ha cambiado desde que se preparó este cambio. Vuelve a leerlo antes \
+             de escribir.",
+            a.path
+        ));
+    }
+    if let Some(dir) = std::path::Path::new(&a.path).parent() {
+        if !dir.as_os_str().is_empty() && !dir.exists() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("No se pudo crear la carpeta '{}': {e}", dir.display()))?;
+        }
+    }
+    std::fs::write(&a.path, &a.after)
+        .map_err(|e| format!("No se pudo escribir '{}': {e}", a.path))
+}
+
 /// Ejecuta una herramienta por nombre. `None` = este shell no la conoce.
 ///
 /// Devuelve `None` en vez de un error para que quien llama pueda distinguir «la
@@ -74,6 +216,14 @@ pub fn run(name: &str, args: &str) -> Option<ToolResult> {
 pub const AVAILABLE: &[(&str, &str)] = &[
     ("readfile", "<TOOL>readfile:C:\\ruta\\fichero.log</TOOL> — te devuelve su texto"),
     ("listdir", "<TOOL>listdir:C:\\ruta</TOOL> — te devuelve qué hay en esa carpeta"),
+    (
+        "writefile",
+        "<TOOL>writefile:C:\\ruta\\fichero.txt|||CONTENIDO</TOOL> — PROPONE escribirlo",
+    ),
+    (
+        "editfile",
+        "<TOOL>editfile:C:\\ruta|||TEXTO_VIEJO|||TEXTO_NUEVO</TOOL> — PROPONE un cambio",
+    ),
 ];
 
 fn readfile(path: &str) -> ToolResult {
@@ -294,6 +444,93 @@ mod tests {
         assert!(r.ok, "{}", r.body);
         assert!(r.body.contains("subcarpeta/"), "las carpetas no se distinguen: {}", r.body);
         assert!(r.body.contains("dato.txt (4 B)"), "{}", r.body);
+    }
+
+    #[test]
+    fn un_texto_que_aparece_dos_veces_no_se_edita_a_ciegas() {
+        // EL FALLO QUE HUNDE A TODAS LAS HERRAMIENTAS DE EDICIÓN. Sustituir la
+        // primera coincidencia es lo cómodo, y produce el bug que nadie
+        // encuentra: se cambia una línea parecida en otro sitio del fichero, y
+        // el diff que el operador aprobó no es el que se aplicó.
+        let p = tmp("lucy_tool_ambiguo.txt");
+        std::fs::write(&p, "valor = 1\notra cosa\nvalor = 1\n").unwrap();
+        let a = prepare_edit(&format!("{}|||valor = 1|||valor = 2", p.display()));
+        let _ = std::fs::remove_file(&p);
+        assert!(!a.blocked.is_empty(), "editó a ciegas");
+        assert!(a.blocked.contains("2 veces"), "{}", a.blocked);
+        assert!(a.blocked.contains("contexto"), "no dice cómo arreglarlo: {}", a.blocked);
+    }
+
+    #[test]
+    fn un_texto_que_no_esta_lo_dice_en_vez_de_no_hacer_nada() {
+        let p = tmp("lucy_tool_ausente.txt");
+        std::fs::write(&p, "una cosa\n").unwrap();
+        let a = prepare_edit(&format!("{}|||lo que sea|||otra", p.display()));
+        let _ = std::fs::remove_file(&p);
+        assert!(a.blocked.contains("no aparece"), "{}", a.blocked);
+        assert!(a.blocked.contains("readfile"), "no le dice cómo recuperarse");
+    }
+
+    #[test]
+    fn preparar_no_toca_el_disco() {
+        // Es la garantía entera del carril de artefactos: lo que se ve es una
+        // propuesta, y hasta que alguien pulsa no ha pasado nada.
+        let p = tmp("lucy_tool_intacto.txt");
+        std::fs::write(&p, "original").unwrap();
+        let a = prepare_write(&format!("{}|||machacado", p.display()));
+        let en_disco = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(en_disco, "original", "preparar escribió");
+        assert!(!a.applied);
+        assert_eq!(a.after, "machacado");
+        assert_eq!(a.before, "original");
+        // Y aplicar sí escribe.
+        apply(&a).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "machacado");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn un_fichero_que_cambio_por_debajo_no_se_machaca() {
+        // Entre que Lucy propone y el operador aprueba pasan minutos, y en ese
+        // hueco cabe otro editor guardando. Aplicar el `after` tal cual borraría
+        // ese trabajo sin que nadie se enterara.
+        let p = tmp("lucy_tool_carrera.txt");
+        std::fs::write(&p, "v1").unwrap();
+        let a = prepare_write(&format!("{}|||v2 de Lucy", p.display()));
+        std::fs::write(&p, "v1 con mis cambios a mano").unwrap();
+        let e = apply(&a).unwrap_err();
+        assert!(e.contains("ha cambiado"), "{e}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "v1 con mis cambios a mano");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn crear_un_fichero_nuevo_es_escribir_y_no_un_error() {
+        let p = tmp("lucy_tool_nuevo_de_verdad.txt");
+        let _ = std::fs::remove_file(&p);
+        let a = prepare_write(&format!("{}|||contenido", p.display()));
+        assert!(a.blocked.is_empty(), "{}", a.blocked);
+        assert!(a.summary.contains("crear"), "{}", a.summary);
+        assert_eq!(a.before, "");
+        apply(&a).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "contenido");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn un_formato_mal_puesto_se_explica_en_vez_de_perderse() {
+        // Sin separador no hay contenido. Descartarlo en silencio dejaría a
+        // Lucy esperando un artefacto que nunca aparece.
+        let a = prepare_write("C:\\solo\\una\\ruta.txt");
+        assert!(a.blocked.contains("|||"), "{}", a.blocked);
+        let b = prepare_edit("C:\\ruta|||solo el viejo");
+        assert!(b.blocked.contains("Faltan partes"), "{}", b.blocked);
+    }
+
+    #[test]
+    fn un_artefacto_bloqueado_no_se_puede_aplicar() {
+        let a = prepare_write("sin separador");
+        assert!(apply(&a).is_err());
     }
 
     #[test]

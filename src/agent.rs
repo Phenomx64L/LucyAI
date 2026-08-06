@@ -108,6 +108,20 @@ pub struct Artifact {
     pub before: String,
     pub after: String,
     pub ts: u64,
+    /// Si el cambio ya está en el disco.
+    ///
+    /// UN ARTEFACTO NACE SIN APLICAR. Lo que hay en `after` es lo que Lucy
+    /// propone escribir, no lo que hay escrito, y esa diferencia es la razón de
+    /// que este campo exista: hasta hoy el carril enseñaba «propuesto — sin
+    /// escribir» en el resumen, que es una forma de decirlo que no se puede
+    /// consultar desde el código. Ahora el botón mira aquí.
+    pub applied: bool,
+    /// Por qué no se puede aplicar, cuando no se puede. Vacío = se puede.
+    ///
+    /// Se guarda en vez de descartar la propuesta: un `editfile` cuyo texto
+    /// viejo no aparece es un error de Lucy que ella tiene que ver para
+    /// corregirlo, no algo que deba desaparecer sin dejar rastro.
+    pub blocked: String,
 }
 
 /// Estado de un sub-agente lanzado con `fork_task`.
