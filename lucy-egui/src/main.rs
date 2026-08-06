@@ -44,11 +44,21 @@ fn main() -> eframe::Result {
             // manejador de arrastre de la cabecera. El redimensionado NO: winit
             // sigue dando los bordes mientras la ventana sea `resizable`.
             .with_decorations(false)
-            .with_resizable(true),
+            .with_resizable(true)
+            // El título SIGUE siendo el humano: sale en la barra de tareas y en
+            // el Alt+Tab, que son los dos sitios donde alguien lo lee.
+            .with_title("Lucy · egui (Fase 1)"),
         ..Default::default()
     };
     eframe::run_native(
-        "Lucy · egui (Fase 1)",
+        // ESTE nombre no es el título: es el IDENTIFICADOR con el que eframe
+        // decide dónde guardar, y acababa creando
+        // `%APPDATA%\Lucy · egui (Fase 1)\data\`. Un directorio con un punto
+        // medio y un paréntesis dentro, atado a un texto de interfaz que llevaba
+        // «Fase 1» — el día que se le quite, la configuración de todo el mundo
+        // se queda huérfana en una carpeta que ya nadie lee, sin error y sin
+        // aviso. Estable y aburrido a propósito.
+        "lucy-egui",
         opts,
         Box::new(|cc| {
             // El tema de Lucy, no el oscuro genérico de egui. En modo inmediato

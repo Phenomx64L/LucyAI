@@ -8,7 +8,13 @@ edition = "2021"
 # backend Tauri completo. Resultado: este binario NO enlaza tauri/wry/webview2 —
 # es el objetivo real de la migración (binario nativo sin motor de navegador).
 [dependencies]
-eframe = "0.29"
+# `persistence` NO viene en las características por defecto de eframe, y sin ella
+# `CreationContext::storage` es siempre `None`: `save()` no se llama nunca y todo
+# `get_string` devuelve nada. Es decir, el modelo elegido, el tema, el nombre del
+# operador, el ancho del carril, el tope de pasos y las conversaciones abiertas
+# se escribían al vacío y se leían del vacío — sin error, sin aviso, y con los
+# tests en verde porque prueban la serialización, no el almacén.
+eframe = { version = "0.29", features = ["persistence"] }
 egui = "0.29"
 egui_commonmark = "0.18"
 proto-core = { path = "../proto-core" }
