@@ -364,6 +364,30 @@ fn encolar(slot: &mut Option<String>, nuevo: String) {
     }
 }
 
+/// Lo que se sabe de un equipo remoto tras llamar a su puerta.
+///
+/// TRES ESTADOS Y NO UN BOOLEANO. «No lo hemos probado» no es lo mismo que «no
+/// contesta», y pintar los dos iguales le diría al operador que su servidor
+/// recién dado de alta está caído cuando lo único que pasa es que nadie ha
+/// llamado todavía.
+#[derive(Debug, Clone, PartialEq)]
+enum Conexion {
+    Probando,
+    Ok { os: String, ms: u64 },
+    Fallo(String),
+}
+
+impl Conexion {
+    /// El color del punto del carril.
+    fn color(&self) -> egui::Color32 {
+        match self {
+            Self::Probando => theme::amber(),
+            Self::Ok { .. } => theme::acc(),
+            Self::Fallo(_) => theme::red(),
+        }
+    }
+}
+
 /// Los milisegundos desde la época. Para el id de un equipo nuevo, con la misma
 /// forma que genera la app (`h_{millis}`), para que ninguno de los dos lados se
 /// sorprenda al leer los del otro.
@@ -2013,13 +2037,10 @@ struct App {
     nx_started: Option<Instant>,
     /// A que equipo iba la traduccion que esta en vuelo.
     nx_destino: Option<lucy_core::hosts::Host>,
-    /// El sistema medido de cada equipo remoto. Ver `detect_os`.
-    nx_os: std::collections::HashMap<String, String>,
-    /// Equipos a los que ya se les preguntÃ³, para no preguntar dos veces
-    /// mientras la primera respuesta viene por el camino.
-    nx_os_pedido: std::collections::HashSet<String>,
-    nx_os_tx: std::sync::mpsc::Sender<(String, String)>,
-    nx_os_rx: std::sync::mpsc::Receiver<(String, String)>,
+    /// Lo que se sabe de cada equipo remoto tras llamar a su puerta.
+    nx_estado: std::collections::HashMap<String, Conexion>,
+    nx_conn_tx: std::sync::mpsc::Sender<(String, Result<lucy_core::hosts::Probe, String>)>,
+    nx_conn_rx: std::sync::mpsc::Receiver<(String, Result<lucy_core::hosts::Probe, String>)>,
     nx_exec_rx: Option<std::sync::mpsc::Receiver<lucy_core::hosts::Line>>,
     /// El equipo que se estÃ¡ dando de alta o editando.
     nx_edit: Option<lucy_core::hosts::Host>,
@@ -2181,7 +2202,7 @@ impl App {
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let (att_tx, att_rx) = std::sync::mpsc::channel();
-        let (nx_os_tx, nx_os_rx) = std::sync::mpsc::channel();
+        let (nx_conn_tx, nx_conn_rx) = std::sync::mpsc::channel();
         // Las conversaciones de la vez pasada. Una sesión que no se entiende no
         // se anuncia ni se repara: se arranca de cero, que es lo que hace falta
         // en ese momento.
@@ -2245,10 +2266,9 @@ impl App {
             nx_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             nx_started: None,
             nx_destino: None,
-            nx_os: std::collections::HashMap::new(),
-            nx_os_pedido: std::collections::HashSet::new(),
-            nx_os_tx,
-            nx_os_rx,
+            nx_estado: std::collections::HashMap::new(),
+            nx_conn_tx,
+            nx_conn_rx,
             nx_exec_rx: None,
             nx_edit: None,
             nx_edit_pw: String::new(),
@@ -2493,9 +2513,7 @@ impl eframe::App for App {
         // fallo que esta cola existe para arreglar, un frame más tarde.
         self.pump_pending();
         self.pump_nx_test();
-        while let Ok((id, so)) = self.nx_os_rx.try_recv() {
-            self.nx_os.insert(id, so);
-        }
+        self.pump_nx_conn();
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -7078,21 +7096,12 @@ _(detenido por el operador)_");
             self.nx_host = None;
             return;
         };
-        // El sistema se mide UNA vez por equipo, al abrirlo, y en otro hilo. Es
-        // lo que hace que la traducción proponga `dnf` en una Fedora en vez de
-        // `apt` — un error que se ve tarde, porque el comando existe pero no
-        // está. Se marca antes de lanzar para no pedirlo dos veces mientras la
-        // primera va por el camino.
-        if h.protocol.can_shell() && !self.nx_os.contains_key(&h.id) && !self.nx_os_pedido.contains(&h.id)
-        {
-            self.nx_os_pedido.insert(h.id.clone());
-            let (host, tx) = (h.clone(), self.nx_os_tx.clone());
-            std::thread::spawn(move || {
-                let pw = lucy_core::hosts::password(&host.id).unwrap_or_default();
-                if let Some(so) = lucy_core::hosts::detect_os(&host, &pw) {
-                    let _ = tx.send((host.id, so));
-                }
-            });
+        // Se llama a la puerta SOLO la primera vez que se abre el equipo. Ese
+        // viaje contesta las tres preguntas de una: si se llega, si valen las
+        // credenciales, y qué sistema corre — y cada conexión de WinRM paga su
+        // autenticación, que es la parte lenta.
+        if h.protocol.can_shell() && !self.nx_estado.contains_key(&h.id) {
+            self.nx_conectar(&h);
         }
         row_align(ui, 28.0, egui::Align::Center, |ui| {
             ui.spacing_mut().item_spacing.x = 7.0;
@@ -7102,8 +7111,41 @@ _(detenido por el operador)_");
             // El sistema MEDIDO, no el declarado. Es lo que decide si la
             // traducción propone `dnf` o `apt`, y verlo aquí es lo que permite
             // notar que el equipo no es lo que uno creía.
-            if let Some(so) = self.nx_os.get(&h.id) {
-                ui.label(egui::RichText::new(so).size(theme::FS_MICRO).color(theme::faint()));
+            match self.nx_estado.get(&h.id) {
+                Some(Conexion::Ok { os, ms }) => {
+                    ui.label(
+                        egui::RichText::new(format!("{os} · {ms} ms"))
+                            .size(theme::FS_MICRO)
+                            .color(theme::faint()),
+                    );
+                }
+                Some(Conexion::Fallo(e)) => {
+                    ui.label(egui::RichText::new(e).size(theme::FS_MICRO).color(theme::red()));
+                }
+                Some(Conexion::Probando) => {
+                    ui.label(
+                        egui::RichText::new("conectando…")
+                            .size(theme::FS_MICRO)
+                            .color(theme::amber()),
+                    );
+                    ui.ctx().request_repaint();
+                }
+                None => {}
+            }
+            // EL BOTÓN QUE FALTABA. En mi diseño cada comando abre su propia
+            // conexión —WinRM es así— y por eso no había nada que «conectar».
+            // Pero eso deja al operador a ciegas: lo primero que hace uno con un
+            // equipo recién dado de alta es comprobar que responde, y sin botón
+            // la única forma era mandarle un comando a ver qué pasaba.
+            //
+            // No abre una sesión persistente, y la V2 tampoco: llama a la puerta
+            // y enciende la luz.
+            if !matches!(self.nx_estado.get(&h.id), Some(Conexion::Probando)) && ui
+                .add(egui::Button::new("Conectar").small())
+                .on_hover_text("Comprobar que responde y con qué sistema")
+                .clicked()
+            {
+                self.nx_conectar(&h);
             }
             if self.nx_busy {
                 ui.add_space(8.0);
@@ -7219,6 +7261,11 @@ _(detenido por el operador)_");
                             let (prefijo, color) = match *clase {
                                 'c' => ("❯ ", theme::acc()),
                                 'e' => ("", theme::red()),
+                                // Lo que dice LUCY, no el equipo: conectando,
+                                // conectado, detenido. En otro color porque no
+                                // es salida del comando, y leerlo como si lo
+                                // fuera confunde sobre qué contestó el servidor.
+                                'i' => ("", theme::txt3()),
                                 _ => ("", theme::txt2()),
                             };
                             ui.label(
@@ -7248,6 +7295,47 @@ _(detenido por el operador)_");
             }
         }
         self.pump_nx_remote();
+    }
+
+    /// Llama a la puerta de un equipo y deja el resultado a la vista.
+    ///
+    /// En otro hilo: un WinRM que no contesta tarda lo que tarde su tiempo de
+    /// espera, y una ventana congelada mientras tanto es lo que esta migración
+    /// existe para no tener.
+    fn nx_conectar(&mut self, h: &lucy_core::hosts::Host) {
+        self.nx_estado.insert(h.id.clone(), Conexion::Probando);
+        let id = h.id.clone();
+        self.nx_lines_mut(&id).push((
+            'i',
+            format!("Conectando a {} ({}:{})…", h.name, h.host, h.port),
+        ));
+        let (host, tx) = (h.clone(), self.nx_conn_tx.clone());
+        std::thread::spawn(move || {
+            let pw = lucy_core::hosts::password(&host.id).unwrap_or_default();
+            let _ = tx.send((host.id.clone(), lucy_core::hosts::probe(&host, &pw)));
+        });
+    }
+
+    /// Recoge las sondas que hayan terminado.
+    fn pump_nx_conn(&mut self) {
+        while let Ok((id, r)) = self.nx_conn_rx.try_recv() {
+            let (estado, linea) = match r {
+                Ok(p) => (
+                    Conexion::Ok { os: p.os.clone(), ms: p.ms },
+                    (
+                        'i',
+                        format!(
+                            "✓ Conectado en {} ms{}",
+                            p.ms,
+                            if p.os.is_empty() { String::new() } else { format!(" · {}", p.os) }
+                        ),
+                    ),
+                ),
+                Err(e) => (Conexion::Fallo(e.clone()), ('e', e)),
+            };
+            self.nx_estado.insert(id.clone(), estado);
+            self.nx_lines_mut(&id).push(linea);
+        }
     }
 
     /// Las líneas de ESTE equipo. Se crean al primer uso.
@@ -7422,6 +7510,16 @@ _(detenido por el operador)_");
                 let color = color_hex(&h.color).unwrap_or(theme::txt3());
                 let sub = format!("{}:{} · {}", h.host, h.port, h.protocol.label());
                 let r = self.nx_host_row(ui, &h.name, &sub, color, sel);
+                // El punto de estado, a la derecha de la fila. Con ocho equipos
+                // es lo que se mira antes que el nombre: cuál responde.
+                if let Some(c) = self.nx_estado.get(&h.id) {
+                    let rect = r.rect;
+                    ui.painter().circle_filled(
+                        egui::pos2(rect.right() - 12.0, rect.center().y),
+                        3.5,
+                        c.color(),
+                    );
+                }
                 if r.clicked() {
                     elegir = Some(h.id.clone());
                 }
@@ -7775,7 +7873,13 @@ _(detenido por el operador)_");
         let (shell, so) = match &destino {
             Some(h) => (
                 if h.protocol.os() == "windows" { "PowerShell" } else { "bash" },
-                self.nx_os.get(&h.id).cloned().unwrap_or_else(|| {
+                self.nx_estado
+                    .get(&h.id)
+                    .and_then(|c| match c {
+                        Conexion::Ok { os, .. } if !os.is_empty() => Some(os.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
                     // Sin haberlo medido aún, el tipo declarado del equipo es
                     // peor que la medición y mucho mejor que el de aquí.
                     if h.protocol.os() == "windows" { "Windows" } else { "Linux" }.to_string()
