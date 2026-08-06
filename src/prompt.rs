@@ -188,8 +188,16 @@ impl Section for Identity {
         if !c.user_name.is_empty() {
             let _ = write!(s, "\n\nEl operador se llama {}.", c.user_name);
         }
+        // El perfil va en su PROPIO párrafo, con encabezado. Antes se pegaba
+        // detrás del nombre con un espacio, y el bloque es multilínea y viene
+        // agrupado por categorías: el resultado era una frase que empezaba
+        // "El operador se llama Iván. [IDENTIDAD] - dominio ad: corp.local".
         if !c.user_profile.is_empty() {
-            let _ = write!(s, " {}", c.user_profile);
+            let _ = write!(
+                s,
+                "\n\nLO QUE YA SABES DE ÉL (de conversaciones anteriores):\n{}",
+                c.user_profile
+            );
         }
         if !c.working_dir.is_empty() {
             let _ = write!(
@@ -299,7 +307,14 @@ impl Section for Actions {
              Una consulta al registro va SIEMPRE en <EXECUTE_REG> y NUNCA en <EXECUTE_WMIC>: \
              WMI no es el registro.\n\
              Si necesitas razonar antes de responder, hazlo dentro de <THOUGHT>…</THOUGHT>: \
-             se guarda aparte y no ensucia la respuesta.",
+             se guarda aparte y no ensucia la respuesta.\n\
+             Cuando el operador te diga un dato SUYO que vayas a necesitar otro día \
+             —su dominio, sus servidores, cómo prefiere que hagas las cosas— guárdalo \
+             con <REMEMBER category=\"identidad|preferencia|contexto|host\">clave: \
+             valor</REMEMBER>. Una etiqueta por dato, la clave corta. Lo guardado te \
+             llegará en el prompt de todas las conversaciones siguientes, así que \
+             guarda hechos estables y NO lo de este turno: ni cifras que cambian, ni \
+             salidas de comandos, ni nada que puedas volver a medir.",
         );
         // El automático se mira ANTES que `can_execute` y no en conjunción con
         // él. Los dos describen quién aprieta el gatillo, y el shell nativo pone
@@ -690,6 +705,45 @@ mod tests {
         // Y cuando el shell SÍ ejecuta, no se le dice lo contrario.
         let p2 = build(&Ctx { can_execute: true, ..Default::default() });
         assert!(!p2.contains("NUNCA digas que ya"));
+    }
+
+    #[test]
+    fn se_le_dice_como_guardar_lo_que_aprende() {
+        let _s = serie();
+        // Sin esta instrucción la etiqueta no se emite nunca, y todo lo que hay
+        // detrás —parsear, guardar, volver a inyectarlo— es maquinaria que no
+        // arranca. Es el fallo del que venimos: el hueco del perfil existía en
+        // el prompt y viajaba vacío porque nadie había cerrado el círculo.
+        let p = build(&Ctx::default());
+        assert!(p.contains("<REMEMBER"), "no se le enseña la etiqueta");
+        // Y se le dice qué NO guardar. Sin ese límite, un modelo servicial
+        // guarda el porcentaje de CPU de hoy y lo arrastra a cada turno futuro.
+        assert!(p.contains("hechos estables"), "no se le acota qué guardar");
+    }
+
+    #[test]
+    fn el_perfil_va_en_su_propio_parrafo() {
+        let _s = serie();
+        // Se pegaba detrás del nombre con un espacio, y el bloque es multilínea
+        // con encabezados de categoría: salía "El operador se llama Iván.
+        // [IDENTIDAD] - dominio ad: corp.local" como si fuera una frase.
+        let p = build(&Ctx {
+            user_name: "Iván",
+            user_profile: "[IDENTIDAD]\n- dominio ad: corp.local",
+            ..Default::default()
+        });
+        assert!(p.contains("se llama Iván"), "{p}");
+        assert!(p.contains("LO QUE YA SABES DE ÉL"), "el perfil no tiene encabezado");
+        assert!(!p.contains("Iván. [IDENTIDAD]"), "el perfil quedó pegado a la frase");
+    }
+
+    #[test]
+    fn sin_perfil_no_se_anuncia_un_encabezado_vacio() {
+        let _s = serie();
+        // Un bloque que dice "lo que sabes de él: (nada)" enseña al modelo a
+        // saltarse ese encabezado, y el día que traiga algo tampoco lo mirará.
+        let p = build(&Ctx { user_name: "Iván", ..Default::default() });
+        assert!(!p.contains("LO QUE YA SABES"));
     }
 
     #[test]
