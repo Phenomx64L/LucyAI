@@ -387,28 +387,10 @@ pub fn run_remote(h: &Host, password: &str, script: &str) -> Result<(String, Str
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    if !h.protocol.can_shell() {
-        return Err(format!(
-            "No se pueden ejecutar comandos contra {} por {}.",
-            h.name,
-            h.protocol.label()
-        ));
-    }
-    let envoltorio = match h.protocol {
-        Protocol::Winrm => winrm_wrapper(h, script),
-        // `ssh` toma la contraseña por su propio camino y no la lee de la
-        // entrada estándar salvo desde un terminal. Se dice en vez de intentarlo
-        // y fallar con un mensaje de OpenSSH que no explica nada.
-        Protocol::Ssh if password.is_empty() => ssh_wrapper(h, script),
-        Protocol::Ssh => {
-            return Err(
-                "SSH con contraseña todavía no: usa una clave y deja la contraseña en \
-                 blanco, o configura `ssh-agent`."
-                    .into(),
-            )
-        }
-        _ => unreachable!("can_shell ya lo filtró"),
-    };
+    // La MISMA decisión que usa la versión con streaming. Dos copias de «qué
+    // protocolo se puede y con qué credencial» acabarían discrepando, y la que
+    // discrepara de menos dejaría pasar una ejecución que la otra rechaza.
+    let envoltorio = wrapper_for(h, password, script)?;
 
     let mut hijo = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &crate::shell::ps_utf8(&envoltorio)])
@@ -487,6 +469,155 @@ fn b64_utf16le(s: &str) -> String {
 
 fn b64_utf8(s: &str) -> String {
     crate::attach::b64_encode(s.as_bytes())
+}
+
+/// Una línea de una sesión remota, según de dónde venga.
+///
+/// El canal separa las tres porque el operador las lee distinto: lo que dijo el
+/// comando, lo que dijo el error, y que ya terminó. Mezclarlas obliga a quien
+/// pinta a adivinar, y adivinar mal convierte un aviso de PowerShell —que los
+/// escribe por la salida de error aunque el comando funcione— en un fallo.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Line {
+    Out(String),
+    Err(String),
+    /// Terminó. `true` si el proceso salió bien.
+    Done(bool),
+}
+
+/// Corre un script remoto ENTREGANDO LA SALIDA SEGÚN LLEGA.
+///
+/// POR QUÉ NO BASTABA `run_remote`. Esperaba a que el proceso terminara para
+/// devolverlo todo junto, y un inventario sobre veinte servidores tarda minutos:
+/// el operador veía «ejecutando…» sin una sola línea y sin forma de saber si
+/// avanzaba o se había colgado. Un comando remoto largo es el caso normal, no el
+/// raro.
+///
+/// `stop` se mira entre línea y línea, y además MATA EL PROCESO. Aquí no vale el
+/// truco de «dejar de leer y ya se acabará solo» que se usa con un flujo HTTP:
+/// al otro lado hay un `Invoke-Command` de verdad corriendo en una máquina de
+/// verdad, y dejar de mirarlo no lo para.
+#[cfg(windows)]
+pub fn run_remote_streaming(
+    h: &Host,
+    password: &str,
+    script: &str,
+    tx: &std::sync::mpsc::Sender<Line>,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::Ordering;
+
+    let envoltorio = wrapper_for(h, password, script)?;
+    let mut hijo = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &crate::shell::ps_utf8(&envoltorio)])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .map_err(|e| format!("No se pudo lanzar PowerShell: {e}"))?;
+    if let Some(mut s) = hijo.stdin.take() {
+        let _ = writeln!(s, "{password}");
+    }
+
+    // El error se lee en OTRO hilo. Con un solo hilo, leer la salida hasta el
+    // final antes de mirar el error se cuelga en cuanto el error llena su
+    // tubería: el proceso se bloquea escribiendo y nunca cierra la salida que
+    // estamos esperando. Es el bloqueo clásico de leer dos tuberías en serie.
+    let err_tx = tx.clone();
+    let err_pipe = hijo.stderr.take();
+    let err_hilo = std::thread::spawn(move || {
+        if let Some(e) = err_pipe {
+            for l in BufReader::new(e).lines().map_while(Result::ok) {
+                if l.trim().is_empty() {
+                    continue;
+                }
+                if err_tx.send(Line::Err(crate::shell::decode_console(l.as_bytes()))).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    if let Some(o) = hijo.stdout.take() {
+        for l in BufReader::new(o).split(b'\n') {
+            if stop.load(Ordering::Relaxed) {
+                let _ = hijo.kill();
+                break;
+            }
+            let Ok(bytes) = l else { break };
+            let texto = crate::shell::decode_console(&bytes);
+            if tx.send(Line::Out(texto.trim_end_matches('\r').to_string())).is_err() {
+                let _ = hijo.kill();
+                break;
+            }
+        }
+    }
+    let ok = hijo.wait().map(|s| s.success()).unwrap_or(false);
+    let _ = err_hilo.join();
+    let _ = tx.send(Line::Done(ok && !stop.load(Ordering::Relaxed)));
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn run_remote_streaming(
+    _h: &Host,
+    _password: &str,
+    _script: &str,
+    tx: &std::sync::mpsc::Sender<Line>,
+    _stop: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    let _ = tx.send(Line::Done(false));
+    Err("la ejecución remota solo está implementada en Windows".into())
+}
+
+/// El constructor de envoltorio que corresponde a este equipo, o por qué no hay.
+///
+/// Se saca aparte porque lo comparten la versión que espera y la que va
+/// entregando: dos copias de esta decisión acabarían discrepando en cuál es el
+/// protocolo que sí se puede.
+fn wrapper_for(h: &Host, password: &str, script: &str) -> Result<String, String> {
+    if !h.protocol.can_shell() {
+        return Err(format!(
+            "No se pueden ejecutar comandos contra {} por {}.",
+            h.name,
+            h.protocol.label()
+        ));
+    }
+    match h.protocol {
+        Protocol::Winrm => Ok(winrm_wrapper(h, script)),
+        Protocol::Ssh if password.is_empty() => Ok(ssh_wrapper(h, script)),
+        Protocol::Ssh => Err("SSH con contraseña todavía no: usa una clave y deja la \
+                              contraseña en blanco, o configura `ssh-agent`."
+            .into()),
+        _ => unreachable!("can_shell ya lo filtró"),
+    }
+}
+
+/// Qué sistema corre en el equipo remoto, para poder traducir bien.
+///
+/// SIN ESTO LA TRADUCCIÓN USA EL SISTEMA EQUIVOCADO: se le pediría a un modelo
+/// un comando «para Windows 11» cuando al otro lado hay una Debian, y lo que
+/// vuelve no existe allí. Peor con las distribuciones: `apt` en una Fedora es un
+/// error que se ve tarde, porque el comando existe, simplemente no está.
+///
+/// Una línea corta, que es lo que cabe en un prompt. Un fallo devuelve `None` y
+/// quien llama se apaña con el tipo declarado del equipo — peor que medirlo, y
+/// mucho mejor que no traducir.
+pub fn detect_os(h: &Host, password: &str) -> Option<String> {
+    let script = if h.protocol.os() == "windows" {
+        "(Get-CimInstance Win32_OperatingSystem).Caption"
+    } else {
+        // `PRETTY_NAME` está en cualquier Linux con systemd, que a efectos
+        // prácticos es cualquier Linux al que se llegue por SSH.
+        ". /etc/os-release 2>/dev/null && echo $PRETTY_NAME || uname -sr"
+    };
+    let (out, _, ok) = run_remote(h, password, script).ok()?;
+    let linea = out.lines().map(str::trim).find(|l| !l.is_empty())?;
+    (ok && !linea.is_empty()).then(|| truncar(linea, 80))
 }
 
 /// Comprueba que se llega al equipo y que las credenciales valen.
