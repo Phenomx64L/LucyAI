@@ -1769,6 +1769,11 @@ struct App {
     max_loops: u32,
     /// Ancho del carril del agente. Se arrastra y se recuerda.
     ws_width: f32,
+    /// Fila resaltada de la paleta de comandos.
+    ///
+    /// Global y no por pestaña: la paleta es del momento en que se escribe, no
+    /// de la conversación, y se cierra en cuanto se elige.
+    slash_sel: usize,
     /// Modo privacidad: nada sale de esta máquina. Ver `lucy_core::cloud::allowed`.
     ///
     /// Es GLOBAL y no por pestaña, al revés que el automático. La diferencia no
@@ -1986,6 +1991,7 @@ impl App {
             max_loops,
             ws_width,
             privacy,
+            slash_sel: 0,
             model_query: String::new(),
             face: None,
             ws_tab: WsTab::Plan,
@@ -3344,7 +3350,15 @@ impl App {
                     // El foco se mira ANTES de consumir: quitar el evento
                     // cuando el compositor no lo tiene se lo robaría a quien sí
                     // lo tuviera.
-                    let enter_solo = ui.memory(|m| m.has_focus(id))
+                    //
+                    // Y con la paleta abierta el Enter NO es de aquí. La paleta
+                    // se dibuja al final de esta misma función, así que si el
+                    // compositor se queda la tecla, la lista no llega a verla y
+                    // `/kg` se manda como si fuera una pregunta en vez de
+                    // elegirse de entre nueve.
+                    let paleta = self.tabs[self.tab].input.starts_with('/');
+                    let enter_solo = !paleta
+                        && ui.memory(|m| m.has_focus(id))
                         && ui.input_mut(|i| {
                         let mut pulsado = false;
                         i.events.retain(|e| {
@@ -3604,6 +3618,10 @@ _(detenido por el operador)_");
     fn slash_palette(&mut self, ui: &mut egui::Ui) {
         let draft = self.tabs[self.tab].input.clone();
         if !draft.starts_with('/') {
+            // Con la paleta cerrada el resaltado vuelve arriba. Sin esto, abrirla
+            // otra vez la dejaría señalando la fila donde se quedó la vez
+            // anterior, sobre una lista que ya no es la misma.
+            self.slash_sel = 0;
             return;
         }
         let q = draft.to_lowercase();
@@ -3620,78 +3638,122 @@ _(detenido por el operador)_");
         let row_h = 26.0;
         let shown = hits.len().min(9);
         let h = shown as f32 * row_h + 16.0;
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(composer.left(), composer.top() - h - 8.0),
-            egui::vec2(w, h),
-        );
 
+        // ── Teclado, ANTES de dibujar ────────────────────────────────────────
+        //
+        // Las flechas mueven, Enter elige y Tab completa. Antes solo había Tab y
+        // siempre sobre el primero: con nueve resultados en pantalla eso
+        // significa que ocho no se podían elegir sin ratón.
+        //
+        // Enter se atrapa aquí porque con la paleta abierta es lo que espera
+        // cualquiera: elegir de la lista, no mandar `/kg` como si fuera una
+        // pregunta. El compositor lo mira DESPUÉS y ya no lo encuentra.
+        let sel = &mut self.slash_sel;
+        ui.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                *sel = (*sel + 1) % hits.len();
+            }
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                *sel = (*sel + hits.len() - 1) % hits.len();
+            }
+        });
+        // La lista cambia mientras se escribe, así que el índice de hace dos
+        // letras puede señalar fuera. Se recorta en vez de entrar en pánico.
+        let sel = (*sel).min(hits.len() - 1);
+        self.slash_sel = sel;
         let mut elegido: Option<&str> = None;
-        // Capa propia: si se dibujara en el flujo, el hilo de la conversación
-        // —que se pinta antes— se quedaría por encima.
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::new("slash"),
-        ));
-        painter.rect(
-            rect,
-            egui::Rounding::same(theme::R_LG),
-            theme::bg3(),
-            egui::Stroke::new(1.0_f32, theme::bdr2()),
-        );
-
-        let mut y = rect.top() + 8.0;
-        for (cmd, desc, ready) in hits.iter().take(shown) {
-            let r = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + 6.0, y),
-                egui::vec2(w - 12.0, row_h),
-            );
-            let hover = ui.rect_contains_pointer(r);
-            if hover {
-                painter.rect_filled(r, egui::Rounding::same(theme::R_SM), theme::bg4());
-                if ui.input(|i| i.pointer.primary_clicked()) {
-                    elegido = Some(cmd);
-                }
-            }
-            painter.text(
-                egui::pos2(r.left() + 10.0, r.center().y),
-                egui::Align2::LEFT_CENTER,
-                cmd,
-                egui::FontId::monospace(theme::FS_FOOTNOTE),
-                theme::acc(),
-            );
-            painter.text(
-                egui::pos2(r.left() + 130.0, r.center().y),
-                egui::Align2::LEFT_CENTER,
-                desc,
-                egui::FontId::proportional(theme::FS_CAPTION),
-                if *ready { theme::txt2() } else { theme::faint() },
-            );
-            // Los que todavía no hacen nada se marcan aquí, no al pulsarlos:
-            // enterarse después de elegir es perder el movimiento.
-            if !*ready {
-                painter.text(
-                    egui::pos2(r.right() - 10.0, r.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    "sin migrar",
-                    egui::FontId::proportional(theme::FS_MICRO),
-                    theme::faint(),
-                );
-            }
-            y += row_h;
-        }
-        if hits.len() > shown {
-            painter.text(
-                egui::pos2(rect.center().x, rect.bottom() - 4.0),
-                egui::Align2::CENTER_CENTER,
-                format!("+{} más", hits.len() - shown),
-                egui::FontId::proportional(theme::FS_MICRO),
-                theme::faint(),
-            );
+        if ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+        }) {
+            elegido = Some(hits[sel].0);
         }
 
-        // Tab completa con el primero, como en cualquier terminal.
-        if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
-            elegido = Some(hits[0].0);
+        // ── La lista ─────────────────────────────────────────────────────────
+        //
+        // En un `Area` y no con un painter suelto sobre una capa de primer
+        // plano, que es lo que había y por lo que no se podía pulsar nada. El
+        // dibujo salía bien —está por encima de todo— pero el clic se probaba
+        // con `ui.rect_contains_pointer`, que intersecta contra el `clip_rect`
+        // del `ui` que la llama: la paleta se pinta ENCIMA del compositor, o
+        // sea fuera de él, así que esa intersección era vacía y la fila nunca
+        // se daba por señalada. Un `Area` es la capa de verdad de egui, con su
+        // orden y su reparto de entrada, y las filas vuelven a ser widgets con
+        // su `Response`.
+        let resp = egui::Area::new(egui::Id::new("slash"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(composer.left(), composer.top() - h - 8.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::none()
+                    .fill(theme::bg3())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr2()))
+                    .rounding(egui::Rounding::same(theme::R_LG))
+                    .inner_margin(egui::Margin::symmetric(6.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 12.0);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        let mut pulsado: Option<&str> = None;
+                        for (i, (cmd, desc, ready)) in hits.iter().take(shown).enumerate() {
+                            let (r, resp) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), row_h),
+                                egui::Sense::click(),
+                            );
+                            // El resaltado sale del teclado O del ratón: son la
+                            // misma cosa vista de dos maneras, y tener dos
+                            // marcas a la vez confunde sobre cuál se elegiría.
+                            if i == sel || resp.hovered() {
+                                ui.painter().rect_filled(
+                                    r,
+                                    egui::Rounding::same(theme::R_SM),
+                                    theme::bg4(),
+                                );
+                            }
+                            if resp.clicked() {
+                                pulsado = Some(cmd);
+                            }
+                            let p = ui.painter();
+                            p.text(
+                                egui::pos2(r.left() + 10.0, r.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                cmd,
+                                egui::FontId::monospace(theme::FS_FOOTNOTE),
+                                theme::acc(),
+                            );
+                            p.text(
+                                egui::pos2(r.left() + 130.0, r.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                desc,
+                                egui::FontId::proportional(theme::FS_CAPTION),
+                                if *ready { theme::txt2() } else { theme::faint() },
+                            );
+                            // Los que todavía no hacen nada se marcan aquí, no
+                            // al pulsarlos: enterarse después de elegir es
+                            // perder el movimiento.
+                            if !*ready {
+                                p.text(
+                                    egui::pos2(r.right() - 10.0, r.center().y),
+                                    egui::Align2::RIGHT_CENTER,
+                                    "sin migrar",
+                                    egui::FontId::proportional(theme::FS_MICRO),
+                                    theme::faint(),
+                                );
+                            }
+                        }
+                        if hits.len() > shown {
+                            ui.painter().text(
+                                egui::pos2(ui.min_rect().center().x, ui.min_rect().bottom() + 6.0),
+                                egui::Align2::CENTER_CENTER,
+                                format!("+{} más — sigue escribiendo para acotar", hits.len() - shown),
+                                egui::FontId::proportional(theme::FS_MICRO),
+                                theme::faint(),
+                            );
+                        }
+                        pulsado
+                    })
+                    .inner
+            });
+        if let Some(c) = resp.inner {
+            elegido = Some(c);
         }
         if let Some(c) = elegido {
             // Los que ESTA versión sabe hacer se ejecutan al elegirlos; los
@@ -6666,6 +6728,46 @@ mod teclado {
         let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
         assert_eq!(atajo.logical_key, Key::Enter);
         assert!(atajo.modifiers.shift);
+    }
+}
+
+#[cfg(test)]
+mod paleta_teclado {
+    /// El mismo movimiento que hacen las flechas en la paleta.
+    fn mover(sel: usize, n: usize, abajo: bool) -> usize {
+        if abajo {
+            (sel + 1) % n
+        } else {
+            (sel + n - 1) % n
+        }
+    }
+
+    #[test]
+    fn las_flechas_dan_la_vuelta_por_los_dos_lados() {
+        // Arriba desde la primera fila va a la última. Escrito como `sel - 1`
+        // sería una resta con acarreo en `usize`: pánico, no vuelta.
+        assert_eq!(mover(0, 9, false), 8);
+        assert_eq!(mover(8, 9, true), 0);
+        assert_eq!(mover(3, 9, true), 4);
+        assert_eq!(mover(3, 9, false), 2);
+    }
+
+    #[test]
+    fn con_una_sola_coincidencia_no_se_mueve_a_ninguna_parte() {
+        // Pasa en cuanto se escriben tres letras. El módulo de 1 es 0 por los
+        // dos lados, que es justo lo que se quiere.
+        assert_eq!(mover(0, 1, true), 0);
+        assert_eq!(mover(0, 1, false), 0);
+    }
+
+    #[test]
+    fn un_indice_de_una_lista_mas_larga_se_recorta() {
+        // La lista se acorta con cada letra que se escribe, así que el índice de
+        // hace dos pulsaciones puede señalar fuera. Recortar, no entrar en
+        // pánico ni saltar al principio: la fila de al lado es la que el
+        // operador tenía delante.
+        assert_eq!(7usize.min(3 - 1), 2);
+        assert_eq!(1usize.min(9 - 1), 1);
     }
 }
 
