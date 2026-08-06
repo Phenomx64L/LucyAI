@@ -355,19 +355,27 @@ fn load_system_fonts(ctx: &egui::Context) {
 /// hacer lo uno sin lo otro.
 pub fn switch(ctx: &egui::Context, m: Mode) {
     set_mode(m);
-    apply(ctx);
+    // SOLO los colores, no las fuentes. `apply` lee tres ficheros TTF del disco
+    // y llama a `set_fonts`, que tira el atlas entero y obliga a volver a
+    // teselar cada letra de la ventana. Hacerlo por cambiar de tema es un tirón
+    // visible a cambio de nada: las fuentes son las mismas en claro y en oscuro.
+    apply_visuals(ctx);
 }
 
-/// Aplica el tema completo al contexto.
+/// Aplica el tema completo al contexto: fuentes y colores. Al arrancar.
+pub fn apply(ctx: &egui::Context) {
+    load_system_fonts(ctx);
+    apply_visuals(ctx);
+}
+
+/// Los colores, y nada más.
 ///
-/// Al arrancar, y otra vez CADA VEZ QUE CAMBIA EL MODO. Los colores que se
-/// consultan al dibujar se resuelven solos, pero éstos no: se copian dentro de
+/// Al arrancar y CADA VEZ QUE CAMBIA EL MODO. Los que se consultan al dibujar se
+/// resuelven solos, pero éstos no: se copian dentro de
 /// los `Visuals` de egui y se quedan ahí hasta que alguien los vuelva a poner.
 /// Sin la segunda llamada, pasar a claro dejaba los widgets propios de egui
 /// —desplegables, barras de scroll, campos— en negro sobre blanco.
-pub fn apply(ctx: &egui::Context) {
-    load_system_fonts(ctx);
-
+fn apply_visuals(ctx: &egui::Context) {
     // La base la elige el modo. No es cosmético: de ahí salen decenas de colores
     // que este fichero no toca uno a uno, y partir de la base oscura en tema
     // claro deja rincones negros donde nadie los ha puesto.

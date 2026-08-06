@@ -336,6 +336,27 @@ fn start_turn(
     rx
 }
 
+/// Los comandos que casan con lo que se lleva escrito.
+///
+/// EXISTE PARA QUE LA PREGUNTA SE HAGA UNA SOLA VEZ. La paleta la usa para saber
+/// qué pintar, y el compositor para saber si tiene que cederle el Enter. Cuando
+/// eran dos condiciones distintas —«hay resultados» allí, «empieza por barra»
+/// aquí— había un hueco entre las dos: escribir `/kg algo`, que no casa con
+/// nada, cerraba la paleta y dejaba al compositor sin su tecla. La orden no se
+/// podía mandar y no había nada en pantalla que dijera por qué.
+fn slash_hits(draft: &str) -> Vec<&'static (&'static str, &'static str, bool)> {
+    if !draft.starts_with('/') {
+        return Vec::new();
+    }
+    let q = draft.to_lowercase();
+    SLASH
+        .iter()
+        .filter(|(c, d, _)| {
+            c.starts_with(&q) || d.to_lowercase().contains(q.trim_start_matches('/'))
+        })
+        .collect()
+}
+
 /// Lo que el bucle automático hace a continuación.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NextAuto {
@@ -1769,6 +1790,8 @@ struct App {
     max_loops: u32,
     /// Ancho del carril del agente. Se arrastra y se recuerda.
     ws_width: f32,
+    /// El último informe de duplicados, si se ha pedido alguno.
+    dedup: Option<Result<lucy_core::consolidate::Report, String>>,
     /// Fila resaltada de la paleta de comandos.
     ///
     /// Global y no por pestaña: la paleta es del momento en que se escribe, no
@@ -1992,6 +2015,7 @@ impl App {
             ws_width,
             privacy,
             slash_sel: 0,
+            dedup: None,
             model_query: String::new(),
             face: None,
             ws_tab: WsTab::Plan,
@@ -3351,12 +3375,18 @@ impl App {
                     // cuando el compositor no lo tiene se lo robaría a quien sí
                     // lo tuviera.
                     //
-                    // Y con la paleta abierta el Enter NO es de aquí. La paleta
+                    // Y con la paleta ABIERTA el Enter no es de aquí. La paleta
                     // se dibuja al final de esta misma función, así que si el
                     // compositor se queda la tecla, la lista no llega a verla y
                     // `/kg` se manda como si fuera una pregunta en vez de
                     // elegirse de entre nueve.
-                    let paleta = self.tabs[self.tab].input.starts_with('/');
+                    //
+                    // «Abierta» se pregunta con la MISMA función que usa la
+                    // paleta, no con «empieza por barra». Eran dos condiciones
+                    // distintas y entre ellas cabía `/kg algo`: no casa con
+                    // nada, así que la paleta se cerraba, pero el compositor
+                    // seguía cediendo su tecla y la orden no se podía mandar.
+                    let paleta = !slash_hits(&self.tabs[self.tab].input).is_empty();
                     let enter_solo = !paleta
                         && ui.memory(|m| m.has_focus(id))
                         && ui.input_mut(|i| {
@@ -3624,11 +3654,7 @@ _(detenido por el operador)_");
             self.slash_sel = 0;
             return;
         }
-        let q = draft.to_lowercase();
-        let hits: Vec<&(&str, &str, bool)> = SLASH
-            .iter()
-            .filter(|(c, d, _)| c.starts_with(&q) || d.to_lowercase().contains(q.trim_start_matches('/')))
-            .collect();
+        let hits = slash_hits(&draft);
         if hits.is_empty() {
             return;
         }
@@ -6292,7 +6318,77 @@ _(detenido por el operador)_");
             if ui.button("↻ Recargar").clicked() {
                 self.mems = load_memories();
             }
+            // ── Duplicados ───────────────────────────────────────────────────
+            //
+            // EN SECO PRIMERO, SIEMPRE. La pasada existía desde hace tiempo en la
+            // app y nunca la llamaba nadie, así que sobre esta base de datos no
+            // ha corrido jamás: lo primero que haga tiene que ser enseñar qué
+            // fundiría, no fundirlo. El botón de aplicar solo aparece después,
+            // y solo si encontró algo.
+            if ui.button("Buscar duplicados").clicked() {
+                self.dedup = Some(lucy_core::consolidate::run(true));
+            }
+            if let Some(Ok(r)) = &self.dedup {
+                if r.clusters_found > 0 && r.dry_run && ui.button("Fundir").clicked() {
+                    self.dedup = Some(lucy_core::consolidate::run(false));
+                    self.mems = load_memories();
+                }
+            }
         });
+        // El informe, junto al botón que lo pidió.
+        match &self.dedup {
+            Some(Err(e)) => {
+                ui.colored_label(theme::red(), format!("⚠ {e}"));
+            }
+            Some(Ok(r)) if r.clusters_found == 0 => {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Ninguna repetida entre las {} más recientes.",
+                        r.scanned
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                );
+            }
+            Some(Ok(r)) => {
+                ui.label(
+                    egui::RichText::new(if r.dry_run {
+                        format!(
+                            "{} grupos · {} memorias se fundirían en otra, de {} miradas. \
+                             No se ha tocado nada todavía.",
+                            r.clusters_found, r.memories_merged, r.scanned
+                        )
+                    } else {
+                        format!(
+                            "{} grupos fundidos · {} memorias marcadas. No se borró ninguna: \
+                             quedan etiquetadas y fuera de las consultas vivas.",
+                            r.clusters_found, r.memories_merged
+                        )
+                    })
+                    .size(theme::FS_CAPTION)
+                    .color(if r.dry_run { theme::amber() } else { theme::acc() }),
+                );
+                // Cuáles, con nombre. Un contador sin la lista pide fiarse de un
+                // número, y de lo que hay que fiarse es del criterio.
+                for c in r.clusters.iter().take(8) {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "· «{}» absorbe {} — parecido {:.0} %",
+                            c.canonical_title,
+                            if c.merged_ids.len() == 1 {
+                                "1 memoria".to_string()
+                            } else {
+                                format!("{} memorias", c.merged_ids.len())
+                            },
+                            c.overlap_score * 100.0
+                        ))
+                        .size(theme::FS_MICRO)
+                        .color(theme::txt3()),
+                    );
+                }
+            }
+            None => {}
+        }
         // La búsqueda se PIDE dentro del match (que tiene prestado `self.mems`)
         // y se EJECUTA al salir. `run_semantic_search` necesita `&mut self`, así
         // que llamarla ahí dentro no compila — y forzarlo con un clon de las
@@ -6728,6 +6824,45 @@ mod teclado {
         let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
         assert_eq!(atajo.logical_key, Key::Enter);
         assert!(atajo.modifiers.shift);
+    }
+}
+
+#[cfg(test)]
+mod paleta_filtro {
+    use super::*;
+
+    #[test]
+    fn una_orden_con_argumentos_deja_de_abrir_la_paleta() {
+        // EL FALLO QUE ESTO FIJA. El compositor cedía el Enter con cualquier
+        // borrador que empezara por barra, y la paleta se cerraba cuando no
+        // había coincidencias. `/kg algo` caía en el hueco: nadie se quedaba la
+        // tecla, la orden no se podía mandar, y en pantalla no había nada que
+        // explicara por qué.
+        assert!(slash_hits("/kg algo que escribí").is_empty());
+        assert!(slash_hits("/pantalla ¿qué ves?").is_empty());
+        // Y sin barra, ni se plantea.
+        assert!(slash_hits("hola").is_empty());
+        assert!(slash_hits("").is_empty());
+    }
+
+    #[test]
+    fn escribir_la_barra_los_ofrece_todos() {
+        // La paleta es una herramienta de descubrimiento antes que un menú: con
+        // la barra sola tienen que salir los veintinueve, migrados o no.
+        assert_eq!(slash_hits("/").len(), SLASH.len());
+    }
+
+    #[test]
+    fn se_busca_por_nombre_y_tambien_por_lo_que_hace() {
+        // Nadie recuerda que el tema se cambia con `/theme`; sí recuerda la
+        // palabra "tema".
+        let por_nombre = slash_hits("/mod");
+        assert!(por_nombre.iter().any(|(c, _, _)| *c == "/model"), "{por_nombre:?}");
+        let por_descripcion = slash_hits("/memoria");
+        assert!(
+            !por_descripcion.is_empty(),
+            "buscar por la descripción no encuentra nada"
+        );
     }
 }
 
