@@ -524,7 +524,7 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/diff", "Comparar dos snapshots", false),
     ("/detective", "Síntesis forense de incidente", false),
     ("/runbooks", "Lista de runbooks (V1)", false),
-    ("/pantalla", "Lucy ve tu pantalla (captura + pregunta)", false),
+    ("/pantalla", "Lucy ve tu pantalla (captura + pregunta)", true),
     ("/polarity", "Proyección de polaridad de un texto", false),
     ("/privacy", "Modo privacidad (sólo LLM local)", false),
     ("/theme", "Cambiar el tema visual", false),
@@ -3502,6 +3502,32 @@ _(detenido por el operador)_");
                     ui.memory_mut(|m| m.open_popup(id));
                 }
                 "/memory" => self.view = View::Memoria,
+                // La captura se hace AL ELEGIR el comando, no al enviar. Entre
+                // una cosa y otra el operador escribe su pregunta, y la pantalla
+                // que quiere enseñar es la de ahora — no la de dentro de veinte
+                // segundos con el compositor tapando media ventana.
+                //
+                // La orden queda en el campo para que la complete: `/pantalla` a
+                // secas manda una pregunta genérica, y ese es el caso peor de
+                // una imagen que cuesta tokens de verdad.
+                "/pantalla" => match lucy_core::screen::capture_image(
+                    lucy_core::screen::MAX_WIDTH,
+                ) {
+                    Ok(img) => {
+                        let t = &mut self.tabs[self.tab];
+                        let mut a = Attachment::pending("pantalla.png", AttachKind::Image);
+                        a.pending = false;
+                        a.image = Some(img);
+                        t.attachments.push(a);
+                        t.input = "¿Qué ves en mi pantalla? ".into();
+                    }
+                    // Sin escritorio —una sesión de servicio, una sesión RDP
+                    // desconectada— no hay pantalla que capturar. Se dice; el
+                    // silencio se leería como que el comando no existe.
+                    Err(e) => self.tabs[self.tab]
+                        .log
+                        .push(ChatMsg::new(false, format!("No pude capturar tu pantalla: {e}"))),
+                },
                 "/help" => {
                     let mut s = String::from("Comandos disponibles:
 
