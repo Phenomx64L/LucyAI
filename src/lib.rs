@@ -62,6 +62,9 @@ pub mod profile;
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
 pub mod system;
+/// Las herramientas de LECTURA que Lucy puede pedir. Antes se anotaban y no se
+/// cumplían, que parece que funcionó.
+pub mod tools;
 /// La conversación que viaja al modelo, y su recorte.
 pub mod turns;
 /// Las etiquetas de acción de una respuesta de Lucy. Detecta, no ejecuta.

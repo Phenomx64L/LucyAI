@@ -308,6 +308,11 @@ impl Section for Actions {
              WMI no es el registro.\n\
              Si necesitas razonar antes de responder, hazlo dentro de <THOUGHT>…</THOUGHT>: \
              se guarda aparte y no ensucia la respuesta.\n\
+             Herramientas de lectura, cuyo resultado te vuelve en el turno siguiente:\n\
+             · <TOOL>readfile:C:\\ruta\\fichero.log</TOOL> — el texto del fichero\n\
+             · <TOOL>listdir:C:\\ruta</TOOL> — qué hay en esa carpeta\n\
+             Esas DOS y ninguna más: lo que pidas con otro nombre no lo va a cumplir \
+             nadie, y te quedarás esperando un resultado que no llega.\n\
              Cuando el operador te diga un dato SUYO que vayas a necesitar otro día \
              —su dominio, sus servidores, cómo prefiere que hagas las cosas— guárdalo \
              con <REMEMBER category=\"identidad|preferencia|contexto|host\">clave: \
@@ -705,6 +710,22 @@ mod tests {
         // Y cuando el shell SÍ ejecuta, no se le dice lo contrario.
         let p2 = build(&Ctx { can_execute: true, ..Default::default() });
         assert!(!p2.contains("NUNCA digas que ya"));
+    }
+
+    #[test]
+    fn solo_se_le_prometen_las_herramientas_que_existen() {
+        let _s = serie();
+        // Prometer en el prompt una herramienta que nadie cumple es cómo se
+        // llegó a esto: Lucy pedía `readfile`, el shell lo anotaba y no pasaba
+        // nada. Las dos que están se nombran; que no están las demás se dice.
+        let p = build(&Ctx::default());
+        for (nombre, _) in crate::tools::AVAILABLE {
+            assert!(p.contains(nombre), "no se le ofrece {nombre}");
+        }
+        assert!(p.contains("ninguna más"), "no se le acota el catálogo");
+        // `writefile` NO está migrada. Nombrarla haría que la pidiera y se
+        // quedara esperando un resultado que no llega.
+        assert!(!p.contains("writefile"), "se le promete escribir ficheros");
     }
 
     #[test]
