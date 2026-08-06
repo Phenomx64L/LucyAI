@@ -14,7 +14,6 @@
 
 mod avatar;
 mod drain;
-mod hosts;
 mod icons;
 mod prompt;
 mod theme;
@@ -363,6 +362,88 @@ fn encolar(slot: &mut Option<String>, nuevo: String) {
         }
         None => *slot = Some(nuevo),
     }
+}
+
+/// Los milisegundos desde la época. Para el id de un equipo nuevo, con la misma
+/// forma que genera la app (`h_{millis}`), para que ninguno de los dos lados se
+/// sorprenda al leer los del otro.
+fn millis_ahora() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Un `#rrggbb` del índice de equipos, a color de egui.
+///
+/// Los colores los escribió la app en CSS y aquí hay que pintarlos. Un valor que
+/// no se entienda devuelve `None` en vez de un color inventado: mejor la
+/// pastilla en gris que en un color que no es el que el operador eligió.
+fn color_hex(s: &str) -> Option<egui::Color32> {
+    let h = s.trim().strip_prefix('#')?;
+    if h.len() != 6 {
+        return None;
+    }
+    let n = u32::from_str_radix(h, 16).ok()?;
+    Some(egui::Color32::from_rgb(
+        (n >> 16) as u8,
+        (n >> 8) as u8,
+        n as u8,
+    ))
+}
+
+/// Una etiqueta de campo del formulario de equipos.
+fn etiqueta_campo(t: &str) -> egui::RichText {
+    egui::RichText::new(t).size(theme::FS_CAPTION).color(theme::txt3())
+}
+
+/// Una fila de «etiqueta + campo de texto» del formulario.
+fn campo(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, pista: &str) {
+    row_align(ui, 26.0, egui::Align::Center, |ui| {
+        cell(ui, 110.0, 26.0, false, etiqueta_campo(etiqueta));
+        ui.add(
+            egui::TextEdit::singleline(valor)
+                .desired_width(300.0)
+                .hint_text(pista),
+        );
+    });
+    ui.add_space(6.0);
+}
+
+/// La franja de confirmación de un comando destructivo. `true` = ejecutar.
+///
+/// Devuelve el veredicto en vez de ejecutar ella: así el mismo trozo sirve para
+/// el equipo local y para uno remoto, que corren por caminos distintos.
+fn confirm_strip(ui: &mut egui::Ui, cmd: &str) -> bool {
+    let mut ejecutar = false;
+    egui::Frame::none()
+        .fill(theme::amber_bg())
+        .stroke(egui::Stroke::new(1.0_f32, theme::amber()))
+        .rounding(egui::Rounding::same(theme::R_SM))
+        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(lucy_core::destructive::reason())
+                    .size(theme::FS_CAPTION)
+                    .color(theme::amber()),
+            );
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new(cmd)
+                    .size(theme::FS_FOOTNOTE)
+                    .monospace()
+                    .color(theme::txt()),
+            );
+            ui.add_space(6.0);
+            row(ui, 24.0, |ui| {
+                if ui.button("Ejecutar").clicked() {
+                    ejecutar = true;
+                }
+                let _ = ui.button("Cancelar");
+            });
+        });
+    ui.add_space(6.0);
+    ejecutar
 }
 
 /// Cuántas líneas de diff caben en la ficha de un artefacto.
@@ -1919,6 +2000,19 @@ struct App {
     /// Traduccion en vuelo.
     nx_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     nx_busy: bool,
+    /// Equipo seleccionado en NexShell. `None` = este equipo.
+    nx_host: Option<String>,
+    /// Lineas de una sesion remota. Un WinRM no es un PTY: cada comando va y
+    /// vuelve, asÃ­ que no pasan por el emulador VT.
+    nx_lines: Vec<(char, String)>,
+    nx_exec_rx: Option<std::sync::mpsc::Receiver<Result<(String, String, bool), String>>>,
+    /// El equipo que se estÃ¡ dando de alta o editando.
+    nx_edit: Option<lucy_core::hosts::Host>,
+    nx_edit_pw: String,
+    nx_edit_nuevo: bool,
+    nx_test: Option<Result<u64, String>>,
+    nx_testing: bool,
+    nx_test_rx: Option<std::sync::mpsc::Receiver<Result<u64, String>>>,
     // memoria
     mems: Result<Vec<AgentMemory>, String>,
     mem_search: String,
@@ -1962,7 +2056,7 @@ struct App {
     cpu_hist: Vec<f32>,
     ram_hist: Vec<f32>,
     /// Los equipos dados de alta, leídos del Credential Manager. Ver `hosts`.
-    remote_hosts: Vec<hosts::Host>,
+    remote_hosts: Vec<lucy_core::hosts::Host>,
     /// Equipo seleccionado: `"local"` o el `id` de uno remoto.
     selected_host: String,
     /// Cuándo entró el Dashboard en pantalla. Gobierna la animación de entrada;
@@ -2129,6 +2223,15 @@ impl App {
             nx_confirm: None,
             nx_rx: None,
             nx_busy: false,
+            nx_host: None,
+            nx_lines: Vec::new(),
+            nx_exec_rx: None,
+            nx_edit: None,
+            nx_edit_pw: String::new(),
+            nx_edit_nuevo: true,
+            nx_test: None,
+            nx_testing: false,
+            nx_test_rx: None,
             mems: load_memories(),
             mem_search: String::new(),
             sem_result: None,
@@ -2156,7 +2259,7 @@ impl App {
             svc_rx: None,
             cpu_hist: Vec::new(),
             ram_hist: Vec::new(),
-            remote_hosts: hosts::load(),
+            remote_hosts: lucy_core::hosts::load(),
             selected_host: "local".to_string(),
             dash_shown: None,
             sys_stamp: String::from("—"),
@@ -2365,6 +2468,7 @@ impl eframe::App for App {
         // ocupado siempre y el turno encolado no saldría nunca — que es el mismo
         // fallo que esta cola existe para arreglar, un frame más tarde.
         self.pump_pending();
+        self.pump_nx_test();
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -6088,7 +6192,7 @@ _(detenido por el operador)_");
             // Se relee al abrir: el operador puede haber dado de alta un equipo
             // en la app web hace un minuto, y una lista cacheada al arrancar no
             // lo tendría.
-            self.remote_hosts = hosts::load();
+            self.remote_hosts = lucy_core::hosts::load();
             ui.memory_mut(|m| m.toggle_popup(popup_id));
         }
 
@@ -6718,6 +6822,31 @@ _(detenido por el operador)_");
     /// una respuesta interactiva —una `y` a una pregunta del programa— sale
     /// gratis, y allí hacía falta un camino aparte.
     fn nexshell(&mut self, ui: &mut egui::Ui) {
+        // ── el carril de equipos ─────────────────────────────────────────────
+        //
+        // A la IZQUIERDA y siempre visible, como en la V2. Es la lista de lo que
+        // administras: esconderla detrás de un desplegable convierte «mira los
+        // ocho servidores» en ocho aperturas de menú.
+        egui::SidePanel::left("nx-hosts")
+            .exact_width(232.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::bg2())
+                    .inner_margin(egui::Margin::symmetric(10.0, 8.0)),
+            )
+            .show_inside(ui, |ui| self.nx_host_rail(ui));
+
+        self.nx_modal(ui.ctx());
+
+        // El equipo LOCAL es un caso aparte y no una fila más de la lista: es el
+        // único que no necesita credenciales, el único con PTY vivo, y el que
+        // está seleccionado al arrancar.
+        if self.nx_host.is_some() {
+            self.nx_remote(ui);
+            return;
+        }
+
         // ── barra ────────────────────────────────────────────────────────────
         row_align(ui, 28.0, egui::Align::Center, |ui| {
             ui.spacing_mut().item_spacing.x = 7.0;
@@ -6908,6 +7037,564 @@ _(detenido por el operador)_");
             self.nx_submit();
         }
         self.pump_nx();
+    }
+
+    /// La sesión contra un equipo remoto.
+    ///
+    /// SIN PTY. Un WinRM no es una sesión viva: cada `Invoke-Command` va y
+    /// vuelve. Así que aquí las líneas se acumulan en una lista propia en vez de
+    /// pasar por el emulador VT — fingir un terminal sobre algo que no lo es
+    /// daría un cursor que no significa nada y un Ctrl+C que no llega.
+    fn nx_remote(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.nx_host.clone() else { return };
+        let Some(h) = self.remote_hosts.iter().find(|x| x.id == id).cloned() else {
+            self.nx_host = None;
+            return;
+        };
+        row_align(ui, 28.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 7.0;
+            icons::show(ui, icons::Icon::Server, 15.0, color_hex(&h.color).unwrap_or(theme::acc()));
+            ui.label(egui::RichText::new(&h.name).size(theme::FS_FOOTNOTE).color(theme::txt()));
+            ui.label(theme::instrument_label(h.protocol.label(), theme::faint()));
+            if self.nx_busy {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("ejecutando…").size(theme::FS_CAPTION).color(theme::acc()),
+                );
+                ui.ctx().request_repaint();
+            }
+            right(ui, 24.0, |ui| {
+                if ui.add(egui::Button::new("⌫").small()).on_hover_text("Limpiar").clicked() {
+                    self.nx_lines.clear();
+                }
+            });
+        });
+        ui.add_space(6.0);
+
+        let mut enviar = false;
+        egui::TopBottomPanel::bottom("nx-remote-input")
+            .frame(egui::Frame::none().inner_margin(egui::Margin {
+                top: 8.0,
+                bottom: 4.0,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show_inside(ui, |ui| {
+                if let Some(cmd) = self.nx_confirm.clone() {
+                    if confirm_strip(ui, &cmd) {
+                        self.nx_run_remote(&h, &cmd);
+                    }
+                    self.nx_confirm = None;
+                }
+                egui::Frame::none()
+                    .fill(theme::bg3())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        row_align(ui, 26.0, egui::Align::Center, |ui| {
+                            ui.spacing_mut().item_spacing.x = 9.0;
+                            icons::show(ui, icons::Icon::Terminal, 15.0, theme::txt3());
+                            let te = ui.add(
+                                egui::TextEdit::singleline(&mut self.term_input)
+                                    .hint_text(format!("Comando o petición para {}…", h.name))
+                                    .desired_width(ui.available_width() - 34.0)
+                                    .frame(false)
+                                    .font(egui::FontId::monospace(theme::FS_FOOTNOTE)),
+                            );
+                            if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                enviar = true;
+                                te.request_focus();
+                            }
+                        });
+                    });
+            });
+
+        egui::Frame::none()
+            .fill(theme::bg())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+            .rounding(egui::Rounding::same(theme::R_MD))
+            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        if self.nx_lines.is_empty() {
+                            ui.add_space(30.0);
+                            ui.vertical_centered(|ui| {
+                                icons::show(ui, icons::Icon::Server, 26.0, theme::faint());
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(format!("Listo para operar en {}", h.name))
+                                        .size(theme::FS_HEADING)
+                                        .color(theme::txt2()),
+                                );
+                            });
+                        }
+                        for (clase, texto) in &self.nx_lines {
+                            let (prefijo, color) = match *clase {
+                                'c' => ("❯ ", theme::acc()),
+                                'e' => ("", theme::red()),
+                                _ => ("", theme::txt2()),
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("{prefijo}{texto}"))
+                                    .monospace()
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(color),
+                            );
+                        }
+                    });
+            });
+
+        if enviar {
+            let texto = std::mem::take(&mut self.term_input).trim().to_string();
+            if !texto.is_empty() && !self.nx_busy {
+                self.nx_history.push(texto.clone());
+                self.nx_hist_idx = None;
+                if lucy_core::destructive::is_destructive(&texto) {
+                    self.nx_confirm = Some(texto);
+                } else {
+                    self.nx_run_remote(&h, &texto);
+                }
+            }
+        }
+        self.pump_nx_remote();
+    }
+
+    /// Lanza un comando contra el equipo remoto, en otro hilo.
+    fn nx_run_remote(&mut self, h: &lucy_core::hosts::Host, cmd: &str) {
+        self.nx_lines.push(('c', cmd.to_string()));
+        let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
+        let (host, script) = (h.clone(), cmd.to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.nx_busy = true;
+        self.nx_exec_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::hosts::run_remote(&host, &pw, &script));
+        });
+    }
+
+    fn pump_nx_remote(&mut self) {
+        let Some(rx) = &self.nx_exec_rx else { return };
+        let r = match rx.try_recv() {
+            Ok(v) => v,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.nx_exec_rx = None;
+                self.nx_busy = false;
+                return;
+            }
+        };
+        self.nx_exec_rx = None;
+        self.nx_busy = false;
+        match r {
+            Ok((out, err, _ok)) => {
+                for l in out.lines() {
+                    self.nx_lines.push(('o', l.to_string()));
+                }
+                // La salida de error va SEPARADA y en rojo, no mezclada: en un
+                // remoto, distinguir «el comando dijo esto» de «no se pudo
+                // llegar» es la mitad del diagnóstico.
+                for l in err.lines().filter(|l| !l.trim().is_empty()) {
+                    self.nx_lines.push(('e', l.to_string()));
+                }
+                if out.trim().is_empty() && err.trim().is_empty() {
+                    self.nx_lines.push(('o', "(sin salida)".into()));
+                }
+            }
+            Err(e) => self.nx_lines.push(('e', e)),
+        }
+    }
+
+    /// Prueba la conexión desde el modal, sin bloquear la ventana.
+    fn nx_probar(&mut self, h: &lucy_core::hosts::Host) {
+        let (host, pw) = (h.clone(), self.nx_edit_pw.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.nx_testing = true;
+        self.nx_test = None;
+        self.nx_test_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::hosts::test_connection(&host, &pw));
+        });
+    }
+
+    fn pump_nx_test(&mut self) {
+        let Some(rx) = &self.nx_test_rx else { return };
+        match rx.try_recv() {
+            Ok(v) => {
+                self.nx_test = Some(v);
+                self.nx_test_rx = None;
+                self.nx_testing = false;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.nx_test_rx = None;
+                self.nx_testing = false;
+            }
+        }
+    }
+
+    /// La lista de equipos: el local arriba, los remotos debajo.
+    fn nx_host_rail(&mut self, ui: &mut egui::Ui) {
+        row_align(ui, 24.0, egui::Align::Center, |ui| {
+            ui.add(egui::Label::new(theme::instrument_label("Equipos", theme::faint())));
+            ui.label(
+                egui::RichText::new(format!("{}", self.remote_hosts.len() + 1))
+                    .size(theme::FS_MICRO)
+                    .monospace()
+                    .color(theme::txt3()),
+            );
+            right(ui, 22.0, |ui| {
+                if ui.small_button("+").on_hover_text("Añadir equipo").clicked() {
+                    self.nx_edit = Some(lucy_core::hosts::Host::nuevo(
+                        lucy_core::hosts::Protocol::Winrm,
+                        millis_ahora(),
+                    ));
+                    self.nx_edit_pw.clear();
+                    self.nx_edit_nuevo = true;
+                    self.nx_test = None;
+                }
+            });
+        });
+        ui.add_space(6.0);
+
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            // El local, primero y sin adornos.
+            let local_sel = self.nx_host.is_none();
+            if self
+                .nx_host_row(ui, "Este equipo", "PowerShell · PTY", theme::acc(), local_sel)
+                .clicked()
+            {
+                self.nx_host = None;
+            }
+            let mut editar = None;
+            let mut borrar = None;
+            let mut elegir = None;
+            for h in &self.remote_hosts {
+                let sel = self.nx_host.as_deref() == Some(h.id.as_str());
+                let color = color_hex(&h.color).unwrap_or(theme::txt3());
+                let sub = format!("{}:{} · {}", h.host, h.port, h.protocol.label());
+                let r = self.nx_host_row(ui, &h.name, &sub, color, sel);
+                if r.clicked() {
+                    elegir = Some(h.id.clone());
+                }
+                // Editar y borrar en el menú del clic derecho, no como dos
+                // iconos permanentes: con ocho equipos son dieciséis botones
+                // pidiendo atención para algo que se hace una vez al mes.
+                r.context_menu(|ui| {
+                    if ui.button("Editar").clicked() {
+                        editar = Some(h.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Eliminar").clicked() {
+                        borrar = Some(h.id.clone());
+                        ui.close_menu();
+                    }
+                });
+            }
+            if let Some(id) = elegir {
+                self.nx_host = Some(id);
+            }
+            if let Some(h) = editar {
+                self.nx_edit_pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
+                self.nx_edit = Some(h);
+                self.nx_edit_nuevo = false;
+                self.nx_test = None;
+            }
+            if let Some(id) = borrar {
+                let _ = lucy_core::hosts::delete(&mut self.remote_hosts, &id);
+                if self.nx_host.as_deref() == Some(id.as_str()) {
+                    self.nx_host = None;
+                }
+            }
+            if self.remote_hosts.is_empty() {
+                ui.add_space(16.0);
+                ui.vertical_centered(|ui| {
+                    icons::show(ui, icons::Icon::Server, 22.0, theme::faint());
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new("Sin equipos remotos.")
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                    );
+                });
+            }
+        });
+    }
+
+    /// Una fila del carril. Devuelve su respuesta para el clic y el menú.
+    fn nx_host_row(
+        &self,
+        ui: &mut egui::Ui,
+        nombre: &str,
+        sub: &str,
+        color: egui::Color32,
+        sel: bool,
+    ) -> egui::Response {
+        let (r, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 40.0),
+            egui::Sense::click(),
+        );
+        if sel {
+            ui.painter().rect_filled(r, egui::Rounding::same(theme::R_SM), theme::acc_bg());
+        } else if resp.hovered() {
+            ui.painter().rect_filled(r, egui::Rounding::same(theme::R_SM), theme::bg3());
+        }
+        // La pastilla de color a la izquierda: es lo que el operador asoció a
+        // ese equipo al darlo de alta, y con ocho filas es lo que se busca antes
+        // de leer el nombre.
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(r.left_top() + egui::vec2(6.0, 8.0), egui::vec2(3.0, 24.0)),
+            egui::Rounding::same(2.0),
+            color,
+        );
+        let p = ui.painter();
+        p.text(
+            egui::pos2(r.left() + 16.0, r.top() + 12.0),
+            egui::Align2::LEFT_CENTER,
+            nombre,
+            egui::FontId::proportional(theme::FS_FOOTNOTE),
+            if sel { theme::txt() } else { theme::txt2() },
+        );
+        p.text(
+            egui::pos2(r.left() + 16.0, r.top() + 27.0),
+            egui::Align2::LEFT_CENTER,
+            sub,
+            egui::FontId::proportional(theme::FS_MICRO),
+            theme::faint(),
+        );
+        ui.add_space(2.0);
+        resp
+    }
+
+    /// El alta y la edición de un equipo.
+    fn nx_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut h) = self.nx_edit.clone() else { return };
+        let mut cerrar = false;
+        let mut guardar = false;
+        let mut probar = false;
+        egui::Window::new(if self.nx_edit_nuevo { "Nuevo equipo remoto" } else { "Editar equipo" })
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_width(520.0)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(theme::bg2())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::acc_line())),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(500.0);
+                // El subtítulo dice a qué se está dando de alta ANTES de
+                // rellenar nada, y cambia con el protocolo. La V2 lo tiene y es
+                // lo que evita guardar un WinRM creyendo que era un SSH.
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        h.protocol.label(),
+                        if h.host.is_empty() { "sin dirección aún" } else { &h.host }
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                );
+                ui.add_space(10.0);
+
+                campo(ui, "Nombre", &mut h.name, "Ej. Prod-Web-01");
+
+                // ── protocolo, agrupado ─────────────────────────────────────
+                row_align(ui, 26.0, egui::Align::Center, |ui| {
+                    cell(ui, 110.0, 26.0, false, etiqueta_campo("Protocolo"));
+                    egui::ComboBox::from_id_source("nx-proto")
+                        .selected_text(h.protocol.label())
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            let mut grupo = "";
+                            for p in lucy_core::hosts::Protocol::ALL {
+                                if p.group() != grupo {
+                                    grupo = p.group();
+                                    ui.add_space(4.0);
+                                    ui.label(theme::instrument_label(grupo, theme::faint()));
+                                }
+                                if ui
+                                    .selectable_label(h.protocol == p, p.label())
+                                    .clicked()
+                                {
+                                    // Arrastra puerto, sistema y categoría. Es
+                                    // el núcleo quien decide, no esta vista.
+                                    h.set_protocol(p);
+                                }
+                            }
+                        });
+                });
+                ui.add_space(6.0);
+
+                campo(ui, "Dirección", &mut h.host, "192.168.1.10 ó servidor.empresa.local");
+
+                row_align(ui, 26.0, egui::Align::Center, |ui| {
+                    cell(ui, 110.0, 26.0, false, etiqueta_campo("Puerto"));
+                    let mut p = h.port.to_string();
+                    if ui
+                        .add(egui::TextEdit::singleline(&mut p).desired_width(80.0))
+                        .changed()
+                    {
+                        // Un puerto vacío mientras se escribe no es un error: se
+                        // deja en cero y `missing` no lo exige, porque el
+                        // protocolo ya trae el suyo.
+                        h.port = p.parse().unwrap_or(0);
+                    }
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(format!("por defecto {}", h.protocol.default_port()))
+                            .size(theme::FS_MICRO)
+                            .color(theme::faint()),
+                    );
+                });
+                ui.add_space(6.0);
+
+                campo(ui, "Usuario", &mut h.username, "DOMINIO/usuario");
+
+                row_align(ui, 26.0, egui::Align::Center, |ui| {
+                    cell(ui, 110.0, 26.0, false, etiqueta_campo("Contraseña"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.nx_edit_pw)
+                            .password(true)
+                            .desired_width(220.0)
+                            .hint_text(if self.nx_edit_nuevo { "" } else { "(sin cambios)" }),
+                    );
+                });
+                ui.add_space(6.0);
+
+                let mut tags = h.tags.join(", ");
+                row_align(ui, 26.0, egui::Align::Center, |ui| {
+                    cell(ui, 110.0, 26.0, false, etiqueta_campo("Etiquetas"));
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut tags)
+                                .desired_width(300.0)
+                                .hint_text("prod, web, db"),
+                        )
+                        .changed()
+                    {
+                        h.tags = tags
+                            .split(',')
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
+                    }
+                });
+                ui.add_space(8.0);
+
+                row_align(ui, 26.0, egui::Align::Center, |ui| {
+                    cell(ui, 110.0, 26.0, false, etiqueta_campo("Color"));
+                    for c in lucy_core::hosts::COLORS {
+                        let col = color_hex(c).unwrap_or(theme::acc());
+                        let (r, resp) =
+                            ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                        ui.painter().circle_filled(r.center(), 10.0, col);
+                        if h.color == c {
+                            ui.painter().circle_stroke(
+                                r.center(),
+                                12.0,
+                                egui::Stroke::new(2.0, theme::txt()),
+                            );
+                        }
+                        if resp.clicked() {
+                            h.color = c.to_string();
+                        }
+                    }
+                });
+
+                // ── el requisito del protocolo ──────────────────────────────
+                //
+                // Se dice AQUÍ y no cuando la conexión falla. «WinRM necesita
+                // Enable-PSRemoting» leído tras un error de red es un rato
+                // perdido buscando en el sitio equivocado.
+                let req = h.protocol.requirement();
+                if !req.is_empty() {
+                    ui.add_space(8.0);
+                    egui::Frame::none()
+                        .fill(theme::acc_bg())
+                        .rounding(egui::Rounding::same(theme::R_SM))
+                        .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(req)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::txt2()),
+                            );
+                        });
+                }
+                if let Some(r) = &self.nx_test {
+                    ui.add_space(6.0);
+                    let (col, txt) = match r {
+                        Ok(ms) => (theme::acc(), format!("Conectado en {ms} ms")),
+                        Err(e) => (theme::red(), e.clone()),
+                    };
+                    ui.label(egui::RichText::new(txt).size(theme::FS_CAPTION).color(col));
+                }
+
+                ui.add_space(12.0);
+                let falta = h.missing();
+                row_align(ui, 28.0, egui::Align::Center, |ui| {
+                    // Probar ANTES de guardar. La V2 lo añadió porque «guardé una
+                    // errata y falló al primer uso» era la queja número uno.
+                    if ui
+                        .add_enabled(
+                            falta.is_empty() && h.protocol.can_shell() && !self.nx_testing,
+                            egui::Button::new("Probar conexión"),
+                        )
+                        .clicked()
+                    {
+                        probar = true;
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        cerrar = true;
+                    }
+                    right(ui, 28.0, |ui| {
+                        if ui
+                            .add_enabled(falta.is_empty(), egui::Button::new("Guardar"))
+                            .clicked()
+                        {
+                            guardar = true;
+                        }
+                    });
+                });
+                // Lo que falta, dicho entero y a la vista, no de uno en uno al
+                // pulsar.
+                if !falta.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("Falta: {}", falta.join(", ")))
+                            .size(theme::FS_MICRO)
+                            .color(theme::amber()),
+                    );
+                }
+            });
+
+        if probar {
+            self.nx_probar(&h);
+        }
+        if guardar {
+            match self.remote_hosts.iter().position(|x| x.id == h.id) {
+                Some(i) => self.remote_hosts[i] = h.clone(),
+                None => self.remote_hosts.push(h.clone()),
+            }
+            let _ = lucy_core::hosts::save(&self.remote_hosts);
+            // La contraseña solo si se escribió algo: al editar, un campo en
+            // blanco significa «déjala como está», no «bórrala».
+            if !self.nx_edit_pw.trim().is_empty() {
+                let _ = lucy_core::hosts::set_password(&h.id, self.nx_edit_pw.trim());
+            }
+            cerrar = true;
+        }
+        if cerrar {
+            self.nx_edit = None;
+            self.nx_edit_pw.clear();
+            self.nx_test = None;
+        } else {
+            self.nx_edit = Some(h);
+        }
     }
 
     /// Decide qué hacer con lo escrito: ejecutarlo o mandarlo a traducir.

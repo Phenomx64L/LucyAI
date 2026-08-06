@@ -54,7 +54,7 @@ pub fn recall(query: &str) -> String {
 /// Van con su id porque es lo que identificaría una ejecución remota el día que
 /// se migre; hoy la sección del núcleo solo los nombra para que Lucy sepa que
 /// existen y no proponga correr aquí algo que era para allá.
-pub fn hosts_block(hosts: &[crate::hosts::Host]) -> String {
+pub fn hosts_block(hosts: &[lucy_core::hosts::Host]) -> String {
     let mut s = String::new();
     for h in hosts {
         let _ = writeln!(
@@ -62,7 +62,7 @@ pub fn hosts_block(hosts: &[crate::hosts::Host]) -> String {
             "- {} (id {}) — {} en {}",
             h.name,
             h.id,
-            if h.kind == "linux" { "Linux por SSH" } else { "Windows por WinRM" },
+            h.protocol.label(),
             if h.host.is_empty() { "sin dirección" } else { &h.host }
         );
     }
@@ -72,19 +72,19 @@ pub fn hosts_block(hosts: &[crate::hosts::Host]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hosts::Host;
+    use lucy_core::hosts::Host;
 
     #[test]
     fn el_bloque_de_hosts_lleva_el_id_y_el_transporte() {
         // El id es lo que identificaría la ejecución remota cuando se migre, y
         // el transporte es lo que decide si un comando es PowerShell o bash.
         let hs = [Host {
-            id: "srv01".into(),
             name: "Servidor de archivos".into(),
             host: "10.0.0.5".into(),
             username: "admin".into(),
-            kind: "windows".into(),
+            ..Host::nuevo(lucy_core::hosts::Protocol::Winrm, 0)
         }];
+        let hs = [Host { id: "srv01".into(), ..hs[0].clone() }];
         let b = hosts_block(&hs);
         assert!(b.contains("Servidor de archivos"));
         assert!(b.contains("id srv01"));
@@ -102,11 +102,8 @@ mod tests {
     #[test]
     fn un_host_sin_direccion_lo_dice_en_vez_de_dejar_un_hueco() {
         let hs = [Host {
-            id: "x".into(),
             name: "Sin IP".into(),
-            host: String::new(),
-            username: String::new(),
-            kind: "linux".into(),
+            ..Host::nuevo(lucy_core::hosts::Protocol::Ssh, 0)
         }];
         assert!(hosts_block(&hs).contains("sin dirección"));
     }
