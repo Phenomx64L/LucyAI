@@ -4127,6 +4127,14 @@ _(detenido por el operador)_");
         use lucy_core::agent::{PlanStep, StepStatus, TraceEntry};
         use lucy_core::tags::{self, TagKind};
 
+        // Los resultados de las herramientas de lectura de ESTE turno.
+        //
+        // Se juntan y se mandan de una vez al terminar el bucle, no una llamada
+        // por herramienta: si Lucy pide tres ficheros en la misma respuesta,
+        // devolverlos por separado gastaría tres turnos —tres peticiones de red
+        // pagadas— para contarle lo que cabía en uno.
+        let mut herramientas: Vec<String> = Vec::new();
+
         for t in tags::extract_tags(reply) {
             match t.kind {
                 TagKind::Thought => self.tabs[ti].ws.trace_push(TraceEntry {
@@ -4172,6 +4180,33 @@ _(detenido por el operador)_");
                         detail: args.clone(),
                         ..Default::default()
                     });
+                    // LAS DE LECTURA SE CUMPLEN AQUÍ MISMO, y el resultado se
+                    // acumula para devolvérselo en el turno siguiente. Antes se
+                    // anotaba la petición y no pasaba nada más: Lucy veía su
+                    // propia llamada en el panel, no le volvía nada, y o
+                    // insistía o se inventaba el contenido.
+                    //
+                    // En el hilo de la interfaz, sin hilo aparte, y eso es
+                    // deliberado: leer un fichero de disco local son
+                    // milisegundos, con tope de ocho megas. Lo que sí justificó
+                    // un hilo —una petición de red, un PowerShell que tarda
+                    // segundos— no se parece a esto.
+                    if let Some(r) = lucy_core::tools::run(&name, &args) {
+                        self.tabs[ti].ws.trace_push(TraceEntry {
+                            phase: if r.ok { "obs" } else { "error" }.into(),
+                            label: r.label.clone(),
+                            detail: if r.ok {
+                                format!("{} caracteres", r.body.chars().count())
+                            } else {
+                                r.body.clone()
+                            },
+                            ..Default::default()
+                        });
+                        herramientas.push(format!(
+                            "<TOOL_RESULT tool=\"{name}\" arg=\"{args}\">\n{}\n</TOOL_RESULT>",
+                            r.body
+                        ));
+                    }
                     // `writefile` y `editfile` tocan ficheros: eso es un
                     // artefacto, aunque todavía no se haya escrito ninguno.
                     if matches!(name.as_str(), "writefile" | "editfile") {
@@ -4259,6 +4294,25 @@ _(detenido por el operador)_");
                 }
                 _ => {}
             }
+        }
+
+        // Y SE LE DEVUELVE LO QUE PIDIÓ. Sin esta parte, todo lo de arriba es
+        // leer ficheros para nadie: el resultado se quedaría en el carril de
+        // Trace, que Lucy no ve.
+        //
+        // Va DESPUÉS del bucle y solo si hay algo, porque abrir un turno para
+        // decir "no pediste nada" cuesta lo mismo que abrirlo para contestar.
+        if !herramientas.is_empty() {
+            let n = herramientas.len();
+            self.send_raw(
+                ti,
+                format!(
+                    "Esto es lo que devolvieron las {} que pediste. Úsalo para \
+                     contestar; no vuelvas a pedir lo mismo.\n\n{}",
+                    if n == 1 { "herramienta".to_string() } else { format!("{n} herramientas") },
+                    herramientas.join("\n\n")
+                ),
+            );
         }
     }
 
