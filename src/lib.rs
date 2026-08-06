@@ -37,6 +37,8 @@ pub mod cloud;
 /// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
 /// en quien expone el comando.
 pub mod logs;
+/// Fundir memorias que dicen lo mismo. Estaba escrito y nadie lo llamaba nunca.
+pub mod consolidate;
 /// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
 pub mod memory;
 /// El catálogo de modelos LLM. Duplica `src/lib/models.js` a propósito, con un
