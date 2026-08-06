@@ -95,10 +95,29 @@ impl Default for Ctx<'_> {
 /// `-mini` y `-lite` con guion A PROPÓSITO: `mini` suelto haría que "geMINI"
 /// entrara aquí, y Gemini Pro no es un modelo flojo.
 pub fn model_is_weak(model: &str) -> bool {
+    // PRIMERO SE LE PREGUNTA AL CATÁLOGO, que ya sabe la respuesta.
+    //
+    // El glifo de cada modelo codifica su nivel —◆ insignia, ◐ equilibrado,
+    // ◯ económico— y este clasificador lo ignoraba para adivinarlo del nombre.
+    // Se equivocaba en las dos direcciones: degradaba a `gemini-3.5-flash`, que
+    // el propio catálogo describe como «rendimiento de frontera sostenido», por
+    // llevar «flash» en el id; y ascendía a `gpt-5.6-luna`, que es ◯ económico,
+    // porque su nombre no casaba con ninguna de las cadenas. La heurística se
+    // escribió cuando «Flash» quería decir pequeño y barato, y dejó de ser
+    // verdad sin que nadie tocara esta función.
+    let base = model.split_once("::").map_or(model, |(b, _)| b);
+    for g in crate::models::GROUPS {
+        for o in g.options {
+            let oid = o.id.split_once("::").map_or(o.id, |(b, _)| b);
+            if oid == base {
+                return o.icon == "◯";
+            }
+        }
+    }
+    // Y si no está en el catálogo es de Ollama, que se descubre en la máquina.
+    // Ahí sí hay que adivinar, y el tamaño en el nombre es lo único que hay.
     let m = model.to_ascii_lowercase();
-    m.contains("flash")
-        || m.contains("haiku")
-        || m.contains("-mini")
+    m.contains("-mini")
         || m.contains("-lite")
         || m.contains(":8b")
         || m.contains(":7b")
@@ -886,16 +905,43 @@ mod tests {
     }
 
     #[test]
-    fn gemini_no_es_un_modelo_flojo() {
+    fn el_nivel_lo_dice_el_catalogo_y_no_el_nombre() {
         let _s = serie();
-        // `mini` suelto haría que "geMINI" entrara en el nivel flojo. El guion
-        // de `-mini` es lo único que lo evita.
-        assert!(!model_is_weak("gemini-3.1-pro-preview"));
-        assert!(model_is_weak("gemini-3.6-flash"));
-        assert!(model_is_weak("gpt-5.4-mini"));
-        assert!(model_is_weak("claude-haiku-4-5"));
-        assert!(model_is_weak("llama3:8b"));
+        // Lo económico es flojo, lo demás no. Probado con los que la heurística
+        // vieja clasificaba MAL, que son los que importan:
+        //
+        //   • «flash» dejó de querer decir pequeño. El catálogo describe a
+        //     `gemini-3.5-flash` como «rendimiento de frontera sostenido», y en
+        //     una prueba real compuso un comando compuesto y analizó tres
+        //     ficheros. Se le estaba mandando el prompt corto, sin herramientas.
+        assert!(!model_is_weak("gemini-3.5-flash"), "◐ equilibrado no es flojo");
+        assert!(!model_is_weak("gemini-3.6-flash"), "◐ equilibrado no es flojo");
+        assert!(!model_is_weak("deepseek-v4-flash"), "◇ intermedio no es flojo");
+        assert!(!model_is_weak("claude-haiku-4-5"), "▸ rápido no es flojo");
+        //   • y al revés: un económico que el nombre no delataba se estaba
+        //     llevando el prompt entero.
+        assert!(model_is_weak("gpt-5.6-luna"), "◯ económico sí es flojo");
+        assert!(model_is_weak("gemini-3.5-flash-lite"));
+        assert!(model_is_weak("mistralai/mistral-7b-instruct-v0.3"));
+
+        // Lo de arriba del catálogo, intacto.
         assert!(!model_is_weak("claude-opus-5"));
+        assert!(!model_is_weak("gemini-3.1-pro-preview"));
+        // Y con sufijo de esfuerzo, que es como llegan de verdad del selector.
+        assert!(!model_is_weak("claude-opus-5::xhigh"));
+    }
+
+    #[test]
+    fn un_modelo_local_se_juzga_por_su_tamano() {
+        let _s = serie();
+        // Los de Ollama no están en el catálogo —se descubren en la máquina—,
+        // así que ahí sí hay que adivinar, y el tamaño en el nombre es lo único
+        // que hay.
+        assert!(model_is_weak("llama3:8b"));
+        assert!(model_is_weak("qwen3:3b"));
+        assert!(!model_is_weak("llama3:70b"));
+        // `mini` suelto haría que "geMINI" entrara aquí. El guion lo evita.
+        assert!(!model_is_weak("gemini-loquesea"));
     }
 
     #[test]
