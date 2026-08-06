@@ -41,6 +41,10 @@ pub mod memory;
 pub mod models;
 /// Lo que cuesta cada turno. Duplica `src/lib/model-pricing.ts`, con test.
 pub mod pricing;
+/// El prompt de sistema, por secciones. Port de la ARQUITECTURA de
+/// `commands/prompt_sections.rs`, no de su texto: allí se describen herramientas
+/// que este shell todavía no tiene.
+pub mod prompt;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
