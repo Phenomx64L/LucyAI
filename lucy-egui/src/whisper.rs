@@ -324,3 +324,137 @@ mod mel {
         assert!(ancho(70) > ancho(5), "{} vs {}", ancho(70), ancho(5));
     }
 }
+
+// ── Transcripción ────────────────────────────────────────────────────────────
+
+use candle_core::{Device, IndexOp, Tensor};
+use candle_transformers::models::whisper as w;
+
+/// Tope de tokens por dictado.
+///
+/// Whisper procesa ventanas de 30 s y una orden dictada no llega ni de lejos.
+/// El tope existe por otra razón: un modelo puede entrar en bucle repitiendo la
+/// última palabra, y sin corte se queda generando hasta que alguien mata la app.
+const MAX_TOKENS: usize = 224;
+
+/// El transcriptor cargado. Cargar cuesta segundos; transcribir, décimas.
+///
+/// Por eso vive y se reutiliza en vez de construirse por dictado: cargar medio
+/// giga de pesos cada vez que se pulsa el micrófono convertiría una función
+/// instantánea en una espera.
+pub struct Transcriber {
+    model: w::model::Whisper,
+    tokenizer: tokenizers::Tokenizer,
+    config: w::Config,
+    filters: Vec<f32>,
+    sot: u32,
+    eot: u32,
+    lang: u32,
+    transcribe: u32,
+    no_ts: u32,
+}
+
+impl Transcriber {
+    /// Carga el modelo desde un directorio ya verificado por `status`.
+    pub fn load(dir: &std::path::Path) -> Result<Self, String> {
+        let cfg_txt = std::fs::read_to_string(dir.join("config.json"))
+            .map_err(|e| format!("No se pudo leer config.json: {e}"))?;
+        let config: w::Config = serde_json::from_str(&cfg_txt)
+            .map_err(|e| format!("config.json no tiene la forma esperada: {e}"))?;
+
+        let tokenizer = tokenizers::Tokenizer::from_file(dir.join("tokenizer.json"))
+            .map_err(|e| format!("No se pudo leer el tokenizador: {e}"))?;
+
+        // CPU a propósito: `candle` con GPU exige compilar con CUDA, que es
+        // volver a la dependencia nativa que se evitó al elegir Rust puro. Para
+        // una orden dictada de unos segundos, la CPU basta.
+        let device = Device::Cpu;
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[dir.join("model.safetensors")],
+                w::DTYPE,
+                &device,
+            )
+            .map_err(|e| format!("No se pudieron mapear los pesos: {e}"))?
+        };
+        let model = w::model::Whisper::load(&vb, config.clone())
+            .map_err(|e| format!("No se pudo construir el modelo: {e}"))?;
+
+        // Los tokens especiales se resuelven UNA vez y se guardan. Buscarlos por
+        // texto en cada dictado es trabajo repetido, y que falte uno es un fallo
+        // de modelo equivocado que conviene detectar al cargar, no a mitad de
+        // una transcripción.
+        let tok = |s: &str| {
+            tokenizer
+                .token_to_id(s)
+                .ok_or_else(|| format!("El tokenizador no tiene {s}: ¿es un modelo multilingüe?"))
+        };
+        Ok(Self {
+            filters: mel_filters(w::SAMPLE_RATE, w::N_FFT, config.num_mel_bins),
+            sot: tok(w::SOT_TOKEN)?,
+            eot: tok(w::EOT_TOKEN)?,
+            lang: tok("<|es|>")?,
+            transcribe: tok(w::TRANSCRIBE_TOKEN)?,
+            no_ts: tok(w::NO_TIMESTAMPS_TOKEN)?,
+            model,
+            tokenizer,
+            config,
+        })
+    }
+
+    /// Transcribe audio mono a 16 kHz y devuelve el texto.
+    pub fn transcribe(&mut self, pcm: &[f32]) -> Result<String, String> {
+        // Whisper SIEMPRE mira una ventana de 30 s. Un dictado corto se rellena
+        // con silencio: darle menos muestras produce un espectrograma de otra
+        // forma y el encoder falla con un error de dimensiones que no dice nada
+        // sobre la causa.
+        let mut pad = pcm.to_vec();
+        pad.resize(w::N_SAMPLES, 0.0);
+
+        let mel = w::audio::pcm_to_mel(&self.config, &pad, &self.filters);
+        let n = self.config.num_mel_bins;
+        let mel = Tensor::from_vec(mel, (1, n, w::N_FRAMES), &Device::Cpu)
+            .map_err(|e| format!("El espectrograma no cuadra: {e}"))?;
+
+        let audio = self
+            .model
+            .encoder
+            .forward(&mel, true)
+            .map_err(|e| format!("Falló el encoder: {e}"))?;
+
+        // Los cuatro tokens de arranque fijan la tarea: transcribir, en español,
+        // sin marcas de tiempo. Fijar el idioma en vez de detectarlo se salta una
+        // pasada entera del modelo, y esta herramienta se usa en español.
+        let mut tokens = vec![self.sot, self.lang, self.transcribe, self.no_ts];
+        for i in 0..MAX_TOKENS {
+            let t = Tensor::new(tokens.as_slice(), &Device::Cpu)
+                .and_then(|t| t.unsqueeze(0))
+                .map_err(|e| format!("No se pudo formar la entrada: {e}"))?;
+            // `flush_kv_cache` solo en la primera pasada: después la caché es lo
+            // que evita recalcular todo el prefijo en cada token.
+            let logits = self
+                .model
+                .decoder
+                .forward(&t, &audio, i == 0)
+                .map_err(|e| format!("Falló el decoder: {e}"))?;
+            let last = logits
+                .dim(1)
+                .and_then(|d| logits.i((0, d - 1)))
+                .map_err(|e| format!("No se pudo leer la salida: {e}"))?;
+            let next = last
+                .argmax(0)
+                .and_then(|t| t.to_scalar::<u32>())
+                .map_err(|e| format!("No se pudo elegir el token: {e}"))?;
+            if next == self.eot {
+                break;
+            }
+            tokens.push(next);
+        }
+
+        // Se descartan los cuatro de control: son instrucciones, no texto.
+        self.tokenizer
+            .decode(&tokens[4..], true)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| format!("No se pudo descodificar: {e}"))
+    }
+}

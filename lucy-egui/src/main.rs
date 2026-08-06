@@ -319,6 +319,8 @@ struct ChatTab {
     ws: lucy_core::agent::Workspace,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
+    /// Transcripción en vuelo: el canal por el que llegará el texto.
+    tr_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Grabación de voz en curso, si la hay. Vive en la pestaña porque el
     /// dictado acaba en SU compositor.
     rec: Option<voice::Recording>,
@@ -342,6 +344,7 @@ impl ChatTab {
             turn_start: None,
             drain: drain::Drain::default(),
             rec: None,
+            tr_rx: None,
             stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             title: if n == 0 {
                 "Nueva Terminal".to_string()
@@ -1852,6 +1855,7 @@ impl eframe::App for App {
         // que poder terminar aunque el operador se vaya al Dashboard a mirar
         // otra cosa mientras corre.
         self.pump_exec();
+        self.pump_voice();
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -2762,9 +2766,15 @@ impl App {
                     // siguiente, y el botón lo dice al soltar en vez de tragarse
                     // el audio en silencio.
                     let grabando = self.tabs[self.tab].rec.is_some();
+                    let transcribiendo = self.tabs[self.tab].tr_rx.is_some();
                     let (mr, mresp) =
                         ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-                    if grabando {
+                    if transcribiendo {
+                        // Transcribiendo: el mismo sitio, otro estado. Sin esto,
+                        // los segundos que tarda Whisper parecen que no pasó nada.
+                        ui.painter().circle_filled(mr.center(), 11.0, theme::ACC_BG);
+                        ui.ctx().request_repaint();
+                    } else if grabando {
                         // El aro crece con el nivel. Sin señal visible no hay
                         // forma de saber si Windows eligió el micrófono que
                         // tienes delante o uno que no existe.
@@ -2784,7 +2794,13 @@ impl App {
                         icons::Icon::Mic,
                         mr.center(),
                         17.0,
-                        if grabando { theme::RED } else { theme::TXT3 },
+                        if grabando {
+                            theme::RED
+                        } else if transcribiendo {
+                            theme::ACC
+                        } else {
+                            theme::TXT3
+                        },
                     );
                     // El estado del modelo se dice EN EL BOTÓN, antes de grabar.
                     // Descubrir que falta después de hablar treinta segundos es
@@ -2793,10 +2809,13 @@ impl App {
                     if mresp
                         .on_hover_text(if grabando {
                             "Detener el dictado".to_string()
+                        } else if transcribiendo {
+                            "Transcribiendo…".to_string()
                         } else {
                             format!("Dictar — {}", modelo.message())
                         })
                         .clicked()
+                        && !transcribiendo
                     {
                         dictar = true;
                     }
@@ -2925,14 +2944,23 @@ impl App {
                 // grabación en silencio sería peor que no grabar.
                 Some(r) => {
                     let audio = r.finish();
-                    let s = voice::duration_s(&audio);
-                    t.log.push(ChatMsg::new(
-                        false,
-                        format!(
-                            "Grabados {s:.1} s de audio ({} muestras a 16 kHz, mono). \n                             La transcripción es el paso siguiente: falta el motor \n                             Whisper local.",
-                            audio.len()
-                        ),
-                    ));
+                    match whisper::status() {
+                        whisper::Status::Ready(dir) => {
+                            // En OTRO HILO: cargar los pesos y decodificar
+                            // tarda segundos en CPU, y hacerlo aquí congelaría
+                            // la ventana justo después de soltar el botón.
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let r = whisper::Transcriber::load(&dir)
+                                    .and_then(|mut t| t.transcribe(&audio));
+                                let _ = tx.send(r);
+                            });
+                            t.tr_rx = Some(rx);
+                        }
+                        // Sin modelo se dice qué falta y DÓNDE ponerlo, en vez
+                        // de tragarse la grabación en silencio.
+                        otro => t.log.push(ChatMsg::new(false, otro.message())),
+                    }
                 }
                 None => match voice::Recording::start() {
                     Ok(r) => t.rec = Some(r),
@@ -4107,6 +4135,34 @@ _(detenido por el operador)_");
             });
             self.svc_rx = Some(rx);
             self.svc_last = Instant::now();
+        }
+    }
+
+    /// Recoge el texto dictado cuando el hilo de Whisper termina.
+    ///
+    /// El texto va al COMPOSITOR, no al hilo: dictar es escribir con la voz,
+    /// y mandarlo solo quitaría la oportunidad de corregir una palabra que el
+    /// reconocedor entendió mal antes de que Lucy actúe sobre ella.
+    fn pump_voice(&mut self) {
+        for t in &mut self.tabs {
+            let Some(rx) = &t.tr_rx else { continue };
+            match rx.try_recv() {
+                Ok(Ok(texto)) => {
+                    if !texto.is_empty() {
+                        if !t.input.is_empty() && !t.input.ends_with(' ') {
+                            t.input.push(' ');
+                        }
+                        t.input.push_str(&texto);
+                    }
+                    t.tr_rx = None;
+                }
+                Ok(Err(e)) => {
+                    t.log.push(ChatMsg::new(false, format!("No se pudo transcribir: {e}")));
+                    t.tr_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => t.tr_rx = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
         }
     }
 
