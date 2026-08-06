@@ -147,9 +147,82 @@ pub fn run_powershell_utf8(script: &str) -> Result<(String, String, bool), Strin
     ))
 }
 
+/// Traduce una etiqueta de ejecución al script de PowerShell que la cumple.
+///
+/// EL FALLO QUE ESTO CIERRA. El shell nativo metía TODAS las etiquetas de
+/// ejecución en el mismo sitio y luego mandaba su contenido a PowerShell tal
+/// cual. Con `<EXECUTE>` eso es correcto. Con las demás no:
+///
+///   • `<EXECUTE_REG>query HKLM\...` — en PowerShell, `query` es el programa de
+///     Terminal Services, no `reg.exe`. No falla: hace otra cosa.
+///   • `<EXECUTE_WMIC>cpu get name` — `cpu` no es nada, y el error que sale
+///     ("término no reconocido") no se parece a la causa.
+///   • `<EXECUTE_NETSH>`, `<EXECUTE_CSCRIPT>` — igual, sin su binario delante.
+///
+/// El panel decía "Ejecutar (EXECUTE_REG)" y ejecutaba otra cosa. Eso es peor
+/// que no soportar la etiqueta, porque el registro de auditoría queda diciendo
+/// que se hizo lo que se pidió.
+///
+/// Sale `None` para las que este shell NO puede cumplir —hoy, la remota—. Quien
+/// llama tiene que decirlo, no inventarse un equivalente local: correr en esta
+/// máquina un comando que el modelo pidió para otra es el peor final posible.
+///
+/// El contenido se pasa como ARGUMENTOS de un `&`-call, no interpolado en una
+/// cadena de script: así un `;` o un `|` dentro del comando son texto para el
+/// binario invocado y no sintaxis para PowerShell.
+pub fn tag_to_script(kind: crate::tags::TagKind, content: &str) -> Option<String> {
+    use crate::tags::TagKind as K;
+    let c = content.trim();
+    Some(match kind {
+        K::Execute => c.to_string(),
+        // `cmd /c` y no `&`: lo que hay dentro suele ser una línea de cmd con su
+        // propia sintaxis —tuberías, `&&`, redirecciones— y quien tiene que
+        // interpretarla es cmd.
+        K::ExecuteCmd => format!("cmd.exe /c {c}"),
+        K::ExecuteWmic => format!("wmic.exe {c}"),
+        K::ExecuteNetsh => format!("netsh.exe {c}"),
+        K::ExecuteReg => format!("reg.exe {c}"),
+        K::ExecuteCscript => format!("cscript.exe //NoLogo {c}"),
+        // La remota necesita una sesión que este shell todavía no abre.
+        K::ExecuteRemote => return None,
+        // Ni `<TOOL>` ni `<THOUGHT>` son ejecuciones: van a Trace.
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cada_etiqueta_llama_a_su_binario_y_no_a_powershell_a_secas() {
+        use crate::tags::TagKind as K;
+        // Sin el prefijo, PowerShell entiende `query` como el programa de
+        // Terminal Services: no da error y hace otra cosa. Es el fallo que
+        // dejaba el panel diciendo que se ejecutó lo que se pidió.
+        assert_eq!(
+            tag_to_script(K::ExecuteReg, "query HKLM\\SOFTWARE /v X").unwrap(),
+            "reg.exe query HKLM\\SOFTWARE /v X"
+        );
+        assert_eq!(tag_to_script(K::ExecuteWmic, "cpu get name").unwrap(), "wmic.exe cpu get name");
+        assert_eq!(
+            tag_to_script(K::ExecuteNetsh, "interface ip show config").unwrap(),
+            "netsh.exe interface ip show config"
+        );
+        assert!(tag_to_script(K::ExecuteCscript, "x.vbs").unwrap().contains("//NoLogo"));
+        // La sencilla se queda como está: ya es PowerShell.
+        assert_eq!(tag_to_script(K::Execute, "Get-Service").unwrap(), "Get-Service");
+    }
+
+    #[test]
+    fn lo_que_este_shell_no_puede_cumplir_devuelve_nada() {
+        use crate::tags::TagKind as K;
+        // Correr localmente un comando que el modelo pidió para OTRA máquina es
+        // el peor final posible: parece que funcionó y midió el equipo que no era.
+        assert!(tag_to_script(K::ExecuteRemote, "Get-Service").is_none());
+        assert!(tag_to_script(K::Tool, "sysinfo").is_none());
+        assert!(tag_to_script(K::Thought, "pensando").is_none());
+    }
 
     // Las letras acentuadas de 0x80–0xA5 son IDÉNTICAS en CP-437 (Windows en
     // inglés, que es lo que corre el CI) y CP-850 (español, donde se encontró
