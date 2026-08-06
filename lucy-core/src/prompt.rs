@@ -311,7 +311,14 @@ impl Section for Actions {
              Herramientas de lectura, cuyo resultado te vuelve en el turno siguiente:\n\
              · <TOOL>readfile:C:\\ruta\\fichero.log</TOOL> — el texto del fichero\n\
              · <TOOL>listdir:C:\\ruta</TOOL> — qué hay en esa carpeta\n\
-             Esas DOS y ninguna más: lo que pidas con otro nombre no lo va a cumplir \
+             Y dos para cambiar ficheros, que NO escriben solas: preparan el cambio en \
+             el panel de Artefactos con su diff, y escribe el operador al aprobarlo.\n\
+             · <TOOL>writefile:C:\\ruta\\fichero.txt|||CONTENIDO</TOOL>\n\
+             · <TOOL>editfile:C:\\ruta|||TEXTO_VIEJO|||TEXTO_NUEVO</TOOL>\n\
+             En `editfile`, el TEXTO_VIEJO tiene que aparecer UNA sola vez en el \
+             fichero: si aparece varias, el cambio se rechaza y hay que darle más \
+             contexto —la línea de antes y la de después— hasta que sea único.\n\
+             Esas CUATRO y ninguna más: lo que pidas con otro nombre no lo va a cumplir \
              nadie, y te quedarás esperando un resultado que no llega.\n\
              Cuando el operador te diga un dato SUYO que vayas a necesitar otro día \
              —su dominio, sus servidores, cómo prefiere que hagas las cosas— guárdalo \
@@ -723,9 +730,20 @@ mod tests {
             assert!(p.contains(nombre), "no se le ofrece {nombre}");
         }
         assert!(p.contains("ninguna más"), "no se le acota el catálogo");
-        // `writefile` NO está migrada. Nombrarla haría que la pidiera y se
-        // quedara esperando un resultado que no llega.
-        assert!(!p.contains("writefile"), "se le promete escribir ficheros");
+    }
+
+    #[test]
+    fn las_de_escribir_se_le_ofrecen_como_propuestas_y_no_como_escrituras() {
+        let _s = serie();
+        // La diferencia no es de matiz. Si Lucy cree que `writefile` escribe,
+        // dice "ya lo he dejado arreglado" y se va; el operador se encuentra el
+        // fichero intacto y un artefacto esperando en un panel que no miró.
+        let p = build(&Ctx::default());
+        assert!(p.contains("NO escriben solas"), "no se le dice que solo proponen");
+        assert!(p.contains("Artefactos"), "no se le dice dónde acaba la propuesta");
+        // Y el caso que rechaza el cambio, dicho ANTES de que lo intente: sin
+        // esto lo descubre por un error y gasta una vuelta en enterarse.
+        assert!(p.contains("UNA sola vez"), "no se le avisa de la coincidencia única");
     }
 
     #[test]
