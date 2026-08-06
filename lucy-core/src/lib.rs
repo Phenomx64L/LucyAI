@@ -55,6 +55,9 @@ pub mod session;
 /// Capturar la pantalla. La mitad de VER de `local_screen.rs`; conducir el
 /// escritorio no viene, y no por falta de tiempo.
 pub mod screen;
+/// Lo que Lucy sabe del operador entre sesiones. El hueco del prompt existía y
+/// viajaba vacío; la etiqueta con la que se escribe se ignoraba.
+pub mod profile;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
