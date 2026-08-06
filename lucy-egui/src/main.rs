@@ -338,6 +338,62 @@ fn start_turn(
     rx
 }
 
+/// Cuántas líneas de diff caben en la ficha de un artefacto.
+///
+/// Un fichero entero dentro del carril no se lee, y para leerlo entero está
+/// abrirlo. Lo que hace falta aquí es ver QUÉ cambia.
+const DIFF_MAX: usize = 24;
+
+/// Las líneas que cambian entre dos textos, con su signo.
+///
+/// Recorta el prefijo y el sufijo comunes y enseña lo de en medio. NO es un diff
+/// de verdad —no busca el subconjunto común más largo, así que mover un bloque
+/// se ve como borrarlo y añadirlo— y para lo que hace falta aquí basta: el caso
+/// normal es un `editfile` que toca dos líneas, y ahí acierta exactamente.
+/// Traerse un algoritmo de Myers por los casos raros sería pagar mucho por una
+/// ficha de veinticuatro líneas.
+fn diff_lineas(antes: &str, despues: &str, max: usize) -> Vec<(char, String)> {
+    let a: Vec<&str> = antes.lines().collect();
+    let b: Vec<&str> = despues.lines().collect();
+    // Prefijo común.
+    let mut ini = 0;
+    while ini < a.len() && ini < b.len() && a[ini] == b[ini] {
+        ini += 1;
+    }
+    // Sufijo común, sin pisar el prefijo.
+    let mut fin = 0;
+    while fin < a.len() - ini.min(a.len()) && fin < b.len() - ini.min(b.len())
+        && a[a.len() - 1 - fin] == b[b.len() - 1 - fin]
+    {
+        fin += 1;
+    }
+    let quitadas = &a[ini..a.len() - fin];
+    let puestas = &b[ini..b.len() - fin];
+    // Sin cambios, sin diff. Antes se colaba la línea de contexto igualmente y
+    // dos textos idénticos producían una ficha con una línea, que se lee como
+    // "algo cambió aquí" cuando no cambió nada.
+    if quitadas.is_empty() && puestas.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    // Una línea de contexto antes, para que el cambio no salga flotando.
+    if ini > 0 {
+        out.push((' ', a[ini - 1].to_string()));
+    }
+    for l in quitadas {
+        out.push(('-', l.to_string()));
+    }
+    for l in puestas {
+        out.push(('+', l.to_string()));
+    }
+    if out.len() > max {
+        let sobran = out.len() - max;
+        out.truncate(max);
+        out.push((' ', format!("… y {sobran} líneas más")));
+    }
+    out
+}
+
 /// Los comandos que casan con lo que se lleva escrito.
 ///
 /// EXISTE PARA QUE LA PREGUNTA SE HAGA UNA SOLA VEZ. La paleta la usa para saber
@@ -4207,22 +4263,45 @@ _(detenido por el operador)_");
                             r.body
                         ));
                     }
-                    // `writefile` y `editfile` tocan ficheros: eso es un
-                    // artefacto, aunque todavía no se haya escrito ninguno.
+                    // `writefile` y `editfile` PREPARAN un artefacto y no
+                    // escriben. Antes se dejaba una ficha vacía cuyo resumen
+                    // decía «propuesto — sin escribir»: cierto, pero sin el
+                    // antes ni el después no había nada que aprobar — solo una
+                    // ruta y la palabra de Lucy sobre lo que iba a hacerle.
+                    //
+                    // Escribir en el disco de alguien pasa por la MISMA puerta
+                    // que ejecutar un comando: se ve el cambio entero y decide
+                    // una persona.
                     if matches!(name.as_str(), "writefile" | "editfile") {
-                        self.tabs[ti].ws.artifact_push(lucy_core::agent::Artifact {
-                            id: String::new(),
-                            kind: if name == "editfile" {
-                                lucy_core::agent::ArtifactKind::Edit
-                            } else {
-                                lucy_core::agent::ArtifactKind::Write
-                            },
-                            path: args.split("|||").next().unwrap_or(&args).to_string(),
-                            summary: "propuesto — sin escribir".into(),
-                            before: String::new(),
-                            after: String::new(),
-                            ts: 0,
-                        });
+                        let mut a = if name == "editfile" {
+                            lucy_core::tools::prepare_edit(&args)
+                        } else {
+                            lucy_core::tools::prepare_write(&args)
+                        };
+                        // El guardrail mira lo que se va a ESCRIBIR, no solo la
+                        // ruta: un fichero de arranque con una elevación dentro
+                        // es el mismo ataque que un comando que la lleva.
+                        let g = lucy_core::guard::scan(
+                            &a.after,
+                            lucy_core::guard::Role::Assistant,
+                        );
+                        if g.decision == lucy_core::guard::Decision::Block
+                            && a.blocked.is_empty()
+                        {
+                            a.blocked = g.reason.clone();
+                        }
+                        // Un artefacto que no se puede aplicar VUELVE a Lucy con
+                        // el motivo. Es un error suyo —un texto viejo que no
+                        // existe, un formato mal puesto— y sin decírselo lo
+                        // repite igual en el turno siguiente.
+                        if !a.blocked.is_empty() {
+                            herramientas.push(format!(
+                                "<TOOL_RESULT tool=\"{name}\" arg=\"{}\">\nNO SE APLICÓ: {}\n\
+                                 </TOOL_RESULT>",
+                                a.path, a.blocked
+                            ));
+                        }
+                        self.tabs[ti].ws.artifact_push(a);
                     }
                 }
                 k if k.is_execute() => {
@@ -4994,6 +5073,7 @@ _(detenido por el operador)_");
     }
 
     fn ws_artifacts(&mut self, ui: &mut egui::Ui) {
+        let mut escribir: Option<String> = None;
         for a in &self.tabs[self.tab].ws.artifacts {
             ui.add_space(6.0);
             egui::Frame::none()
@@ -5025,8 +5105,107 @@ _(detenido por el operador)_");
                                 .color(theme::faint()),
                         );
                     }
+                    // Por qué no se puede aplicar, si no se puede. En rojo y
+                    // sin botón: un botón que va a fallar es peor que ninguno.
+                    if !a.blocked.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(&a.blocked)
+                                .size(theme::FS_MICRO)
+                                .color(theme::red()),
+                        );
+                        return;
+                    }
+                    // EL DIFF. Es lo que hace que el botón signifique algo:
+                    // aprobar una ruta y la palabra de Lucy sobre lo que le va
+                    // a hacer no es aprobar nada. Las líneas que cambian, con
+                    // su signo, hasta un tope — un fichero entero en el carril
+                    // no se lee, y para eso está abrirlo.
+                    let d = diff_lineas(&a.before, &a.after, DIFF_MAX);
+                    if !d.is_empty() {
+                        ui.add_space(5.0);
+                        egui::Frame::none()
+                            .fill(theme::bg())
+                            .rounding(egui::Rounding::same(theme::R_SM))
+                            .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                            .show(ui, |ui| {
+                                for (signo, linea) in &d {
+                                    ui.label(
+                                        egui::RichText::new(format!("{signo} {linea}"))
+                                            .size(theme::FS_MICRO)
+                                            .monospace()
+                                            .color(match signo {
+                                                '+' => theme::acc(),
+                                                '-' => theme::red(),
+                                                _ => theme::faint(),
+                                            }),
+                                    );
+                                }
+                            });
+                    }
+                    if !a.applied {
+                        ui.add_space(6.0);
+                        if ui
+                            .button("Escribir")
+                            .on_hover_text(format!("Aplicar el cambio en {}", a.path))
+                            .clicked()
+                        {
+                            escribir = Some(a.id.clone());
+                        }
+                    } else {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("escrito")
+                                .size(theme::FS_MICRO)
+                                .color(theme::acc()),
+                        );
+                    }
                 });
         }
+        // Fuera del bucle: aplicar toca el mismo vector que se está recorriendo.
+        if let Some(id) = escribir {
+            self.aplicar_artefacto(&id);
+        }
+    }
+
+    /// Escribe un artefacto aprobado y le cuenta a Lucy cómo fue.
+    fn aplicar_artefacto(&mut self, id: &str) {
+        let ti = self.tab;
+        let Some(i) = self.tabs[ti].ws.artifacts.iter().position(|a| a.id == id) else {
+            return;
+        };
+        let r = lucy_core::tools::apply(&self.tabs[ti].ws.artifacts[i]);
+        let (path, ok) = (self.tabs[ti].ws.artifacts[i].path.clone(), r.is_ok());
+        match r {
+            Ok(()) => {
+                self.tabs[ti].ws.artifacts[i].applied = true;
+                self.tabs[ti].ws.artifacts[i].summary =
+                    format!("{} · escrito", self.tabs[ti].ws.artifacts[i].summary);
+            }
+            // El motivo se guarda EN el artefacto, no solo en el trace: el
+            // operador está mirando la ficha, y es donde va a buscar por qué el
+            // botón no hizo nada.
+            Err(ref e) => self.tabs[ti].ws.artifacts[i].blocked = e.clone(),
+        }
+        self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: if ok { "obs" } else { "error" }.into(),
+            label: if ok { "Fichero escrito" } else { "No se pudo escribir" }.into(),
+            detail: path.clone(),
+            ..Default::default()
+        });
+        // Y VUELVE A LUCY, como la salida de un comando. Sin esto, el operador
+        // aprueba el cambio y Lucy sigue creyendo que está pendiente.
+        self.send_raw(
+            ti,
+            if ok {
+                format!("El operador aprobó tu cambio y '{path}' ya está escrito en disco.")
+            } else {
+                format!(
+                    "Tu cambio en '{path}' NO se aplicó: {}. Corrígelo o dilo.",
+                    self.tabs[ti].ws.artifacts[i].blocked
+                )
+            },
+        );
     }
 
     /// El run en texto plano, para el portapapeles.
@@ -6970,6 +7149,67 @@ mod teclado {
         let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
         assert_eq!(atajo.logical_key, Key::Enter);
         assert!(atajo.modifiers.shift);
+    }
+}
+
+#[cfg(test)]
+mod diff {
+    use super::*;
+
+    #[test]
+    fn una_linea_cambiada_sale_como_una_quitada_y_una_puesta() {
+        // El caso normal de un `editfile`, y el que tiene que salir perfecto.
+        let d = diff_lineas("uno\ndos\ntres", "uno\nDOS\ntres", DIFF_MAX);
+        assert_eq!(
+            d,
+            vec![
+                (' ', "uno".to_string()),
+                ('-', "dos".to_string()),
+                ('+', "DOS".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lo_que_no_cambia_no_se_enseña() {
+        // Un diff que enseña el fichero entero no es un diff, es el fichero.
+        let largo: String = (0..100).map(|i| format!("linea {i}\n")).collect();
+        let mut otro: Vec<&str> = largo.lines().collect();
+        otro[50] = "CAMBIADA";
+        let d = diff_lineas(&largo, &otro.join("\n"), DIFF_MAX);
+        assert!(d.len() <= 3, "enseñó {} líneas para un cambio de una", d.len());
+    }
+
+    #[test]
+    fn dos_textos_iguales_no_tienen_diff() {
+        assert!(diff_lineas("igual\nigual", "igual\nigual", DIFF_MAX).is_empty());
+        assert!(diff_lineas("", "", DIFF_MAX).is_empty());
+    }
+
+    #[test]
+    fn crear_un_fichero_es_todo_lineas_nuevas() {
+        let d = diff_lineas("", "una\ndos", DIFF_MAX);
+        assert_eq!(d, vec![('+', "una".to_string()), ('+', "dos".to_string())]);
+    }
+
+    #[test]
+    fn un_cambio_enorme_se_recorta_y_dice_cuanto_falta() {
+        // Sin la nota, el operador aprobaría un cambio de mil líneas creyendo
+        // que ha visto las veinticuatro que hay.
+        let nuevo: String = (0..200).map(|i| format!("l{i}\n")).collect();
+        let d = diff_lineas("", &nuevo, DIFF_MAX);
+        assert_eq!(d.len(), DIFF_MAX + 1);
+        assert!(d.last().unwrap().1.contains("líneas más"), "{:?}", d.last());
+    }
+
+    #[test]
+    fn borrar_el_final_no_se_sale_por_debajo() {
+        // Los índices de sufijo y prefijo se pisan cuando un texto es prefijo
+        // del otro. Escrito sin cuidado es una resta con acarreo en `usize`.
+        let d = diff_lineas("una\ndos\ntres", "una", DIFF_MAX);
+        assert!(d.iter().any(|(s, _)| *s == '-'));
+        let d2 = diff_lineas("una", "una\ndos\ntres", DIFF_MAX);
+        assert!(d2.iter().any(|(s, _)| *s == '+'));
     }
 }
 
