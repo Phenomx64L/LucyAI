@@ -548,140 +548,28 @@ pub async fn memory_consolidate(dry_run: Option<bool>) -> Result<ConsolidationRe
 /// diagnostics check call the same code for a dry run instead of reimplementing
 /// "how duplicated is this corpus" with a second, drifting definition.
 pub(crate) fn consolidate_sync(is_dry: bool) -> Result<ConsolidationReport, String> {
-    use crate::commands::metrics::shared_db;
-
-    // Hard caps so consolidation can't pathologically iterate.
-    const MAX_INPUT: usize = 1_000;           // protect O(n²) inner loop
-    const MIN_TAG_OVERLAP: f32 = 0.50;
-    const MIN_CONTENT_JACCARD: f32 = 0.35;
-
-    let now_ts: i64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64).unwrap_or(0);
-
-    shared_db(move |conn| {
-        // Pull all candidate memories. Skip pinned (importance=10 by convention)
-        // and skip already-superseded ones (tag includes "superseded_by:...").
-        let mut stmt = conn.prepare(
-            "SELECT id, title, content, tags, importance, created_at
-             FROM agent_memories
-             WHERE importance < 10
-               AND tags NOT LIKE '%superseded_by%'
-             ORDER BY created_at DESC
-             LIMIT ?1"
-        ).map_err(|e| format!("prepare: {}", e))?;
-
-        type Row = (i64, String, String, String, i64, i64);
-        let rows: Vec<Row> = stmt
-            .query_map(rusqlite::params![MAX_INPUT as i64], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+    // DELEGA en `lucy_core::consolidate`. El cuerpo entero vivia aqui, y por eso
+    // no corria nunca: era un comando de Tauri, y el shell nativo âque si tiene
+    // una vista de Memoria donde ofrecerloâ no puede llamar a uno.
+    //
+    // Los tipos se traducen en vez de compartirse porque estos cruzan el puente
+    // IPC y llevan `Serialize`; el nucleo no depende de serde para su modelo.
+    let r = lucy_core::consolidate::run(is_dry)?;
+    Ok(ConsolidationReport {
+        dry_run: r.dry_run,
+        scanned: r.scanned,
+        clusters_found: r.clusters_found,
+        memories_merged: r.memories_merged,
+        clusters: r
+            .clusters
+            .into_iter()
+            .map(|c| ConsolidationCluster {
+                canonical_id: c.canonical_id,
+                canonical_title: c.canonical_title,
+                merged_ids: c.merged_ids,
+                overlap_score: c.overlap_score,
             })
-            .map_err(|e| format!("query: {}", e))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let scanned = rows.len();
-        if scanned < 2 {
-            return Ok(ConsolidationReport {
-                dry_run: is_dry, scanned,
-                clusters_found: 0, memories_merged: 0,
-                clusters: vec![],
-            });
-        }
-
-        // Pre-compute tokens + tag sets so the O(n²) loop is cheap.
-        let prepped: Vec<(i64, String, std::collections::HashSet<String>, std::collections::HashSet<String>)> = rows.iter()
-            .map(|(id, title, content, tags_json, _imp, _ts)| {
-                let content_toks = tokens_for_similarity(&format!("{} {}", title, content));
-                let tags: Vec<String> = serde_json::from_str(tags_json).unwrap_or_default();
-                let tag_set: std::collections::HashSet<String> = tags.into_iter()
-                    .map(|t| t.to_lowercase())
-                    .collect();
-                (*id, title.clone(), content_toks, tag_set)
-            })
-            .collect();
-
-        // Greedy clustering: walk newest → oldest, each unvisited entry
-        // seeds a cluster, then we absorb anything that exceeds both thresholds.
-        let mut visited: std::collections::HashSet<i64> = std::collections::HashSet::new();
-        let mut clusters: Vec<ConsolidationCluster> = Vec::new();
-
-        for i in 0..prepped.len() {
-            let (id_i, title_i, toks_i, tags_i) = &prepped[i];
-            if visited.contains(id_i) { continue; }
-            visited.insert(*id_i);
-
-            let mut merged: Vec<i64> = Vec::new();
-            let mut best_overlap: f32 = 0.0;
-            for j in (i + 1)..prepped.len() {
-                let (id_j, _title_j, toks_j, tags_j) = &prepped[j];
-                if visited.contains(id_j) { continue; }
-                let tag_overlap = jaccard(tags_i, tags_j);
-                if tag_overlap < MIN_TAG_OVERLAP { continue; }
-                let content_overlap = jaccard(toks_i, toks_j);
-                if content_overlap < MIN_CONTENT_JACCARD { continue; }
-                visited.insert(*id_j);
-                merged.push(*id_j);
-                let combined = (tag_overlap + content_overlap) * 0.5;
-                if combined > best_overlap { best_overlap = combined; }
-            }
-
-            if !merged.is_empty() {
-                clusters.push(ConsolidationCluster {
-                    canonical_id: *id_i,
-                    canonical_title: title_i.clone(),
-                    merged_ids: merged,
-                    overlap_score: best_overlap,
-                });
-            }
-        }
-
-        let clusters_found = clusters.len();
-        let memories_merged: usize = clusters.iter().map(|c| c.merged_ids.len()).sum();
-
-        // Write phase — only if NOT dry-run.
-        if !is_dry && !clusters.is_empty() {
-            let tx = conn.unchecked_transaction()
-                .map_err(|e| format!("begin tx: {}", e))?;
-            for cl in &clusters {
-                // Mark each merged entry with the superseded_by tag pointing at canonical_id.
-                // We append to the existing tags JSON array so the audit history is preserved.
-                let supersede_marker = format!("superseded_by:{}", cl.canonical_id);
-                for old_id in &cl.merged_ids {
-                    // Read existing tags
-                    let cur_tags: String = tx.query_row(
-                        "SELECT tags FROM agent_memories WHERE id = ?1",
-                        rusqlite::params![old_id],
-                        |r| r.get(0),
-                    ).unwrap_or_else(|_| "[]".to_string());
-                    let mut tags: Vec<String> = serde_json::from_str(&cur_tags).unwrap_or_default();
-                    if !tags.iter().any(|t| t == &supersede_marker) {
-                        tags.push(supersede_marker.clone());
-                    }
-                    let new_tags = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-                    tx.execute(
-                        "UPDATE agent_memories SET tags = ?1 WHERE id = ?2",
-                        rusqlite::params![new_tags, old_id],
-                    ).ok();
-                }
-                // Bump the canonical entry's importance by 1 (capped at 9)
-                // so it's slightly more sticky against future decay.
-                tx.execute(
-                    "UPDATE agent_memories
-                     SET importance = MIN(importance + 1, 9),
-                         created_at = ?1
-                     WHERE id = ?2",
-                    rusqlite::params![now_ts, cl.canonical_id],
-                ).ok();
-            }
-            tx.commit().map_err(|e| format!("commit: {}", e))?;
-        }
-
-        Ok(ConsolidationReport {
-            dry_run: is_dry, scanned,
-            clusters_found, memories_merged,
-            clusters,
-        })
+            .collect(),
     })
 }
 

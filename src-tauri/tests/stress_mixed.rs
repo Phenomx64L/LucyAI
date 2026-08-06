@@ -42,6 +42,7 @@ fn open_readonly() -> Connection {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s1_agent_loop_rapid_writes() {
     let db = open_db();
     let tab_id = "stress-s1-agent-loop";
@@ -107,6 +108,7 @@ fn s1_agent_loop_rapid_writes() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s2_interleaved_read_write() {
     use std::thread;
     use std::sync::{Arc, Barrier, atomic::{AtomicU64, Ordering}};
@@ -200,6 +202,7 @@ fn s2_interleaved_read_write() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s3_persistence_across_reconnect() {
     let session_id = "stress-s3-persist";
     let tab_id = "stress-s3-tab";
@@ -271,6 +274,7 @@ fn s3_persistence_across_reconnect() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s4_large_content() {
     let db = open_db();
     let tab_id = "stress-s4-large";
@@ -315,6 +319,7 @@ fn s4_large_content() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s5_conversation_ordering() {
     let db = open_db();
     let tab_id = "stress-s5-order";
@@ -365,6 +370,7 @@ fn s5_conversation_ordering() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s6_token_usage_accounting() {
     let db = open_readonly();
 
@@ -421,6 +427,7 @@ fn s6_token_usage_accounting() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s7_fts_sync_after_inserts() {
     let db = open_db();
     let tab_id = "stress-s7-fts";
@@ -474,6 +481,7 @@ fn s7_fts_sync_after_inserts() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s8_metrics_continuity() {
     let db = open_readonly();
 
@@ -522,6 +530,7 @@ fn s8_metrics_continuity() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test stress_mixed -- --ignored --nocapture --test-threads=1)"]
 fn s_summary() {
     let db = open_db();
     let integrity: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0)).unwrap();

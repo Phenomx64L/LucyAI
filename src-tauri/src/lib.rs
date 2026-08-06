@@ -1303,7 +1303,14 @@ const WEBVIEW2_BROWSER_ARGS: &str = concat!(
 /// `LUCY_OPAQUE=1`, transparency is exonerated and that rewrite has its
 /// justification closed. If it does not, the bug was never the WebView.
 ///
-///     $env:LUCY_OPAQUE = "1"; npm run tauri dev
+/// ```text
+/// $env:LUCY_OPAQUE = "1"; npm run tauri dev
+/// ```
+///
+/// Fenced as `text` on purpose: an indented block inside a doc comment is a
+/// RUST DOCTEST as far as rustdoc is concerned, so this PowerShell line was
+/// being handed to the compiler on every `cargo test --doc` and failing with
+/// "expected item, found `$`".
 fn lucy_context() -> tauri::Context {
     let mut ctx = tauri::generate_context!();
     if std::env::var_os("LUCY_OPAQUE").is_some() {

@@ -7,8 +7,18 @@
 //   P4: Concurrent access (WAL mode parallel reads/writes)
 //   P5: Data integrity under load (foreign keys, FTS consistency)
 //
-// Usage: cargo test --test perf_suite -- --nocapture
-//        cargo test --test perf_suite -- --nocapture --test-threads=1  (sequential)
+// Usage: cargo test --test perf_suite -- --ignored --nocapture --test-threads=1
+//
+// IGNORED BY DEFAULT, and not as housekeeping. These benchmarks run against the
+// developer's LIVE `%APPDATA%\com.lucy.dev\lucy.db`, and `p1_write_throughput`
+// INSERTS 100 rows into `agent_memories` before deleting them at the end. When
+// it fails partway — and it does, with "database is locked", because the suite
+// runs in parallel against one SQLite file — the cleanup at the bottom never
+// runs and a hundred rows titled "Perf test memory #N" stay in the operator's
+// memory. A plain `cargo test` should never be able to write to the user's data.
+//
+// `--test-threads=1` is not optional here either: several of these open the same
+// database and the writer loses the lock to the readers.
 
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
@@ -38,6 +48,7 @@ fn open_readonly() -> Connection {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p1_write_throughput_agent_memories() {
     let db = open_db();
     let count = 100;
@@ -69,6 +80,7 @@ fn p1_write_throughput_agent_memories() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p1_read_throughput_scan() {
     let db = open_readonly();
     let iterations = 50;
@@ -88,6 +100,7 @@ fn p1_read_throughput_scan() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p1_metrics_insert_throughput() {
     let db = open_db();
     let count = 200;
@@ -123,6 +136,7 @@ fn p1_metrics_insert_throughput() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p2_conversation_context_build() {
     // Simulates building context from recent conversation turns
     let db = open_readonly();
@@ -147,6 +161,7 @@ fn p2_conversation_context_build() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p2_metrics_aggregation() {
     // Simulates capacity planning query (aggregation over time series)
     let db = open_readonly();
@@ -170,6 +185,7 @@ fn p2_metrics_aggregation() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p2_fts_search_latency() {
     // Full-text search on conversation turns (used by semantic recall)
     let db = open_readonly();
@@ -199,6 +215,7 @@ fn p2_fts_search_latency() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p3_memory_roundtrip() {
     let db = open_db();
     // Idempotent: clean up any leftover data from a previous failed run
@@ -253,6 +270,7 @@ fn p3_memory_roundtrip() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p3_tag_search_precision() {
     let db = open_db();
     // Idempotent cleanup
@@ -305,6 +323,7 @@ fn p3_tag_search_precision() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p4_concurrent_reads() {
     use std::thread;
 
@@ -344,6 +363,7 @@ fn p4_concurrent_reads() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p4_read_write_contention() {
     // Simulate WAL mode: one writer + multiple readers simultaneously
     use std::thread;
@@ -413,6 +433,7 @@ fn p4_read_write_contention() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p5_db_pragmas_optimal() {
     // Use read-write connection: PRAGMA quick_check on FTS5 tables needs
     // write access internally (SQLite quirk — it validates the inverted index).
@@ -440,6 +461,7 @@ fn p5_db_pragmas_optimal() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p5_fts_consistency() {
     // Verify FTS index is in sync with the base table
     let db = open_readonly();
@@ -463,6 +485,7 @@ fn p5_fts_consistency() {
 }
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p5_token_usage_consistency() {
     let db = open_readonly();
 
@@ -489,6 +512,7 @@ fn p5_token_usage_consistency() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "manual: writes to the live lucy.db (cargo test --test perf_suite -- --ignored --nocapture --test-threads=1)"]
 fn p_summary() {
     let db = open_db();
 

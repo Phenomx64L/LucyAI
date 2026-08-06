@@ -1175,6 +1175,22 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Serialises the tests that watch %TEMP%.
+    ///
+    /// They assert on the CONTENTS OF A SHARED DIRECTORY, and the suite runs in
+    /// parallel in one process: while one test has its file staged, another one
+    /// listing the same directory sees it and reports a leak that never
+    /// happened. It failed intermittently — roughly once in every few runs —
+    /// which is the worst kind, because the fix people reach for is re-running
+    /// until it goes green.
+    ///
+    /// The lock cannot go inside `staged_temp_files`: the window that has to be
+    /// protected spans the before-listing, the call, and the after-listing.
+    fn temp_serie() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        L.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// The drag-and-drop happy path, end to end: PDF bytes → base64 → staged
     /// temp file → extractor → text. This is what the composer chip promises
     /// and what the prompt builder puts under `--- ARCHIVOS ---`.
@@ -1183,6 +1199,7 @@ mod tests {
         use base64::{engine::general_purpose, Engine as _};
         const CANARY: &str = "LUCY DROPPED PDF CANARY";
 
+        let _serie = temp_serie();
         let b64 = general_purpose::STANDARD.encode(build_text_pdf(CANARY));
         let before = staged_temp_files();
 
@@ -1203,6 +1220,7 @@ mod tests {
     async fn extract_from_bytes_cleans_up_after_a_failed_extraction() {
         use base64::{engine::general_purpose, Engine as _};
 
+        let _serie = temp_serie();
         let b64 = general_purpose::STANDARD.encode(b"not a PDF at all");
         let before = staged_temp_files();
 
@@ -1219,6 +1237,7 @@ mod tests {
     /// a stray 100 MB drop is refused instead of first becoming 75 MB of Vec.
     #[tokio::test]
     async fn extract_from_bytes_refuses_an_oversized_payload() {
+        let _serie = temp_serie();
         let huge = "A".repeat(80 * 1024 * 1024 + 4);
         let before = staged_temp_files();
 
@@ -1243,6 +1262,10 @@ mod tests {
         use base64::{engine::general_purpose, Engine as _};
         const CANARY: &str = "LUCY HOSTILE NAME CANARY";
 
+        // Takes the lock too. It does not read the directory itself, but it DOES
+        // stage a file there, and a sibling counting temp files while this one
+        // is mid-flight blames the leak on itself.
+        let _serie = temp_serie();
         let b64 = general_purpose::STANDARD.encode(build_text_pdf(CANARY));
         let hostile = r"..\..\..\..\evil";
         let escaped = std::env::temp_dir().join("..").join("evil.pdf");
