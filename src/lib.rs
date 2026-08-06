@@ -42,6 +42,9 @@ pub mod cloud;
 pub mod logs;
 /// Fundir memorias que dicen lo mismo. Estaba escrito y nadie lo llamaba nunca.
 pub mod consolidate;
+/// Lo que distingue a NexShell de una consola: decidir si lo escrito es un
+/// comando o una frase, y limpiar lo que el modelo devuelve.
+pub mod nexshell;
 /// Memoria NÚCLEO + decaimiento. Primer lote de `commands/memory.rs`.
 pub mod memory;
 /// El catálogo de modelos LLM. Duplica `src/lib/models.js` a propósito, con un
