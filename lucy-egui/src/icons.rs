@@ -47,6 +47,8 @@ pub enum Icon {
     Settings,
     /// `refresh`.
     Refresh,
+    /// `bolt` — el modo automático: Lucy encadena pasos sola.
+    Bolt,
     /// `chevron-down`.
     ChevronDown,
     /// `paperclip`.
@@ -190,6 +192,13 @@ impl Icon {
                     (14.5, 19.5), (17.4, 18.0),
                 ]),
             ],
+            // `bolt`: el rayo de Tabler. Un solo trazo cerrado — la figura es
+            // el contorno, no un relleno, que es lo que la deja legible a 17px
+            // igual que a 40.
+            Self::Bolt => &[Seg::Path(&[
+                (13.0, 3.0), (5.0, 13.5), (11.0, 13.5), (11.0, 21.0),
+                (19.0, 10.5), (13.0, 10.5), (13.0, 3.0),
+            ])],
             Self::ChevronDown => &[Seg::Path(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)])],
             Self::Clip => &[Seg::Path(&[
                 (15.0, 7.0), (8.5, 13.5), (8.5, 16.0), (10.5, 18.0), (13.0, 18.0),
@@ -288,9 +297,10 @@ mod tests {
     use super::*;
 
     /// Los 22 iconos, uno por uno.
-    const ALL: [Icon; 22] = [
+    const ALL: [Icon; 23] = [
         Icon::Grid, Icon::Sparkles, Icon::Terminal, Icon::FileText, Icon::Database,
-        Icon::Shield, Icon::Memory, Icon::Settings, Icon::Refresh, Icon::ChevronDown,
+        Icon::Shield, Icon::Memory, Icon::Settings, Icon::Refresh, Icon::Bolt,
+        Icon::ChevronDown,
         Icon::Clip, Icon::Mic, Icon::ArrowUp, Icon::Plus, Icon::Close, Icon::Copy,
         Icon::Desktop, Icon::Server, Icon::Pencil, Icon::Minimize, Icon::Maximize,
         Icon::Restore,
