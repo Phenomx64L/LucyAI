@@ -16,6 +16,11 @@ ureq       = "2"
 # El almacén de secretos del SO — las claves de API viven ahí, escritas por la
 # app real bajo el servicio "LucySysAdmin". Misma versión que `src-tauri`.
 keyring    = "2.3"
+# El banco de patrones del guardrail. Ya estaba en el árbol de forma
+# transitiva, así que como dependencia directa no compila nada nuevo. Escribir
+# esos patrones a mano en un componente de SEGURIDAD sería peor: un matcher
+# sutilmente mal es peor que ningún matcher, porque da confianza.
+regex      = "1"
 # El extractor de PDF de los adjuntos. Misma versión que `src-tauri`: la 0.7
 # fija lopdf 0.34, que desborda la pila con PDF muy anidados —sin guardia de
 # recursión— y un solo fichero hostil tumbaba el proceso entero.

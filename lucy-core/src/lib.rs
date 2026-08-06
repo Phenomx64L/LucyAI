@@ -22,6 +22,9 @@ use std::path::Path;
 pub mod attach;
 /// El texto de un PDF adjunto. La ingesta RAG sigue en `commands/pdf.rs`.
 pub mod pdf;
+/// Qué se deja correr solo y qué no. Aparece con el bucle automático: mientras
+/// una persona leyera cada comando, el guardrail era esa persona.
+pub mod guard;
 /// El workspace del agente: plan, ejecución, trace y artefactos. Port de
 /// `src/lib/cockpit/agent-workspace.ts` — el modelo, y sobre todo sus topes.
 pub mod agent;

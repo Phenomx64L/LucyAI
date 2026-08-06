@@ -42,6 +42,16 @@ pub struct PlanStep {
     /// Duración, una vez terminado.
     pub ms: Option<u64>,
     pub ts: u64,
+    /// Por qué este paso necesita que lo mire una persona, si lo necesita.
+    ///
+    /// `None` es lo normal y significa que puede correr solo cuando la pestaña
+    /// está en automático. Lo pone el guardrail —no la interfaz— porque «esto
+    /// puede correr sin que nadie lo lea» es una propiedad del paso, no de cómo
+    /// se pinte: la misma decisión vale igual si mañana la toma otro frontend.
+    ///
+    /// Un paso BLOQUEADO no usa este campo: nace en `Error` y no tiene botón.
+    /// Esto es para el estado del medio — plausible, delicado, decide un humano.
+    pub needs_human: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
