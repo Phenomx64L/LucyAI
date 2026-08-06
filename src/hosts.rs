@@ -597,40 +597,51 @@ fn wrapper_for(h: &Host, password: &str, script: &str) -> Result<String, String>
     }
 }
 
-/// Qué sistema corre en el equipo remoto, para poder traducir bien.
+/// Recorta un texto por caracteres, con puntos suspensivos.
 ///
-/// SIN ESTO LA TRADUCCIÓN USA EL SISTEMA EQUIVOCADO: se le pediría a un modelo
-/// un comando «para Windows 11» cuando al otro lado hay una Debian, y lo que
-/// vuelve no existe allí. Peor con las distribuciones: `apt` en una Fedora es un
-/// error que se ve tarde, porque el comando existe, simplemente no está.
-///
-/// Una línea corta, que es lo que cabe en un prompt. Un fallo devuelve `None` y
-/// quien llama se apaña con el tipo declarado del equipo — peor que medirlo, y
-/// mucho mejor que no traducir.
-pub fn detect_os(h: &Host, password: &str) -> Option<String> {
-    let script = if h.protocol.os() == "windows" {
-        "(Get-CimInstance Win32_OperatingSystem).Caption"
-    } else {
-        // `PRETTY_NAME` está en cualquier Linux con systemd, que a efectos
-        // prácticos es cualquier Linux al que se llegue por SSH.
-        ". /etc/os-release 2>/dev/null && echo $PRETTY_NAME || uname -sr"
-    };
-    let (out, _, ok) = run_remote(h, password, script).ok()?;
-    let linea = out.lines().map(str::trim).find(|l| !l.is_empty())?;
-    (ok && !linea.is_empty()).then(|| truncar(linea, 80))
+/// Lo que llega de un equipo remoto no tiene tope: un rastro de pila de WinRM
+/// son varias pantallas, y una etiqueta de interfaz no puede crecer con él.
+fn truncar(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    s.chars().take(n).collect::<String>() + "…"
 }
 
-/// Comprueba que se llega al equipo y que las credenciales valen.
+/// Lo que se sabe de un equipo después de llamar a su puerta.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    /// El sistema que dijo tener. Vacío si contestó pero no supo decirlo.
+    pub os: String,
+    /// Lo que tardó. Distingue «funciona» de «funciona y va lento».
+    pub ms: u64,
+}
+
+/// Llama a la puerta del equipo: ¿se llega, valen las credenciales, y qué corre?
 ///
-/// Un `echo` y nada más: lo que se quiere saber es si hay red y si la
-/// contraseña entra, no si el servidor sabe hacer algo. Devuelve los
-/// milisegundos, que es lo que distingue «funciona» de «funciona y va lento».
-pub fn test_connection(h: &Host, password: &str) -> Result<u64, String> {
+/// LAS TRES COSAS EN UN VIAJE. Antes eran dos funciones y dos conexiones —una
+/// para probar y otra para el sistema— y cada una paga su autenticación de
+/// WinRM, que es la parte lenta. La V2 lo hace en una sola sonda y tiene razón.
+///
+/// La marca `Lucy:OK` no es adorno: prueba que lo que volvió es NUESTRO comando
+/// y no un banner de bienvenida del servidor, un aviso de perfil o cualquier
+/// otra cosa que un shell remoto escupe antes del prompt. Sin ella, un servidor
+/// hablador pasa por conectado diciendo cualquier cosa.
+pub fn probe(h: &Host, password: &str) -> Result<Probe, String> {
+    const MARCA: &str = "Lucy:OK";
+    let script = if h.protocol.os() == "windows" {
+        "\"Lucy:OK|$((Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption)\""
+    } else {
+        // `PRETTY_NAME` está en cualquier Linux con systemd —a efectos prácticos,
+        // cualquiera al que se llegue por SSH—; `uname` es el respaldo.
+        ". /etc/os-release 2>/dev/null; echo \"Lucy:OK|${PRETTY_NAME:-$(uname -sr)}\""
+    };
     let t0 = std::time::Instant::now();
-    let (out, err, ok) = run_remote(h, password, "'lucy-ok'")?;
+    let (out, err, ok) = run_remote(h, password, script)?;
     let ms = t0.elapsed().as_millis() as u64;
-    if ok && out.contains("lucy-ok") {
-        return Ok(ms);
+    if let Some(l) = out.lines().find(|l| l.contains(MARCA)) {
+        let os = l.split('|').nth(1).unwrap_or("").trim().to_string();
+        return Ok(Probe { os: truncar(&os, 80), ms });
     }
     // La PRIMERA línea del error. WinRM devuelve media pantalla de rastro de
     // pila y lo que dice qué pasó está arriba del todo.
@@ -638,15 +649,22 @@ pub fn test_connection(h: &Host, password: &str) -> Result<u64, String> {
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .unwrap_or("sin respuesta del equipo");
+        .unwrap_or(if ok { "el equipo contestó algo que no reconozco" } else { "sin respuesta del equipo" });
     Err(truncar(motivo, 200))
 }
 
-fn truncar(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        return s.to_string();
-    }
-    s.chars().take(n).collect::<String>() + "…"
+/// QuÃ© sistema corre en el equipo remoto. Una vista de `probe`.
+///
+/// TenÃ­a su propia conexiÃ³n y era un viaje de mÃ¡s: lo que hace falta para medir
+/// el sistema es exactamente lo que hace falta para saber si se llega, y cada
+/// conexiÃ³n de WinRM paga su autenticaciÃ³n, que es la parte lenta.
+pub fn detect_os(h: &Host, password: &str) -> Option<String> {
+    probe(h, password).ok().map(|p| p.os).filter(|s| !s.is_empty())
+}
+
+/// Comprueba que se llega al equipo y que las credenciales valen.
+pub fn test_connection(h: &Host, password: &str) -> Result<u64, String> {
+    probe(h, password).map(|p| p.ms)
 }
 
 #[cfg(test)]
