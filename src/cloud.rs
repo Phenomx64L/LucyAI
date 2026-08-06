@@ -89,8 +89,21 @@ impl Provider {
 /// añada un modelo de otra casa con un nombre parecido — y el catálogo ya sabe
 /// la respuesta.
 pub fn provider_of(model_id: &str) -> Provider {
+    // El sufijo `::nivel` se quita antes de buscar, y no es una comodidad.
+    // El catálogo lista los modelos de Anthropic SOLO con él —
+    // `claude-opus-5::high`, `::max`…— y nunca a secas, así que un
+    // `claude-opus-5` pelado no casaba con nada y caía en el `_` de abajo: se
+    // le mandaba a Ollama, que contesta "model not found" sobre un nombre que
+    // existe de verdad en otra casa. El selector siempre pone el sufijo, así
+    // que en el camino normal no se veía; lo encontró un test del modo
+    // privacidad, que es justo un sitio donde llega el id pelado.
+    let base = model_id.split_once("::").map_or(model_id, |(b, _)| b);
     for g in crate::models::GROUPS {
-        if g.options.iter().any(|o| o.id == model_id) {
+        if g
+            .options
+            .iter()
+            .any(|o| o.id == model_id || o.id.split_once("::").map_or(o.id, |(b, _)| b) == base)
+        {
             return match g.provider {
                 "anthropic" => Provider::Anthropic,
                 "gemini" => Provider::Gemini,
@@ -159,6 +172,34 @@ fn api_key(p: Provider) -> Result<String, String> {
             p.label()
         )
     })
+}
+
+/// Si esta orden puede salir de la máquina.
+///
+/// QUÉ SIGNIFICA AQUÍ EL MODO PRIVACIDAD, que no es lo que significa en la V2.
+/// Allí el interruptor bloquea las llamadas AUXILIARES —generar el título de una
+/// pestaña, la capa LLM de los chips de memoria— y deja pasar la conversación
+/// principal. Este shell no tiene ninguna de esas dos cosas, así que portarlo
+/// literalmente habría dado un interruptor que no hace nada: un candado de
+/// adorno, que es peor que ninguno porque se confía en él.
+///
+/// Lo que se implementa es lo que dice el nombre y lo que cualquiera asume al
+/// encenderlo: con el modo puesto, NADA va a un proveedor de nube. Solo Ollama,
+/// que corre en esta máquina.
+///
+/// Y falla ANTES de mandar, con el nombre de a quién no se llamó. Un modo
+/// privacidad que se saltara en silencio al modelo elegido sería el mismo
+/// adorno por otro camino.
+pub fn allowed(model: &str, privacy: bool) -> Result<(), String> {
+    let p = provider_of(model);
+    if privacy && p != Provider::Ollama {
+        return Err(format!(
+            "Modo privacidad activo: no se llama a {}. Elige un modelo local de \
+             Ollama, o apaga el modo con /privacy.",
+            p.label()
+        ));
+    }
+    Ok(())
 }
 
 /// Arranca una respuesta en streaming del proveedor que corresponda.
@@ -707,6 +748,51 @@ mod motivos {
     fn una_trama_cualquiera_no_inventa_motivo() {
         assert_eq!(stop_reason(Provider::Gemini, &json!({"foo":1})), None);
         assert_eq!(stop_reason(Provider::OpenAi, &json!({"choices":[{"delta":{}}]})), None);
+    }
+
+    #[test]
+    fn un_id_sin_su_sufijo_de_esfuerzo_sigue_siendo_de_su_casa() {
+        // El catálogo lista los de Anthropic SOLO con sufijo. Sin quitarlo antes
+        // de buscar, `claude-opus-5` pelado no casaba con nada y acababa en
+        // Ollama — que contesta "model not found" sobre un modelo que existe.
+        assert_eq!(provider_of("claude-opus-5"), Provider::Anthropic);
+        assert_eq!(provider_of("claude-opus-5::high"), Provider::Anthropic);
+        assert_eq!(provider_of("claude-sonnet-5"), Provider::Anthropic);
+        // Y lo que de verdad es local sigue siéndolo: quitar el sufijo no puede
+        // convertir un id desconocido en un modelo de nube.
+        assert_eq!(provider_of("qwen3:4b"), Provider::Ollama);
+        assert_eq!(provider_of("un-modelo-mio::alto"), Provider::Ollama);
+    }
+
+    #[test]
+    fn el_modo_privacidad_no_deja_salir_nada_a_la_nube() {
+        // Con el modo puesto, ninguno de los seis proveedores pasa. Y el error
+        // dice a quién NO se llamó: "no se puede" sin nombre deja al operador
+        // adivinando si el problema es la clave, la red o el modo.
+        for m in ["claude-opus-5", "gemini-3.6-flash", "gpt-5.6-sol", "grok-4.5"] {
+            let e = allowed(m, true).unwrap_err();
+            assert!(e.contains("privacidad"), "{m}: {e}");
+            assert!(e.contains("/privacy"), "{m}: no dice cómo apagarlo — {e}");
+        }
+        // Anthropic por su nombre, no por su id.
+        assert!(allowed("claude-opus-5", true).unwrap_err().contains("Anthropic"));
+    }
+
+    #[test]
+    fn lo_local_pasa_con_el_modo_puesto() {
+        // Es el sentido entero del modo: seguir trabajando, sin salir de aquí.
+        assert!(allowed("qwen3:4b", true).is_ok());
+        assert!(allowed("llama3.1:8b", true).is_ok());
+        // Un id desconocido cuenta como local, igual que en `provider_of`: los
+        // modelos de Ollama se descubren en la máquina y no están en el catálogo.
+        assert!(allowed("un-modelo-mio", true).is_ok());
+    }
+
+    #[test]
+    fn con_el_modo_apagado_no_estorba() {
+        // Un guardrail que estorba se apaga, y entonces no hay guardrail.
+        assert!(allowed("claude-opus-5", false).is_ok());
+        assert!(allowed("qwen3:4b", false).is_ok());
     }
 
     /// Construye la parte de mensajes del cuerpo tal como lo haría `stream`,
