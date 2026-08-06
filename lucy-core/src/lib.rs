@@ -37,6 +37,8 @@ pub mod chat;
 /// Los proveedores de nube. Sin esto, el catálogo de modelos ofrece cincuenta y
 /// uno y solo funcionan los locales.
 pub mod cloud;
+/// El registro de equipos remotos. El MISMO índice que la app, byte a byte.
+pub mod hosts;
 /// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
 /// en quien expone el comando.
 pub mod logs;
