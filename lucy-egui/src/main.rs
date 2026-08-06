@@ -259,6 +259,7 @@ struct PromptInput {
     hosts: String,
     cwd: String,
     name: String,
+    profile: String,
     weak: bool,
     auto: bool,
 }
@@ -286,6 +287,7 @@ impl PromptInput {
             memories: &mems,
             working_dir: &self.cwd,
             user_name: &self.name,
+            user_profile: &self.profile,
             weak_model: self.weak,
             // Este shell propone; ejecuta el operador. Decirle lo contrario haría
             // que escribiera "ya lo he ejecutado" sobre una máquina intacta.
@@ -4133,6 +4135,35 @@ _(detenido por el operador)_");
                     detail: t.content,
                     ..Default::default()
                 }),
+                // LUCY ESCRIBE LO QUE APRENDE DEL OPERADOR.
+                //
+                // Esta rama caía en el `_ => {}` de abajo, y era la mitad que
+                // faltaba de una asimetría: el prompt YA le inyectaba memorias
+                // recordadas, así que Lucy recordaba cosas que ella no había
+                // escrito y no podía guardar nada. Preguntaba el nombre del
+                // dominio cada mañana sin forma de dejar de preguntarlo.
+                TagKind::Remember => {
+                    let cat = t.attrs.get("category").cloned().unwrap_or_default();
+                    // Un hecho a medias —sin clave o sin valor— no se guarda ni
+                    // se anuncia como guardado. Llenar el perfil de filas vacías
+                    // sale caro: viajan en cada turno a partir de entonces.
+                    let Some((k, v)) = lucy_core::profile::parse_fact(&t.content) else {
+                        continue;
+                    };
+                    let (label, detail) = match lucy_core::profile::set(&k, &v, &cat) {
+                        Ok(()) => ("Aprendido".to_string(), format!("{k}: {v}")),
+                        // Que no se pueda guardar SE DICE. Un "aprendido" que no
+                        // aprendió es la clase de mentira que solo se descubre
+                        // tres días después, cuando vuelve a preguntar lo mismo.
+                        Err(e) => ("No se pudo guardar".to_string(), e),
+                    };
+                    self.tabs[ti].ws.trace_push(TraceEntry {
+                        phase: "info".into(),
+                        label,
+                        detail,
+                        ..Default::default()
+                    });
+                }
                 TagKind::Tool => {
                     let (name, args) = tags::parse_tool(&t.content);
                     self.tabs[ti].ws.trace_push(TraceEntry {
@@ -4300,6 +4331,12 @@ _(detenido por el operador)_");
             // Windows si no lo ha puesto. Que Lucy sepa a quién le habla no es
             // cortesía: cambia a quién atribuye lo que se hizo en esta máquina.
             name: user_name(),
+            // Lo que Lucy ha ido aprendiendo del operador. Se lee AQUÍ —en el
+            // hilo de la interfaz— y no en `build`, porque es una consulta a
+            // una tabla local con cuarenta filas como mucho: microsegundos,
+            // frente a la petición HTTP que sí justificó mover el recuerdo
+            // semántico a otro hilo.
+            profile: lucy_core::profile::block(),
             // El nivel del modelo se decide por su id: uno flojo se ahoga con el
             // prompt entero y contesta en prosa sin emitir ninguna etiqueta.
             weak: lucy_core::prompt::model_is_weak(&self.chat_model),
@@ -5527,6 +5564,61 @@ _(detenido por el operador)_");
                 // decide una vez; si esta orden corre sola o no, es una decisión
                 // por orden. Ponerlos juntos haría que encender el automático
                 // costara tres clics y un cambio de vista.
+                // ── lo que Lucy ha aprendido ─────────────────────────────────
+                //
+                // ESTA LISTA ES LA MITAD DE CONFIANZA de la función. Lo que hay
+                // aquí lo escribió un modelo, sin que nadie lo aprobara, y viaja
+                // en todos los prompts a partir de entonces. Un almacén así sin
+                // forma de verlo ni de vaciarlo no es una memoria: es algo que
+                // se te queda pegado.
+                section(ui, "Lo que Lucy sabe de ti", None);
+                let perfil = lucy_core::profile::all().unwrap_or_default();
+                let alto = (perfil.len().max(1) as f32 * 22.0 + 30.0).min(240.0);
+                let mut olvidar: Option<String> = None;
+                card_on(ui, egui::vec2(full, alto), 14.0, theme::bg2(), |ui| {
+                    if perfil.is_empty() {
+                        ui.label(
+                            egui::RichText::new(
+                                "Todavía nada. Lucy lo va guardando sola cuando le \
+                                 cuentas algo que le servirá otro día.",
+                            )
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                        );
+                        return;
+                    }
+                    for e in &perfil {
+                        row_align(ui, 20.0, egui::Align::Center, |ui| {
+                            cell(
+                                ui,
+                                150.0,
+                                20.0,
+                                false,
+                                egui::RichText::new(e.key.replace('_', " "))
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::faint()),
+                            );
+                            ui.label(
+                                egui::RichText::new(&e.value)
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(theme::txt2()),
+                            );
+                            right(ui, 18.0, |ui| {
+                                if ui
+                                    .small_button("×")
+                                    .on_hover_text("Que Lucy lo olvide")
+                                    .clicked()
+                                {
+                                    olvidar = Some(e.key.clone());
+                                }
+                            });
+                        });
+                    }
+                });
+                if let Some(k) = olvidar {
+                    let _ = lucy_core::profile::forget(&k);
+                }
+
                 section(ui, "Ejecución automática", None);
                 card_on(ui, egui::vec2(full, 88.0), 14.0, theme::bg2(), |ui| {
                     row_align(ui, 24.0, egui::Align::Center, |ui| {
