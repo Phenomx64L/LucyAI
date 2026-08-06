@@ -17,6 +17,11 @@ use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Qué es un fichero adjunto y qué se puede hacer con él. La decisión —esto es
+/// texto, esto una imagen, esto no se puede mandar y por esto— no es de interfaz.
+pub mod attach;
+/// El texto de un PDF adjunto. La ingesta RAG sigue en `commands/pdf.rs`.
+pub mod pdf;
 /// El workspace del agente: plan, ejecución, trace y artefactos. Port de
 /// `src/lib/cockpit/agent-workspace.ts` — el modelo, y sobre todo sus topes.
 pub mod agent;

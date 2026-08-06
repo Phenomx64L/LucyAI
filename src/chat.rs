@@ -38,14 +38,24 @@ pub fn start_ollama(
         let msgs: Vec<serde_json::Value> = turns
             .iter()
             .map(|t| {
-                serde_json::json!({
+                let mut m = serde_json::json!({
                     "role": match t.who {
                         crate::turns::Who::System => "system",
                         crate::turns::Who::Assistant => "assistant",
                         crate::turns::Who::User => "user",
                     },
                     "content": t.text,
-                })
+                });
+                // Ollama sí las quiere en un campo aparte y sin tipo MIME: una
+                // lista de base64 pelados. Un modelo local sin visión ignora el
+                // campo, que no es lo ideal pero es mejor que el silencio de no
+                // mandarlo — con `llava` o `gemma3` funciona tal cual.
+                if !t.images.is_empty() {
+                    m["images"] = serde_json::Value::Array(
+                        t.images.iter().map(|i| serde_json::json!(i.b64)).collect(),
+                    );
+                }
+                m
             })
             .collect();
         let body = serde_json::json!({
