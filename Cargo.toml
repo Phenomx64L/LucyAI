@@ -37,7 +37,14 @@ ts-rs      = { version = "10", features = ["chrono-impl", "serde-compat"], optio
 # nativas de consola, que no respetan el UTF-8 que sí se le puede pedir a
 # PowerShell. Ver `shell.rs`.
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["stringapiset", "winnls", "sysinfoapi", "minwinbase"] }
+winapi = { version = "0.3", features = [
+    "stringapiset", "winnls", "sysinfoapi", "minwinbase",
+    # BitBlt + GetDIBits: capturar la pantalla para que Lucy pueda verla.
+    "winuser", "wingdi", "windef", "minwindef", "winnt",
+] }
+# Codificación PNG de la captura. Sin características por defecto: el resto de
+# formatos que trae `image` son megabytes de decodificadores que aquí no se usan.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 default = []

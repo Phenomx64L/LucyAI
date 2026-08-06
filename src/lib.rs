@@ -50,6 +50,9 @@ pub mod pricing;
 pub mod prompt;
 /// Las conversaciones abiertas, para que sobrevivan al cierre.
 pub mod session;
+/// Capturar la pantalla. La mitad de VER de `local_screen.rs`; conducir el
+/// escritorio no viene, y no por falta de tiempo.
+pub mod screen;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
