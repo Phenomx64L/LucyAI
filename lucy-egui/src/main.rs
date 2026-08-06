@@ -229,6 +229,93 @@ fn attach_glyph(k: AttachKind) -> &'static str {
     }
 }
 
+/// Todo lo que el prompt necesita, EN PROPIEDAD, para poder cruzar a un hilo.
+///
+/// POR QUÉ EXISTE. Montar el prompt parecía barato y no lo era: la sección de
+/// memorias sale de una búsqueda semántica, y esa búsqueda pide un embedding a
+/// Ollama por HTTP con treinta segundos de espera. Corría en el hilo de la
+/// interfaz, así que cada orden congelaba la ventana entre tres y cinco segundos
+/// antes de imprimir nada — el fallo exacto que esta migración existe para no
+/// tener, y encima escondido detrás de una función que se llamaba `sys_prompt`
+/// como si solo formateara texto.
+///
+/// Lo que se recoge aquí es lo BARATO: lecturas de estructuras que ya están en
+/// memoria. Lo caro —el recuerdo— lo hace `build` al otro lado. La frontera está
+/// donde está para que sea evidente qué cuesta y qué no.
+struct PromptInput {
+    snap: lucy_core::system::SysSnapshot,
+    services: Vec<lucy_core::system::DownService>,
+    log: Vec<String>,
+    hosts: String,
+    cwd: String,
+    name: String,
+    weak: bool,
+    auto: bool,
+}
+
+impl PromptInput {
+    /// El prompt de sistema. Se llama YA EN EL HILO, no antes.
+    ///
+    /// `query` es la orden que se acaba de escribir, y solo sirve para buscar
+    /// memorias parecidas: la búsqueda es sobre lo que se pregunta AHORA, no
+    /// sobre la conversación entera, que traería recuerdos de otro asunto.
+    /// Vacía —al reintentar o al devolver la salida de un comando— no se busca
+    /// nada: no hay pregunta nueva a la que parecerse, y sería medio segundo de
+    /// Ollama para no añadir ni una línea.
+    fn build(&self, query: &str) -> String {
+        let mems = if query.trim().is_empty() {
+            String::new()
+        } else {
+            prompt::recall(query)
+        };
+        lucy_core::prompt::build(&lucy_core::prompt::Ctx {
+            machine: Some(&self.snap),
+            services: &self.services,
+            log: &self.log,
+            hosts: &self.hosts,
+            memories: &mems,
+            working_dir: &self.cwd,
+            user_name: &self.name,
+            weak_model: self.weak,
+            // Este shell propone; ejecuta el operador. Decirle lo contrario haría
+            // que escribiera "ya lo he ejecutado" sobre una máquina intacta.
+            can_execute: false,
+            // Salvo cuando el operador enciende el automático en ESTA pestaña, y
+            // entonces la frase de arriba deja de ser cierta para ella.
+            auto: self.auto,
+            ..Default::default()
+        })
+    }
+}
+
+/// Arranca un turno con el prompt construido AL OTRO LADO del hilo.
+///
+/// Devuelve el mismo `Receiver<ChatEvent>` que `cloud::start_cancellable`, así
+/// que quien lo consume no se entera de que hay un salto de hilo de por medio.
+/// El coste es un reenvío por evento, que al lado de una petición de red no se
+/// mide; lo que se gana es que la ventana siga viva mientras se piensa el prompt.
+fn start_turn(
+    pi: PromptInput,
+    query: String,
+    conv: Vec<lucy_core::turns::Turn>,
+    model: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::sync::mpsc::Receiver<lucy_core::chat::ChatEvent> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let sys = pi.build(&query);
+        let turns = lucy_core::turns::fit(&sys, &conv, lucy_core::turns::MAX_HISTORY_CHARS);
+        for ev in lucy_core::cloud::start_cancellable(model, turns, stop) {
+            // Si nadie escucha, la pestaña se cerró. Se deja de reenviar; el
+            // flujo de abajo se acaba solo en cuanto su canal muere.
+            if tx.send(ev).is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
 /// Lo que el bucle automático hace a continuación.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NextAuto {
@@ -2955,21 +3042,19 @@ impl App {
         if self.tabs[self.tab].busy() {
             return;
         }
-        let sys = self.sys_prompt("");
         let conv = self.history(self.tab);
         if conv.is_empty() {
             return;
         }
-        let turns = lucy_core::turns::fit(&sys, &conv, lucy_core::turns::MAX_HISTORY_CHARS);
+        let pi = self.prompt_input();
+        let modelo = self.chat_model.clone();
         let t = &mut self.tabs[self.tab];
         t.drain.flush();
         t.log.push(ChatMsg::new(false, String::new()));
         t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        t.rx = Some(lucy_core::cloud::start_cancellable(
-            self.chat_model.clone(),
-            turns,
-            t.stop.clone(),
-        ));
+        // Sin consulta: reintentar no es una pregunta nueva, así que no hay
+        // memorias que buscar y el hilo arranca de inmediato.
+        t.rx = Some(start_turn(pi, String::new(), conv, modelo, t.stop.clone()));
         t.ws.status.running = true;
         t.turn_start = Some(Instant::now());
     }
@@ -3149,13 +3234,48 @@ impl App {
                     // orden por el medio metía la línea en el sitio equivocado.
                     // El campo sabe dónde está el cursor; yo no.
                     let id = ui.make_persistent_id(("composer", self.tab));
-                    // Y el Enter a secas se quita del evento ANTES de dibujar,
+                    // Y el Enter A SECAS se quita del evento antes de dibujar,
                     // para que el campo no llegue a verlo.
-                    if ui.memory(|m| m.has_focus(id))
+                    //
+                    // A MANO, y no con `consume_key`, que era el fallo que
+                    // quedaba. Ese ayudante compara con `matches_logically`, y
+                    // su documentación lo dice sin rodeos: «extra Shift and Alt
+                    // modifiers are ignored». Pedirle `Modifiers::NONE + Enter`
+                    // no significa "Enter sin nada": significa "Enter con lo que
+                    // sea", así que se tragaba también el Shift+Enter y lo
+                    // convertía en un envío. El campo tenía bien configurado su
+                    // salto de línea desde el intento anterior; lo que no le
+                    // llegaba nunca era la pulsación.
+                    //
+                    // Aquí los cuatro modificadores se miran uno a uno. Es más
+                    // código que la línea que sustituye y es la única forma de
+                    // decir de verdad "Enter y nada más".
+                    //
+                    // El foco se mira ANTES de consumir: quitar el evento
+                    // cuando el compositor no lo tiene se lo robaría a quien sí
+                    // lo tuviera.
+                    let enter_solo = ui.memory(|m| m.has_focus(id))
                         && ui.input_mut(|i| {
-                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                        })
-                    {
+                        let mut pulsado = false;
+                        i.events.retain(|e| {
+                            let es = matches!(
+                                e,
+                                egui::Event::Key {
+                                    key: egui::Key::Enter,
+                                    modifiers,
+                                    pressed: true,
+                                    ..
+                                } if !modifiers.shift
+                                    && !modifiers.alt
+                                    && !modifiers.ctrl
+                                    && !modifiers.command
+                            );
+                            pulsado |= es;
+                            !es
+                        });
+                            pulsado
+                        });
+                    if enter_solo {
                         enviar = true;
                     }
 
@@ -3660,7 +3780,11 @@ _(detenido por el operador)_");
         // El prompt de sistema va DELANTE en cada turno: quién es Lucy y en qué
         // equipo está. Sin él, un modelo de nube contesta lo único que puede —
         // "no tengo acceso a tu computadora"— y tiene razón.
-        let sys_prompt = self.sys_prompt(&text);
+        // Lo BARATO se recoge aquí; el recuerdo —que es lo que tardaba— lo hace
+        // el hilo. Se toma antes de tocar la pestaña porque `prompt_input` lee
+        // de `self`, y después el préstamo mutable lo impediría.
+        let pi = self.prompt_input();
+        let consulta = text.clone();
         prompt.push_str(&text);
 
         {
@@ -3721,20 +3845,12 @@ _(detenido por el operador)_");
         if let Some(last) = conv.last_mut() {
             last.text = prompt;
         }
-        let turns = lucy_core::turns::fit(
-            &sys_prompt,
-            &conv,
-            lucy_core::turns::MAX_HISTORY_CHARS,
-        );
+        let modelo = self.chat_model.clone();
         {
             let t = &mut self.tabs[self.tab];
             t.log.push(ChatMsg::new(false, String::new()));
             t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            t.rx = Some(lucy_core::cloud::start_cancellable(
-                self.chat_model.clone(),
-                turns,
-                t.stop.clone(),
-            ));
+            t.rx = Some(start_turn(pi, consulta, conv, modelo, t.stop.clone()));
         }
 
         for (n, blocked) in &adjuntos {
@@ -3949,37 +4065,24 @@ _(detenido por el operador)_");
     /// sobre la conversación entera, que traería recuerdos de otro asunto.
     /// Vacía —al reintentar o al devolver la salida de un comando— no se busca
     /// nada: no hay pregunta nueva a la que parecerse.
-    fn sys_prompt(&self, query: &str) -> String {
-        let snap = self.sys.snapshot();
-        let hosts = prompt::hosts_block(&self.remote_hosts);
-        let mems = if query.trim().is_empty() { String::new() } else { prompt::recall(query) };
-        // El directorio desde el que se lanzó Lucy, para que un fichero nombrado
-        // sin ruta se resuelva contra algo en vez de contra nada.
-        let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
-        let nombre = user_name();
-        lucy_core::prompt::build(&lucy_core::prompt::Ctx {
-            machine: Some(&snap),
-            services: &self.services,
-            log: self.log_lines.as_deref().unwrap_or(&[]),
-            hosts: &hosts,
-            memories: &mems,
-            working_dir: &cwd,
+    fn prompt_input(&self) -> PromptInput {
+        PromptInput {
+            snap: self.sys.snapshot(),
+            services: self.services.clone(),
+            log: self.log_lines.clone().unwrap_or_default(),
+            hosts: prompt::hosts_block(&self.remote_hosts),
+            // El directorio desde el que se lanzó Lucy, para que un fichero
+            // nombrado sin ruta se resuelva contra algo en vez de contra nada.
+            cwd: std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default(),
             // El nombre que el operador puso en Configuración, o su cuenta de
             // Windows si no lo ha puesto. Que Lucy sepa a quién le habla no es
             // cortesía: cambia a quién atribuye lo que se hizo en esta máquina.
-            user_name: &nombre,
+            name: user_name(),
             // El nivel del modelo se decide por su id: uno flojo se ahoga con el
             // prompt entero y contesta en prosa sin emitir ninguna etiqueta.
-            weak_model: lucy_core::prompt::model_is_weak(&self.chat_model),
-            // Este shell propone; ejecuta el operador. Decirle lo contrario haría
-            // que escribiera "ya lo he ejecutado" sobre una máquina intacta.
-            can_execute: false,
-            // Salvo cuando el operador enciende el automático en ESTA pestaña, y
-            // entonces la frase de arriba deja de ser cierta para ella. Se lee de
-            // la pestaña activa porque es la que está mandando el turno.
+            weak: lucy_core::prompt::model_is_weak(&self.chat_model),
             auto: self.tabs[self.tab].auto,
-            ..Default::default()
-        })
+        }
     }
 
     /// La conversación de una pestaña, en la forma que entiende el modelo.
@@ -4016,7 +4119,7 @@ _(detenido por el operador)_");
         if self.tabs[ti].busy() {
             return;
         }
-        let sys = self.sys_prompt("");
+        let pi = self.prompt_input();
         {
             let t = &mut self.tabs[ti];
             let resto = t.drain.flush();
@@ -4030,18 +4133,14 @@ _(detenido por el operador)_");
         // la pregunta que la provocó, y sin ella Lucy resume a ciegas.
         let mut conv = self.history(ti);
         conv.push(lucy_core::turns::Turn::user(prompt));
-        let turns =
-            lucy_core::turns::fit(&sys, &conv, lucy_core::turns::MAX_HISTORY_CHARS);
+        let modelo = self.chat_model.clone();
         let t = &mut self.tabs[ti];
         // La línea del comando ya se añadió en `pump_exec`: aquí solo se abre el
         // hueco de la respuesta.
         t.log.push(ChatMsg::new(false, String::new()));
         t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        t.rx = Some(lucy_core::cloud::start_cancellable(
-            self.chat_model.clone(),
-            turns,
-            t.stop.clone(),
-        ));
+        // Sin consulta: la salida de un comando no es una pregunta nueva.
+        t.rx = Some(start_turn(pi, String::new(), conv, modelo, t.stop.clone()));
         self.tabs[ti].ws.status.running = true;
         self.tabs[ti].turn_start = Some(Instant::now());
     }
@@ -6362,6 +6461,49 @@ mod hilo {
         assert!(g.ends_with(", Iván"), "salió: {g}");
         // Y sin nombre, saluda igual en vez de dejar una coma colgando.
         assert!(!greeting("").contains(','));
+    }
+}
+
+#[cfg(test)]
+mod teclado {
+    use eframe::egui::{Key, Modifiers};
+
+    /// El mismo predicado que usa el compositor para decidir si un Enter es de
+    /// envío. Aquí suelto para poder probarlo sin montar una ventana.
+    fn es_envio(m: Modifiers) -> bool {
+        !m.shift && !m.alt && !m.ctrl && !m.command
+    }
+
+    #[test]
+    fn shift_enter_no_es_un_envio() {
+        // El fallo que costó tres intentos. `consume_key(NONE, Enter)` parecía
+        // decir "Enter sin modificadores" y decía "Enter con lo que sea": su
+        // comparación ignora el Shift y el Alt sobrantes, por diseño y
+        // documentado. Así que el compositor se comía el Shift+Enter y lo
+        // mandaba, y el campo —que tenía bien puesto su salto de línea— no
+        // llegaba a ver la pulsación nunca.
+        assert!(!es_envio(Modifiers::SHIFT), "Shift+Enter tiene que dar salto de línea");
+        assert!(es_envio(Modifiers::NONE), "Enter a secas tiene que enviar");
+    }
+
+    #[test]
+    fn ningun_otro_modificador_envia() {
+        // Ctrl+Enter y Alt+Enter son combinaciones que la gente pulsa por
+        // costumbre de otros programas. Mandar con ellas sorprende; no hacer
+        // nada, no.
+        for m in [Modifiers::ALT, Modifiers::CTRL, Modifiers::COMMAND] {
+            assert!(!es_envio(m), "{m:?} no debería enviar");
+        }
+    }
+
+    #[test]
+    fn el_campo_salta_con_shift_enter() {
+        // La otra mitad del contrato: el widget tiene que estar configurado con
+        // ESA combinación. Por defecto egui usa Enter a secas, que es lo que
+        // hacía que Shift+Enter no significara nada para él.
+        let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
+        assert_eq!(atajo.logical_key, Key::Enter);
+        assert!(atajo.modifiers.shift);
     }
 }
 
