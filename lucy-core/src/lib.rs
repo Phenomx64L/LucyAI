@@ -28,6 +28,9 @@ pub mod guard;
 /// El workspace del agente: plan, ejecución, trace y artefactos. Port de
 /// `src/lib/cockpit/agent-workspace.ts` — el modelo, y sobre todo sus topes.
 pub mod agent;
+/// Comandos que no se deshacen. Otra pregunta que `guard`: éste no busca
+/// ataques, busca lo irreversible.
+pub mod destructive;
 /// Elevación a administrador con UAC. El mecanismo que faltaba en la V1 y la V2.
 pub mod elevate;
 pub mod chat;
