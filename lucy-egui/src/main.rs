@@ -2722,11 +2722,7 @@ impl App {
         if self.tabs[self.tab].busy() {
             return;
         }
-        let sys = prompt::system_prompt(
-            &self.sys.snapshot(),
-            &self.services,
-            self.log_lines.as_deref().unwrap_or(&[]),
-        );
+        let sys = self.sys_prompt("");
         let conv = self.history(self.tab);
         if conv.is_empty() {
             return;
@@ -3321,14 +3317,7 @@ _(detenido por el operador)_");
         // El prompt de sistema va DELANTE en cada turno: quién es Lucy y en qué
         // equipo está. Sin él, un modelo de nube contesta lo único que puede —
         // "no tengo acceso a tu computadora"— y tiene razón.
-        let sys_prompt = prompt::system_prompt(
-            &self.sys.snapshot(),
-            &self.services,
-            self.log_lines.as_deref().unwrap_or(&[]),
-        );
-        // Memorias parecidas a ESTA orden, no a la conversación entera: la
-        // búsqueda es sobre lo que se acaba de pedir.
-        let sys_prompt = prompt::with_memories(&sys_prompt, &text);
+        let sys_prompt = self.sys_prompt(&text);
         prompt.push_str(&text);
 
         {
@@ -3478,17 +3467,65 @@ _(detenido por el operador)_");
                 }
                 k if k.is_execute() => {
                     let host = t.attrs.get("target").cloned().unwrap_or_default();
-                    self.tabs[ti].ws.plan_append(PlanStep {
-                        label: format!("Ejecutar ({})", k.name()),
-                        status: StepStatus::Pending,
-                        detail: t.content,
-                        host,
-                        ..Default::default()
-                    });
+                    // El paso guarda el script que se va a correr DE VERDAD, no
+                    // el contenido crudo de la etiqueta. Antes eran lo mismo y
+                    // por eso `<EXECUTE_REG>query HKLM\…` acababa en PowerShell,
+                    // donde `query` es el programa de Terminal Services: el
+                    // panel decía "Ejecutar (EXECUTE_REG)" y corría otra cosa.
+                    match lucy_core::shell::tag_to_script(k, &t.content) {
+                        Some(script) => self.tabs[ti].ws.plan_append(PlanStep {
+                            label: format!("Ejecutar ({})", k.name()),
+                            status: StepStatus::Pending,
+                            detail: script,
+                            host,
+                            ..Default::default()
+                        }),
+                        // Lo que este shell no sabe cumplir se enseña en ERROR y
+                        // sin botón. Un paso remoto ejecutado aquí mediría la
+                        // máquina equivocada y lo diría como si fuera la buena.
+                        None => self.tabs[ti].ws.plan_append(PlanStep {
+                            label: format!("{} — sin migrar a este shell", k.name()),
+                            status: StepStatus::Error,
+                            detail: t.content,
+                            host,
+                            ..Default::default()
+                        }),
+                    };
                 }
                 _ => {}
             }
         }
+    }
+
+    /// El prompt de sistema de este turno.
+    ///
+    /// `query` es la orden que se acaba de escribir, y solo sirve para buscar
+    /// memorias parecidas: la búsqueda es sobre lo que se pregunta AHORA, no
+    /// sobre la conversación entera, que traería recuerdos de otro asunto.
+    /// Vacía —al reintentar o al devolver la salida de un comando— no se busca
+    /// nada: no hay pregunta nueva a la que parecerse.
+    fn sys_prompt(&self, query: &str) -> String {
+        let snap = self.sys.snapshot();
+        let hosts = prompt::hosts_block(&self.remote_hosts);
+        let mems = if query.trim().is_empty() { String::new() } else { prompt::recall(query) };
+        // El directorio desde el que se lanzó Lucy, para que un fichero nombrado
+        // sin ruta se resuelva contra algo en vez de contra nada.
+        let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+        lucy_core::prompt::build(&lucy_core::prompt::Ctx {
+            machine: Some(&snap),
+            services: &self.services,
+            log: self.log_lines.as_deref().unwrap_or(&[]),
+            hosts: &hosts,
+            memories: &mems,
+            working_dir: &cwd,
+            // El nivel del modelo se decide por su id: uno flojo se ahoga con el
+            // prompt entero y contesta en prosa sin emitir ninguna etiqueta.
+            weak_model: lucy_core::prompt::model_is_weak(&self.chat_model),
+            // Este shell propone; ejecuta el operador. Decirle lo contrario haría
+            // que escribiera "ya lo he ejecutado" sobre una máquina intacta.
+            can_execute: false,
+            ..Default::default()
+        })
     }
 
     /// La conversación de una pestaña, en la forma que entiende el modelo.
@@ -3525,11 +3562,7 @@ _(detenido por el operador)_");
         if self.tabs[ti].busy() {
             return;
         }
-        let sys = prompt::system_prompt(
-            &self.sys.snapshot(),
-            &self.services,
-            self.log_lines.as_deref().unwrap_or(&[]),
-        );
+        let sys = self.sys_prompt("");
         {
             let t = &mut self.tabs[ti];
             let resto = t.drain.flush();
