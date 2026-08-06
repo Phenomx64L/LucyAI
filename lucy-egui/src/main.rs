@@ -4396,21 +4396,38 @@ _(detenido por el operador)_");
                                         ..Default::default()
                                     })
                                 }
-                                otra => self.tabs[ti].ws.plan_append(PlanStep {
-                                    label: format!("Ejecutar ({})", k.name()),
-                                    status: StepStatus::Pending,
-                                    detail: script,
-                                    host,
-                                    // Sale del guardrail, no de la interfaz. En
-                                    // modo manual no cambia nada —todo lo mira
-                                    // una persona igual—; en automático es lo
-                                    // que hace que la cadena se pare sola justo
-                                    // en el paso que merecía pararla.
-                                    needs_human: (otra
-                                        == lucy_core::guard::Decision::Ask)
-                                        .then(|| g.reason.clone()),
-                                    ..Default::default()
-                                }),
+                                otra => {
+                                    // DOS PREGUNTAS DISTINTAS, y la segunda
+                                    // faltaba. El guardrail busca ataques y deja
+                                    // pasar la administración normal a propósito
+                                    // —un administrador borra cosas—, así que
+                                    // `Remove-Item -Recurse -Force` y
+                                    // `format D:` salían con `Allow`. En manual
+                                    // da igual: una persona los lee. Con el
+                                    // automático encendido, `Allow` quería decir
+                                    // que corrían solos.
+                                    let motivo = if otra
+                                        == lucy_core::guard::Decision::Ask
+                                    {
+                                        Some(g.reason.clone())
+                                    } else if lucy_core::destructive::is_destructive(&script) {
+                                        Some(lucy_core::destructive::reason().to_string())
+                                    } else {
+                                        None
+                                    };
+                                    self.tabs[ti].ws.plan_append(PlanStep {
+                                        label: format!("Ejecutar ({})", k.name()),
+                                        status: StepStatus::Pending,
+                                        detail: script,
+                                        host,
+                                        // Sale del núcleo, no de la interfaz. En
+                                        // modo manual no cambia nada; en
+                                        // automático es lo que para la cadena
+                                        // justo en el paso que merecía pararla.
+                                        needs_human: motivo,
+                                        ..Default::default()
+                                    })
+                                }
                             }
                         }
                         // Lo que este shell no sabe cumplir se enseña en ERROR y
