@@ -338,6 +338,23 @@ fn start_turn(
     rx
 }
 
+/// Deja un turno automático en la cola de una pestaña, sin perder el que ya
+/// hubiera.
+///
+/// Se JUNTAN en vez de sustituirse. Dos resultados pueden coincidir —una
+/// herramienta de lectura y la salida de un comando aprobado en el mismo
+/// instante— y quedarse con el último tiraría el otro, que es el fallo del que
+/// viene esta función.
+fn encolar(slot: &mut Option<String>, nuevo: String) {
+    match slot {
+        Some(prev) => {
+            prev.push_str("\n\n");
+            prev.push_str(&nuevo);
+        }
+        None => *slot = Some(nuevo),
+    }
+}
+
 /// Cuántas líneas de diff caben en la ficha de un artefacto.
 ///
 /// Un fichero entero dentro del carril no se lee, y para leerlo entero está
@@ -557,6 +574,11 @@ struct ChatTab {
     /// sale sola. Es de la PESTAÑA porque el operador puede irse a otra
     /// mientras tanto, y la que espera es esta.
     send_al_terminar: bool,
+    /// Un turno automático esperando a que la pestaña se libere.
+    ///
+    /// Es de la PESTAÑA porque el resultado pertenece a su conversación: global,
+    /// una terminal que termina antes se llevaría el turno que esperaba otra.
+    pending_raw: Option<String>,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
     /// Tokens cobrados en esta pestaña, para el contador de coste.
@@ -599,6 +621,7 @@ impl ChatTab {
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
             send_al_terminar: false,
+            pending_raw: None,
             drain: drain::Drain::default(),
             rec: None,
             tr_rx: None,
@@ -2189,6 +2212,22 @@ impl App {
         }
     }
 
+    /// Manda los turnos que se quedaron esperando a que la pestaña se liberara.
+    ///
+    /// Se mira en CADA frame y sobre TODAS las pestañas: la que espera puede no
+    /// ser la que se está mirando, y un resultado retenido en una terminal de
+    /// fondo tiene que salir igual cuando le toque.
+    fn pump_pending(&mut self) {
+        for i in 0..self.tabs.len() {
+            if self.tabs[i].busy() {
+                continue;
+            }
+            if let Some(p) = self.tabs[i].pending_raw.take() {
+                self.send_raw(i, p);
+            }
+        }
+    }
+
     /// Mueve al mensaje visible lo que la cola deje salir en este frame.
     ///
     /// Sobre TODAS las pestañas: una de fondo que sigue escribiendo tiene que
@@ -2296,6 +2335,11 @@ impl eframe::App for App {
         // otra cosa mientras corre.
         self.pump_exec();
         self.pump_voice();
+        // DESPUÉS de la cola de revelado y de la ejecución, que son las dos
+        // cosas que mantienen ocupada una pestaña. Mirarlo antes lo encontraría
+        // ocupado siempre y el turno encolado no saldría nunca — que es el mismo
+        // fallo que esta cola existe para arreglar, un frame más tarde.
+        self.pump_pending();
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -4508,7 +4552,18 @@ _(detenido por el operador)_");
     /// conversación empujaría fuera de pantalla la pregunta original. Al modelo
     /// sí le va completa.
     fn send_raw(&mut self, ti: usize, prompt: String) {
+        // OCUPADO NO ES DESCARTADO, y aquí lo era. `busy()` incluye la cola de
+        // revelado, y `absorb_tags` corre en el instante en que el stream
+        // cierra — cuando la cola SIEMPRE tiene texto pendiente, porque el
+        // modelo escribe más rápido de lo que se pinta. El resultado de una
+        // herramienta se perdía sin dejar rastro: Lucy decía "voy a listar el
+        // directorio", el listado se leía de verdad, y ahí se acababa todo.
+        //
+        // No lo sufría `pump_exec` porque un comando tarda cientos de
+        // milisegundos y para entonces la cola ya ha terminado. Las
+        // herramientas devuelven en microsegundos, y por eso salió con ellas.
         if self.tabs[ti].busy() {
+            encolar(&mut self.tabs[ti].pending_raw, prompt);
             return;
         }
         let pi = self.prompt_input();
@@ -7149,6 +7204,33 @@ mod teclado {
         let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
         assert_eq!(atajo.logical_key, Key::Enter);
         assert!(atajo.modifiers.shift);
+    }
+}
+
+#[cfg(test)]
+mod cola_de_turnos {
+    use super::*;
+
+    #[test]
+    fn dos_resultados_a_la_vez_no_se_pisan() {
+        // EL FALLO QUE ESTO FIJA, en su forma más pequeña. `send_raw` descartaba
+        // el turno cuando la pestaña estaba ocupada, y `absorb_tags` corre justo
+        // cuando SIEMPRE lo está: la cola de revelado todavía tiene texto,
+        // porque el modelo escribe más rápido de lo que se pinta. El resultado
+        // de la herramienta se perdía sin dejar rastro.
+        let mut slot = None;
+        encolar(&mut slot, "salida del listdir".into());
+        encolar(&mut slot, "salida del comando".into());
+        let v = slot.unwrap();
+        assert!(v.contains("listdir"), "se perdió el primero");
+        assert!(v.contains("comando"), "se perdió el segundo");
+    }
+
+    #[test]
+    fn una_cola_vacia_se_llena_tal_cual() {
+        let mut slot = None;
+        encolar(&mut slot, "único".into());
+        assert_eq!(slot.as_deref(), Some("único"));
     }
 }
 
