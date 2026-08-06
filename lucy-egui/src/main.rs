@@ -2004,8 +2004,23 @@ struct App {
     nx_host: Option<String>,
     /// Lineas de una sesion remota. Un WinRM no es un PTY: cada comando va y
     /// vuelve, asÃ­ que no pasan por el emulador VT.
-    nx_lines: Vec<(char, String)>,
-    nx_exec_rx: Option<std::sync::mpsc::Receiver<Result<(String, String, bool), String>>>,
+    nx_lines: std::collections::HashMap<String, Vec<(char, String)>>,
+    /// El equipo cuyo comando esta en vuelo, para saber donde escribir su salida.
+    nx_exec_id: String,
+    /// Interruptor de parada del comando remoto en curso.
+    nx_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Cuando empezo, para el contador de segundos.
+    nx_started: Option<Instant>,
+    /// A que equipo iba la traduccion que esta en vuelo.
+    nx_destino: Option<lucy_core::hosts::Host>,
+    /// El sistema medido de cada equipo remoto. Ver `detect_os`.
+    nx_os: std::collections::HashMap<String, String>,
+    /// Equipos a los que ya se les preguntÃ³, para no preguntar dos veces
+    /// mientras la primera respuesta viene por el camino.
+    nx_os_pedido: std::collections::HashSet<String>,
+    nx_os_tx: std::sync::mpsc::Sender<(String, String)>,
+    nx_os_rx: std::sync::mpsc::Receiver<(String, String)>,
+    nx_exec_rx: Option<std::sync::mpsc::Receiver<lucy_core::hosts::Line>>,
     /// El equipo que se estÃ¡ dando de alta o editando.
     nx_edit: Option<lucy_core::hosts::Host>,
     nx_edit_pw: String,
@@ -2166,6 +2181,7 @@ impl App {
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let (att_tx, att_rx) = std::sync::mpsc::channel();
+        let (nx_os_tx, nx_os_rx) = std::sync::mpsc::channel();
         // Las conversaciones de la vez pasada. Una sesión que no se entiende no
         // se anuncia ni se repara: se arranca de cero, que es lo que hace falta
         // en ese momento.
@@ -2224,7 +2240,15 @@ impl App {
             nx_rx: None,
             nx_busy: false,
             nx_host: None,
-            nx_lines: Vec::new(),
+            nx_lines: std::collections::HashMap::new(),
+            nx_exec_id: String::new(),
+            nx_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            nx_started: None,
+            nx_destino: None,
+            nx_os: std::collections::HashMap::new(),
+            nx_os_pedido: std::collections::HashSet::new(),
+            nx_os_tx,
+            nx_os_rx,
             nx_exec_rx: None,
             nx_edit: None,
             nx_edit_pw: String::new(),
@@ -2469,6 +2493,9 @@ impl eframe::App for App {
         // fallo que esta cola existe para arreglar, un frame más tarde.
         self.pump_pending();
         self.pump_nx_test();
+        while let Ok((id, so)) = self.nx_os_rx.try_recv() {
+            self.nx_os.insert(id, so);
+        }
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -7051,21 +7078,72 @@ _(detenido por el operador)_");
             self.nx_host = None;
             return;
         };
+        // El sistema se mide UNA vez por equipo, al abrirlo, y en otro hilo. Es
+        // lo que hace que la traducción proponga `dnf` en una Fedora en vez de
+        // `apt` — un error que se ve tarde, porque el comando existe pero no
+        // está. Se marca antes de lanzar para no pedirlo dos veces mientras la
+        // primera va por el camino.
+        if h.protocol.can_shell() && !self.nx_os.contains_key(&h.id) && !self.nx_os_pedido.contains(&h.id)
+        {
+            self.nx_os_pedido.insert(h.id.clone());
+            let (host, tx) = (h.clone(), self.nx_os_tx.clone());
+            std::thread::spawn(move || {
+                let pw = lucy_core::hosts::password(&host.id).unwrap_or_default();
+                if let Some(so) = lucy_core::hosts::detect_os(&host, &pw) {
+                    let _ = tx.send((host.id, so));
+                }
+            });
+        }
         row_align(ui, 28.0, egui::Align::Center, |ui| {
             ui.spacing_mut().item_spacing.x = 7.0;
             icons::show(ui, icons::Icon::Server, 15.0, color_hex(&h.color).unwrap_or(theme::acc()));
             ui.label(egui::RichText::new(&h.name).size(theme::FS_FOOTNOTE).color(theme::txt()));
             ui.label(theme::instrument_label(h.protocol.label(), theme::faint()));
+            // El sistema MEDIDO, no el declarado. Es lo que decide si la
+            // traducción propone `dnf` o `apt`, y verlo aquí es lo que permite
+            // notar que el equipo no es lo que uno creía.
+            if let Some(so) = self.nx_os.get(&h.id) {
+                ui.label(egui::RichText::new(so).size(theme::FS_MICRO).color(theme::faint()));
+            }
             if self.nx_busy {
                 ui.add_space(8.0);
+                // Los SEGUNDOS, no un «ejecutando…» fijo. En un remoto lo que
+                // hay que saber es si avanza o se colgó, y un texto que no
+                // cambia no distingue lo uno de lo otro.
+                let s = self.nx_started.map_or(0, |t| t.elapsed().as_secs());
                 ui.label(
-                    egui::RichText::new("ejecutando…").size(theme::FS_CAPTION).color(theme::acc()),
+                    egui::RichText::new(format!("ejecutando… {s}s"))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::acc()),
                 );
+                if ui.add(egui::Button::new("■ Detener").small()).clicked() {
+                    // Mata el proceso, no solo deja de mirarlo: al otro lado hay
+                    // un comando corriendo en una máquina de verdad, y dejar de
+                    // leer no lo para.
+                    self.nx_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 ui.ctx().request_repaint();
             }
             right(ui, 24.0, |ui| {
                 if ui.add(egui::Button::new("⌫").small()).on_hover_text("Limpiar").clicked() {
-                    self.nx_lines.clear();
+                    self.nx_lines.remove(&h.id);
+                }
+                if ui
+                    .add(egui::Button::new("⧉").small())
+                    .on_hover_text("Copiar la salida")
+                    .clicked()
+                {
+                    let t = self
+                        .nx_lines
+                        .get(&h.id)
+                        .map(|v| {
+                            v.iter()
+                                .map(|(c, t)| if *c == 'c' { format!("❯ {t}") } else { t.clone() })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default();
+                    ui.output_mut(|o| o.copied_text = t);
                 }
             });
         });
@@ -7120,7 +7198,12 @@ _(detenido por el operador)_");
                     .auto_shrink([false, false])
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        if self.nx_lines.is_empty() {
+                        // Las de ESTE equipo. Sin la clave, la lista era una sola
+                        // y la salida del servidor anterior aparecía aquí como
+                        // si fuera de éste.
+                        let vacio = Vec::new();
+                        let lineas = self.nx_lines.get(&h.id).unwrap_or(&vacio);
+                        if lineas.is_empty() {
                             ui.add_space(30.0);
                             ui.vertical_centered(|ui| {
                                 icons::show(ui, icons::Icon::Server, 26.0, theme::faint());
@@ -7132,7 +7215,7 @@ _(detenido por el operador)_");
                                 );
                             });
                         }
-                        for (clase, texto) in &self.nx_lines {
+                        for (clase, texto) in lineas {
                             let (prefijo, color) = match *clase {
                                 'c' => ("❯ ", theme::acc()),
                                 'e' => ("", theme::red()),
@@ -7153,58 +7236,120 @@ _(detenido por el operador)_");
             if !texto.is_empty() && !self.nx_busy {
                 self.nx_history.push(texto.clone());
                 self.nx_hist_idx = None;
-                if lucy_core::destructive::is_destructive(&texto) {
-                    self.nx_confirm = Some(texto);
+                // EL LENGUAJE NATURAL TAMBIÉN AQUÍ. Estaba solo en la ruta
+                // local, así que la función que da nombre al módulo funcionaba
+                // en la mitad de los sitios: en un remoto, escribir una frase
+                // intentaba ejecutarla como comando.
+                if lucy_core::nexshell::looks_like_command(&texto) {
+                    self.nx_gate_remote(&h, texto);
                 } else {
-                    self.nx_run_remote(&h, &texto);
+                    self.nx_translate(Some(h.clone()), texto);
                 }
             }
         }
         self.pump_nx_remote();
     }
 
-    /// Lanza un comando contra el equipo remoto, en otro hilo.
+    /// Las líneas de ESTE equipo. Se crean al primer uso.
+    ///
+    /// POR EQUIPO Y NO UNA SOLA LISTA, que es como estaba y era un fallo:
+    /// cambiabas del servidor A al B y seguías viendo la salida de A como si
+    /// fuera suya. Es la misma clase de error que el workspace global de las
+    /// pestañas —el que imprimía el resultado de una conversación en otra— y lo
+    /// volví a cometer aquí.
+    fn nx_lines_mut(&mut self, id: &str) -> &mut Vec<(char, String)> {
+        self.nx_lines.entry(id.to_string()).or_default()
+    }
+
+    /// Escribe un aviso donde el operador lo esté mirando: la pantalla del
+    /// remoto, o la sesión local a través del PTY.
+    fn nx_aviso(&mut self, destino: Option<&lucy_core::hosts::Host>, texto: &str) {
+        match destino {
+            Some(h) => {
+                let id = h.id.clone();
+                self.nx_lines_mut(&id).push(('e', texto.to_string()));
+            }
+            None => self.nx_say(texto),
+        }
+    }
+
+    /// Comprueba si un comando remoto se deshace, y si no, pide confirmación.
+    fn nx_gate_remote(&mut self, h: &lucy_core::hosts::Host, cmd: String) {
+        if lucy_core::destructive::is_destructive(&cmd) {
+            self.nx_confirm = Some(cmd);
+        } else {
+            self.nx_run_remote(h, &cmd);
+        }
+    }
+
+    /// Lanza un comando contra el equipo remoto, entregando la salida según
+    /// llega.
     fn nx_run_remote(&mut self, h: &lucy_core::hosts::Host, cmd: &str) {
-        self.nx_lines.push(('c', cmd.to_string()));
+        let id = h.id.clone();
+        self.nx_lines_mut(&id).push(('c', cmd.to_string()));
         let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
         let (host, script) = (h.clone(), cmd.to_string());
         let (tx, rx) = std::sync::mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.nx_busy = true;
+        self.nx_stop = stop.clone();
+        self.nx_exec_id = id;
         self.nx_exec_rx = Some(rx);
+        self.nx_started = Some(Instant::now());
         std::thread::spawn(move || {
-            let _ = tx.send(lucy_core::hosts::run_remote(&host, &pw, &script));
+            if let Err(e) = lucy_core::hosts::run_remote_streaming(&host, &pw, &script, &tx, &stop)
+            {
+                let _ = tx.send(lucy_core::hosts::Line::Err(e));
+                let _ = tx.send(lucy_core::hosts::Line::Done(false));
+            }
         });
     }
 
     fn pump_nx_remote(&mut self) {
         let Some(rx) = &self.nx_exec_rx else { return };
-        let r = match rx.try_recv() {
-            Ok(v) => v,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.nx_exec_rx = None;
-                self.nx_busy = false;
-                return;
-            }
-        };
-        self.nx_exec_rx = None;
-        self.nx_busy = false;
-        match r {
-            Ok((out, err, _ok)) => {
-                for l in out.lines() {
-                    self.nx_lines.push(('o', l.to_string()));
+        // TODAS las líneas que haya en este frame, no una. A sesenta cuadros por
+        // segundo, una línea por frame convierte un `Get-EventLog` de dos mil
+        // líneas en medio minuto de pintado.
+        let mut recibidas = Vec::new();
+        let mut fin = None;
+        loop {
+            match rx.try_recv() {
+                Ok(lucy_core::hosts::Line::Done(ok)) => {
+                    fin = Some(ok);
+                    break;
                 }
-                // La salida de error va SEPARADA y en rojo, no mezclada: en un
-                // remoto, distinguir «el comando dijo esto» de «no se pudo
-                // llegar» es la mitad del diagnóstico.
-                for l in err.lines().filter(|l| !l.trim().is_empty()) {
-                    self.nx_lines.push(('e', l.to_string()));
-                }
-                if out.trim().is_empty() && err.trim().is_empty() {
-                    self.nx_lines.push(('o', "(sin salida)".into()));
+                Ok(l) => recibidas.push(l),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    fin = Some(false);
+                    break;
                 }
             }
-            Err(e) => self.nx_lines.push(('e', e)),
+        }
+        let id = self.nx_exec_id.clone();
+        let lineas = self.nx_lines_mut(&id);
+        for l in recibidas {
+            match l {
+                // La salida de error va SEPARADA y en rojo. En un remoto,
+                // distinguir «el comando dijo esto» de «no se pudo llegar» es la
+                // mitad del diagnóstico.
+                lucy_core::hosts::Line::Err(t) => lineas.push(('e', t)),
+                lucy_core::hosts::Line::Out(t) => lineas.push(('o', t)),
+                lucy_core::hosts::Line::Done(_) => {}
+            }
+        }
+        if let Some(ok) = fin {
+            self.nx_exec_rx = None;
+            self.nx_busy = false;
+            self.nx_started = None;
+            if !ok {
+                let parado = self.nx_stop.load(std::sync::atomic::Ordering::Relaxed);
+                self.nx_lines_mut(&id).push((
+                    'e',
+                    if parado { "(detenido)" } else { "(el comando terminó con error)" }
+                        .to_string(),
+                ));
+            }
         }
     }
 
@@ -7406,7 +7551,7 @@ _(detenido por el operador)_");
                 // ── protocolo, agrupado ─────────────────────────────────────
                 row_align(ui, 26.0, egui::Align::Center, |ui| {
                     cell(ui, 110.0, 26.0, false, etiqueta_campo("Protocolo"));
-                    egui::ComboBox::from_id_source("nx-proto")
+                    egui::ComboBox::from_id_salt("nx-proto")
                         .selected_text(h.protocol.label())
                         .width(220.0)
                         .show_ui(ui, |ui| {
@@ -7497,7 +7642,7 @@ _(detenido por el operador)_");
                             ui.painter().circle_stroke(
                                 r.center(),
                                 12.0,
-                                egui::Stroke::new(2.0, theme::txt()),
+                                egui::Stroke::new(2.0_f32, theme::txt()),
                             );
                         }
                         if resp.clicked() {
@@ -7613,9 +7758,33 @@ _(detenido por el operador)_");
             self.nx_maybe_run(texto);
             return;
         }
-        // Es una frase: se traduce. En otro hilo, que es una petición de red.
-        let so = self.sys.snapshot().os;
-        let prompt = lucy_core::nexshell::translate_prompt(&texto, "PowerShell", &so);
+        self.nx_translate(None, texto);
+    }
+
+    /// Manda una frase a traducir. `destino` = el equipo remoto, o `None` para
+    /// el local.
+    ///
+    /// UNA SOLA FUNCIÓN PARA LOS DOS. Estaba escrita dentro de la ruta local, y
+    /// por eso el remoto no traducía: la frase se intentaba ejecutar tal cual.
+    /// Sacarla aquí es lo que hace que el módulo se comporte igual en los dos
+    /// sitios, que es lo único que se le pide a un módulo.
+    fn nx_translate(&mut self, destino: Option<lucy_core::hosts::Host>, texto: String) {
+        // EL SISTEMA DEL EQUIPO AL QUE VA, no el de esta máquina. Pedir un
+        // comando «para Windows 11» cuando al otro lado hay una Debian devuelve
+        // algo que allí no existe.
+        let (shell, so) = match &destino {
+            Some(h) => (
+                if h.protocol.os() == "windows" { "PowerShell" } else { "bash" },
+                self.nx_os.get(&h.id).cloned().unwrap_or_else(|| {
+                    // Sin haberlo medido aún, el tipo declarado del equipo es
+                    // peor que la medición y mucho mejor que el de aquí.
+                    if h.protocol.os() == "windows" { "Windows" } else { "Linux" }.to_string()
+                }),
+            ),
+            None => ("PowerShell", self.sys.snapshot().os),
+        };
+        self.nx_destino = destino;
+        let prompt = lucy_core::nexshell::translate_prompt(&texto, shell, &so);
         let modelo = self.chat_model.clone();
         let privado = self.privacy;
         let (tx, rx) = std::sync::mpsc::channel();
@@ -7656,18 +7825,26 @@ _(detenido por el operador)_");
             Ok(Ok(cmd)) => {
                 self.nx_rx = None;
                 self.nx_busy = false;
+                let destino = self.nx_destino.take();
                 if cmd.is_empty() || cmd.contains(lucy_core::nexshell::NO_COMMAND) {
-                    self.nx_say("No supe convertir eso en un comando.");
+                    self.nx_aviso(destino.as_ref(), "No supe convertir eso en un comando.");
                     return;
                 }
-                self.nx_maybe_run(cmd);
+                // La traducción vuelve al equipo QUE LA PIDIÓ. Sin guardar el
+                // destino, un comando pensado para una Debian remota acabaría
+                // ejecutándose en el PowerShell de aquí.
+                match destino {
+                    Some(h) => self.nx_gate_remote(&h, cmd),
+                    None => self.nx_maybe_run(cmd),
+                }
             }
             // Se dice en la propia pantalla y no en un diálogo: el operador está
             // mirando ahí, y un error de traducción es parte de la sesión.
             Ok(Err(e)) => {
                 self.nx_rx = None;
                 self.nx_busy = false;
-                self.nx_say(&format!("No se pudo traducir: {e}"));
+                let destino = self.nx_destino.take();
+                self.nx_aviso(destino.as_ref(), &format!("No se pudo traducir: {e}"));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
