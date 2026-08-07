@@ -274,6 +274,8 @@ struct PromptInput {
     hosts: String,
     /// El catálogo de skills, ya formateado. Ver `lucy_core::skills::catalog`.
     skills_cat: String,
+    /// El modo fijado, ya formateado. Vacío = ninguno.
+    preset_txt: String,
     cwd: String,
     name: String,
     profile: String,
@@ -302,6 +304,7 @@ impl PromptInput {
             log: &self.log,
             hosts: &self.hosts,
             skills: &self.skills_cat,
+            preset: &self.preset_txt,
             memories: &mems,
             working_dir: &self.cwd,
             user_name: &self.name,
@@ -879,7 +882,7 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/consolidate", "Ejecutar consolidación ahora", true),
     ("/playbooks", "Playbooks multi-fase curados", false),
     ("/skills", "Picker de skills ejecutables", true),
-    ("/preset", "Presets de framing (AD, Hyper-V, SQL…)", false),
+    ("/preset", "Presets de framing (AD, Hyper-V, SQL…)", true),
     ("/sec-skill", "Catálogo security/forensics (200+)", false),
     ("/skills-manager", "Gestionar skills cargadas", true),
     ("/capabilities", "Auto-introspección: skills, MCPs, frameworks", true),
@@ -2050,6 +2053,13 @@ struct App {
     api_keys: std::collections::HashMap<String, String>,
     /// El Ãºltimo error al guardar o borrar una clave. VacÃ­o = ninguno.
     api_key_msg: String,
+    /// El skill FIJADO, si hay alguno. Se guarda entre arranques.
+    ///
+    /// Un modo puesto cambia todas las respuestas, así que tiene que
+    /// sobrevivir al cierre igual que lo hace el modelo elegido — y verse
+    /// siempre, o el operador acaba preguntándose por qué Lucy insiste con lo
+    /// mismo.
+    preset: Option<String>,
     /// Los skills instalados. Se leen al arrancar y al pedir `/skills`.
     ///
     /// EN MEMORIA Y NO EN CADA TURNO: son ficheros de disco que solo cambian
@@ -2207,6 +2217,8 @@ const K_SESSION: &str = "lucy.session";
 const K_WS_WIDTH: &str = "lucy.ws_width";
 /// Clave del modo privacidad.
 const K_PRIVACY: &str = "lucy.privacy";
+/// Clave del modo fijado.
+const K_PRESET: &str = "lucy.preset";
 /// Clave del tema visual.
 const K_THEME: &str = "lucy.theme";
 
@@ -2265,6 +2277,9 @@ impl App {
             .and_then(|s| s.get_string(K_PRIVACY))
             .map(|v| v == "true")
             .unwrap_or(false);
+        let preset = storage
+            .and_then(|s| s.get_string(K_PRESET))
+            .filter(|v| !v.trim().is_empty());
         let ws_width = storage
             .and_then(|s| s.get_string(K_WS_WIDTH))
             .and_then(|v| v.parse::<f32>().ok())
@@ -2326,6 +2341,7 @@ impl App {
             privacy,
             api_keys: std::collections::HashMap::new(),
             api_key_msg: String::new(),
+            preset,
             skills: cargar_skills(),
             tema_pendiente: None,
             slash_sel: 0,
@@ -2516,6 +2532,7 @@ impl eframe::App for App {
         storage.set_string(K_WS_WIDTH, self.ws_width.to_string());
         storage.set_string(K_PRIVACY, self.privacy.to_string());
         storage.set_string(K_THEME, theme::mode().key().to_string());
+        storage.set_string(K_PRESET, self.preset.clone().unwrap_or_default());
         // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
         // cerrar, así que un cuelgue pierde medio minuto de charla y no la
         // sesión entera — que es la diferencia entre un incordio y volver a
@@ -2731,6 +2748,22 @@ impl eframe::App for App {
                         ui.label(
                             egui::RichText::new(&self.chat_model).color(theme::txt3()).size(10.5),
                         );
+                        // EL MODO FIJADO, siempre que lo haya. Cambia todas las
+                        // respuestas y sobrevive al cierre: sin verlo, dentro de
+                        // tres días el operador se pregunta por qué Lucy insiste
+                        // con lo mismo y no tiene forma de averiguarlo.
+                        if let Some(p) = self.preset.clone() {
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new(format!("modo {p}"))
+                                    .color(theme::acc())
+                                    .size(10.5),
+                            )
+                            .on_hover_text(
+                                "Un skill fijado enmarca todas las respuestas. Se quita con \
+                                 /preset clear.",
+                            );
+                        }
                         // El candado, siempre que el modo esté puesto. Un modo
                         // que decide si los datos de este equipo pueden viajar
                         // no puede depender de que alguien recuerde haberlo
@@ -4334,6 +4367,7 @@ _(detenido por el operador)_");
             "/snapshot" => self.slash_snapshot(),
             "/capabilities" => self.slash_capabilities(),
             "/skills" | "/skills-manager" => self.slash_skills(),
+            "/preset" => self.slash_preset(args),
             "/help" => {
                 let mut s = String::from("Comandos disponibles:\n\n");
                 for (c, desc, listo) in SLASH {
@@ -4353,6 +4387,67 @@ _(detenido por el operador)_");
     /// Escribe una línea de Lucy en el hilo de la pestaña activa.
     fn di(&mut self, texto: &str) {
         self.tabs[self.tab].log.push(ChatMsg::new(false, texto.to_string()));
+    }
+
+    /// `/preset <nombre>` fija un procedimiento; `/preset clear` lo quita.
+    ///
+    /// UN PRESET Y UN SKILL SON EL MISMO FICHERO, y lo que cambia es cuándo
+    /// aplica: uno se pide para una tarea y se acaba con ella, el otro se fija y
+    /// enmarca todo hasta que alguien lo quita. Tener dos sistemas para eso
+    /// obligaría a escribir cada procedimiento dos veces, y la copia menos usada
+    /// sería la que se quedara vieja.
+    fn slash_preset(&mut self, args: &str) {
+        let a = args.trim();
+        if a.eq_ignore_ascii_case("clear") || a == "-" {
+            match self.preset.take() {
+                Some(p) => self.di(&format!("Modo **{p}** quitado. Vuelvo a contestar libremente.")),
+                None => self.di("No había ningún modo puesto."),
+            }
+            return;
+        }
+        if a.is_empty() {
+            let m = match &self.preset {
+                Some(p) => format!(
+                    "Modo activo: **{p}**.\n\nQuítalo con `/preset clear`."
+                ),
+                None => {
+                    if self.skills.is_empty() {
+                        "No hay ningún modo puesto, y tampoco hay skills instalados.".to_string()
+                    } else {
+                        format!(
+                            "No hay ningún modo puesto.\n\nFija uno con `/preset <nombre>`: {}",
+                            self.skills
+                                .iter()
+                                .map(|k| k.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                }
+            };
+            self.di(&m);
+            return;
+        }
+        match lucy_core::skills::find(&self.skills, a) {
+            Some(k) => {
+                let (n, d) = (k.name.clone(), k.description.clone());
+                self.preset = Some(n.clone());
+                self.di(&format!(
+                    "Modo **{n}** puesto — {d}\n\nA partir de ahora enmarco todo en él. \
+                     Se quita con `/preset clear`."
+                ));
+            }
+            // Los que SÍ hay. «No existe» a secas deja probando nombres.
+            None => {
+                let hay = self
+                    .skills
+                    .iter()
+                    .map(|k| k.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.di(&format!("No hay ningún skill llamado «{a}». Los que hay: {hay}."));
+            }
+        }
     }
 
     /// `/skills` — qué procedimientos hay instalados y de dónde salen.
@@ -5089,6 +5184,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             log: self.log_lines.clone().unwrap_or_default(),
             hosts: prompt::hosts_block(&self.remote_hosts),
             skills_cat: lucy_core::skills::catalog(&self.skills),
+            preset_txt: self
+                .preset
+                .as_deref()
+                .and_then(|p| lucy_core::skills::find(&self.skills, p))
+                .map(lucy_core::skills::preset_block)
+                .unwrap_or_default(),
             // El directorio desde el que se lanzó Lucy, para que un fichero
             // nombrado sin ruta se resuelva contra algo en vez de contra nada.
             cwd: std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default(),
@@ -9524,7 +9625,7 @@ mod paleta {
         // un comando que se traga la orden y no hace nada.
         let listos: Vec<&str> =
             SLASH.iter().filter(|(_, _, l)| *l).map(|(c, _, _)| *c).collect();
-        assert_eq!(listos.len(), 13, "cambió el número de comandos migrados");
+        assert_eq!(listos.len(), 14, "cambió el número de comandos migrados");
         for c in ["/recall", "/consolidate", "/snapshot", "/capabilities"] {
             assert!(listos.contains(&c), "{c} no está marcado como listo");
         }
