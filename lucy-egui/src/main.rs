@@ -869,22 +869,22 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/memory", "Explorador de memoria (V1)", true),
     ("/kg", "Grafo de conocimiento (V1)", false),
     ("/link", "Relaciones tipadas entre memorias", false),
-    ("/recall", "Recuperar memorias por consulta", false),
+    ("/recall", "Recuperar memorias por consulta", true),
     ("/crystals", "Ver crystals de memoria", false),
     ("/crystallize", "Destilar la sesión en un crystal", false),
     ("/insights", "Insights consolidados", false),
-    ("/consolidate", "Ejecutar consolidación ahora", false),
+    ("/consolidate", "Ejecutar consolidación ahora", true),
     ("/playbooks", "Playbooks multi-fase curados", false),
     ("/skills", "Picker de skills ejecutables", false),
     ("/preset", "Presets de framing (AD, Hyper-V, SQL…)", false),
     ("/sec-skill", "Catálogo security/forensics (200+)", false),
     ("/skills-manager", "Gestionar skills cargadas", false),
-    ("/capabilities", "Auto-introspección: skills, MCPs, frameworks", false),
+    ("/capabilities", "Auto-introspección: skills, MCPs, frameworks", true),
     ("/route", "Ver la última decisión de routing", false),
     ("/serial", "Bypass del fork advisor (esta pestaña)", false),
     ("/smart-router", "Smart-router on/off", false),
     ("/proactive", "Listar insights proactivos", false),
-    ("/snapshot", "Capturar snapshot del sistema", false),
+    ("/snapshot", "Capturar snapshot del sistema", true),
     ("/diff", "Comparar dos snapshots", false),
     ("/detective", "Síntesis forense de incidente", false),
     ("/runbooks", "Lista de runbooks (V1)", false),
@@ -2047,6 +2047,12 @@ struct App {
     api_keys: std::collections::HashMap<String, String>,
     /// El Ãºltimo error al guardar o borrar una clave. VacÃ­o = ninguno.
     api_key_msg: String,
+    /// Un cambio de tema pedido por `/theme`, esperando al `ctx` del frame.
+    ///
+    /// `slash_exec` no recibe `ui` a propósito —lo llaman la paleta Y el envío—
+    /// y aplicar un tema necesita el contexto. Se deja pedido y se aplica donde
+    /// hay contexto, que es una línea de más y una firma menos que arrastrar.
+    tema_pendiente: Option<theme::Mode>,
     /// Fila resaltada de la paleta de comandos.
     ///
     /// Global y no por pestaña: la paleta es del momento en que se escribe, no
@@ -2311,6 +2317,7 @@ impl App {
             privacy,
             api_keys: std::collections::HashMap::new(),
             api_key_msg: String::new(),
+            tema_pendiente: None,
             slash_sel: 0,
             dedup: None,
             model_query: String::new(),
@@ -2581,6 +2588,9 @@ impl eframe::App for App {
         self.pump_pending();
         self.pump_nx_test();
         self.pump_nx_conn();
+        if let Some(m) = self.tema_pendiente.take() {
+            theme::switch(ctx, m);
+        }
 
         // ── Política de repintado ────────────────────────────────────────────
         //
@@ -4235,109 +4245,245 @@ _(detenido por el operador)_");
             elegido = Some(c);
         }
         if let Some(c) = elegido {
-            // Los que ESTA versión sabe hacer se ejecutan al elegirlos; los
-            // demás rellenan el campo, que es lo único honesto que se puede
-            // hacer con un comando que todavía no existe.
             self.tabs[self.tab].input.clear();
-            match c {
-                "/clear" => {
-                    let t = &mut self.tabs[self.tab];
-                    t.log.clear();
-                    t.ws.reset();
-                    t.drain.flush();
-                }
-                // Abre el desplegable de modelos donde ya está, en vez de
-                // duplicar el selector en otro sitio.
-                "/model" => {
-                    let id = ui.make_persistent_id("model-menu");
-                    ui.memory_mut(|m| m.open_popup(id));
-                }
-                "/memory" => self.view = View::Memoria,
-                // Rota entre los tres en vez de abrir un menú. Un comando de
-                // barra se escribe para no levantar las manos del teclado, y
-                // hacerlo desembocar en un desplegable que hay que apuntar con
-                // el ratón deshace justo eso. El selector completo está en
-                // Configuración, para quien prefiera verlos los tres.
-                "/theme" => {
-                    let siguiente = match theme::mode() {
-                        theme::Mode::Dark => theme::Mode::Light,
-                        theme::Mode::Light => theme::Mode::Auto,
-                        theme::Mode::Auto => theme::Mode::Dark,
-                    };
-                    theme::switch(ui.ctx(), siguiente);
-                    self.tabs[self.tab].log.push(ChatMsg::new(
-                        false,
-                        format!("Tema: **{}**.", siguiente.label()),
-                    ));
-                }
-                // Se dice en el hilo, y con el modelo actual delante. Un
-                // interruptor que solo cambia un icono en la barra deja al
-                // operador sin saber si le va a dejar seguir trabajando con lo
-                // que tiene elegido — que es la única pregunta que importa al
-                // encenderlo.
-                "/privacy" => {
-                    self.privacy = !self.privacy;
-                    let m = if self.privacy {
-                        match lucy_core::cloud::allowed(&self.chat_model, true) {
-                            Ok(()) => format!(
-                                "Modo privacidad **activado**. Nada sale de este equipo. \
-                                 El modelo actual (`{}`) es local, así que puedes seguir.",
-                                self.chat_model
-                            ),
-                            Err(e) => format!(
-                                "Modo privacidad **activado**. Nada sale de este equipo.\n\n\
-                                 ⚠ {e}"
-                            ),
-                        }
-                    } else {
-                        "Modo privacidad **apagado**. Vuelven a estar disponibles los \
-                         modelos de nube."
-                            .to_string()
-                    };
-                    self.tabs[self.tab].log.push(ChatMsg::new(false, m));
-                }
-                // La captura se hace AL ELEGIR el comando, no al enviar. Entre
-                // una cosa y otra el operador escribe su pregunta, y la pantalla
-                // que quiere enseñar es la de ahora — no la de dentro de veinte
-                // segundos con el compositor tapando media ventana.
-                //
-                // La orden queda en el campo para que la complete: `/pantalla` a
-                // secas manda una pregunta genérica, y ese es el caso peor de
-                // una imagen que cuesta tokens de verdad.
-                "/pantalla" => match lucy_core::screen::capture_image(
-                    lucy_core::screen::MAX_WIDTH,
-                ) {
-                    Ok(img) => {
-                        let t = &mut self.tabs[self.tab];
-                        let mut a = Attachment::pending("pantalla.png", AttachKind::Image);
-                        a.pending = false;
-                        a.image = Some(img);
-                        t.attachments.push(a);
-                        t.input = "¿Qué ves en mi pantalla? ".into();
-                    }
-                    // Sin escritorio —una sesión de servicio, una sesión RDP
-                    // desconectada— no hay pantalla que capturar. Se dice; el
-                    // silencio se leería como que el comando no existe.
-                    Err(e) => self.tabs[self.tab]
-                        .log
-                        .push(ChatMsg::new(false, format!("No pude capturar tu pantalla: {e}"))),
-                },
-                "/help" => {
-                    let mut s = String::from("Comandos disponibles:
-
-");
-                    for (cmd, desc, listo) in SLASH {
-                        s.push_str(&format!(
-                            "- `{cmd}` — {desc}{}
-",
-                            if listo { "" } else { "  _(sin migrar)_" }
-                        ));
-                    }
-                    self.tabs[self.tab].log.push(ChatMsg::new(false, s));
-                }
-                otro => self.tabs[self.tab].input = format!("{otro} "),
+            // `/model` se queda aquí porque necesita el `ui` para abrir el
+            // desplegable donde ya está, en vez de duplicar el selector.
+            if c == "/model" {
+                let id = ui.make_persistent_id("model-menu");
+                ui.memory_mut(|m| m.open_popup(id));
+            } else {
+                self.slash_exec(c, "");
             }
         }
+    }
+
+    /// Cumple un comando de barra. Sin `ui`: lo llaman la paleta y el envío.
+    ///
+    /// LOS DOS CAMINOS PASAN POR AQUÍ. Elegir `/clear` de la lista y escribir
+    /// `/clear` y pulsar Enter tienen que hacer lo mismo, y con la ejecución
+    /// metida dentro de la paleta no lo hacían: lo segundo mandaba «/clear» al
+    /// modelo como si fuera una pregunta.
+    fn slash_exec(&mut self, cmd: &str, args: &str) {
+        match cmd {
+            "/clear" => {
+                let t = &mut self.tabs[self.tab];
+                t.log.clear();
+                t.ws.reset();
+                t.drain.flush();
+            }
+            "/memory" => self.view = View::Memoria,
+            // Rota entre los tres en vez de abrir un menú: un comando de barra
+            // se escribe para no levantar las manos del teclado, y desembocar
+            // en un desplegable que hay que apuntar deshace justo eso.
+            "/theme" => {
+                let siguiente = match theme::mode() {
+                    theme::Mode::Dark => theme::Mode::Light,
+                    theme::Mode::Light => theme::Mode::Auto,
+                    theme::Mode::Auto => theme::Mode::Dark,
+                };
+                self.tema_pendiente = Some(siguiente);
+                self.di(&format!("Tema: **{}**.", siguiente.label()));
+            }
+            "/privacy" => {
+                self.privacy = !self.privacy;
+                let m = if self.privacy {
+                    match lucy_core::cloud::allowed(&self.chat_model, true) {
+                        Ok(()) => format!(
+                            "Modo privacidad **activado**. Nada sale de este equipo. El \
+                             modelo actual (`{}`) es local, así que puedes seguir.",
+                            self.chat_model
+                        ),
+                        Err(e) => format!(
+                            "Modo privacidad **activado**. Nada sale de este equipo.\n\n⚠ {e}"
+                        ),
+                    }
+                } else {
+                    "Modo privacidad **apagado**. Vuelven a estar disponibles los modelos \
+                     de nube."
+                        .to_string()
+                };
+                self.di(&m);
+            }
+            "/pantalla" => match lucy_core::screen::capture_image(lucy_core::screen::MAX_WIDTH) {
+                Ok(img) => {
+                    let t = &mut self.tabs[self.tab];
+                    let mut a = Attachment::pending("pantalla.png", AttachKind::Image);
+                    a.pending = false;
+                    a.image = Some(img);
+                    t.attachments.push(a);
+                    t.input = if args.is_empty() {
+                        "¿Qué ves en mi pantalla? ".into()
+                    } else {
+                        format!("{args} ")
+                    };
+                }
+                Err(e) => self.di(&format!("No pude capturar tu pantalla: {e}")),
+            },
+            "/recall" => self.slash_recall(args),
+            "/consolidate" => self.slash_consolidate(),
+            "/snapshot" => self.slash_snapshot(),
+            "/capabilities" => self.slash_capabilities(),
+            "/help" => {
+                let mut s = String::from("Comandos disponibles:\n\n");
+                for (c, desc, listo) in SLASH {
+                    s.push_str(&format!(
+                        "- `{c}` — {desc}{}\n",
+                        if listo { "" } else { "  _(sin migrar)_" }
+                    ));
+                }
+                self.di(&s);
+            }
+            // Lo que todavía no existe rellena el campo, que es lo único
+            // honesto que se puede hacer con un comando que no está.
+            otro => self.tabs[self.tab].input = format!("{otro} "),
+        }
+    }
+
+    /// Escribe una línea de Lucy en el hilo de la pestaña activa.
+    fn di(&mut self, texto: &str) {
+        self.tabs[self.tab].log.push(ChatMsg::new(false, texto.to_string()));
+    }
+
+    /// `/recall <consulta>` — qué recordaría Lucy si le preguntaras eso.
+    ///
+    /// ENSEÑA LO QUE EL PROMPT INYECTA. La recuperación semántica corre en cada
+    /// turno y es invisible: cuando Lucy contesta algo raro, saber si fue por
+    /// una memoria mal recordada es imposible sin ver lo que se le metió. Esto
+    /// es esa ventana, y usa la MISMA función que el prompt — no una parecida,
+    /// que enseñaría un resultado que no es el que se está usando.
+    fn slash_recall(&mut self, consulta: &str) {
+        if consulta.trim().is_empty() {
+            self.di("Escribe qué buscar: `/recall disco lleno`.");
+            return;
+        }
+        let r = prompt::recall(consulta);
+        if r.trim().is_empty() {
+            self.di(&format!(
+                "Nada parecido a «{consulta}».\n\nSi esperabas algo: la búsqueda necesita \
+                 Ollama para el embebedor, y solo encuentra memorias que tengan su vector \
+                 calculado."
+            ));
+            return;
+        }
+        self.di(&format!("Esto es lo que recordaría con «{consulta}»:\n\n{r}"));
+    }
+
+    /// `/consolidate` — qué memorias se fundirían, sin fundirlas.
+    ///
+    /// EN SECO, como el botón de la vista de Memoria. Un comando de barra que
+    /// modificara la base de datos al escribirlo sería la peor forma de ofrecer
+    /// una función destructiva: sin ver antes qué toca.
+    fn slash_consolidate(&mut self) {
+        let m = match lucy_core::consolidate::run(true) {
+            Err(e) => format!("No se pudo revisar: {e}"),
+            Ok(r) if r.clusters_found == 0 => {
+                format!("Ninguna repetida entre las {} más recientes.", r.scanned)
+            }
+            Ok(r) => {
+                let mut s = format!(
+                    "**{} grupos · {} memorias** se fundirían, de {} miradas. No se ha \
+                     tocado nada.\n\n",
+                    r.clusters_found, r.memories_merged, r.scanned
+                );
+                for c in r.clusters.iter().take(10) {
+                    s.push_str(&format!(
+                        "- «{}» absorbe {} — parecido {:.0} %\n",
+                        c.canonical_title,
+                        c.merged_ids.len(),
+                        c.overlap_score * 100.0
+                    ));
+                }
+                s.push_str("\nPara aplicarlo: Memoria → Fundir.");
+                s
+            }
+        };
+        self.di(&m);
+    }
+
+    /// `/snapshot` — el estado del equipo, ahora, en el hilo.
+    ///
+    /// EN LA CONVERSACIÓN y no en el Dashboard, y esa es la diferencia: queda
+    /// FECHADO dentro del hilo. «Mira, a las once y cuarto la RAM estaba al 40 %»
+    /// es una frase que se puede escribir porque el número quedó escrito ahí, y
+    /// un panel que siempre enseña el valor de ahora no la permite.
+    fn slash_snapshot(&mut self) {
+        let s = self.sys.snapshot();
+        let mut m = format!(
+            "**{}** · {}\n\nCPU {:.0} % · RAM {:.1} de {:.1} GB\n",
+            s.host,
+            s.os,
+            s.cpu_pct,
+            s.mem_used as f64 / 1e9,
+            s.mem_total as f64 / 1e9
+        );
+        for d in &s.disks {
+            let usado = d.total.saturating_sub(d.avail);
+            let pct = if d.total > 0 { usado as f64 / d.total as f64 * 100.0 } else { 0.0 };
+            m.push_str(&format!(
+                "{} {:.0} % usado · {:.1} GB libres de {:.1}\n",
+                d.mount,
+                pct,
+                d.avail as f64 / 1e9,
+                d.total as f64 / 1e9
+            ));
+        }
+        if !self.services.is_empty() {
+            m.push_str(&format!("\n{} servicios automáticos detenidos:\n", self.services.len()));
+            for sv in self.services.iter().take(10) {
+                m.push_str(&format!("- {}\n", sv.name));
+            }
+        }
+        self.di(&m);
+    }
+
+    /// `/capabilities` — qué puede hacer ESTE shell, medido y no declarado.
+    ///
+    /// TODO SALE DE PREGUNTARLE AL ESTADO, no de una lista escrita a mano. Una
+    /// lista escrita miente en cuanto algo cambia, y es justo lo que ha pasado
+    /// cuatro veces hoy con comentarios que afirmaban carencias ya resueltas.
+    /// Aquí, si mañana se migra un comando, esta respuesta lo dice sola.
+    fn slash_capabilities(&mut self) {
+        let listos: Vec<&str> =
+            SLASH.iter().filter(|(_, _, l)| *l).map(|(c, _, _)| *c).collect();
+        let con_clave: Vec<&str> = lucy_core::keys::PROVIDERS
+            .iter()
+            .filter(|(k, _, _)| lucy_core::keys::has(k))
+            .map(|(_, etiqueta, _)| *etiqueta)
+            .collect();
+        let herramientas: Vec<&str> =
+            lucy_core::tools::AVAILABLE.iter().map(|(n, _)| *n).collect();
+        let remotos = self.remote_hosts.len();
+
+        let mut m = String::from("**Lo que puedo hacer en este equipo**\n\n");
+        m.push_str(&format!("- Herramientas: {}\n", herramientas.join(", ")));
+        m.push_str("- Ejecutar PowerShell, cmd, wmic, netsh, reg y cscript, con tu aprobación\n");
+        m.push_str(&format!(
+            "- Equipos remotos dados de alta: {}{}\n",
+            remotos,
+            if remotos > 0 { " (puedo ejecutar en ellos)" } else { "" }
+        ));
+        m.push_str(&format!(
+            "- Proveedores con clave: {}\n",
+            if con_clave.is_empty() {
+                "ninguno — configúralas en Configuración".to_string()
+            } else {
+                con_clave.join(", ")
+            }
+        ));
+        m.push_str(&format!("- Comandos de barra activos: {}\n", listos.join(" ")));
+        m.push_str(&format!(
+            "- Modo automático: {} · Privacidad: {}\n",
+            if self.tabs[self.tab].auto { "encendido" } else { "apagado" },
+            if self.privacy { "encendida" } else { "apagada" }
+        ));
+        // Y lo que NO puedo, que es la mitad que suele faltar en una
+        // introspección: sin ella, lo que no aparece se lee como un olvido.
+        let pendientes = SLASH.len() - listos.len();
+        m.push_str(&format!(
+            "\n**Lo que todavía no**: {pendientes} comandos de barra sin migrar, \
+             sub-agentes, y escribir ficheros sin que apruebes el diff."
+        ));
+        self.di(&m);
     }
 
     /// Añade ficheros a la pestaña activa, sin repetir los que ya están.
@@ -4413,6 +4559,20 @@ _(detenido por el operador)_");
     fn send(&mut self, text: String) {
         if self.tabs[self.tab].busy() {
             return;
+        }
+        // UN COMANDO CON ARGUMENTOS SE ENVÍA, no se elige de la paleta: en
+        // cuanto escribes `/recall disco` la lista deja de casar y se cierra, y
+        // el Enter vuelve a ser de enviar. Si la ejecución viviera solo en la
+        // paleta, la mitad de los comandos —justo los que llevan argumento— no
+        // se podrían usar.
+        if let Some(resto) = text.strip_prefix('/') {
+            let (cmd, args) = resto.split_once(char::is_whitespace).unwrap_or((resto, ""));
+            let cmd = format!("/{}", cmd.trim());
+            if SLASH.iter().any(|(c, _, listo)| *c == cmd && *listo) {
+                self.tabs[self.tab].input.clear();
+                self.slash_exec(&cmd, args.trim());
+                return;
+            }
         }
         // El texto de los adjuntos —el del fichero, o el que se extrajo del
         // PDF— se antepone a la orden, que es lo que hace el constructor de
@@ -9291,6 +9451,41 @@ mod bucle {
 #[cfg(test)]
 mod paleta {
     use super::*;
+
+    /// Cómo `send` parte un comando escrito a mano en orden y argumentos.
+    fn partir(texto: &str) -> Option<(String, String)> {
+        let resto = texto.strip_prefix('/')?;
+        let (cmd, args) = resto.split_once(char::is_whitespace).unwrap_or((resto, ""));
+        Some((format!("/{}", cmd.trim()), args.trim().to_string()))
+    }
+
+    #[test]
+    fn un_comando_con_argumentos_se_reconoce_al_enviarlo() {
+        // EL HUECO QUE ESTO CIERRA. La ejecución vivía dentro de la paleta, y la
+        // paleta se cierra en cuanto lo escrito deja de casar — que es justo lo
+        // que pasa al añadir un argumento. Así que `/recall disco` se mandaba al
+        // modelo como si fuera una pregunta.
+        assert_eq!(
+            partir("/recall disco lleno"),
+            Some(("/recall".into(), "disco lleno".into()))
+        );
+        assert_eq!(partir("/snapshot"), Some(("/snapshot".into(), String::new())));
+        // Y lo que no es un comando sigue sin serlo.
+        assert_eq!(partir("hola"), None);
+    }
+
+    #[test]
+    fn los_comandos_marcados_listos_son_los_que_se_cumplen() {
+        // La bandera de la tabla es lo que decide si el Enter lo ejecuta o lo
+        // manda al modelo. Marcar uno como listo sin cumplirlo lo convertiría en
+        // un comando que se traga la orden y no hace nada.
+        let listos: Vec<&str> =
+            SLASH.iter().filter(|(_, _, l)| *l).map(|(c, _, _)| *c).collect();
+        assert_eq!(listos.len(), 11, "cambió el número de comandos migrados");
+        for c in ["/recall", "/consolidate", "/snapshot", "/capabilities"] {
+            assert!(listos.contains(&c), "{c} no está marcado como listo");
+        }
+    }
 
     #[test]
     fn el_catalogo_de_comandos_es_el_de_la_v2() {
