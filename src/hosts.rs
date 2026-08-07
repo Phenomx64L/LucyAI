@@ -392,7 +392,7 @@ pub fn run_remote(h: &Host, password: &str, script: &str) -> Result<(String, Str
     // La MISMA decisión que usa la versión con streaming. Dos copias de «qué
     // protocolo se puede y con qué credencial» acabarían discrepando, y la que
     // discrepara de menos dejaría pasar una ejecución que la otra rechaza.
-    let (programa, args) = lanzamiento(h, password, script)?;
+    let (programa, args) = lanzamiento(h, script)?;
 
     let mut hijo = Command::new(&programa)
         .args(&args)
@@ -535,7 +535,7 @@ pub fn run_remote_streaming(
     use std::process::{Command, Stdio};
     use std::sync::atomic::Ordering;
 
-    let (programa, args) = lanzamiento(h, password, script)?;
+    let (programa, args) = lanzamiento(h, script)?;
     let mut hijo = Command::new(&programa)
         .args(&args)
         .stdin(Stdio::piped())
@@ -628,7 +628,7 @@ pub fn run_remote_streaming(
 /// PowerShell porque `Invoke-Command` ES de PowerShell; SSH se lanza directo,
 /// porque meterlo dentro de un PowerShell solo servía para perder su entrada
 /// estándar.
-fn lanzamiento(h: &Host, password: &str, script: &str) -> Result<(String, Vec<String>), String> {
+fn lanzamiento(h: &Host, script: &str) -> Result<(String, Vec<String>), String> {
     if !h.protocol.can_shell() {
         return Err(format!(
             "No se pueden ejecutar comandos contra {} por {}.",
