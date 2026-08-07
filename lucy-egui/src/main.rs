@@ -1741,21 +1741,33 @@ fn fmt_chars(n: usize) -> String {
 /// consultar el Credential Manager en cada frame son siete llamadas al sistema
 /// por fotograma. El valor de la clave NUNCA sale de aquí — solo si existe.
 fn with_key(provider: &str) -> bool {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut c) = cache.lock() else { return true };
+    let Ok(mut c) = cache_claves().lock() else { return true };
     if let Some(v) = c.get(provider) {
         return *v;
     }
-    // Ollama no lleva clave: es local.
-    let v = provider == "ollama"
-        || keyring::Entry::new("LucySysAdmin", &format!("{provider}_api_key"))
-            .and_then(|e| e.get_password())
-            .is_ok();
+    let v = lucy_core::keys::has(provider);
     c.insert(provider.to_string(), v);
     v
+}
+
+type CacheClaves = std::sync::Mutex<std::collections::HashMap<String, bool>>;
+
+fn cache_claves() -> &'static CacheClaves {
+    static CACHE: std::sync::OnceLock<CacheClaves> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Olvida lo que sabÃ­a de las claves.
+///
+/// SIN ESTO, LA CACHÃ MIENTE. Guardas la clave de Anthropic en ConfiguraciÃ³n,
+/// vuelves al selector de modelos, y sus modelos siguen saliendo apagados con
+/// Â«sin claveÂ» â porque la respuesta se calculÃ³ una vez, antes de que la clave
+/// existiera, y esa cachÃ© existe justamente para no volver a preguntar. Un
+/// ajuste que no se nota al aplicarlo se lee como un ajuste que no funciona.
+fn olvidar_claves() {
+    if let Ok(mut c) = cache_claves().lock() {
+        c.clear();
+    }
 }
 
 /// Lo que se puede hacer con un mensaje ya escrito.
@@ -2028,6 +2040,13 @@ struct App {
     ws_width: f32,
     /// El último informe de duplicados, si se ha pedido alguno.
     dedup: Option<Result<lucy_core::consolidate::Report, String>>,
+    /// Lo que se estÃ¡ escribiendo en cada casilla de clave de API.
+    ///
+    /// Se borra en cuanto se guarda: dejar la clave en un cuadro de texto es
+    /// dejarla en memoria y en pantalla para nada.
+    api_keys: std::collections::HashMap<String, String>,
+    /// El Ãºltimo error al guardar o borrar una clave. VacÃ­o = ninguno.
+    api_key_msg: String,
     /// Fila resaltada de la paleta de comandos.
     ///
     /// Global y no por pestaña: la paleta es del momento en que se escribe, no
@@ -2290,6 +2309,8 @@ impl App {
             max_loops,
             ws_width,
             privacy,
+            api_keys: std::collections::HashMap::new(),
+            api_key_msg: String::new(),
             slash_sel: 0,
             dedup: None,
             model_query: String::new(),
@@ -4735,8 +4756,25 @@ _(detenido por el operador)_");
                                     } else {
                                         None
                                     };
+                                    // EL NOMBRE DE LA MÁQUINA EN LA ETIQUETA, no
+                                    // el de la etiqueta XML. «Ejecutar
+                                    // (EXECUTE_REMOTE)» no dice dónde, y dónde
+                                    // es la mitad de lo que se aprueba: el mismo
+                                    // `Restart-Service` es rutina en un equipo
+                                    // de pruebas y un incidente en producción.
+                                    let etiqueta = if host.is_empty() {
+                                        format!("Ejecutar ({})", k.name())
+                                    } else {
+                                        let nombre = self
+                                            .remote_hosts
+                                            .iter()
+                                            .find(|x| x.id == host || x.name == host)
+                                            .map(|x| x.name.clone())
+                                            .unwrap_or_else(|| host.clone());
+                                        format!("Ejecutar en {nombre}")
+                                    };
                                     self.tabs[ti].ws.plan_append(PlanStep {
-                                        label: format!("Ejecutar ({})", k.name()),
+                                        label: etiqueta,
                                         status: StepStatus::Pending,
                                         detail: script,
                                         host,
@@ -4959,12 +4997,43 @@ _(detenido por el operador)_");
         if ti == self.tab {
             self.ws_tab = WsTab::Exec; // se mira la salida, no el plan
         }
+        // ¿A QUÉ MÁQUINA VA? El paso guarda el `target` que puso el modelo. Un
+        // paso remoto que cayera aquí es el peor final posible: parecería que
+        // funcionó y habría medido el equipo equivocado.
+        //
+        // Por eso un destino que no se resuelve NO se ejecuta en ninguna parte.
+        // El modelo puede inventarse un id, y «no conozco ese equipo» es una
+        // respuesta; correrlo aquí, no.
+        let destino = self.tabs[ti].ws.plan.iter().find(|s| s.id == id).map(|s| s.host.clone());
+        let remoto = match destino.as_deref().filter(|h| !h.is_empty()) {
+            None => None,
+            Some(h) => match self.remote_hosts.iter().find(|x| x.id == h || x.name == h) {
+                Some(host) => Some(host.clone()),
+                None => {
+                    self.tabs[ti].ws.plan_update(&id, StepStatus::Error, None);
+                    self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                        phase: "error".into(),
+                        label: "Equipo desconocido".into(),
+                        detail: format!(
+                            "El paso iba a «{h}», que no está dado de alta. No se ejecuta \
+                             aquí: sería medir la máquina equivocada."
+                        ),
+                        ..Default::default()
+                    });
+                    return;
+                }
+            },
+        };
+
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let t0 = Instant::now();
             // Elevado va por otro camino entero: proceso nuevo, UAC, y la
             // salida por fichero. Ver `lucy_core::elevate`.
-            let r = if elevated {
+            let r = if let Some(h) = remoto {
+                let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
+                lucy_core::hosts::run_remote(&h, &pw, &cmd)
+            } else if elevated {
                 lucy_core::elevate::run_elevated(&cmd).map(|(o, ok)| (o, String::new(), ok))
             } else {
                 lucy_core::shell::run_powershell_utf8(&cmd)
@@ -6199,6 +6268,115 @@ _(detenido por el operador)_");
                 // decide una vez; si esta orden corre sola o no, es una decisión
                 // por orden. Ponerlos juntos haría que encender el automático
                 // costara tres clics y un cambio de vista.
+                // ── claves de API ────────────────────────────────────────────
+                //
+                // ESTO FALTABA ENTERO, y era lo que ataba este shell al que
+                // sustituye: las claves se leían del Credential Manager y no
+                // había dónde escribirlas, así que una instalación limpia
+                // arrancaba sin poder hablar con ningún modelo de nube y sin
+                // decir cómo arreglarlo.
+                section(ui, "Claves de API", None);
+                let mut guardar: Option<(String, String)> = None;
+                let mut borrar: Option<String> = None;
+                card_on(
+                    ui,
+                    egui::vec2(full, lucy_core::keys::PROVIDERS.len() as f32 * 30.0 + 42.0),
+                    14.0,
+                    theme::bg2(),
+                    |ui| {
+                        for (clave, etiqueta, donde) in lucy_core::keys::PROVIDERS {
+                            row_align(ui, 28.0, egui::Align::Center, |ui| {
+                                cell(
+                                    ui,
+                                    120.0,
+                                    28.0,
+                                    false,
+                                    egui::RichText::new(*etiqueta)
+                                        .size(theme::FS_FOOTNOTE)
+                                        .color(theme::txt2()),
+                                );
+                                match lucy_core::keys::hint(clave) {
+                                    // GUARDADA se enseña con una pista de cuatro
+                                    // caracteres, nunca entera. Distingue la de
+                                    // producción de la de pruebas, que es lo
+                                    // único que hace falta, y no sirve para
+                                    // reconstruirla ni acaba en una captura.
+                                    Some(pista) => {
+                                        ui.label(
+                                            egui::RichText::new(pista)
+                                                .size(theme::FS_CAPTION)
+                                                .monospace()
+                                                .color(theme::acc()),
+                                        );
+                                        ui.add_space(8.0);
+                                        if ui.small_button("Quitar").clicked() {
+                                            borrar = Some(clave.to_string());
+                                        }
+                                    }
+                                    None => {
+                                        let buf = self
+                                            .api_keys
+                                            .entry(clave.to_string())
+                                            .or_default();
+                                        let te = ui.add(
+                                            egui::TextEdit::singleline(buf)
+                                                .password(true)
+                                                .desired_width(240.0)
+                                                .hint_text(*donde),
+                                        );
+                                        let intro = te.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                        let pulsado = ui
+                                            .add_enabled(
+                                                !buf.trim().is_empty(),
+                                                egui::Button::new("Guardar").small(),
+                                            )
+                                            .clicked();
+                                        if (intro || pulsado) && !buf.trim().is_empty() {
+                                            guardar =
+                                                Some((clave.to_string(), buf.trim().to_string()));
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Se guardan en el Credential Manager de Windows, en el mismo \
+                                 sitio que las usa la app de escritorio. Ollama no necesita \
+                                 clave: es local.",
+                            )
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                        );
+                    },
+                );
+                if let Some((p, k)) = guardar {
+                    self.api_key_msg = match lucy_core::keys::set(&p, &k) {
+                        // El campo se vacía al guardar: dejar la clave escrita
+                        // en un cuadro de texto es dejarla en memoria y en
+                        // pantalla para nada.
+                        Ok(()) => {
+                            self.api_keys.remove(&p);
+                            olvidar_claves();
+                            String::new()
+                        }
+                        Err(e) => e,
+                    };
+                }
+                if let Some(p) = borrar {
+                    self.api_key_msg = lucy_core::keys::delete(&p).err().unwrap_or_default();
+                    olvidar_claves();
+                }
+                if !self.api_key_msg.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.api_key_msg)
+                            .size(theme::FS_CAPTION)
+                            .color(theme::red()),
+                    );
+                }
+
                 // ── lo que Lucy ha aprendido ─────────────────────────────────
                 //
                 // ESTA LISTA ES LA MITAD DE CONFIANZA de la función. Lo que hay
