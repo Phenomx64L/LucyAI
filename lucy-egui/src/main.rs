@@ -7921,15 +7921,34 @@ _(detenido por el operador)_");
 
                 campo(ui, "Usuario", &mut h.username, "DOMINIO/usuario");
 
-                row_align(ui, 26.0, egui::Align::Center, |ui| {
-                    cell(ui, 110.0, 26.0, false, etiqueta_campo("Contraseña"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.nx_edit_pw)
-                            .password(true)
-                            .desired_width(220.0)
-                            .hint_text(if self.nx_edit_nuevo { "" } else { "(sin cambios)" }),
-                    );
-                });
+                // LO QUE EL TRANSPORTE USA DE VERDAD, y no los dos campos
+                // siempre. WinRM autentica con contraseña; SSH va por clave,
+                // porque la confianza se establece antes. Enseñar una casilla de
+                // contraseña a un host SSH invita a rellenarla, y ese dato no
+                // se usa para nada — antes incluso impedía ejecutar.
+                if h.protocol == lucy_core::hosts::Protocol::Ssh {
+                    row_align(ui, 26.0, egui::Align::Center, |ui| {
+                        cell(ui, 110.0, 26.0, false, etiqueta_campo("Clave privada"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut h.ssh_key_path)
+                                .desired_width(300.0)
+                                // Vacío es lo NORMAL: con `ssh-agent` o con la
+                                // clave en su sitio de siempre, `ssh` la
+                                // encuentra sola y no hay nada que escribir.
+                                .hint_text("vacío = ssh-agent o ~/.ssh/id_ed25519"),
+                        );
+                    });
+                } else {
+                    row_align(ui, 26.0, egui::Align::Center, |ui| {
+                        cell(ui, 110.0, 26.0, false, etiqueta_campo("Contraseña"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.nx_edit_pw)
+                                .password(true)
+                                .desired_width(220.0)
+                                .hint_text(if self.nx_edit_nuevo { "" } else { "(sin cambios)" }),
+                        );
+                    });
+                }
                 ui.add_space(6.0);
 
                 let mut tags = h.tags.join(", ");
@@ -8049,7 +8068,14 @@ _(detenido por el operador)_");
             let _ = lucy_core::hosts::save(&self.remote_hosts);
             // La contraseña solo si se escribió algo: al editar, un campo en
             // blanco significa «déjala como está», no «bórrala».
-            if !self.nx_edit_pw.trim().is_empty() {
+            //
+            // Y NUNCA para un SSH. Ese transporte va por clave, así que una
+            // contraseña ahí es un secreto que se guarda, se respalda y se
+            // filtra sin que nada la use jamás. La mejor forma de proteger un
+            // dato es no tenerlo.
+            if h.protocol != lucy_core::hosts::Protocol::Ssh
+                && !self.nx_edit_pw.trim().is_empty()
+            {
                 let _ = lucy_core::hosts::set_password(&h.id, self.nx_edit_pw.trim());
             }
             cerrar = true;
