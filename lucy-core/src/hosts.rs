@@ -390,10 +390,10 @@ pub fn run_remote(h: &Host, password: &str, script: &str) -> Result<(String, Str
     // La MISMA decisión que usa la versión con streaming. Dos copias de «qué
     // protocolo se puede y con qué credencial» acabarían discrepando, y la que
     // discrepara de menos dejaría pasar una ejecución que la otra rechaza.
-    let envoltorio = wrapper_for(h, password, script)?;
+    let (programa, args) = lanzamiento(h, password, script)?;
 
-    let mut hijo = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &crate::shell::ps_utf8(&envoltorio)])
+    let mut hijo = Command::new(&programa)
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -454,24 +454,34 @@ pub fn winrm_wrapper(h: &Host, script: &str) -> String {
 }
 
 /// Lo mismo por SSH, con clave. La contraseña no cabe aquí — ver `run_remote`.
-fn ssh_wrapper(h: &Host, script: &str) -> String {
-    let mut args = format!(
-        "-o BatchMode=yes -o StrictHostKeyChecking=accept-new -p {} {}@{}",
-        h.port,
-        h.username.replace('\'', "''"),
-        h.host.replace('\'', "''")
-    );
+/// Los argumentos de `ssh` para este equipo, como argv.
+///
+/// COMO ARGV Y NO COMO UNA LÍNEA DE SHELL, que es lo que había. El camino de SSH
+/// pasaba por PowerShell solo para que PowerShell llamara a `ssh`, y esa capa no
+/// compraba nada: arriesgaba el entrecomillado —un nombre de usuario o una ruta
+/// de clave con un carácter raro— y, sobre todo, SE COMÍA LA ENTRADA ESTÁNDAR.
+/// Es justo la que hace falta para contestarle a un `sudo`.
+///
+/// El comando remoto va en base64 y se decodifica allí: así su contenido no
+/// puede cerrar ninguna comilla, igual que en WinRM.
+pub fn ssh_args(h: &Host, script: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
     if !h.ssh_key_path.is_empty() {
-        args = format!("-i '{}' {args}", h.ssh_key_path.replace('\'', "''"));
+        v.push("-i".into());
+        v.push(h.ssh_key_path.clone());
     }
-    // El comando remoto va en base64 por lo mismo que en WinRM: que su contenido
-    // no pueda cerrar la comilla que lo envuelve.
-    format!(
-        "$null = [Console]::In.ReadLine(); \
-         $c = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}')); \
-         ssh {args} $c",
+    v.push("-o".into());
+    // `accept-new` y no `no`: acepta una máquina nueva, pero sigue avisando si
+    // la clave de una conocida CAMBIA — que es la señal que importa.
+    v.push("StrictHostKeyChecking=accept-new".into());
+    v.push("-p".into());
+    v.push(h.port.to_string());
+    v.push(format!("{}@{}", h.username, h.host));
+    v.push(format!(
+        "echo {} | base64 -d | sh",
         b64_utf8(script)
-    )
+    ));
+    v
 }
 
 fn b64_utf16le(s: &str) -> String {
@@ -516,23 +526,41 @@ pub fn run_remote_streaming(
     script: &str,
     tx: &std::sync::mpsc::Sender<Line>,
     stop: &std::sync::atomic::AtomicBool,
+    entrada_tx: Option<&std::sync::mpsc::Sender<Option<std::process::ChildStdin>>>,
 ) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::sync::atomic::Ordering;
 
-    let envoltorio = wrapper_for(h, password, script)?;
-    let mut hijo = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &crate::shell::ps_utf8(&envoltorio)])
+    let (programa, args) = lanzamiento(h, password, script)?;
+    let mut hijo = Command::new(&programa)
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(0x0800_0000)
         .spawn()
-        .map_err(|e| format!("No se pudo lanzar PowerShell: {e}"))?;
-    if let Some(mut s) = hijo.stdin.take() {
-        let _ = writeln!(s, "{password}");
+        .map_err(|e| format!("No se pudo lanzar `{programa}`: {e}"))?;
+
+    // La entrada estándar SE CONSERVA para poder escribirle después. Antes se
+    // soltaba aquí mismo —el `if let` la dejaba caer al salir— y con ella se iba
+    // la única forma de contestarle a un `sudo` o a un «¿seguro? [y/N]». Es la
+    // razón por la que la V2 declara que WinRM no admite entrada interactiva: en
+    // WinRM sigue siendo verdad, porque la contraseña la consume el envoltorio;
+    // en SSH ahora no.
+    let mut entrada = hijo.stdin.take();
+    if h.protocol == Protocol::Winrm {
+        if let Some(s) = entrada.as_mut() {
+            let _ = writeln!(s, "{password}");
+        }
+    }
+    if let Some(tx_in) = entrada_tx {
+        // Quien llama se queda con el extremo por el que escribir. Si no lo
+        // quiere, la entrada se cierra al salir de aquí, que es lo correcto:
+        // un programa remoto esperando una respuesta que nadie va a dar debe
+        // recibir un fin de fichero y terminar, no colgarse para siempre.
+        let _ = tx_in.send(entrada.take());
     }
 
     // El error se lee en OTRO hilo. Con un solo hilo, leer la salida hasta el
@@ -581,6 +609,7 @@ pub fn run_remote_streaming(
     _script: &str,
     tx: &std::sync::mpsc::Sender<Line>,
     _stop: &std::sync::atomic::AtomicBool,
+    _entrada_tx: Option<&std::sync::mpsc::Sender<Option<std::process::ChildStdin>>>,
 ) -> Result<(), String> {
     let _ = tx.send(Line::Done(false));
     Err("la ejecución remota solo está implementada en Windows".into())
@@ -591,7 +620,13 @@ pub fn run_remote_streaming(
 /// Se saca aparte porque lo comparten la versión que espera y la que va
 /// entregando: dos copias de esta decisión acabarían discrepando en cuál es el
 /// protocolo que sí se puede.
-fn wrapper_for(h: &Host, password: &str, script: &str) -> Result<String, String> {
+/// Con qué programa y qué argumentos se corre un script en este equipo.
+///
+/// Dos transportes de verdad y no uno disfrazado del otro: WinRM va envuelto en
+/// PowerShell porque `Invoke-Command` ES de PowerShell; SSH se lanza directo,
+/// porque meterlo dentro de un PowerShell solo servía para perder su entrada
+/// estándar.
+fn lanzamiento(h: &Host, password: &str, script: &str) -> Result<(String, Vec<String>), String> {
     if !h.protocol.can_shell() {
         return Err(format!(
             "No se pueden ejecutar comandos contra {} por {}.",
@@ -600,8 +635,19 @@ fn wrapper_for(h: &Host, password: &str, script: &str) -> Result<String, String>
         ));
     }
     match h.protocol {
-        Protocol::Winrm => Ok(winrm_wrapper(h, script)),
-        Protocol::Ssh if password.is_empty() => Ok(ssh_wrapper(h, script)),
+        Protocol::Winrm => Ok((
+            "powershell".into(),
+            vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                crate::shell::ps_utf8(&winrm_wrapper(h, script)),
+            ],
+        )),
+        Protocol::Ssh if password.is_empty() => Ok(("ssh".into(), ssh_args(h, script))),
+        // `ssh` lee la contraseña del terminal, no de la entrada estándar, así
+        // que no hay dónde ponérsela. Se dice, en vez de intentarlo y entregar
+        // un mensaje de OpenSSH que no explica nada.
         Protocol::Ssh => Err("SSH con contraseña todavía no: usa una clave y deja la \
                               contraseña en blanco, o configura `ssh-agent`."
             .into()),
@@ -903,6 +949,49 @@ mod tests {
         let w = winrm_wrapper(&h, "x");
         assert!(w.contains("$_.Exception.Message"), "{w}");
         assert!(w.contains("[Console]::Error.WriteLine"), "no lo manda por la salida de error");
+    }
+
+    #[test]
+    fn ssh_se_lanza_directo_y_no_dentro_de_powershell() {
+        // Pasaba por PowerShell solo para que PowerShell llamara a `ssh`. Esa
+        // capa arriesgaba el entrecomillado y, sobre todo, se comía la entrada
+        // estándar — la única forma de contestarle a un `sudo`.
+        let mut h = Host::nuevo(Protocol::Ssh, 1);
+        h.host = "10.0.0.5".into();
+        h.username = "root".into();
+        let a = ssh_args(&h, "uptime");
+        assert!(a.iter().any(|x| x == "root@10.0.0.5"), "{a:?}");
+        assert!(a.iter().any(|x| x == "-p"), "no pasa el puerto: {a:?}");
+        // Y el comando remoto va codificado, no en claro: su contenido no puede
+        // cerrar ninguna comilla.
+        assert!(!a.iter().any(|x| x == "uptime"), "el comando viaja sin codificar: {a:?}");
+        assert!(a.iter().any(|x| x.contains("base64 -d")), "{a:?}");
+    }
+
+    #[test]
+    fn una_clave_con_espacios_no_necesita_comillas_en_argv() {
+        // Es la mitad del valor de pasar argv en vez de una línea de shell: la
+        // ruta viaja como UN argumento y nadie tiene que escaparla.
+        let mut h = Host::nuevo(Protocol::Ssh, 1);
+        h.host = "srv".into();
+        h.username = "u".into();
+        h.ssh_key_path = r"C:\mis claves\id_ed25519".into();
+        let a = ssh_args(&h, "x");
+        let i = a.iter().position(|x| x == "-i").expect("sin -i");
+        assert_eq!(a[i + 1], r"C:\mis claves\id_ed25519");
+    }
+
+    #[test]
+    fn una_maquina_nueva_se_acepta_pero_un_cambio_de_clave_no() {
+        // `accept-new` y no `no`: lo primero es comodidad, lo segundo apaga el
+        // aviso de que la clave de un servidor conocido CAMBIÓ, que es la señal
+        // que importa.
+        let mut h = Host::nuevo(Protocol::Ssh, 1);
+        h.host = "srv".into();
+        h.username = "u".into();
+        let a = ssh_args(&h, "x").join(" ");
+        assert!(a.contains("StrictHostKeyChecking=accept-new"), "{a}");
+        assert!(!a.contains("StrictHostKeyChecking=no"), "apagó el aviso: {a}");
     }
 
     #[test]
