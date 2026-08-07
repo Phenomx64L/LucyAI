@@ -382,6 +382,28 @@ fn recorta_visual(s: &str, n: usize) -> String {
     s.chars().take(n).collect::<String>() + "…"
 }
 
+/// Un comando destructivo esperando que alguien lo mire.
+///
+/// LLEVA SU DESTINO, y no llevarlo era un fallo con dientes. El campo era una
+/// cadena suelta, y las dos vistas —la del equipo local y la de un remoto— leían
+/// la MISMA: se encolaba un `Remove-Item` contra un servidor, se cambiaba a
+/// «Este equipo» antes de confirmar, y al pulsar Ejecutar el comando corría en
+/// la estación del operador. Estrecho de provocar y grave de sufrir, y
+/// justamente en la franja que existe para evitar accidentes.
+#[derive(Debug, Clone, PartialEq)]
+struct Pendiente {
+    /// El id del equipo al que iba. `None` = este equipo.
+    host: Option<String>,
+    cmd: String,
+}
+
+impl Pendiente {
+    /// Si esta confirmación es de la vista que está mirando `host`.
+    fn es_de(&self, host: Option<&str>) -> bool {
+        self.host.as_deref() == host
+    }
+}
+
 /// Lo que se sabe de un equipo remoto tras llamar a su puerta.
 ///
 /// TRES ESTADOS Y NO UN BOOLEANO. «No lo hemos probado» no es lo mismo que «no
@@ -2037,8 +2059,8 @@ struct App {
     /// Por donde va el recorrido del historial. `None` = escribiendo una linea
     /// nueva, que es un estado distinto de "en la mas reciente".
     nx_hist_idx: Option<usize>,
-    /// Un comando destructivo esperando confirmacion.
-    nx_confirm: Option<String>,
+    /// Un comando destructivo esperando confirmaciÃ³n, CON su destino.
+    nx_confirm: Option<Pendiente>,
     /// Traduccion en vuelo.
     nx_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     nx_busy: bool,
@@ -7076,37 +7098,15 @@ _(detenido por el operador)_");
                 // La confirmación va PEGADA al campo, no en un diálogo aparte.
                 // Un modal tapa el comando que se está juzgando, que es
                 // justamente lo que hay que leer para decidir.
-                if let Some(cmd) = self.nx_confirm.clone() {
-                    egui::Frame::none()
-                        .fill(theme::amber_bg())
-                        .stroke(egui::Stroke::new(1.0_f32, theme::amber()))
-                        .rounding(egui::Rounding::same(theme::R_SM))
-                        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(lucy_core::destructive::reason())
-                                    .size(theme::FS_CAPTION)
-                                    .color(theme::amber()),
-                            );
-                            ui.add_space(3.0);
-                            ui.label(
-                                egui::RichText::new(&cmd)
-                                    .size(theme::FS_FOOTNOTE)
-                                    .monospace()
-                                    .color(theme::txt()),
-                            );
-                            ui.add_space(6.0);
-                            row(ui, 24.0, |ui| {
-                                if ui.button("Ejecutar").clicked() {
-                                    self.nx_run(&cmd);
-                                    self.nx_confirm = None;
-                                }
-                                if ui.button("Cancelar").clicked() {
-                                    self.nx_confirm = None;
-                                }
-                            });
-                        });
-                    ui.add_space(6.0);
+                // SOLO la que es de esta vista. El campo era una cadena suelta y
+                // las dos vistas leÃ­an la misma: un comando encolado contra un
+                // servidor acababa corriendo aquÃ­ si el operador cambiaba de
+                // equipo antes de confirmar.
+                if let Some(p) = self.nx_confirm.clone().filter(|p| p.es_de(None)) {
+                    if confirm_strip(ui, &p.cmd) {
+                        self.nx_run(&p.cmd);
+                    }
+                    self.nx_confirm = None;
                 }
                 egui::Frame::none()
                     .fill(theme::bg3())
@@ -7337,9 +7337,9 @@ _(detenido por el operador)_");
             }))
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                if let Some(cmd) = self.nx_confirm.clone() {
-                    if confirm_strip(ui, &cmd) {
-                        self.nx_run_remote(&h, &cmd);
+                if let Some(p) = self.nx_confirm.clone().filter(|p| p.es_de(Some(&h.id))) {
+                    if confirm_strip(ui, &p.cmd) {
+                        self.nx_run_remote(&h, &p.cmd);
                     }
                     self.nx_confirm = None;
                 }
@@ -7352,8 +7352,26 @@ _(detenido por el operador)_");
                         row_align(ui, 26.0, egui::Align::Center, |ui| {
                             ui.spacing_mut().item_spacing.x = 9.0;
                             icons::show(ui, icons::Icon::Terminal, 15.0, theme::txt3());
+                            // Las flechas, ANTES de dibujar el campo, o el
+                            // propio `TextEdit` las usa para mover el cursor. Lo
+                            // tenía en el equipo local y no lo llevé aquí, así
+                            // que en un remoto —donde los comandos son más
+                            // largos y se repiten más— no había historial.
+                            let id = ui.make_persistent_id("nx-remote-field");
+                            if ui.memory(|m| m.has_focus(id)) {
+                                let (arriba, abajo) = ui.input_mut(|i| {
+                                    (
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                                    )
+                                });
+                                if arriba || abajo {
+                                    self.nx_recall(if arriba { -1 } else { 1 });
+                                }
+                            }
                             let te = ui.add(
                                 egui::TextEdit::singleline(&mut self.term_input)
+                                    .id(id)
                                     .hint_text(format!("Comando o petición para {}…", h.name))
                                     .desired_width(ui.available_width() - 34.0)
                                     .frame(false)
@@ -7508,7 +7526,7 @@ _(detenido por el operador)_");
     /// Comprueba si un comando remoto se deshace, y si no, pide confirmación.
     fn nx_gate_remote(&mut self, h: &lucy_core::hosts::Host, cmd: String) {
         if lucy_core::destructive::is_destructive(&cmd) {
-            self.nx_confirm = Some(cmd);
+            self.nx_confirm = Some(Pendiente { host: Some(h.id.clone()), cmd });
         } else {
             self.nx_run_remote(h, &cmd);
         }
@@ -8110,7 +8128,7 @@ _(detenido por el operador)_");
     /// sitio, pregunta en los dos.
     fn nx_maybe_run(&mut self, cmd: String) {
         if lucy_core::destructive::is_destructive(&cmd) {
-            self.nx_confirm = Some(cmd);
+            self.nx_confirm = Some(Pendiente { host: None, cmd });
         } else {
             self.nx_run(&cmd);
         }
@@ -8672,6 +8690,27 @@ mod teclado {
         let atajo = eframe::egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter);
         assert_eq!(atajo.logical_key, Key::Enter);
         assert!(atajo.modifiers.shift);
+    }
+}
+
+#[cfg(test)]
+mod confirmacion {
+    use super::*;
+
+    #[test]
+    fn una_confirmacion_solo_la_atiende_su_propia_vista() {
+        // EL FALLO QUE ESTO FIJA, y tenía dientes. El campo era una cadena
+        // suelta y las dos vistas leían la misma: se encolaba un `Remove-Item`
+        // contra un servidor, se cambiaba a «Este equipo» antes de confirmar, y
+        // al pulsar Ejecutar el comando corría en la estación del operador.
+        let al_servidor = Pendiente { host: Some("h_1".into()), cmd: "Remove-Item C:\\".into() };
+        assert!(al_servidor.es_de(Some("h_1")), "su propia vista no la reconoce");
+        assert!(!al_servidor.es_de(None), "la vista local se la quedaría");
+        assert!(!al_servidor.es_de(Some("h_2")), "otro servidor se la quedaría");
+
+        let al_local = Pendiente { host: None, cmd: "del /s C:\\temp".into() };
+        assert!(al_local.es_de(None));
+        assert!(!al_local.es_de(Some("h_1")), "un remoto se quedaría la del local");
     }
 }
 
