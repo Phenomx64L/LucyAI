@@ -429,10 +429,12 @@ impl Section for HostRouting {
     fn render(&self, c: &Ctx) -> String {
         format!(
             "EQUIPOS REMOTOS CONFIGURADOS\n{}\n\
-             Si el operador nombra uno de ellos, la ejecución remota TODAVÍA NO está \
-             migrada a este shell: dilo claramente y da el comando en un bloque de código \
-             para que lo copie, en vez de proponer un <EXECUTE> que correría en la máquina \
-             local y mediría el equipo equivocado.",
+             Para correr algo en uno de ellos usa \
+             <EXECUTE_REMOTE target=\"id\">comando</EXECUTE_REMOTE> con el id que aparece \
+             arriba. El comando se ejecuta ALLÍ, así que escríbelo en el shell de ESE \
+             equipo: PowerShell en los Windows, bash en los Linux.\n\
+             Y no uses <EXECUTE> para algo que era para otra máquina: ése corre aquí, y \
+             mediría el equipo equivocado diciendo que midió el bueno.",
             c.hosts.trim_end()
         )
     }
@@ -955,12 +957,20 @@ mod tests {
     }
 
     #[test]
-    fn con_hosts_configurados_se_dice_la_verdad_sobre_lo_remoto() {
+    fn con_hosts_configurados_se_le_ofrece_la_ejecucion_remota() {
         let _s = serie();
-        // Proponer un <EXECUTE> para un equipo remoto lo correría AQUÍ y mediría
-        // la máquina equivocada, diciéndolo como si fuera la buena.
+        // Antes esta sección le decía que lo remoto «TODAVÍA NO está migrado» y
+        // le pedía que diera el comando para copiar a mano. Era cierto hasta que
+        // se migró NexShell; desde entonces el registro de equipos y
+        // `hosts::run_remote` existen, y la frase se quedó pidiéndole que no
+        // usara algo que sí funciona.
         let p = build(&Ctx { hosts: "srv-01 (10.0.0.5)", ..Default::default() });
         assert!(p.contains("srv-01"));
-        assert!(p.contains("TODAVÍA NO está"));
+        assert!(p.contains("EXECUTE_REMOTE"), "no se le ofrece la etiqueta");
+        assert!(!p.contains("TODAVÍA NO"), "sigue diciendo que no se puede");
+        // Y la advertencia que sí sigue en pie: un <EXECUTE> a secas corre AQUÍ.
+        assert!(p.contains("equipo equivocado"));
+        // El shell del equipo de destino, que no tiene por qué ser PowerShell.
+        assert!(p.contains("bash"), "no le dice que un Linux lleva bash");
     }
 }

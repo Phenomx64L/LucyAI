@@ -183,8 +183,13 @@ pub fn tag_to_script(kind: crate::tags::TagKind, content: &str) -> Option<String
         K::ExecuteNetsh => format!("netsh.exe {c}"),
         K::ExecuteReg => format!("reg.exe {c}"),
         K::ExecuteCscript => format!("cscript.exe //NoLogo {c}"),
-        // La remota necesita una sesión que este shell todavía no abre.
-        K::ExecuteRemote => return None,
+        // La remota SÍ, y su contenido es el script tal cual: quien lo ejecuta
+        // es `hosts::run_remote`, contra el equipo que diga el atributo
+        // `target`. Aquí decía «necesita una sesión que este shell todavía no
+        // abre», y era verdad hasta que se migró NexShell — el registro de
+        // equipos y la ejecución remota existen desde entonces, y el comentario
+        // se quedó afirmando una carencia que ya no estaba.
+        K::ExecuteRemote => c.to_string(),
         // Ni `<TOOL>` ni `<THOUGHT>` son ejecuciones: van a Trace.
         _ => return None,
     })
@@ -215,13 +220,25 @@ mod tests {
     }
 
     #[test]
-    fn lo_que_este_shell_no_puede_cumplir_devuelve_nada() {
+    fn lo_que_no_es_una_ejecucion_devuelve_nada() {
         use crate::tags::TagKind as K;
-        // Correr localmente un comando que el modelo pidió para OTRA máquina es
-        // el peor final posible: parece que funcionó y midió el equipo que no era.
-        assert!(tag_to_script(K::ExecuteRemote, "Get-Service").is_none());
         assert!(tag_to_script(K::Tool, "sysinfo").is_none());
         assert!(tag_to_script(K::Thought, "pensando").is_none());
+    }
+
+    #[test]
+    fn la_remota_devuelve_su_script_sin_tocarlo() {
+        use crate::tags::TagKind as K;
+        // Ya se puede cumplir: el registro de equipos y `hosts::run_remote`
+        // existen desde que se migró NexShell. Antes esto devolvía `None` y el
+        // comentario decía que hacía falta «una sesión que este shell todavía no
+        // abre» — cierto cuando se escribió, falso desde entonces.
+        //
+        // SIN TOCARLO, y eso importa: el script va a correr en la otra máquina,
+        // que puede ser un Linux. Envolverlo en algo de PowerShell aquí sería
+        // traducirlo al shell equivocado.
+        assert_eq!(tag_to_script(K::ExecuteRemote, "systemctl status nginx").unwrap(), "systemctl status nginx");
+        assert_eq!(tag_to_script(K::ExecuteRemote, "Get-Service").unwrap(), "Get-Service");
     }
 
     // Las letras acentuadas de 0x80–0xA5 son IDÉNTICAS en CP-437 (Windows en
