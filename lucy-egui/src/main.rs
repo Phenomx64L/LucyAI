@@ -2071,6 +2071,10 @@ struct App {
     nx_lines: std::collections::HashMap<String, Vec<(char, String)>>,
     /// El equipo cuyo comando esta en vuelo, para saber donde escribir su salida.
     nx_exec_id: String,
+    /// La entrada del comando remoto en vuelo, si la admite. Es lo que permite
+    /// contestarle a un `sudo` o a un Â«Â¿seguro? [y/N]Â».
+    nx_stdin: Option<std::process::ChildStdin>,
+    nx_stdin_rx: Option<std::sync::mpsc::Receiver<Option<std::process::ChildStdin>>>,
     /// Interruptor de parada del comando remoto en curso.
     nx_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cuando empezo, para el contador de segundos.
@@ -2303,6 +2307,8 @@ impl App {
             nx_host: None,
             nx_lines: std::collections::HashMap::new(),
             nx_exec_id: String::new(),
+            nx_stdin: None,
+            nx_stdin_rx: None,
             nx_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             nx_started: None,
             nx_destino: None,
@@ -7372,7 +7378,16 @@ _(detenido por el operador)_");
                             let te = ui.add(
                                 egui::TextEdit::singleline(&mut self.term_input)
                                     .id(id)
-                                    .hint_text(format!("Comando o petición para {}…", h.name))
+                                    // La pista cambia con el estado, porque el
+                                    // significado de la tecla cambia con él: con
+                                    // algo corriendo, lo que escribes es una
+                                    // respuesta PARA ese comando.
+                                    .hint_text(if self.nx_busy {
+                                        "Respuesta para el comando en curso (p. ej. y) …"
+                                            .to_string()
+                                    } else {
+                                        format!("Comando o petición para {}…", h.name)
+                                    })
                                     .desired_width(ui.available_width() - 34.0)
                                     .frame(false)
                                     .font(egui::FontId::monospace(theme::FS_FOOTNOTE)),
@@ -7442,7 +7457,15 @@ _(detenido por el operador)_");
 
         if enviar {
             let texto = std::mem::take(&mut self.term_input).trim().to_string();
-            if !texto.is_empty() && !self.nx_busy {
+            // CON UN COMANDO EN VUELO, lo que se escribe es una RESPUESTA para
+            // él, no un comando nuevo. Es lo que hace falta para un `sudo` o un
+            // «¿seguro? [y/N]», y sin ello el comando se queda esperando algo
+            // que nadie le va a dar hasta que alguien lo mate.
+            if self.nx_busy {
+                if !texto.is_empty() {
+                    self.nx_send_input(&h.id, &texto);
+                }
+            } else if !texto.is_empty() {
                 self.nx_history.push(texto.clone());
                 self.nx_hist_idx = None;
                 // EL LENGUAJE NATURAL TAMBIÉN AQUÍ. Estaba solo en la ruta
@@ -7500,6 +7523,40 @@ _(detenido por el operador)_");
         }
     }
 
+    /// Contesta a un comando remoto que está esperando algo.
+    ///
+    /// La respuesta se ECHA EN LA SESIÓN antes de mandarla, con su propia marca.
+    /// Sin verla escrita, el operador no tiene forma de saber si la escribió
+    /// bien — y en un `sudo` eso significa reintentar a ciegas.
+    fn nx_send_input(&mut self, id: &str, texto: &str) {
+        use std::io::Write;
+        // El extremo llega por el canal en cuanto el proceso arranca. Se recoge
+        // aquí y no en el pump para no tener que mirarlo en cada frame.
+        if self.nx_stdin.is_none() {
+            if let Some(rx) = &self.nx_stdin_rx {
+                if let Ok(s) = rx.try_recv() {
+                    self.nx_stdin = s;
+                }
+            }
+        }
+        let Some(s) = self.nx_stdin.as_mut() else {
+            self.nx_lines_mut(id).push((
+                'e',
+                "Este comando no admite respuestas: WinRM no deja escribirle una vez \
+                 lanzado. Detenlo y vuelve a lanzarlo sin la parte interactiva."
+                    .into(),
+            ));
+            return;
+        };
+        let r = writeln!(s, "{texto}").and_then(|()| s.flush());
+        match r {
+            Ok(()) => self.nx_lines_mut(id).push(('c', format!("↳ {texto}"))),
+            Err(e) => self
+                .nx_lines_mut(id)
+                .push(('e', format!("No se pudo enviar la respuesta: {e}"))),
+        }
+    }
+
     /// Las líneas de ESTE equipo. Se crean al primer uso.
     ///
     /// POR EQUIPO Y NO UNA SOLA LISTA, que es como estaba y era un fallo:
@@ -7546,9 +7603,13 @@ _(detenido por el operador)_");
         self.nx_exec_id = id;
         self.nx_exec_rx = Some(rx);
         self.nx_started = Some(Instant::now());
+        let (in_tx, in_rx) = std::sync::mpsc::channel();
+        self.nx_stdin = None;
+        self.nx_stdin_rx = Some(in_rx);
         std::thread::spawn(move || {
-            if let Err(e) = lucy_core::hosts::run_remote_streaming(&host, &pw, &script, &tx, &stop)
-            {
+            if let Err(e) = lucy_core::hosts::run_remote_streaming(
+                &host, &pw, &script, &tx, &stop, Some(&in_tx),
+            ) {
                 let _ = tx.send(lucy_core::hosts::Line::Err(e));
                 let _ = tx.send(lucy_core::hosts::Line::Done(false));
             }
