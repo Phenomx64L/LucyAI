@@ -160,7 +160,9 @@ impl Protocol {
         match self {
             Self::Winrm => "El servidor remoto debe tener WinRM habilitado. Ejecuta allí: \
                             Enable-PSRemoting -Force",
-            Self::Ssh => "El servidor remoto debe aceptar SSH por contraseña o por clave.",
+            Self::Ssh => "Por CLAVE, no por contraseña: la confianza se establece antes. \
+                          Autoriza tu clave pública en el servidor (`~/.ssh/authorized_keys`) \
+                          o ten la privada cargada en `ssh-agent`.",
             _ => "",
         }
     }
@@ -644,13 +646,16 @@ fn lanzamiento(h: &Host, password: &str, script: &str) -> Result<(String, Vec<St
                 crate::shell::ps_utf8(&winrm_wrapper(h, script)),
             ],
         )),
-        Protocol::Ssh if password.is_empty() => Ok(("ssh".into(), ssh_args(h, script))),
-        // `ssh` lee la contraseña del terminal, no de la entrada estándar, así
-        // que no hay dónde ponérsela. Se dice, en vez de intentarlo y entregar
-        // un mensaje de OpenSSH que no explica nada.
-        Protocol::Ssh => Err("SSH con contraseña todavía no: usa una clave y deja la \
-                              contraseña en blanco, o configura `ssh-agent`."
-            .into()),
+        // SSH VA SIEMPRE POR CLAVE, y eso es una decisión, no una carencia. El
+        // modelo de operación es establecer la confianza entre las máquinas
+        // antes —clave autorizada o `ssh-agent`— y entonces la contraseña
+        // sobra: no hay secreto que guardar, ni que rotar, ni que teclear.
+        //
+        // Antes esto RECHAZABA si había una contraseña guardada, y era una
+        // trampa: el formulario ofrecía el campo, rellenarlo era natural, y un
+        // equipo bien configurado dejaba de funcionar por un dato que no debía
+        // estar ahí. Ahora se ignora, y el formulario ya no lo pide.
+        Protocol::Ssh => Ok(("ssh".into(), ssh_args(h, script))),
         _ => unreachable!("can_shell ya lo filtró"),
     }
 }
