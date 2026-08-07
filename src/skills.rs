@@ -142,6 +142,26 @@ pub fn catalog(skills: &[Skill]) -> String {
     s.trim_end().to_string()
 }
 
+/// Un skill FIJADO, tal como viaja en el prompt de cada turno.
+///
+/// LA DIFERENCIA CON PEDIRLO es cuándo se aplica, no qué dice. Un skill se pide
+/// para una tarea y se acaba con ella; un preset se fija y enmarca todo lo que
+/// venga después hasta que alguien lo quite. La V2 lo llama «modo skill» y tiene
+/// razón: no es otro tipo de contenido, es el mismo contenido con otra duración.
+///
+/// Por eso comparten fichero. Dos sistemas paralelos para lo mismo obligarían a
+/// escribir cada procedimiento dos veces, y la copia que menos se use será la
+/// que se quede vieja.
+pub fn preset_block(k: &Skill) -> String {
+    format!(
+        "MODO ACTIVO: «{}»\n\
+         El operador ha fijado este procedimiento. Enmárcalo TODO en él mientras siga \
+         puesto: si lo que te piden encaja, aplícalo; si no encaja, dilo y contesta igual \
+         — un modo fijado no es una orden de forzarlo todo por ese camino.\n\n{}",
+        k.name, k.body
+    )
+}
+
 /// Busca un skill por nombre, tolerando cómo lo escriba el modelo.
 ///
 /// Se acepta con o sin espacios, mayúsculas o guiones bajos: pedir
@@ -215,6 +235,18 @@ mod tests {
         // Y se le dice que no lo fuerce: un skill aplicado a algo que no era
         // hace peor trabajo que ninguno.
         assert!(c.contains("no lo fuerces"));
+    }
+
+    #[test]
+    fn un_preset_lleva_el_cuerpo_y_permiso_para_no_aplicarlo() {
+        // Sin ese permiso, un modo fijado convierte cada pregunta en un clavo
+        // para su martillo: se pregunta la hora y contesta con un diagnóstico
+        // de DNS porque es lo que dice el modo.
+        let k = parse("dns", CON_CABECERA);
+        let b = preset_block(&k);
+        assert!(b.contains("# Pasos"), "no lleva el cuerpo");
+        assert!(b.contains("si no encaja, dilo"), "no le deja salirse: {b}");
+        assert!(b.contains("dns"), "no dice cuál está puesto");
     }
 
     #[test]
