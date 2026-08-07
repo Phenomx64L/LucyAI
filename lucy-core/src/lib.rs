@@ -39,6 +39,9 @@ pub mod chat;
 pub mod cloud;
 /// El registro de equipos remotos. El MISMO índice que la app, byte a byte.
 pub mod hosts;
+/// Las claves de API. Se podían LEER y no escribir: en una instalación limpia,
+/// egui arrancaba sin poder hablar con nadie y sin decir dónde arreglarlo.
+pub mod keys;
 /// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
 /// en quien expone el comando.
 pub mod logs;
