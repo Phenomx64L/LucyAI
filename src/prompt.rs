@@ -51,6 +51,12 @@ pub struct Ctx<'a> {
     pub log: &'a [String],
     /// Equipos remotos configurados, ya formateados. Vacío = no hay ninguno.
     pub hosts: &'a str,
+    /// El catálogo de skills, ya formateado. Vacío = no hay ninguno.
+    ///
+    /// Solo el NOMBRE y la DESCRIPCIÓN de cada uno. El cuerpo entero de cinco
+    /// skills serían miles de tokens en cada turno de cada conversación, casi
+    /// siempre para no usar ninguno; se carga el que pida, cuando lo pida.
+    pub skills: &'a str,
     /// Memorias recordadas para esta orden, ya formateadas.
     pub memories: &'a str,
     /// Modelo flojo siguiendo instrucciones: se le manda lo justo.
@@ -77,6 +83,7 @@ impl Default for Ctx<'_> {
             services: &[],
             log: &[],
             hosts: "",
+            skills: "",
             memories: "",
             weak_model: false,
             can_execute: false,
@@ -412,6 +419,28 @@ impl Section for Elevation {
     }
 }
 
+struct Skills;
+impl Section for Skills {
+    fn name(&self) -> &'static str {
+        "Skills"
+    }
+    fn relevant(&self, c: &Ctx) -> bool {
+        !c.skills.is_empty()
+    }
+    fn priority(&self) -> u32 {
+        35
+    }
+    /// ESTABLE: el catálogo solo cambia cuando alguien añade un fichero, así que
+    /// va antes de la marca de caché y se cobra como lectura en vez de como
+    /// tokens nuevos en cada turno de cada conversación.
+    fn stable(&self) -> bool {
+        true
+    }
+    fn render(&self, c: &Ctx) -> String {
+        c.skills.trim_end().to_string()
+    }
+}
+
 struct HostRouting;
 impl Section for HostRouting {
     fn name(&self) -> &'static str {
@@ -588,6 +617,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Safety),
         Box::new(Actions),
         Box::new(Elevation),
+        Box::new(Skills),
         Box::new(HostRouting),
         Box::new(Memories),
         Box::new(Machine),
