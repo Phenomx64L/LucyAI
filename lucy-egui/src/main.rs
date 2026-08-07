@@ -39,9 +39,15 @@ fn main() -> eframe::Result {
             // la barra de título. Con las dos, Lucy tendría dos cabeceras de
             // distinto color y distinta altura, una encima de la otra.
             //
-            // Lo que hay que reponer a mano está en `window_buttons` y en el
-            // manejador de arrastre de la cabecera. El redimensionado NO: winit
-            // sigue dando los bordes mientras la ventana sea `resizable`.
+            // Lo que hay que reponer a mano: los botones (`window_buttons`), el
+            // arrastre de la cabecera, Y EL REDIMENSIONADO (`resize_borders`).
+            //
+            // Aquí ponía que el redimensionado no hacía falta porque «winit
+            // sigue dando los bordes mientras la ventana sea `resizable`». Era
+            // falso y estaba escrito con seguridad: los bordes de agarre los
+            // dibuja el MARCO DEL SISTEMA, que es exactamente lo que quita
+            // `with_decorations(false)`. `resizable(true)` solo dice que la
+            // ventana admite otro tamaño, no que haya dónde agarrarla.
             .with_decorations(false)
             .with_resizable(true)
             // El título SIGUE siendo el humano: sale en la barra de tareas y en
@@ -2562,8 +2568,14 @@ impl eframe::App for App {
         // aplicación tiene dos cabeceras de distinto color y dos alturas.
         //
         // Lo que había que reponer a mano al quitarla: arrastrar la ventana,
-        // maximizar con doble clic, y los tres botones. El redimensionado lo
-        // sigue dando winit por los bordes mientras la ventana sea `resizable`.
+        // maximizar con doble clic, los tres botones, y el REDIMENSIONADO.
+        //
+        // Los bordes van ANTES que la cabecera, y por lo mismo que la franja de
+        // arrastre va antes que los botones: egui resuelve un solapamiento a
+        // favor de quien se registró más tarde. Con los bordes al final, la
+        // esquina superior izquierda redimensionaría en vez de arrastrar.
+        self.resize_borders(ctx);
+
         egui::TopBottomPanel::top("header")
             .exact_height(44.0)
             .frame(egui::Frame::none().fill(theme::bg2()).inner_margin(egui::Margin::symmetric(14.0, 0.0)))
@@ -3877,6 +3889,110 @@ _(detenido por el operador)_");
                 self.send(text);
             }
         }
+    }
+
+    /// Los bordes de agarre para redimensionar, que el marco del sistema daba.
+    ///
+    /// EL SUPUESTO QUE ESTO CORRIGE. El código decía que winit seguía dando los
+    /// bordes mientras la ventana fuera `resizable`. No: esos bordes los dibuja
+    /// el marco del sistema, y `with_decorations(false)` lo quita entero.
+    /// `resizable(true)` solo dice que la ventana ADMITE otro tamaño, no que
+    /// haya de dónde cogerla — así que la ventana se podía maximizar y no se
+    /// podía estirar.
+    ///
+    /// Ocho zonas: cuatro lados y cuatro esquinas. Las esquinas se registran
+    /// DESPUÉS de los lados a propósito — se solapan con ellos, y en la esquina
+    /// lo que uno quiere es mover las dos dimensiones a la vez.
+    fn resize_borders(&mut self, ctx: &egui::Context) {
+        use egui::viewport::ResizeDirection as D;
+
+        // Maximizada no se estira: la ventana ya está pegada a los bordes de la
+        // pantalla y el agarre solo serviría para restaurarla sin querer.
+        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+            return;
+        }
+        let pantalla = ctx.screen_rect();
+        // Seis píxeles. Windows usa entre cuatro y ocho según el tema; por
+        // debajo de cuatro hay que apuntar, y por encima de ocho la franja se
+        // come los clics de lo que haya pegado al borde.
+        const B: f32 = 6.0;
+
+        let (izq, der, arr, aba) = (pantalla.left(), pantalla.right(), pantalla.top(), pantalla.bottom());
+        let zonas: [(&str, egui::Rect, D, egui::CursorIcon); 8] = [
+            (
+                "rz-n",
+                egui::Rect::from_min_max(egui::pos2(izq + B, arr), egui::pos2(der - B, arr + B)),
+                D::North,
+                egui::CursorIcon::ResizeNorth,
+            ),
+            (
+                "rz-s",
+                egui::Rect::from_min_max(egui::pos2(izq + B, aba - B), egui::pos2(der - B, aba)),
+                D::South,
+                egui::CursorIcon::ResizeSouth,
+            ),
+            (
+                "rz-w",
+                egui::Rect::from_min_max(egui::pos2(izq, arr + B), egui::pos2(izq + B, aba - B)),
+                D::West,
+                egui::CursorIcon::ResizeWest,
+            ),
+            (
+                "rz-e",
+                egui::Rect::from_min_max(egui::pos2(der - B, arr + B), egui::pos2(der, aba - B)),
+                D::East,
+                egui::CursorIcon::ResizeEast,
+            ),
+            (
+                "rz-nw",
+                egui::Rect::from_min_max(egui::pos2(izq, arr), egui::pos2(izq + B, arr + B)),
+                D::NorthWest,
+                egui::CursorIcon::ResizeNorthWest,
+            ),
+            (
+                "rz-ne",
+                egui::Rect::from_min_max(egui::pos2(der - B, arr), egui::pos2(der, arr + B)),
+                D::NorthEast,
+                egui::CursorIcon::ResizeNorthEast,
+            ),
+            (
+                "rz-sw",
+                egui::Rect::from_min_max(egui::pos2(izq, aba - B), egui::pos2(izq + B, aba)),
+                D::SouthWest,
+                egui::CursorIcon::ResizeSouthWest,
+            ),
+            (
+                "rz-se",
+                egui::Rect::from_min_max(egui::pos2(der - B, aba - B), egui::pos2(der, aba)),
+                D::SouthEast,
+                egui::CursorIcon::ResizeSouthEast,
+            ),
+        ];
+
+        // Un `Area` de primer plano que cubre la ventana, y dentro las ocho
+        // franjas. En una capa propia por encima de todo: si fueran del flujo,
+        // cualquier panel pegado al borde se quedaría con el clic antes que
+        // ellas. El área NO pinta nada ni reclama la superficie — solo los ocho
+        // rectángulos finos responden, y el resto de la ventana sigue viva.
+        egui::Area::new(egui::Id::new("resize"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pantalla.min)
+            .show(ctx, |ui| {
+                for (id, rect, dir, cursor) in zonas {
+                    let r = ui.interact(rect, egui::Id::new(id), egui::Sense::click_and_drag());
+                    if r.hovered() || r.is_pointer_button_down_on() {
+                        ui.ctx().set_cursor_icon(cursor);
+                    }
+                    // `is_pointer_button_down_on` y no `drag_started`, por lo
+                    // mismo que en la franja de arrastre: en cuanto empieza el
+                    // redimensionado nativo, winit se queda con el ratón y egui
+                    // no llega a ver el movimiento que convertiría la pulsación
+                    // en arrastre.
+                    if r.is_pointer_button_down_on() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                    }
+                }
+            });
     }
 
     /// Minimizar, maximizar y cerrar, a la derecha de la barra de título.
