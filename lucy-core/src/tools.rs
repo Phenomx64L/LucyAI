@@ -209,6 +209,50 @@ pub fn run(name: &str, args: &str) -> Option<ToolResult> {
     }
 }
 
+/// Igual, pero sabiendo qué skills hay instalados.
+///
+/// UN SKILL ES UNA HERRAMIENTA y no una etiqueta nueva, y eso ahorra media
+/// migración: la tubería que recoge el resultado, lo junta con los demás y se lo
+/// devuelve al modelo en un solo turno ya existe y ya está probada. Una etiqueta
+/// `<SKILL>` habría necesitado su propio camino para hacer exactamente lo mismo.
+pub fn run_with_skills(
+    name: &str,
+    args: &str,
+    skills: &[crate::skills::Skill],
+) -> Option<ToolResult> {
+    if name == "skill" {
+        return Some(match crate::skills::find(skills, args) {
+            Some(k) => ToolResult {
+                label: format!("skill {}", k.name),
+                body: format!(
+                    "Instrucciones del skill «{}». Síguelas para esta tarea; si algo no \
+                     encaja con lo que ves en la máquina, manda lo que ves.\n\n{}",
+                    k.name, k.body
+                ),
+                ok: true,
+            },
+            // Los que SÍ hay, en el error. Decir solo «no existe» deja al modelo
+            // probando nombres, y cada intento cuesta un turno.
+            None => ToolResult::err(
+                format!("skill {args}"),
+                if skills.is_empty() {
+                    "No hay ningún skill instalado en este equipo.".to_string()
+                } else {
+                    format!(
+                        "No hay ningún skill llamado «{args}». Los que hay: {}.",
+                        skills
+                            .iter()
+                            .map(|k| k.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+            ),
+        });
+    }
+    run(name, args)
+}
+
 /// Las que este shell sabe cumplir, para poder nombrarlas en el prompt.
 ///
 /// Prometer en el prompt una herramienta que no está es cómo se llega a que
@@ -370,6 +414,34 @@ mod tests {
 
     fn tmp(nombre: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(nombre)
+    }
+
+    #[test]
+    fn un_skill_que_no_esta_dice_cuales_si() {
+        // «No existe» a secas deja al modelo probando nombres, y cada intento
+        // cuesta un turno de red. Con la lista delante acierta al siguiente.
+        let ks = vec![crate::skills::parse("dns", "---\ndescription: d\n---\ncuerpo")];
+        let r = run_with_skills("skill", "loquesea", &ks).unwrap();
+        assert!(!r.ok);
+        assert!(r.body.contains("dns"), "{}", r.body);
+    }
+
+    #[test]
+    fn un_skill_llega_con_sus_instrucciones_y_un_recordatorio() {
+        // El recordatorio no es adorno: un procedimiento escrito hace meses
+        // puede no encajar con la máquina de hoy, y lo que hay que hacer
+        // entonces es mandar lo que se ve, no lo que dice el papel.
+        let ks = vec![crate::skills::parse("dns", "---\ndescription: d\n---\nMira resolv.conf")];
+        let r = run_with_skills("skill", "dns", &ks).unwrap();
+        assert!(r.ok);
+        assert!(r.body.contains("Mira resolv.conf"));
+        assert!(r.body.contains("manda lo que ves"), "{}", r.body);
+    }
+
+    #[test]
+    fn sin_skills_instalados_se_dice_eso_y_no_otra_cosa() {
+        let r = run_with_skills("skill", "dns", &[]).unwrap();
+        assert!(r.body.contains("No hay ningún skill instalado"), "{}", r.body);
     }
 
     #[test]

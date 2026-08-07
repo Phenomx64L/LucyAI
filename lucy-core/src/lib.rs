@@ -69,6 +69,9 @@ pub mod screen;
 /// Lo que Lucy sabe del operador entre sesiones. El hueco del prompt existía y
 /// viajaba vacío; la etiqueta con la que se escribe se ignoraba.
 pub mod profile;
+/// Los skills: instrucciones que Lucy carga cuando vienen al caso. Ficheros en
+/// disco, no objetos compilados — se añade uno dejando un `SKILL.md`.
+pub mod skills;
 /// PowerShell y decodificación de consola. Base de Inventario, Compliance y
 /// NexShell — ninguna migra sin esto.
 pub mod shell;
