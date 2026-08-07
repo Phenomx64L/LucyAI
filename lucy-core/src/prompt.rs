@@ -57,6 +57,12 @@ pub struct Ctx<'a> {
     /// skills serían miles de tokens en cada turno de cada conversación, casi
     /// siempre para no usar ninguno; se carga el que pida, cuando lo pida.
     pub skills: &'a str,
+    /// El skill FIJADO, ya formateado. Vacío = ninguno.
+    ///
+    /// Va con prioridad alta y ESTABLE: es un modo que el operador puso a
+    /// propósito y que enmarca todo lo que venga, así que se lee antes que el
+    /// estado de la máquina y se cobra como caché.
+    pub preset: &'a str,
     /// Memorias recordadas para esta orden, ya formateadas.
     pub memories: &'a str,
     /// Modelo flojo siguiendo instrucciones: se le manda lo justo.
@@ -84,6 +90,7 @@ impl Default for Ctx<'_> {
             log: &[],
             hosts: "",
             skills: "",
+            preset: "",
             memories: "",
             weak_model: false,
             can_execute: false,
@@ -419,6 +426,22 @@ impl Section for Elevation {
     }
 }
 
+struct Preset;
+impl Section for Preset {
+    fn name(&self) -> &'static str {
+        "Preset"
+    }
+    fn relevant(&self, c: &Ctx) -> bool {
+        !c.preset.is_empty()
+    }
+    fn priority(&self) -> u32 {
+        12
+    }
+    fn render(&self, c: &Ctx) -> String {
+        c.preset.trim_end().to_string()
+    }
+}
+
 struct Skills;
 impl Section for Skills {
     fn name(&self) -> &'static str {
@@ -617,6 +640,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Safety),
         Box::new(Actions),
         Box::new(Elevation),
+        Box::new(Preset),
         Box::new(Skills),
         Box::new(HostRouting),
         Box::new(Memories),
