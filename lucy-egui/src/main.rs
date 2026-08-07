@@ -272,6 +272,8 @@ struct PromptInput {
     services: Vec<lucy_core::system::DownService>,
     log: Vec<String>,
     hosts: String,
+    /// El catálogo de skills, ya formateado. Ver `lucy_core::skills::catalog`.
+    skills_cat: String,
     cwd: String,
     name: String,
     profile: String,
@@ -299,6 +301,7 @@ impl PromptInput {
             services: &self.services,
             log: &self.log,
             hosts: &self.hosts,
+            skills: &self.skills_cat,
             memories: &mems,
             working_dir: &self.cwd,
             user_name: &self.name,
@@ -875,10 +878,10 @@ const SLASH: [(&str, &str, bool); 29] = [
     ("/insights", "Insights consolidados", false),
     ("/consolidate", "Ejecutar consolidación ahora", true),
     ("/playbooks", "Playbooks multi-fase curados", false),
-    ("/skills", "Picker de skills ejecutables", false),
+    ("/skills", "Picker de skills ejecutables", true),
     ("/preset", "Presets de framing (AD, Hyper-V, SQL…)", false),
     ("/sec-skill", "Catálogo security/forensics (200+)", false),
-    ("/skills-manager", "Gestionar skills cargadas", false),
+    ("/skills-manager", "Gestionar skills cargadas", true),
     ("/capabilities", "Auto-introspección: skills, MCPs, frameworks", true),
     ("/route", "Ver la última decisión de routing", false),
     ("/serial", "Bypass del fork advisor (esta pestaña)", false),
@@ -2047,6 +2050,12 @@ struct App {
     api_keys: std::collections::HashMap<String, String>,
     /// El Ãºltimo error al guardar o borrar una clave. VacÃ­o = ninguno.
     api_key_msg: String,
+    /// Los skills instalados. Se leen al arrancar y al pedir `/skills`.
+    ///
+    /// EN MEMORIA Y NO EN CADA TURNO: son ficheros de disco que solo cambian
+    /// cuando alguien los edita, y releerlos por cada mensaje serían cinco
+    /// aperturas de fichero para obtener lo mismo.
+    skills: Vec<lucy_core::skills::Skill>,
     /// Un cambio de tema pedido por `/theme`, esperando al `ctx` del frame.
     ///
     /// `slash_exec` no recibe `ui` a propósito —lo llaman la paleta Y el envío—
@@ -2317,6 +2326,7 @@ impl App {
             privacy,
             api_keys: std::collections::HashMap::new(),
             api_key_msg: String::new(),
+            skills: cargar_skills(),
             tema_pendiente: None,
             slash_sel: 0,
             dedup: None,
@@ -4323,6 +4333,7 @@ _(detenido por el operador)_");
             "/consolidate" => self.slash_consolidate(),
             "/snapshot" => self.slash_snapshot(),
             "/capabilities" => self.slash_capabilities(),
+            "/skills" | "/skills-manager" => self.slash_skills(),
             "/help" => {
                 let mut s = String::from("Comandos disponibles:\n\n");
                 for (c, desc, listo) in SLASH {
@@ -4342,6 +4353,35 @@ _(detenido por el operador)_");
     /// Escribe una línea de Lucy en el hilo de la pestaña activa.
     fn di(&mut self, texto: &str) {
         self.tabs[self.tab].log.push(ChatMsg::new(false, texto.to_string()));
+    }
+
+    /// `/skills` — qué procedimientos hay instalados y de dónde salen.
+    ///
+    /// RELEE EL DISCO al invocarlo. El catálogo se carga al arrancar, así que
+    /// sin releer aquí, añadir un skill obligaría a reiniciar Lucy para verlo —
+    /// y el sentido de que sean ficheros es justamente que no haga falta.
+    fn slash_skills(&mut self) {
+        self.skills = cargar_skills();
+        if self.skills.is_empty() {
+            self.di(
+                "No hay skills instalados.
+
+Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan junto al ejecutable, en tu perfil y en el directorio \n                 desde el que lanzas Lucy.",
+            );
+            return;
+        }
+        let mut m = format!("**{} skills instalados**
+
+", self.skills.len());
+        for k in &self.skills {
+            m.push_str(&format!("- `{}` — {}
+", k.name, k.description));
+        }
+        m.push_str(
+            "
+Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
+        );
+        self.di(&m);
     }
 
     /// `/recall <consulta>` — qué recordaría Lucy si le preguntaras eso.
@@ -4802,7 +4842,9 @@ _(detenido por el operador)_");
                     // milisegundos, con tope de ocho megas. Lo que sí justificó
                     // un hilo —una petición de red, un PowerShell que tarda
                     // segundos— no se parece a esto.
-                    if let Some(r) = lucy_core::tools::run(&name, &args) {
+                    if let Some(r) =
+                        lucy_core::tools::run_with_skills(&name, &args, &self.skills)
+                    {
                         self.tabs[ti].ws.trace_push(TraceEntry {
                             phase: if r.ok { "obs" } else { "error" }.into(),
                             label: r.label.clone(),
@@ -5046,6 +5088,7 @@ _(detenido por el operador)_");
             services: self.services.clone(),
             log: self.log_lines.clone().unwrap_or_default(),
             hosts: prompt::hosts_block(&self.remote_hosts),
+            skills_cat: lucy_core::skills::catalog(&self.skills),
             // El directorio desde el que se lanzó Lucy, para que un fichero
             // nombrado sin ruta se resuelva contra algo en vez de contra nada.
             cwd: std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default(),
@@ -9481,7 +9524,7 @@ mod paleta {
         // un comando que se traga la orden y no hace nada.
         let listos: Vec<&str> =
             SLASH.iter().filter(|(_, _, l)| *l).map(|(c, _, _)| *c).collect();
-        assert_eq!(listos.len(), 11, "cambió el número de comandos migrados");
+        assert_eq!(listos.len(), 13, "cambió el número de comandos migrados");
         for c in ["/recall", "/consolidate", "/snapshot", "/capabilities"] {
             assert!(listos.contains(&c), "{c} no está marcado como listo");
         }
@@ -9509,4 +9552,40 @@ mod paleta {
         v.dedup();
         assert_eq!(v.len(), n, "hay un comando duplicado");
     }
+}
+
+/// Lee los skills instalados.
+///
+/// TRES SITIOS, en este orden: junto al ejecutable, en el perfil del operador, y
+/// el directorio de trabajo. El primero es lo que viene con Lucy; el segundo es
+/// donde uno pone los suyos sin tocar la instalación; el tercero hace que probar
+/// un skill sea dejarlo en la carpeta desde la que lanzas y volver a arrancar.
+///
+/// Se acumulan y el ÚLTIMO gana en caso de mismo nombre: así un skill propio
+/// puede sustituir a uno de los que vienen sin borrarlo, que es lo que uno
+/// quiere cuando el procedimiento de la casa difiere del general.
+fn cargar_skills() -> Vec<lucy_core::skills::Skill> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            dirs.push(d.join("skills"));
+        }
+    }
+    if let Some(d) = dirs::config_dir() {
+        dirs.push(d.join("lucy-egui").join("skills"));
+    }
+    if let Ok(d) = std::env::current_dir() {
+        dirs.push(d.join("skills"));
+    }
+    let mut out: Vec<lucy_core::skills::Skill> = Vec::new();
+    for d in dirs {
+        for k in lucy_core::skills::discover(&d) {
+            match out.iter().position(|x| x.name == k.name) {
+                Some(i) => out[i] = k,
+                None => out.push(k),
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
