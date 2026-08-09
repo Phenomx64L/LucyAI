@@ -31,6 +31,10 @@ pub mod agent;
 /// Comandos que no se deshacen. Otra pregunta que `guard`: éste no busca
 /// ataques, busca lo irreversible.
 pub mod destructive;
+/// Sub-agentes. `agent::AgentFork` llevaba desde el principio con su estado de
+/// cuatro valores y su contador de «corriendo», y nada los creaba. Aquí está lo
+/// que faltaba — y la decisión de que un sub-agente SOLO LEA.
+pub mod forks;
 /// Elevación a administrador con UAC. El mecanismo que faltaba en la V1 y la V2.
 pub mod elevate;
 pub mod chat;

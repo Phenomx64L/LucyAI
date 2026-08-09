@@ -205,6 +205,13 @@ pub fn run(name: &str, args: &str) -> Option<ToolResult> {
     match name {
         "readfile" => Some(readfile(args)),
         "listdir" => Some(listdir(args)),
+        // `readlines` estaba ESCRITA, PROBADA, ANUNCIADA EN EL PROMPT Y NO
+        // DESPACHADA: se añadió como la salida del callejón de `readfile`
+        // —«recorté, sigue con readlines»— y esta línea no llegó a existir. El
+        // efecto es el peor de los posibles: el propio aviso del recorte le
+        // dice al modelo cómo continuar, lo intenta, `run` contesta `None`, y
+        // el callejón que la herramienta venía a abrir seguía cerrado.
+        "readlines" => Some(readlines(args)),
         _ => None,
     }
 }
@@ -272,6 +279,16 @@ pub const AVAILABLE: &[(&str, &str)] = &[
         "editfile",
         "<TOOL>editfile:C:\\ruta|||TEXTO_VIEJO|||TEXTO_NUEVO</TOOL> — PROPONE un cambio",
     ),
+    // Las dos de sub-agente NO las cumple `run`, las cumple el shell: necesitan
+    // hilos, un canal por tarea y un modelo elegido, y nada de eso cabe en una
+    // función que devuelve un `ToolResult` de golpe. Están en esta lista porque
+    // esta lista es lo que el prompt promete, y el criterio es «alguien lo
+    // cumple», no «lo cumple este módulo» — igual que `writefile`.
+    (
+        "fork_task",
+        "<TOOL>fork_task:nombre|qué tiene que averiguar</TOOL> — lanza una tarea en paralelo",
+    ),
+    ("wait_task", "<TOOL>wait_task:nombre</TOOL> — recoge lo que averiguó"),
 ];
 
 /// Cuántas líneas devuelve `readlines` como mucho de una vez.
@@ -516,6 +533,21 @@ mod tests {
         assert!(run("graphify", "lo que sea").is_none());
         assert!(run("writefile", "x|||y").is_none(), "escribir no está y no debe fingirse");
         assert!(run("listdir", ".").is_some());
+    }
+
+    #[test]
+    fn readlines_esta_despachada_y_no_solo_escrita() {
+        // Estuvo escrita, probada y anunciada en el prompt sin esta línea de
+        // `run`. Y era el peor sitio donde faltar: el aviso de recorte de
+        // `readfile` le dice al modelo que siga con `readlines`, lo intentaba, y
+        // `run` contestaba «no la tengo». Los tests de abajo pasaban porque
+        // llaman a la función privada directamente, sin pasar por el despacho.
+        let p = tmp("lucy_tool_despacho.txt");
+        std::fs::write(&p, "una\ndos\ntres\n").unwrap();
+        let r = run("readlines", &format!("{}|2|1", p.to_string_lossy()));
+        let _ = std::fs::remove_file(&p);
+        let r = r.expect("readlines no llega al despacho");
+        assert!(r.body.starts_with("dos"), "{}", r.body);
     }
 
     #[test]
