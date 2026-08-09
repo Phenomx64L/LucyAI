@@ -4944,6 +4944,53 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         ..Default::default()
                     });
                 }
+                // LO QUE LUCY APRENDE SE PROPONE COMO UN SKILL.
+                //
+                // Esta rama caía en el `_ => {}`, igual que `<REMEMBER>` esta
+                // mañana: Lucy podía decir «apuntado» y no quedaba nada. Y la V2
+                // le construyó un almacén propio de runbooks, que es una segunda
+                // forma de guardar procedimientos al lado de la de los skills.
+                //
+                // Va por el carril de ARTEFACTOS y no directo al disco: escribir
+                // un fichero pasa por la misma puerta que cualquier otro, y aquí
+                // además es lo correcto por otra razón — lo que se aprende de una
+                // conversación conviene leerlo antes de dejarlo escrito.
+                TagKind::Learn => {
+                    let Some((nombre, md)) = lucy_core::skills::from_learn(&t.content) else {
+                        self.tabs[ti].ws.trace_push(TraceEntry {
+                            phase: "error".into(),
+                            label: "No pude apuntar eso".into(),
+                            detail: "El formato es claves|comando|respuesta, y hace falta al \
+                                     menos una clave y una de las dos cosas."
+                                .into(),
+                            ..Default::default()
+                        });
+                        continue;
+                    };
+                    match lucy_core::skills::user_dir() {
+                        Some(d) => {
+                            let ruta = d.join(&nombre).join("SKILL.md");
+                            let mut a = lucy_core::tools::prepare_write(&format!(
+                                "{}|||{md}",
+                                ruta.display()
+                            ));
+                            a.summary = format!("aprender «{nombre}»");
+                            self.tabs[ti].ws.artifact_push(a);
+                            self.tabs[ti].ws.trace_push(TraceEntry {
+                                phase: "info".into(),
+                                label: format!("Skill propuesto: {nombre}"),
+                                detail: "Apruébalo en Artefactos y quedará instalado.".into(),
+                                ..Default::default()
+                            });
+                        }
+                        None => self.tabs[ti].ws.trace_push(TraceEntry {
+                            phase: "error".into(),
+                            label: "No pude apuntar eso".into(),
+                            detail: "No se pudo resolver tu perfil de usuario.".into(),
+                            ..Default::default()
+                        }),
+                    }
+                }
                 TagKind::Tool => {
                     let (name, args) = tags::parse_tool(&t.content);
                     self.tabs[ti].ws.trace_push(TraceEntry {
@@ -5982,6 +6029,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 self.tabs[ti].ws.artifacts[i].applied = true;
                 self.tabs[ti].ws.artifacts[i].summary =
                     format!("{} · escrito", self.tabs[ti].ws.artifacts[i].summary);
+                // Si lo escrito era un SKILL, se recarga el catálogo. Sin esto,
+                // aprobar algo aprendido lo dejaría en disco y fuera del alcance
+                // de Lucy hasta el siguiente arranque — que es la mitad de la
+                // función sin hacer.
+                if path.ends_with("SKILL.md") {
+                    self.skills = cargar_skills();
+                }
             }
             // El motivo se guarda EN el artefacto, no solo en el trace: el
             // operador está mirando la ficha, y es donde va a buscar por qué el
