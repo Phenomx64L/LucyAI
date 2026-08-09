@@ -2060,6 +2060,8 @@ struct App {
     /// siempre, o el operador acaba preguntándose por qué Lucy insiste con lo
     /// mismo.
     preset: Option<String>,
+    /// El resultado de instalar o quitar un skill. Vacío = nada que decir.
+    skills_msg: String,
     /// Los skills instalados. Se leen al arrancar y al pedir `/skills`.
     ///
     /// EN MEMORIA Y NO EN CADA TURNO: son ficheros de disco que solo cambian
@@ -2342,6 +2344,7 @@ impl App {
             api_keys: std::collections::HashMap::new(),
             api_key_msg: String::new(),
             preset,
+            skills_msg: String::new(),
             skills: cargar_skills(),
             tema_pendiente: None,
             slash_sel: 0,
@@ -4366,7 +4369,7 @@ _(detenido por el operador)_");
             "/consolidate" => self.slash_consolidate(),
             "/snapshot" => self.slash_snapshot(),
             "/capabilities" => self.slash_capabilities(),
-            "/skills" | "/skills-manager" => self.slash_skills(),
+            "/skills" | "/skills-manager" => self.slash_skills(args),
             "/preset" => self.slash_preset(args),
             "/help" => {
                 let mut s = String::from("Comandos disponibles:\n\n");
@@ -4455,7 +4458,30 @@ _(detenido por el operador)_");
     /// RELEE EL DISCO al invocarlo. El catálogo se carga al arrancar, así que
     /// sin releer aquí, añadir un skill obligaría a reiniciar Lucy para verlo —
     /// y el sentido de que sean ficheros es justamente que no haga falta.
-    fn slash_skills(&mut self) {
+    fn slash_skills(&mut self, args: &str) {
+        // `install <ruta>` desde el chat: quien está escribiendo no tiene por qué
+        // irse a Configuración a hacer una cosa que ya sabe nombrar.
+        if let Some(ruta) = args.trim().strip_prefix("install") {
+            let ruta = ruta.trim();
+            if ruta.is_empty() {
+                self.di(
+                    r"Dime de dónde: `/skills install C:\ruta\al\skill`. Vale la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual.",
+                );
+                return;
+            }
+            let m = match lucy_core::skills::user_dir() {
+                Some(d) => match lucy_core::skills::install(std::path::Path::new(ruta), &d) {
+                    Ok(v) => {
+                        self.skills = cargar_skills();
+                        format!("Instalados: {}.", v.join(", "))
+                    }
+                    Err(e) => e,
+                },
+                None => "No se pudo resolver tu perfil de usuario.".into(),
+            };
+            self.di(&m);
+            return;
+        }
         self.skills = cargar_skills();
         if self.skills.is_empty() {
             self.di(
@@ -6579,6 +6605,125 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // había dónde escribirlas, así que una instalación limpia
                 // arrancaba sin poder hablar con ningún modelo de nube y sin
                 // decir cómo arreglarlo.
+                // ── skills ───────────────────────────────────────────────────
+                section(ui, "Skills", None);
+                let mut instalar = false;
+                let mut quitar: Option<String> = None;
+                card_on(
+                    ui,
+                    egui::vec2(full, (self.skills.len().max(1) as f32) * 26.0 + 62.0),
+                    14.0,
+                    theme::bg2(),
+                    |ui| {
+                        row_align(ui, 26.0, egui::Align::Center, |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{} instalados", self.skills.len()))
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(theme::txt2()),
+                            );
+                            right(ui, 24.0, |ui| {
+                                if ui
+                                    .button("Instalar…")
+                                    .on_hover_text(
+                                        "Elige la carpeta de un skill, o una que contenga \
+                                         varios — un repositorio descargado sirve tal cual",
+                                    )
+                                    .clicked()
+                                {
+                                    instalar = true;
+                                }
+                            });
+                        });
+                        ui.add_space(4.0);
+                        if self.skills.is_empty() {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Ninguno. Un skill es una carpeta con un SKILL.md dentro.",
+                                )
+                                .size(theme::FS_CAPTION)
+                                .color(theme::faint()),
+                            );
+                        }
+                        for k in &self.skills {
+                            row_align(ui, 22.0, egui::Align::Center, |ui| {
+                                cell(
+                                    ui,
+                                    150.0,
+                                    22.0,
+                                    false,
+                                    egui::RichText::new(&k.name)
+                                        .size(theme::FS_CAPTION)
+                                        .monospace()
+                                        .color(theme::acc()),
+                                );
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&k.description)
+                                            .size(theme::FS_MICRO)
+                                            .color(theme::txt3()),
+                                    )
+                                    .truncate(),
+                                );
+                                right(ui, 18.0, |ui| {
+                                    if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                                        quitar = Some(k.name.clone());
+                                    }
+                                });
+                            });
+                        }
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Lucy los ve y pide el que encaje. Se instalan en tu perfil, \
+                                 así que sobreviven a reinstalar Lucy.",
+                            )
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                        );
+                    },
+                );
+                if instalar {
+                    // Bloqueante a propósito: es el diálogo del sistema, y
+                    // mientras está abierto no hay nada que animar detrás.
+                    if let Some(dir) = rfd::FileDialog::new()
+                        .set_title("Carpeta del skill (o una que contenga varios)")
+                        .pick_folder()
+                    {
+                        let destino = lucy_core::skills::user_dir();
+                        self.skills_msg = match destino {
+                            Some(d) => match lucy_core::skills::install(&dir, &d) {
+                                Ok(v) => {
+                                    self.skills = cargar_skills();
+                                    format!("Instalados: {}", v.join(", "))
+                                }
+                                Err(e) => e,
+                            },
+                            None => "No se pudo resolver tu perfil de usuario.".into(),
+                        };
+                    }
+                }
+                if let Some(n) = quitar {
+                    self.skills_msg = match lucy_core::skills::uninstall(&n) {
+                        Ok(()) => {
+                            self.skills = cargar_skills();
+                            // Un modo fijado que ya no existe dejaría el prompt
+                            // pidiendo un procedimiento ausente en cada turno.
+                            if self.preset.as_deref() == Some(n.as_str()) {
+                                self.preset = None;
+                            }
+                            format!("«{n}» quitado.")
+                        }
+                        Err(e) => e,
+                    };
+                }
+                if !self.skills_msg.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.skills_msg)
+                            .size(theme::FS_CAPTION)
+                            .color(theme::txt3()),
+                    );
+                }
+
                 section(ui, "Claves de API", None);
                 let mut guardar: Option<(String, String)> = None;
                 let mut borrar: Option<String> = None;
