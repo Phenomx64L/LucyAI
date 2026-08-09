@@ -354,7 +354,16 @@ impl Section for Actions {
              En `editfile`, el TEXTO_VIEJO tiene que aparecer UNA sola vez en el \
              fichero: si aparece varias, el cambio se rechaza y hay que darle más \
              contexto —la línea de antes y la de después— hasta que sea único.\n\
-             Esas CUATRO y ninguna más: lo que pidas con otro nombre no lo va a cumplir \
+             Y dos para repartirte el trabajo cuando tengas VARIAS averiguaciones que \
+             no dependen unas de otras —cuatro logs, tres carpetas, dos equipos—:\n\
+             · <TOOL>fork_task:nombre-corto|qué tiene que averiguar</TOOL>\n\
+             · <TOOL>wait_task:nombre-corto</TOOL> — o <TOOL>wait_task:*</TOOL> para todas\n\
+             Lanza las que necesites en un mismo turno y recógelas después; el nombre lo \
+             pones tú y es por el que las pides. Una tarea auxiliar SOLO LEE ficheros y \
+             carpetas: no ejecuta comandos ni toca equipos remotos, así que lo que haya \
+             que ejecutar lo propones TÚ con lo que ella te cuente. Y no la uses para lo \
+             que puedes hacer de un tirón: una sola lectura sale más barata leyéndola.\n\
+             Esas y ninguna más: lo que pidas con otro nombre no lo va a cumplir \
              nadie, y te quedarás esperando un resultado que no llega.\n\
              Cuando el operador te enseñe un PROCEDIMIENTO —cómo se hace algo aquí, en \
              esta casa— y te diga que lo apuntes, guárdalo con \
