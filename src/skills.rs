@@ -142,6 +142,104 @@ pub fn catalog(skills: &[Skill]) -> String {
     s.trim_end().to_string()
 }
 
+/// Dónde se instalan los skills del operador.
+///
+/// EN SU PERFIL Y NO JUNTO AL EJECUTABLE. Lo segundo parece más ordenado y se
+/// borra con la próxima actualización: `Program Files` es de la aplicación, no
+/// del operador. Aquí sobreviven a reinstalar Lucy, que es lo mínimo que se le
+/// pide a algo que alguien se ha molestado en escribir.
+pub fn user_dir() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|d| d.join("lucy-egui").join("skills"))
+}
+
+/// Instala uno o varios skills desde una carpeta.
+///
+/// ACEPTA LAS DOS FORMAS que la gente tiene de verdad: una carpeta que ES un
+/// skill —lleva su `SKILL.md` dentro— o una carpeta que CONTIENE skills, que es
+/// como llega un repositorio descargado y descomprimido. Obligar a señalar cada
+/// subcarpeta de un repositorio de treinta skills sería treinta viajes al
+/// diálogo de ficheros.
+///
+/// Devuelve los nombres instalados. Una carpeta sin ningún `SKILL.md` es un
+/// error CON su explicación: es la equivocación más probable —señalar el
+/// directorio de al lado— y «no se instaló nada» no ayuda a corregirla.
+pub fn install(origen: &std::path::Path, destino: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut candidatos: Vec<std::path::PathBuf> = Vec::new();
+    if origen.join("SKILL.md").is_file() {
+        candidatos.push(origen.to_path_buf());
+    } else {
+        let rd = std::fs::read_dir(origen)
+            .map_err(|e| format!("No se pudo leer «{}»: {e}", origen.display()))?;
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && p.join("SKILL.md").is_file() {
+                candidatos.push(p);
+            }
+        }
+    }
+    if candidatos.is_empty() {
+        return Err(format!(
+            "En «{}» no hay ningún SKILL.md. Un skill es una carpeta con ese fichero \
+             dentro; señala la carpeta del skill, o una que las contenga.",
+            origen.display()
+        ));
+    }
+    std::fs::create_dir_all(destino)
+        .map_err(|e| format!("No se pudo crear «{}»: {e}", destino.display()))?;
+
+    let mut puestos = Vec::new();
+    for c in candidatos {
+        let Some(nombre) = c.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let nombre = nombre.to_lowercase();
+        let dst = destino.join(&nombre);
+        // Se copia SOLO el primer nivel de ficheros. Un skill puede traer
+        // material de apoyo, y también un repositorio entero con su `.git`: dos
+        // mil ficheros de historia que no hacen falta para leer un
+        // procedimiento.
+        if let Err(e) = copiar_plano(&c, &dst) {
+            return Err(format!("Instalando «{nombre}»: {e}"));
+        }
+        puestos.push(nombre);
+    }
+    puestos.sort();
+    Ok(puestos)
+}
+
+/// Copia los ficheros de un directorio, sin bajar a sus subcarpetas.
+fn copiar_plano(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for e in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        if let Some(n) = p.file_name() {
+            std::fs::copy(&p, dst.join(n)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Desinstala un skill del directorio del operador.
+///
+/// SOLO DE AHÍ. Los que vienen con Lucy están junto al ejecutable y borrarlos
+/// desde la interfaz dejaría la instalación distinta de la que se instaló, sin
+/// forma de volver. Si molesta uno de esos, se tapa poniendo otro con el mismo
+/// nombre en el perfil — que es para lo que el perfil gana.
+pub fn uninstall(nombre: &str) -> Result<(), String> {
+    let dir = user_dir().ok_or("No se pudo resolver el perfil del usuario")?;
+    let p = dir.join(nombre.to_lowercase());
+    if !p.is_dir() {
+        return Err(format!(
+            "«{nombre}» no está instalado en tu perfil. Los que vienen con Lucy no se \
+             borran desde aquí: pon uno con el mismo nombre para taparlo."
+        ));
+    }
+    std::fs::remove_dir_all(&p).map_err(|e| format!("No se pudo borrar «{nombre}»: {e}"))
+}
+
 /// Un skill FIJADO, tal como viaja en el prompt de cada turno.
 ///
 /// LA DIFERENCIA CON PEDIRLO es cuándo se aplica, no qué dice. Un skill se pide
@@ -274,6 +372,80 @@ mod tests {
         // llevaría por delante el presupuesto de la conversación.
         let largo = format!("---\ndescription: x\n---\n{}", "y".repeat(MAX_BODY + 5_000));
         assert_eq!(parse("k", &largo).body.chars().count(), MAX_BODY);
+    }
+
+    /// Un directorio temporal propio de este test, y su limpieza.
+    fn tmp(nombre: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("lucy_skills_{nombre}"));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn poner(dir: &std::path::Path, nombre: &str) {
+        let d = dir.join(nombre);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), "---\ndescription: d\n---\ncuerpo").unwrap();
+    }
+
+    #[test]
+    fn se_instala_una_carpeta_que_es_un_skill() {
+        let (o, d) = (tmp("o1"), tmp("d1"));
+        poner(&o, "dns");
+        let r = install(&o.join("dns"), &d).unwrap();
+        assert_eq!(r, vec!["dns"]);
+        assert!(d.join("dns").join("SKILL.md").is_file());
+        let _ = std::fs::remove_dir_all(&o);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn se_instala_un_repositorio_entero_de_una_vez() {
+        // Es como llega uno descargado y descomprimido. Obligar a señalar cada
+        // subcarpeta de treinta skills serían treinta viajes al diálogo.
+        let (o, d) = (tmp("o2"), tmp("d2"));
+        poner(&o, "dns");
+        poner(&o, "ssl");
+        std::fs::create_dir_all(o.join("no-es-un-skill")).unwrap();
+        let r = install(&o, &d).unwrap();
+        assert_eq!(r, vec!["dns", "ssl"], "no cogió los dos, o cogió el que no era");
+        assert!(!d.join("no-es-un-skill").exists(), "instaló una carpeta sin SKILL.md");
+        let _ = std::fs::remove_dir_all(&o);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn señalar_la_carpeta_equivocada_se_explica() {
+        // Es la equivocación más probable, y «no se instaló nada» no ayuda a
+        // corregirla.
+        let (o, d) = (tmp("o3"), tmp("d3"));
+        let e = install(&o, &d).unwrap_err();
+        assert!(e.contains("SKILL.md"), "{e}");
+        assert!(e.contains("carpeta"), "no dice qué señalar: {e}");
+        let _ = std::fs::remove_dir_all(&o);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn no_se_arrastra_el_historial_del_repositorio() {
+        // Un repositorio descargado trae su `.git`: miles de ficheros que no
+        // hacen falta para leer un procedimiento.
+        let (o, d) = (tmp("o4"), tmp("d4"));
+        poner(&o, "dns");
+        std::fs::create_dir_all(o.join("dns").join(".git")).unwrap();
+        std::fs::write(o.join("dns").join(".git").join("HEAD"), "ref: x").unwrap();
+        install(&o.join("dns"), &d).unwrap();
+        assert!(d.join("dns").join("SKILL.md").is_file());
+        assert!(!d.join("dns").join(".git").exists(), "se trajo el .git");
+        let _ = std::fs::remove_dir_all(&o);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn desinstalar_lo_que_no_es_tuyo_se_explica_en_vez_de_fallar_raro() {
+        let e = uninstall("un-skill-que-nadie-instalo").unwrap_err();
+        assert!(e.contains("no está instalado"), "{e}");
+        assert!(e.contains("taparlo"), "no dice la alternativa: {e}");
     }
 
     #[test]

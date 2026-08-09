@@ -21,6 +21,9 @@ keyring    = "2.3"
 # esos patrones a mano en un componente de SEGURIDAD sería peor: un matcher
 # sutilmente mal es peor que ningún matcher, porque da confianza.
 regex      = "1"
+# El directorio de configuración del usuario, para instalar skills donde
+# sobrevivan a reinstalar la aplicación.
+dirs       = "5"
 # El extractor de PDF de los adjuntos. Misma versión que `src-tauri`: la 0.7
 # fija lopdf 0.34, que desborda la pila con PDF muy anidados —sin guardia de
 # recursión— y un solo fichero hostil tumbaba el proceso entero.
