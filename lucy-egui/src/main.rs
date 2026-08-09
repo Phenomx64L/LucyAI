@@ -773,6 +773,33 @@ struct ChatTab {
     /// tiene los suyos.
     attachments: Vec<Attachment>,
     rx: Option<std::sync::mpsc::Receiver<lucy_core::chat::ChatEvent>>,
+    /// Los sub-agentes en vuelo de ESTA pestaña, con el canal de cada uno.
+    ///
+    /// El estado que se PINTA vive en `ws.forks`; aquí solo está el hilo del que
+    /// tirar. Separados porque son dos cosas con vidas distintas: la fila del
+    /// panel se queda para que el operador vea qué se lanzó y qué devolvió, y el
+    /// canal se tira en cuanto llega el resultado.
+    fork_rx: Vec<(String, std::sync::mpsc::Receiver<lucy_core::forks::ForkResult>)>,
+    /// Un turno de resultados retenido porque un `wait_task` aún no puede
+    /// contestarse.
+    ///
+    /// SIN ESTO, `wait_task` NO SERÍA UNA ESPERA. Los resultados de las
+    /// herramientas se mandan de vuelta al cerrar el turno, y en ese instante un
+    /// sub-agente lanzado hace dos segundos casi nunca ha terminado: contestar
+    /// «todavía corre» le devolvería el turno a Lucy para que preguntara otra
+    /// vez, y otra, cada una con su petición de red. Se retiene el lote entero y
+    /// sale solo cuando lo que se esperaba está.
+    espera: Option<Espera>,
+}
+
+/// Un lote de resultados esperando a que terminen unos sub-agentes.
+struct Espera {
+    /// Los que faltan. Cuando ninguno siga corriendo, el lote sale.
+    ids: Vec<String>,
+    /// Lo que ya devolvieron las OTRAS herramientas del mismo turno. Se guarda
+    /// junto y no se manda antes: dos turnos con la mitad del contexto cada uno
+    /// hacen que Lucy conteste la primera mitad y vuelva a pedir la segunda.
+    resultados: Vec<String>,
 }
 
 impl ChatTab {
@@ -800,6 +827,8 @@ impl ChatTab {
             input: String::new(),
             attachments: Vec::new(),
             rx: None,
+            fork_rx: Vec::new(),
+            espera: None,
         }
     }
 
@@ -808,8 +837,11 @@ impl ChatTab {
     /// La cola cuenta: el stream puede haber terminado y quedar texto por
     /// revelar, y durante ese rato Lucy SIGUE escribiendo en pantalla. Sin
     /// esto, el cursor desaparecería a mitad de la última frase.
+    /// Y la espera de un sub-agente también: mientras un lote está retenido, el
+    /// turno de Lucy no ha terminado —está esperando a su propia tarea— y meterle
+    /// otra orden por delante partiría la conversación en dos.
     fn busy(&self) -> bool {
-        self.rx.is_some() || self.drain.busy()
+        self.rx.is_some() || self.drain.busy() || self.espera.is_some()
     }
 }
 
@@ -2611,6 +2643,10 @@ impl eframe::App for App {
         // otra cosa mientras corre.
         self.pump_exec();
         self.pump_voice();
+        // ANTES de `pump_pending`: un sub-agente que acaba de terminar libera
+        // una espera, y esa espera es justo lo que mantiene la pestaña ocupada.
+        // Al revés, el turno retenido esperaría un frame de más cada vez.
+        self.pump_forks();
         // DESPUÉS de la cola de revelado y de la ejecución, que son las dos
         // cosas que mantienen ocupada una pestaña. Mirarlo antes lo encontraría
         // ocupado siempre y el turno encolado no saldría nunca — que es el mismo
@@ -3971,6 +4007,20 @@ impl App {
                     s.label = "Cancelado — el operador detuvo la respuesta".into();
                 }
             }
+            // Y LA ESPERA DE LOS SUB-AGENTES. Sin esto, detener no detiene: los
+            // sub-agentes terminan por su cuenta un minuto después, el lote
+            // retenido sale solo, y Lucy arranca un turno nuevo con lo que el
+            // operador acababa de cortar. Los hilos siguen hasta acabar —no hay
+            // forma de matar una petición HTTP a medias— pero su resultado ya no
+            // tiene a dónde volver, que es lo que el botón promete.
+            t.fork_rx.clear();
+            t.espera = None;
+            for f in t.ws.forks.iter_mut() {
+                if f.status == lucy_core::agent::ForkStatus::Running {
+                    f.status = lucy_core::agent::ForkStatus::Error;
+                    f.result = "Cancelado — el operador detuvo la respuesta".into();
+                }
+            }
             let resto = t.drain.flush();
             if let Some(last) = t.log.last_mut() {
                 last.text.push_str(&resto);
@@ -4316,6 +4366,14 @@ _(detenido por el operador)_");
                 t.log.clear();
                 t.ws.reset();
                 t.drain.flush();
+                // Los sub-agentes de la conversación que se acaba de borrar no
+                // tienen dónde volver. Soltar los canales no mata sus hilos —
+                // terminarán y escribirán en un canal muerto, que no le pasa
+                // nada a nadie—, pero sí quita la espera: sin esto la pestaña se
+                // quedaría ocupada para siempre esperando un lote cuyo turno ya
+                // no existe.
+                t.fork_rx.clear();
+                t.espera = None;
             }
             "/memory" => self.view = View::Memoria,
             // Rota entre los tres en vez de abrir un menú: un comando de barra
@@ -4906,6 +4964,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // devolverlos por separado gastaría tres turnos —tres peticiones de red
         // pagadas— para contarle lo que cabía en uno.
         let mut herramientas: Vec<String> = Vec::new();
+        // Los sub-agentes que un `wait_task` de este turno pidió y todavía no
+        // han terminado. Si al final queda alguno, el lote entero se retiene.
+        let mut pendientes: Vec<String> = Vec::new();
 
         for t in tags::extract_tags(reply) {
             match t.kind {
@@ -5005,6 +5066,24 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     // propia llamada en el panel, no le volvía nada, y o
                     // insistía o se inventaba el contenido.
                     //
+                    // LAS DOS DE SUB-AGENTE, ANTES QUE NINGUNA. No las cumple
+                    // `tools::run` y no podrían: necesitan un hilo, un canal y un
+                    // modelo elegido, y esa función devuelve un resultado de
+                    // golpe. Van aquí porque el shell es quien tiene las tres
+                    // cosas.
+                    if name == "fork_task" {
+                        let r = self.fork_lanzar(ti, &args);
+                        herramientas.push(format!(
+                            "<TOOL_RESULT tool=\"fork_task\" arg=\"{args}\">\n{r}\n</TOOL_RESULT>"
+                        ));
+                        continue;
+                    }
+                    if name == "wait_task" {
+                        let (listos, faltan) = self.fork_recoger(ti, &args);
+                        herramientas.extend(listos);
+                        pendientes.extend(faltan);
+                        continue;
+                    }
                     // En el hilo de la interfaz, sin hilo aparte, y eso es
                     // deliberado: leer un fichero de disco local son
                     // milisegundos, con tope de ocho megas. Lo que sí justificó
@@ -5180,18 +5259,231 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         //
         // Va DESPUÉS del bucle y solo si hay algo, porque abrir un turno para
         // decir "no pediste nada" cuesta lo mismo que abrirlo para contestar.
-        if !herramientas.is_empty() {
-            let n = herramientas.len();
-            self.send_raw(
-                ti,
-                format!(
-                    "Esto es lo que devolvieron las {} que pediste. Úsalo para \
-                     contestar; no vuelvas a pedir lo mismo.\n\n{}",
-                    if n == 1 { "herramienta".to_string() } else { format!("{n} herramientas") },
-                    herramientas.join("\n\n")
-                ),
+        //
+        // Salvo que un `wait_task` haya nombrado tareas que siguen corriendo:
+        // entonces el lote ENTERO se retiene, incluidas las lecturas que sí
+        // terminaron. Mandar ahora la mitad y luego la otra haría que Lucy
+        // contestara con lo primero que le llegó y volviera a preguntar por lo
+        // demás — dos turnos pagados para lo que cabe en uno.
+        if !pendientes.is_empty() {
+            self.tabs[ti].espera = Some(Espera { ids: pendientes, resultados: herramientas });
+        } else if !herramientas.is_empty() {
+            self.mandar_resultados(ti, herramientas);
+        }
+    }
+
+    /// Lanza un sub-agente. Devuelve lo que se le contesta a Lucy.
+    ///
+    /// EL MISMO MODELO QUE LA CONVERSACIÓN, y es una decisión, no una omisión.
+    /// La V2 tiene un selector de modelo para sub-agentes con cuatro modos, y lo
+    /// que consigue es que una tarea auxiliar acabe corriendo en otro proveedor
+    /// —otra factura, otras capacidades, otro criterio— sin que el operador que
+    /// eligió el modelo de arriba se entere. Aquí, si Lucy corre en Opus, sus
+    /// tareas corren en Opus; cambiar eso es cambiar el desplegable de siempre.
+    fn fork_lanzar(&mut self, ti: usize, args: &str) -> String {
+        let Some((id, instruccion)) = lucy_core::forks::parse_fork(args) else {
+            return "Formato: fork_task:nombre-corto|qué tiene que averiguar. Hacen falta \
+                    las dos partes."
+                .to_string();
+        };
+        // EL TOPE SE MIRA CONTRA LOS CANALES VIVOS, no contra las filas del
+        // panel: las filas se quedan para que el operador vea lo que se lanzó, y
+        // contarlas haría que la sexta tarea del día se rechazara por culpa de
+        // cinco que terminaron hace media hora.
+        if self.tabs[ti].fork_rx.len() >= lucy_core::forks::MAX_PARALELOS {
+            return format!(
+                "Ya hay {} tareas en curso, que es el máximo. Recoge alguna con \
+                 wait_task antes de lanzar otra.",
+                lucy_core::forks::MAX_PARALELOS
             );
         }
+        if self.tabs[ti].fork_rx.iter().any(|(x, _)| *x == id) {
+            return format!(
+                "Ya hay una tarea llamada «{id}» corriendo. Recógela con \
+                 wait_task:{id} o llama a esta de otra forma."
+            );
+        }
+        let equipo = lucy_core::system::hostname();
+        let modelo = self.chat_model.clone();
+        let rx = lucy_core::forks::spawn(
+            id.clone(),
+            instruccion.clone(),
+            modelo.clone(),
+            equipo,
+            self.privacy,
+        );
+        self.tabs[ti].fork_rx.push((id.clone(), rx));
+        self.tabs[ti].ws.fork_start(&id, &instruccion, &modelo);
+        self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: "act".into(),
+            label: format!("Sub-agente lanzado: {id}"),
+            detail: instruccion,
+            ..Default::default()
+        });
+        format!(
+            "Lanzada «{id}». Sigue con lo tuyo y recógela con wait_task:{id} cuando la \
+             necesites."
+        )
+    }
+
+    /// Recoge lo que pidió un `wait_task`. Devuelve (lo que ya está, lo que falta).
+    ///
+    /// `*` o sin argumento significa TODAS. Es la forma que se usa cuando se han
+    /// lanzado cuatro tareas de golpe, y sin ella Lucy tendría que escribir
+    /// cuatro etiquetas para lo que es una sola espera.
+    fn fork_recoger(&mut self, ti: usize, args: &str) -> (Vec<String>, Vec<String>) {
+        use lucy_core::agent::ForkStatus;
+        let pedidos = lucy_core::forks::pedidos(&self.tabs[ti].ws.forks, args);
+
+        let mut listos = Vec::new();
+        let mut faltan = Vec::new();
+        if pedidos.is_empty() {
+            // Las dos razones de que no quede nada que recoger son distintas, y
+            // contestar la primera cuando pasa la segunda haría que Lucy volviera
+            // a lanzar lo que ya había lanzado y recogido.
+            let motivo = if self.tabs[ti].ws.forks.is_empty() {
+                "no has lanzado ninguna en esta conversación"
+            } else {
+                "ya las recogiste todas; lo que devolvieron lo tienes más arriba"
+            };
+            listos.push(format!(
+                "<TOOL_RESULT tool=\"wait_task\" arg=\"{args}\">\nNo hay ninguna tarea que \
+                 recoger: {motivo}.\n</TOOL_RESULT>"
+            ));
+            return (listos, faltan);
+        }
+        for id in pedidos {
+            match self.tabs[ti].ws.forks.iter().find(|f| f.id == id).map(|f| f.status) {
+                Some(ForkStatus::Running) => faltan.push(id),
+                Some(_) => listos.push(self.fork_cobrar(ti, &id)),
+                // Un nombre que no se lanzó se dice AHORA. Meterlo en los que
+                // faltan lo dejaría esperando para siempre a una tarea que no
+                // existe, y la pestaña con el cursor puesto.
+                None => listos.push(format!(
+                    "<TOOL_RESULT tool=\"wait_task\" arg=\"{id}\">\nNo hay ninguna tarea \
+                     llamada «{id}». Las que lanzaste: {}.\n</TOOL_RESULT>",
+                    if self.tabs[ti].ws.forks.is_empty() {
+                        "ninguna".to_string()
+                    } else {
+                        self.tabs[ti]
+                            .ws
+                            .forks
+                            .iter()
+                            .map(|f| f.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                )),
+            }
+        }
+        (listos, faltan)
+    }
+
+    /// Da por recogido un sub-agente terminado y devuelve su resultado.
+    fn fork_cobrar(&mut self, ti: usize, id: &str) -> String {
+        use lucy_core::agent::ForkStatus;
+        let Some(f) = self.tabs[ti].ws.forks.iter().find(|f| f.id == id) else {
+            return String::new();
+        };
+        let (estado, cuerpo) = match f.status {
+            ForkStatus::Error => ("falló", f.result.clone()),
+            // Recogerla dos veces devuelve lo mismo con una nota. Contestar «ya
+            // la recogiste» sería esconderle a Lucy un dato que tenemos delante
+            // por un descuido suyo que no cuesta nada.
+            ForkStatus::Collected => ("ya la habías recogido", f.result.clone()),
+            _ => ("terminó", f.result.clone()),
+        };
+        let ms = f.ms.unwrap_or(0);
+        self.tabs[ti].ws.fork_collected(id);
+        format!(
+            "<TOOL_RESULT tool=\"wait_task\" arg=\"{id}\">\n[«{id}» {estado} en {:.1} s]\n\
+             {cuerpo}\n</TOOL_RESULT>",
+            ms as f64 / 1000.0
+        )
+    }
+
+    /// Recoge los sub-agentes que hayan terminado y suelta las esperas cumplidas.
+    ///
+    /// En CADA frame y sobre TODAS las pestañas, como el resto de los `pump`: la
+    /// pestaña que espera puede no ser la que se está mirando, y un sub-agente
+    /// que termina en una terminal de fondo tiene que cerrar su turno igual.
+    fn pump_forks(&mut self) {
+        use lucy_core::agent::ForkStatus;
+        use std::sync::mpsc::TryRecvError;
+
+        for i in 0..self.tabs.len() {
+            let mut llegados = Vec::new();
+            self.tabs[i].fork_rx.retain(|(id, rx)| match rx.try_recv() {
+                Ok(r) => {
+                    llegados.push(r);
+                    false
+                }
+                Err(TryRecvError::Empty) => true,
+                // El hilo murió sin mandar nada — un pánico dentro de la tarea.
+                // Se cierra como error en vez de dejar el canal puesto: si no,
+                // el `wait_task` que la espera no terminaría nunca y la pestaña
+                // se quedaría ocupada para siempre.
+                Err(TryRecvError::Disconnected) => {
+                    llegados.push(lucy_core::forks::ForkResult {
+                        id: id.clone(),
+                        text: "La tarea se cortó sin devolver nada.".into(),
+                        ok: false,
+                        ms: 0,
+                    });
+                    false
+                }
+            });
+            for r in llegados {
+                let estado = if r.ok { ForkStatus::Done } else { ForkStatus::Error };
+                self.tabs[i].ws.fork_finish(&r.id, estado, &r.text);
+                self.tabs[i].ws.trace_push(lucy_core::agent::TraceEntry {
+                    phase: if r.ok { "obs" } else { "error" }.into(),
+                    label: format!("Sub-agente {}: {}", r.id, if r.ok { "hecho" } else { "error" }),
+                    detail: r.text.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+
+        for i in 0..self.tabs.len() {
+            let listo = match &self.tabs[i].espera {
+                Some(e) => e.ids.iter().all(|id| {
+                    self.tabs[i]
+                        .ws
+                        .forks
+                        .iter()
+                        .find(|f| f.id == *id)
+                        .map_or(true, |f| f.status != ForkStatus::Running)
+                }),
+                None => false,
+            };
+            if !listo {
+                continue;
+            }
+            // Se saca ANTES de mandar: `send_raw` mira `busy()`, y `busy()`
+            // ahora incluye esta espera. Dejarla puesta encolaría el lote contra
+            // sí mismo y no saldría nunca.
+            let Some(e) = self.tabs[i].espera.take() else { continue };
+            let mut res = e.resultados;
+            for id in &e.ids {
+                res.push(self.fork_cobrar(i, id));
+            }
+            self.mandar_resultados(i, res);
+        }
+    }
+
+    /// Devuelve a Lucy el lote de resultados de herramientas de un turno.
+    fn mandar_resultados(&mut self, ti: usize, herramientas: Vec<String>) {
+        let n = herramientas.len();
+        self.send_raw(
+            ti,
+            format!(
+                "Esto es lo que devolvieron las {} que pediste. Úsalo para \
+                 contestar; no vuelvas a pedir lo mismo.\n\n{}",
+                if n == 1 { "herramienta".to_string() } else { format!("{n} herramientas") },
+                herramientas.join("\n\n")
+            ),
+        );
     }
 
     /// Da el siguiente paso solo, si toca. La decisión está en `next_auto`;
@@ -5623,6 +5915,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 right(ui, 22.0, |ui| {
                     if ghost_icon(ui, icons::Icon::Close).on_hover_text("Limpiar el workspace").clicked() {
                         self.tabs[self.tab].ws.reset();
+                        // Y la espera con él: `reset` vacía las filas de los
+                        // sub-agentes, así que un lote retenido contra ellas no
+                        // podría cumplirse nunca.
+                        self.tabs[self.tab].fork_rx.clear();
+                        self.tabs[self.tab].espera = None;
                     }
                     if ghost_icon(ui, icons::Icon::Copy)
                         .on_hover_text("Exportar el run (copia al portapapeles)")
