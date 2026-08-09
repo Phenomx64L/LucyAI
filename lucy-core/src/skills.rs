@@ -142,6 +142,81 @@ pub fn catalog(skills: &[Skill]) -> String {
     s.trim_end().to_string()
 }
 
+/// Convierte un `<LEARN>` en el contenido de un `SKILL.md`.
+///
+/// EL FORMATO DE LA V2 ES `claves|script|respuesta`: cuándo aplica, qué ejecutar
+/// y qué contestar. Es exactamente un skill escrito en una línea, y por eso se
+/// traduce en vez de construirle un almacén propio.
+///
+/// LO QUE LUCY APRENDE ACABA SIENDO UN FICHERO, y eso es la diferencia de fondo
+/// con un almacén interno: se puede leer, corregir a mano, copiar a otra máquina
+/// y borrar. Un procedimiento aprendido que solo vive dentro de una base de datos
+/// es un procedimiento que nadie revisa hasta que falla.
+pub fn from_learn(payload: &str) -> Option<(String, String)> {
+    let mut p = payload.splitn(3, '|');
+    let claves = p.next()?.trim();
+    let script = p.next().unwrap_or("").trim();
+    let respuesta = p.next().unwrap_or("").trim();
+    if claves.is_empty() || (script.is_empty() && respuesta.is_empty()) {
+        return None;
+    }
+    // El nombre sale de la primera clave: es la que el operador dijo primero, y
+    // suele ser la que usaría para buscarlo.
+    // Se quitan los acentos ANTES de filtrar. `is_alphanumeric` los acepta
+    // —en Unicode una `ó` es una letra— y `is_ascii_alphanumeric` no, así que
+    // sin este paso «producción» acaba en `producci-n`. Quitar la tilde es lo
+    // que uno quiere de un nombre de carpeta escrito en español.
+    let sin_tildes: String = claves
+        .split(',')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' | 'â' => 'a',
+            'é' | 'è' | 'ë' | 'ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            otro => otro,
+        })
+        .collect();
+    let mut nombre = String::new();
+    for c in sin_tildes.chars() {
+        if c.is_ascii_alphanumeric() {
+            nombre.push(c);
+        } else if !nombre.ends_with('-') {
+            nombre.push('-');
+        }
+    }
+    let nombre = nombre.trim_matches('-').to_string();
+    if nombre.is_empty() {
+        return None;
+    }
+    let mut md = format!(
+        "---\nname: {nombre}\ndescription: {}\n---\n\n# {nombre}\n\n",
+        una_linea(claves, 200)
+    );
+    if !script.is_empty() {
+        md.push_str(&format!("## Qué ejecutar\n\n```\n{script}\n```\n\n"));
+    }
+    if !respuesta.is_empty() {
+        md.push_str(&format!("## Qué responder\n\n{respuesta}\n\n"));
+    }
+    // La fecha NO se pone aquí: `SystemTime` daría una hora distinta en cada
+    // ejecución y el test dejaría de poder afirmar nada. Quien lo escriba en
+    // disco puede añadirla si hace falta.
+    md.push_str(
+        "---\n\nAprendido de una conversación. Si al aplicarlo la máquina no responde como \
+         dice aquí, manda lo que ves — este procedimiento se escribió en un momento y la \
+         máquina es de ahora.\n",
+    );
+    Some((nombre, md))
+}
+
 /// Dónde se instalan los skills del operador.
 ///
 /// EN SU PERFIL Y NO JUNTO AL EJECUTABLE. Lo segundo parece más ordenado y se
@@ -386,6 +461,44 @@ mod tests {
         let d = dir.join(nombre);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("SKILL.md"), "---\ndescription: d\n---\ncuerpo").unwrap();
+    }
+
+    #[test]
+    fn lo_aprendido_se_convierte_en_un_skill_legible() {
+        // El formato de la V2 —`claves|script|respuesta`— es un skill escrito en
+        // una línea. Traducirlo evita construirle un almacén propio, y hace que
+        // lo aprendido acabe siendo un fichero que se puede leer y corregir.
+        let (n, md) = from_learn(
+            "reiniciar spooler, cola de impresión|Restart-Service Spooler|Se reinicia el servicio de impresión.",
+        )
+        .unwrap();
+        assert_eq!(n, "reiniciar-spooler");
+        let k = parse(&n, &md);
+        assert!(k.description.contains("cola de impresión"), "{}", k.description);
+        assert!(k.body.contains("Restart-Service Spooler"));
+        assert!(k.body.contains("Se reinicia el servicio"));
+        // Y el recordatorio: se escribió en un momento, la máquina es de ahora.
+        assert!(k.body.contains("manda lo que ves"), "{}", k.body);
+    }
+
+    #[test]
+    fn un_learn_a_medias_no_produce_un_skill_vacio() {
+        // Un skill sin nada que hacer ni que decir es una entrada en el catálogo
+        // que gasta tokens en cada turno para no servir de nada.
+        assert!(from_learn("").is_none());
+        assert!(from_learn("solo-claves").is_none());
+        assert!(from_learn("|script|respuesta").is_none(), "sin claves no hay nombre");
+        // Con solo respuesta SÍ vale: enseñarle qué contestar es aprender.
+        assert!(from_learn("dns lento||Revisa el reenviador").is_some());
+    }
+
+    #[test]
+    fn el_nombre_aprendido_es_un_nombre_de_carpeta_valido() {
+        // Sale de texto que escribió un modelo: acentos, comas, barras y todo lo
+        // que a un sistema de ficheros no le gusta.
+        let (n, _) = from_learn("Reiniciar IIS/W3SVC en producción|iisreset|listo").unwrap();
+        assert!(n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'), "salió «{n}»");
+        assert!(!n.starts_with('-') && !n.ends_with('-'), "salió «{n}»");
     }
 
     #[test]
