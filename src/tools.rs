@@ -261,6 +261,10 @@ pub const AVAILABLE: &[(&str, &str)] = &[
     ("readfile", "<TOOL>readfile:C:\\ruta\\fichero.log</TOOL> — te devuelve su texto"),
     ("listdir", "<TOOL>listdir:C:\\ruta</TOOL> — te devuelve qué hay en esa carpeta"),
     (
+        "readlines",
+        "<TOOL>readlines:C:\\ruta|desde|cuántas</TOOL> — un tramo, para ficheros largos",
+    ),
+    (
         "writefile",
         "<TOOL>writefile:C:\\ruta\\fichero.txt|||CONTENIDO</TOOL> — PROPONE escribirlo",
     ),
@@ -269,6 +273,63 @@ pub const AVAILABLE: &[(&str, &str)] = &[
         "<TOOL>editfile:C:\\ruta|||TEXTO_VIEJO|||TEXTO_NUEVO</TOOL> — PROPONE un cambio",
     ),
 ];
+
+/// Cuántas líneas devuelve `readlines` como mucho de una vez.
+///
+/// Quinientas son unas veinte pantallas: de sobra para entender un tramo, y poco
+/// para que quepan tres tramos en un turno sin que la conversación se ahogue.
+pub const MAX_LINES: usize = 500;
+
+/// `readlines:ruta|desde|cuántas` — un tramo concreto de un fichero.
+///
+/// EXISTE PORQUE `readfile` DEJABA UN CALLEJÓN SIN SALIDA. Recortaba a 16 000
+/// caracteres y avisaba —«se te mandan los primeros»— sin dar forma de ver el
+/// resto. En un log eso es justamente lo peor: lo que se busca casi siempre está
+/// al final, y Lucy solo alcanzaba el principio.
+///
+/// `desde` cuenta DESDE 1, como cualquier editor y como cualquier mensaje de
+/// error. Contar desde cero aquí obligaría a restar uno cada vez que alguien
+/// dice «mira la línea 342», y esa resta se olvida.
+fn readlines(args: &str) -> ToolResult {
+    let mut p = args.split('|');
+    let path = p.next().unwrap_or("").trim();
+    let desde: usize = p.next().and_then(|x| x.trim().parse().ok()).unwrap_or(1).max(1);
+    let cuantas: usize = p
+        .next()
+        .and_then(|x| x.trim().parse().ok())
+        .unwrap_or(MAX_LINES)
+        .clamp(1, MAX_LINES);
+    let label = format!("readlines {path} desde {desde}");
+
+    if path.is_empty() {
+        return ToolResult::err(label, "Falta la ruta: readlines:C:\\ruta|desde|cuántas");
+    }
+    // Se reutiliza `readfile` para no tener dos lectores con dos criterios
+    // distintos sobre qué es un binario y qué codificación tiene un log.
+    let entero = readfile(path);
+    if !entero.ok {
+        return ToolResult { label, ..entero };
+    }
+    let lineas: Vec<&str> = entero.body.lines().collect();
+    let total = lineas.len();
+    if desde > total {
+        return ToolResult::err(
+            label,
+            format!("'{path}' tiene {total} líneas; pediste desde la {desde}."),
+        );
+    }
+    let fin = (desde - 1 + cuantas).min(total);
+    let tramo = lineas[desde - 1..fin].join("\n");
+    // DÓNDE ESTÁ Y CUÁNTO QUEDA, en la propia respuesta. Sin eso, el modelo no
+    // sabe si ha llegado al final y o para antes de tiempo o pide un tramo que
+    // no existe.
+    let nota = if fin < total {
+        format!("\n\n[líneas {desde}–{fin} de {total}. Sigue con readlines:{path}|{}|{cuantas}]", fin + 1)
+    } else {
+        format!("\n\n[líneas {desde}–{fin} de {total} — es el final del fichero]")
+    };
+    ToolResult { label, body: format!("{tramo}{nota}"), ok: true }
+}
 
 fn readfile(path: &str) -> ToolResult {
     let path = path.trim();
@@ -324,9 +385,13 @@ fn readfile(path: &str) -> ToolResult {
     let (cuerpo, nota) = if total > MAX_CHARS {
         (
             texto.chars().take(MAX_CHARS).collect::<String>(),
+            // CON LA SALIDA, no solo con el aviso. Decir «recortado» y callar
+            // deja al modelo sabiendo que le falta algo y sin forma de pedirlo,
+            // que en un log es lo peor: lo que se busca suele estar al final.
             format!(
-                "\n\n[…recortado: {total} caracteres en total, se te mandan los primeros \
-                 {MAX_CHARS}…]"
+                "\n\n[…recortado: {total} caracteres, {} líneas. Se te mandan los primeros \
+                 {MAX_CHARS} caracteres. Para el resto: readlines:{path}|desde|cuántas…]",
+                texto.lines().count()
             ),
         )
     } else {
@@ -461,6 +526,51 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         assert!(r.ok, "{}", r.body);
         assert!(r.body.contains("línea dos"));
+    }
+
+    #[test]
+    fn un_tramo_dice_donde_esta_y_como_seguir() {
+        // Sin eso el modelo no sabe si llegó al final: o para antes de tiempo o
+        // pide un tramo que no existe, y las dos cuestan un turno.
+        let p = tmp("lucy_tool_tramos.txt");
+        let contenido: String = (1..=50).map(|i| format!("linea {i}\n")).collect();
+        std::fs::write(&p, &contenido).unwrap();
+        let ruta = p.to_string_lossy().to_string();
+
+        let r = readlines(&format!("{ruta}|10|5"));
+        assert!(r.ok, "{}", r.body);
+        assert!(r.body.contains("linea 10"), "no empieza donde se pidió: {}", r.body);
+        assert!(r.body.contains("linea 14"));
+        assert!(!r.body.contains("linea 15"), "se pasó de las que se pidieron");
+        assert!(r.body.contains("de 50"), "no dice cuántas hay: {}", r.body);
+        assert!(r.body.contains("|15|"), "no dice cómo seguir: {}", r.body);
+
+        // Y el final se dice que es el final, en vez de invitar a otra vuelta.
+        let f = readlines(&format!("{ruta}|46|20"));
+        assert!(f.body.contains("final del fichero"), "{}", f.body);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn las_lineas_se_cuentan_desde_uno() {
+        // Como cualquier editor y como cualquier mensaje de error. Contar desde
+        // cero obligaría a restar uno cada vez que alguien dice «la línea 342», y
+        // esa resta se olvida.
+        let p = tmp("lucy_tool_base1.txt");
+        std::fs::write(&p, "primera\nsegunda\ntercera\n").unwrap();
+        let r = readlines(&format!("{}|1|1", p.to_string_lossy()));
+        assert!(r.body.starts_with("primera"), "{}", r.body);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn pedir_mas_alla_del_final_se_explica() {
+        let p = tmp("lucy_tool_corto.txt");
+        std::fs::write(&p, "una\ndos\n").unwrap();
+        let r = readlines(&format!("{}|99|10", p.to_string_lossy()));
+        assert!(!r.ok);
+        assert!(r.body.contains("2 líneas"), "{}", r.body);
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
