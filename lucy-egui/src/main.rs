@@ -643,6 +643,34 @@ fn next_auto(
     if let Some(motivo) = &step.needs_human {
         return NextAuto::Pause(format!("{motivo}. Aprueba el paso para seguir."));
     }
+    // OTRO EQUIPO NO ES «EL MÍO», y esta puerta faltaba entera.
+    //
+    // El automático se enciende para que Lucy siga sola EN ESTA MÁQUINA — es lo
+    // que razonan las demás puertas de aquí, y por eso `auto_step` pasa
+    // `elevated: false` fijo. Pero un paso con `host` no corre aquí: `run_step`
+    // saca la contraseña del almacén de credenciales y abre una sesión
+    // autenticada contra el servidor.
+    //
+    // Y las dos comprobaciones que sí hay están calibradas para una estación de
+    // trabajo. `destructive` conoce `Remove-`, `net user`, `format`… y no conoce
+    // `Add-ADGroupMember`, `New-ADUser` ni `Set-ADAccountPassword`. O sea que
+    // `Add-ADGroupMember "Domain Admins" -Members eve` contra el controlador de
+    // dominio salía `Allow`, no destructivo, `needs_human: None`, y lo corría el
+    // bucle sin un clic. Eso no es leer de más: es un cambio en el directorio.
+    //
+    // Va AQUÍ y no en `absorb_tags` por dos razones. `next_auto` es el cuello por
+    // el que pasa todo lo que corre sin clic, así que un paso remoto que llegue
+    // al plan por otra vía —una sesión restaurada, lo que venga mañana— se para
+    // igual. Y `needs_human` significa «el guardrail miró ESTE texto», que es una
+    // propiedad del contenido; el destino no lo es, y mezclarlos haría que el
+    // motivo que se le enseña al operador mintiera sobre quién decidió.
+    if !step.host.is_empty() {
+        return NextAuto::Pause(format!(
+            "Este paso corre en «{}», no en este equipo. Un comando en otra máquina lo \
+             apruebas tú.",
+            step.host
+        ));
+    }
     if loops >= max {
         return NextAuto::Ceiling(format!(
             "{max} pasos seguidos sin llegar a una respuesta. El automático se \
@@ -650,6 +678,25 @@ fn next_auto(
         ));
     }
     NextAuto::Run(step.id.clone(), step.detail.clone())
+}
+
+/// ¿Se le puede devolver otro lote de resultados de herramienta?
+///
+/// EL OTRO BUCLE, el que no tenía presupuesto. `absorb_tags` cumple un `readfile`
+/// y `mandar_resultados` abre un turno nuevo para devolvérselo; si en ese turno
+/// vuelve a pedir, otra vuelta, y así. Nada lo paraba: `loops` solo cuenta pasos
+/// de ejecución, y este camino ni consulta `auto` — corre con el interruptor del
+/// rayo APAGADO, que es justo el modo que el operador entiende como «esto no va
+/// solo».
+///
+/// No ejecuta nada en la máquina, así que no es el mismo peligro que la cadena de
+/// comandos; lo que se va es dinero de API sin techo y una pestaña clavada en
+/// `busy()` que el operador no puede usar hasta pulsar Parar.
+///
+/// Aparte y probable por lo mismo que `next_auto`: un bucle que gasta dinero solo
+/// no es sitio para «se ve que funciona».
+fn hay_presupuesto_tool(vueltas: u32, max: u32) -> bool {
+    vueltas < max
 }
 
 impl ChatMsg {
@@ -753,6 +800,18 @@ struct ChatTab {
     /// Interruptor de parada del turno en curso. El hilo del stream lo mira
     /// entre trama y trama.
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// El de los sub-agentes, que es OTRO y vive más.
+    ///
+    /// `stop` se fabrica de cero en cada turno —`send` y `send_raw` lo
+    /// reemplazan—, y una tarea vive por encima de los turnos: se lanza en uno,
+    /// se recoge en otro. Dándole el `stop` del turno que la lanzó, el primer
+    /// `send_raw` posterior dejaba su interruptor huérfano y Detener ya no la
+    /// alcanzaba: seguía pagando peticiones contra un canal muerto, que es
+    /// exactamente lo que la cancelación venía a arreglar.
+    ///
+    /// Se renueva con cada ORDEN del operador, como el presupuesto de pasos: es
+    /// el mismo criterio, lo que dura es la orden.
+    fork_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// El texto recibido y aún no enseñado del turno en curso. Ver `drain`.
     drain: drain::Drain,
     /// Esta pestaña encadena pasos sola.
@@ -768,6 +827,19 @@ struct ChatTab {
     /// Se pone a cero con cada orden nueva del operador. Sin eso el tope sería
     /// de la sesión entera y la segunda pregunta del día ya no tendría bucle.
     loops: u32,
+    /// Vueltas de ida y vuelta de herramienta que lleva esta orden.
+    ///
+    /// EL SEGUNDO BUCLE DE LA APLICACIÓN, y era el único sin presupuesto. Lucy
+    /// pide un `readfile`, `absorb_tags` lo cumple y `mandar_resultados` abre un
+    /// turno nuevo para devolvérselo; si en ese turno vuelve a pedir, otra vuelta.
+    /// `loops` no cuenta esto —solo lo incrementa `auto_step`, y solo para pasos
+    /// de ejecución— así que el tope que el operador configuró no lo tocaba, y el
+    /// interruptor del rayo tampoco: esto corre con el automático APAGADO.
+    ///
+    /// Aparte de `loops` y no compartido: `loops` se enseña en el tooltip del
+    /// rayo y se pone a cero al alternarlo. Compartirlo haría mentir al tooltip y
+    /// dejaría que tocar el interruptor recargara este presupuesto sin querer.
+    tool_loops: u32,
     /// Adjuntos de ESTA pestaña. Por pestaña y no globales: los ficheros
     /// pertenecen a la orden que se está escribiendo, y en la V2 cada terminal
     /// tiene los suyos.
@@ -817,7 +889,9 @@ impl ChatTab {
             tokens_out: 0,
             auto: false,
             loops: 0,
+            tool_loops: 0,
             stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fork_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             title: if n == 0 {
                 "Nueva Terminal".to_string()
             } else {
@@ -842,6 +916,35 @@ impl ChatTab {
     /// otra orden por delante partiría la conversación en dos.
     fn busy(&self) -> bool {
         self.rx.is_some() || self.drain.busy() || self.espera.is_some()
+    }
+
+    /// Caduca los pasos que quedaron sin aprobar. Devuelve cuántos eran.
+    ///
+    /// UN PASO PENDIENTE ES UNA PROPUESTA CONTRA LA ORDEN QUE LA PIDIÓ. Si esa
+    /// orden ya no está en pie, ejecutarlo es correr un comando que ya no quiere
+    /// nadie — y el bucle lo hacía, porque `next_auto` coge el primer `Pending`
+    /// del plan entero sin preguntar de cuándo es. El caso fácil de ver: quedan
+    /// dos pasos sin aprobar de «revisa el disco», el operador escribe «¿qué hora
+    /// es?», y al cerrar ESE turno el bucle arranca por el comando del asunto
+    /// anterior.
+    ///
+    /// Esto ya estaba escrito —dentro del botón de Detener, con su comentario— y
+    /// no lo heredaba nadie más. Aquí está una vez y lo llaman los tres finales
+    /// que dejan una orden atrás: detener, fallar y empezar otra.
+    ///
+    /// Se marcan `Error` y NO se borran: el plan es también el registro de la
+    /// sesión, y un paso que desaparece se lee como un paso que nunca se propuso.
+    fn caducar_pendientes(&mut self, motivo: &str) -> usize {
+        use lucy_core::agent::StepStatus;
+        let mut n = 0;
+        for s in self.ws.plan.iter_mut() {
+            if s.status == StepStatus::Pending {
+                s.status = StepStatus::Error;
+                s.label = motivo.to_string();
+                n += 1;
+            }
+        }
+        n
     }
 }
 
@@ -2461,12 +2564,14 @@ impl App {
         // está prestado por las pestañas y el workspace no se puede tocar.
         // Con el UID de su pestaña: el turno que se cierra puede no ser el de la
         // pestaña que se está mirando.
-        let mut cerrados: Vec<(usize, String)> = Vec::new();
+        // El tercero es el motivo del fallo, `None` si el turno cerró bien.
+        let mut cerrados: Vec<(usize, String, Option<String>)> = Vec::new();
         for t in &mut self.tabs {
             if t.rx.is_none() {
                 continue;
             }
             let mut done = false;
+            let mut fallo: Option<String> = None;
             if let Some(rx) = &t.rx {
                 while let Ok(ev) = rx.try_recv() {
                     match ev {
@@ -2489,6 +2594,7 @@ impl App {
                             if let Some(last) = t.log.last_mut() {
                                 last.text.push_str(&format!("\n\n⚠ {e}"));
                             }
+                            fallo = Some(e);
                             done = true;
                             break;
                         }
@@ -2506,10 +2612,27 @@ impl App {
                     t.log.last().map(|m| m.text.clone()).unwrap_or_default(),
                     t.drain.peek()
                 );
-                cerrados.push((t.uid, reply));
+                cerrados.push((t.uid, reply, fallo));
             }
         }
-        for (uid, reply) in cerrados {
+        for (uid, reply, fallo) in cerrados {
+            // UN TURNO QUE FALLÓ NO ENCADENA NADA, y esta rama lo hacía igual que
+            // uno que terminó. El caso que lo enseña no necesita que el modelo se
+            // porte mal: un corte de red a mitad de stream, DESPUÉS de que haya
+            // emitido un `<EXECUTE>` completo. `reply` lleva el trozo que sí
+            // llegó, `absorb_tags` parsea la etiqueta entera que hay dentro, y el
+            // bucle ejecutaba un comando sacado de una respuesta truncada — sin
+            // que nadie haya visto el final de la frase que lo justificaba.
+            //
+            // Se aborta ANTES de absorber, no solo antes de `auto_step`: un
+            // `<TOOL>` dentro del mismo trozo truncado también abre un turno
+            // nuevo por `mandar_resultados`, y eso pasa con el automático
+            // apagado.
+            if let Some(e) = fallo {
+                self.turn_finished(uid, reply.chars().count());
+                self.turno_fallido(uid, &e);
+                continue;
+            }
             self.absorb_tags(uid, &reply);
             self.turn_finished(uid, reply.chars().count());
             // El bucle arranca CUANDO EL TURNO SE CIERRA, no dentro de
@@ -2517,6 +2640,37 @@ impl App {
             // y un `<EXECUTE>` a medio recibir es un comando a medio escribir.
             self.auto_step(uid);
         }
+    }
+
+    /// Cierra una pestaña cuyo turno murió por el proveedor.
+    ///
+    /// Apaga el automático y caduca lo pendiente. Quedarse solo en «no llames a
+    /// `auto_step`» dejaría los pasos en `Pending` con el modo apagado, y la
+    /// siguiente orden del operador —que reinicia el presupuesto, y para la que a
+    /// lo mejor vuelve a encender el rayo— arrancaría la cadena por esos pasos
+    /// rancios. Es el mismo razonamiento que ya está escrito en el botón de
+    /// Detener, aplicado al otro final posible de un turno.
+    fn turno_fallido(&mut self, uid: usize, error: &str) {
+        let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
+        let t = &mut self.tabs[ti];
+        let n = t.caducar_pendientes("Cancelado — falló el turno que lo propuso");
+        t.auto = false;
+        t.ws.trace_push(lucy_core::agent::TraceEntry {
+            phase: "error".into(),
+            label: "Cadena detenida por un fallo del proveedor".into(),
+            detail: if n == 0 {
+                error.to_string()
+            } else {
+                format!(
+                    "{error}\n\n{n} paso{} propuesto{} en esa respuesta se caduca{}: la \
+                     respuesta que los justificaba no llegó entera.",
+                    if n == 1 { "" } else { "s" },
+                    if n == 1 { "" } else { "s" },
+                    if n == 1 { "" } else { "n" }
+                )
+            },
+            ..Default::default()
+        });
     }
 
     /// Manda los turnos que se quedaron esperando a que la pestaña se liberara.
@@ -4001,18 +4155,18 @@ impl App {
             // vuelva a encender el automático el bucle empezaría por ellos —
             // ejecutando, un turno más tarde, justo el comando que detuvo.
             t.auto = false;
-            for s in t.ws.plan.iter_mut() {
-                if s.status == lucy_core::agent::StepStatus::Pending {
-                    s.status = lucy_core::agent::StepStatus::Error;
-                    s.label = "Cancelado — el operador detuvo la respuesta".into();
-                }
-            }
+            t.caducar_pendientes("Cancelado — el operador detuvo la respuesta");
             // Y LA ESPERA DE LOS SUB-AGENTES. Sin esto, detener no detiene: los
             // sub-agentes terminan por su cuenta un minuto después, el lote
             // retenido sale solo, y Lucy arranca un turno nuevo con lo que el
-            // operador acababa de cortar. Los hilos siguen hasta acabar —no hay
-            // forma de matar una petición HTTP a medias— pero su resultado ya no
-            // tiene a dónde volver, que es lo que el botón promete.
+            // operador acababa de cortar.
+            //
+            // Y ya no es solo dejar de escuchar: el interruptor lo mira el hilo
+            // del proveedor entre trama y trama, así que Detener deja de PAGAR
+            // tokens y no solo de mirarlos. Antes se limpiaba `fork_rx` —el
+            // operador recuperaba su pestaña, que es lo que ve— y por debajo
+            // seguían hasta cuatro peticiones por tarea contra un canal muerto.
+            t.fork_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             t.fork_rx.clear();
             t.espera = None;
             for f in t.ws.forks.iter_mut() {
@@ -4367,11 +4521,11 @@ _(detenido por el operador)_");
                 t.ws.reset();
                 t.drain.flush();
                 // Los sub-agentes de la conversación que se acaba de borrar no
-                // tienen dónde volver. Soltar los canales no mata sus hilos —
-                // terminarán y escribirán en un canal muerto, que no le pasa
-                // nada a nadie—, pero sí quita la espera: sin esto la pestaña se
-                // quedaría ocupada para siempre esperando un lote cuyo turno ya
-                // no existe.
+                // tienen dónde volver, así que se paran de verdad: el
+                // interruptor corta sus peticiones, y soltar los canales quita la
+                // espera —sin eso la pestaña se quedaría ocupada para siempre
+                // esperando un lote cuyo turno ya no existe.
+                t.fork_stop.store(true, std::sync::atomic::Ordering::Relaxed);
                 t.fork_rx.clear();
                 t.espera = None;
             }
@@ -4876,6 +5030,36 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // por orden y no por sesión: si fuera de sesión, la segunda pregunta
             // del día se quedaría sin bucle por lo que hizo la primera.
             t.loops = 0;
+            // Y el de vueltas de herramienta, por lo mismo. Va aparte de `loops`
+            // a propósito: `loops` se PINTA en el tooltip del rayo y se pone a
+            // cero al tocarlo, así que compartirlo dejaría que un toque al
+            // interruptor recargara en silencio el otro presupuesto.
+            t.tool_loops = 0;
+            // Y el interruptor de los sub-agentes se REEMPLAZA, no se pone a
+            // false: si quedara alguna tarea de la orden anterior corriendo
+            // contra el viejo, bajar la bandera la resucitaría. Uno nuevo deja
+            // muertas las de antes y limpias las de ahora.
+            t.fork_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            // LO PENDIENTE DE LA ORDEN ANTERIOR CADUCA AQUÍ. Un `Pending` es una
+            // propuesta contra la pregunta que lo pidió; llega otra pregunta y
+            // esa propuesta ya no la respalda nadie. Sin esto, escribir «¿qué
+            // hora es?» con dos pasos colgando del asunto anterior hacía que el
+            // bucle arrancara por ellos en cuanto cerrara este turno.
+            let caducados = t.caducar_pendientes("Caducado — llegó una orden nueva");
+            if caducados > 0 {
+                t.ws.trace_push(lucy_core::agent::TraceEntry {
+                    phase: "info".into(),
+                    label: format!(
+                        "{caducados} paso{} sin aprobar caduca{}",
+                        if caducados == 1 { "" } else { "s" },
+                        if caducados == 1 { "" } else { "n" }
+                    ),
+                    detail: "Eran de la orden anterior. Si los sigues queriendo, pídelos \
+                             otra vez."
+                        .into(),
+                    ..Default::default()
+                });
+            }
             // Lo retenido se dice en el hilo, junto a la orden que lo llevaba.
             for (nombre, motivo) in &retenidos {
                 t.ws.trace_push(lucy_core::agent::TraceEntry {
@@ -5092,20 +5276,41 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     if let Some(r) =
                         lucy_core::tools::run_with_skills(&name, &args, &self.skills)
                     {
+                        // POR LA MISMA PUERTA QUE LA SALIDA DE UN COMANDO, que es
+                        // lo que faltaba. `pump_exec` escanea lo que devuelve un
+                        // `Get-Content`; esto no escaneaba lo que devuelve un
+                        // `readfile` DEL MISMO FICHERO. El guardrail cubría las
+                        // dos puertas raras —el adjunto arrastrado y la salida de
+                        // un comando— y dejaba abierta la principal.
+                        let env = lucy_core::guard::tool_result(&name, &args, &r.body);
                         self.tabs[ti].ws.trace_push(TraceEntry {
-                            phase: if r.ok { "obs" } else { "error" }.into(),
-                            label: r.label.clone(),
-                            detail: if r.ok {
-                                format!("{} caracteres", r.body.chars().count())
+                            phase: if env.retenido.is_some() {
+                                "info"
+                            } else if r.ok {
+                                "obs"
                             } else {
-                                r.body.clone()
+                                "error"
+                            }
+                            .into(),
+                            label: match &env.retenido {
+                                Some(_) => format!("{} — retenido", r.label),
+                                None => r.label.clone(),
+                            },
+                            detail: match &env.retenido {
+                                Some(motivo) => motivo.clone(),
+                                None if r.ok => format!("{} caracteres", r.body.chars().count()),
+                                None => r.body.clone(),
                             },
                             ..Default::default()
                         });
-                        herramientas.push(format!(
-                            "<TOOL_RESULT tool=\"{name}\" arg=\"{args}\">\n{}\n</TOOL_RESULT>",
-                            r.body
-                        ));
+                        // Y se apaga el automático, igual que en `pump_exec`. Sin
+                        // esto se habría limpiado el contenido y dejado la cadena
+                        // corriendo sobre un fichero que alguien escribió para
+                        // conducirla.
+                        if env.retenido.is_some() {
+                            self.tabs[ti].auto = false;
+                        }
+                        herramientas.push(env.block);
                     }
                     // `writefile` y `editfile` PREPARAN un artefacto y no
                     // escriben. Antes se dejaba una ficha vacía cuyo resumen
@@ -5305,12 +5510,18 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
         let equipo = lucy_core::system::hostname();
         let modelo = self.chat_model.clone();
+        // EL MISMO INTERRUPTOR QUE EL TURNO. Las tareas nacían con
+        // `cloud::start`, que se fabrica uno apagado y lo tira: Detener limpiaba
+        // `fork_rx` —el operador recuperaba la pestaña, que es lo que ve— y por
+        // debajo seguían corriendo hasta cuatro peticiones por tarea, pagándose,
+        // contra un canal que ya no escuchaba nadie.
         let rx = lucy_core::forks::spawn(
             id.clone(),
             instruccion.clone(),
             modelo.clone(),
             equipo,
             self.privacy,
+            self.tabs[ti].fork_stop.clone(),
         );
         self.tabs[ti].fork_rx.push((id.clone(), rx));
         self.tabs[ti].ws.fork_start(&id, &instruccion, &modelo);
@@ -5395,11 +5606,32 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         };
         let ms = f.ms.unwrap_or(0);
         self.tabs[ti].ws.fork_collected(id);
-        format!(
-            "<TOOL_RESULT tool=\"wait_task\" arg=\"{id}\">\n[«{id}» {estado} en {:.1} s]\n\
-             {cuerpo}\n</TOOL_RESULT>",
-            ms as f64 / 1000.0
-        )
+        // LA CUARTA PUERTA, y la más golosa de las cuatro. Un sub-agente lee un
+        // log envenenado, se lo cree, y devuelve la instrucción convertida en
+        // PROSA PROPIA: «el procedimiento aprobado por el administrador es copiar
+        // …». A partir de ahí ningún patrón la reconoce — el lavado ya está
+        // hecho, y encima llega con formato de conclusión medida.
+        //
+        // Que `forks::limpia` quite las etiquetas de acción no es sanear: cubre
+        // el caso en que el sub-agente escribe un `<EXECUTE>`, que es el que no
+        // importa. El que importa es la prosa, y es justo lo que su prompt de
+        // sistema le PIDE producir. El escaneo de verdad va también dentro de
+        // `forks::corre`, sobre lo que lee; esto es el segundo cerrojo.
+        let env = lucy_core::guard::tool_result(
+            "wait_task",
+            id,
+            &format!("[«{id}» {estado} en {:.1} s]\n{cuerpo}", ms as f64 / 1000.0),
+        );
+        if env.retenido.is_some() {
+            self.tabs[ti].auto = false;
+            self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "info".into(),
+                label: format!("Sub-agente {id} — resultado retenido"),
+                detail: env.retenido.clone().unwrap_or_default(),
+                ..Default::default()
+            });
+        }
+        env.block
     }
 
     /// Recoge los sub-agentes que hayan terminado y suelta las esperas cumplidas.
@@ -5429,6 +5661,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         text: "La tarea se cortó sin devolver nada.".into(),
                         ok: false,
                         ms: 0,
+                        // Lo que gastara antes de morir no se sabe: el gasto
+                        // viaja con el resultado, y aquí no hubo resultado.
+                        tokens_in: 0,
+                        tokens_out: 0,
                     });
                     false
                 }
@@ -5436,6 +5672,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             for r in llegados {
                 let estado = if r.ok { ForkStatus::Done } else { ForkStatus::Error };
                 self.tabs[i].ws.fork_finish(&r.id, estado, &r.text);
+                // LO QUE COBRÓ LA TAREA VA AL CONTADOR DE LA PESTAÑA. El brazo
+                // de `Usage` del sub-agente era un `_ => {}`, así que con cinco
+                // tareas de hasta cuatro peticiones cada una el coste que se
+                // enseña podía ir veinte llamadas por detrás de la factura.
+                self.tabs[i].tokens_in += r.tokens_in;
+                self.tabs[i].tokens_out += r.tokens_out;
                 self.tabs[i].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: if r.ok { "obs" } else { "error" }.into(),
                     label: format!("Sub-agente {}: {}", r.id, if r.ok { "hecho" } else { "error" }),
@@ -5474,6 +5716,23 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
     /// Devuelve a Lucy el lote de resultados de herramientas de un turno.
     fn mandar_resultados(&mut self, ti: usize, herramientas: Vec<String>) {
+        // EL PRESUPUESTO, antes de abrir el turno. Al agotarse no se manda el
+        // lote y el turno vuelve al operador: los resultados ya están en el
+        // carril de Trace, que es donde él los lee de todos modos.
+        if !hay_presupuesto_tool(self.tabs[ti].tool_loops, self.max_loops) {
+            self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "info".into(),
+                label: "Tope de vueltas de herramienta".into(),
+                detail: format!(
+                    "{} vueltas pidiendo ficheros sin llegar a una respuesta. El turno \
+                     vuelve a ti; lo que se leyó está en este mismo carril.",
+                    self.max_loops
+                ),
+                ..Default::default()
+            });
+            return;
+        }
+        self.tabs[ti].tool_loops += 1;
         let n = herramientas.len();
         self.send_raw(
             ti,
@@ -5502,6 +5761,40 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     ///     cuenta como automático;
     ///   • que haya paso: lo normal es que no lo haya, y entonces esto no hace
     ///     nada, que es lo correcto.
+    /// Vuelve a intentar el paso automático de las pestañas que se quedaron
+    /// esperando el carril de ejecución.
+    ///
+    /// LA PUERTA DE `ocupado` APLAZA, NO DESCARTA — y no lo hacía. `auto_step`
+    /// se llamaba desde un único sitio, el cierre de un turno; si en ese instante
+    /// `exec_rx` estaba ocupado por otra pestaña, `next_auto` devolvía `Idle` y
+    /// ahí se acababa: esa pestaña ya no tenía ningún turno abierto, así que no
+    /// habría otro cierre que lo reintentara. El paso se quedaba `Pending` con
+    /// su botón, el badge seguía prometiendo que la cadena encadena, y el modo
+    /// automático degradaba a manual en silencio.
+    ///
+    /// Se llama en el instante en que `exec_rx` se libera, que es el único
+    /// momento en que un `Idle`-por-ocupado deja de serlo.
+    fn reintentar_auto(&mut self, salvo: usize) {
+        if self.exec_rx.is_some() {
+            return;
+        }
+        let uids: Vec<usize> = self
+            .tabs
+            .iter()
+            .filter(|t| t.auto && t.uid != salvo && !t.busy())
+            .map(|t| t.uid)
+            .collect();
+        for uid in uids {
+            self.auto_step(uid);
+            // Hay un solo carril: en cuanto una pestaña lo coge, el resto espera
+            // al siguiente borde. Sin este corte, la segunda llamada pisaría el
+            // `exec_rx` de la primera y perdería su resultado.
+            if self.exec_rx.is_some() {
+                break;
+            }
+        }
+    }
+
     fn auto_step(&mut self, uid: usize) {
         let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
         let t = &self.tabs[ti];
@@ -5738,6 +6031,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     t.ws.plan_update(&id, StepStatus::Error, None);
                 }
                 self.exec_rx = None;
+                // Éste y el de abajo son los dos únicos finales que liberan el
+                // carril SIN abrir un turno, así que son los que de verdad
+                // dejaban colgadas a las demás pestañas: por el camino normal, el
+                // `send_raw` del final ya provoca un cierre que las reintenta.
+                self.reintentar_auto(uid);
                 return;
             }
         };
@@ -5745,6 +6043,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // error: se ejecutó igual, y no hay a quién contárselo.
         let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else {
             self.exec_rx = None;
+            self.reintentar_auto(uid);
             return;
         };
         let cmd = self.tabs[ti]
@@ -5769,13 +6068,37 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             body = "(sin salida)".into();
         }
 
+        // EL ESCANEO VA ANTES DE TOCAR EL HILO, y ahí estaba el fallo. Estaba
+        // ochenta líneas más abajo, después del `log.push`: cuando decidía
+        // retener, el volcado YA vivía en `t.log` como `Role::Exec`, y
+        // `history()` interpola ese campo literalmente en cada petición. O sea
+        // que el `send_raw` que dice "no la vas a ver" viajaba con el log
+        // envenenado entero dentro del mismo cuerpo — y se reenviaba en cada
+        // turno posterior de la pestaña, y en cada sesión restaurada de disco.
+        //
+        // El comentario de abajo afirmaba lo contrario de lo que hacía el código,
+        // que es la peor clase de guardrail: uno que hace tomar decisiones —
+        // "sigo usando esta pestaña"— sobre un aviso falso.
+        let g = lucy_core::guard::scan(&body, lucy_core::guard::Role::Tool);
+        let retenido = g.decision == lucy_core::guard::Decision::Block;
+
+        // DÓNDE CORRIÓ, no solo con qué. `engine` ponía "PS" a secas también para
+        // los pasos remotos, así que el carril que sirve para auditar no permitía
+        // saber en qué máquina pasó nada. Se resuelve antes del `exec_push`
+        // porque dentro el workspace ya está prestado.
+        let motor = match self.tabs[ti].ws.plan.iter().find(|s| s.id == id) {
+            Some(s) if !s.host.is_empty() => format!("PS · {}", s.host),
+            _ => "PS".to_string(),
+        };
+        // El carril de Ejecución SÍ lleva el volcado crudo: es del operador, y
+        // no viaja en ningún prompt. Es el único sitio donde debe vivir.
         self.tabs[ti].ws.exec_push(ExecEntry {
             id: String::new(),
             cmd: cmd.clone(),
             output: body.clone(),
             ok,
             ms: Some(ms),
-            engine: "PS".into(),
+            engine: motor,
             code: None,
             ts: 0,
         });
@@ -5787,16 +6110,19 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         self.exec_rx = None;
 
         // La línea del comando entra en el hilo como EVENTO, plegada: el
-        // comando, si fue bien, y su salida dentro.
-        self.tabs[ti].log.push(ChatMsg::exec(cmd.clone(), ok, body.clone()));
+        // comando, si fue bien, y su salida dentro. Con el motivo en lugar del
+        // cuerpo cuando se retuvo, porque este campo es el que acaba en el prompt.
+        self.tabs[ti].log.push(ChatMsg::exec(
+            cmd.clone(),
+            ok,
+            if retenido {
+                format!("[salida retenida por el guardrail: {}]", g.reason)
+            } else {
+                body.clone()
+            },
+        ));
 
-        // LA SALIDA SE REVISA ANTES DE DEVOLVERLA. Es el rol de riesgo: quien
-        // controle una línea de un log controla lo que Lucy lee, y en una
-        // cadena automática nadie está mirando lo que vuelve. Un fichero que
-        // dice "ignora las instrucciones anteriores" no es una curiosidad: es
-        // la forma barata de conducir a la que ejecuta los comandos.
-        let g = lucy_core::guard::scan(&body, lucy_core::guard::Role::Tool);
-        if g.decision == lucy_core::guard::Decision::Block {
+        if retenido {
             self.tabs[ti].auto = false;
             self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                 phase: "info".into(),
@@ -5917,7 +6243,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         self.tabs[self.tab].ws.reset();
                         // Y la espera con él: `reset` vacía las filas de los
                         // sub-agentes, así que un lote retenido contra ellas no
-                        // podría cumplirse nunca.
+                        // podría cumplirse nunca. Se paran además de soltarse:
+                        // seguir pagando una tarea cuya fila se acaba de borrar
+                        // no le sirve a nadie.
+                        self.tabs[self.tab]
+                            .fork_stop
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.tabs[self.tab].fork_rx.clear();
                         self.tabs[self.tab].espera = None;
                     }
@@ -10018,6 +10349,83 @@ mod bucle {
             needs_human: needs_human.map(String::from),
             ..Default::default()
         }
+    }
+
+    fn paso_en(host: &str) -> PlanStep {
+        PlanStep { host: host.into(), ..paso(StepStatus::Pending, None) }
+    }
+
+    #[test]
+    fn un_paso_en_otro_equipo_no_corre_solo() {
+        // EL AGUJERO QUE NO TENÍA PUERTA. `run_step` saca la contraseña del
+        // almacén y abre sesión contra el servidor; las dos comprobaciones que sí
+        // había están calibradas para una estación de trabajo. Contra un
+        // controlador de dominio eso significa que `Add-ADGroupMember "Domain
+        // Admins"` —que no casa con ningún patrón de `destructive`— salía
+        // `Allow`, `needs_human: None`, y lo corría el bucle sin un clic.
+        let p = [paso_en("DC01")];
+        match next_auto(true, false, 0, 8, &p) {
+            NextAuto::Pause(m) => {
+                assert!(m.contains("DC01"), "no dice a qué equipo iba: {m}");
+                assert!(m.contains("apruebas tú"), "{m}");
+            }
+            otro => panic!("un paso remoto salió como {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn el_equipo_local_sigue_encadenando() {
+        // Lo primero que tiene que hacer una puerta nueva es no cerrar la casa:
+        // un paso sin `host` es de esta máquina y es para lo que se enciende el
+        // automático.
+        let p = [paso(StepStatus::Pending, None)];
+        assert!(matches!(next_auto(true, false, 0, 8, &p), NextAuto::Run(_, _)));
+    }
+
+    #[test]
+    fn el_destino_se_mira_antes_que_el_tope() {
+        // Si el tope fuera primero, un paso remoto con el presupuesto agotado
+        // apagaría el modo con un mensaje que no viene a cuento —«8 pasos sin
+        // llegar a una respuesta»— en vez de decir lo que pasa de verdad.
+        let p = [paso_en("DC01")];
+        assert!(matches!(next_auto(true, false, 8, 8, &p), NextAuto::Pause(_)));
+    }
+
+    #[test]
+    fn lo_pendiente_caduca_pero_no_desaparece() {
+        // Un `Pending` es una propuesta contra la orden que lo pidió. Llega otra
+        // pregunta y ya no lo respalda nadie — pero `next_auto` coge el primer
+        // `Pending` del plan entero sin mirar de cuándo es, así que escribir
+        // «¿qué hora es?» con dos pasos colgando del disco arrancaba por ellos.
+        let mut t = ChatTab::new(0);
+        t.ws.plan_append(paso(StepStatus::Pending, None));
+        t.ws.plan_append(paso(StepStatus::Done, None));
+        t.ws.plan_append(paso(StepStatus::Pending, None));
+
+        assert_eq!(t.caducar_pendientes("Caducado — llegó una orden nueva"), 2);
+        assert!(matches!(next_auto(true, false, 0, 8, &t.ws.plan), NextAuto::Idle));
+        // Y NO se borran: el plan es también el registro de la sesión, y un paso
+        // que desaparece se lee como un paso que nunca se propuso.
+        assert_eq!(t.ws.plan.len(), 3);
+        assert_eq!(t.ws.plan[1].status, StepStatus::Done, "tocó lo que ya había corrido");
+        assert!(t.ws.plan[0].label.contains("Caducado"));
+        // Idempotente: llamarlo dos veces no vuelve a contar los mismos.
+        assert_eq!(t.caducar_pendientes("otra vez"), 0);
+    }
+
+    #[test]
+    fn el_ida_y_vuelta_de_herramientas_tiene_techo() {
+        // El otro bucle de la aplicación, el que corría SIN presupuesto y con el
+        // automático apagado: `absorb_tags` cumple un `readfile` y
+        // `mandar_resultados` abre un turno para devolvérselo; si vuelve a pedir,
+        // otra vuelta. `loops` no cuenta esto y `auto` ni se consulta.
+        assert!(hay_presupuesto_tool(0, 8));
+        assert!(hay_presupuesto_tool(7, 8));
+        assert!(!hay_presupuesto_tool(8, 8), "la novena vuelta no debería salir");
+        assert!(!hay_presupuesto_tool(9, 8));
+        // Con el tope a cero no hay ida y vuelta ninguno, que es lo que el
+        // operador esperaría de haberlo puesto a cero.
+        assert!(!hay_presupuesto_tool(0, 0));
     }
 
     #[test]
