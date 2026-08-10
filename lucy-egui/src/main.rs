@@ -6140,6 +6140,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                  Ejecución y no propongas más comandos sobre este contenido.",
                 g.reason
             ));
+            // DESPUÉS de la decisión del guardrail y no en el `exec_rx = None` de
+            // arriba: reintentar allí lanzaría el siguiente paso antes de que
+            // esta rama pudiera apagar el automático, que es justo lo que existe
+            // para impedir. `salvo` es esta pestaña — ya tiene turno abierto y su
+            // propio cierre la reintenta; las otras son las que llevaban
+            // esperando el carril.
+            self.reintentar_auto(uid);
             return;
         }
 
@@ -6165,6 +6172,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             "He ejecutado el comando que propusiste y esta es su salida literal. \
              {cola}\n\n$ {cmd}\n\n{body}"
         ));
+        // Y el carril queda libre para quien lo esperaba. Esta pestaña no —
+        // acaba de abrir turno y su propio cierre la reintenta—; las otras
+        // llevaban paradas desde que `next_auto` les dijo `Idle` por ocupado, y
+        // ese `Idle` no tenía quien lo deshiciera.
+        self.reintentar_auto(uid);
     }
 
     /// Cierra el turno en el workspace cuando el stream termina.
