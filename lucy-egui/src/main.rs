@@ -2483,6 +2483,17 @@ struct App {
     /// Lectura remota en vuelo. Solo una: son procesos de PowerShell o de ssh.
     lv_rx: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
     lv_desde: Option<Instant>,
+    /// Los logs que se han encontrado en el equipo, si se ha explorado.
+    ///
+    /// EXISTE PORQUE TECLEAR LA RUTA DE MEMORIA NO ES UN FLUJO. Para leer el log
+    /// de un servidor había que acordarse de la ruta exacta, y una letra de más
+    /// devuelve «no existe» sin decir cuál era la buena — así que el operador
+    /// acababa abriendo una sesión aparte solo para mirar dónde estaban los
+    /// ficheros, que es justo el trabajo que esta vista tenía que ahorrarle.
+    lv_files: Vec<lucy_core::logs::RemoteFile>,
+    lv_files_rx: Option<std::sync::mpsc::Receiver<Result<Vec<lucy_core::logs::RemoteFile>, String>>>,
+    /// La carpeta que se está explorando, para poder decirlo mientras carga.
+    lv_dir: String,
     // sistema (métricas live vía lucy_core::system)
     sys: lucy_core::system::SysMonitor,
     sys_last: Instant,
@@ -2732,6 +2743,9 @@ impl App {
             lv_next: Instant::now(),
             lv_rx: None,
             lv_desde: None,
+            lv_files: Vec::new(),
+            lv_files_rx: None,
+            lv_dir: String::new(),
             sys: lucy_core::system::SysMonitor::new(),
             sys_last: Instant::now(),
             net: lucy_core::system::NetRate::default(),
@@ -6997,8 +7011,127 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     );
                 });
         }
+        // El explorador va ENTRE la barra y el flujo, y solo cuando hace falta:
+        // en un equipo remoto del que aún no se ha elegido fichero. Una vez hay
+        // líneas en pantalla, ocupar sitio con la lista de carpetas taparía justo
+        // lo que se vino a leer.
+        if self.lv_mode == LvMode::Archivo && !self.lv_host.is_empty() && self.lv_rows.is_empty() {
+            self.lv_explorador(ui);
+        }
         ui.add_space(6.0);
         self.lv_stream(ui);
+    }
+
+    /// Qué logs tiene este equipo. Carpetas sugeridas y lo que hay dentro.
+    fn lv_explorador(&mut self, ui: &mut egui::Ui) {
+        let Some(h) = self.remote_hosts.iter().find(|x| x.id == self.lv_host).cloned() else {
+            return;
+        };
+        let mut explorar: Option<String> = None;
+        let mut abrir: Option<String> = None;
+
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(theme::instrument_label(
+            &format!("Dónde mirar en {}", h.name),
+            theme::faint(),
+        )));
+        ui.add_space(6.0);
+        // Las carpetas dependen del sistema: ofrecerle `/var/log` a un Windows
+        // sería prometer un listado que vuelve vacío, y el operador no sabría si
+        // es que no hay logs o que la ruta no aplica a esa máquina.
+        ui.horizontal_wrapped(|ui| {
+            for (nombre, ruta) in lucy_core::logs::common_dirs(&h) {
+                if lv_chip(ui, nombre, 0, self.lv_dir == *ruta) {
+                    explorar = Some((*ruta).to_string());
+                }
+                ui.add_space(6.0);
+            }
+        });
+
+        if self.lv_files_rx.is_some() {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!("buscando en {}…", self.lv_dir))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::txt3()),
+            );
+        } else if !self.lv_files.is_empty() {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} ficheros en {} — el más reciente primero",
+                    self.lv_files.len(),
+                    self.lv_dir
+                ))
+                .size(theme::FS_CAPTION)
+                .color(theme::txt3()),
+            );
+            ui.add_space(4.0);
+            // Altura acotada: con doscientos ficheros esto se comería la pantalla
+            // entera y el flujo de abajo dejaría de verse.
+            egui::ScrollArea::vertical()
+                .max_height(190.0)
+                .auto_shrink([false, false])
+                .id_salt("lv-files")
+                .show(ui, |ui| {
+                    for f in &self.lv_files {
+                        let r = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!(
+                                    "{}   {}   {}",
+                                    f.modified, f.size, f.path
+                                ))
+                                .monospace()
+                                .size(theme::FS_CAPTION)
+                                .color(theme::txt2()),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                        );
+                        if r.hovered() {
+                            ui.painter().rect_filled(
+                                r.rect.expand2(egui::vec2(4.0, 1.0)),
+                                egui::Rounding::same(4.0),
+                                theme::bg3(),
+                            );
+                        }
+                        if r.on_hover_text("Leer la cola de este fichero").clicked() {
+                            abrir = Some(f.path.clone());
+                        }
+                    }
+                });
+        } else if !self.lv_dir.is_empty() {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!("No hay ficheros de log en {}.", self.lv_dir))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+            );
+        }
+
+        if let Some(d) = explorar {
+            self.lv_explorar(&h, &d);
+        }
+        if let Some(p) = abrir {
+            self.lv_path = p;
+            self.lv_cargar();
+        }
+    }
+
+    fn lv_explorar(&mut self, h: &lucy_core::hosts::Host, dir: &str) {
+        if self.lv_files_rx.is_some() {
+            return;
+        }
+        self.lv_dir = dir.to_string();
+        self.lv_files.clear();
+        self.lv_error.clear();
+        let (host, carpeta) = (h.clone(), dir.to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let pw = lucy_core::hosts::password(&host.id).unwrap_or_default();
+            let _ = tx.send(lucy_core::logs::list_remote(&host, &pw, &carpeta));
+        });
+        self.lv_files_rx = Some(rx);
     }
 
     fn lv_cabecera(&mut self, ui: &mut egui::Ui) {
@@ -7239,14 +7372,29 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 self.lv_host_menu = false;
                 let cambio = id != self.lv_host;
                 self.lv_host = id;
-                if cambio {
-                    // Las filas eran del equipo anterior. Dejarlas mientras se
-                    // lee el nuevo enseñaría el log de una máquina bajo el
-                    // nombre de otra, que es peor que no enseñar nada.
-                    self.lv_rows.clear();
-                    self.lv_error.clear();
+                if !cambio {
+                    return false;
                 }
-                cambio && !self.lv_path.trim().is_empty()
+                // Las filas eran del equipo anterior. Dejarlas mientras se lee el
+                // nuevo enseñaría el log de una máquina bajo el nombre de otra,
+                // que es peor que no enseñar nada.
+                self.lv_rows.clear();
+                self.lv_files.clear();
+                self.lv_error.clear();
+                if !self.lv_path.trim().is_empty() {
+                    return true;
+                }
+                // Sin ruta escrita, elegir equipo EXPLORA. Quien abre este
+                // desplegable ha venido a mirar los logs de esa máquina, y
+                // dejarle un campo en blanco delante es devolverle la pregunta
+                // que traía — cuál era la ruta.
+                let h = self.remote_hosts.iter().find(|x| x.id == self.lv_host).cloned();
+                if let Some(h) = h {
+                    if let Some((_, dir)) = lucy_core::logs::common_dirs(&h).first() {
+                        self.lv_explorar(&h, dir);
+                    }
+                }
+                false
             }
             None => false,
         }
@@ -7489,6 +7637,31 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let _ = lucy_core::audit::ensure_schema().and_then(|()| lucy_core::audit::record(&e));
     }
 
+    /// Abre el visor de logs sobre un equipo concreto, ya explorando.
+    ///
+    /// Es lo que se pide desde NexShell. Deja la vista lista para elegir fichero
+    /// —modo Archivo, ese equipo, y la primera carpeta sugerida ya buscándose—
+    /// en vez de dejar la ruta en blanco: llegar aquí con un campo vacío es el
+    /// mismo callejón del que venimos, solo que dos clics más allá.
+    fn lv_ir_a_equipo(&mut self, id: &str) {
+        let Some(h) = self.remote_hosts.iter().find(|x| x.id == id).cloned() else { return };
+        self.view = View::LogViewer;
+        self.lv_mode = LvMode::Archivo;
+        self.lv_host = id.to_string();
+        self.lv_host_menu = false;
+        // Lo que hubiera era de otro equipo o de la auditoría. Dejarlo mientras
+        // se explora el nuevo enseñaría el log de una máquina bajo el nombre de
+        // otra, que es peor que no enseñar nada.
+        self.lv_rows.clear();
+        self.lv_files.clear();
+        self.lv_path.clear();
+        self.lv_error.clear();
+        self.lv_last.clear();
+        if let Some((_, dir)) = lucy_core::logs::common_dirs(&h).first() {
+            self.lv_explorar(&h, dir);
+        }
+    }
+
     /// Trae lo que toque según el modo. Es el único sitio que escribe `lv_rows`.
     fn lv_cargar(&mut self) {
         self.lv_error.clear();
@@ -7634,6 +7807,25 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     self.lv_rx = None;
                     self.lv_desde = None;
                     self.lv_error = "La lectura remota se cortó sin devolver nada.".into();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(rx) = &self.lv_files_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.lv_files_rx = None;
+                    match r {
+                        Ok(f) => self.lv_files = f,
+                        Err(e) => {
+                            self.lv_files.clear();
+                            self.lv_error = format!("No se pudo listar «{}»: {e}", self.lv_dir);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.lv_files_rx = None;
+                    self.lv_error = "La exploración se cortó sin devolver nada.".into();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
@@ -9914,6 +10106,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             let mut editar = None;
             let mut borrar = None;
             let mut elegir = None;
+            let mut ver_logs = None;
             for h in &self.remote_hosts {
                 let sel = self.nx_host.as_deref() == Some(h.id.as_str());
                 let color = color_hex(&h.color).unwrap_or(theme::txt3());
@@ -9936,6 +10129,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // iconos permanentes: con ocho equipos son dieciséis botones
                 // pidiendo atención para algo que se hace una vez al mes.
                 r.context_menu(|ui| {
+                    // VER SUS LOGS, desde donde ya se está mirando ese equipo.
+                    // Sin esto había que irse al visor, cambiar a modo Archivo,
+                    // abrir el desplegable y volver a encontrar la misma máquina
+                    // — cuatro pasos para algo que se pide estando ya encima de
+                    // la fila que la nombra.
+                    if h.protocol.can_shell() && ui.button("Ver sus logs").clicked() {
+                        ver_logs = Some(h.id.clone());
+                        ui.close_menu();
+                    }
                     if ui.button("Editar").clicked() {
                         editar = Some(h.clone());
                         ui.close_menu();
@@ -9948,6 +10150,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
             if let Some(id) = elegir {
                 self.nx_host = Some(id);
+            }
+            if let Some(id) = ver_logs {
+                self.lv_ir_a_equipo(&id);
             }
             if let Some(h) = editar {
                 self.nx_edit_pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
