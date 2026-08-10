@@ -123,6 +123,121 @@ impl Level {
             Level::Info
         }
     }
+
+    /// El nivel de una línea de UN LOG CUALQUIERA, no de `lucy_app.log`.
+    ///
+    /// `of` busca `[NIVEL]` entre corchetes porque ése es el formato que escribe
+    /// Lucy. Sobre un log de IIS, un syslog o la salida de un servicio no hay
+    /// corchetes en ninguna parte, así que `of` devuelve `Info` PARA TODO: el
+    /// visor pinta tres mil líneas del mismo color y el contador de errores
+    /// marca cero mientras el fichero está lleno de fallos. Es el único sitio
+    /// donde un visor de logs no puede equivocarse.
+    ///
+    /// Se mira primero lo que `of` reconoce, para que un `lucy_app.log` leído por
+    /// el modo Archivo dé exactamente lo mismo que leído por el modo Auditoría —
+    /// dos criterios distintos sobre el mismo fichero es cómo se llega a que la
+    /// misma línea sea un aviso en una pestaña y un error en la de al lado.
+    ///
+    /// PALABRAS ENTERAS. Sin eso, `error` casa dentro de `no-errors`, `sin
+    /// errores` y `ErrorActionPreference`, y prácticamente todo el fichero sale
+    /// en rojo.
+    pub fn sniff(line: &str) -> Level {
+        let etiquetado = Level::of(line);
+        if etiquetado != Level::Info {
+            return etiquetado;
+        }
+        // Español e inglés: los logs de una máquina Windows en español mezclan
+        // los dos, y a menudo en la misma línea.
+        const ERROR: [&str; 10] = [
+            "error", "errores", "fatal", "fail", "failed", "failure", "denied",
+            "exception", "denegado", "critical",
+        ];
+        const WARN: [&str; 8] = [
+            "warn", "warning", "advertencia", "advertencias", "aviso", "avisos",
+            "deprecated", "obsoleto",
+        ];
+        let bajo = line.to_lowercase();
+        for p in palabras(&bajo) {
+            if ERROR.contains(&p) {
+                return Level::Error;
+            }
+        }
+        for p in palabras(&bajo) {
+            if WARN.contains(&p) {
+                return Level::Warn;
+            }
+        }
+        Level::Info
+    }
+}
+
+/// Parte una línea en palabras, quedándose solo con letras y dígitos.
+///
+/// Por carácter alfanumérico UNICODE y no ASCII: `advertencia` no lleva tilde
+/// pero `conexión` sí, y partir por `is_ascii_alphanumeric` cortaría la palabra
+/// en la tilde y dejaría dos trozos que no casan con nada.
+fn palabras(bajo: &str) -> impl Iterator<Item = &str> {
+    bajo.split(|c: char| !c.is_alphanumeric()).filter(|p| !p.is_empty())
+}
+
+/// El comando que hay que correr en un equipo remoto para leer la cola de un log.
+///
+/// SEPARADO DE LA EJECUCIÓN A PROPÓSITO. Es donde vive el escapado de la ruta, y
+/// un escapado mal hecho no da un error: da una ejecución de más. Así se puede
+/// probar sin un servidor delante, que es la diferencia entre tener test y no
+/// tenerlo — el mismo motivo por el que `winrm_wrapper` ya está aparte.
+pub fn remote_script(h: &crate::hosts::Host, path: &str, lines: usize) -> Result<String, String> {
+    if !h.protocol.can_shell() {
+        return Err(format!(
+            "«{}» está dado de alta como {} y por ahí no se leen ficheros. Hace falta \
+             WinRM o SSH.",
+            h.name,
+            h.protocol.label()
+        ));
+    }
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("Falta la ruta del fichero.".into());
+    }
+    let lines = lines.clamp(1, MAX_LINES);
+    Ok(match h.protocol {
+        // `-ErrorAction Stop` DENTRO del ScriptBlock. El `$ErrorActionPreference`
+        // del envoltorio de WinRM es local al proceso que lanza la conexión, no
+        // al bloque que corre al otro lado: sin esto, una ruta que no existe
+        // vuelve con código de salida CORRECTO y sin líneas, y el visor pinta
+        // «log vacío» donde debería decir «ese fichero no está».
+        crate::hosts::Protocol::Winrm => format!(
+            "Get-Content -Path '{}' -Tail {lines} -ErrorAction Stop",
+            crate::hosts::ps_quote(path)
+        ),
+        _ => format!("tail -n {lines} '{}'", crate::hosts::sh_quote(path)),
+    })
+}
+
+/// La cola de un log en un equipo remoto, en orden de lectura.
+///
+/// EN ORDEN DE LECTURA, igual que `tail`, y no del revés. Que lo más reciente se
+/// enseñe arriba es una decisión de la vista; devolverlo ya invertido desde aquí
+/// obligaría a quien quisiera lo contrario a volver a darle la vuelta, y haría
+/// que las dos funciones de este módulo con el mismo nombre devolvieran cosas
+/// distintas.
+pub fn tail_remote(
+    h: &crate::hosts::Host,
+    password: &str,
+    path: &str,
+    lines: usize,
+) -> Result<Vec<String>, String> {
+    let script = remote_script(h, path, lines)?;
+    let (out, err, ok) = crate::hosts::run_remote(h, password, &script)?;
+    if !ok {
+        let motivo = err.trim();
+        return Err(if motivo.is_empty() {
+            format!("No se pudo leer '{path}' en {}.", h.name)
+        } else {
+            motivo.to_string()
+        });
+    }
+    Ok(out.lines().map(|l| l.trim_end_matches('\r').to_string()).collect())
 }
 
 #[cfg(test)]
@@ -189,6 +304,117 @@ mod tests {
     fn a_missing_file_says_which_one() {
         let err = tail(Path::new("C:/no/existe/lucy_x.log"), 10).expect_err("debe fallar");
         assert!(err.contains("lucy_x.log"), "el error debe nombrar la ruta: {err}");
+    }
+
+    fn host(protocol: crate::hosts::Protocol) -> crate::hosts::Host {
+        crate::hosts::Host {
+            id: "h1".into(),
+            name: "WIN-AD".into(),
+            os: "windows".into(),
+            protocol,
+            host: "10.0.0.5".into(),
+            username: "admin".into(),
+            port: 5985,
+            ssh_key_path: String::new(),
+            tags: Vec::new(),
+            color: "#3dd6a4".into(),
+            category: crate::hosts::Category::Shell,
+            db_type: None,
+        }
+    }
+
+    #[test]
+    fn un_log_sin_corchetes_no_sale_todo_en_info() {
+        // `of` busca `[NIVEL]` porque ése es el formato de lucy_app.log. Sobre un
+        // IIS o un syslog no hay corchetes en ninguna parte, así que devolvía
+        // Info PARA TODO: el visor pintaba tres mil líneas del mismo color y el
+        // contador de errores marcaba cero con el fichero lleno de fallos.
+        assert_eq!(Level::sniff("sshd: failed password for admin"), Level::Error);
+        assert_eq!(Level::sniff("kernel: I/O exception on sda"), Level::Error);
+        assert_eq!(Level::sniff("acceso denegado al recurso"), Level::Error);
+        assert_eq!(Level::sniff("TLS 1.0 is deprecated"), Level::Warn);
+        assert_eq!(Level::sniff("Advertencia: quedan 2 GB"), Level::Warn);
+        assert_eq!(Level::sniff("reload completado en 4.2 s"), Level::Info);
+    }
+
+    #[test]
+    fn sniff_no_tine_de_rojo_las_lineas_que_dicen_que_todo_va_bien() {
+        // Buscar `error` como subcadena casa dentro de `no-errors`,
+        // `ErrorActionPreference` y `sin errores`, y entonces prácticamente todo
+        // el fichero sale en rojo — que es igual de inútil que todo en gris.
+        assert_eq!(Level::sniff("reload completado — 0 no-errors"), Level::Info);
+        assert_eq!(Level::sniff("set ErrorActionPreference=Stop"), Level::Info);
+        // Pero la palabra suelta sí cuenta, aunque venga pegada a puntuación.
+        assert_eq!(Level::sniff("resultado: ERROR."), Level::Error);
+        assert_eq!(Level::sniff("[error] algo"), Level::Error);
+    }
+
+    #[test]
+    fn el_mismo_fichero_se_lee_igual_por_los_dos_caminos() {
+        // Una línea de lucy_app.log abierta en el modo Archivo tiene que dar el
+        // mismo nivel que en el de Auditoría. Dos criterios sobre el mismo
+        // fichero es cómo se llega a que la misma línea sea un aviso en una
+        // pestaña y un error en la de al lado.
+        for l in [
+            "[2026-01-01] [ERROR] fallo",
+            "[2026-01-01] [WARN] ojo",
+            "[2026-01-01] [WARNING] ojo",
+            "[2026-01-01] [INFO] arranque",
+        ] {
+            assert_eq!(Level::sniff(l), Level::of(l), "{l}");
+        }
+    }
+
+    #[test]
+    fn la_ruta_no_puede_cerrar_la_comilla_que_la_envuelve() {
+        // No da un error: da una ejecución de más, que es la clase de fallo que
+        // solo se descubre mirando qué corrió.
+        let veneno = "C:\\logs\\a'; Invoke-Expression 'calc'; $x='";
+        let s = remote_script(&host(crate::hosts::Protocol::Winrm), veneno, 200).unwrap();
+        assert!(s.contains("''"), "no dobló la comilla: {s}");
+        // El literal que abre `-Path '` tiene que seguir abierto hasta el que lo
+        // cierra: un número IMPAR de comillas sueltas significaría lo contrario.
+        assert_eq!(s.matches('\'').count() % 2, 0, "{s}");
+
+        let posix = remote_script(&host(crate::hosts::Protocol::Ssh), "/var/log/a'; id; '", 50)
+            .unwrap();
+        assert!(posix.contains("'\\''"), "escapado POSIX mal hecho: {posix}");
+    }
+
+    #[test]
+    fn una_ruta_que_no_existe_tiene_que_fallar_y_no_volver_vacia() {
+        // `-ErrorAction Stop` DENTRO del ScriptBlock. El
+        // `$ErrorActionPreference` del envoltorio es local al proceso que lanza
+        // la conexión, no al bloque que corre al otro lado: sin esto, una ruta
+        // inexistente vuelve con código de salida correcto y cero líneas, y el
+        // visor dice «log vacío» donde debería decir «ese fichero no está».
+        let s = remote_script(&host(crate::hosts::Protocol::Winrm), "C:\\x.log", 200).unwrap();
+        assert!(s.contains("-ErrorAction Stop"), "{s}");
+    }
+
+    #[test]
+    fn cada_protocolo_lleva_su_comando_y_los_demas_se_rechazan() {
+        let win = remote_script(&host(crate::hosts::Protocol::Winrm), "C:\\x.log", 10).unwrap();
+        assert!(win.starts_with("Get-Content"), "{win}");
+        let ssh = remote_script(&host(crate::hosts::Protocol::Ssh), "/var/log/syslog", 10).unwrap();
+        assert!(ssh.starts_with("tail -n 10 "), "{ssh}");
+
+        // Un equipo dado de alta como base de datos no lee ficheros, y decirlo
+        // es mejor que mandarle un `tail` que no va a entender.
+        let e = remote_script(&host(crate::hosts::Protocol::Redis), "/var/log/x", 10).unwrap_err();
+        assert!(e.contains("WinRM o SSH"), "{e}");
+    }
+
+    #[test]
+    fn el_tope_de_lineas_se_respeta_tambien_en_remoto() {
+        // Sin esto, pedir un millón de líneas trae el fichero entero por la red
+        // y lo mete en memoria — el mismo tope que ya se aplica en local.
+        let s = remote_script(&host(crate::hosts::Protocol::Ssh), "/var/log/x", 999_999).unwrap();
+        assert!(s.contains(&format!("tail -n {MAX_LINES} ")), "{s}");
+        // Y cero líneas no es una petición válida: devolvería un comando que no
+        // hace nada y una lista vacía indistinguible de un log vacío.
+        let z = remote_script(&host(crate::hosts::Protocol::Ssh), "/var/log/x", 0).unwrap();
+        assert!(z.contains("tail -n 1 "), "{z}");
     }
 
     #[test]

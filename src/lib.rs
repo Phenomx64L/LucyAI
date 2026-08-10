@@ -49,6 +49,9 @@ pub mod keys;
 /// Lectura de la cola de un log. El MECANISMO; la política de rutas se queda
 /// en quien expone el comando.
 pub mod logs;
+/// El registro de auditoría. La tabla la creó la app Tauri y el shell nativo
+/// ejecutaba comandos sin dejar constancia de ninguno.
+pub mod audit;
 /// Fundir memorias que dicen lo mismo. Estaba escrito y nadie lo llamaba nunca.
 pub mod consolidate;
 /// Lo que distingue a NexShell de una consola: decidir si lo escrito es un
