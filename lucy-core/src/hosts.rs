@@ -422,6 +422,29 @@ pub fn run_remote(
     Err("la ejecución remota solo está implementada en Windows".into())
 }
 
+/// Un texto listo para ir entre comillas simples en PowerShell.
+///
+/// PowerShell escapa la comilla simple DOBLÁNDOLA, no con barra invertida. Sin
+/// esto, una ruta como `C:\logs\a'; Invoke-Expression 'calc'; $x='` cierra el
+/// literal y lo que sigue se ejecuta — y no da error: da una ejecución de más,
+/// que es la clase de fallo que solo se descubre mirando qué corrió.
+///
+/// Existe como función porque ahora hay DOS sitios que lo necesitan —el
+/// envoltorio de WinRM y la cola de un log remoto— y dos copias del mismo
+/// escapado acaban discrepando el día que alguien arregla una.
+pub fn ps_quote(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Lo mismo para un shell POSIX, donde la receta es otra.
+///
+/// Se cierra la comilla, se mete una comilla escapada y se vuelve a abrir:
+/// `'\''`. Doblarla como en PowerShell aquí no escapa nada — deja dos literales
+/// pegados y el resto de la línea al aire.
+pub fn sh_quote(s: &str) -> String {
+    s.replace('\'', "'\\''")
+}
+
 /// El script que envuelve al del operador para mandarlo por WinRM.
 ///
 /// Port de `build_winrm_script`. Se comprueba por separado —hay un test— porque
@@ -448,8 +471,8 @@ pub fn winrm_wrapper(h: &Host, script: &str) -> String {
            [Console]::Error.WriteLine($_.Exception.Message); \
            exit 1 \
          }}",
-        h.username.replace('\'', "''"),
-        h.host.replace('\'', "''"),
+        ps_quote(&h.username),
+        ps_quote(&h.host),
         h.port,
         b64_utf16le(script),
     )
@@ -476,6 +499,19 @@ pub fn ssh_args(h: &Host, script: &str) -> Vec<String> {
     // `accept-new` y no `no`: acepta una máquina nueva, pero sigue avisando si
     // la clave de una conocida CAMBIA — que es la señal que importa.
     v.push("StrictHostKeyChecking=accept-new".into());
+    // SIN ESTOS DOS, UN SSH QUE PIDE CONTRASEÑA NO VUELVE NUNCA. El proceso se
+    // lanza con `CREATE_NO_WINDOW`, así que su petición de contraseña se escribe
+    // en una consola que no existe y nadie la ve: la interfaz se queda con el
+    // botón girando para siempre y sin nada que enseñar.
+    //
+    // En este proyecto los equipos Linux van por CLAVE —la relación de confianza
+    // se establece antes—, así que pedir contraseña no es un caso legítimo que
+    // estemos cortando: es exactamente la señal de que la clave no está
+    // autorizada, y `BatchMode` la convierte en un error que se puede leer.
+    v.push("-o".into());
+    v.push("BatchMode=yes".into());
+    v.push("-o".into());
+    v.push("ConnectTimeout=10".into());
     v.push("-p".into());
     v.push(h.port.to_string());
     v.push(format!("{}@{}", h.username, h.host));
