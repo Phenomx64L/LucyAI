@@ -69,6 +69,13 @@ pub struct ForkResult {
     pub text: String,
     pub ok: bool,
     pub ms: u64,
+    /// Lo que cobró el proveedor por ESTA tarea, sumando sus vueltas.
+    ///
+    /// Vuelve con el resultado y no por un canal aparte para que no se pueda
+    /// recoger lo uno sin lo otro: el coste de un sub-agente es la parte de la
+    /// factura que nadie ve pasar.
+    pub tokens_in: u32,
+    pub tokens_out: u32,
 }
 
 /// Separa un `fork_task:id|instrucción`.
@@ -121,24 +128,50 @@ pub fn pedidos(forks: &[crate::agent::AgentFork], arg: &str) -> Vec<String> {
 /// sub-agente no es una conversación que alguien esté leyendo, es un dato que la
 /// principal va a usar. Enseñarlo token a token en un carril aparte sería
 /// movimiento sin información.
+/// El interruptor es OBLIGATORIO en la firma, no un `Option`.
+///
+/// Nació sin él: `corre` llamaba a `cloud::start`, que es el atajo que se fabrica
+/// un interruptor apagado y lo tira. Resultado: el botón de Detener limpiaba
+/// `fork_rx` —el operador recuperaba su pestaña, que es lo que ve— y por debajo
+/// seguían hasta cuatro peticiones de red por tarea, pagándose, contra un canal
+/// que ya no escuchaba nadie. Pedirlo en la firma es lo que impide que el
+/// siguiente sitio que lance una tarea lo vuelva a olvidar.
 pub fn spawn(
     id: String,
     instruccion: String,
     modelo: String,
     equipo: String,
     privacy: bool,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::sync::mpsc::Receiver<ForkResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let t0 = std::time::Instant::now();
-        let r = corre(&instruccion, &modelo, &equipo, privacy);
+        let mut gasto = Gasto::default();
+        let r = corre(&instruccion, &modelo, &equipo, privacy, &stop, &mut gasto);
         let ms = t0.elapsed().as_millis() as u64;
-        let _ = tx.send(match r {
-            Ok(text) => ForkResult { id, text, ok: true, ms },
-            Err(e) => ForkResult { id, text: e, ok: false, ms },
+        let (text, ok) = match r {
+            Ok(text) => (text, true),
+            Err(e) => (e, false),
+        };
+        let _ = tx.send(ForkResult {
+            id,
+            text,
+            ok,
+            ms,
+            tokens_in: gasto.tin,
+            tokens_out: gasto.tout,
         });
     });
     rx
+}
+
+/// Lo que un sub-agente lleva cobrado. Se acumula ENTRE vueltas, no por vuelta:
+/// lo que el operador paga es la tarea entera.
+#[derive(Default)]
+struct Gasto {
+    tin: u32,
+    tout: u32,
 }
 
 /// Cuántas vueltas de lectura puede dar un sub-agente antes de tener que
@@ -149,9 +182,22 @@ pub fn spawn(
 /// es un límite de calidad sino de tiempo y dinero: si en tres lecturas no ha
 /// encontrado lo que buscaba, lo que hay que devolver a la conversación
 /// principal es eso —lo que miró y lo que no había— y no una cuarta corazonada.
+///
+/// SON TRES LECTURAS Y HASTA CUATRO PETICIONES, y conviene decirlo porque el
+/// bucle lo disimula: la última vuelta corre igual pero sus herramientas ya no se
+/// cumplen — es la que sirve para concluir con lo que se tenga. El mensaje que se
+/// le manda al sub-agente contaba mal por eso y le prometía una lectura más de
+/// las que iba a tener.
 pub const MAX_VUELTAS: usize = 3;
 
-fn corre(instruccion: &str, modelo: &str, equipo: &str, privacy: bool) -> Result<String, String> {
+fn corre(
+    instruccion: &str,
+    modelo: &str,
+    equipo: &str,
+    privacy: bool,
+    stop: &std::sync::atomic::AtomicBool,
+    gasto: &mut Gasto,
+) -> Result<String, String> {
     crate::cloud::allowed(modelo, privacy)?;
     let mut turns = vec![
         Turn::system(system_prompt(equipo)),
@@ -159,7 +205,10 @@ fn corre(instruccion: &str, modelo: &str, equipo: &str, privacy: bool) -> Result
     ];
 
     for vuelta in 0..=MAX_VUELTAS {
-        let out = un_turno(modelo, turns.clone())?;
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("Cancelada por el operador.".into());
+        }
+        let out = un_turno(modelo, turns.clone(), stop, gasto)?;
         // LAS HERRAMIENTAS DE UN SUB-AGENTE SE CUMPLEN AQUÍ, en su propio hilo,
         // y no vuelven a la conversación principal. Sin este bucle el prompt de
         // arriba sería una mentira de tres líneas: le ofrece `readfile`, la
@@ -178,11 +227,21 @@ fn corre(instruccion: &str, modelo: &str, equipo: &str, privacy: bool) -> Result
             // es devolver lo que haya escrito diciendo que se quedó a medias:
             // callarlo haría que la conversación principal tomara por conclusión
             // lo que era el principio de una lectura.
+            //
+            // Y si no escribió NADA fuera de la etiqueta —que es lo normal en
+            // esta vuelta: pide y calla— el aviso va solo. Antes salía un texto
+            // que empezaba por dos saltos de línea y un corchete, con las cuatro
+            // peticiones pagadas y ni una palabra de por qué.
             let dicho = limpia(out).unwrap_or_default();
-            return Ok(recorta(format!(
-                "{dicho}\n\n[la tarea agotó sus {MAX_VUELTAS} lecturas y no llegó a \
-                 concluir — lo de arriba es lo que alcanzó a ver]"
-            )));
+            let nota = format!(
+                "[la tarea agotó sus {MAX_VUELTAS} lecturas sin llegar a concluir; seguía \
+                 pidiendo ficheros. Si necesitas eso, pídelo tú.]"
+            );
+            return Ok(recorta(if dicho.trim().is_empty() {
+                nota
+            } else {
+                format!("{dicho}\n\n{nota}")
+            }));
         }
 
         let mut resultados = Vec::new();
@@ -200,29 +259,82 @@ fn corre(instruccion: &str, modelo: &str, equipo: &str, privacy: bool) -> Result
                      respuesta y lo decide la conversación principal."
                 ),
             };
-            resultados.push(format!(
-                "<TOOL_RESULT tool=\"{name}\" arg=\"{args}\">\n{cuerpo}\n</TOOL_RESULT>"
-            ));
+            // POR LA MISMA PUERTA QUE TODO LO DEMÁS. Aquí se armaba el sobre a
+            // mano y sin revisar, que es el sitio MÁS goloso de los cuatro: un
+            // sub-agente lee un log envenenado, se lo cree, y devuelve la
+            // instrucción convertida en prosa propia. A partir de ahí ningún
+            // patrón la reconoce — el lavado ya está hecho.
+            resultados.push(crate::guard::tool_result(&name, &args, &cuerpo).block);
         }
         turns.push(Turn::assistant(out));
+        // LAS QUE LE QUEDAN DE VERDAD. Decía `MAX_VUELTAS - vuelta`, que cuenta
+        // también la última —la que corre pero ya no cumple herramientas—, así
+        // que en la penúltima le prometía una lectura que no iba a tener. Un
+        // presupuesto que miente es peor que no darlo: se lo gasta creyendo que
+        // le sobra.
         turns.push(Turn::user(format!(
-            "Esto devolvieron. Te quedan {} lecturas.\n\n{}",
-            MAX_VUELTAS - vuelta,
+            "Esto devolvieron. {}\n\n{}",
+            aviso_de_presupuesto(vuelta),
             resultados.join("\n\n")
         )));
     }
     unreachable!("el bucle sale por la última vuelta")
 }
 
-fn un_turno(modelo: &str, turns: Vec<Turn>) -> Result<String, String> {
+/// Lo que se le dice al sub-agente sobre lo que le queda, tras cumplirle la
+/// vuelta `vuelta` (contando desde 0).
+///
+/// Está aparte para poder probar el conteo. Decía `MAX_VUELTAS - vuelta`, que
+/// incluye la última vuelta —la que corre pero cuyas herramientas ya NO se
+/// cumplen—, así que en la penúltima prometía una lectura que no existía. Un
+/// presupuesto que miente es peor que no dar ninguno: se lo gasta creyendo que
+/// le sobra, y las cuatro peticiones se pagan igual.
+fn aviso_de_presupuesto(vuelta: usize) -> String {
+    match MAX_VUELTAS.saturating_sub(vuelta + 1) {
+        0 => "Es la ÚLTIMA: no vas a poder pedir más ficheros, así que responde con esto."
+            .to_string(),
+        1 => "Te queda 1 lectura.".to_string(),
+        n => format!("Te quedan {n} lecturas."),
+    }
+}
+
+fn un_turno(
+    modelo: &str,
+    turns: Vec<Turn>,
+    stop: &std::sync::atomic::AtomicBool,
+    gasto: &mut Gasto,
+) -> Result<String, String> {
     let mut out = String::new();
     let mut err = None;
-    for ev in crate::cloud::start(modelo.to_string(), turns) {
+    // El MISMO interruptor que el turno principal. El hilo del proveedor lo mira
+    // entre trama y trama, así que parar deja de pagar tokens de verdad, no solo
+    // de mirarlos.
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        stop.load(std::sync::atomic::Ordering::Relaxed),
+    ));
+    for ev in crate::cloud::start_cancellable(modelo.to_string(), turns, flag.clone()) {
+        // Se propaga en cada evento porque el `Arc` que ve el proveedor es otro:
+        // el de la pestaña vive en la interfaz y este hilo solo tiene una
+        // referencia prestada.
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         match ev {
             ChatEvent::Token(t) => out.push_str(&t),
+            // LO QUE COBRA UN SUB-AGENTE SE CUENTA. Este brazo era `_ => {}`, y
+            // con hasta cinco tareas de hasta cuatro peticiones cada una, el
+            // contador de coste de la pestaña podía ir veinte llamadas por
+            // detrás de la factura.
+            ChatEvent::Usage(i, o) => {
+                gasto.tin += i;
+                gasto.tout += o;
+            }
             ChatEvent::Error(e) => err = Some(e),
             _ => {}
         }
+    }
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Cancelada por el operador.".into());
     }
     match err {
         Some(e) => Err(e),
@@ -322,6 +434,21 @@ mod tests {
         assert_eq!(pedidos(&fs, "a, b ,c"), vec!["a", "b", "c"]);
         // Un nombre repetido no se contesta dos veces en el mismo turno.
         assert_eq!(pedidos(&fs, "a,a"), vec!["a"]);
+    }
+
+    #[test]
+    fn el_presupuesto_que_se_le_promete_es_el_que_va_a_tener() {
+        // EL DESFASE DE UNO. `MAX_VUELTAS - vuelta` cuenta también la vuelta que
+        // corre sin cumplir herramientas, así que en la penúltima le prometía una
+        // lectura que no iba a existir. Se lo gasta creyendo que le sobra.
+        //
+        // Con MAX_VUELTAS = 3 se cumplen las vueltas 0, 1 y 2. Tras la 0 quedan
+        // dos; tras la 1, una; tras la 2, ninguna.
+        assert_eq!(aviso_de_presupuesto(0), "Te quedan 2 lecturas.");
+        assert_eq!(aviso_de_presupuesto(1), "Te queda 1 lectura.");
+        assert!(aviso_de_presupuesto(2).contains("ÚLTIMA"), "{}", aviso_de_presupuesto(2));
+        // Y en la última no se le pide que pida: se le pide que conteste.
+        assert!(aviso_de_presupuesto(2).contains("responde"));
     }
 
     #[test]
