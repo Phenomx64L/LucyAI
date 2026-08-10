@@ -76,6 +76,10 @@ pub enum Icon {
     /// `copy` desplazado — restaurar desde maximizada, dos rectángulos como en
     /// cualquier ventana de Windows.
     Restore,
+    /// `player-pause` — parar el refresco automático del visor de logs.
+    Pause,
+    /// `player-play` — reanudarlo.
+    Play,
 }
 
 impl Icon {
@@ -248,6 +252,16 @@ impl Icon {
                 Seg::Rect((5.0, 8.0), (16.0, 19.0), 1.5),
                 Seg::Path(&[(8.0, 5.0), (19.0, 5.0), (19.0, 16.0)]),
             ],
+            // Las dos barras de `player-pause`, con la misma caja de 24 que el
+            // resto: estrechas y altas, o a este tamaño se leen como un igual.
+            Self::Pause => &[
+                Seg::Rect((7.0, 5.0), (10.0, 19.0), 1.0),
+                Seg::Rect((14.0, 5.0), (17.0, 19.0), 1.0),
+            ],
+            // El triángulo de `player-play`, CERRADO: el último punto repite el
+            // primero porque `Seg::Path` traza segmentos sueltos y sin él queda
+            // una uve abierta en vez de un triángulo.
+            Self::Play => &[Seg::Path(&[(7.0, 4.0), (20.0, 12.0), (7.0, 20.0), (7.0, 4.0)])],
         }
     }
 }

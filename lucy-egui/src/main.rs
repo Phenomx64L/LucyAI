@@ -680,6 +680,126 @@ fn next_auto(
     NextAuto::Run(step.id.clone(), step.detail.clone())
 }
 
+/// Las dos preguntas que contesta el visor de logs.
+///
+/// DOS MODOS Y NO DOS MÓDULOS. La auditoría responde «qué hizo Lucy» y el
+/// archivo «qué dice el sistema». Son la misma pregunta desde dos lados y se
+/// consultan en la misma sesión — separarlas en dos vistas obligaría a saltar
+/// entre ellas justo cuando se está correlacionando una con otra.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LvMode {
+    Auditoria,
+    Archivo,
+}
+
+/// Una fila del visor, venga de donde venga.
+///
+/// Normalizar en la entrada y no en la pintura: si cada modo se dibujara con su
+/// propia forma, la barra de filtros —que es común— tendría que saber de los
+/// dos, y añadir un tercer origen mañana tocaría tres sitios.
+struct LvRow {
+    /// `HH:MM:SS`. Vacío cuando la línea ya trae su marca dentro, que es lo
+    /// normal en un fichero de log: repetirla en una columna aparte gastaría
+    /// sesenta píxeles para decir dos veces lo mismo.
+    t: String,
+    lv: lucy_core::logs::Level,
+    /// De dónde sale: el `source` de la auditoría, o el nombre del equipo.
+    src: String,
+    m: String,
+}
+
+/// Cada cuánto se relee, en modo Auditoría y en Archivo local.
+///
+/// Cinco segundos, como la V2. En REMOTO no se auto-relee y es a propósito:
+/// cada lectura por WinRM levanta un PowerShell que abre una sesión autenticada
+/// contra el servidor, y eso son segundos y una entrada en su registro de
+/// seguridad. Repetirlo cada cinco segundos mientras la pestaña está abierta
+/// convierte mirar un log en un martilleo al servidor que nadie pidió.
+const LV_POLL: Duration = Duration::from_secs(5);
+
+/// Cuántas líneas se piden de un fichero.
+const LV_LINES: usize = 2_000;
+
+/// Las filas que pasan el filtro de nivel y el de texto, por índice.
+///
+/// Por índice y no clonando: son hasta dos mil filas y esto corre en cada frame
+/// mientras el operador escribe en la caja de búsqueda.
+///
+/// El nivel es EXCLUYENTE —`None` es «todos»— porque es lo que hace la vista
+/// que se está migrando y lo que enseñan sus chips: uno encendido cada vez. El
+/// visor de juguete que había aquí usaba casillas acumulativas; se cambia a
+/// propósito, y lo que se pierde es poder ver Error y Warn a la vez.
+fn lv_filtrar(
+    rows: &[LvRow],
+    nivel: Option<lucy_core::logs::Level>,
+    query: &str,
+) -> Vec<usize> {
+    let q = query.trim().to_lowercase();
+    rows.iter()
+        .enumerate()
+        .filter(|(_, r)| nivel.is_none_or(|n| r.lv == n))
+        // Sobre el mensaje Y el origen: buscar «WIN-AD» para ver solo lo de ese
+        // equipo es lo primero que hace cualquiera con una lista mezclada.
+        .filter(|(_, r)| {
+            q.is_empty()
+                || r.m.to_lowercase().contains(&q)
+                || r.src.to_lowercase().contains(&q)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Cuántas filas hay de cada nivel. Para los contadores de los chips.
+fn lv_cuenta(rows: &[LvRow]) -> (usize, usize, usize) {
+    let mut e = 0;
+    let mut w = 0;
+    let mut i = 0;
+    for r in rows {
+        match r.lv {
+            lucy_core::logs::Level::Error => e += 1,
+            lucy_core::logs::Level::Warn => w += 1,
+            lucy_core::logs::Level::Info => i += 1,
+        }
+    }
+    (e, w, i)
+}
+
+/// La hora de una fila de auditoría, en `HH:MM:SS`.
+///
+/// `created_at` es epoch en SEGUNDOS —lo pone la propia base con
+/// `strftime('%s','now')`, ningún llamante lo pasa— así que no hay que adivinar
+/// la unidad. La V2 lleva un `if (s > 1e12) s = Math.floor(s/1000)` por si acaso;
+/// es una defensa contra un caso que no puede darse, y copiarla aquí sería
+/// arrastrar una duda que ya está resuelta.
+///
+/// El `timestamp` ISO es el respaldo, para filas antiguas donde el epoch pudiera
+/// ser cero.
+fn lv_hora_de(created_at: i64, iso: &str) -> String {
+    if created_at > 0 {
+        let r = (created_at as u64) % 86_400;
+        return format!("{:02}:{:02}:{:02}", r / 3600, (r % 3600) / 60, r % 60);
+    }
+    // `2026-08-10T14:22:12Z` → `14:22:12`. Por caracteres y con comprobación:
+    // una cadena más corta de lo esperado cortaría en medio.
+    if iso.len() >= 19 {
+        return iso[11..19].to_string();
+    }
+    String::new()
+}
+
+/// La hora local en `HH:MM:SS`, para el indicador de última lectura.
+fn lv_hora() -> String {
+    let s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // En UTC. Es lo honesto sin arrastrar un crate de zonas horarias solo para
+    // esto, y va marcado con la Z para que nadie lo lea como hora local y
+    // concluya que el log lleva parado seis horas.
+    let r = s % 86_400;
+    format!("{:02}:{:02}:{:02}Z", r / 3600, (r % 3600) / 60, r % 60)
+}
+
 /// ¿Se le puede devolver otro lote de resultados de herramienta?
 ///
 /// EL OTRO BUCLE, el que no tenía presupuesto. `absorb_tags` cumple un `readfile`
@@ -2036,6 +2156,64 @@ fn ghost_icon(ui: &mut egui::Ui, icon: icons::Icon) -> egui::Response {
     resp
 }
 
+/// Un chip de nivel con su contador.
+///
+/// El contador va SIEMPRE, también en cero: un «Error 0» dice que se miró y no
+/// había, y esconderlo dejaría al operador sin saber si es que no hay errores o
+/// si es que el filtro no llegó a aplicarse.
+fn lv_chip(ui: &mut egui::Ui, label: &str, n: usize, on: bool) -> bool {
+    let txt = format!("{label}  {n}");
+    let font = egui::FontId::proportional(theme::FS_FOOTNOTE);
+    let w = ui.fonts(|f| f.layout_no_wrap(txt.clone(), font.clone(), theme::txt2()).size().x);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w + 20.0, 26.0), egui::Sense::click());
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(theme::R_SM),
+        if on {
+            theme::acc_bg()
+        } else if resp.hovered() {
+            theme::bg4()
+        } else {
+            theme::bg3()
+        },
+        egui::Stroke::new(1.0_f32, if on { theme::acc_line() } else { theme::bdr() }),
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        txt,
+        font,
+        if on { theme::acc() } else { theme::txt3() },
+    );
+    resp.clicked()
+}
+
+/// Una fila del desplegable de equipos: nombre a la izquierda, tipo a la derecha.
+fn lv_opcion(ui: &mut egui::Ui, nombre: &str, tipo: &str, sel: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().max(198.0), 28.0),
+        egui::Sense::click(),
+    );
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, egui::Rounding::same(theme::R_SM), theme::bg4());
+    }
+    ui.painter().text(
+        egui::pos2(rect.left() + 9.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        nombre,
+        egui::FontId::proportional(theme::FS_FOOTNOTE),
+        if sel { theme::acc() } else { theme::txt2() },
+    );
+    ui.painter().text(
+        egui::pos2(rect.right() - 9.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        tipo,
+        egui::FontId::monospace(theme::FS_CAPTION),
+        theme::faint(),
+    );
+    resp.clicked()
+}
+
 /// Un lado de un control segmentado. Activo = relleno de acento con tinta
 /// oscura encima, que es el único sitio donde el CSS pone el acento sólido.
 fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
@@ -2284,9 +2462,27 @@ struct App {
     sem_result: Option<Result<(Vec<lucy_core::vectors::SemanticHit>, Vec<String>), String>>,
     // log viewer
     log_lines: Result<Vec<String>, String>,
-    log_error: bool,
-    log_warn: bool,
-    log_info: bool,
+    /// Qué pregunta se está haciendo: qué hizo Lucy, o qué dice el sistema.
+    lv_mode: LvMode,
+    /// El equipo del que se lee en modo Archivo. Vacío = éste.
+    lv_host: String,
+    lv_host_menu: bool,
+    lv_path: String,
+    /// Las filas ya normalizadas, vengan de la auditoría o de un fichero.
+    lv_rows: Vec<LvRow>,
+    /// Por qué no se pudo leer. Se ENSEÑA: una ruta que no existe, un permiso o
+    /// un equipo caído son información útil, y dejar la lista vacía sin decir
+    /// nada hace que el operador crea que el log está limpio.
+    lv_error: String,
+    lv_filter: Option<lucy_core::logs::Level>,
+    lv_query: String,
+    lv_paused: bool,
+    /// Hora de la última lectura, para el indicador de «en vivo».
+    lv_last: String,
+    lv_next: Instant,
+    /// Lectura remota en vuelo. Solo una: son procesos de PowerShell o de ssh.
+    lv_rx: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
+    lv_desde: Option<Instant>,
     // sistema (métricas live vía lucy_core::system)
     sys: lucy_core::system::SysMonitor,
     sys_last: Instant,
@@ -2520,12 +2716,22 @@ impl App {
             log_lines: log_path()
                 .ok_or_else(|| "no se pudo resolver %APPDATA%".to_string())
                 .and_then(|p| lucy_core::logs::tail(&p, 2_000)),
-            // Error y Warn encendidos, Info apagado: quien abre un visor de logs
-            // suele venir buscando qué falló, no la narración completa. Se
-            // enciende con un clic.
-            log_error: true,
-            log_warn: true,
-            log_info: false,
+            lv_mode: LvMode::Auditoria,
+            lv_host: String::new(),
+            lv_host_menu: false,
+            lv_path: String::new(),
+            lv_rows: Vec::new(),
+            lv_error: String::new(),
+            // Todos, no «solo errores». Un visor que arranca filtrado enseña una
+            // lista corta que parece la lista entera, y el operador concluye que
+            // no pasó nada más.
+            lv_filter: None,
+            lv_query: String::new(),
+            lv_paused: false,
+            lv_last: String::new(),
+            lv_next: Instant::now(),
+            lv_rx: None,
+            lv_desde: None,
             sys: lucy_core::system::SysMonitor::new(),
             sys_last: Instant::now(),
             net: lucy_core::system::NetRate::default(),
@@ -2808,6 +3014,10 @@ impl eframe::App for App {
         self.pump_pending();
         self.pump_nx_test();
         self.pump_nx_conn();
+        // Fuera de la vista también: una lectura remota lanzada justo antes de
+        // cambiar de pantalla tiene que poder cerrarse, o al volver el indicador
+        // seguiría diciendo «leyendo…» sobre un hilo que terminó hace rato.
+        self.pump_logs();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
@@ -3760,6 +3970,9 @@ impl App {
         if conv.is_empty() {
             return;
         }
+        // La cola del log, fresca. Va DENTRO del prompt de sistema, y leída solo
+        // al arrancar Lucy contestaba sobre un log de hace horas.
+        self.reload_log();
         let pi = self.prompt_input();
         let modelo = self.chat_model.clone();
         let privado = self.privacy;
@@ -4990,6 +5203,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // Lo BARATO se recoge aquí; el recuerdo —que es lo que tardaba— lo hace
         // el hilo. Se toma antes de tocar la pestaña porque `prompt_input` lee
         // de `self`, y después el préstamo mutable lo impediría.
+        // La cola del log, fresca. Va DENTRO del prompt de sistema, y leída solo
+        // al arrancar Lucy contestaba sobre un log de hace horas.
+        self.reload_log();
         let pi = self.prompt_input();
         let consulta = text.clone();
         prompt.push_str(&text);
@@ -5913,6 +6129,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             encolar(&mut self.tabs[ti].pending_raw, prompt);
             return;
         }
+        // La cola del log, fresca. Va DENTRO del prompt de sistema, y leída solo
+        // al arrancar Lucy contestaba sobre un log de hace horas.
+        self.reload_log();
         let pi = self.prompt_input();
         {
             let t = &mut self.tabs[ti];
@@ -6086,10 +6305,20 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // los pasos remotos, así que el carril que sirve para auditar no permitía
         // saber en qué máquina pasó nada. Se resuelve antes del `exec_push`
         // porque dentro el workspace ya está prestado.
-        let motor = match self.tabs[ti].ws.plan.iter().find(|s| s.id == id) {
-            Some(s) if !s.host.is_empty() => format!("PS · {}", s.host),
-            _ => "PS".to_string(),
-        };
+        let destino = self
+            .tabs[ti]
+            .ws
+            .plan
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.host.clone())
+            .unwrap_or_default();
+        let motor =
+            if destino.is_empty() { "PS".to_string() } else { format!("PS · {destino}") };
+        // `ai` y no `manual`: lo propuso Lucy. Que la fuente diga quién decidió
+        // el comando es la mitad de para qué sirve un registro de auditoría —
+        // con el automático encendido, además, nadie lo aprobó.
+        self.auditar(Some(ti), &cmd, &destino, "ai", ok, ms, &body);
         // El carril de Ejecución SÍ lleva el volcado crudo: es del operador, y
         // no viaja en ningún prompt. Es el único sitio donde debe vivir.
         self.tabs[ti].ws.exec_push(ExecEntry {
@@ -6748,74 +6977,684 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// guarda de rutas sensibles que sí lleva el comando Tauri — allí la ruta la
     /// puede pedir un modelo, aquí la pone el programa.
     fn log_viewer(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("LOG DE LA APP").strong());
-            if ui.button("↻ Recargar").clicked() {
-                self.reload_log();
-            }
-            ui.separator();
-            // El filtro es acumulativo, no excluyente: querer ver errores Y
-            // avisos a la vez es lo normal cuando se investiga algo.
-            ui.checkbox(&mut self.log_error, "Error");
-            ui.checkbox(&mut self.log_warn, "Warn");
-            ui.checkbox(&mut self.log_info, "Info");
-        });
+        self.lv_cabecera(ui);
+        self.lv_barra(ui);
+        if !self.lv_error.is_empty() {
+            ui.add_space(4.0);
+            egui::Frame::none()
+                .fill(theme::red().linear_multiply(0.10))
+                .stroke(egui::Stroke::new(1.0_f32, theme::red()))
+                .rounding(egui::Rounding::same(theme::R_MD))
+                .inner_margin(egui::Margin::symmetric(13.0, 9.0))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.lv_error)
+                                .size(theme::FS_CAPTION)
+                                .color(theme::txt2()),
+                        )
+                        .wrap(),
+                    );
+                });
+        }
+        ui.add_space(6.0);
+        self.lv_stream(ui);
+    }
 
-        match &self.log_lines {
-            Err(e) => {
-                ui.add_space(6.0);
-                ui.colored_label(theme::amber(), format!("⚠ {e}"));
-                ui.label(
-                    egui::RichText::new(
-                        "El log aparece en cuanto Lucy arranca al menos una vez.",
-                    )
-                    .small()
-                    .color(theme::txt3()),
-                );
-            }
-            Ok(lines) => {
-                let visible: Vec<&String> = lines
-                    .iter()
-                    .filter(|l| match lucy_core::logs::Level::of(l) {
-                        lucy_core::logs::Level::Error => self.log_error,
-                        lucy_core::logs::Level::Warn => self.log_warn,
-                        lucy_core::logs::Level::Info => self.log_info,
-                    })
-                    .collect();
-                ui.label(
-                    egui::RichText::new(format!("{} de {} líneas", visible.len(), lines.len()))
-                        .small()
-                        .color(theme::txt3()),
-                );
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for l in visible {
-                            let color = match lucy_core::logs::Level::of(l) {
-                                lucy_core::logs::Level::Error => theme::red(),
-                                lucy_core::logs::Level::Warn => theme::amber(),
-                                lucy_core::logs::Level::Info => theme::txt2(),
-                            };
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(l).monospace().size(11.5).color(color),
-                                )
-                                .wrap(),
-                            );
+    fn lv_cabecera(&mut self, ui: &mut egui::Ui) {
+        let mut recargar = false;
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
+            // El punto de estado: verde si se está releyendo solo, ámbar si está
+            // en pausa. Sin él, «en vivo» y «pausado» se distinguen leyendo, y
+            // esto se mira de reojo.
+            let vivo = !self.lv_paused;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
+            ui.painter().circle_filled(
+                rect.center(),
+                3.5,
+                if vivo { theme::acc() } else { theme::amber() },
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Visor de logs")
+                    .size(theme::FS_TITLE)
+                    .color(theme::txt()),
+            );
+            ui.add_space(6.0);
+
+            // ── modo ──
+            let mut nuevo = self.lv_mode;
+            egui::Frame::none()
+                .fill(theme::bg3())
+                .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+                .rounding(egui::Rounding::same(theme::R_MD))
+                .inner_margin(egui::Margin::same(2.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if seg(ui, "Auditoría", self.lv_mode == LvMode::Auditoria) {
+                            nuevo = LvMode::Auditoria;
+                        }
+                        if seg(ui, "Archivo", self.lv_mode == LvMode::Archivo) {
+                            nuevo = LvMode::Archivo;
                         }
                     });
+                });
+            if nuevo != self.lv_mode {
+                self.lv_mode = nuevo;
+                // Las filas del modo anterior NO se quedan. Contestan a otra
+                // pregunta, y dejarlas mientras carga lo nuevo haría que los
+                // contadores de la barra describieran algo que ya no se enseña.
+                self.lv_rows.clear();
+                self.lv_error.clear();
+                self.lv_last.clear();
+                recargar = true;
+            }
+            ui.add_space(6.0);
+
+            match self.lv_mode {
+                LvMode::Auditoria => {
+                    ui.add(egui::Label::new(
+                        egui::RichText::new("audit trail")
+                            .monospace()
+                            .size(theme::FS_FOOTNOTE)
+                            .color(theme::txt3()),
+                    ));
+                }
+                LvMode::Archivo => {
+                    if self.lv_host_picker(ui) {
+                        recargar = true;
+                    }
+                    ui.add_space(6.0);
+                    let ph = if self.lv_host.is_empty() {
+                        "C:\\ruta\\al\\archivo.log"
+                    } else {
+                        "/var/log/syslog"
+                    };
+                    let campo = ui.add_sized(
+                        [280.0, 24.0],
+                        egui::TextEdit::singleline(&mut self.lv_path)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text(ph),
+                    );
+                    // Enter lee. `lost_focus` + la tecla, que es la forma que
+                    // funciona en un `singleline`: mirar solo la tecla dispara
+                    // también cuando el foco está en otro sitio de la vista.
+                    if campo.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        recargar = true;
+                    }
+                    ui.add_space(4.0);
+                    if ghost_icon(ui, icons::Icon::Refresh)
+                        .on_hover_text("Leer la cola del fichero")
+                        .clicked()
+                    {
+                        recargar = true;
+                    }
+                }
+            }
+
+            if !self.lv_last.is_empty() {
+                ui.add_space(8.0);
+                let (txt, col) = if self.lv_paused {
+                    (format!("⏸ pausado · {}", self.lv_last), theme::amber())
+                } else {
+                    (format!("en vivo · {}", self.lv_last), theme::acc())
+                };
+                ui.label(egui::RichText::new(txt).size(theme::FS_CAPTION).color(col));
+            }
+            // Y si hay una lectura remota en vuelo se dice, con lo que lleva
+            // esperando: un botón que no hace nada visible durante ocho segundos
+            // se pulsa otra vez, y entonces son dos sesiones contra el servidor.
+            if let Some(t0) = self.lv_desde {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!("leyendo… {}s", t0.elapsed().as_secs()))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::txt3()),
+                );
+            }
+
+            right(ui, 30.0, |ui| {
+                let n = lv_filtrar(&self.lv_rows, self.lv_filter, &self.lv_query).len();
+                if ghost_icon(ui, icons::Icon::Copy)
+                    .on_hover_text(if n == 0 {
+                        "No hay nada visible que copiar".to_string()
+                    } else {
+                        format!("Copiar las {n} líneas visibles")
+                    })
+                    .clicked()
+                    && n > 0
+                {
+                    let txt = self.lv_texto_visible();
+                    ui.ctx().copy_text(txt);
+                }
+                let icono = if self.lv_paused { icons::Icon::Play } else { icons::Icon::Pause };
+                if ghost_icon(ui, icono)
+                    .on_hover_text(if self.lv_paused {
+                        "Reanudar la actualización"
+                    } else {
+                        "Pausar la actualización"
+                    })
+                    .clicked()
+                {
+                    self.lv_paused = !self.lv_paused;
+                    // Al reanudar se relee YA. Esperar al siguiente tic dejaría
+                    // hasta cinco segundos de pantalla vieja justo después de
+                    // pedir explícitamente que vuelva a moverse.
+                    if !self.lv_paused {
+                        recargar = true;
+                    }
+                }
+            });
+        });
+        if recargar {
+            self.lv_cargar();
+        }
+    }
+
+    /// El desplegable de equipos. Devuelve si hay que releer.
+    fn lv_host_picker(&mut self, ui: &mut egui::Ui) -> bool {
+        let etiqueta = if self.lv_host.is_empty() {
+            "Este equipo".to_string()
+        } else {
+            self.remote_hosts
+                .iter()
+                .find(|h| h.id == self.lv_host)
+                .map(|h| h.name.clone())
+                .unwrap_or_else(|| "Equipo".into())
+        };
+        let boton = ui.add(
+            egui::Button::new(
+                egui::RichText::new(format!("▤ {etiqueta}"))
+                    .monospace()
+                    .size(theme::FS_FOOTNOTE)
+                    .color(theme::txt3()),
+            )
+            .fill(theme::bg3())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+            .rounding(egui::Rounding::same(theme::R_SM)),
+        );
+        if boton.clicked() {
+            self.lv_host_menu = !self.lv_host_menu;
+        }
+        if !self.lv_host_menu {
+            return false;
+        }
+
+        let mut elegido: Option<String> = None;
+        // En un `Area` y no pintando a pelo sobre una capa: el menú se dibuja
+        // encima de lo que ya está colocado, y `rect_contains_pointer` mira el
+        // rectángulo de recorte de quien llama — que aquí es una fila de 30 px.
+        // Es el mismo fallo que dejó la paleta de comandos sin poder pulsarse.
+        egui::Area::new(egui::Id::new("lv-host-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(boton.rect.left_bottom() + egui::vec2(0.0, 6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::none()
+                    .fill(theme::bg3())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr2()))
+                    .rounding(egui::Rounding::same(theme::R_LG))
+                    .inner_margin(egui::Margin::same(6.0))
+                    .shadow(egui::epaint::Shadow {
+                        offset: egui::vec2(0.0, 6.0),
+                        blur: 18.0,
+                        spread: 0.0,
+                        color: egui::Color32::from_black_alpha(90),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_width(210.0);
+                        if lv_opcion(ui, "Este equipo", "local", self.lv_host.is_empty()) {
+                            elegido = Some(String::new());
+                        }
+                        // SOLO LOS QUE SABEN LEER UN FICHERO. Un equipo dado de
+                        // alta como Redis o Postgres no tiene shell, y ofrecerlo
+                        // aquí es prometer una lectura que va a fallar con un
+                        // mensaje que no explica por qué estaba el botón.
+                        for h in self.remote_hosts.iter().filter(|h| h.protocol.can_shell()) {
+                            let tipo = if h.protocol == lucy_core::hosts::Protocol::Winrm {
+                                "WinRM"
+                            } else {
+                                "SSH"
+                            };
+                            if lv_opcion(ui, &h.name, tipo, self.lv_host == h.id) {
+                                elegido = Some(h.id.clone());
+                            }
+                        }
+                    });
+            });
+
+        // Fuera del menú se cierra. Sin esto hay que volver a pulsar el botón,
+        // que es justo donde no está el ratón cuando se decide no cambiar nada.
+        if ui.input(|i| i.pointer.any_click()) && !boton.clicked() && elegido.is_none() {
+            let dentro = ui.ctx().pointer_latest_pos().is_some_and(|p| {
+                ui.ctx()
+                    .memory(|m| m.area_rect(egui::Id::new("lv-host-menu")))
+                    .is_some_and(|r| r.contains(p))
+            });
+            if !dentro {
+                self.lv_host_menu = false;
             }
         }
+        match elegido {
+            Some(id) => {
+                self.lv_host_menu = false;
+                let cambio = id != self.lv_host;
+                self.lv_host = id;
+                if cambio {
+                    // Las filas eran del equipo anterior. Dejarlas mientras se
+                    // lee el nuevo enseñaría el log de una máquina bajo el
+                    // nombre de otra, que es peor que no enseñar nada.
+                    self.lv_rows.clear();
+                    self.lv_error.clear();
+                }
+                cambio && !self.lv_path.trim().is_empty()
+            }
+            None => false,
+        }
+    }
+
+    fn lv_barra(&mut self, ui: &mut egui::Ui) {
+        let (e, w, i) = lv_cuenta(&self.lv_rows);
+        let total = self.lv_rows.len();
+        ui.add_space(8.0);
+        row_align(ui, 28.0, egui::Align::Center, |ui| {
+            let chips: [(&str, usize, Option<lucy_core::logs::Level>); 4] = [
+                ("Todos", total, None),
+                ("Error", e, Some(lucy_core::logs::Level::Error)),
+                ("Warn", w, Some(lucy_core::logs::Level::Warn)),
+                ("Info", i, Some(lucy_core::logs::Level::Info)),
+            ];
+            for (label, n, nivel) in chips {
+                if lv_chip(ui, label, n, self.lv_filter == nivel) {
+                    self.lv_filter = nivel;
+                }
+                ui.add_space(6.0);
+            }
+            ui.add_space(6.0);
+            ui.add_sized(
+                [ui.available_width().min(520.0).max(160.0), 26.0],
+                egui::TextEdit::singleline(&mut self.lv_query).hint_text("⌕  Filtrar mensajes…"),
+            );
+        });
+    }
+
+    fn lv_stream(&mut self, ui: &mut egui::Ui) {
+        let visibles = lv_filtrar(&self.lv_rows, self.lv_filter, &self.lv_query);
+        if visibles.is_empty() {
+            let msg = if self.lv_rows.is_empty() {
+                match self.lv_mode {
+                    LvMode::Auditoria => "Sin actividad registrada.",
+                    LvMode::Archivo if self.lv_path.trim().is_empty() => {
+                        "Escribe la ruta de un fichero y pulsa Enter."
+                    }
+                    LvMode::Archivo => "El fichero no tiene líneas.",
+                }
+            } else {
+                "Sin coincidencias."
+            };
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(msg)
+                        .monospace()
+                        .size(theme::FS_FOOTNOTE)
+                        .color(theme::faint()),
+                );
+            });
+            return;
+        }
+
+        // POR FILAS Y NO PINTÁNDOLAS TODAS. Son hasta dos mil líneas y el visor
+        // se relee cada cinco segundos: dibujar las dos mil en cada frame es lo
+        // que convierte una vista de texto en una que tira la tasa de refresco.
+        // `show_rows` pide altura fija, así que las líneas no se parten — se
+        // recortan a lo ancho y la entera se lee en el globo al pasar por encima.
+        let alto = 20.0_f32;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(
+            ui,
+            alto,
+            visibles.len(),
+            |ui, rango| {
+                for k in rango {
+                    let r = &self.lv_rows[visibles[k]];
+                    let col = match r.lv {
+                        lucy_core::logs::Level::Error => theme::red(),
+                        lucy_core::logs::Level::Warn => theme::amber(),
+                        lucy_core::logs::Level::Info => theme::txt3(),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.set_height(alto);
+                        if !r.t.is_empty() {
+                            ui.add_sized(
+                                [58.0, alto],
+                                egui::Label::new(
+                                    egui::RichText::new(&r.t)
+                                        .monospace()
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::faint()),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        ui.add_sized(
+                            [46.0, alto],
+                            egui::Label::new(
+                                egui::RichText::new(match r.lv {
+                                    lucy_core::logs::Level::Error => "ERROR",
+                                    lucy_core::logs::Level::Warn => "WARN",
+                                    lucy_core::logs::Level::Info => "INFO",
+                                })
+                                .monospace()
+                                .size(theme::FS_CAPTION)
+                                .color(col),
+                            )
+                            .truncate(),
+                        );
+                        if !r.src.is_empty() {
+                            ui.add_sized(
+                                [96.0, alto],
+                                egui::Label::new(
+                                    egui::RichText::new(&r.src)
+                                        .monospace()
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::txt3()),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        let resp = ui
+                            .add(
+                                egui::Label::new(
+                                    egui::RichText::new(&r.m)
+                                        .monospace()
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::txt2()),
+                                )
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(&r.m);
+                        // Un clic copia la línea entera. Es la operación que se
+                        // hace de verdad con una línea de log —pegarla en un
+                        // ticket o en un buscador— y con el texto recortado a lo
+                        // ancho seleccionarlo a mano no la daría completa.
+                        if resp.clicked() {
+                            ui.ctx().copy_text(format!(
+                                "{}{}{}",
+                                if r.t.is_empty() { String::new() } else { format!("{}  ", r.t) },
+                                if r.src.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("{}  ", r.src)
+                                },
+                                r.m
+                            ));
+                        }
+                    });
+                }
+            },
+        );
+    }
+
+    /// Lo visible, en texto plano, para el portapapeles.
+    fn lv_texto_visible(&self) -> String {
+        lv_filtrar(&self.lv_rows, self.lv_filter, &self.lv_query)
+            .into_iter()
+            .map(|i| {
+                let r = &self.lv_rows[i];
+                let nivel = match r.lv {
+                    lucy_core::logs::Level::Error => "ERROR",
+                    lucy_core::logs::Level::Warn => "WARN ",
+                    lucy_core::logs::Level::Info => "INFO ",
+                };
+                format!("{:>8}  {nivel}  {:<14}  {}", r.t, r.src, r.m)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Relee la cola del log. 2000 líneas: suficiente para una sesión larga y
     /// lejos del tope de 50 000 del core.
+    ///
+    /// SE LLAMA ANTES DE CADA TURNO, y hasta ahora no lo llamaba nadie salvo el
+    /// botón «Recargar» del visor de juguete. `log_lines` no es solo para la
+    /// vista: va dentro del prompt de sistema para que Lucy pueda contestar qué
+    /// dice su propio log. Cargado únicamente al arrancar, después de una hora
+    /// de trabajo Lucy veía el log tal y como estaba al abrir la aplicación —
+    /// sin ninguno de los errores por los que se le está preguntando.
     fn reload_log(&mut self) {
         self.log_lines = log_path()
             .ok_or_else(|| "no se pudo resolver %APPDATA%".to_string())
             .and_then(|p| lucy_core::logs::tail(&p, 2_000));
+    }
+
+    /// Deja constancia de un comando que se ha ejecutado.
+    ///
+    /// LA MITAD QUE FALTABA DEL VISOR. La tabla `audit_trail` existía, la app
+    /// Tauri escribía en ella y el shell nativo no: ejecutaba comandos por tres
+    /// caminos —un paso del plan del agente, el NexShell local y el remoto— y no
+    /// registraba ninguno. Enseñar esa tabla sin esto habría dado un panel que
+    /// cuenta lo que hizo la aplicación vieja y calla lo que hace la nueva.
+    ///
+    /// Un fallo al registrar NO interrumpe nada ni sale en la conversación: el
+    /// comando ya corrió, y una ventana de error porque no se pudo apuntar sería
+    /// castigar al operador por un problema del registro. Se deja en el carril
+    /// de Trace, que es donde se mira cuando algo no cuadra.
+    fn auditar(
+        &mut self,
+        ti: Option<usize>,
+        cmd: &str,
+        host_id: &str,
+        source: &str,
+        ok: bool,
+        ms: u64,
+        salida: &str,
+    ) {
+        let nombre = if host_id.is_empty() {
+            lucy_core::system::hostname()
+        } else {
+            self.remote_hosts
+                .iter()
+                .find(|h| h.id == host_id)
+                .map(|h| h.name.clone())
+                .unwrap_or_else(|| host_id.to_string())
+        };
+        let e = lucy_core::audit::Entry::nueva(cmd, source)
+            .en_equipo(host_id, &nombre)
+            .resultado(ok, ms, salida);
+        // El esquema, por si la base es nueva. Es un `IF NOT EXISTS` sobre una
+        // conexión ya abierta.
+        let r = lucy_core::audit::ensure_schema().and_then(|()| lucy_core::audit::record(&e));
+        if let (Err(err), Some(ti)) = (r, ti) {
+            self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "error".into(),
+                label: "No se pudo registrar en la auditoría".into(),
+                detail: err,
+                ..Default::default()
+            });
+        }
+    }
+
+    /// Registra un comando que se MANDÓ, sin saber cómo acabó.
+    ///
+    /// Para la terminal local, que es un PTY: no hay evento de fin de comando,
+    /// solo una pantalla que cambia. `exit_code` se queda en `None` — que
+    /// significa «no se sabe», no «fue bien»— porque inventarse un cero sería
+    /// escribir en el registro de auditoría algo que nadie ha comprobado.
+    fn auditar_enviado(&mut self, cmd: &str, host_id: &str, source: &str) {
+        let nombre = if host_id.is_empty() {
+            lucy_core::system::hostname()
+        } else {
+            host_id.to_string()
+        };
+        let e = lucy_core::audit::Entry::nueva(cmd, source).en_equipo(host_id, &nombre);
+        let _ = lucy_core::audit::ensure_schema().and_then(|()| lucy_core::audit::record(&e));
+    }
+
+    /// Trae lo que toque según el modo. Es el único sitio que escribe `lv_rows`.
+    fn lv_cargar(&mut self) {
+        self.lv_error.clear();
+        match self.lv_mode {
+            LvMode::Auditoria => self.lv_cargar_auditoria(),
+            LvMode::Archivo if self.lv_host.is_empty() => self.lv_cargar_local(),
+            LvMode::Archivo => self.lv_cargar_remoto(),
+        }
+        self.lv_next = Instant::now() + LV_POLL;
+    }
+
+    fn lv_cargar_auditoria(&mut self) {
+        // El esquema se asegura en cada carga y no una vez al arrancar: es un
+        // `CREATE TABLE IF NOT EXISTS` sobre una base ya abierta —microsegundos—
+        // y cubre el caso de que la base se cree después de arrancar Lucy, que
+        // es lo que pasa en una instalación nueva.
+        if let Err(e) = lucy_core::audit::ensure_schema() {
+            self.lv_error = e;
+            return;
+        }
+        match lucy_core::audit::query(&lucy_core::audit::Filter::default()) {
+            Ok(filas) => {
+                self.lv_rows = filas
+                    .iter()
+                    .map(|e| LvRow {
+                        t: lv_hora_de(e.created_at, &e.timestamp),
+                        lv: lucy_core::audit::level_of(e),
+                        src: if e.host_name.is_empty() {
+                            e.source.clone()
+                        } else {
+                            format!("{} · {}", e.host_name, e.source)
+                        },
+                        // El comando es la fila; la salida solo si no hay
+                        // comando. Enseñar los dos juntos llenaría la línea de
+                        // volcado y taparía justo lo que se busca.
+                        m: if e.command.is_empty() {
+                            e.output_preview.clone()
+                        } else {
+                            e.command.clone()
+                        },
+                    })
+                    .collect();
+                self.lv_last = lv_hora();
+            }
+            Err(e) => {
+                self.lv_rows.clear();
+                self.lv_error = e;
+            }
+        }
+    }
+
+    fn lv_cargar_local(&mut self) {
+        let ruta = self.lv_path.trim().to_string();
+        if ruta.is_empty() {
+            self.lv_rows.clear();
+            self.lv_last.clear();
+            return;
+        }
+        // En el hilo de la interfaz: es un fichero de disco local con tope de
+        // líneas, milisegundos. Lo que justificó un hilo —una sesión remota— es
+        // el otro camino, y va por hilo.
+        match lucy_core::logs::tail(std::path::Path::new(&ruta), LV_LINES) {
+            Ok(l) => self.lv_absorber(l, "este equipo"),
+            Err(e) => {
+                self.lv_rows.clear();
+                self.lv_error = format!("No se pudo leer «{ruta}»: {e}");
+                self.lv_last.clear();
+            }
+        }
+    }
+
+    fn lv_cargar_remoto(&mut self) {
+        // Una lectura en vuelo cada vez. Dos sesiones simultáneas contra el
+        // mismo servidor no traen la respuesta antes: la traen dos veces.
+        if self.lv_rx.is_some() {
+            return;
+        }
+        let ruta = self.lv_path.trim().to_string();
+        if ruta.is_empty() {
+            self.lv_rows.clear();
+            self.lv_last.clear();
+            return;
+        }
+        let Some(h) = self.remote_hosts.iter().find(|h| h.id == self.lv_host).cloned() else {
+            self.lv_error = "Ese equipo ya no está dado de alta.".into();
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // La contraseña se saca DENTRO del hilo: leer el almacén de
+            // credenciales de Windows abre un diálogo del sistema la primera
+            // vez, y eso en el hilo de la interfaz congela la ventana.
+            let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
+            let _ = tx.send(lucy_core::logs::tail_remote(&h, &pw, &ruta, LV_LINES));
+        });
+        self.lv_rx = Some(rx);
+        self.lv_desde = Some(Instant::now());
+    }
+
+    /// Convierte líneas crudas en filas.
+    fn lv_absorber(&mut self, lineas: Vec<String>, origen: &str) {
+        // AL REVÉS: lo más reciente arriba, como la auditoría. `tail` devuelve
+        // en orden de lectura —lo último al final— y mezclar los dos criterios
+        // en la misma lista haría que cambiar de modo diera la vuelta a la
+        // pantalla sin avisar.
+        self.lv_rows = lineas
+            .into_iter()
+            .rev()
+            .map(|l| LvRow {
+                t: String::new(),
+                lv: lucy_core::logs::Level::sniff(&l),
+                src: origen.to_string(),
+                m: l,
+            })
+            .collect();
+        self.lv_last = lv_hora();
+    }
+
+    /// Recoge la lectura remota y relee sola cuando toca.
+    fn pump_logs(&mut self) {
+        if let Some(rx) = &self.lv_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.lv_rx = None;
+                    self.lv_desde = None;
+                    let nombre = self
+                        .remote_hosts
+                        .iter()
+                        .find(|h| h.id == self.lv_host)
+                        .map(|h| h.name.clone())
+                        .unwrap_or_else(|| "remoto".into());
+                    match r {
+                        Ok(l) => self.lv_absorber(l, &nombre),
+                        Err(e) => {
+                            self.lv_rows.clear();
+                            self.lv_error =
+                                format!("No se pudo leer «{}» en {nombre}: {e}", self.lv_path.trim());
+                            self.lv_last.clear();
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.lv_rx = None;
+                    self.lv_desde = None;
+                    self.lv_error = "La lectura remota se cortó sin devolver nada.".into();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        // El refresco automático NO alcanza al modo remoto, y es a propósito:
+        // cada lectura por WinRM levanta un PowerShell que abre una sesión
+        // autenticada contra el servidor —segundos, y una entrada en su registro
+        // de seguridad— así que repetirlo cada cinco segundos mientras la
+        // pestaña está abierta es un martilleo que nadie pidió. Ahí se relee con
+        // el botón.
+        let auto = match self.lv_mode {
+            LvMode::Auditoria => true,
+            LvMode::Archivo => self.lv_host.is_empty() && !self.lv_path.trim().is_empty(),
+        };
+        if self.view == View::LogViewer
+            && auto
+            && !self.lv_paused
+            && Instant::now() >= self.lv_next
+        {
+            self.lv_cargar();
+        }
     }
 
     /// Lanza la búsqueda semántica sobre `lucy-core::vectors`.
@@ -8973,6 +9812,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if let Some(ok) = fin {
             self.nx_exec_rx = None;
             self.nx_busy = false;
+            // `manual`: este lo escribió el operador a mano en la terminal, y esa
+            // distinción con los de Lucy es lo que hace útil la columna.
+            let ms = self.nx_started.map_or(0, |t| t.elapsed().as_millis() as u64);
+            let (cmd, salida) = self.nx_ultimo_comando(&id);
+            if !cmd.is_empty() {
+                self.auditar(None, &cmd, &id, "manual", ok, ms, &salida);
+            }
             self.nx_started = None;
             if !ok {
                 let parado = self.nx_stop.load(std::sync::atomic::Ordering::Relaxed);
@@ -8983,6 +9829,25 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ));
             }
         }
+    }
+
+    /// El último comando de un carril remoto y lo que devolvió.
+    ///
+    /// Se reconstruye del propio carril en vez de guardarlo aparte: es la misma
+    /// fuente que el operador está viendo, así que no pueden discrepar. Las
+    /// líneas van marcadas con su tipo —`c` comando, `o` salida, `e` error— y el
+    /// último `c` abre el bloque que interesa.
+    fn nx_ultimo_comando(&self, id: &str) -> (String, String) {
+        let Some(lineas) = self.nx_lines.get(id) else { return (String::new(), String::new()) };
+        let Some(i) = lineas.iter().rposition(|(k, _)| *k == 'c') else {
+            return (String::new(), String::new());
+        };
+        let salida = lineas[i + 1..]
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (lineas[i].1.clone(), salida)
     }
 
     /// Prueba la conexión desde el modal, sin bloquear la ventana.
@@ -9538,6 +10403,16 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if lucy_core::destructive::is_destructive(&cmd) {
             self.nx_confirm = Some(Pendiente { host: None, cmd });
         } else {
+            // SE REGISTRA QUE SE MANDÓ, SIN CÓMO ACABÓ. La terminal local es un
+            // PTY de verdad: no hay un evento de «este comando terminó y devolvió
+            // esto», solo una pantalla que va cambiando. Deducir los límites de
+            // cada comando del emulador VT sería adivinar, y una fila de
+            // auditoría adivinada es peor que ninguna.
+            //
+            // `exit_code: None` dice exactamente eso — «no se sabe» — que es para
+            // lo que existe. Lo que sí es cierto y merece constancia es que Lucy
+            // convirtió una frase en un comando y lo mandó a la máquina.
+            self.auditar_enviado(&cmd, "", "ai");
             self.nx_run(&cmd);
         }
     }
@@ -10401,6 +11276,67 @@ mod bucle {
         // llegar a una respuesta»— en vez de decir lo que pasa de verdad.
         let p = [paso_en("DC01")];
         assert!(matches!(next_auto(true, false, 8, 8, &p), NextAuto::Pause(_)));
+    }
+
+    fn fila(lv: lucy_core::logs::Level, src: &str, m: &str) -> LvRow {
+        LvRow { t: "14:22:12".into(), lv, src: src.into(), m: m.into() }
+    }
+
+    fn muestra() -> Vec<LvRow> {
+        use lucy_core::logs::Level::*;
+        vec![
+            fila(Error, "WIN-AD", "failed password for admin"),
+            fila(Info, "local", "reload completado"),
+            fila(Warn, "WIN-AD", "TLS 1.0 deprecated"),
+            fila(Info, "WIN-AD", "servicio arrancado"),
+        ]
+    }
+
+    #[test]
+    fn el_filtro_de_nivel_es_excluyente_y_todos_es_ninguno() {
+        // Es lo que hace la vista que se migra y lo que enseñan sus chips: uno
+        // encendido cada vez. `None` no es «ningún nivel», es «todos».
+        let r = muestra();
+        assert_eq!(lv_filtrar(&r, None, "").len(), 4);
+        assert_eq!(lv_filtrar(&r, Some(lucy_core::logs::Level::Error), ""), vec![0]);
+        assert_eq!(lv_filtrar(&r, Some(lucy_core::logs::Level::Info), ""), vec![1, 3]);
+    }
+
+    #[test]
+    fn la_busqueda_mira_tambien_el_origen() {
+        // Escribir el nombre de un equipo para ver solo lo suyo es lo primero
+        // que hace cualquiera con una lista mezclada.
+        let r = muestra();
+        assert_eq!(lv_filtrar(&r, None, "win-ad").len(), 3, "no busca por origen");
+        assert_eq!(lv_filtrar(&r, None, "PASSWORD"), vec![0], "distingue mayúsculas");
+        // Y los dos filtros se componen, no se sustituyen.
+        assert_eq!(lv_filtrar(&r, Some(lucy_core::logs::Level::Info), "win-ad"), vec![3]);
+        assert!(lv_filtrar(&r, None, "no-existe-esto").is_empty());
+    }
+
+    #[test]
+    fn los_contadores_cuadran_con_lo_que_hay() {
+        // Si no cuadran, el chip dice «Error 3» y al pulsarlo salen dos — y a
+        // partir de ahí nadie se fía de la pantalla.
+        let r = muestra();
+        let (e, w, i) = lv_cuenta(&r);
+        assert_eq!((e, w, i), (1, 1, 2));
+        assert_eq!(e + w + i, r.len(), "hay filas que no cuenta ningún chip");
+        assert_eq!(lv_cuenta(&[]), (0, 0, 0));
+    }
+
+    #[test]
+    fn la_hora_de_una_fila_sale_del_epoch_y_el_iso_es_el_respaldo() {
+        // `created_at` es epoch en SEGUNDOS: lo pone la base con
+        // `strftime('%s','now')` y ningún llamante lo pasa. La V2 lleva un
+        // `if (s > 1e12)` por si viniera en milisegundos — una defensa contra un
+        // caso que no puede darse.
+        assert_eq!(lv_hora_de(51_732, ""), "14:22:12");
+        // Sin epoch se recorta el ISO por las posiciones fijas del formato.
+        assert_eq!(lv_hora_de(0, "2026-08-10T09:05:01Z"), "09:05:01");
+        // Y una cadena más corta no se corta a medias: mejor vacío que basura.
+        assert_eq!(lv_hora_de(0, "2026-08-10"), "");
+        assert_eq!(lv_hora_de(0, ""), "");
     }
 
     #[test]
