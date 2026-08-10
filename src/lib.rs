@@ -52,6 +52,9 @@ pub mod logs;
 /// El registro de auditoría. La tabla la creó la app Tauri y el shell nativo
 /// ejecutaba comandos sin dejar constancia de ninguno.
 pub mod audit;
+/// Inventario de un equipo: puertos, servicios, software, certificados, tareas.
+/// Sin JSON fabricado a mano, que es lo que tumbaba el inventario entero.
+pub mod inventory;
 /// Fundir memorias que dicen lo mismo. Estaba escrito y nadie lo llamaba nunca.
 pub mod consolidate;
 /// Lo que distingue a NexShell de una consola: decidir si lo escrito es un
