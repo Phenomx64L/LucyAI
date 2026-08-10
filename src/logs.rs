@@ -214,6 +214,142 @@ pub fn remote_script(h: &crate::hosts::Host, path: &str, lines: usize) -> Result
     })
 }
 
+/// Dónde suelen estar los logs, según el sistema del equipo.
+///
+/// EXISTE PORQUE TECLEAR LA RUTA DE MEMORIA NO ES UN FLUJO. Para leer el log de
+/// un servidor había que acordarse de si era `C:\inetpub\logs\LogFiles` o
+/// `C:\inetpub\logs\LogFile`, y una letra de más devuelve «no existe» sin decir
+/// cuál era la buena. El operador acaba abriendo una sesión aparte solo para
+/// mirar dónde están los ficheros — que es exactamente el trabajo que este
+/// módulo tenía que ahorrarle.
+///
+/// Son CARPETAS y no ficheros concretos a propósito: el nombre del fichero de un
+/// log lleva la fecha dentro (`u_ex260810.log`, `auth.log.1`), así que apuntar a
+/// uno fijo caduca al día siguiente. Se lista la carpeta y se elige.
+pub fn common_dirs(h: &crate::hosts::Host) -> &'static [(&'static str, &'static str)] {
+    if h.protocol == crate::hosts::Protocol::Winrm {
+        &[
+            ("IIS", "C:\\inetpub\\logs\\LogFiles"),
+            ("Windows", "C:\\Windows\\Logs"),
+            ("Instalación", "C:\\Windows\\Panther"),
+            ("Lucy", "C:\\ProgramData\\Lucy\\logs"),
+        ]
+    } else {
+        &[
+            ("Sistema", "/var/log"),
+            ("Nginx", "/var/log/nginx"),
+            ("Apache", "/var/log/apache2"),
+            ("Journal", "/var/log/journal"),
+        ]
+    }
+}
+
+/// Cuántos ficheros devuelve un listado remoto.
+///
+/// `/var/log` en un servidor con meses de rotación pasa de mil entradas. Traerlas
+/// todas por la red para enseñar las veinte que se miran es tiempo de espera a
+/// cambio de nada.
+pub const MAX_FILES: usize = 200;
+
+/// Un fichero de log encontrado en el equipo remoto.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteFile {
+    pub path: String,
+    /// Tamaño legible ya formateado por el equipo remoto — no se recalcula aquí
+    /// para no tener dos criterios de redondeo.
+    pub size: String,
+    /// Fecha de modificación tal cual la da el sistema. Es lo que decide cuál
+    /// mirar: el log de hoy, no el de hace tres semanas.
+    pub modified: String,
+}
+
+/// El comando que lista los logs de una carpeta remota.
+///
+/// La salida sale con SEPARADOR DE BARRA VERTICAL y no en columnas alineadas. Un
+/// `Get-ChildItem` sin formato recorta los nombres largos con puntos suspensivos
+/// según el ancho de consola que crea tener, y entonces la ruta que se elige no
+/// existe. Con un separador explícito el nombre llega entero.
+pub fn list_script(h: &crate::hosts::Host, dir: &str) -> Result<String, String> {
+    if !h.protocol.can_shell() {
+        return Err(format!(
+            "«{}» está dado de alta como {} y por ahí no se listan ficheros.",
+            h.name,
+            h.protocol.label()
+        ));
+    }
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return Err("Falta la carpeta.".into());
+    }
+    Ok(if h.protocol == crate::hosts::Protocol::Winrm {
+        format!(
+            "Get-ChildItem -Path '{}' -File -Recurse -Depth 2 -Include *.log,*.txt \
+             -ErrorAction Stop | Sort-Object LastWriteTime -Descending | \
+             Select-Object -First {MAX_FILES} | ForEach-Object {{ \
+             \"$($_.FullName)|$([math]::Round($_.Length/1KB,1)) KB|\
+             $($_.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))\" }}",
+            crate::hosts::ps_quote(dir)
+        )
+    } else {
+        // `-printf` da los tres campos de una vez y sin depender del idioma del
+        // sistema, que es lo que rompe el análisis de la salida de `ls -l`.
+        format!(
+            "find '{}' -maxdepth 3 -type f \\( -name '*.log' -o -name '*.txt' \\) \
+             -printf '%p|%k KB|%TY-%Tm-%Td %TH:%TM\\n' 2>/dev/null | sort -t'|' -k3 -r | \
+             head -n {MAX_FILES}",
+            crate::hosts::sh_quote(dir)
+        )
+    })
+}
+
+/// Interpreta la salida de `list_script`.
+///
+/// Las líneas que no traen los tres campos SE DESCARTAN en silencio: un `find`
+/// escribe avisos de permisos por su salida de error, y en WinRM las dos salidas
+/// llegan juntas. Colar «Permission denied» como si fuera un fichero pondría en
+/// la lista una ruta que no se puede abrir.
+pub fn parse_list(salida: &str) -> Vec<RemoteFile> {
+    salida
+        .lines()
+        .filter_map(|l| {
+            let mut p = l.splitn(3, '|');
+            let path = p.next()?.trim();
+            let size = p.next()?.trim();
+            let modified = p.next()?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(RemoteFile {
+                path: path.to_string(),
+                size: size.to_string(),
+                modified: modified.to_string(),
+            })
+        })
+        .take(MAX_FILES)
+        .collect()
+}
+
+/// Lista los ficheros de log de una carpeta en un equipo remoto.
+pub fn list_remote(
+    h: &crate::hosts::Host,
+    password: &str,
+    dir: &str,
+) -> Result<Vec<RemoteFile>, String> {
+    let script = list_script(h, dir)?;
+    let (out, err, ok) = crate::hosts::run_remote(h, password, &script)?;
+    // Un listado vacío NO es un error: la carpeta puede existir y no tener logs,
+    // y decir «falló» ahí mandaría a buscar un problema que no hay.
+    if !ok && parse_list(&out).is_empty() {
+        let motivo = err.trim();
+        return Err(if motivo.is_empty() {
+            format!("No se pudo listar '{dir}' en {}.", h.name)
+        } else {
+            motivo.to_string()
+        });
+    }
+    Ok(parse_list(&out))
+}
+
 /// La cola de un log en un equipo remoto, en orden de lectura.
 ///
 /// EN ORDEN DE LECTURA, igual que `tail`, y no del revés. Que lo más reciente se
@@ -403,6 +539,59 @@ mod tests {
         // es mejor que mandarle un `tail` que no va a entender.
         let e = remote_script(&host(crate::hosts::Protocol::Redis), "/var/log/x", 10).unwrap_err();
         assert!(e.contains("WinRM o SSH"), "{e}");
+    }
+
+    #[test]
+    fn un_listado_solo_acepta_lineas_con_los_tres_campos() {
+        // Un `find` escribe sus avisos de permisos por la salida de error, y en
+        // WinRM las dos salidas llegan juntas. Colar «Permission denied» como si
+        // fuera un fichero pondría en la lista una ruta que no se puede abrir.
+        let salida = "find: '/var/log/private': Permission denied\n\
+                      /var/log/syslog|412 KB|2026-08-10 01:15\n\
+                      \n\
+                      /var/log/auth.log|88 KB|2026-08-09 22:03\n\
+                      basura sin separadores";
+        let f = parse_list(salida);
+        assert_eq!(f.len(), 2, "{f:?}");
+        assert_eq!(f[0].path, "/var/log/syslog");
+        assert_eq!(f[0].size, "412 KB");
+        assert_eq!(f[1].modified, "2026-08-09 22:03");
+    }
+
+    #[test]
+    fn un_nombre_con_espacios_llega_entero() {
+        // El separador explícito existe justamente por esto: un listado en
+        // columnas se parte por el espacio y la ruta elegida no existe.
+        let f = parse_list("C:\\Program Files\\App\\mi log.txt|4.2 KB|2026-08-10 01:15");
+        assert_eq!(f[0].path, "C:\\Program Files\\App\\mi log.txt");
+    }
+
+    #[test]
+    fn el_listado_remoto_tambien_escapa_la_carpeta() {
+        let veneno = "C:\\logs\\a'; calc; $x='";
+        let s = list_script(&host(crate::hosts::Protocol::Winrm), veneno).unwrap();
+        assert!(s.contains("''"), "{s}");
+        assert!(s.contains("-ErrorAction Stop"), "{s}");
+        assert!(s.contains(&format!("-First {MAX_FILES}")), "sin tope: {s}");
+
+        let p = list_script(&host(crate::hosts::Protocol::Ssh), "/var/log").unwrap();
+        assert!(p.contains("-printf"), "depende del idioma del sistema: {p}");
+        assert!(p.contains(&format!("head -n {MAX_FILES}")), "sin tope: {p}");
+    }
+
+    #[test]
+    fn las_carpetas_sugeridas_dependen_del_sistema() {
+        // Ofrecerle /var/log a un Windows es prometer un listado que va a volver
+        // vacío, y el operador no sabrá si es que no hay logs o que la ruta no
+        // aplica.
+        let w = common_dirs(&host(crate::hosts::Protocol::Winrm));
+        assert!(w.iter().all(|(_, p)| p.starts_with("C:\\")), "{w:?}");
+        let l = common_dirs(&host(crate::hosts::Protocol::Ssh));
+        assert!(l.iter().all(|(_, p)| p.starts_with('/')), "{l:?}");
+        // Y son CARPETAS, no ficheros: el nombre de un log lleva la fecha dentro
+        // y apuntar a uno fijo caduca al día siguiente.
+        assert!(w.iter().all(|(_, p)| !p.ends_with(".log")));
+        assert!(l.iter().all(|(_, p)| !p.ends_with(".log")));
     }
 
     #[test]
