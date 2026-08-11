@@ -2660,7 +2660,13 @@ struct App {
     inv_data: lucy_core::inventory::Inventory,
     inv_error: String,
     /// Escaneo en vuelo. Uno cada vez: es un PowerShell de varios segundos.
-    inv_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::inventory::Inventory, String>>>,
+    ///
+    /// LLEVA EL ID DEL EQUIPO AL QUE SE LE PIDIÓ. Sin él, cambiar de equipo
+    /// mientras un escaneo tarda —diez segundos contra un servidor es normal—
+    /// hacía que la foto de WIN-AD apareciera bajo el nombre de «Este equipo».
+    /// Sobre inventario eso es la peor mentira posible: es exactamente el dato
+    /// que se viene a comprobar, y no hay nada en pantalla que lo delate.
+    inv_rx: Option<(String, std::sync::mpsc::Receiver<Result<lucy_core::inventory::Inventory, String>>)>,
     inv_desde: Option<Instant>,
     inv_last: String,
     /// El orden de cada categoría: `(columna, ascendente)`. `None` = como llegó.
@@ -8233,13 +8239,23 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             };
             let _ = tx.send(r);
         });
-        self.inv_rx = Some(rx);
+        self.inv_rx = Some((self.inv_host.clone(), rx));
         self.inv_desde = Some(Instant::now());
     }
 
     fn pump_inventario(&mut self) {
-        let Some(rx) = &self.inv_rx else { return };
+        let Some((pedido, rx)) = &self.inv_rx else { return };
+        // A QUÉ EQUIPO SE LE PIDIÓ. Si el operador cambió de equipo mientras
+        // esto llegaba, la foto es de otra máquina y no se enseña bajo el nombre
+        // de ésta: se tira. Volver a pedirla cuesta un botón; enseñar los
+        // servicios de un servidor como si fueran los de otro no se detecta
+        // hasta que alguien actúa sobre ellos.
+        let de_otro = *pedido != self.inv_host;
         match rx.try_recv() {
+            Ok(_) if de_otro => {
+                self.inv_rx = None;
+                self.inv_desde = None;
+            }
             Ok(r) => {
                 self.inv_rx = None;
                 self.inv_desde = None;
