@@ -800,6 +800,125 @@ fn lv_hora() -> String {
     format!("{:02}:{:02}:{:02}Z", r / 3600, (r % 3600) / 60, r % 60)
 }
 
+/// Las columnas de cada categoría del inventario, en orden.
+///
+/// Una tabla por categoría y no una genérica: las cinco tienen campos distintos,
+/// y una tabla que los aplanara a «campo1, campo2, campo3» obligaría al operador
+/// a acordarse de qué era cada uno.
+fn inv_columnas(c: lucy_core::inventory::Categoria) -> &'static [(&'static str, f32)] {
+    use lucy_core::inventory::Categoria::*;
+    match c {
+        Puertos => &[("Puerto", 90.0), ("Proceso", 0.0)],
+        Servicios => &[("Servicio", 220.0), ("Estado", 90.0), ("Descripción", 0.0)],
+        Software => &[("Nombre", 380.0), ("Versión", 0.0)],
+        Certificados => &[("Caduca", 110.0), ("Asunto", 420.0), ("Ruta", 0.0)],
+        Tareas => &[("Tarea", 0.0)],
+    }
+}
+
+/// Las filas visibles de una categoría, filtradas y ordenadas, por índice.
+///
+/// Por índice y no clonando: son hasta cuatrocientos paquetes y esto corre en
+/// cada frame mientras el operador escribe en la caja de búsqueda.
+///
+/// `orden` es `(columna, ascendente)`. `None` = el orden en que llegó, que en
+/// software y servicios ya viene del sistema y suele ser el útil.
+fn inv_filas(
+    inv: &lucy_core::inventory::Inventory,
+    cat: lucy_core::inventory::Categoria,
+    query: &str,
+    orden: Option<(usize, bool)>,
+) -> Vec<usize> {
+    use lucy_core::inventory::Categoria::*;
+    let q = query.trim().to_lowercase();
+    // El filtro mira TODOS los campos de la fila. Buscar «443» tiene que
+    // encontrar el puerto, y buscar «nginx» el proceso que lo tiene abierto:
+    // quien escribe en esa caja no está pensando en columnas.
+    let casa = |campos: &[&str]| q.is_empty() || campos.iter().any(|c| c.to_lowercase().contains(&q));
+    let mut idx: Vec<usize> = match cat {
+        Puertos => inv
+            .ports
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| casa(&[&p.port.to_string(), &p.process]))
+            .map(|(i, _)| i)
+            .collect(),
+        Servicios => inv
+            .services
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| casa(&[&s.name, &s.status, &s.description]))
+            .map(|(i, _)| i)
+            .collect(),
+        Software => inv
+            .software
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| casa(&[&s.name, &s.version]))
+            .map(|(i, _)| i)
+            .collect(),
+        Certificados => inv
+            .certs
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| casa(&[&c.subject, &c.path]))
+            .map(|(i, _)| i)
+            .collect(),
+        Tareas => inv
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| casa(&[&t.entry]))
+            .map(|(i, _)| i)
+            .collect(),
+    };
+
+    if let Some((col, asc)) = orden {
+        // EL PUERTO SE ORDENA COMO NÚMERO. Por texto, «11434» va antes que «443»
+        // porque el primer carácter es menor — y una lista de puertos ordenada
+        // alfabéticamente no sirve para nada, porque lo que se busca es el rango
+        // bajo o el alto.
+        //
+        // Y la caducidad también: es un epoch, y ordenarlo como texto pondría
+        // «999…» antes que «1786…» justo en la columna que decide qué certificado
+        // renovar primero.
+        match (cat, col) {
+            (Puertos, 0) => idx.sort_by_key(|&i| inv.ports[i].port),
+            (Puertos, _) => idx.sort_by(|&a, &b| cmp_txt(&inv.ports[a].process, &inv.ports[b].process)),
+            (Servicios, 0) => idx.sort_by(|&a, &b| cmp_txt(&inv.services[a].name, &inv.services[b].name)),
+            (Servicios, 1) => {
+                idx.sort_by(|&a, &b| cmp_txt(&inv.services[a].status, &inv.services[b].status))
+            }
+            (Servicios, _) => idx.sort_by(|&a, &b| {
+                cmp_txt(&inv.services[a].description, &inv.services[b].description)
+            }),
+            (Software, 0) => idx.sort_by(|&a, &b| cmp_txt(&inv.software[a].name, &inv.software[b].name)),
+            (Software, _) => {
+                idx.sort_by(|&a, &b| cmp_txt(&inv.software[a].version, &inv.software[b].version))
+            }
+            (Certificados, 0) => idx.sort_by_key(|&i| inv.certs[i].expires_epoch),
+            (Certificados, 1) => {
+                idx.sort_by(|&a, &b| cmp_txt(&inv.certs[a].subject, &inv.certs[b].subject))
+            }
+            (Certificados, _) => idx.sort_by(|&a, &b| cmp_txt(&inv.certs[a].path, &inv.certs[b].path)),
+            (Tareas, _) => idx.sort_by(|&a, &b| cmp_txt(&inv.tasks[a].entry, &inv.tasks[b].entry)),
+        }
+        if !asc {
+            idx.reverse();
+        }
+    }
+    idx
+}
+
+/// Compara dos textos ignorando mayúsculas.
+///
+/// Un inventario de software mezcla `7-Zip`, `git` y `Microsoft Edge`, y una
+/// ordenación sensible a mayúsculas los agrupa por si el fabricante escribió en
+/// mayúscula — que no es un criterio que nadie esté buscando.
+fn cmp_txt(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
+
 /// ¿Se le puede devolver otro lote de resultados de herramienta?
 ///
 /// EL OTRO BUCLE, el que no tenía presupuesto. `absorb_tags` cumple un `readfile`
@@ -2188,6 +2307,48 @@ fn lv_chip(ui: &mut egui::Ui, label: &str, n: usize, on: bool) -> bool {
     resp.clicked()
 }
 
+/// Un aviso en rojo, con su marco. Para lo que salió mal y hay que leer.
+fn aviso_rojo(ui: &mut egui::Ui, texto: &str) {
+    egui::Frame::none()
+        .fill(theme::red().linear_multiply(0.10))
+        .stroke(egui::Stroke::new(1.0_f32, theme::red()))
+        .rounding(egui::Rounding::same(theme::R_MD))
+        .inner_margin(egui::Margin::symmetric(13.0, 9.0))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(texto).size(theme::FS_CAPTION).color(theme::txt2()),
+                )
+                .wrap(),
+            );
+        });
+}
+
+/// Una celda de tabla. `ancho` 0 = lo que quede.
+///
+/// Recorta en vez de partir, y la entera se lee en el globo al pasar por encima:
+/// con altura de fila fija —que es lo que pide `show_rows` para virtualizar— una
+/// celda que se parta en dos líneas se sale de su hueco y pisa la de abajo.
+fn celda(ui: &mut egui::Ui, texto: &str, ancho: f32, color: egui::Color32, mono: bool) {
+    let w = if ancho > 0.0 { ancho } else { ui.available_width().max(60.0) };
+    let mut t = egui::RichText::new(texto).size(theme::FS_CAPTION).color(color);
+    if mono {
+        t = t.monospace();
+    }
+    let r = ui.add_sized([w, 20.0], egui::Label::new(t).truncate());
+    if !texto.is_empty() {
+        r.on_hover_text(texto);
+    }
+}
+
+/// Ahora, en epoch de segundos.
+fn ahora_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Una fila del desplegable de equipos: nombre a la izquierda, tipo a la derecha.
 fn lv_opcion(ui: &mut egui::Ui, nombre: &str, tipo: &str, sel: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(
@@ -2490,6 +2651,24 @@ struct App {
     /// devuelve «no existe» sin decir cuál era la buena — así que el operador
     /// acababa abriendo una sesión aparte solo para mirar dónde estaban los
     /// ficheros, que es justo el trabajo que esta vista tenía que ahorrarle.
+    // inventario
+    /// El equipo del que se enseña la foto. Vacío = éste.
+    inv_host: String,
+    inv_host_menu: bool,
+    inv_cat: lucy_core::inventory::Categoria,
+    inv_query: String,
+    inv_data: lucy_core::inventory::Inventory,
+    inv_error: String,
+    /// Escaneo en vuelo. Uno cada vez: es un PowerShell de varios segundos.
+    inv_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::inventory::Inventory, String>>>,
+    inv_desde: Option<Instant>,
+    inv_last: String,
+    /// El orden de cada categoría: `(columna, ascendente)`. `None` = como llegó.
+    ///
+    /// POR CATEGORÍA Y NO UNO GLOBAL. Ordenar el software por nombre y los
+    /// puertos por número son dos decisiones distintas, y compartir el estado
+    /// haría que cambiar de pestaña reordenara la otra sin que nadie lo pidiera.
+    inv_sort: [Option<(usize, bool)>; 5],
     lv_files: Vec<lucy_core::logs::RemoteFile>,
     lv_files_rx: Option<std::sync::mpsc::Receiver<Result<Vec<lucy_core::logs::RemoteFile>, String>>>,
     /// La carpeta que se está explorando, para poder decirlo mientras carga.
@@ -2743,6 +2922,16 @@ impl App {
             lv_next: Instant::now(),
             lv_rx: None,
             lv_desde: None,
+            inv_host: String::new(),
+            inv_host_menu: false,
+            inv_cat: lucy_core::inventory::Categoria::Puertos,
+            inv_query: String::new(),
+            inv_data: lucy_core::inventory::Inventory::default(),
+            inv_error: String::new(),
+            inv_rx: None,
+            inv_desde: None,
+            inv_last: String::new(),
+            inv_sort: [None; 5],
             lv_files: Vec::new(),
             lv_files_rx: None,
             lv_dir: String::new(),
@@ -3032,6 +3221,10 @@ impl eframe::App for App {
         // cambiar de pantalla tiene que poder cerrarse, o al volver el indicador
         // seguiría diciendo «leyendo…» sobre un hilo que terminó hace rato.
         self.pump_logs();
+        // Fuera de la vista igual: un escaneo tarda segundos y el operador se va
+        // a mirar otra cosa mientras. Al volver tiene que estar la foto, no el
+        // botón girando.
+        self.pump_inventario();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
@@ -3398,6 +3591,7 @@ impl eframe::App for App {
             View::Memoria => self.memoria(ui),
             View::Dashboard => self.sistema(ui),
             View::LogViewer => self.log_viewer(ui),
+            View::Inventario => self.inventario(ui),
             View::Configuracion => self.configuracion(ui),
             other => self.pendiente(ui, other),
         });
@@ -7637,6 +7831,445 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let _ = lucy_core::audit::ensure_schema().and_then(|()| lucy_core::audit::record(&e));
     }
 
+    /// Inventario — la foto de un equipo: qué escucha, qué corre, qué hay
+    /// instalado, qué caduca y qué se dispara solo.
+    ///
+    /// NO ESCANEA SOLO AL ABRIRSE, y es la diferencia más visible con la V2.
+    /// Allí el escaneo salía al montar la vista y se repetía cada treinta
+    /// minutos: son varios segundos de PowerShell —o de sesión remota— por
+    /// vuelta, para un dato que solo cambia cuando alguien instala algo. Aquí
+    /// se pide, se lee y se cierra.
+    fn inventario(&mut self, ui: &mut egui::Ui) {
+        self.inv_cabecera(ui);
+        if !self.inv_error.is_empty() {
+            ui.add_space(4.0);
+            aviso_rojo(ui, &self.inv_error);
+        }
+        // Las secciones que fallaron, cada una con su motivo. Van arriba y no
+        // dentro de su pestaña: si el operador está mirando Puertos, tiene que
+        // enterarse igual de que las tareas no se pudieron leer — o dará por
+        // bueno que este equipo no tiene ninguna.
+        for (cat, motivo) in self.inv_data.fallos.clone() {
+            ui.add_space(4.0);
+            aviso_rojo(ui, &format!("{}: {motivo}", cat.label()));
+        }
+        for (cat, total) in self.inv_data.truncado.clone() {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "⚠ {}: se enseñan {} de {total}. Una lista recortada en silencio se \
+                     lee como una lista completa.",
+                    cat.label(),
+                    self.inv_data.len_de(cat)
+                ))
+                .size(theme::FS_CAPTION)
+                .color(theme::amber()),
+            );
+        }
+        self.inv_pestanas(ui);
+        ui.add_space(6.0);
+        self.inv_tabla(ui);
+    }
+
+    fn inv_cabecera(&mut self, ui: &mut egui::Ui) {
+        let mut escanear = false;
+        row_align(ui, 30.0, egui::Align::Center, |ui| {
+            let corriendo = self.inv_rx.is_some();
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
+            ui.painter().circle_filled(
+                rect.center(),
+                3.5,
+                if corriendo {
+                    theme::amber()
+                } else if self.inv_last.is_empty() {
+                    theme::faint()
+                } else {
+                    theme::acc()
+                },
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Inventario").size(theme::FS_TITLE).color(theme::txt()),
+            );
+            ui.add_space(8.0);
+            if self.inv_host_picker(ui) {
+                escanear = true;
+            }
+            ui.add_space(6.0);
+            let b = egui::Button::new(
+                egui::RichText::new(if corriendo { "Escaneando…" } else { "Escanear" })
+                    .size(theme::FS_CAPTION)
+                    .color(if corriendo { theme::txt3() } else { theme::acc_ink() }),
+            )
+            .fill(if corriendo { theme::bg3() } else { theme::acc() })
+            .stroke(egui::Stroke::NONE)
+            .rounding(egui::Rounding::same(theme::R_SM))
+            .min_size(egui::vec2(84.0, 24.0));
+            if ui.add_enabled(!corriendo, b).clicked() {
+                escanear = true;
+            }
+            if let Some(t0) = self.inv_desde {
+                ui.add_space(8.0);
+                // El tiempo transcurrido, en segundos. Un escaneo tarda entre dos
+                // y quince, y un botón que no hace nada visible durante quince
+                // segundos se pulsa otra vez.
+                ui.label(
+                    egui::RichText::new(format!("{}s", t0.elapsed().as_secs()))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::txt3()),
+                );
+            } else if !self.inv_last.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!("escaneado {}", self.inv_last))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::acc()),
+                );
+            }
+
+            right(ui, 30.0, |ui| {
+                let hay = !self.inv_data.is_empty();
+                if ghost_icon(ui, icons::Icon::Copy)
+                    .on_hover_text(if hay {
+                        "Copiar el inventario en CSV"
+                    } else {
+                        "Nada que copiar todavía"
+                    })
+                    .clicked()
+                    && hay
+                {
+                    let nombre = self.inv_nombre_equipo();
+                    let csv = lucy_core::inventory::to_csv(&self.inv_data, &nombre);
+                    ui.ctx().copy_text(csv);
+                }
+            });
+        });
+        if escanear {
+            self.inv_escanear();
+        }
+    }
+
+    /// Cómo se llama el equipo que se está mirando.
+    fn inv_nombre_equipo(&self) -> String {
+        if self.inv_host.is_empty() {
+            lucy_core::system::hostname()
+        } else {
+            self.remote_hosts
+                .iter()
+                .find(|h| h.id == self.inv_host)
+                .map(|h| h.name.clone())
+                .unwrap_or_else(|| "Equipo".into())
+        }
+    }
+
+    /// El desplegable de equipos. Devuelve si hay que escanear.
+    fn inv_host_picker(&mut self, ui: &mut egui::Ui) -> bool {
+        let etiqueta = if self.inv_host.is_empty() {
+            "Este equipo".to_string()
+        } else {
+            self.inv_nombre_equipo()
+        };
+        let boton = ui.add(
+            egui::Button::new(
+                egui::RichText::new(format!("▤ {etiqueta}"))
+                    .monospace()
+                    .size(theme::FS_FOOTNOTE)
+                    .color(theme::txt3()),
+            )
+            .fill(theme::bg3())
+            .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+            .rounding(egui::Rounding::same(theme::R_SM)),
+        );
+        if boton.clicked() {
+            self.inv_host_menu = !self.inv_host_menu;
+        }
+        if !self.inv_host_menu {
+            return false;
+        }
+        let mut elegido: Option<String> = None;
+        egui::Area::new(egui::Id::new("inv-host-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(boton.rect.left_bottom() + egui::vec2(0.0, 6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::none()
+                    .fill(theme::bg3())
+                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr2()))
+                    .rounding(egui::Rounding::same(theme::R_LG))
+                    .inner_margin(egui::Margin::same(6.0))
+                    .shadow(egui::epaint::Shadow {
+                        offset: egui::vec2(0.0, 6.0),
+                        blur: 18.0,
+                        spread: 0.0,
+                        color: egui::Color32::from_black_alpha(90),
+                    })
+                    .show(ui, |ui| {
+                        ui.set_min_width(210.0);
+                        if lv_opcion(ui, "Este equipo", "local", self.inv_host.is_empty()) {
+                            elegido = Some(String::new());
+                        }
+                        // Solo los que tienen shell: un equipo dado de alta como
+                        // Postgres no se puede inventariar, y ofrecerlo promete
+                        // un escaneo que falla sin explicar por qué estaba ahí.
+                        for h in self.remote_hosts.iter().filter(|h| h.protocol.can_shell()) {
+                            let tipo = if h.protocol == lucy_core::hosts::Protocol::Winrm {
+                                "WinRM"
+                            } else {
+                                "SSH"
+                            };
+                            if lv_opcion(ui, &h.name, tipo, self.inv_host == h.id) {
+                                elegido = Some(h.id.clone());
+                            }
+                        }
+                    });
+            });
+        if ui.input(|i| i.pointer.any_click()) && !boton.clicked() && elegido.is_none() {
+            let dentro = ui.ctx().pointer_latest_pos().is_some_and(|p| {
+                ui.ctx()
+                    .memory(|m| m.area_rect(egui::Id::new("inv-host-menu")))
+                    .is_some_and(|r| r.contains(p))
+            });
+            if !dentro {
+                self.inv_host_menu = false;
+            }
+        }
+        match elegido {
+            Some(id) => {
+                self.inv_host_menu = false;
+                let cambio = id != self.inv_host;
+                self.inv_host = id;
+                if cambio {
+                    // La foto era de OTRA máquina. Dejarla mientras se escanea la
+                    // nueva enseñaría los servicios de un servidor bajo el nombre
+                    // de otro — que sobre inventario es la peor mentira posible,
+                    // porque es exactamente el dato que se viene a comprobar.
+                    self.inv_data = lucy_core::inventory::Inventory::default();
+                    self.inv_error.clear();
+                    self.inv_last.clear();
+                    self.inv_sort = [None; 5];
+                }
+                // Cambiar de equipo NO escanea solo: un escaneo son segundos y
+                // una sesión autenticada contra el servidor, y abrir un
+                // desplegable no es pedir eso. Se pulsa Escanear.
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn inv_pestanas(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        row_align(ui, 28.0, egui::Align::Center, |ui| {
+            for c in lucy_core::inventory::Categoria::ALL {
+                let n = self.inv_data.len_de(c);
+                if lv_chip(ui, c.label(), n, self.inv_cat == c) {
+                    self.inv_cat = c;
+                }
+                ui.add_space(6.0);
+            }
+            ui.add_space(6.0);
+            ui.add_sized(
+                [ui.available_width().min(420.0).max(150.0), 26.0],
+                egui::TextEdit::singleline(&mut self.inv_query).hint_text("⌕  Filtrar…"),
+            );
+        });
+    }
+
+    fn inv_tabla(&mut self, ui: &mut egui::Ui) {
+        use lucy_core::inventory::Categoria as C;
+        let cat = self.inv_cat;
+        let ci = C::ALL.iter().position(|c| *c == cat).unwrap_or(0);
+        let filas = inv_filas(&self.inv_data, cat, &self.inv_query, self.inv_sort[ci]);
+
+        if filas.is_empty() {
+            let msg = if self.inv_data.is_empty() && self.inv_last.is_empty() {
+                "Pulsa Escanear para hacerle una foto a este equipo."
+            } else if self.inv_data.len_de(cat) == 0 {
+                match self.inv_data.fallo_de(cat) {
+                    // Distinguir «no hay» de «no se pudo mirar» es la mitad del
+                    // valor de un inventario: lo primero es un hecho del equipo y
+                    // lo segundo un problema de permisos.
+                    Some(_) => "No se pudo consultar esta categoría — el motivo está arriba.",
+                    None => "Esta categoría no tiene nada en este equipo.",
+                }
+            } else {
+                "Sin coincidencias."
+            };
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(msg)
+                        .monospace()
+                        .size(theme::FS_FOOTNOTE)
+                        .color(theme::faint()),
+                );
+            });
+            return;
+        }
+
+        // ── cabecera de columnas, que además ordena ──
+        let cols = inv_columnas(cat);
+        let mut nuevo_orden = self.inv_sort[ci];
+        row_align(ui, 24.0, egui::Align::Center, |ui| {
+            for (n, (titulo, ancho)) in cols.iter().enumerate() {
+                let activa = self.inv_sort[ci].map(|(c, _)| c) == Some(n);
+                let flecha = match self.inv_sort[ci] {
+                    Some((c, asc)) if c == n => {
+                        if asc {
+                            " ▲"
+                        } else {
+                            " ▼"
+                        }
+                    }
+                    _ => "",
+                };
+                let w = if *ancho > 0.0 { *ancho } else { ui.available_width().max(120.0) };
+                let r = ui.add_sized(
+                    [w, 22.0],
+                    egui::Label::new(
+                        egui::RichText::new(format!("{titulo}{flecha}"))
+                            .size(theme::FS_CAPTION)
+                            .color(if activa { theme::acc() } else { theme::txt3() }),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if r.on_hover_text("Ordenar por esta columna").clicked() {
+                    // Tres estados y no dos: ascendente, descendente y NINGUNO.
+                    // El orden en que llega el software es el que da el sistema y
+                    // a veces es el útil; sin forma de volver a él, ordenar una
+                    // vez sería irreversible sin reescanear.
+                    nuevo_orden = match self.inv_sort[ci] {
+                        Some((c, true)) if c == n => Some((n, false)),
+                        Some((c, false)) if c == n => None,
+                        _ => Some((n, true)),
+                    };
+                }
+            }
+        });
+        self.inv_sort[ci] = nuevo_orden;
+        ui.add_space(2.0);
+
+        let alto = 20.0_f32;
+        let ahora = ahora_epoch();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .id_salt("inv-tabla")
+            .show_rows(ui, alto, filas.len(), |ui, rango| {
+                for k in rango {
+                    let i = filas[k];
+                    ui.horizontal(|ui| {
+                        ui.set_height(alto);
+                        match cat {
+                            C::Puertos => {
+                                let p = &self.inv_data.ports[i];
+                                celda(ui, &p.port.to_string(), 90.0, theme::txt(), true);
+                                celda(ui, &p.process, 0.0, theme::txt2(), true);
+                            }
+                            C::Servicios => {
+                                let s = &self.inv_data.services[i];
+                                celda(ui, &s.name, 220.0, theme::txt(), true);
+                                let col = if s.status.starts_with("run") {
+                                    theme::acc()
+                                } else {
+                                    theme::txt3()
+                                };
+                                celda(ui, &s.status, 90.0, col, true);
+                                celda(ui, &s.description, 0.0, theme::txt2(), false);
+                            }
+                            C::Software => {
+                                let s = &self.inv_data.software[i];
+                                celda(ui, &s.name, 380.0, theme::txt(), false);
+                                celda(ui, &s.version, 0.0, theme::txt2(), true);
+                            }
+                            C::Certificados => {
+                                let c = &self.inv_data.certs[i];
+                                let d = c.days_left(ahora);
+                                // EL COLOR SALE DE LOS DÍAS QUE QUEDAN, que es
+                                // para lo que se abre esta pestaña. Un
+                                // certificado caducado en el mismo gris que uno
+                                // de dos años no se distingue leyendo una lista
+                                // de cuarenta.
+                                let (txt, col) = if d < 0 {
+                                    (format!("caducó hace {}d", -d), theme::red())
+                                } else if d <= 30 {
+                                    (format!("{d}d"), theme::amber())
+                                } else {
+                                    (format!("{d}d"), theme::txt3())
+                                };
+                                celda(ui, &txt, 110.0, col, true);
+                                celda(ui, &c.subject, 420.0, theme::txt(), false);
+                                celda(ui, &c.path, 0.0, theme::txt3(), false);
+                            }
+                            C::Tareas => {
+                                celda(ui, &self.inv_data.tasks[i].entry, 0.0, theme::txt2(), false);
+                            }
+                        }
+                    });
+                }
+            });
+    }
+
+    /// Lanza el escaneo en un hilo.
+    fn inv_escanear(&mut self) {
+        if self.inv_rx.is_some() {
+            return;
+        }
+        self.inv_error.clear();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let host = self
+            .remote_hosts
+            .iter()
+            .find(|h| h.id == self.inv_host)
+            .cloned()
+            .filter(|_| !self.inv_host.is_empty());
+        std::thread::spawn(move || {
+            let r = match host {
+                // La contraseña se saca DENTRO del hilo: leer el almacén de
+                // credenciales abre un diálogo del sistema la primera vez, y en
+                // el hilo de la interfaz eso congela la ventana.
+                Some(h) => {
+                    let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
+                    lucy_core::inventory::discover_remote(&h, &pw)
+                }
+                None => lucy_core::inventory::discover_local(),
+            };
+            let _ = tx.send(r);
+        });
+        self.inv_rx = Some(rx);
+        self.inv_desde = Some(Instant::now());
+    }
+
+    fn pump_inventario(&mut self) {
+        let Some(rx) = &self.inv_rx else { return };
+        match rx.try_recv() {
+            Ok(r) => {
+                self.inv_rx = None;
+                self.inv_desde = None;
+                match r {
+                    Ok(inv) => {
+                        self.inv_data = inv;
+                        self.inv_last = lv_hora();
+                    }
+                    // NADA DE DATOS DE EJEMPLO. La V2 enseña un inventario
+                    // inventado cuando el escaneo falla —bajo el nombre del
+                    // equipo real, y encima cruza esos datos contra la base de
+                    // vulnerabilidades—, y su aviso de «datos de ejemplo» está
+                    // detrás de una condición que en esa rama nunca se cumple.
+                    // Aquí un fallo es un fallo: el motivo y la tabla vacía.
+                    Err(e) => {
+                        self.inv_data = lucy_core::inventory::Inventory::default();
+                        self.inv_error = e;
+                        self.inv_last.clear();
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.inv_rx = None;
+                self.inv_desde = None;
+                self.inv_error = "El escaneo se cortó sin devolver nada.".into();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
     /// Abre el visor de logs sobre un equipo concreto, ya explorando.
     ///
     /// Es lo que se pide desde NexShell. Deja la vista lista para elegir fichero
@@ -11542,6 +12175,103 @@ mod bucle {
         // Y una cadena más corta no se corta a medias: mejor vacío que basura.
         assert_eq!(lv_hora_de(0, "2026-08-10"), "");
         assert_eq!(lv_hora_de(0, ""), "");
+    }
+
+    fn inv_muestra() -> lucy_core::inventory::Inventory {
+        use lucy_core::inventory::*;
+        let mut i = Inventory::default();
+        // Puestos a propósito en un orden que delate una ordenación por texto.
+        i.ports = vec![
+            Port { port: 11434, process: "ollama".into() },
+            Port { port: 443, process: "nginx".into() },
+            Port { port: 22, process: "sshd".into() },
+        ];
+        i.software = vec![
+            Software { name: "git".into(), version: "2.45.1".into() },
+            Software { name: "7-Zip".into(), version: "24.05".into() },
+            Software { name: "Microsoft Edge".into(), version: "126.0".into() },
+        ];
+        i.certs = vec![
+            Cert { path: "/a.pem".into(), subject: "CN=viejo".into(), expires_epoch: 1_000 },
+            Cert { path: "/b.pem".into(), subject: "CN=nuevo".into(), expires_epoch: 9_999_999 },
+        ];
+        i
+    }
+
+    #[test]
+    fn los_puertos_se_ordenan_como_numeros_no_como_texto() {
+        // Por texto, «11434» va antes que «443» porque el primer carácter es
+        // menor — y una lista de puertos ordenada alfabéticamente no sirve para
+        // nada, porque lo que se busca es el rango bajo o el alto.
+        use lucy_core::inventory::Categoria::Puertos;
+        let inv = inv_muestra();
+        let asc = inv_filas(&inv, Puertos, "", Some((0, true)));
+        let puertos: Vec<u32> = asc.iter().map(|&i| inv.ports[i].port).collect();
+        assert_eq!(puertos, vec![22, 443, 11434]);
+        let desc = inv_filas(&inv, Puertos, "", Some((0, false)));
+        assert_eq!(
+            desc.iter().map(|&i| inv.ports[i].port).collect::<Vec<_>>(),
+            vec![11434, 443, 22]
+        );
+    }
+
+    #[test]
+    fn la_caducidad_se_ordena_por_fecha_y_el_caducado_sale_primero() {
+        // Es un epoch: ordenarlo como texto pondría «999…» antes que «1786…»
+        // justo en la columna que decide qué certificado renovar antes.
+        use lucy_core::inventory::Categoria::Certificados;
+        let inv = inv_muestra();
+        let asc = inv_filas(&inv, Certificados, "", Some((0, true)));
+        assert_eq!(inv.certs[asc[0]].subject, "CN=viejo");
+    }
+
+    #[test]
+    fn ordenar_texto_no_agrupa_por_mayusculas() {
+        // Un inventario mezcla «7-Zip», «git» y «Microsoft Edge»; ordenar
+        // sensible a mayúsculas los agrupa por si el fabricante escribió en
+        // mayúscula, que no es un criterio que nadie busque.
+        use lucy_core::inventory::Categoria::Software;
+        let inv = inv_muestra();
+        let asc = inv_filas(&inv, Software, "", Some((0, true)));
+        let n: Vec<&str> = asc.iter().map(|&i| inv.software[i].name.as_str()).collect();
+        assert_eq!(n, vec!["7-Zip", "git", "Microsoft Edge"]);
+    }
+
+    #[test]
+    fn el_orden_tiene_tres_estados_y_se_puede_volver_al_original() {
+        // Sin el tercero, ordenar una vez sería irreversible sin reescanear — y
+        // el orden en que llega el software es el que da el sistema, que a veces
+        // es el útil.
+        use lucy_core::inventory::Categoria::Software;
+        let inv = inv_muestra();
+        let sin = inv_filas(&inv, Software, "", None);
+        assert_eq!(sin, vec![0, 1, 2], "sin orden no se toca lo que llegó");
+    }
+
+    #[test]
+    fn el_filtro_mira_todos_los_campos_de_la_fila() {
+        // Quien escribe en esa caja no está pensando en columnas: buscar «443»
+        // tiene que encontrar el puerto y buscar «nginx» el proceso que lo abre.
+        use lucy_core::inventory::Categoria::Puertos;
+        let inv = inv_muestra();
+        assert_eq!(inv_filas(&inv, Puertos, "443", None).len(), 1);
+        assert_eq!(inv_filas(&inv, Puertos, "nginx", None).len(), 1);
+        assert_eq!(inv_filas(&inv, Puertos, "NGINX", None).len(), 1, "distingue mayúsculas");
+        assert!(inv_filas(&inv, Puertos, "no-existe", None).is_empty());
+        // Y filtrar y ordenar se componen.
+        let f = inv_filas(&inv, Puertos, "s", Some((0, true)));
+        assert_eq!(f.iter().map(|&i| inv.ports[i].port).collect::<Vec<_>>(), vec![22]);
+    }
+
+    #[test]
+    fn cada_categoria_tiene_columnas_y_la_ultima_es_elastica() {
+        // La última a ancho 0 = «lo que quede». Si alguna tuviera todas fijas,
+        // sobraría espacio a la derecha en una ventana ancha.
+        for c in lucy_core::inventory::Categoria::ALL {
+            let cols = inv_columnas(c);
+            assert!(!cols.is_empty(), "{} sin columnas", c.label());
+            assert_eq!(cols.last().unwrap().1, 0.0, "{} no es elástica", c.label());
+        }
     }
 
     #[test]
