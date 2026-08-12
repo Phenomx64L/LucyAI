@@ -58,6 +58,9 @@ pub mod inventory;
 /// Qué ha cambiado desde que dijimos que el equipo estaba bien. Los puertos
 /// efímeros no cuentan: son la diferencia entre un informe y un montón de ruido.
 pub mod drift;
+/// Checks de CIS Benchmark. El catálogo se COMPARTE con la app por `include_str!`
+/// en vez de copiarse, y la evidencia llega entera en vez de con puntos.
+pub mod compliance;
 /// Fundir memorias que dicen lo mismo. Estaba escrito y nadie lo llamaba nunca.
 pub mod consolidate;
 /// Lo que distingue a NexShell de una consola: decidir si lo escrito es un
