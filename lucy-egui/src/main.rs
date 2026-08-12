@@ -2344,6 +2344,20 @@ fn celda(ui: &mut egui::Ui, texto: &str, ancho: f32, color: egui::Color32, mono:
     }
 }
 
+/// «hace 3 días», «hace 2 h». Para decir la edad de una línea base.
+///
+/// Importa cuánto: comparar contra una foto de hace seis meses da un informe
+/// enorme que no dice nada, y sin la edad delante nadie se da cuenta de que ése
+/// es el problema.
+fn hace_cuanto(secs: i64) -> String {
+    match secs {
+        s if s < 90 => "hace un momento".to_string(),
+        s if s < 5_400 => format!("hace {} min", s / 60),
+        s if s < 172_800 => format!("hace {} h", s / 3_600),
+        s => format!("hace {} días", s / 86_400),
+    }
+}
+
 /// Ahora, en epoch de segundos.
 fn ahora_epoch() -> i64 {
     std::time::SystemTime::now()
@@ -2684,6 +2698,16 @@ struct App {
     /// sexta; esto era lo único que habría compilado callado, y el `position()`
     /// de una categoría fuera de rango habría reventado en tiempo de ejecución.
     inv_sort: [Option<(usize, bool)>; lucy_core::inventory::Categoria::ALL.len()],
+    /// El informe de cambios, si se ha pedido.
+    ///
+    /// Se calcula al pulsar y no en cada escaneo: la mayoría de las veces el
+    /// operador viene a mirar qué hay, no a comparar. Y comparar contra una línea
+    /// base que no existe no es un error que merezca ocupar la pantalla.
+    inv_drift: Option<lucy_core::drift::Report>,
+    /// Si este equipo tiene línea base, y de cuándo. `None` = aún no se ha
+    /// mirado; `Some(None)` = se miró y no hay.
+    #[allow(clippy::option_option)]
+    inv_base: Option<Option<(String, i64)>>,
     /// El interruptor del escaneo en curso.
     ///
     /// Se REEMPLAZA en cada escaneo en vez de bajarse: si quedara un hilo del
@@ -2952,6 +2976,8 @@ impl App {
             inv_desde: None,
             inv_last: String::new(),
             inv_sort: [None; lucy_core::inventory::Categoria::ALL.len()],
+            inv_drift: None,
+            inv_base: None,
             inv_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             lv_files: Vec::new(),
             lv_files_rx: None,
@@ -7894,9 +7920,218 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 .color(theme::amber()),
             );
         }
+        // La barra de comparación solo aparece con una foto delante: fijar una
+        // línea base sin haber escaneado no significa nada, y ofrecerlo sería un
+        // botón que solo sabe dar error.
+        if !self.inv_data.is_empty() {
+            self.inv_barra_drift(ui);
+        }
+        if let Some(r) = self.inv_drift.clone() {
+            self.inv_tabla_drift(ui, &r);
+            return;
+        }
         self.inv_pestanas(ui);
         ui.add_space(6.0);
         self.inv_tabla(ui);
+    }
+
+    /// Fijar la línea base y comparar contra ella.
+    fn inv_barra_drift(&mut self, ui: &mut egui::Ui) {
+        // Se consulta una vez por equipo y se recuerda: es una fila de SQLite,
+        // pero pedirla en cada frame es una consulta a sesenta por segundo para
+        // pintar un texto que no cambia.
+        if self.inv_base.is_none() {
+            self.inv_base = Some(
+                lucy_core::drift::get_baseline(&self.inv_host)
+                    .ok()
+                    .flatten()
+                    .map(|b| (b.label, b.updated_at)),
+            );
+        }
+        let base = self.inv_base.clone().flatten();
+        ui.add_space(8.0);
+        row_align(ui, 26.0, egui::Align::Center, |ui| {
+            match &base {
+                Some((label, ts)) => {
+                    let etiqueta = if label.trim().is_empty() { "sin etiqueta" } else { label };
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Línea base: {etiqueta} · {}",
+                            hace_cuanto(ahora_epoch() - *ts)
+                        ))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::txt3()),
+                    );
+                    ui.add_space(8.0);
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("Ver cambios")
+                                .size(theme::FS_CAPTION)
+                                .color(theme::acc()),
+                        ))
+                        .on_hover_text("Comparar esta foto con la línea base")
+                        .clicked()
+                    {
+                        self.inv_comparar();
+                    }
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("Rehacer").size(theme::FS_CAPTION),
+                        ))
+                        .on_hover_text("Esta foto pasa a ser la nueva línea base")
+                        .clicked()
+                    {
+                        self.inv_fijar_base();
+                    }
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new("Sin línea base para este equipo.")
+                            .size(theme::FS_CAPTION)
+                            .color(theme::faint()),
+                    );
+                    ui.add_space(8.0);
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("Fijar línea base")
+                                .size(theme::FS_CAPTION)
+                                .color(theme::acc()),
+                        ))
+                        .on_hover_text(
+                            "Declara que este equipo está como debe. A partir de aquí se \
+                             puede ver qué cambia.",
+                        )
+                        .clicked()
+                    {
+                        self.inv_fijar_base();
+                    }
+                }
+            }
+            if self.inv_drift.is_some() {
+                right(ui, 26.0, |ui| {
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("Volver al inventario")
+                                .size(theme::FS_CAPTION),
+                        ))
+                        .clicked()
+                    {
+                        self.inv_drift = None;
+                    }
+                });
+            }
+        });
+    }
+
+    fn inv_fijar_base(&mut self) {
+        let etiqueta = lv_hora();
+        match lucy_core::drift::set_baseline(&self.inv_host, &etiqueta, &self.inv_data) {
+            Ok(()) => {
+                self.inv_base = None; // se relee
+                // El informe anterior deja de valer: comparaba contra otra cosa,
+                // y dejarlo en pantalla diría que esos cambios siguen ahí.
+                self.inv_drift = None;
+                self.inv_error.clear();
+            }
+            Err(e) => self.inv_error = e,
+        }
+    }
+
+    fn inv_comparar(&mut self) {
+        match lucy_core::drift::get_baseline(&self.inv_host) {
+            Ok(Some(b)) => {
+                let mut r = lucy_core::drift::compare(&b.inv, &self.inv_data);
+                r.edad_secs = ahora_epoch() - b.updated_at;
+                r.label = b.label;
+                self.inv_drift = Some(r);
+            }
+            Ok(None) => self.inv_error = "Este equipo no tiene línea base todavía.".into(),
+            Err(e) => self.inv_error = e,
+        }
+    }
+
+    fn inv_tabla_drift(&mut self, ui: &mut egui::Ui, r: &lucy_core::drift::Report) {
+        use lucy_core::drift::Cambio;
+        ui.add_space(8.0);
+        if r.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(if r.efimeros_ignorados == 0 {
+                        "Nada ha cambiado desde la línea base.".to_string()
+                    } else {
+                        // El «sin cambios» se explica: descartar cuarenta filas
+                        // por su cuenta y no decirlo hace que la próxima vez que
+                        // alguien eche en falta un puerto sospeche del programa.
+                        format!(
+                            "Nada ha cambiado desde la línea base.\n\
+                             ({} puertos dinámicos ignorados — el sistema los reparte en \
+                             cada arranque.)",
+                            r.efimeros_ignorados
+                        )
+                    })
+                    .size(theme::FS_FOOTNOTE)
+                    .color(theme::faint()),
+                );
+            });
+            return;
+        }
+
+        row_align(ui, 24.0, egui::Align::Center, |ui| {
+            for c in lucy_core::inventory::Categoria::ALL {
+                let n = r.cuenta(c);
+                if n > 0 {
+                    ui.label(
+                        egui::RichText::new(format!("{} {n}", c.label()))
+                            .size(theme::FS_CAPTION)
+                            .color(theme::txt3()),
+                    );
+                    ui.add_space(10.0);
+                }
+            }
+            if r.efimeros_ignorados > 0 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "· {} dinámicos ignorados",
+                        r.efimeros_ignorados
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                );
+            }
+        });
+        ui.add_space(4.0);
+
+        let alto = 20.0_f32;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .id_salt("inv-drift")
+            .show_rows(ui, alto, r.filas.len(), |ui, rango| {
+                for k in rango {
+                    let f = &r.filas[k];
+                    // APARECER Y DESAPARECER NO SON IGUAL DE GRAVES, y el color lo
+                    // dice antes que el texto: algo nuevo escuchando en un puerto
+                    // es lo que se busca en este panel; algo que ya no está suele
+                    // ser una limpieza.
+                    let (marca, col) = match &f.cambio {
+                        Cambio::Apareció => ("+", theme::acc()),
+                        Cambio::Desapareció => ("−", theme::amber()),
+                        Cambio::Cambió { .. } => ("~", theme::red()),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.set_height(alto);
+                        celda(ui, marca, 18.0, col, true);
+                        celda(ui, f.cat.label(), 96.0, theme::txt3(), false);
+                        celda(ui, &f.id, 240.0, theme::txt(), true);
+                        let texto = match &f.cambio {
+                            Cambio::Cambió { campo, de, a } => {
+                                format!("{campo}: {de} → {a}")
+                            }
+                            _ => f.detalle.clone(),
+                        };
+                        celda(ui, &texto, 0.0, theme::txt2(), false);
+                    });
+                }
+            });
     }
 
     fn inv_cabecera(&mut self, ui: &mut egui::Ui) {
@@ -8095,6 +8330,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     self.inv_error.clear();
                     self.inv_last.clear();
                     self.inv_sort = [None; lucy_core::inventory::Categoria::ALL.len()];
+                    // La línea base es POR EQUIPO. Sin esto, el panel seguiría
+                    // enseñando «Línea base: 14:22 · hace 3 días» sobre la
+                    // máquina recién elegida, que puede no tener ninguna — y el
+                    // informe compararía la foto de una contra la foto de otra.
+                    self.inv_base = None;
+                    self.inv_drift = None;
                 }
                 // Cambiar de equipo NO escanea solo: un escaneo son segundos y
                 // una sesión autenticada contra el servidor, y abrir un
@@ -12365,6 +12606,22 @@ mod bucle {
         // Y filtrar y ordenar se componen.
         let f = inv_filas(&inv, Puertos, "s", Some((0, true)));
         assert_eq!(f.iter().map(|&i| inv.ports[i].port).collect::<Vec<_>>(), vec![22]);
+    }
+
+    #[test]
+    fn la_edad_de_la_linea_base_se_lee_como_la_diria_una_persona() {
+        // Importa cuánto: comparar contra una foto de hace seis meses da un
+        // informe enorme que no dice nada, y sin la edad delante nadie se da
+        // cuenta de que ése es el problema.
+        assert_eq!(hace_cuanto(5), "hace un momento");
+        assert_eq!(hace_cuanto(89), "hace un momento");
+        assert_eq!(hace_cuanto(600), "hace 10 min");
+        assert_eq!(hace_cuanto(7_200), "hace 2 h");
+        assert_eq!(hace_cuanto(3 * 86_400), "hace 3 días");
+        // Y no hay huecos entre tramos: cada segundo cae en alguno.
+        for s in [90, 5_399, 5_400, 172_799, 172_800] {
+            assert!(!hace_cuanto(s).is_empty(), "{s}");
+        }
     }
 
     #[test]
