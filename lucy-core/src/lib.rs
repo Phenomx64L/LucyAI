@@ -55,6 +55,9 @@ pub mod audit;
 /// Inventario de un equipo: puertos, servicios, software, certificados, tareas.
 /// Sin JSON fabricado a mano, que es lo que tumbaba el inventario entero.
 pub mod inventory;
+/// Qué ha cambiado desde que dijimos que el equipo estaba bien. Los puertos
+/// efímeros no cuentan: son la diferencia entre un informe y un montón de ruido.
+pub mod drift;
 /// Fundir memorias que dicen lo mismo. Estaba escrito y nadie lo llamaba nunca.
 pub mod consolidate;
 /// Lo que distingue a NexShell de una consola: decidir si lo escrito es un
