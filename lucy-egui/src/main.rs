@@ -812,7 +812,10 @@ fn inv_columnas(c: lucy_core::inventory::Categoria) -> &'static [(&'static str, 
         Servicios => &[("Servicio", 220.0), ("Estado", 90.0), ("Descripción", 0.0)],
         Software => &[("Nombre", 380.0), ("Versión", 0.0)],
         Certificados => &[("Caduca", 110.0), ("Asunto", 420.0), ("Ruta", 0.0)],
-        Tareas => &[("Tarea", 0.0)],
+        // El estado va DELANTE: una tarea deshabilitada y una lista para
+        // dispararse se leen igual si hay que llegar al final de la línea para
+        // saber cuál es cuál, y las rutas de tarea son largas.
+        Tareas => &[("Estado", 90.0), ("Tarea", 0.0)],
     }
 }
 
@@ -7851,6 +7854,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             ui.add_space(4.0);
             aviso_rojo(ui, &self.inv_error);
         }
+        // La foto puede estar a medias: la sesión se cortó después de alguna
+        // sección. Va lo PRIMERO porque cambia cómo se lee todo lo de abajo — un
+        // «Servicios (0)» sin este aviso se toma por un hecho del servidor.
+        if let Some(p) = self.inv_data.parcial.clone() {
+            ui.add_space(4.0);
+            aviso_rojo(ui, &format!("Foto incompleta: {p}"));
+        }
         // Las secciones que fallaron, cada una con su motivo. Van arriba y no
         // dentro de su pestaña: si el operador está mirando Puertos, tiene que
         // enterarse igual de que las tareas no se pudieron leer — o dará por
@@ -8187,25 +8197,44 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             }
                             C::Certificados => {
                                 let c = &self.inv_data.certs[i];
-                                let d = c.days_left(ahora);
                                 // EL COLOR SALE DE LOS DÍAS QUE QUEDAN, que es
                                 // para lo que se abre esta pestaña. Un
                                 // certificado caducado en el mismo gris que uno
                                 // de dos años no se distingue leyendo una lista
                                 // de cuarenta.
-                                let (txt, col) = if d < 0 {
-                                    (format!("caducó hace {}d", -d), theme::red())
-                                } else if d <= 30 {
-                                    (format!("{d}d"), theme::amber())
-                                } else {
-                                    (format!("{d}d"), theme::txt3())
+                                //
+                                // Y «no se sabe» tiene su propio aspecto. En
+                                // Alpine y en BSD el equipo no sabe convertir la
+                                // fecha de `openssl`, y pintar eso como «caducó
+                                // hace 20672d» en rojo manda a renovar un
+                                // certificado que puede estar impecable.
+                                let (txt, col) = match c.days_left(ahora) {
+                                    None => ("fecha ilegible".to_string(), theme::txt3()),
+                                    Some(d) if d < 0 => {
+                                        (format!("caducó hace {}d", -d), theme::red())
+                                    }
+                                    Some(d) if d <= 30 => (format!("{d}d"), theme::amber()),
+                                    Some(d) => (format!("{d}d"), theme::txt3()),
                                 };
                                 celda(ui, &txt, 110.0, col, true);
                                 celda(ui, &c.subject, 420.0, theme::txt(), false);
                                 celda(ui, &c.path, 0.0, theme::txt3(), false);
                             }
                             C::Tareas => {
-                                celda(ui, &self.inv_data.tasks[i].entry, 0.0, theme::txt2(), false);
+                                let t = &self.inv_data.tasks[i];
+                                let col = match t.state.as_str() {
+                                    "Running" => theme::acc(),
+                                    "Disabled" => theme::faint(),
+                                    _ => theme::txt3(),
+                                };
+                                celda(
+                                    ui,
+                                    if t.state.is_empty() { "cron" } else { &t.state },
+                                    90.0,
+                                    col,
+                                    true,
+                                );
+                                celda(ui, &t.entry, 0.0, theme::txt2(), false);
                             }
                         }
                     });
@@ -8219,13 +8248,25 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             return;
         }
         self.inv_error.clear();
+        // «ESTE EQUIPO» Y «UN EQUIPO QUE YA NO ESTÁ» NO SON EL MISMO CASO, y se
+        // derrumbaban en uno. Un `find()` que no encuentra devuelve `None`, y el
+        // `filter` posterior no lo arregla porque ya era `None`: el hilo se iba
+        // por la rama local y escaneaba la máquina del operador para
+        // presentársela bajo el nombre del servidor que acababa de borrar.
+        let host = if self.inv_host.is_empty() {
+            None
+        } else {
+            match self.remote_hosts.iter().find(|h| h.id == self.inv_host) {
+                Some(h) => Some(h.clone()),
+                None => {
+                    self.inv_error =
+                        "Ese equipo ya no está dado de alta. Elige otro en el desplegable."
+                            .into();
+                    return;
+                }
+            }
+        };
         let (tx, rx) = std::sync::mpsc::channel();
-        let host = self
-            .remote_hosts
-            .iter()
-            .find(|h| h.id == self.inv_host)
-            .cloned()
-            .filter(|_| !self.inv_host.is_empty());
         std::thread::spawn(move || {
             let r = match host {
                 // La contraseña se saca DENTRO del hilo: leer el almacén de
@@ -12208,8 +12249,8 @@ mod bucle {
             Software { name: "Microsoft Edge".into(), version: "126.0".into() },
         ];
         i.certs = vec![
-            Cert { path: "/a.pem".into(), subject: "CN=viejo".into(), expires_epoch: 1_000 },
-            Cert { path: "/b.pem".into(), subject: "CN=nuevo".into(), expires_epoch: 9_999_999 },
+            Cert { path: "/a.pem".into(), subject: "CN=viejo".into(), expires_epoch: Some(1_000) },
+            Cert { path: "/b.pem".into(), subject: "CN=nuevo".into(), expires_epoch: Some(9_999_999) },
         ];
         i
     }
