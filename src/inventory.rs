@@ -506,10 +506,55 @@ pub fn discover_local() -> Result<Inventory, String> {
     cierra(parse(&out), &err, ok, "este equipo")
 }
 
-/// Inventaría un equipo remoto.
-pub fn discover_remote(h: &crate::hosts::Host, password: &str) -> Result<Inventory, String> {
+/// Cuánto se espera a un equipo antes de darlo por perdido.
+///
+/// Dos minutos. Un inventario contra un servidor con mucho software tarda entre
+/// diez y treinta segundos, así que esto no corta nada legítimo; lo que corta es
+/// el caso en que no hay nadie al otro lado. Sin plazo, un WinRM apagado deja la
+/// vista muerta los MINUTOS que tarde `Invoke-Command` en rendirse — y durante
+/// todo ese rato no hay nada que pulsar.
+pub const TIMEOUT_SECS: u64 = 120;
+
+/// Inventaría un equipo remoto. Se puede parar y tiene plazo.
+pub fn discover_remote(
+    h: &crate::hosts::Host,
+    password: &str,
+    stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<Inventory, String> {
+    use std::sync::atomic::Ordering;
     let script = remote_script(h)?;
-    let (out, err, ok) = crate::hosts::run_remote(h, password, &script)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Por el camino en STREAMING y no por `run_remote`, que bloquea en
+    // `wait_with_output()` sin plazo ni forma de interrumpirlo. Aquí no se usa
+    // el goteo para enseñar nada —el inventario se pinta entero— sino para poder
+    // soltar el proceso cuando el operador lo pide o cuando se acaba el tiempo.
+    crate::hosts::run_remote_streaming(h, password, &script, &tx, stop, None, Some(TIMEOUT_SECS))?;
+
+    let mut out = String::new();
+    let mut err = String::new();
+    let mut ok = false;
+    for l in rx {
+        match l {
+            crate::hosts::Line::Out(t) => {
+                out.push_str(&t);
+                out.push('\n');
+            }
+            crate::hosts::Line::Err(t) => {
+                err.push_str(&t);
+                err.push('\n');
+            }
+            crate::hosts::Line::Done(v) => ok = v,
+        }
+    }
+    if stop.load(Ordering::Relaxed) {
+        // Lo que llegó antes de parar NO se devuelve como si fuera la foto: es
+        // media foto de la que nadie dijo que lo fuera. Un error se entiende;
+        // media lista presentada como entera, no.
+        return Err(format!(
+            "El inventario de {} se detuvo antes de terminar (parado o sin respuesta en {}s).",
+            h.name, TIMEOUT_SECS
+        ));
+    }
     cierra(parse(&out), &err, ok, &h.name)
 }
 
@@ -551,7 +596,12 @@ fn cierra(mut inv: Inventory, err: &str, ok: bool, equipo: &str) -> Result<Inven
 /// mes pasado, qué dice el contrato de soporte— que es exactamente lo que un CSV
 /// permite y un PDF no.
 pub fn to_csv(inv: &Inventory, equipo: &str) -> String {
-    let mut s = String::from("equipo,categoria,campo1,campo2,campo3\n");
+    // COLUMNAS CON NOMBRE. Decía `campo1,campo2,campo3`, y en una hoja de
+    // cálculo eso obliga a deducir qué es cada una mirando la categoría de la
+    // fila — que es justo lo que un export existe para evitar. Los nombres son
+    // genéricos porque las cinco categorías comparten tabla, pero «valor» y
+    // «detalle» se pueden leer; «campo2» no.
+    let mut s = String::from("equipo,categoria,nombre,valor,detalle\n");
     let mut fila = |cat: &str, a: &str, b: &str, c: &str| {
         s.push_str(&format!(
             "{},{},{},{},{}\n",

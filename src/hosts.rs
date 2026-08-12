@@ -563,8 +563,18 @@ pub fn run_remote_streaming(
     password: &str,
     script: &str,
     tx: &std::sync::mpsc::Sender<Line>,
-    stop: &std::sync::atomic::AtomicBool,
+    // Por `Arc` y no por referencia: el vigilante del plazo corre en OTRO hilo
+    // y necesita su propia copia — que es justo lo que hace falta para que
+    // alguien pueda parar esto cuando el proceso está bloqueado leyendo.
+    stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     entrada_tx: Option<&std::sync::mpsc::Sender<Option<std::process::ChildStdin>>>,
+    // Segundos tras los cuales se mata el proceso. `None` = sin plazo.
+    //
+    // `None` para una terminal interactiva, donde un comando legítimo puede
+    // tardar lo que quiera y el operador está mirando. Con plazo para lo que
+    // corre solo —un inventario, una sonda— donde nadie va a estar delante para
+    // notar que lleva cuatro minutos sin decir nada.
+    deadline_secs: Option<u64>,
 ) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::process::CommandExt;
@@ -587,6 +597,35 @@ pub fn run_remote_streaming(
     // razón por la que la V2 declara que WinRM no admite entrada interactiva: en
     // WinRM sigue siendo verdad, porque la contraseña la consume el envoltorio;
     // en SSH ahora no.
+    // EL PLAZO SE VIGILA DESDE FUERA, y tiene que ser así. Más abajo el bucle
+    // mira `stop` entre línea y línea, lo cual sirve para «ya he visto bastante»
+    // pero NO para el caso que de verdad cuelga: un equipo apagado, o con el
+    // 5985 cerrado, no manda una primera línea nunca, así que el bucle se queda
+    // bloqueado leyendo y el interruptor no se consulta jamás. WinRM agota sus
+    // propios plazos en minutos, y durante todo ese rato no hay nada que pulsar.
+    //
+    // Se mata el ÁRBOL (`/T`): el proceso que se lanza es un PowerShell que a su
+    // vez abre la sesión remota, y matar solo al padre deja al hijo hablando con
+    // el servidor.
+    if let Some(secs) = deadline_secs {
+        let pid = hijo.id();
+        let stop_watchdog = stop.clone();
+        std::thread::spawn(move || {
+            let hasta = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+            while std::time::Instant::now() < hasta {
+                if stop_watchdog.load(Ordering::Relaxed) {
+                    return; // ya paró por su cuenta
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            stop_watchdog.store(true, Ordering::Relaxed);
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(0x0800_0000)
+                .output();
+        });
+    }
+
     let mut entrada = hijo.stdin.take();
     if h.protocol == Protocol::Winrm {
         if let Some(s) = entrada.as_mut() {
@@ -646,8 +685,9 @@ pub fn run_remote_streaming(
     _password: &str,
     _script: &str,
     tx: &std::sync::mpsc::Sender<Line>,
-    _stop: &std::sync::atomic::AtomicBool,
+    _stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     _entrada_tx: Option<&std::sync::mpsc::Sender<Option<std::process::ChildStdin>>>,
+    _deadline_secs: Option<u64>,
 ) -> Result<(), String> {
     let _ = tx.send(Line::Done(false));
     Err("la ejecución remota solo está implementada en Windows".into())
