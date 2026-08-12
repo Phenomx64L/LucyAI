@@ -789,15 +789,25 @@ fn lv_hora_de(created_at: i64, iso: &str) -> String {
 
 /// La hora local en `HH:MM:SS`, para el indicador de última lectura.
 fn lv_hora() -> String {
-    let s = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // En UTC. Es lo honesto sin arrastrar un crate de zonas horarias solo para
-    // esto, y va marcado con la Z para que nadie lo lea como hora local y
-    // concluya que el log lleva parado seis horas.
-    let r = s % 86_400;
-    format!("{:02}:{:02}:{:02}Z", r / 3600, (r % 3600) / 60, r % 60)
+    // EN HORA LOCAL. Estuvo en UTC con una `Z` detrás —honesto, pero ilegible—:
+    // el operador mira «escaneado 23:51:48Z» con su reloj marcando las 17:51 y
+    // tiene que restar seis horas mentalmente para saber si esa foto es de ahora
+    // o de esta mañana. La marca de hora de un panel se compara contra el reloj
+    // de la barra de tareas, no contra Greenwich.
+    //
+    // Si el sistema no sabe decir su desfase —pasa en entornos raros— se cae a
+    // UTC y se marca, en vez de mentir con una hora que no es de nadie.
+    match time::OffsetDateTime::now_local() {
+        Ok(t) => format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second()),
+        Err(_) => {
+            let s = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let r = s % 86_400;
+            format!("{:02}:{:02}:{:02}Z", r / 3600, (r % 3600) / 60, r % 60)
+        }
+    }
 }
 
 /// Las columnas de cada categoría del inventario, en orden.
@@ -808,7 +818,11 @@ fn lv_hora() -> String {
 fn inv_columnas(c: lucy_core::inventory::Categoria) -> &'static [(&'static str, f32)] {
     use lucy_core::inventory::Categoria::*;
     match c {
-        Puertos => &[("Puerto", 90.0), ("Proceso", 0.0)],
+        // ESTADO es constante —la consulta pide `-State Listen`— y aun así va: la
+        // columna dice QUÉ se está enseñando, que son los puertos a la escucha y
+        // no todas las conexiones abiertas. Sin ella, una captura de esta tabla
+        // en un ticket se lee como «este equipo tiene 38 conexiones».
+        Puertos => &[("Puerto", 90.0), ("Proceso", 0.0), ("Estado", 84.0)],
         Servicios => &[("Servicio", 220.0), ("Estado", 90.0), ("Descripción", 0.0)],
         Software => &[("Nombre", 380.0), ("Versión", 0.0)],
         Certificados => &[("Caduca", 110.0), ("Asunto", 420.0), ("Ruta", 0.0)],
@@ -911,6 +925,26 @@ fn inv_filas(
         }
     }
     idx
+}
+
+/// Resuelve los anchos de una categoría contra el espacio disponible.
+///
+/// LA COLUMNA ELÁSTICA NO ES SIEMPRE LA ÚLTIMA. En Puertos, «Estado» va pegada a
+/// la derecha y la que se estira es «Proceso», que está en medio — así que una
+/// celda elástica no puede limitarse a pedir `available_width()`: se comería el
+/// hueco de las que vienen después y la última saldría fuera de la ventana.
+///
+/// Se calcula UNA VEZ y lo usan la cabecera y las filas, que es lo que garantiza
+/// que la flecha de ordenar caiga sobre su columna y no en el hueco de al lado.
+fn inv_anchos(cols: &[(&str, f32)], total: f32, gap: f32) -> Vec<f32> {
+    let fijo: f32 = cols.iter().map(|(_, w)| *w).sum();
+    let huecos = gap * (cols.len().saturating_sub(1)) as f32;
+    let elasticas = cols.iter().filter(|(_, w)| *w == 0.0).count();
+    let sobra = (total - fijo - huecos).max(0.0);
+    let cada = if elasticas > 0 { sobra / elasticas as f32 } else { 0.0 };
+    cols.iter()
+        .map(|(_, w)| if *w == 0.0 { cada.max(80.0) } else { *w })
+        .collect()
 }
 
 /// Compara dos textos ignorando mayúsculas.
@@ -2364,6 +2398,56 @@ fn ahora_epoch() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Una tarjeta de recuento del inventario. Devuelve si la han pulsado.
+///
+/// La cifra grande y la etiqueta pequeña debajo, como en la vista que se migra:
+/// el número es el dato y a la vez el botón que abre su tabla.
+fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: usize, fallo: bool, on: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(118.0, 66.0), egui::Sense::click());
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(theme::R_MD),
+        if on { theme::acc_bg() } else { theme::bg3() },
+        egui::Stroke::new(
+            1.0_f32,
+            if on {
+                theme::acc_line()
+            } else if resp.hovered() {
+                theme::bdr2()
+            } else {
+                theme::bdr()
+            },
+        ),
+    );
+    // Un guion donde iría el número cuando la categoría no se pudo consultar. Un
+    // cero afirmaría algo del equipo que nadie ha comprobado.
+    let (cifra, color) = if fallo {
+        ("—".to_string(), theme::red())
+    } else if on {
+        (n.to_string(), theme::acc())
+    } else {
+        (n.to_string(), theme::txt())
+    };
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.top() + 26.0),
+        egui::Align2::CENTER_CENTER,
+        cifra,
+        egui::FontId::proportional(24.0),
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.bottom() - 16.0),
+        egui::Align2::CENTER_CENTER,
+        label.to_uppercase(),
+        egui::FontId::proportional(theme::FS_CAPTION),
+        if on { theme::acc() } else { theme::txt3() },
+    );
+    if fallo {
+        resp.clone().on_hover_text("No se pudo consultar — el motivo está arriba.");
+    }
+    resp.clicked()
 }
 
 /// Una fila del desplegable de equipos: nombre a la izquierda, tipo a la derecha.
@@ -8159,31 +8243,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             if self.inv_host_picker(ui) {
                 escanear = true;
             }
-            ui.add_space(6.0);
-            // MIENTRAS CORRE, EL BOTÓN PARA — no se apaga. Deshabilitado dejaba
-            // la vista sin nada que pulsar durante los minutos que WinRM tarda en
-            // rendirse contra un equipo apagado, que es justo cuando el operador
-            // más quiere salir de ahí.
-            let b = egui::Button::new(
-                egui::RichText::new(if corriendo { "Parar" } else { "Escanear" })
-                    .size(theme::FS_CAPTION)
-                    .color(if corriendo { theme::txt() } else { theme::acc_ink() }),
-            )
-            .fill(if corriendo { theme::bg4() } else { theme::acc() })
-            .stroke(if corriendo {
-                egui::Stroke::new(1.0_f32, theme::amber())
-            } else {
-                egui::Stroke::NONE
-            })
-            .rounding(egui::Rounding::same(theme::R_SM))
-            .min_size(egui::vec2(84.0, 24.0));
-            if ui.add(b).clicked() {
-                if corriendo {
-                    parar = true;
-                } else {
-                    escanear = true;
-                }
-            }
+            ui.add_space(8.0);
             if let Some(t0) = self.inv_desde {
                 ui.add_space(8.0);
                 // El tiempo transcurrido, en segundos. Un escaneo tarda entre dos
@@ -8204,6 +8264,34 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
 
             right(ui, 30.0, |ui| {
+                // EL BOTÓN A LA DERECHA DEL TODO, como en la vista que se migra:
+                // es la acción principal de la pantalla y ahí es donde se busca.
+                //
+                // Y MIENTRAS CORRE, PARA — no se apaga. Deshabilitado dejaba la
+                // vista sin nada que pulsar durante los minutos que WinRM tarda
+                // en rendirse contra un equipo apagado, que es justo cuando el
+                // operador más quiere salir de ahí.
+                let b = egui::Button::new(
+                    egui::RichText::new(if corriendo { "■  Parar" } else { "⟳  Escanear" })
+                        .size(theme::FS_CAPTION)
+                        .color(if corriendo { theme::txt() } else { theme::acc_ink() }),
+                )
+                .fill(if corriendo { theme::bg4() } else { theme::acc() })
+                .stroke(if corriendo {
+                    egui::Stroke::new(1.0_f32, theme::amber())
+                } else {
+                    egui::Stroke::NONE
+                })
+                .rounding(egui::Rounding::same(theme::R_SM))
+                .min_size(egui::vec2(104.0, 26.0));
+                if ui.add(b).clicked() {
+                    if corriendo {
+                        parar = true;
+                    } else {
+                        escanear = true;
+                    }
+                }
+                ui.add_space(6.0);
                 let hay = !self.inv_data.is_empty();
                 if ghost_icon(ui, icons::Icon::Copy)
                     .on_hover_text(if hay {
@@ -8248,10 +8336,25 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
     /// El desplegable de equipos. Devuelve si hay que escanear.
     fn inv_host_picker(&mut self, ui: &mut egui::Ui) -> bool {
+        // EL NOMBRE DE LA MÁQUINA Y CÓMO SE LLEGA A ELLA, como en la vista que se
+        // migra. «Este equipo» no dice cuál es, y con una captura de pantalla en
+        // un ticket eso es justo lo que hace falta saber.
         let etiqueta = if self.inv_host.is_empty() {
-            "Este equipo".to_string()
+            format!("{} · local", lucy_core::system::hostname())
         } else {
-            self.inv_nombre_equipo()
+            let via = self
+                .remote_hosts
+                .iter()
+                .find(|h| h.id == self.inv_host)
+                .map(|h| {
+                    if h.protocol == lucy_core::hosts::Protocol::Winrm {
+                        "WinRM"
+                    } else {
+                        "SSH"
+                    }
+                })
+                .unwrap_or("?");
+            format!("{} · {via}", self.inv_nombre_equipo())
         };
         let boton = ui.add(
             egui::Button::new(
@@ -8347,21 +8450,33 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     }
 
     fn inv_pestanas(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(8.0);
-        row_align(ui, 28.0, egui::Align::Center, |ui| {
-            for c in lucy_core::inventory::Categoria::ALL {
+        use lucy_core::inventory::Categoria as C;
+        ui.add_space(10.0);
+        // TARJETAS Y NO PESTAÑAS. La cifra es el dato: «157 software» se lee de
+        // un vistazo desde el otro lado de la mesa, y a la vez es el botón que
+        // abre esa tabla. Con chips había que leer el número pequeño entre
+        // paréntesis para enterarse de lo mismo.
+        ui.horizontal(|ui| {
+            for c in C::ALL {
                 let n = self.inv_data.len_de(c);
-                if lv_chip(ui, c.label(), n, self.inv_cat == c) {
+                // Una categoría que falló NO enseña un cero. Un cero dice «no hay
+                // ninguno», que es un hecho sobre el equipo; lo que pasó es que
+                // no se pudo mirar, y son cosas distintas.
+                let fallo = self.inv_data.fallo_de(c).is_some();
+                if inv_tarjeta(ui, c.label(), n, fallo, self.inv_cat == c) {
                     self.inv_cat = c;
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
             }
-            ui.add_space(6.0);
-            ui.add_sized(
-                [ui.available_width().min(420.0).max(150.0), 26.0],
-                egui::TextEdit::singleline(&mut self.inv_query).hint_text("⌕  Filtrar…"),
-            );
         });
+        ui.add_space(10.0);
+        // El texto de ayuda dice QUÉ se está filtrando. Con cinco tablas detrás
+        // de cinco tarjetas, un «Filtrar…» a secas no dice sobre cuál actúa.
+        ui.add_sized(
+            [ui.available_width(), 30.0],
+            egui::TextEdit::singleline(&mut self.inv_query)
+                .hint_text(format!("⌕   Filtrar {}…", self.inv_cat.label().to_lowercase())),
+        );
     }
 
     fn inv_tabla(&mut self, ui: &mut egui::Ui) {
@@ -8403,10 +8518,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // derecha de sus celdas y «Descripción» 4 px, y la flecha de ordenar
         // acababa señalando el hueco entre dos columnas.
         let cols = inv_columnas(cat);
+        // El espaciado del tema, el mismo que usarán las filas — es lo que hace
+        // que cabecera y contenido caigan en la misma rejilla.
+        let gap = ui.spacing().item_spacing.x;
+        let anchos = inv_anchos(cols, ui.available_width(), gap);
         let mut nuevo_orden = self.inv_sort[ci];
         ui.horizontal(|ui| {
             ui.set_height(24.0);
-            for (n, (titulo, ancho)) in cols.iter().enumerate() {
+            for (n, (titulo, _)) in cols.iter().enumerate() {
+                let ancho = &anchos[n];
                 let activa = self.inv_sort[ci].map(|(c, _)| c) == Some(n);
                 let flecha = match self.inv_sort[ci] {
                     Some((c, asc)) if c == n => {
@@ -8418,7 +8538,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     }
                     _ => "",
                 };
-                let w = if *ancho > 0.0 { *ancho } else { ui.available_width().max(120.0) };
+                let w = *ancho;
                 let r = ui.add_sized(
                     [w, 22.0],
                     egui::Label::new(
@@ -8457,24 +8577,25 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         match cat {
                             C::Puertos => {
                                 let p = &self.inv_data.ports[i];
-                                celda(ui, &p.port.to_string(), cols[0].1, theme::txt(), true);
-                                celda(ui, &p.process, cols[1].1, theme::txt2(), true);
+                                celda(ui, &p.port.to_string(), anchos[0], theme::txt(), true);
+                                celda(ui, &p.process, anchos[1], theme::txt2(), true);
+                                celda(ui, "LISTEN", anchos[2], theme::acc(), true);
                             }
                             C::Servicios => {
                                 let s = &self.inv_data.services[i];
-                                celda(ui, &s.name, cols[0].1, theme::txt(), true);
+                                celda(ui, &s.name, anchos[0], theme::txt(), true);
                                 let col = if s.status.starts_with("run") {
                                     theme::acc()
                                 } else {
                                     theme::txt3()
                                 };
-                                celda(ui, &s.status, cols[1].1, col, true);
-                                celda(ui, &s.description, cols[2].1, theme::txt2(), false);
+                                celda(ui, &s.status, anchos[1], col, true);
+                                celda(ui, &s.description, anchos[2], theme::txt2(), false);
                             }
                             C::Software => {
                                 let s = &self.inv_data.software[i];
-                                celda(ui, &s.name, cols[0].1, theme::txt(), false);
-                                celda(ui, &s.version, cols[1].1, theme::txt2(), true);
+                                celda(ui, &s.name, anchos[0], theme::txt(), false);
+                                celda(ui, &s.version, anchos[1], theme::txt2(), true);
                             }
                             C::Certificados => {
                                 let c = &self.inv_data.certs[i];
@@ -8497,9 +8618,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     Some(d) if d <= 30 => (format!("{d}d"), theme::amber()),
                                     Some(d) => (format!("{d}d"), theme::txt3()),
                                 };
-                                celda(ui, &txt, cols[0].1, col, true);
-                                celda(ui, &c.subject, cols[1].1, theme::txt(), false);
-                                celda(ui, &c.path, cols[2].1, theme::txt3(), false);
+                                celda(ui, &txt, anchos[0], col, true);
+                                celda(ui, &c.subject, anchos[1], theme::txt(), false);
+                                celda(ui, &c.path, anchos[2], theme::txt3(), false);
                             }
                             C::Tareas => {
                                 let t = &self.inv_data.tasks[i];
@@ -8511,11 +8632,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 celda(
                                     ui,
                                     if t.state.is_empty() { "cron" } else { &t.state },
-                                    cols[0].1,
+                                    anchos[0],
                                     col,
                                     true,
                                 );
-                                celda(ui, &t.entry, cols[1].1, theme::txt2(), false);
+                                celda(ui, &t.entry, anchos[1], theme::txt2(), false);
                             }
                         }
                     });
@@ -12625,14 +12746,43 @@ mod bucle {
     }
 
     #[test]
-    fn cada_categoria_tiene_columnas_y_la_ultima_es_elastica() {
-        // La última a ancho 0 = «lo que quede». Si alguna tuviera todas fijas,
-        // sobraría espacio a la derecha en una ventana ancha.
+    fn cada_categoria_tiene_exactamente_una_columna_elastica() {
+        // Ancho 0 = «lo que quede». Ninguna elástica deja hueco muerto a la
+        // derecha en una ventana ancha; dos se pelean por el mismo sitio. Y NO
+        // tiene por qué ser la última: en Puertos, «Estado» va pegada a la
+        // derecha y la que se estira es «Proceso», en medio.
         for c in lucy_core::inventory::Categoria::ALL {
             let cols = inv_columnas(c);
             assert!(!cols.is_empty(), "{} sin columnas", c.label());
-            assert_eq!(cols.last().unwrap().1, 0.0, "{} no es elástica", c.label());
+            let elasticas = cols.iter().filter(|(_, w)| *w == 0.0).count();
+            assert_eq!(elasticas, 1, "{} tiene {elasticas} elásticas", c.label());
         }
+    }
+
+    #[test]
+    fn los_anchos_reparten_el_sobrante_y_no_se_pasan_de_la_ventana() {
+        // El fallo que esto evita: una celda elástica que pide
+        // `available_width()` se come el hueco de las que vienen DESPUÉS, y la
+        // última sale fuera de la ventana. En Puertos la elástica está en medio.
+        let cols = inv_columnas(lucy_core::inventory::Categoria::Puertos);
+        let a = inv_anchos(cols, 1000.0, 8.0);
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[0], 90.0, "la fija cambió");
+        assert_eq!(a[2], 84.0, "la de la derecha cambió");
+        // Todo cabe: las tres más sus dos huecos no pasan del total.
+        assert!(a.iter().sum::<f32>() + 16.0 <= 1000.5, "{a:?}");
+        // Y la elástica se queda con lo que sobra, no con una miga.
+        assert!(a[1] > 700.0, "{a:?}");
+    }
+
+    #[test]
+    fn en_una_ventana_estrecha_la_columna_elastica_no_desaparece() {
+        // Con la ventana encogida, el sobrante sale negativo. Sin suelo, la
+        // columna del proceso quedaría en cero y la tabla sería dos números y
+        // nada más — que es peor que tener que desplazarse.
+        let cols = inv_columnas(lucy_core::inventory::Categoria::Servicios);
+        let a = inv_anchos(cols, 120.0, 8.0);
+        assert!(a[2] >= 80.0, "la elástica se quedó sin sitio: {a:?}");
     }
 
     #[test]
