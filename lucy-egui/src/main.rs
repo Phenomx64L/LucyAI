@@ -87,11 +87,11 @@ fn main() -> eframe::Result {
 
 /// Las ocho entradas del rail de Lucy, en su orden real.
 ///
-/// Están TODAS, no solo las migradas. Un rail con cuatro entradas daría la
-/// impresión de que la app nativa está casi lista; con las ocho y las pendientes
-/// marcadas, el propio prototipo dice en qué punto va la migración cada vez que
-/// se abre. Eso es más útil que un documento de estado, porque no puede quedarse
-/// obsoleto sin que se note.
+/// Durante la migración el rail las enseñaba todas y atenuaba las que aún no
+/// estaban, para que el propio prototipo dijera en qué punto iba cada vez que se
+/// abría. Ya no hace falta: las ocho están migradas, y ese comentario aguantó
+/// exactamente hasta que dejó de ser cierto — Inventario y Compliance salían
+/// apagados un día después de estar terminados.
 #[derive(PartialEq, Clone, Copy)]
 enum View {
     Dashboard,
@@ -130,27 +130,6 @@ impl View {
             View::Compliance => icons::Icon::Shield,
             View::Memoria => icons::Icon::Memory,
             View::Configuracion => icons::Icon::Settings,
-        }
-    }
-
-    /// Qué necesita del backend la vista que aún no está migrada. Se enseña en
-    /// su panel: convierte un "pendiente" vago en el trabajo concreto que falta.
-    fn pending_needs(self) -> Option<&'static str> {
-        match self {
-            View::Dashboard
-            | View::TerminalIa
-            | View::NexShell
-            | View::Memoria
-            | View::LogViewer
-            | View::Configuracion => None,
-            View::Inventario => Some(
-                "commands/inventory.rs — puro, sin AppHandle. \
-                 Necesita además la tabla ordenable y el export a PDF.",
-            ),
-            View::Compliance => Some(
-                "commands/compliance.rs — puro. La vista es la tabla de checks \
-                 por host más el porcentaje de aprobados.",
-            ),
         }
     }
 
@@ -3638,18 +3617,12 @@ impl eframe::App for App {
                 for v in View::ALL {
                     let label = v.label();
                     let active = self.view == v;
-                    let pending = v.pending_needs().is_some();
-
-                    // Tres estados, no dos: activa, disponible, y pendiente de
-                    // migrar. La tercera se atenúa pero SIGUE siendo pulsable —
-                    // su panel explica qué le falta, que es información útil.
-                    let fg = if active {
-                        theme::acc()
-                    } else if pending {
-                        theme::txt3().linear_multiply(0.55)
-                    } else {
-                        theme::txt2()
-                    };
+                    // Dos estados: activa y disponible. Había un tercero —atenuado,
+                    // «pendiente de migrar»— y sobra: ya no queda ninguna vista
+                    // sin migrar, y Inventario y Compliance salían apagados un
+                    // día después de estar terminados. El menú decía que no
+                    // mientras la vista funcionaba.
+                    let fg = if active { theme::acc() } else { theme::txt2() };
 
                     let resp = ui.allocate_response(
                         egui::vec2(ui.available_width(), 46.0),
@@ -3784,7 +3757,6 @@ impl eframe::App for App {
             View::Inventario => self.inventario(ui),
             View::Compliance => self.compliance(ui),
             View::Configuracion => self.configuracion(ui),
-            other => self.pendiente(ui, other),
         });
     }
 }
@@ -10367,43 +10339,6 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 });
                 ui.add_space(GAP);
             });
-    }
-
-    fn pendiente(&mut self, ui: &mut egui::Ui, v: View) {
-        let label = v.label();
-        ui.add_space(48.0);
-        ui.vertical_centered(|ui| {
-            // El icono de la vista, atenuado: dice CUÁL falta sin gritarlo.
-            icons::show(ui, v.icon(), 34.0, theme::txt3().linear_multiply(0.5));
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new(label).size(17.0).color(theme::txt()));
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("Todavía no migrada al shell nativo")
-                    .size(11.5)
-                    .color(theme::txt3()),
-            );
-            ui.add_space(18.0);
-
-            if let Some(needs) = v.pending_needs() {
-                egui::Frame::none()
-                    .fill(theme::bg2())
-                    .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
-                    .rounding(egui::Rounding::same(6.0))
-                    .inner_margin(egui::Margin::same(14.0))
-                    .show(ui, |ui| {
-                        ui.set_max_width(430.0);
-                        ui.label(
-                            egui::RichText::new("QUÉ FALTA")
-                                .size(9.5)
-                                .strong()
-                                .color(theme::acc()),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new(needs).size(11.5).color(theme::txt2()));
-                    });
-            }
-        });
     }
 
 
