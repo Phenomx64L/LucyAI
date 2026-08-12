@@ -2677,7 +2677,18 @@ struct App {
     /// POR CATEGORÍA Y NO UNO GLOBAL. Ordenar el software por nombre y los
     /// puertos por número son dos decisiones distintas, y compartir el estado
     /// haría que cambiar de pestaña reordenara la otra sin que nadie lo pidiera.
-    inv_sort: [Option<(usize, bool)>; 5],
+    ///
+    /// El tamaño sale de `Categoria::ALL`, no de un 5 escrito a mano. Lo demás
+    /// que depende de las categorías —`inv_columnas`, `len_de`, el `match` de
+    /// `inv_filas`— lo vigila el compilador con un error si alguien añade una
+    /// sexta; esto era lo único que habría compilado callado, y el `position()`
+    /// de una categoría fuera de rango habría reventado en tiempo de ejecución.
+    inv_sort: [Option<(usize, bool)>; lucy_core::inventory::Categoria::ALL.len()],
+    /// El interruptor del escaneo en curso.
+    ///
+    /// Se REEMPLAZA en cada escaneo en vez de bajarse: si quedara un hilo del
+    /// anterior mirando el mismo booleano, bajar la bandera lo resucitaría.
+    inv_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lv_files: Vec<lucy_core::logs::RemoteFile>,
     lv_files_rx: Option<std::sync::mpsc::Receiver<Result<Vec<lucy_core::logs::RemoteFile>, String>>>,
     /// La carpeta que se está explorando, para poder decirlo mientras carga.
@@ -2940,7 +2951,8 @@ impl App {
             inv_rx: None,
             inv_desde: None,
             inv_last: String::new(),
-            inv_sort: [None; 5],
+            inv_sort: [None; lucy_core::inventory::Categoria::ALL.len()],
+            inv_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             lv_files: Vec::new(),
             lv_files_rx: None,
             lv_dir: String::new(),
@@ -7889,6 +7901,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
     fn inv_cabecera(&mut self, ui: &mut egui::Ui) {
         let mut escanear = false;
+        let mut parar = false;
         row_align(ui, 30.0, egui::Align::Center, |ui| {
             let corriendo = self.inv_rx.is_some();
             let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
@@ -7912,17 +7925,29 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 escanear = true;
             }
             ui.add_space(6.0);
+            // MIENTRAS CORRE, EL BOTÓN PARA — no se apaga. Deshabilitado dejaba
+            // la vista sin nada que pulsar durante los minutos que WinRM tarda en
+            // rendirse contra un equipo apagado, que es justo cuando el operador
+            // más quiere salir de ahí.
             let b = egui::Button::new(
-                egui::RichText::new(if corriendo { "Escaneando…" } else { "Escanear" })
+                egui::RichText::new(if corriendo { "Parar" } else { "Escanear" })
                     .size(theme::FS_CAPTION)
-                    .color(if corriendo { theme::txt3() } else { theme::acc_ink() }),
+                    .color(if corriendo { theme::txt() } else { theme::acc_ink() }),
             )
-            .fill(if corriendo { theme::bg3() } else { theme::acc() })
-            .stroke(egui::Stroke::NONE)
+            .fill(if corriendo { theme::bg4() } else { theme::acc() })
+            .stroke(if corriendo {
+                egui::Stroke::new(1.0_f32, theme::amber())
+            } else {
+                egui::Stroke::NONE
+            })
             .rounding(egui::Rounding::same(theme::R_SM))
             .min_size(egui::vec2(84.0, 24.0));
-            if ui.add_enabled(!corriendo, b).clicked() {
-                escanear = true;
+            if ui.add(b).clicked() {
+                if corriendo {
+                    parar = true;
+                } else {
+                    escanear = true;
+                }
             }
             if let Some(t0) = self.inv_desde {
                 ui.add_space(8.0);
@@ -7960,6 +7985,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
             });
         });
+        if parar {
+            // La bandera mata el proceso remoto; soltar el canal devuelve la
+            // vista al operador ya, sin esperar a que el hilo se entere.
+            self.inv_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.inv_rx = None;
+            self.inv_desde = None;
+            self.inv_error = "Escaneo detenido.".into();
+        }
         if escanear {
             self.inv_escanear();
         }
@@ -8061,7 +8094,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     self.inv_data = lucy_core::inventory::Inventory::default();
                     self.inv_error.clear();
                     self.inv_last.clear();
-                    self.inv_sort = [None; 5];
+                    self.inv_sort = [None; lucy_core::inventory::Categoria::ALL.len()];
                 }
                 // Cambiar de equipo NO escanea solo: un escaneo son segundos y
                 // una sesión autenticada contra el servidor, y abrir un
@@ -8122,9 +8155,16 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
 
         // ── cabecera de columnas, que además ordena ──
+        //
+        // EN UN `horizontal` NORMAL Y NO EN `row_align`. `row_align` pone
+        // `item_spacing.x = GAP` (10 px) y las filas de dentro del `ScrollArea`
+        // heredan el del tema (8 px): con eso, «Estado» quedaba 2 px a la
+        // derecha de sus celdas y «Descripción» 4 px, y la flecha de ordenar
+        // acababa señalando el hueco entre dos columnas.
         let cols = inv_columnas(cat);
         let mut nuevo_orden = self.inv_sort[ci];
-        row_align(ui, 24.0, egui::Align::Center, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_height(24.0);
             for (n, (titulo, ancho)) in cols.iter().enumerate() {
                 let activa = self.inv_sort[ci].map(|(c, _)| c) == Some(n);
                 let flecha = match self.inv_sort[ci] {
@@ -8176,24 +8216,24 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         match cat {
                             C::Puertos => {
                                 let p = &self.inv_data.ports[i];
-                                celda(ui, &p.port.to_string(), 90.0, theme::txt(), true);
-                                celda(ui, &p.process, 0.0, theme::txt2(), true);
+                                celda(ui, &p.port.to_string(), cols[0].1, theme::txt(), true);
+                                celda(ui, &p.process, cols[1].1, theme::txt2(), true);
                             }
                             C::Servicios => {
                                 let s = &self.inv_data.services[i];
-                                celda(ui, &s.name, 220.0, theme::txt(), true);
+                                celda(ui, &s.name, cols[0].1, theme::txt(), true);
                                 let col = if s.status.starts_with("run") {
                                     theme::acc()
                                 } else {
                                     theme::txt3()
                                 };
-                                celda(ui, &s.status, 90.0, col, true);
-                                celda(ui, &s.description, 0.0, theme::txt2(), false);
+                                celda(ui, &s.status, cols[1].1, col, true);
+                                celda(ui, &s.description, cols[2].1, theme::txt2(), false);
                             }
                             C::Software => {
                                 let s = &self.inv_data.software[i];
-                                celda(ui, &s.name, 380.0, theme::txt(), false);
-                                celda(ui, &s.version, 0.0, theme::txt2(), true);
+                                celda(ui, &s.name, cols[0].1, theme::txt(), false);
+                                celda(ui, &s.version, cols[1].1, theme::txt2(), true);
                             }
                             C::Certificados => {
                                 let c = &self.inv_data.certs[i];
@@ -8216,9 +8256,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     Some(d) if d <= 30 => (format!("{d}d"), theme::amber()),
                                     Some(d) => (format!("{d}d"), theme::txt3()),
                                 };
-                                celda(ui, &txt, 110.0, col, true);
-                                celda(ui, &c.subject, 420.0, theme::txt(), false);
-                                celda(ui, &c.path, 0.0, theme::txt3(), false);
+                                celda(ui, &txt, cols[0].1, col, true);
+                                celda(ui, &c.subject, cols[1].1, theme::txt(), false);
+                                celda(ui, &c.path, cols[2].1, theme::txt3(), false);
                             }
                             C::Tareas => {
                                 let t = &self.inv_data.tasks[i];
@@ -8230,11 +8270,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 celda(
                                     ui,
                                     if t.state.is_empty() { "cron" } else { &t.state },
-                                    90.0,
+                                    cols[0].1,
                                     col,
                                     true,
                                 );
-                                celda(ui, &t.entry, 0.0, theme::txt2(), false);
+                                celda(ui, &t.entry, cols[1].1, theme::txt2(), false);
                             }
                         }
                     });
@@ -8267,6 +8307,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
         };
         let (tx, rx) = std::sync::mpsc::channel();
+        // Uno nuevo por escaneo, no bajar el de antes: si quedara un hilo del
+        // anterior mirando el mismo booleano, bajarlo lo resucitaría.
+        self.inv_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = self.inv_stop.clone();
         std::thread::spawn(move || {
             let r = match host {
                 // La contraseña se saca DENTRO del hilo: leer el almacén de
@@ -8274,7 +8318,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // el hilo de la interfaz eso congela la ventana.
                 Some(h) => {
                     let pw = lucy_core::hosts::password(&h.id).unwrap_or_default();
-                    lucy_core::inventory::discover_remote(&h, &pw)
+                    lucy_core::inventory::discover_remote(&h, &pw, &stop)
                 }
                 None => lucy_core::inventory::discover_local(),
             };
@@ -10650,7 +10694,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         self.nx_stdin_rx = Some(in_rx);
         std::thread::spawn(move || {
             if let Err(e) = lucy_core::hosts::run_remote_streaming(
-                &host, &pw, &script, &tx, &stop, Some(&in_tx),
+                // Sin plazo: es una terminal interactiva y un comando legítimo
+                // puede tardar lo que quiera con el operador delante. El plazo
+                // es para lo que corre solo, como el inventario.
+                &host, &pw, &script, &tx, &stop, Some(&in_tx), None,
             ) {
                 let _ = tx.send(lucy_core::hosts::Line::Err(e));
                 let _ = tx.send(lucy_core::hosts::Line::Done(false));
