@@ -62,10 +62,18 @@ pub const MARCA: &str = "LUCY:";
 // el software es la lista que alimenta el cruce de vulnerabilidades, así que
 // recortarla esconde justo lo que hay que encontrar.
 pub const MAX_PORTS: usize = 200;
-pub const MAX_SERVICES: usize = 300;
+/// Un Windows 11 de escritorio normal tiene 307 servicios. Con el tope en 300 se
+/// caían siete SIEMPRE LOS MISMOS —la cola del alfabeto, `wuauserv` entre
+/// ellos, que está arrancado— y el aviso de recorte no ayudaba: nadie sospecha
+/// que le falte justo Windows Update.
+pub const MAX_SERVICES: usize = 800;
 pub const MAX_SOFTWARE: usize = 400;
 pub const MAX_CERTS: usize = 50;
-pub const MAX_TASKS: usize = 100;
+/// Un Windows 11 de escritorio normal tiene 205 tareas programadas — medido
+/// ejecutando el script de este módulo contra esta máquina. Con el tope en 100
+/// se recortaba la mitad, y aunque el aviso lo decía, la mitad que sobrevive de
+/// una lista alfabética no es una muestra de nada.
+pub const MAX_TASKS: usize = 400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Categoria {
@@ -144,30 +152,44 @@ pub struct Software {
 pub struct Cert {
     pub path: String,
     pub subject: String,
-    /// Cuándo caduca, en epoch de SEGUNDOS.
+    /// Cuándo caduca, en epoch de SEGUNDOS. `None` = no se pudo averiguar.
+    ///
+    /// EL `None` ES OBLIGATORIO Y NO UN LUJO. Con un `i64` a secas, el cero
+    /// significa dos cosas incompatibles: «caduca el 1 de enero de 1970» y «el
+    /// equipo no supo darme la fecha». Y la segunda pasa de verdad — en Alpine y
+    /// en BSD, `date -d` no entiende el formato que escupe `openssl x509`. La
+    /// fila salía perfectamente formada, y la vista pintaba en rojo «caducó hace
+    /// 20672d» sobre un certificado que a lo mejor está impecable.
     ///
     /// El equipo remoto manda el instante y los días los calcula Rust. La V2 los
     /// calculaba allí, en cada sistema por su cuenta —`(NotAfter - Get-Date).Days`
     /// en PowerShell, una resta de epochs con `date -d` en bash— y las dos
     /// cuentas redondean distinto: un certificado que caduca esta noche sale como
     /// «0 días» en un sitio y «1 día» en el otro. Un solo reloj y una sola resta.
-    pub expires_epoch: i64,
+    pub expires_epoch: Option<i64>,
 }
 
 impl Cert {
-    /// Días que le quedan. Negativo = ya caducó.
-    pub fn days_left(&self, ahora: i64) -> i64 {
+    /// Días que le quedan. Negativo = ya caducó. `None` = no se sabe cuándo.
+    pub fn days_left(&self, ahora: i64) -> Option<i64> {
         // División entera hacia abajo también con negativos: `-1/86400` en Rust
         // da 0, y un certificado que caducó hace una hora saldría como «le quedan
         // 0 días» en vez de como caducado.
-        let d = self.expires_epoch - ahora;
-        d.div_euclid(86_400)
+        Some((self.expires_epoch? - ahora).div_euclid(86_400))
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Task {
     pub entry: String,
+    /// `Ready`, `Running`, `Disabled`… Vacío en cron, que no tiene estado.
+    ///
+    /// LA V2 FILTRABA POR `State -eq 'Ready'` y por eso las tareas que estaban
+    /// EJECUTÁNDOSE en ese instante no existían para el inventario: se escanea,
+    /// no aparecen; se reescanea treinta segundos después y aparecen. La misma
+    /// máquina daba dos respuestas y ninguna decía por qué. Ahora vienen todas
+    /// con su estado, y quien quiera filtrar lo hace mirándolo.
+    pub state: String,
 }
 
 /// La foto completa de un equipo.
@@ -191,6 +213,14 @@ pub struct Inventory {
     /// inventario eso es peor que no tenerla: se concluye que un paquete no está
     /// instalado cuando lo que pasa es que no cupo.
     pub truncado: Vec<(Categoria, usize)>,
+    /// El transporte se cortó a media foto, con el motivo.
+    ///
+    /// UN ESCANEO INTERRUMPIDO NO PUEDE ENSEÑARSE COMO COMPLETO. Si la sesión se
+    /// cae después de los puertos —`Connection closed by remote host`, o WinRM
+    /// tirando el `Invoke-Command` por su propio plazo—, llegan cuarenta líneas
+    /// buenas y ninguna de error. Con solo mirar «¿hay datos?» eso pasaba por un
+    /// éxito, y el operador leía «Servicios (0)» como un hecho del servidor.
+    pub parcial: Option<String>,
 }
 
 impl Inventory {
@@ -242,9 +272,11 @@ pub fn windows_script() -> String {
              W 'software' ($_.name+[char]31+$_.version) }} }} catch {{ E 'software' $_.Exception.Message }}\n\
          try {{ Get-ChildItem Cert:\\LocalMachine\\My -EA Stop | ForEach-Object {{ \
              W 'certs' ('Cert:\\LocalMachine\\My'+[char]31+$_.Subject+[char]31+\
-             [string][int](Get-Date $_.NotAfter -UFormat %s)) }} }} catch {{ E 'certs' $_.Exception.Message }}\n\
-         try {{ Get-ScheduledTask -EA Stop | Where-Object {{$_.State -eq 'Ready'}} | \
-           ForEach-Object {{ W 'tasks' $_.TaskName }} }} catch {{ E 'tasks' $_.Exception.Message }}",
+             [string][int64]($_.NotAfter.ToUniversalTime()-[datetime]'1970-01-01').TotalSeconds) }} }} \
+           catch {{ E 'certs' $_.Exception.Message }}\n\
+         try {{ Get-ScheduledTask -EA Stop | \
+           ForEach-Object {{ W 'tasks' ($_.TaskPath+$_.TaskName+[char]31+$_.State.ToString()) }} }} \
+           catch {{ E 'tasks' $_.Exception.Message }}",
         software = INSTALLED_SOFTWARE_PS
     )
 }
@@ -265,8 +297,11 @@ pub fn windows_script() -> String {
 /// quitando el recorte de allá y no poniéndolo aquí.
 pub const INSTALLED_SOFTWARE_PS: &str = "Get-ItemProperty \
      HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*,\
-     HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* \
+     HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*,\
+     HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*,\
+     HKCU:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* \
      -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | \
+     Sort-Object DisplayName -Unique | \
      ForEach-Object { [PSCustomObject]@{name=$_.DisplayName; version=$_.DisplayVersion} }";
 
 /// El script de descubrimiento para un equipo Linux.
@@ -274,37 +309,52 @@ pub fn linux_script() -> String {
     // Sin `head -c`: el recorte por bytes es lo que corrompía el documento. Aquí
     // se manda todo y recorta Rust, que además puede decir cuántos había.
     format!(
+        // SE MIRA EL RESULTADO, NO SI EXISTE EL BINARIO. `command -v ss` dice que
+        // sí en un RHEL 7 cuyo `ss` no conoce `-H`; el comando sale con error de
+        // uso, el `2>/dev/null` se lo come y la pestaña dice «Puertos (0)» sin un
+        // solo fallo anotado. Capturar la salida CON su error y mirar el código
+        // de salida convierte eso en un motivo que se puede leer.
+        //
+        // Y `-p` en `ss`: la columna del proceso solo la imprime con esa opción.
+        // Sin ella, `users:((...))` no aparece nunca y el campo salía vacío en
+        // TODOS los Linux — por construcción, no por permisos.
         "S=$(printf '\\037')\n\
-         W() {{ printf '{MARCA}%s%s%s\\n' \"$1\" \"$S\" \"$2\"; }}\n\
-         if command -v ss >/dev/null 2>&1; then \
-           ss -tlnH 2>/dev/null | awk -v S=\"$S\" '{{ \
+         o=$(ss -tlnp 2>&1); \
+         if [ $? -eq 0 ]; then \
+           printf '%s\\n' \"$o\" | awk -v S=\"$S\" 'NR>1 || $1!=\"State\" {{ \
+             if ($1==\"State\") next; \
              split($4,a,\":\"); p=a[length(a)]; \
              proc=\"\"; if (match($0, /users:\\(\\(\"[^\"]+\"/)) {{ \
                proc=substr($0, RSTART+9, RLENGTH-10) }}; \
-             printf \"{MARCA}ports%s%s%s%s\\n\", S, p, S, proc }}'; \
-         else printf '{MARCA}err%sports%sno hay ss en este equipo\\n' \"$S\" \"$S\"; fi\n\
-         if command -v systemctl >/dev/null 2>&1; then \
-           systemctl list-units --type=service --state=running --no-pager --no-legend --plain 2>/dev/null | \
-           awk -v S=\"$S\" '{{ n=$1; sub(/\\.service$/,\"\",n); d=\"\"; \
+             if (p ~ /^[0-9]+$/) printf \"{MARCA}ports%s%s%s%s\\n\", S, p, S, proc }}'; \
+         else printf '{MARCA}err%sports%s%s\\n' \"$S\" \"$S\" \"$o\"; fi\n\
+         o=$(systemctl list-units --type=service --all --no-pager --no-legend --plain 2>&1); \
+         if [ $? -eq 0 ]; then \
+           printf '%s\\n' \"$o\" | awk -v S=\"$S\" '{{ n=$1; sub(/\\.service$/,\"\",n); \
+             if (n==\"\") next; d=\"\"; \
              for(i=5;i<=NF;i++) d=d (i>5?\" \":\"\") $i; \
-             printf \"{MARCA}services%s%s%srunning%s%s\\n\", S, n, S, S, d }}'; \
-         else printf '{MARCA}err%sservices%sno hay systemctl\\n' \"$S\" \"$S\"; fi\n\
+             printf \"{MARCA}services%s%s%s%s%s%s\\n\", S, n, S, $4, S, d }}'; \
+         else printf '{MARCA}err%sservices%s%s\\n' \"$S\" \"$S\" \"$o\"; fi\n\
          if command -v dpkg-query >/dev/null 2>&1; then \
            dpkg-query -W -f=\"{MARCA}software$S\\${{Package}}$S\\${{Version}}\\n\" 2>/dev/null; \
          elif command -v rpm >/dev/null 2>&1; then \
            rpm -qa --queryformat \"{MARCA}software$S%{{NAME}}$S%{{VERSION}}\\n\" 2>/dev/null; \
-         else printf '{MARCA}err%ssoftware%sni dpkg ni rpm\\n' \"$S\" \"$S\"; fi\n\
-         find /etc/ssl/certs /etc/letsencrypt/live /etc/pki/tls/certs \\( -name '*.pem' -o -name '*.crt' \\) \
-           -type f 2>/dev/null | while IFS= read -r f; do \
+         elif command -v apk >/dev/null 2>&1; then \
+           apk list --installed 2>/dev/null | awk -v S=\"$S\" '{{ \
+             n=$1; sub(/-[^-]*-[^-]*$/,\"\",n); printf \"{MARCA}software%s%s%s\\n\", S, n, S }}'; \
+         else printf '{MARCA}err%ssoftware%sni dpkg ni rpm ni apk\\n' \"$S\" \"$S\"; fi\n\
+         find -L /etc/letsencrypt/live /etc/pki/tls/certs /etc/nginx/ssl /etc/apache2/ssl \
+           \\( -name '*.pem' -o -name '*.crt' \\) -type f 2>/dev/null | \
+           while IFS= read -r f; do \
              e=$(openssl x509 -enddate -noout -in \"$f\" 2>/dev/null | cut -d= -f2); \
              [ -z \"$e\" ] && continue; \
              s=$(openssl x509 -subject -noout -in \"$f\" 2>/dev/null | sed 's/^subject= *//'); \
-             ep=$(date -d \"$e\" +%s 2>/dev/null || echo 0); \
+             ep=$(date -d \"$e\" +%s 2>/dev/null || date -j -f '%b %e %T %Y %Z' \"$e\" +%s 2>/dev/null || echo ''); \
              printf '{MARCA}certs%s%s%s%s%s%s\\n' \"$S\" \"$f\" \"$S\" \"$s\" \"$S\" \"$ep\"; \
            done\n\
          (crontab -l 2>/dev/null; cat /etc/cron.d/* 2>/dev/null) | \
            grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | \
-           while IFS= read -r l; do printf '{MARCA}tasks%s%s\\n' \"$S\" \"$l\"; done"
+           while IFS= read -r l; do printf '{MARCA}tasks%s%s%s\\n' \"$S\" \"$l\" \"$S\"; done"
     )
 }
 
@@ -386,26 +436,42 @@ fn parse_linea(l: &str, inv: &mut Inventory) {
             inv.certs.push(Cert {
                 path: limpia(path),
                 subject: limpia(subject),
-                expires_epoch: ep.trim().parse().unwrap_or(0),
+                // `.ok()` y no `.unwrap_or(0)`: un campo vacío o ilegible es «no
+                // se sabe», y convertirlo en cero lo volvía «caducó en 1970».
+                expires_epoch: ep.trim().parse().ok(),
             });
         }
         Some(Categoria::Tareas) => {
             let e = limpia(campos.next().unwrap_or_default());
             if !e.is_empty() {
-                inv.tasks.push(Task { entry: e });
+                inv.tasks.push(Task {
+                    entry: e,
+                    state: limpia(campos.next().unwrap_or_default()),
+                });
             }
         }
         None => {}
     }
 }
 
-/// Quita espacios y caracteres de control que sobrevivan al transporte.
+/// Neutraliza los caracteres de control que sobrevivan al transporte.
 ///
-/// Los de control importan: un nombre con un `\u{7}` dentro hace sonar la campana
-/// del terminal al copiar la tabla, y uno con `\u{1b}` mete una secuencia de
-/// escape en el portapapeles.
+/// Importan: un nombre con `\u{7}` dentro hace sonar la campana del terminal al
+/// copiar la tabla, y uno con `\u{1b}` mete una secuencia de escape en el
+/// portapapeles.
+///
+/// SE SUSTITUYEN POR UN ESPACIO, NO SE BORRAN — y esa diferencia era un fallo
+/// real. `/etc/cron.d/*` separa sus campos con TABULADOR:
+/// `30 4 * * 1<TAB>root<TAB>/usr/local/bin/backup.sh`. Borrándolo salía
+/// `30 4 * * 1root/usr/local/bin/backup.sh`, que no se puede leer ni buscar. El
+/// tabulador es Cc igual que la campana, así que el filtro se los llevaba a los
+/// dos por igual.
 fn limpia(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string()
+    let sin_control: String =
+        s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    // Y se colapsan las repeticiones: dos tabuladores seguidos dejarían dos
+    // espacios donde el original tenía una separación.
+    sin_control.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Interpreta la salida entera y aplica los topes.
@@ -437,33 +503,41 @@ fn recorta(inv: &mut Inventory) {
 /// Inventaría este equipo.
 pub fn discover_local() -> Result<Inventory, String> {
     let (out, err, ok) = crate::shell::run_powershell_utf8(&windows_script())?;
-    // `ok` NO decide: el script atrapa cada sección por separado y sigue, así que
-    // un código de salida distinto de cero puede convivir con cuatro listas
-    // buenas. Lo que decide es si volvió alguna línea nuestra.
-    let inv = parse(&out);
-    if inv.is_empty() && inv.fallos.is_empty() {
-        return Err(if ok || err.trim().is_empty() {
-            "El inventario no devolvió nada.".into()
-        } else {
-            err.trim().to_string()
-        });
-    }
-    Ok(inv)
+    cierra(parse(&out), &err, ok, "este equipo")
 }
 
 /// Inventaría un equipo remoto.
 pub fn discover_remote(h: &crate::hosts::Host, password: &str) -> Result<Inventory, String> {
     let script = remote_script(h)?;
     let (out, err, ok) = crate::hosts::run_remote(h, password, &script)?;
-    let inv = parse(&out);
+    cierra(parse(&out), &err, ok, &h.name)
+}
+
+/// Decide si lo que llegó vale, y si vale entero.
+///
+/// TRES DESENLACES Y NO DOS. `ok` por sí solo no sirve —el script atrapa cada
+/// sección y sigue, así que un código de salida distinto de cero convive con
+/// cuatro listas buenas—, pero ignorarlo cuando hay datos era peor: una sesión
+/// que se corta a mitad devuelve las primeras secciones y ninguna marca de
+/// error, y eso pasaba por una foto completa.
+fn cierra(mut inv: Inventory, err: &str, ok: bool, equipo: &str) -> Result<Inventory, String> {
+    let motivo = err.trim();
     if inv.is_empty() && inv.fallos.is_empty() {
-        let motivo = err.trim();
         return Err(if !motivo.is_empty() {
             motivo.to_string()
         } else if ok {
-            format!("{} no devolvió ningún dato de inventario.", h.name)
+            format!("{equipo} no devolvió ningún dato de inventario.")
         } else {
-            format!("No se pudo inventariar {}.", h.name)
+            format!("No se pudo inventariar {equipo}.")
+        });
+    }
+    // Hay datos, pero el transporte se quejó: la foto puede estar a medias y hay
+    // que decirlo en vez de dejar que las secciones vacías se lean como hechos.
+    if !ok || !motivo.is_empty() {
+        inv.parcial = Some(if motivo.is_empty() {
+            format!("La sesión con {equipo} terminó con error; puede faltar información.")
+        } else {
+            motivo.to_string()
         });
     }
     Ok(inv)
@@ -498,24 +572,39 @@ pub fn to_csv(inv: &Inventory, equipo: &str) -> String {
         fila("software", &x.name, &x.version, "");
     }
     for x in &inv.certs {
-        fila("certificado", &x.subject, &x.expires_epoch.to_string(), &x.path);
+        fila(
+            "certificado",
+            &x.subject,
+            &x.expires_epoch.map(|e| e.to_string()).unwrap_or_else(|| "desconocida".into()),
+            &x.path,
+        );
     }
     for x in &inv.tasks {
-        fila("tarea", &x.entry, "", "");
+        fila("tarea", &x.entry, &x.state, "");
     }
     s
 }
 
-/// Un campo de CSV, entrecomillado si le hace falta.
+/// Un campo de CSV, entrecomillado si le hace falta y desactivado si parece una
+/// fórmula.
 ///
 /// El asunto de un certificado lleva comas casi siempre —`CN=api, O=Acme, C=ES`—
-/// así que sin esto el fichero sale con las columnas desplazadas justo en la
-/// tabla que más se exporta.
+/// así que sin el entrecomillado el fichero sale con las columnas desplazadas
+/// justo en la tabla que más se exporta.
+///
+/// Y EL PREFIJO. Una tarea de cron perfectamente normal es
+/// `@reboot /usr/local/bin/sync.sh`, y Excel y LibreOffice tratan `@`, `=`, `+`
+/// y `-` como comienzo de fórmula al importar: la celda muestra `#NAME?` en
+/// lugar de la tarea. Entrecomillar NO lo desactiva —es cosa del importador, no
+/// del CSV— así que hay que romper el primer carácter con una comilla simple,
+/// que las hojas de cálculo entienden como «esto es texto».
 fn csv(s: &str) -> String {
-    if s.contains([',', '"', '\n']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    let formula = s.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    let cuerpo = if formula { format!("'{s}") } else { s.to_string() };
+    if formula || cuerpo.contains([',', '"', '\n']) {
+        format!("\"{}\"", cuerpo.replace('"', "\"\""))
     } else {
-        s.to_string()
+        cuerpo
     }
 }
 
@@ -618,12 +707,23 @@ mod tests {
         // `-1 / 86400` en Rust da 0, así que uno que caducó hace una hora saldría
         // como «le quedan 0 días» — indistinguible de uno que caduca esta noche.
         let ahora = 1_786_060_800_i64;
-        let c = |ep: i64| Cert { path: String::new(), subject: String::new(), expires_epoch: ep };
-        assert_eq!(c(ahora + 10 * 86_400).days_left(ahora), 10);
-        assert_eq!(c(ahora - 3600).days_left(ahora), -1, "un caducado no puede dar 0");
-        assert_eq!(c(ahora - 10 * 86_400).days_left(ahora), -10);
+        let c =
+            |ep: Option<i64>| Cert { path: String::new(), subject: String::new(), expires_epoch: ep };
+        assert_eq!(c(Some(ahora + 10 * 86_400)).days_left(ahora), Some(10));
+        assert_eq!(c(Some(ahora - 3600)).days_left(ahora), Some(-1), "un caducado no puede dar 0");
+        assert_eq!(c(Some(ahora - 10 * 86_400)).days_left(ahora), Some(-10));
         // Y el de hoy mismo sí es cero.
-        assert_eq!(c(ahora + 3600).days_left(ahora), 0);
+        assert_eq!(c(Some(ahora + 3600)).days_left(ahora), Some(0));
+        // NO SABERLO NO ES 1970. En Alpine y en BSD, `date -d` no entiende el
+        // formato de `openssl x509` y el campo vuelve vacío. Con un cero, la
+        // vista pintaba en rojo «caducó hace 20672d» sobre un certificado que
+        // podía estar impecable.
+        assert_eq!(c(None).days_left(ahora), None);
+        assert_eq!(parse(&l("certs", &["/a.pem", "CN=x", ""])).certs[0].expires_epoch, None);
+        assert_eq!(
+            parse(&l("certs", &["/a.pem", "CN=x", "no-numero"])).certs[0].expires_epoch,
+            None
+        );
     }
 
     #[test]
@@ -722,7 +822,7 @@ mod tests {
         inv.certs.push(Cert {
             path: "/etc/x.pem".into(),
             subject: "CN=api, O=Acme \"IT\", C=ES".into(),
-            expires_epoch: 1_786_060_800,
+            expires_epoch: Some(1_786_060_800),
         });
         let c = to_csv(&inv, "WIN-AD");
         let fila = c.lines().nth(1).unwrap();
@@ -731,11 +831,61 @@ mod tests {
     }
 
     #[test]
-    fn los_caracteres_de_control_no_llegan_al_portapapeles() {
-        // Un nombre con `\u{7}` hace sonar la campana del terminal al copiar la
-        // tabla, y uno con `\u{1b}` mete una secuencia de escape.
-        let inv = parse(&l("services", &["ssh\u{7}d", "running", "Open\u{1b}[31mSSH"]));
-        assert_eq!(inv.services[0].name, "sshd");
-        assert_eq!(inv.services[0].description, "Open[31mSSH");
+    fn los_caracteres_de_control_se_neutralizan_sin_pegar_los_campos() {
+        // BORRARLOS ERA EL FALLO. `/etc/cron.d/*` separa sus campos con
+        // TABULADOR, y el tabulador es Cc igual que la campana: el filtro se los
+        // llevaba a los dos por igual y la tarea salía como
+        // `30 4 * * 1root/usr/local/bin/backup.sh`, ilegible e imposible de
+        // buscar.
+        let cron = "30 4 * * 1\troot\t/usr/local/bin/backup.sh --full";
+        let inv = parse(&l("tasks", &[cron]));
+        assert_eq!(inv.tasks[0].entry, "30 4 * * 1 root /usr/local/bin/backup.sh --full");
+
+        // Y lo que motivó el filtro sigue cubierto: una campana no suena al
+        // copiar la tabla y una secuencia de escape no llega al portapapeles.
+        // El precio es que parten la palabra en dos, y es el precio correcto:
+        // una campana dentro de un nombre no es un nombre real, y una línea de
+        // cron sí es una línea de cron.
+        let s = parse(&l("services", &["ssh\u{7}d", "running", "Open\u{1b}[31mSSH"]));
+        assert!(!s.services[0].name.contains('\u{7}'));
+        assert_eq!(s.services[0].name, "ssh d");
+        assert_eq!(s.services[0].description, "Open [31mSSH");
+    }
+
+    #[test]
+    fn una_sesion_cortada_a_medias_no_pasa_por_una_foto_completa() {
+        // La sesión se cae después de los puertos: llegan cuarenta líneas buenas
+        // y ninguna marca de error. Mirando solo «¿hay datos?», eso pasaba por un
+        // éxito y el operador leía «Servicios (0)» como un hecho del servidor.
+        let inv = parse(&l("ports", &["443", "nginx"]));
+        let cortado = cierra(inv.clone(), "Connection closed by remote host", false, "SRV")
+            .expect("hay datos, no puede ser un error entero");
+        assert!(cortado.parcial.is_some(), "no avisa de que puede faltar información");
+        assert!(cortado.parcial.unwrap().contains("Connection closed"));
+        assert_eq!(cortado.ports.len(), 1, "y no se pierde lo que sí llegó");
+
+        // Una foto entera no lleva la marca.
+        let entero = cierra(inv, "", true, "SRV").unwrap();
+        assert!(entero.parcial.is_none());
+
+        // Y sin nada de nada sigue siendo un error, no una foto vacía.
+        assert!(cierra(Inventory::default(), "", true, "SRV").is_err());
+    }
+
+    #[test]
+    fn el_csv_desactiva_lo_que_excel_leeria_como_formula() {
+        // `@reboot /usr/local/bin/sync.sh` es una tarea de cron normal, y Excel y
+        // LibreOffice tratan `@`, `=`, `+` y `-` como comienzo de fórmula al
+        // importar: la celda muestra `#NAME?` en vez de la tarea. Entrecomillar
+        // no lo desactiva — es cosa del importador, no del CSV.
+        let mut inv = Inventory::default();
+        inv.tasks.push(Task {
+            entry: "@reboot /usr/local/bin/sync.sh".into(),
+            state: String::new(),
+        });
+        let c = to_csv(&inv, "SRV");
+        assert!(c.contains("\"'@reboot /usr/local/bin/sync.sh\""), "{c}");
+        // Y un valor normal no se toca.
+        assert!(to_csv(&Inventory::default(), "SRV").starts_with("equipo,"));
     }
 }
