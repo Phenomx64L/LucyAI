@@ -214,8 +214,25 @@ pub fn run(dry_run: bool) -> Result<Report, String> {
             for cl in &clusters {
                 let marca = format!("superseded_by:{}", cl.canonical_id);
                 for old in &cl.merged_ids {
-                    // Se AÑADE a las etiquetas que ya había, no se sustituyen:
-                    // son el rastro de por qué esa memoria existía.
+                    // LA COLUMNA, QUE ES LO QUE MIRAN LAS LECTURAS. Esto escribía
+                    // la marca ÚNICAMENTE dentro del JSON de `tags`, y todas las
+                    // consultas filtran por la columna `superseded_by`
+                    // (lib.rs:209, memory.rs:729). O sea que la consolidación
+                    // corría, decía cuántas memorias había fundido, y las fundidas
+                    // seguían saliendo en el recuerdo, en la búsqueda y en la
+                    // pestaña — indistinguibles de las vivas.
+                    //
+                    // Es peor que la nota que llevaba meses en la lista de tareas:
+                    // no era que la deduplicación «no se ejecutara nunca», es que
+                    // se ejecutaba y no servía de nada. Un informe que dice «he
+                    // fundido 14» sobre una tabla que no cambió.
+                    let _ = tx.execute(
+                        "UPDATE agent_memories SET superseded_by = ?1 WHERE id = ?2",
+                        rusqlite::params![cl.canonical_id.to_string(), old],
+                    );
+                    // Y la etiqueta TAMBIÉN, porque es el rastro legible de por
+                    // qué esa memoria dejó de contar. Se AÑADE a las que ya había:
+                    // son la historia de para qué existía.
                     let cur: String = tx
                         .query_row(
                             "SELECT tags FROM agent_memories WHERE id = ?1",
