@@ -458,9 +458,195 @@ fn cosine_dup(texto: &str) -> Option<Guardado> {
     })
 }
 
+// ── Recordar ────────────────────────────────────────────────────────────────
+//
+// EN EL NÚCLEO Y NO EN LA VENTANA. Estaba en el shell, en diez líneas que
+// buscaban solo entre memorias y devolvían vacío si el embebedor no contestaba.
+// Recordar es el mecanismo del que depende que Lucy sea la misma entre sesiones,
+// y tenerlo en un frontend significa que el otro recuerda distinto.
+
+/// Cuántas memorias entran por turno.
+///
+/// Cinco. Con más, el prompt se llena de cosas tangencialmente parecidas y el
+/// modelo construye sobre lo que se le recordó en vez de sobre lo que se le
+/// preguntó — el fallo típico de la recuperación semántica generosa.
+pub const RECALL_MEMORIAS: usize = 5;
+
+/// Cuántos trozos de documento entran por turno.
+///
+/// Menos que memorias, y a propósito: un trozo de manual son párrafos enteros,
+/// no una frase. Tres ya ocupan más sitio en el prompt que las cinco memorias.
+pub const RECALL_DOCS: usize = 3;
+
+/// Parecido mínimo para que una memoria entre.
+pub const MIN_MEMORIA: f32 = 0.45;
+
+/// Y para que entre un trozo de documento. MÁS ALTO a propósito.
+///
+/// Una memoria irrelevante es una línea que sobra. Un trozo del manual
+/// equivocado son tres párrafos con pinta de documentación oficial sobre los que
+/// el modelo va a construir una respuesta con toda la seguridad del mundo. El
+/// coste de colar de más no es el mismo, y el umbral tampoco puede serlo.
+pub const MIN_DOCUMENTO: f32 = 0.50;
+
+/// Lo que se recordó, y de dónde.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Recuerdo {
+    /// Ya formateado para el prompt. Vacío = no se recordó nada.
+    pub bloque: String,
+    pub memorias: usize,
+    pub documentos: usize,
+    /// Se recurrió a la búsqueda por palabras porque no hubo vectores.
+    ///
+    /// Se dice en vez de callarlo: el recuerdo léxico encuentra menos y peor, y
+    /// quien mire por qué Lucy no se acordó de algo evidente necesita saber que
+    /// estaba funcionando con una mano atada.
+    pub lexico: bool,
+}
+
+impl Recuerdo {
+    pub fn is_empty(&self) -> bool {
+        self.bloque.trim().is_empty()
+    }
+}
+
+/// Lo que hay que recordar para contestar a esto.
+///
+/// TRES PATAS Y NO UNA. La versión anterior buscaba solo entre memorias, con
+/// vectores, y si el embebedor no estaba devolvía cadena vacía sin decir nada:
+/// en una máquina sin Ollama, Lucy no recordaba NADA nunca y el síntoma era
+/// simplemente que parecía tener mala memoria.
+///
+/// · Memorias, por significado.
+/// · Trozos de documento, por significado y con el listón más alto — es la pata
+///   que hace que un manual ingerido sirva sin que nadie lo mencione, que es
+///   justo lo que se le pide a la ingesta.
+/// · Y si no hay vectores, palabras: FTS5 sobre la misma tabla, que no necesita
+///   ningún servicio. Encuentra menos, pero encontrar poco es infinitamente más
+///   que no encontrar nada.
+///
+/// `presupuesto` recorta las tres para un modelo flojo, que se ahoga con el
+/// prompt entero y contesta en prosa sin emitir una sola etiqueta.
+pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
+    let q = query.trim();
+    if q.is_empty() {
+        return Recuerdo::default();
+    }
+    let n_mem = RECALL_MEMORIAS.min(presupuesto);
+    let n_doc = RECALL_DOCS.min(presupuesto.saturating_sub(1));
+
+    let mut r = Recuerdo::default();
+    let mut lineas: Vec<String> = Vec::new();
+
+    let mem = crate::vectors::search(q, "memory", n_mem, MIN_MEMORIA)
+        .map(|(h, _)| h)
+        .unwrap_or_default();
+    for h in &mem {
+        lineas.push(format!("- {}", una_linea(&h.text)));
+    }
+    r.memorias = mem.len();
+
+    if n_doc > 0 {
+        let docs = crate::vectors::search(q, "pdf_chunk", n_doc, MIN_DOCUMENTO)
+            .map(|(h, _)| h)
+            .unwrap_or_default();
+        for h in &docs {
+            // Marcados como lo que son. Sin la marca, el modelo no distingue un
+            // hecho que Lucy aprendió de este equipo de un párrafo de un manual
+            // genérico, y los cita con la misma autoridad.
+            lineas.push(format!("- [documento] {}", una_linea(&h.text)));
+        }
+        r.documentos = docs.len();
+    }
+
+    // EL RESPALDO SOLO SI NO HUBO NADA. Mezclar palabras con significado cuando
+    // el segundo ya trajo algo llenaría el prompt de coincidencias literales
+    // peores que lo que ya había.
+    if lineas.is_empty() {
+        if let Ok(lex) = lexico(q, n_mem) {
+            for t in &lex {
+                lineas.push(format!("- {}", una_linea(t)));
+            }
+            r.memorias = lex.len();
+            r.lexico = !lex.is_empty();
+        }
+    }
+
+    r.bloque = lineas.join("\n");
+    r
+}
+
+/// Una memoria en una línea. Los saltos romperían la lista del prompt.
+fn una_linea(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Recuerdo por palabras, sin ningún servicio detrás.
+fn lexico(query: &str, limite: usize) -> Result<Vec<String>, String> {
+    let q = consulta_fts(query, "");
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    crate::with_db(|c| {
+        let mut st = c
+            .prepare(
+                "SELECT am.title || ' — ' || am.content
+                 FROM agent_memories am
+                 JOIN agent_memories_fts fts ON am.id = fts.rowid
+                 WHERE agent_memories_fts MATCH ?1
+                   AND (am.superseded_by IS NULL OR am.superseded_by = '')
+                 ORDER BY bm25(agent_memories_fts) ASC
+                 LIMIT ?2",
+            )
+            .map_err(|e| format!("recall léxico: {e}"))?;
+        let v = st
+            .query_map(rusqlite::params![q, limite as i64], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("recall léxico: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_listón_de_un_documento_es_mas_alto_que_el_de_una_memoria() {
+        // Una memoria irrelevante es una línea que sobra. Un trozo del manual
+        // equivocado son tres párrafos con pinta de documentación oficial sobre
+        // los que el modelo construye con toda la seguridad del mundo.
+        assert!(MIN_DOCUMENTO > MIN_MEMORIA);
+        // Y entran menos: un trozo de manual son párrafos, no una frase.
+        assert!(RECALL_DOCS < RECALL_MEMORIAS);
+    }
+
+    #[test]
+    fn un_presupuesto_corto_recorta_las_dos_patas() {
+        // Un modelo flojo se ahoga con el prompt entero y contesta en prosa sin
+        // emitir una sola etiqueta. Recortar solo las memorias dejaría los
+        // documentos, que ocupan más.
+        assert_eq!(RECALL_MEMORIAS.min(2), 2);
+        assert_eq!(RECALL_DOCS.min(2usize.saturating_sub(1)), 1);
+        // Con presupuesto 1 no cabe ningún documento.
+        assert_eq!(RECALL_DOCS.min(1usize.saturating_sub(1)), 0);
+    }
+
+    #[test]
+    fn una_consulta_vacia_no_recuerda_nada_ni_pregunta() {
+        // Sin esto se pagaría una petición al embebedor por cada turno que no
+        // trae pregunta nueva — los de devolver la salida de un comando.
+        assert!(recall("   ", 5).is_empty());
+        assert_eq!(recall("", 5), Recuerdo::default());
+    }
+
+    #[test]
+    fn los_saltos_de_linea_no_rompen_la_lista_del_prompt() {
+        // Una memoria con saltos dentro partiría la lista en viñetas falsas, y
+        // el modelo leería media memoria como un elemento aparte.
+        assert_eq!(una_linea("una\nmemoria\tcon   saltos"), "una memoria con saltos");
+    }
 
     #[test]
     fn un_token_no_llega_al_disco() {
