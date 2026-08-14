@@ -151,16 +151,26 @@ fn cluster(prepped: &[Prep]) -> Vec<Cluster> {
 /// qué y cuánto se parecen— es exactamente lo que hace falta para decidir si uno
 /// se fía, y esa decisión tiene que poder tomarse antes y no después.
 pub fn run(dry_run: bool) -> Result<Report, String> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     crate::with_db(move |conn| {
         let mut stmt = conn
             .prepare(
+                // LA COLUMNA Y NO LA ETIQUETA. La app Tauri supersede escribiendo
+                // solo la columna —su auto_dedup lo dice explícitamente: la
+                // etiqueta corrompía el JSON—, así que filtrar por `tags` dejaba
+                // volver como candidatas filas que ella ya había retirado, y una
+                // de esas podía salir elegida CANÓNICA: memorias vivas fundidas
+                // hacia un id que ningún lector enseña.
+                //
+                // Y FUERA LOS TROZOS DE DOCUMENTO. Un manual ingerido son
+                // cientos de filas con la misma etiqueta y párrafos repetidos:
+                // sin esta exclusión se comen la ventana de mil —dejando las
+                // memorias de verdad fuera del escaneo— y la pasada desatendida
+                // puede fundir trozos entre sí, es decir, agujerear un documento.
                 "SELECT id, title, content, tags FROM agent_memories \
-                 WHERE importance < ?1 AND tags NOT LIKE '%superseded_by%' \
+                 WHERE importance < ?1 \
+                   AND (superseded_by IS NULL OR superseded_by = '') \
+                   AND session_id NOT LIKE 'pdf:%' \
+                   AND session_id NOT LIKE 'pdf-doc:%' \
                  ORDER BY created_at DESC LIMIT ?2",
             )
             .map_err(|e| format!("consolidate prepare: {e}"))?;
@@ -226,9 +236,24 @@ pub fn run(dry_run: bool) -> Result<Report, String> {
                     // no era que la deduplicación «no se ejecutara nunca», es que
                     // se ejecutaba y no servía de nada. Un informe que dice «he
                     // fundido 14» sobre una tabla que no cambió.
+                    // `AND superseded_by IS NULL`: si otro proceso —la app
+                    // Tauri comparte esta base— la retiró entre el escaneo y
+                    // aquí, su puntero se respeta en vez de pisarse.
                     let _ = tx.execute(
-                        "UPDATE agent_memories SET superseded_by = ?1 WHERE id = ?2",
+                        "UPDATE agent_memories SET superseded_by = ?1 \
+                         WHERE id = ?2 AND (superseded_by IS NULL OR superseded_by = '')",
                         rusqlite::params![cl.canonical_id.to_string(), old],
+                    );
+                    // Y SU VECTOR SE VA CON ELLA. La búsqueda semántica lee la
+                    // tabla `embeddings` directamente, sin join: dejando el
+                    // vector, la fila retirada seguía saliendo en el recuerdo con
+                    // su redacción vieja, y —peor— la deduplicación por coseno
+                    // podía declarar «duplicada» una memoria nueva contra una
+                    // fila que ningún lector enseña, perdiendo el hecho.
+                    let _ = tx.execute(
+                        "DELETE FROM embeddings \
+                         WHERE entity_type = 'memory' AND entity_id = ?1",
+                        rusqlite::params![old.to_string()],
                     );
                     // Y la etiqueta TAMBIÉN, porque es el rastro legible de por
                     // qué esa memoria dejó de contar. Se AÑADE a las que ya había:
@@ -254,10 +279,17 @@ pub fn run(dry_run: bool) -> Result<Report, String> {
                 // La canónica sube un punto, con tope en 9. Nunca llega a 10:
                 // esa importancia significa "la fijó una persona", y una pasada
                 // automática no puede concederse ese sello a sí misma.
+                //
+                // SIN TOCAR `created_at`. Se re-fechaba a «ahora», y eso tenía
+                // una consecuencia que no se ve desde aquí: los insights solo
+                // miran memorias con más de cinco días, así que cada
+                // consolidación devolvía a la más corroborada —justo la que más
+                // patrón contiene— al fondo de la cola de reflexión, para
+                // siempre.
                 let _ = tx.execute(
                     "UPDATE agent_memories \
-                     SET importance = MIN(importance + 1, 9), created_at = ?1 WHERE id = ?2",
-                    rusqlite::params![now, cl.canonical_id],
+                     SET importance = MIN(importance + 1, 9) WHERE id = ?1",
+                    rusqlite::params![cl.canonical_id],
                 );
             }
             tx.commit().map_err(|e| format!("consolidate commit: {e}"))?;

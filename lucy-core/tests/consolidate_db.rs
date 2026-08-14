@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS agent_memories (
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     last_accessed_at INTEGER,
     access_count INTEGER NOT NULL DEFAULT 0,
-    superseded_by TEXT
+    superseded_by TEXT,
+    expires_at INTEGER NOT NULL DEFAULT 0
 );";
 
 fn mete(titulo: &str, texto: &str, tags: &str, importancia: i64) -> i64 {
@@ -71,6 +72,42 @@ fn visibles() -> Vec<i64> {
     .expect("select")
 }
 
+fn mete_pdf(titulo: &str, texto: &str) -> i64 {
+    lucy_core::with_db(|c| {
+        c.execute(
+            "INSERT INTO agent_memories (session_id, title, content, tags, importance)
+             VALUES ('pdf:7', ?1, ?2, '[\"documento\"]', 1)",
+            rusqlite::params![titulo, texto],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(c.last_insert_rowid())
+    })
+    .expect("insert pdf")
+}
+
+fn vector_de(id: i64) {
+    lucy_core::vectors::ensure_schema().expect("esquema vectores");
+    lucy_core::vectors::upsert(
+        "memory",
+        &[(id.to_string(), format!("texto de {id}"), vec![0.5_f32, 0.5])],
+        "nomic-embed-text",
+    )
+    .expect("upsert");
+}
+
+fn hay_vector(id: i64) -> bool {
+    lucy_core::with_db(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM embeddings WHERE entity_type='memory' AND entity_id=?1",
+            rusqlite::params![id.to_string()],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
 #[test]
 fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
     lucy_core::init(&base()).expect("init");
@@ -103,8 +140,47 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
         r#"["vpn","certificados"]"#,
         3,
     );
+    // Cada una con su vector, como los deja la app cuando embebe al guardar.
+    for id in [a, b, c, otra] {
+        vector_de(id);
+    }
 
-    assert_eq!(visibles(), vec![a, b, c, otra], "de partida se ven las cuatro");
+    // UNA RETIRADA AL ESTILO TAURI: columna escrita, etiqueta intacta. Dice lo
+    // mismo que las tres del spooler, así que con el filtro viejo —que miraba
+    // `tags`— volvía a entrar como candidata y podía salir elegida canónica:
+    // memorias vivas fundidas hacia un id que ningún lector enseña.
+    let muerta = mete(
+        "Impresión: reiniciar spooler",
+        "La cola de impresión atascada se arregla reiniciando el servicio spooler del servidor",
+        r#"["impresion","spooler"]"#,
+        2,
+    );
+    lucy_core::with_db(|con| {
+        con.execute(
+            "UPDATE agent_memories SET superseded_by = '999' WHERE id = ?1",
+            rusqlite::params![muerta],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("retirar");
+
+    // Y TROZOS DE DOCUMENTO REPETIDOS. Un manual trae párrafos casi idénticos
+    // (cabeceras, avisos legales); sin la exclusión, la pasada desatendida los
+    // fundía entre sí — es decir, agujereaba el documento.
+    let p1 = mete_pdf("manual — parte 1/3", "Aviso legal: este documento es confidencial y propiedad de la empresa");
+    let p2 = mete_pdf("manual — parte 2/3", "Aviso legal: este documento es confidencial y propiedad de la empresa SA");
+
+    assert_eq!(
+        visibles(),
+        vec![a, b, c, otra, p1, p2],
+        "de partida se ven las cuatro más los trozos"
+    );
+    let creado_a: i64 = lucy_core::with_db(|con| {
+        con.query_row("SELECT created_at FROM agent_memories WHERE id=?1", [a], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    })
+    .expect("created_at");
 
     let r = lucy_core::consolidate::run(false).expect("consolidar");
     assert!(r.memories_merged > 0, "no fundió nada: {r:?}");
@@ -115,11 +191,36 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
     // tabla que seguía devolviéndolas todas.
     let quedan = visibles();
     assert!(
-        quedan.len() < 4,
-        "consolidar dijo que fundió {} y siguen viéndose las cuatro: {quedan:?}",
+        quedan.iter().filter(|id| [a, b, c].contains(id)).count() < 3,
+        "consolidar dijo que fundió {} y siguen viéndose las tres: {quedan:?}",
         r.memories_merged
     );
     assert!(quedan.contains(&otra), "se llevó por delante una memoria que no tocaba");
+    // Los trozos de documento no se tocan: fundirlos es agujerear el manual.
+    assert!(quedan.contains(&p1) && quedan.contains(&p2), "fundió trozos de documento: {quedan:?}");
+    // Y la retirada al estilo Tauri no fue elegida canónica de nadie: nada
+    // apunta hacia ella.
+    let hacia_muerta: i64 = lucy_core::with_db(|con| {
+        con.query_row(
+            "SELECT COUNT(*) FROM agent_memories WHERE superseded_by = ?1",
+            rusqlite::params![muerta.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("count");
+    assert_eq!(hacia_muerta, 0, "una fila retirada por la app salió elegida canónica");
+    // Su puntero tampoco se pisó: sigue apuntando a donde la app la mandó.
+    let puntero: String = lucy_core::with_db(|con| {
+        con.query_row(
+            "SELECT superseded_by FROM agent_memories WHERE id = ?1",
+            rusqlite::params![muerta],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("puntero");
+    assert_eq!(puntero, "999", "consolidar pisó un puntero que no era suyo");
 
     // La canónica sigue viva y las fundidas apuntan a ella.
     let canonica = *quedan.first().expect("queda al menos una");
@@ -137,6 +238,10 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
     .expect("select");
     assert!(!apuntan.is_empty());
     for (id, hacia) in &apuntan {
+        // `muerta` la retiró «la app» hacia 999 y ese puntero es suyo.
+        if *id == muerta {
+            continue;
+        }
         assert_eq!(
             hacia.as_deref(),
             Some(canonica.to_string().as_str()),
@@ -144,15 +249,54 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
         );
     }
 
-    // Y NO SE BORRA NADA: las cuatro filas siguen ahí. Una memoria fundida es
-    // parte del rastro de por qué la canónica existe, y borrarla haría que un
-    // «esto ya lo sabías» no se pudiera comprobar nunca.
+    // Y NO SE BORRA NINGUNA FILA: siete entraron, siete están. Una memoria
+    // fundida es parte del rastro de por qué la canónica existe.
     let total: i64 = lucy_core::with_db(|c| {
         c.query_row("SELECT COUNT(*) FROM agent_memories", [], |r| r.get(0))
             .map_err(|e| e.to_string())
     })
     .expect("count");
-    assert_eq!(total, 4, "consolidar borró filas en vez de marcarlas");
+    assert_eq!(total, 7, "consolidar borró filas en vez de marcarlas");
+
+    // PERO SUS VECTORES SÍ. La búsqueda semántica lee `embeddings` sin join:
+    // dejando el vector, la fila retirada seguía saliendo en el recuerdo y la
+    // deduplicación por coseno podía descartar un hecho nuevo en su favor.
+    for id in [a, b, c] {
+        let fundida = !visibles().contains(&id);
+        assert_eq!(
+            hay_vector(id),
+            !fundida,
+            "la memoria {id} (fundida={fundida}) tiene el vector al revés"
+        );
+    }
+    assert!(hay_vector(otra), "se llevó el vector de una memoria viva");
+
+    // `viva` es el contraste que usan el recuerdo y la deduplicación: las
+    // fundidas dejan de estarlo, la canónica y la ajena no.
+    for id in [a, b, c, otra] {
+        assert_eq!(lucy_core::memories::viva(id), visibles().contains(&id), "viva({id})");
+    }
+    assert!(!lucy_core::memories::viva(muerta), "una retirada por la app cuenta como viva");
+
+    // La canónica NO se re-fecha. Se re-fechaba a «ahora», y eso devolvía a la
+    // memoria más corroborada al fondo de la cola de los insights —que solo
+    // miran filas con más de cinco días— cada vez que se consolidaba.
+    let canonica_id = *quedan
+        .iter()
+        .find(|id| [a, b, c].contains(id))
+        .expect("una del spooler sigue viva");
+    let creado_ahora: i64 = lucy_core::with_db(|con| {
+        con.query_row(
+            "SELECT created_at FROM agent_memories WHERE id=?1",
+            rusqlite::params![canonica_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("created_at");
+    if canonica_id == a {
+        assert_eq!(creado_ahora, creado_a, "consolidar re-fechó la canónica");
+    }
 
     // Correr otra vez no encuentra nada nuevo: lo ya marcado queda fuera del
     // barrido. Sin esto, cada pasada volvería a «fundir» lo mismo y el informe

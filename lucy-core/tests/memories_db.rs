@@ -245,4 +245,30 @@ fn el_camino_de_escritura_entero() {
     for l in r.bloque.lines() {
         assert!(l.starts_with("- "), "línea sin viñeta: {l}");
     }
+
+    // ── 6. El respaldo léxico no confunde un manual con la memoria ──
+    //
+    // Corre justo cuando Ollama no está, que es cuando no hay ranking semántico
+    // que mantenga a raya los trozos: tras ingerir un manual, sus cuatrocientos
+    // párrafos ganan cualquier búsqueda por palabras. Un trozo que casa con la
+    // consulta NO debe salir como si fuera algo que Lucy aprendió.
+    lucy_core::with_db(|c| {
+        c.execute(
+            "INSERT INTO agent_memories (session_id, title, content, tags, importance)
+             VALUES ('pdf:9', 'manual — parte 4/40',
+                     'El certificado de la VPN según el fabricante se renueva desde el panel del appliance',
+                     '[\"documento\"]', 1)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("trozo");
+    let r = lucy_core::memories::recall("cómo renuevo el certificado de la VPN", 5);
+    assert!(
+        !r.bloque.contains("appliance"),
+        "un trozo de manual salió disfrazado de memoria: {}",
+        r.bloque
+    );
+    assert!(r.bloque.contains("autoridad certificadora"), "y la memoria de verdad sí: {}", r.bloque);
 }

@@ -186,10 +186,16 @@ static PATRONES: Lazy<Vec<Patron>> = Lazy::new(|| {
 });
 
 /// Marcadores baratos. Sin uno de éstos no se corren los ocho patrones.
+///
+/// CADA ALTERNATIVA DE LOS PATRONES NECESITA SU MARCADOR AQUÍ, o el atajo la
+/// anula: el patrón clave=valor cubría `access_key` desde el principio, pero sin
+/// un marcador `access` el atajo devolvía el texto intacto antes de que ningún
+/// patrón corriera — `AZURE_STORAGE_ACCESS_KEY=…` se guardaba tal cual, con la
+/// redacción escrita a un centímetro.
 const MARCAS: &[&str] = &[
-    "password", "passwd", "pwd", "api_key", "apikey", "api-key", "secret", "token", "bearer",
-    "authorization", "akia", "sk-", "nvapi-", "tvly-", "ghp_", "gho_", "ghs_", "ghr_",
-    "github_pat_", "-----begin", "://",
+    "password", "passwd", "pwd", "api_key", "apikey", "api-key", "access_key", "access-key",
+    "accesskey", "secret", "token", "bearer", "authorization", "akia", "sk-", "nvapi-", "tvly-",
+    "ghp_", "gho_", "ghs_", "ghr_", "github_pat_", "-----begin", "://",
 ];
 
 /// Quita de un texto lo que parezca un secreto.
@@ -279,7 +285,13 @@ pub fn ensure_schema() -> Result<(), String> {
 /// modelo.
 pub fn save(n: &New) -> Result<Guardado, String> {
     let title = scrub(n.title.trim());
-    let content = scrub(&recorta(n.content.trim(), MAX_CONTENT));
+    // LIMPIAR ANTES DE CORTAR, y el orden es una regla de seguridad, no de
+    // estilo. El patrón de claves privadas necesita encontrar el `-----END`: si
+    // el corte a 4 000 caracteres cae dentro del bloque, el marcador de cierre
+    // desaparece, el patrón no casa, y el cuerpo de la clave se guarda tal cual.
+    // Al revés, primero se redacta sobre el texto entero y luego se corta lo que
+    // ya está limpio.
+    let content = recorta(&scrub(n.content.trim()), MAX_CONTENT);
     if title.is_empty() || content.is_empty() {
         return Err("Una memoria necesita título y contenido.".into());
     }
@@ -441,21 +453,55 @@ fn texto_dup_tx(
     Ok(None)
 }
 
+/// ¿La memoria sigue contando? Viva = no supersedida y no caducada.
+///
+/// EXISTE PORQUE LOS VECTORES NO LO SABEN. La tabla `embeddings` no tiene
+/// columna de retirada y las búsquedas semánticas la leen sin join: cualquier
+/// resultado que venga de ahí hay que contrastarlo contra la tabla de memorias
+/// antes de creérselo. La app Tauri retira filas escribiendo solo la columna, y
+/// sus vectores se quedan.
+pub fn viva(id: i64) -> bool {
+    crate::with_db(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM agent_memories
+             WHERE id = ?1
+               AND (superseded_by IS NULL OR superseded_by = '')
+               AND (expires_at IS NULL OR expires_at = 0 OR expires_at > strftime('%s','now'))",
+            rusqlite::params![id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
 /// Etapa 2. `None` si no hay parecido — o si no hay servicio de embeddings.
 ///
 /// `entity_id` viene como texto porque la tabla de vectores guarda entidades de
 /// varias clases. Una que no sea un número es de otra cosa, no un error: se
 /// ignora en vez de fallar la escritura.
 fn cosine_dup(texto: &str) -> Option<Guardado> {
-    let (hits, _avisos) = crate::vectors::search(texto, "memory", 1, COSINE_DUP).ok()?;
-    let m = hits.first()?;
-    let id: i64 = m.entity_id.parse().ok()?;
-    Some(Guardado {
-        id,
-        accion: Accion::Duplicada {
-            motivo: format!("dice lo mismo que la memoria {id} (parecido {:.2})", m.score),
-        },
-    })
+    // Tres candidatos y no uno: si el más parecido resulta estar retirado, el
+    // segundo puede seguir siendo un duplicado de verdad.
+    let (hits, _avisos) = crate::vectors::search(texto, "memory", 3, COSINE_DUP).ok()?;
+    for m in &hits {
+        let Ok(id) = m.entity_id.parse::<i64>() else { continue };
+        // CONTRA UNA FILA RETIRADA NO HAY DUPLICADO. Sin esta comprobación, el
+        // vector huérfano de una memoria supersedida bastaba para responder
+        // «ya lo sabía» y descartar el hecho NUEVO — en favor de una fila que
+        // ningún lector enseña. El hecho se perdía de la vista para siempre.
+        if !viva(id) {
+            continue;
+        }
+        return Some(Guardado {
+            id,
+            accion: Accion::Duplicada {
+                motivo: format!("dice lo mismo que la memoria {id} (parecido {:.2})", m.score),
+            },
+        });
+    }
+    None
 }
 
 // ── Escribir sola ───────────────────────────────────────────────────────────
@@ -667,25 +713,45 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
     let mut r = Recuerdo::default();
     let mut lineas: Vec<String> = Vec::new();
 
-    let mem = crate::vectors::search(q, "memory", n_mem, MIN_MEMORIA)
-        .map(|(h, _)| h)
-        .unwrap_or_default();
-    for h in &mem {
-        lineas.push(format!("- {}", una_linea(&h.text)));
-    }
-    r.memorias = mem.len();
+    // LA CONSULTA SE EMBEBE UNA VEZ, no una por pata. Las dos patas semánticas
+    // usan el mismo vector; pedirlo dos veces era pagar dos viajes a Ollama por
+    // turno para recibir dos veces el mismo resultado — en el camino crítico de
+    // cada pregunta. Y las filas van primero: con el corpus vacío no se paga
+    // ningún viaje, que es la misma regla que ya tenía `vectors::search`.
+    let mem_rows = crate::vectors::load_stored("memory").unwrap_or_default();
+    let doc_rows = if n_doc > 0 {
+        crate::vectors::load_stored("pdf_chunk").unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if !mem_rows.is_empty() || !doc_rows.is_empty() {
+        if let Ok((qvec, modelo)) = crate::vectors::embed_blocking(q) {
+            let (mem, _) =
+                crate::vectors::rank_by_cosine(mem_rows, &qvec, &modelo, MIN_MEMORIA, n_mem);
+            for h in &mem {
+                // CONTRASTADO CONTRA LA TABLA DE MEMORIAS. Los vectores no saben
+                // de retiradas ni caducidades: sin esto, una memoria supersedida
+                // por la consolidación —o por la app Tauri, que no borra
+                // vectores— seguía entrando al prompt con su redacción vieja
+                // para siempre.
+                let Ok(id) = h.entity_id.parse::<i64>() else { continue };
+                if !viva(id) {
+                    continue;
+                }
+                lineas.push(format!("- {}", una_linea(&h.text)));
+                r.memorias += 1;
+            }
 
-    if n_doc > 0 {
-        let docs = crate::vectors::search(q, "pdf_chunk", n_doc, MIN_DOCUMENTO)
-            .map(|(h, _)| h)
-            .unwrap_or_default();
-        for h in &docs {
-            // Marcados como lo que son. Sin la marca, el modelo no distingue un
-            // hecho que Lucy aprendió de este equipo de un párrafo de un manual
-            // genérico, y los cita con la misma autoridad.
-            lineas.push(format!("- [documento] {}", una_linea(&h.text)));
+            let (docs, _) =
+                crate::vectors::rank_by_cosine(doc_rows, &qvec, &modelo, MIN_DOCUMENTO, n_doc);
+            for h in &docs {
+                // Marcados como lo que son. Sin la marca, el modelo no distingue
+                // un hecho que Lucy aprendió de este equipo de un párrafo de un
+                // manual genérico, y los cita con la misma autoridad.
+                lineas.push(format!("- [documento] {}", una_linea(&h.text)));
+            }
+            r.documentos = docs.len();
         }
-        r.documentos = docs.len();
     }
 
     // EL RESPALDO SOLO SI NO HUBO NADA. Mezclar palabras con significado cuando
@@ -719,11 +785,18 @@ fn lexico(query: &str, limite: usize) -> Result<Vec<String>, String> {
     crate::with_db(|c| {
         let mut st = c
             .prepare(
+                // Sin trozos de documento. Este respaldo corre justo cuando
+                // Ollama no está —que es cuando no hay ranking semántico que los
+                // mantenga a raya— y tras ingerir un manual, sus cuatrocientos
+                // párrafos ganan cualquier búsqueda por palabras: el recuerdo
+                // entero serían páginas de manual disfrazadas de memorias.
                 "SELECT am.title || ' — ' || am.content
                  FROM agent_memories am
                  JOIN agent_memories_fts fts ON am.id = fts.rowid
                  WHERE agent_memories_fts MATCH ?1
                    AND (am.superseded_by IS NULL OR am.superseded_by = '')
+                   AND am.session_id NOT LIKE 'pdf:%'
+                   AND am.session_id NOT LIKE 'pdf-doc:%'
                  ORDER BY bm25(agent_memories_fts) ASC
                  LIMIT ?2",
             )
@@ -878,6 +951,53 @@ mod tests {
             let out = scrub(e);
             assert!(out.contains("[REDACTADO]"), "no lo limpió: {out}");
         }
+    }
+
+    #[test]
+    fn cada_alternativa_del_patron_kv_tiene_su_marcador() {
+        // EL ATAJO PUEDE ANULAR AL PATRÓN, y lo hacía: el patrón clave=valor
+        // cubría `access_key` desde el principio, pero MARCAS no tenía ningún
+        // marcador que casara con «azure_storage_access_key=», así que scrub
+        // devolvía el texto intacto sin correr ni una expresión. La redacción
+        // estaba escrita a un centímetro y no se ejecutaba nunca.
+        for e in [
+            "AZURE_STORAGE_ACCESS_KEY=Zm9vYmFyYmF6cXV4",
+            "ACCESS_KEY=hunter2hunter2",
+            "access-key: abcd1234efgh",
+        ] {
+            let out = scrub(e);
+            assert!(out.contains("[REDACTADO]"), "el atajo se lo tragó: {out}");
+        }
+    }
+
+    #[test]
+    fn una_clave_privada_cortada_no_sobrevive_por_perder_su_cierre() {
+        // El patrón PEM necesita el -----END. Si se corta ANTES de limpiar, un
+        // bloque que cruce el tope de 4 000 caracteres pierde el cierre, el
+        // patrón no casa, y el cuerpo de la clave se guarda tal cual. El orden
+        // limpiar→cortar es una regla de seguridad, no de estilo.
+        let clave = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----",
+            "MIIEowIBAAKCAQEA7".repeat(220) // ~3 700 caracteres de cuerpo
+        );
+        let n = New {
+            title: "La clave del servidor".into(),
+            // El bloque empieza pasado el carácter 800: el corte a 4 000 cae
+            // DENTRO del cuerpo y se lleva el -----END por delante.
+            content: format!("{}\n{clave}", "El binding TLS falla por esto. ".repeat(30)),
+            tags: vec![],
+            session_id: String::new(),
+            importance: 1,
+        };
+        // Sin base de datos: se comprueba la transformación, no la fila. El
+        // orden vive en `save`, así que se reproduce aquí tal cual lo hace save.
+        let limpio = recorta(&scrub(n.content.trim()), MAX_CONTENT);
+        assert!(!limpio.contains("MIIEowIBAAKCAQEA7"), "el cuerpo de la clave sobrevivió al corte");
+        assert!(limpio.contains("[REDACTADO_CLAVE_PRIVADA]"));
+        // Y el orden contrario —el que había— deja pasar la clave, que es
+        // exactamente por qué este test existe.
+        let mal = scrub(&recorta(n.content.trim(), MAX_CONTENT));
+        assert!(mal.contains("MIIEowIBAAKCAQEA7"), "si esto falla, el orden viejo ya no es peligroso y el test miente");
     }
 
     #[test]
