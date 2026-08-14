@@ -368,6 +368,21 @@ pub fn save(n: &New) -> Result<Guardado, String> {
     Ok(g)
 }
 
+/// Borra una memoria — y su vector, que es la mitad que se olvidaba en todas
+/// partes: una fila borrada cuyo vector queda sigue saliendo en la búsqueda por
+/// significado, citando algo que ya no existe.
+pub fn delete(id: i64) -> Result<(), String> {
+    crate::with_db(|c| {
+        c.execute("DELETE FROM agent_memories WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| format!("memories: borrar: {e}"))?;
+        let _ = c.execute(
+            "DELETE FROM embeddings WHERE entity_type = 'memory' AND entity_id = ?1",
+            rusqlite::params![id.to_string()],
+        );
+        Ok(())
+    })
+}
+
 fn recorta(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();

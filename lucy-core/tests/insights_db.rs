@@ -184,4 +184,51 @@ fn insights_y_el_reloj_del_mantenimiento() {
     // La segunda tanda seguida no repite nada.
     let t = maintenance::tanda(&std::sync::atomic::AtomicBool::new(false));
     assert!(!t.hubo_algo(), "acabado de hacer, no toca: {t:?}");
+
+    // ── 8. «Ponte al día ahora» corre aunque no toque ───────────────────────
+    // Es el botón de la vista de Memoria: esperar dos días para ver si una
+    // corrección funcionó no es una forma de verificar nada.
+    let (antes, _) = maintenance::ultima(maintenance::CONSOLIDAR).expect("fila");
+    let nota = maintenance::corre(
+        maintenance::CONSOLIDAR,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+    assert!(nota.contains("miradas"), "nota: {nota}");
+    let (despues, guardada) = maintenance::ultima(maintenance::CONSOLIDAR).expect("fila");
+    assert!(despues >= antes);
+    assert_eq!(guardada, nota, "la nota devuelta y la de disco tienen que ser la misma");
+
+    // ── 9. Borrar una memoria se lleva también su vector ────────────────────
+    // La mitad que se olvidaba en todas partes: una fila borrada cuyo vector
+    // queda sigue saliendo en la búsqueda por significado.
+    lucy_core::memories::ensure_schema().expect("esquema");
+    lucy_core::vectors::ensure_schema().expect("esquema vectores");
+    let id = lucy_core::with_db(|c| {
+        c.execute(
+            "INSERT INTO agent_memories (title, content) VALUES ('borrable', 'contenido')",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(c.last_insert_rowid())
+    })
+    .expect("insert");
+    lucy_core::vectors::upsert(
+        "memory",
+        &[(id.to_string(), "borrable — contenido".into(), vec![1.0_f32, 0.0])],
+        "nomic-embed-text",
+    )
+    .expect("vector");
+    lucy_core::memories::delete(id).expect("borrar");
+    let quedan: i64 = lucy_core::with_db(|c| {
+        c.query_row(
+            "SELECT (SELECT COUNT(*) FROM agent_memories WHERE id = ?1)
+                  + (SELECT COUNT(*) FROM embeddings
+                     WHERE entity_type = 'memory' AND entity_id = ?2)",
+            rusqlite::params![id, id.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("count");
+    assert_eq!(quedan, 0, "borrar dejó la fila o el vector");
 }
