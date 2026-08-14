@@ -2849,6 +2849,27 @@ struct App {
     mem_rx: Vec<(usize, std::sync::mpsc::Receiver<Result<lucy_core::memories::Guardado, String>>)>,
     /// Las destilaciones de sesión en vuelo.
     cris_rx: Vec<(usize, std::sync::mpsc::Receiver<lucy_core::crystals::Resultado>)>,
+    /// La tanda de mantenimiento en vuelo, si hay una.
+    mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// Todavía no se ha mirado ninguna vez en esta ejecución.
+    mant_primera: bool,
+    /// Cuándo se MIRÓ por última vez si tocaba algo.
+    ///
+    /// Distinto de cuándo se HIZO, que vive en disco. Éste solo evita preguntarle
+    /// a la base en cada frame; el que decide es el de disco, y por eso el
+    /// programa puede estar cerrado tres días y ponerse al día al abrirse.
+    mant_visto: Option<Instant>,
+    /// El interruptor de la tanda.
+    ///
+    /// HOY NO LO BAJA NADIE, y eso es a propósito. El sitio evidente sería `save`,
+    /// pero eframe la llama también cada treinta segundos para autoguardar: bajar
+    /// el interruptor ahí apagaría el mantenimiento del resto de la ejecución
+    /// después del primer autoguardado. Y al cerrar de verdad no hace falta —el
+    /// hilo muere con el proceso, y lo que escribe son inserciones sueltas que
+    /// SQLite deja enteras o no deja—. Existe porque `insights::run` mira entre
+    /// grupo y grupo, y porque el botón de cancelar de la vista de Memoria lo va a
+    /// necesitar.
+    mant_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Sesiones que ya tienen cristal —o lo están destilando ahora mismo.
     ///
     /// EN MEMORIA Y NO EN LA BASE, aunque la base también lo sepa. La consulta de
@@ -3148,6 +3169,10 @@ impl App {
             mem_rx: Vec::new(),
             cris_rx: Vec::new(),
             cris_hechas: std::collections::HashSet::new(),
+            mant_rx: None,
+            mant_primera: true,
+            mant_visto: None,
+            mant_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             inv_drift: None,
             inv_base: None,
             inv_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3417,6 +3442,78 @@ impl App {
         self.cris_rx.push((uid, rx));
     }
 
+    /// Mira si toca mantenimiento y, si toca, lo lanza. Recoge lo anterior.
+    ///
+    /// LA COMPROBACIÓN ES DE MEMORIA Y LA DECISIÓN ES DE DISCO, y esa separación
+    /// es lo que hace que funcione en un portátil. Cada pocos minutos se pregunta
+    /// a la base «¿cuándo se hizo esto por última vez?»; si el programa estuvo
+    /// cerrado tres días, la primera pregunta después de abrirlo ya dice que sí.
+    /// Un temporizador —lo que hacía la V2, `sleep(48h)`— no puede contestar eso:
+    /// el hilo que dormía murió con la ventana.
+    fn pump_mantenimiento(&mut self) {
+        /// Cada cuánto se PREGUNTA. No es el plazo del trabajo, que es de días.
+        const CADA: std::time::Duration = std::time::Duration::from_secs(600);
+        /// Lo que se espera desde que arranca la ventana antes de preguntar nada.
+        ///
+        /// Un minuto. Consolidar toca la misma base que el primer turno y
+        /// reflexionar despierta a Ollama; hacerlo mientras el operador está
+        /// escribiendo su primera orden le pone la aplicación lenta justo en el
+        /// momento en que se está formando una opinión sobre ella.
+        const GRACIA: std::time::Duration = std::time::Duration::from_secs(60);
+
+        if let Some(rx) = &self.mant_rx {
+            match rx.try_recv() {
+                Ok(t) => {
+                    self.mant_rx = None;
+                    let mut lineas = Vec::new();
+                    if let Some(c) = t.consolidado {
+                        lineas.push(format!("consolidación: {c}"));
+                    }
+                    if let Some(r) = t.reflexionado {
+                        lineas.push(format!("reflexión: {r}"));
+                    }
+                    if !lineas.is_empty() {
+                        // Al carril de la pestaña activa. No es de ningún turno
+                        // —el mantenimiento no lo pidió nadie— pero es donde el
+                        // operador mira cuando algo no cuadra, y esconderlo del
+                        // todo sería repetir el fallo de la V2: un trabajo que no
+                        // deja rastro es un trabajo que nadie echa de menos
+                        // cuando deja de correr.
+                        let ti = self.tab;
+                        if let Some(t) = self.tabs.get_mut(ti) {
+                            t.ws.trace_push(lucy_core::agent::TraceEntry {
+                                phase: "info".into(),
+                                label: "Mantenimiento".into(),
+                                detail: lineas.join(" · "),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.mant_rx = None,
+            }
+        }
+        // La primera espera es la de gracia, contada desde el arranque; las
+        // siguientes son el intervalo normal, contado desde la última mirada.
+        let desde = *self.mant_visto.get_or_insert_with(Instant::now);
+        let espera = if self.mant_primera { GRACIA } else { CADA };
+        if desde.elapsed() < espera {
+            return;
+        }
+        self.mant_visto = Some(Instant::now());
+        self.mant_primera = false;
+        // NO SE PREGUNTA A LA BASE AQUÍ. `toca()` son dos consultas, y aunque sean
+        // baratas van en el hilo que pinta; la decisión entera se toma dentro de
+        // `tanda()`, que ya la toma.
+        let stop = self.mant_stop.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::maintenance::tanda(&stop));
+        });
+        self.mant_rx = Some(rx);
+    }
+
     /// Recoge la destilación y la anota en el Trace.
     fn pump_cristales(&mut self) {
         let mut llegados: Vec<(usize, lucy_core::crystals::Resultado)> = Vec::new();
@@ -3666,6 +3763,7 @@ impl eframe::App for App {
         self.pump_compliance();
         self.pump_memorias();
         self.pump_cristales();
+        self.pump_mantenimiento();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
