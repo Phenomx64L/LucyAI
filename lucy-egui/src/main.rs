@@ -104,6 +104,24 @@ enum View {
     Configuracion,
 }
 
+/// Las pestañas de la vista de Memoria.
+///
+/// SEIS Y NO LAS OCHO DE LA V2, y las dos que faltan es porque sus pestañas eran
+/// disfraces: «lessons» era un filtro sobre memorias etiquetadas (aquí es una
+/// etiqueta más en la lista), y «sentinels»/«patterns»/«verify» no tienen nada
+/// detrás en el núcleo — los patrones de verdad viven en la pestaña de
+/// Patrones (insights) y las contradicciones las resuelve la consolidación. El
+/// grafo se decidió no migrar hace tiempo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemTab {
+    Memorias,
+    Cristales,
+    Insights,
+    Documentos,
+    Principios,
+    Mantenimiento,
+}
+
 impl View {
     /// El nombre que ve el operador.
     fn label(self) -> &'static str {
@@ -2404,6 +2422,17 @@ fn hace_cuanto(secs: i64) -> String {
     }
 }
 
+/// Un plazo hacia DELANTE, en la unidad que le queda grande a `hace_cuanto`:
+/// «próxima en 3 h», no «próxima en hace 3 h».
+fn dentro_de(secs: i64) -> String {
+    match secs.max(0) {
+        s if s < 90 => "un momento".to_string(),
+        s if s < 5_400 => format!("{} min", s / 60),
+        s if s < 172_800 => format!("{} h", s / 3_600),
+        s => format!("{} días", s / 86_400),
+    }
+}
+
 /// Ahora, en epoch de segundos.
 fn ahora_epoch() -> i64 {
     std::time::SystemTime::now()
@@ -2760,6 +2789,28 @@ struct App {
     // memoria
     mems: Result<Vec<AgentMemory>, String>,
     mem_search: String,
+    /// Qué pestaña de la vista de Memoria está abierta.
+    mem_tab: MemTab,
+    /// Las listas de las otras pestañas. `None` = aún no se ha mirado; se cargan
+    /// al entrar en su pestaña y con el botón de recargar — nunca por frame, que
+    /// sería una consulta por repintado.
+    cristales: Option<Result<Vec<lucy_core::crystals::Cristal>, String>>,
+    insights_l: Option<Result<Vec<lucy_core::insights::Insight>, String>>,
+    docs_l: Option<Result<Vec<lucy_core::docs::Documento>, String>>,
+    principios_l: Option<Result<Vec<lucy_core::principles::Principio>, String>>,
+    /// Lo último que se sabe de cada trabajo de mantenimiento: (job, cuándo,
+    /// nota). Cacheado por lo mismo: `ultima()` es una consulta.
+    mant_info: Option<Vec<(&'static str, Option<(i64, String)>)>>,
+    /// Un borrado ARMADO: (pestaña, id). El primer clic arma, el segundo borra.
+    /// Cualquier otro clic de borrado re-arma sobre otra fila.
+    mem_confirm: Option<(MemTab, i64)>,
+    /// La ingesta de documento en vuelo, si la hay.
+    doc_rx: Option<std::sync::mpsc::Receiver<lucy_core::docs::Paso>>,
+    /// La última línea de progreso de la ingesta, con si es un error.
+    doc_estado: Option<(String, bool)>,
+    doc_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// El texto de la caja «nuevo principio».
+    princ_nueva: String,
     /// Último resultado semántico: `None` = no se ha buscado todavía.
     /// Los avisos viajan CON los aciertos porque describen ese resultado
     /// concreto — separarlos es cómo acaban desincronizados.
@@ -3130,6 +3181,17 @@ impl App {
             nx_test_rx: None,
             mems: load_memories(),
             mem_search: String::new(),
+            mem_tab: MemTab::Memorias,
+            cristales: None,
+            insights_l: None,
+            docs_l: None,
+            principios_l: None,
+            mant_info: None,
+            mem_confirm: None,
+            doc_rx: None,
+            doc_estado: None,
+            doc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            princ_nueva: String::new(),
             sem_result: None,
             log_lines: log_path()
                 .ok_or_else(|| "no se pudo resolver %APPDATA%".to_string())
@@ -3471,6 +3533,9 @@ impl App {
             match rx.try_recv() {
                 Ok(t) => {
                     self.mant_rx = None;
+                    // La pestaña de Mantenimiento enseña una caché: se invalida
+                    // para que la próxima pintada lea las notas recién escritas.
+                    self.mant_info = None;
                     let mut lineas = Vec::new();
                     if let Some(c) = t.consolidado {
                         lineas.push(format!("consolidación: {c}"));
@@ -3772,6 +3837,7 @@ impl eframe::App for App {
         self.pump_compliance();
         self.pump_memorias();
         self.pump_cristales();
+        self.pump_docs();
         self.pump_recall();
         self.pump_dedup();
         self.pump_mantenimiento();
@@ -12821,9 +12887,101 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         };
     }
 
+    /// Carga la lista de la pestaña si aún no se ha mirado. Al entrar y al
+    /// recargar — nunca por frame.
+    fn mem_carga(&mut self, t: MemTab) {
+        match t {
+            MemTab::Memorias => {}
+            MemTab::Cristales => {
+                if self.cristales.is_none() {
+                    self.cristales = Some(lucy_core::crystals::list(100));
+                }
+            }
+            MemTab::Insights => {
+                if self.insights_l.is_none() {
+                    self.insights_l = Some(lucy_core::insights::list(100));
+                }
+            }
+            MemTab::Documentos => {
+                if self.docs_l.is_none() {
+                    self.docs_l = Some(lucy_core::docs::list());
+                }
+            }
+            MemTab::Principios => {
+                if self.principios_l.is_none() {
+                    self.principios_l = Some(lucy_core::principles::list());
+                }
+            }
+            MemTab::Mantenimiento => {
+                if self.mant_info.is_none() {
+                    self.mant_info = Some(vec![
+                        (
+                            lucy_core::maintenance::CONSOLIDAR,
+                            lucy_core::maintenance::ultima(lucy_core::maintenance::CONSOLIDAR),
+                        ),
+                        (
+                            lucy_core::maintenance::INSIGHTS,
+                            lucy_core::maintenance::ultima(lucy_core::maintenance::INSIGHTS),
+                        ),
+                    ]);
+                }
+            }
+        }
+    }
+
+    // Los borrados de todas las pestañas van en DOS TIEMPOS: el primer clic
+    // arma («¿borrar?») y el segundo borra. Sin diálogo modal a propósito — un
+    // modal por borrado convierte limpiar diez memorias en veinte clics con
+    // viaje de ratón incluido; el armado da la misma protección (ningún borrado
+    // con un solo clic) sin mover el puntero de sitio. El patrón vive inline en
+    // cada pestaña y no en un método porque necesita anotar la decisión FUERA
+    // del préstamo de la lista que se está pintando.
+
     fn memoria(&mut self, ui: &mut egui::Ui) {
+        // ── Las pestañas ─────────────────────────────────────────────────────
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("MEMORIA (DB real · solo-lectura)").strong());
+            ui.label(egui::RichText::new("MEMORIA").strong());
+            ui.add_space(8.0);
+            for (t, nombre) in [
+                (MemTab::Memorias, "Memorias"),
+                (MemTab::Cristales, "Cristales"),
+                (MemTab::Insights, "Patrones"),
+                (MemTab::Documentos, "Documentos"),
+                (MemTab::Principios, "Principios"),
+                (MemTab::Mantenimiento, "Mantenimiento"),
+            ] {
+                if ui.selectable_label(self.mem_tab == t, nombre).clicked() {
+                    self.mem_tab = t;
+                    // Al ENTRAR se relee, no solo la primera vez: si un cristal
+                    // acaba de destilarse en segundo plano, volver a su pestaña
+                    // tiene que enseñarlo sin buscar el botón de recargar.
+                    match t {
+                        MemTab::Cristales => self.cristales = None,
+                        MemTab::Insights => self.insights_l = None,
+                        MemTab::Documentos => self.docs_l = None,
+                        MemTab::Principios => self.principios_l = None,
+                        MemTab::Mantenimiento => self.mant_info = None,
+                        MemTab::Memorias => self.mems = load_memories(),
+                    }
+                    // Y el borrado armado se desarma: era de otra lista.
+                    self.mem_confirm = None;
+                }
+            }
+        });
+        ui.separator();
+        self.mem_carga(self.mem_tab);
+        match self.mem_tab {
+            MemTab::Memorias => self.mem_tab_memorias(ui),
+            MemTab::Cristales => self.mem_tab_cristales(ui),
+            MemTab::Insights => self.mem_tab_insights(ui),
+            MemTab::Documentos => self.mem_tab_documentos(ui),
+            MemTab::Principios => self.mem_tab_principios(ui),
+            MemTab::Mantenimiento => self.mem_tab_mantenimiento(ui),
+        }
+    }
+
+    fn mem_tab_memorias(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
             if ui.button("↻ Recargar").clicked() {
                 self.mems = load_memories();
             }
@@ -12909,6 +13067,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // memorias sería copiar un vector entero por frame para evitar un
         // booleano.
         let mut pedir_semantica = false;
+        // El borrado, por lo mismo: dentro del préstamo solo se ANOTA.
+        let confirmado = self.mem_confirm;
+        let mut armar: Option<i64> = None;
+        let mut borrar_id: Option<i64> = None;
 
         match &self.mems {
             Err(e) => {
@@ -13039,6 +13201,26 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
+                                            let armado =
+                                                confirmado == Some((MemTab::Memorias, m.id));
+                                            let b = if armado {
+                                                egui::Button::new(
+                                                    egui::RichText::new("¿borrar?")
+                                                        .color(theme::red())
+                                                        .small(),
+                                                )
+                                            } else {
+                                                egui::Button::new(
+                                                    egui::RichText::new("🗑").small(),
+                                                )
+                                            };
+                                            if ui.add(b).clicked() {
+                                                if armado {
+                                                    borrar_id = Some(m.id);
+                                                } else {
+                                                    armar = Some(m.id);
+                                                }
+                                            }
                                             ui.label(
                                                 egui::RichText::new(rel_time(m.created_at))
                                                     .small()
@@ -13071,8 +13253,665 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
 
         // Fuera del préstamo de `self.mems`.
+        if let Some(id) = armar {
+            self.mem_confirm = Some((MemTab::Memorias, id));
+        }
+        if let Some(id) = borrar_id {
+            self.mem_confirm = None;
+            match lucy_core::memories::delete(id) {
+                Ok(()) => self.mems = load_memories(),
+                Err(e) => self.mems = Err(e),
+            }
+        }
         if pedir_semantica {
             self.run_semantic_search();
+        }
+    }
+
+    fn mem_tab_cristales(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("↻ Recargar").clicked() {
+                self.cristales = Some(lucy_core::crystals::list(100));
+            }
+            ui.label(
+                egui::RichText::new(
+                    "Cada cristal es una sesión destilada. Se escriben solos al cerrar turnos; \
+                     sus lecciones ya son memorias y sobreviven aunque borres el cristal.",
+                )
+                .size(theme::FS_CAPTION)
+                .color(theme::faint()),
+            );
+        });
+        ui.add_space(4.0);
+        let mut borrar: Option<i64> = None;
+        let mut armar: Option<i64> = None;
+        let confirmado = self.mem_confirm;
+        match &self.cristales {
+            None => {}
+            Some(Err(e)) => {
+                ui.colored_label(theme::red(), format!("⚠ {e}"));
+            }
+            Some(Ok(v)) if v.is_empty() => {
+                ui.label(
+                    egui::RichText::new(
+                        "Todavía no hay ninguno. Salen solos: una conversación con al menos \
+                         cuatro turnos y tres comandos o lecturas se destila al cerrar el turno.",
+                    )
+                    .color(theme::txt3()),
+                );
+            }
+            Some(Ok(v)) => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for c in v {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&c.narrativa).strong());
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let armado =
+                                            confirmado == Some((MemTab::Cristales, c.id));
+                                        let b = if armado {
+                                            egui::Button::new(
+                                                egui::RichText::new("¿borrar?")
+                                                    .color(theme::red())
+                                                    .small(),
+                                            )
+                                        } else {
+                                            egui::Button::new(egui::RichText::new("🗑").small())
+                                        };
+                                        if ui.add(b).clicked() {
+                                            if armado {
+                                                borrar = Some(c.id);
+                                            } else {
+                                                armar = Some(c.id);
+                                            }
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(rel_time(c.creado)).small().weak(),
+                                        );
+                                    },
+                                );
+                            });
+                            for h in &c.hitos {
+                                ui.label(
+                                    egui::RichText::new(format!("· {h}"))
+                                        .small()
+                                        .color(theme::txt2()),
+                                );
+                            }
+                            for l in &c.lecciones {
+                                ui.label(
+                                    egui::RichText::new(format!("→ {l}"))
+                                        .small()
+                                        .color(theme::acc()),
+                                );
+                            }
+                            if !c.archivos.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(c.archivos.join(" · "))
+                                        .size(theme::FS_MICRO)
+                                        .color(theme::txt3()),
+                                );
+                            }
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "#{} · sesión {} · {} caracteres leídos",
+                                    c.id, c.session_id, c.caracteres
+                                ))
+                                .size(theme::FS_MICRO)
+                                .weak(),
+                            );
+                        });
+                    }
+                });
+            }
+        }
+        if let Some(id) = armar {
+            self.mem_confirm = Some((MemTab::Cristales, id));
+        }
+        if let Some(id) = borrar {
+            self.mem_confirm = None;
+            match lucy_core::crystals::delete(id) {
+                Ok(()) => self.cristales = Some(lucy_core::crystals::list(100)),
+                Err(e) => self.cristales = Some(Err(e)),
+            }
+        }
+    }
+
+    fn mem_tab_insights(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("↻ Recargar").clicked() {
+                self.insights_l = Some(lucy_core::insights::list(100));
+            }
+            ui.label(
+                egui::RichText::new(
+                    "Un patrón es lo que se repite entre memorias que nadie escribió juntas. \
+                     Reencontrarlo lo refuerza: la confianza sube con cada vez.",
+                )
+                .size(theme::FS_CAPTION)
+                .color(theme::faint()),
+            );
+        });
+        ui.add_space(4.0);
+        let mut borrar: Option<i64> = None;
+        let mut armar: Option<i64> = None;
+        let confirmado = self.mem_confirm;
+        match &self.insights_l {
+            None => {}
+            Some(Err(e)) => {
+                ui.colored_label(theme::red(), format!("⚠ {e}"));
+            }
+            Some(Ok(v)) if v.is_empty() => {
+                ui.label(
+                    egui::RichText::new(
+                        "Todavía no hay ninguno. Hacen falta al menos cuatro memorias del mismo \
+                         asunto con más de cinco días — la reflexión corre sola cada día, o \
+                         desde Mantenimiento → Reflexionar ahora.",
+                    )
+                    .color(theme::txt3()),
+                );
+            }
+            Some(Ok(v)) => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for i in v {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{:.0}%", i.confianza * 100.0))
+                                        .strong()
+                                        .color(theme::match_color(i.confianza as f32)),
+                                );
+                                ui.label(egui::RichText::new(&i.contenido).color(theme::txt2()));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let armado =
+                                            confirmado == Some((MemTab::Insights, i.id));
+                                        let b = if armado {
+                                            egui::Button::new(
+                                                egui::RichText::new("¿borrar?")
+                                                    .color(theme::red())
+                                                    .small(),
+                                            )
+                                        } else {
+                                            egui::Button::new(egui::RichText::new("🗑").small())
+                                        };
+                                        if ui.add(b).clicked() {
+                                            if armado {
+                                                borrar = Some(i.id);
+                                            } else {
+                                                armar = Some(i.id);
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(if i.refuerzos == 1 {
+                                        "visto 1 vez".to_string()
+                                    } else {
+                                        format!("visto {} veces", i.refuerzos)
+                                    })
+                                    .small()
+                                    .weak(),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{} memorias detrás", i.fuentes))
+                                        .small()
+                                        .weak(),
+                                );
+                                if !i.conceptos.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(i.conceptos.join(" · "))
+                                            .small()
+                                            .color(theme::blue()),
+                                    );
+                                }
+                                ui.label(
+                                    egui::RichText::new(rel_time(i.actualizado)).small().weak(),
+                                );
+                            });
+                        });
+                    }
+                });
+            }
+        }
+        if let Some(id) = armar {
+            self.mem_confirm = Some((MemTab::Insights, id));
+        }
+        if let Some(id) = borrar {
+            self.mem_confirm = None;
+            match lucy_core::insights::delete(id) {
+                Ok(()) => self.insights_l = Some(lucy_core::insights::list(100)),
+                Err(e) => self.insights_l = Some(Err(e)),
+            }
+        }
+    }
+
+    fn mem_tab_documentos(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let ingiriendo = self.doc_rx.is_some();
+            if ui
+                .add_enabled(
+                    !ingiriendo,
+                    egui::Button::new(if ingiriendo { "Ingiriendo…" } else { "＋ Ingerir documento" }),
+                )
+                .clicked()
+            {
+                // El diálogo es MODAL del sistema: bloquea este hilo mientras
+                // está abierto, igual que el de adjuntos. Aceptable porque lo
+                // abre un clic — no pasa solo.
+                if let Some(ruta) = rfd::FileDialog::new()
+                    .add_filter("Documentos", &{
+                        let mut exts: Vec<&str> = vec!["pdf"];
+                        exts.extend_from_slice(lucy_core::docs::TEXTO_PLANO);
+                        exts
+                    })
+                    .pick_file()
+                {
+                    self.doc_stop =
+                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let stop = self.doc_stop.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        lucy_core::docs::ingest(&ruta, &tx, &stop);
+                    });
+                    self.doc_rx = Some(rx);
+                    self.doc_estado = Some(("Extrayendo texto…".into(), false));
+                }
+            }
+            if ingiriendo && ui.button("Cancelar").clicked() {
+                self.doc_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            if ui.button("↻ Recargar").clicked() {
+                self.docs_l = Some(lucy_core::docs::list());
+            }
+            ui.label(
+                egui::RichText::new(
+                    "Lo ingerido alimenta el recuerdo y a pdf_search. Los secretos se \
+                     redactan al entrar.",
+                )
+                .size(theme::FS_CAPTION)
+                .color(theme::faint()),
+            );
+        });
+        if let Some((linea, es_error)) = &self.doc_estado {
+            ui.label(
+                egui::RichText::new(linea)
+                    .size(theme::FS_CAPTION)
+                    .color(if *es_error { theme::red() } else { theme::amber() }),
+            );
+        }
+        ui.add_space(4.0);
+        let mut borrar: Option<i64> = None;
+        let mut armar: Option<i64> = None;
+        let confirmado = self.mem_confirm;
+        match &self.docs_l {
+            None => {}
+            Some(Err(e)) => {
+                ui.colored_label(theme::red(), format!("⚠ {e}"));
+            }
+            Some(Ok(v)) if v.is_empty() => {
+                ui.label(
+                    egui::RichText::new(
+                        "Ningún documento todavía. Un manual ingerido contesta preguntas sin \
+                         que nadie lo mencione — es la fuente principal de la memoria.",
+                    )
+                    .color(theme::txt3()),
+                );
+            }
+            Some(Ok(v)) => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for d in v {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&d.nombre).strong());
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let armado =
+                                            confirmado == Some((MemTab::Documentos, d.id));
+                                        let b = if armado {
+                                            egui::Button::new(
+                                                egui::RichText::new("¿borrar?")
+                                                    .color(theme::red())
+                                                    .small(),
+                                            )
+                                        } else {
+                                            egui::Button::new(egui::RichText::new("🗑").small())
+                                        };
+                                        if ui.add(b).clicked() {
+                                            if armado {
+                                                borrar = Some(d.id);
+                                            } else {
+                                                armar = Some(d.id);
+                                            }
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(rel_time(d.creado)).small().weak(),
+                                        );
+                                    },
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{} trozos", d.trozos))
+                                        .small()
+                                        .weak(),
+                                );
+                                // MENOS VECTORES QUE TROZOS SE DICE EN ÁMBAR: ese
+                                // documento solo se encuentra por palabras, y si
+                                // nadie lo ve, «Lucy no encuentra el manual» no
+                                // tiene diagnóstico.
+                                if d.vectorizados < d.trozos {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} de {} con vector — el resto solo se \
+                                             encuentra por palabras",
+                                            d.vectorizados, d.trozos
+                                        ))
+                                        .small()
+                                        .color(theme::amber()),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("buscable por significado")
+                                            .small()
+                                            .color(theme::acc()),
+                                    );
+                                }
+                                ui.label(
+                                    egui::RichText::new(&d.ruta)
+                                        .size(theme::FS_MICRO)
+                                        .color(theme::txt3()),
+                                );
+                            });
+                        });
+                    }
+                });
+            }
+        }
+        if let Some(id) = armar {
+            self.mem_confirm = Some((MemTab::Documentos, id));
+        }
+        if let Some(id) = borrar {
+            self.mem_confirm = None;
+            match lucy_core::docs::delete(id) {
+                Ok(()) => self.docs_l = Some(lucy_core::docs::list()),
+                Err(e) => self.docs_l = Some(Err(e)),
+            }
+        }
+    }
+
+    /// Recoge el progreso de la ingesta. Corre en cada frame, esté la vista que
+    /// esté: cambiar de pantalla no puede parar un documento a medias.
+    fn pump_docs(&mut self) {
+        use lucy_core::docs::Paso;
+        let Some(rx) = &self.doc_rx else { return };
+        let mut fin = false;
+        while let Ok(p) = rx.try_recv() {
+            self.doc_estado = Some(match p {
+                Paso::Extrayendo => ("Extrayendo texto…".into(), false),
+                Paso::Troceando(n) => (format!("Troceando: {n} trozos"), false),
+                Paso::Embebiendo(h, total) => (format!("Embebiendo {h}/{total}…"), false),
+                Paso::Listo(d) => {
+                    fin = true;
+                    self.docs_l = Some(lucy_core::docs::list());
+                    (format!("«{}» ingerido: {} trozos, todos con vector.", d.nombre, d.trozos), false)
+                }
+                Paso::SinVectores(d, e) => {
+                    fin = true;
+                    self.docs_l = Some(lucy_core::docs::list());
+                    (
+                        format!(
+                            "«{}» quedó buscable por palabras ({} de {} con vector): {e}",
+                            d.nombre, d.vectorizados, d.trozos
+                        ),
+                        false,
+                    )
+                }
+                Paso::Error(e) => {
+                    fin = true;
+                    (e, true)
+                }
+            });
+        }
+        if fin
+            || matches!(
+                self.doc_rx.as_ref().map(|r| r.try_recv()),
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected))
+            )
+        {
+            self.doc_rx = None;
+        }
+    }
+
+    fn mem_tab_principios(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            egui::RichText::new(
+                "Un principio entra en TODOS los turnos, venga o no al caso — su valor está \
+                 justo en los turnos donde a nadie se le habría ocurrido recordarlo. Por eso \
+                 son pocos.",
+            )
+            .size(theme::FS_CAPTION)
+            .color(theme::faint()),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let te = ui.add(
+                egui::TextEdit::singleline(&mut self.princ_nueva)
+                    .hint_text("en producción avisa antes de reiniciar un servicio")
+                    .desired_width(ui.available_width() - 96.0),
+            );
+            let enter = te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (ui.button("＋ Añadir").clicked() || enter) && !self.princ_nueva.trim().is_empty() {
+                match lucy_core::principles::add("", self.princ_nueva.trim(), None) {
+                    Ok(_) => {
+                        self.princ_nueva.clear();
+                        self.principios_l = Some(lucy_core::principles::list());
+                    }
+                    Err(e) => self.principios_l = Some(Err(e)),
+                }
+            }
+        });
+        ui.add_space(4.0);
+        let mut borrar: Option<i64> = None;
+        let mut armar: Option<i64> = None;
+        let mut cambiar: Option<(i64, bool)> = None;
+        let confirmado = self.mem_confirm;
+        match &self.principios_l {
+            None => {}
+            Some(Err(e)) => {
+                ui.colored_label(theme::red(), format!("⚠ {e}"));
+                if ui.button("↻ Reintentar").clicked() {
+                    self.principios_l = Some(lucy_core::principles::list());
+                }
+            }
+            Some(Ok(v)) if v.is_empty() => {
+                ui.label(
+                    egui::RichText::new("Todavía no hay ninguno. También se dictan con /principio.")
+                        .color(theme::txt3()),
+                );
+            }
+            Some(Ok(v)) => {
+                let activos = v.iter().filter(|p| p.activo).count();
+                if activos >= lucy_core::principles::MAX_ACTIVOS {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Hay {activos} activos y en el prompt entran {}: los que sobren no \
+                             se aplican. Apaga los que ya no manden.",
+                            lucy_core::principles::MAX_ACTIVOS
+                        ))
+                        .small()
+                        .color(theme::amber()),
+                    );
+                }
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for (n, p) in v.iter().enumerate() {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let mut activo = p.activo;
+                                if ui.checkbox(&mut activo, "").changed() {
+                                    cambiar = Some((p.id, activo));
+                                }
+                                ui.label(
+                                    egui::RichText::new(format!("[P{}]", n + 1))
+                                        .small()
+                                        .color(theme::blue()),
+                                );
+                                let texto = egui::RichText::new(&p.regla);
+                                ui.label(if p.activo {
+                                    texto.color(theme::txt2())
+                                } else {
+                                    texto.weak().strikethrough()
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let armado =
+                                            confirmado == Some((MemTab::Principios, p.id));
+                                        let b = if armado {
+                                            egui::Button::new(
+                                                egui::RichText::new("¿borrar?")
+                                                    .color(theme::red())
+                                                    .small(),
+                                            )
+                                        } else {
+                                            egui::Button::new(egui::RichText::new("🗑").small())
+                                        };
+                                        if ui.add(b).clicked() {
+                                            if armado {
+                                                borrar = Some(p.id);
+                                            } else {
+                                                armar = Some(p.id);
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                    }
+                });
+            }
+        }
+        if let Some((id, activo)) = cambiar {
+            let _ = lucy_core::principles::set_enabled(id, activo);
+            self.principios_l = Some(lucy_core::principles::list());
+        }
+        if let Some(id) = armar {
+            self.mem_confirm = Some((MemTab::Principios, id));
+        }
+        if let Some(id) = borrar {
+            self.mem_confirm = None;
+            match lucy_core::principles::delete(id) {
+                Ok(()) => self.principios_l = Some(lucy_core::principles::list()),
+                Err(e) => self.principios_l = Some(Err(e)),
+            }
+        }
+    }
+
+    fn mem_tab_mantenimiento(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            egui::RichText::new(
+                "Los dos trabajos corren solos por vencimiento — también si el programa \
+                 estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
+            )
+            .size(theme::FS_CAPTION)
+            .color(theme::faint()),
+        );
+        ui.add_space(6.0);
+        let corriendo = self.mant_rx.is_some();
+        let mut forzar: Option<&'static str> = None;
+        if let Some(info) = &self.mant_info {
+            for (job, ultima) in info {
+                let (titulo, cada, boton, explica) = match *job {
+                    lucy_core::maintenance::CONSOLIDAR => (
+                        "Consolidación",
+                        lucy_core::maintenance::CADA_CONSOLIDAR,
+                        "Consolidar ahora",
+                        "funde memorias que dicen lo mismo; nada se borra",
+                    ),
+                    _ => (
+                        "Reflexión",
+                        lucy_core::maintenance::CADA_INSIGHTS,
+                        "Reflexionar ahora",
+                        "busca patrones entre memorias con más de cinco días",
+                    ),
+                };
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(titulo).strong());
+                        ui.label(
+                            egui::RichText::new(explica).size(theme::FS_CAPTION).color(theme::faint()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    !corriendo,
+                                    egui::Button::new(if corriendo { "Corriendo…" } else { boton }),
+                                )
+                                .clicked()
+                            {
+                                forzar = Some(job);
+                            }
+                        });
+                    });
+                    match ultima {
+                        None => {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Nunca ha corrido en esta base — correrá en la próxima \
+                                     comprobación.",
+                                )
+                                .small()
+                                .color(theme::amber()),
+                            );
+                        }
+                        Some((cuando, nota)) => {
+                            let faltan = (cuando + cada) - ahora_epoch();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Última vez {} · {}",
+                                    rel_time(*cuando),
+                                    if faltan <= 0 {
+                                        "vencido: correrá en la próxima comprobación".to_string()
+                                    } else {
+                                        format!("próxima en {}", dentro_de(faltan))
+                                    }
+                                ))
+                                .small()
+                                .weak(),
+                            );
+                            if !nota.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(nota).small().color(theme::txt3()),
+                                );
+                            }
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+            }
+        }
+        if let Some(job) = forzar {
+            let stop = self.mant_stop.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let nota = lucy_core::maintenance::corre(job, &stop);
+                let mut t = lucy_core::maintenance::Tanda::default();
+                if job == lucy_core::maintenance::CONSOLIDAR {
+                    t.consolidado = Some(nota);
+                } else {
+                    t.reflexionado = Some(nota);
+                }
+                let _ = tx.send(t);
+            });
+            // El mismo canal que la tanda automática: la nota llega por
+            // `pump_mantenimiento`, que la anota en el Trace y refresca esta
+            // pestaña.
+            self.mant_rx = Some(rx);
         }
     }
 }
@@ -13788,6 +14627,16 @@ mod bucle {
         // Y filtrar y ordenar se componen.
         let f = inv_filas(&inv, Puertos, "s", Some((0, true)));
         assert_eq!(f.iter().map(|&i| inv.ports[i].port).collect::<Vec<_>>(), vec![22]);
+    }
+
+    #[test]
+    fn un_plazo_hacia_delante_no_dice_hace() {
+        // «próxima en hace 3 h» es la frase que esta función existe para no
+        // escribir. Y un plazo ya vencido no puede salir negativo.
+        assert_eq!(dentro_de(3 * 3_600), "3 h");
+        assert_eq!(dentro_de(120), "2 min");
+        assert_eq!(dentro_de(-500), "un momento");
+        assert!(!dentro_de(7_200).contains("hace"));
     }
 
     #[test]
