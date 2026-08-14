@@ -65,6 +65,15 @@ pub struct Ctx<'a> {
     pub preset: &'a str,
     /// Memorias recordadas para esta orden, ya formateadas.
     pub memories: &'a str,
+    /// Los principios activos, ya formateados. Vacío = ninguno.
+    ///
+    /// SEPARADO DE LAS MEMORIAS Y CON MÁS PRIORIDAD, porque no son lo mismo. Una
+    /// memoria es un hecho y entra cuando viene al caso; un principio es una
+    /// instrucción y entra SIEMPRE — su valor está justamente en los turnos donde
+    /// a nadie se le habría ocurrido recordarla. Mezclarlos en el mismo bloque
+    /// haría que el modelo leyera «en producción avisa antes» con el mismo peso
+    /// que «el servidor de impresión es SRV-04».
+    pub principles: &'a str,
     /// Modelo flojo siguiendo instrucciones: se le manda lo justo.
     pub weak_model: bool,
     /// Si este shell puede ejecutar lo que proponga. Cambia el contrato entero:
@@ -92,6 +101,7 @@ impl Default for Ctx<'_> {
             skills: "",
             preset: "",
             memories: "",
+            principles: "",
             weak_model: false,
             can_execute: false,
             auto: false,
@@ -449,6 +459,29 @@ impl Section for Elevation {
     }
 }
 
+struct Principles;
+impl Section for Principles {
+    fn name(&self) -> &'static str {
+        "Principles"
+    }
+    fn relevant(&self, c: &Ctx) -> bool {
+        !c.principles.is_empty()
+    }
+    /// ANTES QUE TODO LO DEMÁS, incluido el preset. Son las reglas que el
+    /// operador dictó a propósito para que manden sobre el comportamiento por
+    /// defecto: leerlas después del estado de la máquina las convierte en una
+    /// nota al pie de lo que Lucy ya ha decidido.
+    ///
+    /// Y ESTABLE entre turnos, como el preset: no dependen de la pregunta, así
+    /// que se cobran como caché en vez de reenviarse enteras cada vez.
+    fn priority(&self) -> u32 {
+        8
+    }
+    fn render(&self, c: &Ctx) -> String {
+        format!("REGLAS QUE TE DIO EL OPERADOR\n{}", c.principles.trim_end())
+    }
+}
+
 struct Preset;
 impl Section for Preset {
     fn name(&self) -> &'static str {
@@ -663,6 +696,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Safety),
         Box::new(Actions),
         Box::new(Elevation),
+        Box::new(Principles),
         Box::new(Preset),
         Box::new(Skills),
         Box::new(HostRouting),
