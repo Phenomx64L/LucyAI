@@ -479,7 +479,28 @@ pub const RECALL_MEMORIAS: usize = 5;
 pub const RECALL_DOCS: usize = 3;
 
 /// Parecido mínimo para que una memoria entre.
-pub const MIN_MEMORIA: f32 = 0.45;
+///
+/// MEDIDO, NO ELEGIDO — y lo que se midió cambió el número por completo. Contra
+/// el embebedor de verdad (`nomic-embed-text`, textos en español), tres memorias
+/// de administración de sistemas y cuatro preguntas:
+///
+/// ```text
+/// por qué no imprime la impresora     -> 0.689, 0.564, 0.547
+/// cuándo caduca el certificado        -> 0.766, 0.601, 0.539
+/// qué se hace con el gazpacho andaluz -> 0.591, 0.573, 0.547   ← nada que ver
+/// receta de tortilla de patatas       -> 0.542, 0.538, 0.509   ← nada que ver
+/// ```
+///
+/// El SUELO de dos textos en español que no tienen nada que ver está en 0,59. El
+/// umbral que había en el shell era 0,40 — o sea que en CADA turno entraban cinco
+/// memorias tomadas prácticamente al azar. Justo el fallo contra el que avisaba
+/// el comentario que defendía ese 0,40: «el modelo empieza a construir sobre lo
+/// que se le recordó en vez de sobre lo que se le preguntó».
+///
+/// 0,65 deja pasar el acierto de cabeza —0,69 y 0,77 en las medidas— y corta todo
+/// lo demás. Los números son de ESTE embebedor y de textos en español; con otro
+/// modelo hay que volver a medirlos, no arrastrarlos.
+pub const MIN_MEMORIA: f32 = 0.65;
 
 /// Y para que entre un trozo de documento. MÁS ALTO a propósito.
 ///
@@ -487,7 +508,16 @@ pub const MIN_MEMORIA: f32 = 0.45;
 /// equivocado son tres párrafos con pinta de documentación oficial sobre los que
 /// el modelo va a construir una respuesta con toda la seguridad del mundo. El
 /// coste de colar de más no es el mismo, y el umbral tampoco puede serlo.
-pub const MIN_DOCUMENTO: f32 = 0.50;
+///
+/// Medido igual, sobre un manual real troceado:
+///
+/// ```text
+/// rotación de claves PGP            -> 0.827, 0.656, 0.623
+/// instalar el agente en el servidor -> 0.711, 0.669, 0.668
+/// receta de tortilla de patatas     -> 0.561, 0.556, 0.554   ← nada que ver
+/// cómo se hace el gazpacho          -> 0.551, 0.550, 0.532   ← nada que ver
+/// ```
+pub const MIN_DOCUMENTO: f32 = 0.70;
 
 /// Lo que se recordó, y de dónde.
 #[derive(Debug, Clone, Default, PartialEq)]

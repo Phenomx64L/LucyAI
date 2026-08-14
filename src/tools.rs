@@ -212,7 +212,47 @@ pub fn run(name: &str, args: &str) -> Option<ToolResult> {
         // dice al modelo cómo continuar, lo intenta, `run` contesta `None`, y
         // el callejón que la herramienta venía a abrir seguía cerrado.
         "readlines" => Some(readlines(args)),
+        // EL ESLABÓN QUE DECIDE SI LA INGESTA SIRVE. Un manual de trescientas
+        // páginas ingerido y una herramienta que Lucy no sabe que existe son lo
+        // mismo que no haberlo ingerido — y no da error, da silencio.
+        "pdf_search" => Some(pdf_search(args)),
         _ => None,
+    }
+}
+
+/// Busca en los documentos ingeridos.
+fn pdf_search(args: &str) -> ToolResult {
+    let label = format!("pdf_search {args}");
+    match crate::docs::search(args) {
+        Err(e) => ToolResult::err(label, e),
+        Ok(v) if v.is_empty() => ToolResult::err(
+            label,
+            // Los que SÍ hay, en el error. Sin la lista, el modelo prueba otras
+            // palabras contra un corpus que a lo mejor está vacío, y cada intento
+            // cuesta un turno.
+            match crate::docs::list() {
+                Ok(d) if d.is_empty() => {
+                    "No hay ningún documento ingerido todavía. El operador puede añadir uno \
+                     desde la pestaña Documentos de Memoria."
+                        .to_string()
+                }
+                Ok(d) => format!(
+                    "Nada sobre eso en los documentos ingeridos. Los que hay: {}.",
+                    d.iter().map(|x| x.nombre.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+                Err(_) => "Nada sobre eso en los documentos ingeridos.".to_string(),
+            },
+        ),
+        Ok(v) => {
+            let mut body = String::new();
+            for (titulo, texto) in &v {
+                // CON SU PROCEDENCIA. Un párrafo de manual sin decir de cuál sale
+                // se cita con la misma autoridad que un hecho medido en la
+                // máquina, y no son lo mismo.
+                body.push_str(&format!("--- {titulo} ---\n{texto}\n\n"));
+            }
+            ToolResult { label, body, ok: true }
+        }
     }
 }
 
@@ -284,6 +324,11 @@ pub const AVAILABLE: &[(&str, &str)] = &[
     // función que devuelve un `ToolResult` de golpe. Están en esta lista porque
     // esta lista es lo que el prompt promete, y el criterio es «alguien lo
     // cumple», no «lo cumple este módulo» — igual que `writefile`.
+    (
+        "pdf_search",
+        "<TOOL>pdf_search:qué buscar</TOOL> — busca en los manuales y guías que el \
+         operador ha ingerido",
+    ),
     (
         "fork_task",
         "<TOOL>fork_task:nombre|qué tiene que averiguar</TOOL> — lanza una tarea en paralelo",
