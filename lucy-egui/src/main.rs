@@ -2819,6 +2819,9 @@ struct App {
     /// Un borrado ARMADO: (pestaña, id). El primer clic arma, el segundo borra.
     /// Cualquier otro clic de borrado re-arma sobre otra fila.
     mem_confirm: Option<(MemTab, i64)>,
+    /// El mismo armado para Documentos, aparte porque su id es TEXTO — lo
+    /// decidió la tabla de la app Tauri, que es de las dos aplicaciones.
+    doc_confirm: Option<String>,
     /// La ingesta de documento en vuelo, si la hay.
     doc_rx: Option<std::sync::mpsc::Receiver<lucy_core::docs::Paso>>,
     /// La última línea de progreso de la ingesta, con si es un error.
@@ -3206,6 +3209,7 @@ impl App {
             principios_l: None,
             mant_info: None,
             mem_confirm: None,
+            doc_confirm: None,
             doc_rx: None,
             doc_estado: None,
             doc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -13011,6 +13015,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     }
                     // Y el borrado armado se desarma: era de otra lista.
                     self.mem_confirm = None;
+                    self.doc_confirm = None;
                 }
             }
         });
@@ -13591,9 +13596,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             );
         }
         ui.add_space(4.0);
-        let mut borrar: Option<i64> = None;
-        let mut armar: Option<i64> = None;
-        let confirmado = self.mem_confirm;
+        let mut borrar: Option<String> = None;
+        let mut armar: Option<String> = None;
+        let confirmado = self.doc_confirm.clone();
         match &self.docs_l {
             None => {}
             Some(Err(e)) => {
@@ -13618,7 +13623,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         let armado =
-                                            confirmado == Some((MemTab::Documentos, d.id));
+                                            confirmado.as_deref() == Some(d.id.as_str());
                                         let b = if armado {
                                             egui::Button::new(
                                                 egui::RichText::new("¿borrar?")
@@ -13630,9 +13635,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                         };
                                         if ui.add(b).clicked() {
                                             if armado {
-                                                borrar = Some(d.id);
+                                                borrar = Some(d.id.clone());
                                             } else {
-                                                armar = Some(d.id);
+                                                armar = Some(d.id.clone());
                                             }
                                         }
                                         ui.label(
@@ -13680,11 +13685,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
         }
         if let Some(id) = armar {
-            self.mem_confirm = Some((MemTab::Documentos, id));
+            self.doc_confirm = Some(id);
         }
         if let Some(id) = borrar {
-            self.mem_confirm = None;
-            match lucy_core::docs::delete(id) {
+            self.doc_confirm = None;
+            match lucy_core::docs::delete(&id) {
                 Ok(()) => self.docs_l = Some(lucy_core::docs::list()),
                 Err(e) => self.docs_l = Some(Err(e)),
             }
