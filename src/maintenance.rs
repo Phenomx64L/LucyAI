@@ -138,6 +138,40 @@ impl Tanda {
     }
 }
 
+/// Corre UN trabajo, sin mirar el plazo, y lo anota. Devuelve la misma nota que
+/// queda en disco.
+///
+/// APARTE DE `tanda` porque la vista de Memoria necesita un «ponte al día
+/// ahora» por trabajo: esperar hasta dos días para ver si una corrección
+/// funcionó no es una forma de verificar nada.
+pub fn corre(job: &str, stop: &std::sync::atomic::AtomicBool) -> String {
+    let nota = match job {
+        CONSOLIDAR => match crate::consolidate::run(false) {
+            Ok(r) => format!(
+                "{} memorias miradas, {} grupos, {} fundidas",
+                r.scanned, r.clusters_found, r.memories_merged
+            ),
+            Err(e) => format!("falló: {e}"),
+        },
+        INSIGHTS => {
+            let r = crate::insights::run(stop);
+            if r.creados + r.reforzados > 0 {
+                format!(
+                    "{} elegibles, {} grupos, {} patrones nuevos, {} reforzados",
+                    r.elegibles, r.grupos, r.creados, r.reforzados
+                )
+            } else {
+                // Sin patrones, lo que interesa es POR QUÉ. Un cero pelado es
+                // indistinguible de una avería.
+                format!("{} elegibles · {}", r.elegibles, r.motivo)
+            }
+        }
+        otro => format!("trabajo desconocido: {otro}"),
+    };
+    let _ = marca(job, &nota);
+    nota
+}
+
 /// Hace lo que toque. Bloqueante: quien llama ya está en un hilo.
 ///
 /// LA CONSOLIDACIÓN CORRE DE VERDAD, no en seco, y eso hay que decirlo en voz
@@ -149,33 +183,13 @@ impl Tanda {
 pub fn tanda(stop: &std::sync::atomic::AtomicBool) -> Tanda {
     let mut t = Tanda::default();
     if toca(CONSOLIDAR, CADA_CONSOLIDAR) {
-        let nota = match crate::consolidate::run(false) {
-            Ok(r) => format!(
-                "{} memorias miradas, {} grupos, {} fundidas",
-                r.scanned, r.clusters_found, r.memories_merged
-            ),
-            Err(e) => format!("falló: {e}"),
-        };
-        let _ = marca(CONSOLIDAR, &nota);
-        t.consolidado = Some(nota);
+        t.consolidado = Some(corre(CONSOLIDAR, stop));
     }
     if stop.load(std::sync::atomic::Ordering::Relaxed) {
         return t;
     }
     if toca(INSIGHTS, CADA_INSIGHTS) {
-        let r = crate::insights::run(stop);
-        let nota = if r.creados + r.reforzados > 0 {
-            format!(
-                "{} elegibles, {} grupos, {} patrones nuevos, {} reforzados",
-                r.elegibles, r.grupos, r.creados, r.reforzados
-            )
-        } else {
-            // Sin patrones, lo que interesa es POR QUÉ. Un cero pelado es
-            // indistinguible de una avería.
-            format!("{} elegibles · {}", r.elegibles, r.motivo)
-        };
-        let _ = marca(INSIGHTS, &nota);
-        t.reflexionado = Some(nota);
+        t.reflexionado = Some(corre(INSIGHTS, stop));
     }
     t
 }
