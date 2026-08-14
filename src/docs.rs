@@ -266,6 +266,15 @@ pub fn ingest(
         Ok(None) => {}
     }
 
+    // EL FILTRO DE SECRETOS PASA POR AQUÍ TAMBIÉN, y sobre el texto ENTERO,
+    // antes de trocear. Los formatos que más se ingieren en este oficio —.conf,
+    // .ini, .yml, .ps1, .env volcado a un .txt— son exactamente donde viven las
+    // credenciales, y estas filas viajan después al prompt en cada recuerdo. Se
+    // limpia antes de trocear y no trozo a trozo porque una clave privada puede
+    // caer partida entre dos trozos: ninguno tendría el bloque completo y el
+    // patrón no casaría en ninguno. La huella se calcula ANTES, sobre el texto
+    // tal cual está en disco, para que reingerir el mismo fichero se detecte.
+    let texto = crate::memories::scrub(&texto);
     let trozos = chunk(&texto);
     if trozos.is_empty() {
         let _ = tx.send(Paso::Error(format!("«{nombre}» no dio ningún trozo.")));
@@ -284,10 +293,13 @@ pub fn ingest(
     // Las filas de texto primero. Aunque el embebedor no esté, el documento
     // queda buscable POR PALABRAS —el índice FTS es un disparador de la tabla—
     // que es infinitamente más que no quedar de ninguna forma.
-    if let Err(e) = filas(&doc, &trozos, &texto) {
-        let _ = tx.send(Paso::Error(e));
-        return;
-    }
+    let ids = match filas(&doc, &trozos, &texto) {
+        Ok(ids) => ids,
+        Err(e) => {
+            let _ = tx.send(Paso::Error(e));
+            return;
+        }
+    };
 
     let mut hechos = 0usize;
     for (i, lote) in trozos.chunks(crate::vectors::EMBED_LOTE).enumerate() {
@@ -298,10 +310,16 @@ pub fn ingest(
         match crate::vectors::embed_batch(&textos) {
             Ok((vs, modelo)) => {
                 let base = i * crate::vectors::EMBED_LOTE;
+                // EL ID DEL VECTOR ES EL ID DE LA FILA, no «doc#parte» — porque
+                // la app Tauri usa el id de fila y las dos comparten base. Con
+                // dos esquemas, el borrado de cada aplicación limpiaba solo los
+                // vectores que ella misma escribió: borrar desde la otra dejaba
+                // los huérfanos rankeando en cada búsqueda, citando un documento
+                // que ya no existe.
                 let filas: Vec<(String, String, Vec<f32>)> = vs
                     .into_iter()
                     .enumerate()
-                    .map(|(k, v)| (format!("{}#{}", doc.id, base + k), textos[k].clone(), v))
+                    .map(|(k, v)| (ids[base + k].to_string(), textos[k].clone(), v))
                     .collect();
                 match crate::vectors::upsert("pdf_chunk", &filas, &modelo) {
                     Ok(n) => hechos += n,
@@ -383,9 +401,13 @@ fn marca_embebidos(id: i64, n: usize) -> Result<(), String> {
 }
 
 /// Las filas de memoria del documento: una por trozo, más la del resumen.
-fn filas(d: &Documento, trozos: &[String], texto: &str) -> Result<(), String> {
+///
+/// Devuelve los ids de las filas de TROZO, en el orden de los trozos: son la
+/// clave con la que se guardan sus vectores.
+fn filas(d: &Documento, trozos: &[String], texto: &str) -> Result<Vec<i64>, String> {
     crate::with_db(|c| {
         let tx = c.unchecked_transaction().map_err(|e| format!("docs tx: {e}"))?;
+        let mut ids = Vec::with_capacity(trozos.len());
         for (i, t) in trozos.iter().enumerate() {
             tx.execute(
                 "INSERT INTO agent_memories (session_id, title, content, tags, files, importance)
@@ -397,6 +419,7 @@ fn filas(d: &Documento, trozos: &[String], texto: &str) -> Result<(), String> {
                 ],
             )
             .map_err(|e| format!("docs: trozo: {e}"))?;
+            ids.push(tx.last_insert_rowid());
         }
         // EL RESUMEN, con más importancia. Es la fila que contesta «¿qué
         // documentos tienes?» sin traerse cuatrocientos párrafos, y la que hace
@@ -419,7 +442,7 @@ fn filas(d: &Documento, trozos: &[String], texto: &str) -> Result<(), String> {
         )
         .map_err(|e| format!("docs: resumen: {e}"))?;
         tx.commit().map_err(|e| format!("docs commit: {e}"))?;
-        Ok(())
+        Ok(ids)
     })
 }
 
@@ -448,16 +471,31 @@ pub fn delete(id: i64) -> Result<(), String> {
         let tx = c.unchecked_transaction().map_err(|e| format!("docs tx: {e}"))?;
         // Los tres sitios, o quedan huérfanos: trozos sin documento que siguen
         // saliendo en las búsquedas, y vectores apuntando a filas que no están.
+        //
+        // LOS VECTORES PRIMERO, porque su clave es el id de fila y se resuelve
+        // con una subconsulta sobre las filas — que en la orden siguiente dejan
+        // de existir. Es además la misma consulta que usa la app Tauri para lo
+        // mismo, así que cada aplicación limpia también lo que ingirió la otra.
+        tx.execute(
+            "DELETE FROM embeddings
+              WHERE entity_type = 'pdf_chunk'
+                AND entity_id IN (SELECT CAST(id AS TEXT) FROM agent_memories
+                                   WHERE session_id = ?1 OR session_id = ?2)",
+            rusqlite::params![format!("pdf:{id}"), format!("pdf-doc:{id}")],
+        )
+        .map_err(|e| format!("docs: borrar vectores: {e}"))?;
+        // Y el esquema viejo «doc#parte», por las filas que este mismo programa
+        // escribió antes de alinear la clave con la de la app.
+        tx.execute(
+            "DELETE FROM embeddings WHERE entity_type = 'pdf_chunk' AND entity_id LIKE ?1",
+            rusqlite::params![format!("{id}#%")],
+        )
+        .map_err(|e| format!("docs: borrar vectores viejos: {e}"))?;
         tx.execute(
             "DELETE FROM agent_memories WHERE session_id = ?1 OR session_id = ?2",
             rusqlite::params![format!("pdf:{id}"), format!("pdf-doc:{id}")],
         )
         .map_err(|e| format!("docs: borrar trozos: {e}"))?;
-        tx.execute(
-            "DELETE FROM embeddings WHERE entity_type = 'pdf_chunk' AND entity_id LIKE ?1",
-            rusqlite::params![format!("{id}#%")],
-        )
-        .map_err(|e| format!("docs: borrar vectores: {e}"))?;
         tx.execute("DELETE FROM pdf_documents WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| format!("docs: borrar documento: {e}"))?;
         tx.commit().map_err(|e| format!("docs commit: {e}"))?;
@@ -502,16 +540,41 @@ pub fn search(query: &str) -> Result<Vec<(String, String)>, String> {
     lexico(q)
 }
 
-/// De `12#7` al nombre del documento y el número de parte.
+/// Del id del vector al título de su fila.
+///
+/// La clave nueva es el id de fila en `agent_memories`, cuyo título ya dice
+/// «manual.pdf — parte 3/40». La forma vieja `12#7` se sigue entendiendo por las
+/// filas escritas antes de alinear la clave con la de la app.
 fn titulo_de(entity_id: &str) -> String {
-    let (doc, parte) = entity_id.split_once('#').unwrap_or((entity_id, "?"));
-    let nombre = doc
+    if let Some((doc, parte)) = entity_id.split_once('#') {
+        let nombre = doc
+            .parse::<i64>()
+            .ok()
+            .and_then(|id| {
+                crate::with_db(|c| {
+                    Ok(c.query_row(
+                        "SELECT filename FROM pdf_documents WHERE id = ?1",
+                        rusqlite::params![id],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .ok())
+                })
+                .ok()
+                .flatten()
+            })
+            .unwrap_or_else(|| "documento".into());
+        return format!(
+            "{nombre} · parte {}",
+            parte.parse::<usize>().map(|n| n + 1).unwrap_or(0)
+        );
+    }
+    entity_id
         .parse::<i64>()
         .ok()
         .and_then(|id| {
             crate::with_db(|c| {
                 Ok(c.query_row(
-                    "SELECT filename FROM pdf_documents WHERE id = ?1",
+                    "SELECT title FROM agent_memories WHERE id = ?1",
                     rusqlite::params![id],
                     |r| r.get::<_, String>(0),
                 )
@@ -520,8 +583,7 @@ fn titulo_de(entity_id: &str) -> String {
             .ok()
             .flatten()
         })
-        .unwrap_or_else(|| "documento".into());
-    format!("{nombre} · parte {}", parte.parse::<usize>().map(|n| n + 1).unwrap_or(0))
+        .unwrap_or_else(|| "documento".into())
 }
 
 fn lexico(q: &str) -> Result<Vec<(String, String)>, String> {

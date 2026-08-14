@@ -111,7 +111,14 @@ pub fn start_ollama(
 /// Modelos instalados en Ollama (`GET /api/tags`). Bloqueante y rápido; devuelve
 /// vacío si Ollama no responde.
 pub fn list_models() -> Vec<String> {
-    let resp = match ureq::get(&format!("{OLLAMA}/api/tags")).call() {
+    // CON PLAZO, porque sin él ureq solo limita el CONNECT. Un Ollama que acepta
+    // la conexión y se queda callado —cargando un modelo de 7B en una máquina
+    // corta de RAM— dejaba esta llamada esperando indefinidamente, y quien la
+    // hace es el botón de redetectar, que corre en el hilo que pinta.
+    let resp = match ureq::get(&format!("{OLLAMA}/api/tags"))
+        .timeout(std::time::Duration::from_secs(4))
+        .call()
+    {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };

@@ -511,11 +511,25 @@ pub struct Resultado {
     pub motivo: String,
     /// Lecciones que resultaron ser nuevas.
     pub lecciones: usize,
+    /// Si merece la pena volver a intentarlo en esta sesión.
+    ///
+    /// LA DISTINCIÓN EXISTE POR UN CASO CONCRETO: un modelo instalado que no
+    /// cumple el formato —un razonador que quema los dos mil tokens pensando—
+    /// falla IGUAL en cada intento, y reintentar al cerrar cada turno son noventa
+    /// segundos de Ollama por turno, para siempre. Eso no es transitorio y no se
+    /// reintenta. Un Ollama que no contesta sí lo es: arrancarlo lo arregla.
+    pub reintentable: bool,
 }
 
 impl Resultado {
+    /// Fallo transitorio: reintentar en el próximo cierre puede salir bien.
     fn no(motivo: impl Into<String>) -> Self {
-        Self { id: None, motivo: motivo.into(), lecciones: 0 }
+        Self { id: None, motivo: motivo.into(), lecciones: 0, reintentable: true }
+    }
+
+    /// Fallo determinista o caso cerrado: volver a intentarlo dará lo mismo.
+    fn nunca(motivo: impl Into<String>) -> Self {
+        Self { reintentable: false, ..Self::no(motivo) }
     }
 }
 
@@ -529,16 +543,19 @@ pub fn cristaliza(
     stop: &AtomicBool,
 ) -> Resultado {
     if session_id.trim().is_empty() {
-        return Resultado::no("sesión sin identificador");
+        return Resultado::nunca("sesión sin identificador");
     }
+    // Una puerta cerrada es reintentable por definición: la sesión sigue
+    // creciendo y el turno siguiente puede abrirla.
     if let Err(e) = merece(s) {
         return Resultado::no(e);
     }
     // Antes de Ollama, que es lo único que cuesta.
     if existe(session_id) {
-        return Resultado::no("esta sesión ya tiene cristal");
+        return Resultado::nunca("esta sesión ya tiene cristal");
     }
     let Some(m) = modelo() else {
+        // Transitorio: arrancar Ollama o instalar un modelo lo arregla.
         return Resultado::no("no hay ningún modelo de texto en Ollama");
     };
     if stop.load(Ordering::Relaxed) {
@@ -546,18 +563,25 @@ pub fn cristaliza(
     }
     let crudo = match destila(transcripcion, &m) {
         Ok(c) => c,
-        Err(e) => return Resultado::no(format!("no se pudo destilar: {e}")),
+        // Ollama caído a media petición = transitorio. El formato incumplido =
+        // determinista: el mismo modelo con la misma transcripción va a volver a
+        // no cumplirlo, y cada reintento cuesta la petición entera.
+        Err(e) if e.contains("no respondió") || e.contains("ilegible") => {
+            return Resultado::no(format!("no se pudo destilar: {e}"))
+        }
+        Err(e) => return Resultado::nunca(format!("no se pudo destilar: {e}")),
     };
     // La destilación tarda; en ese hueco cabe otro cierre de turno de la misma
     // sesión. Se vuelve a mirar antes de escribir para no dejar dos cristales.
     if existe(session_id) {
-        return Resultado::no("esta sesión ya tiene cristal");
+        return Resultado::nunca("esta sesión ya tiene cristal");
     }
     match guardar(session_id, &crudo, transcripcion.chars().count()) {
         Ok((id, nuevas)) => Resultado {
             id: Some(id),
             motivo: format!("cristalizada con {m}"),
             lecciones: nuevas,
+            reintentable: false,
         },
         Err(e) => Resultado::no(format!("no se pudo guardar: {e}")),
     }
@@ -758,5 +782,23 @@ mod tests {
         let r = Resultado::no("no hay ningún modelo de texto en Ollama");
         assert!(r.id.is_none());
         assert!(r.motivo.contains("Ollama"));
+    }
+
+    #[test]
+    fn un_fallo_de_formato_no_se_reintenta_y_uno_de_red_si() {
+        // El caso que separa los dos: un razonador instalado que quema el
+        // presupuesto pensando falla IGUAL en cada intento, y reintentar al
+        // cerrar cada turno son noventa segundos de Ollama por turno, para
+        // siempre. Un Ollama caído, en cambio, se arranca y ya.
+        assert!(Resultado::no("Ollama no respondió: connection refused").reintentable);
+        assert!(!Resultado::nunca("el modelo no devolvió <narrative>").reintentable);
+        // Y el éxito no deja nada pendiente de reintentar.
+        let ok = Resultado {
+            id: Some(1),
+            motivo: "cristalizada con mistral".into(),
+            lecciones: 2,
+            reintentable: false,
+        };
+        assert!(!ok.reintentable);
     }
 }
