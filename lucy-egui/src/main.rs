@@ -27,14 +27,29 @@ use proto_core::Pty;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Tamaño de arranque, y el que se REPONE si la ventana aparece colapsada.
+const VENTANA: [f32; 2] = [1180.0, 760.0];
+/// Por debajo de esto la rejilla del dashboard empieza a apilar columnas de
+/// 48 px y el compositor se queda sin sitio para el campo de texto.
+const VENTANA_MIN: [f32; 2] = [900.0, 560.0];
+
+/// ¿Este tamaño es un fallo y no una elección?
+///
+/// La ventana declara un mínimo de 900×560, así que ningún camino legítimo
+/// —ni el operador arrastrando el borde— puede dejarla por debajo. Un rect
+/// menor solo puede venir de la creación colapsada: en pantallas con escala
+/// (150 % aquí), la ventana SIN DECORACIONES a veces nace como una tira de
+/// unas 230×90 antes de que winit llegue a aplicarle el tamaño pedido, y ahí
+/// se queda. El margen de un punto es por el redondeo de la propia escala.
+fn ventana_enana(ancho: f32, alto: f32) -> bool {
+    ancho + 1.0 < VENTANA_MIN[0] || alto + 1.0 < VENTANA_MIN[1]
+}
+
 fn main() -> eframe::Result {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 760.0])
-            // Por debajo de esto la rejilla del dashboard empieza a apilar
-            // columnas de 48 px y el compositor se queda sin sitio para el
-            // campo de texto.
-            .with_min_inner_size([900.0, 560.0])
+            .with_inner_size(VENTANA)
+            .with_min_inner_size(VENTANA_MIN)
             // Sin barra de título del sistema: la cabecera de la aplicación ES
             // la barra de título. Con las dos, Lucy tendría dos cabeceras de
             // distinto color y distinta altura, una encima de la otra.
@@ -2908,6 +2923,9 @@ struct App {
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
     /// Todavía no se ha mirado ninguna vez en esta ejecución.
     mant_primera: bool,
+    /// La orden de reponer el tamaño de la ventana ya está mandada. Ver el
+    /// vigilante al principio de `update`.
+    ventana_curada: bool,
     /// Cuándo se MIRÓ por última vez si tocaba algo.
     ///
     /// Distinto de cuándo se HIZO, que vive en disco. Éste solo evita preguntarle
@@ -3239,6 +3257,7 @@ impl App {
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
             mant_primera: true,
+            ventana_curada: false,
             mant_visto: None,
             mant_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             inv_drift: None,
@@ -3771,6 +3790,33 @@ impl eframe::App for App {
         self.last = now;
         if dt > 0.0 {
             self.fps = 0.9 * self.fps + 0.1 * (1.0 / dt);
+        }
+
+        // ── La ventana se vigila su propio tamaño ────────────────────────────
+        //
+        // En esta máquina (escala del 150 %) la ventana sin decoraciones nace a
+        // veces como una tira de ~230×90: el tamaño pedido no llega a aplicarse
+        // en la creación y, sin marco del sistema, no hay quién lo corrija. El
+        // tamaño persistido en disco era sano — el fallo es de creación, así que
+        // se cura aquí, donde ya hay ventana a la que mandarle órdenes.
+        //
+        // MINIMIZADA NO CUENTA: Windows aparca las ventanas minimizadas como un
+        // tocón de 160×30 en (-32000,-32000), y «curar» eso sería restaurar una
+        // ventana que el operador quitó de en medio a propósito.
+        //
+        // El pestillo evita mandar la orden en cada frame mientras el compositor
+        // tarda en aplicarla; se rearma al volver a un tamaño sano.
+        let minimizada = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        let r = ctx.input(|i| i.screen_rect());
+        if ventana_enana(r.width(), r.height()) && !minimizada {
+            if !self.ventana_curada {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                    VENTANA[0], VENTANA[1],
+                )));
+                self.ventana_curada = true;
+            }
+        } else {
+            self.ventana_curada = false;
         }
 
         self.pump_chat();
@@ -14627,6 +14673,26 @@ mod bucle {
         // Y filtrar y ordenar se componen.
         let f = inv_filas(&inv, Puertos, "s", Some((0, true)));
         assert_eq!(f.iter().map(|&i| inv.ports[i].port).collect::<Vec<_>>(), vec![22]);
+    }
+
+    #[test]
+    fn la_tira_colapsada_se_reconoce_y_un_tamano_legitimo_no() {
+        // El caso medido en esta máquina: la ventana sin decoraciones nace como
+        // una tira de ~230×90 en pantallas con escala del 150 %.
+        assert!(ventana_enana(233.0, 92.0), "la tira del arranque no se reconoció");
+        // El tocón de una ventana minimizada también es enano — por eso el
+        // vigilante mira ADEMÁS si está minimizada antes de actuar.
+        assert!(ventana_enana(158.0, 26.0));
+        // Los tamaños que sí puede tener la ventana no se tocan: el de
+        // arranque, el mínimo exacto, y el mínimo con el redondeo de la escala
+        // (899.33 tras un 150 % es una ventana legítima, no un fallo).
+        assert!(!ventana_enana(VENTANA[0], VENTANA[1]));
+        assert!(!ventana_enana(VENTANA_MIN[0], VENTANA_MIN[1]));
+        assert!(!ventana_enana(VENTANA_MIN[0] - 0.67, VENTANA_MIN[1] - 0.67));
+        // Y por debajo del mínimo con margen, sí: ningún camino legítimo puede
+        // dejarla ahí.
+        assert!(ventana_enana(700.0, 560.0));
+        assert!(ventana_enana(900.0, 400.0));
     }
 
     #[test]
