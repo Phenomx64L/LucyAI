@@ -42,7 +42,10 @@ pub const MAX_TROZOS: usize = 400;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Documento {
-    pub id: i64,
+    /// TEXTO Y NO UN ENTERO, porque el id lo decidió la app Tauri: su tabla
+    /// declara `id TEXT PRIMARY KEY` y la base es compartida. Un id numérico
+    /// aquí no es una preferencia distinta, es otra tabla.
+    pub id: String,
     pub nombre: String,
     pub ruta: String,
     pub trozos: usize,
@@ -141,24 +144,42 @@ pub fn huella(texto: &str) -> String {
     format!("{h:016x}")
 }
 
-/// Crea la tabla de documentos si no está.
+/// Crea la tabla de documentos si no está — CON EL ESQUEMA DE LA APP TAURI.
+///
+/// La primera versión de esto declaraba una tabla propia (`id INTEGER`, `sha`,
+/// `chunks`) y los tests pasaban porque arrancan con base vacía. Contra la base
+/// REAL, `CREATE TABLE IF NOT EXISTS` no hacía nada —la tabla ya existía, creada
+/// por la V2 con `id TEXT` y `content_hash`— y el índice sobre una columna que no
+/// existe tumbaba el esquema entero: la pestaña de Documentos moría con «no such
+/// column: sha». La base compartida manda; el núcleo habla su esquema.
+///
+/// `embedded` es la única columna nuestra, añadida con un ALTER tolerado como
+/// hace la app con las suyas: la V2 no cuenta vectores por documento y este
+/// shell lo necesita para decir «12 de 40 con vector».
 pub fn ensure_schema() -> Result<(), String> {
     crate::memories::ensure_schema()?;
     crate::vectors::ensure_schema()?;
     crate::with_db(|c| {
         c.execute_batch(
             "CREATE TABLE IF NOT EXISTS pdf_documents (
-                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                 filename    TEXT NOT NULL,
-                 path        TEXT NOT NULL DEFAULT '',
-                 sha         TEXT NOT NULL DEFAULT '',
-                 chunks      INTEGER NOT NULL DEFAULT 0,
-                 embedded    INTEGER NOT NULL DEFAULT 0,
-                 created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                 id           TEXT    PRIMARY KEY,
+                 filename     TEXT    NOT NULL,
+                 path         TEXT    NOT NULL,
+                 page_count   INTEGER NOT NULL DEFAULT 0,
+                 chunk_count  INTEGER NOT NULL DEFAULT 0,
+                 ingested_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                 status       TEXT    NOT NULL DEFAULT 'ingesting',
+                 content_hash TEXT    NOT NULL DEFAULT '',
+                 synth_status TEXT    NOT NULL DEFAULT ''
              );
-             CREATE INDEX IF NOT EXISTS idx_pdf_documents_sha ON pdf_documents(sha);",
+             CREATE INDEX IF NOT EXISTS idx_pdf_docs_hash ON pdf_documents(content_hash);",
         )
-        .map_err(|e| format!("docs: esquema: {e}"))
+        .map_err(|e| format!("docs: esquema: {e}"))?;
+        let _ = c.execute(
+            "ALTER TABLE pdf_documents ADD COLUMN embedded INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        Ok(())
     })
 }
 
@@ -331,7 +352,7 @@ pub fn ingest(
                 let _ = tx.send(Paso::Embebiendo(hechos, trozos.len()));
             }
             Err(e) => {
-                let _ = marca_embebidos(doc.id, hechos);
+                let _ = marca_embebidos(&doc.id, hechos);
                 let mut d = doc.clone();
                 d.vectorizados = hechos;
                 let _ = tx.send(Paso::SinVectores(d, e));
@@ -339,7 +360,7 @@ pub fn ingest(
             }
         }
     }
-    let _ = marca_embebidos(doc.id, hechos);
+    let _ = marca_embebidos(&doc.id, hechos);
     let mut d = doc;
     d.vectorizados = hechos;
     let _ = tx.send(Paso::Listo(d));
@@ -349,8 +370,8 @@ fn ya_esta(sha: &str) -> Result<Option<Documento>, String> {
     crate::with_db(|c| {
         let r = c
             .query_row(
-                "SELECT id, filename, path, chunks, embedded, sha, created_at
-                 FROM pdf_documents WHERE sha = ?1 LIMIT 1",
+                "SELECT id, filename, path, chunk_count, embedded, content_hash, ingested_at
+                 FROM pdf_documents WHERE content_hash = ?1 LIMIT 1",
                 rusqlite::params![sha],
                 fila_doc,
             )
@@ -372,15 +393,23 @@ fn fila_doc(r: &rusqlite::Row) -> rusqlite::Result<Documento> {
 }
 
 fn alta(nombre: &str, ruta: &str, sha: &str, trozos: usize) -> Result<Documento, String> {
+    // El id es TEXTO porque lo es en la tabla de la app. Nanos de epoch más la
+    // huella de la ruta: único sin arrastrar un crate de uuid, y con el tiempo
+    // delante para que ordenar por id sea ordenar por llegada.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let id = format!("egui-{nanos:x}-{}", &huella(ruta)[..8]);
     crate::with_db(|c| {
         c.execute(
-            "INSERT INTO pdf_documents (filename, path, sha, chunks) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![nombre, ruta, sha, trozos as i64],
+            "INSERT INTO pdf_documents (id, filename, path, chunk_count, content_hash, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'ingesting')",
+            rusqlite::params![id, nombre, ruta, trozos as i64, sha],
         )
         .map_err(|e| format!("docs: alta: {e}"))?;
-        let id = c.last_insert_rowid();
         c.query_row(
-            "SELECT id, filename, path, chunks, embedded, sha, created_at
+            "SELECT id, filename, path, chunk_count, embedded, content_hash, ingested_at
              FROM pdf_documents WHERE id = ?1",
             rusqlite::params![id],
             fila_doc,
@@ -389,10 +418,13 @@ fn alta(nombre: &str, ruta: &str, sha: &str, trozos: usize) -> Result<Documento,
     })
 }
 
-fn marca_embebidos(id: i64, n: usize) -> Result<(), String> {
+fn marca_embebidos(id: &str, n: usize) -> Result<(), String> {
     crate::with_db(|c| {
+        // `status` también: es la columna que mira la app Tauri para dar un
+        // documento por terminado, y dejarla en 'ingesting' para siempre haría
+        // que SU interfaz lo enseñara eternamente a medias.
         c.execute(
-            "UPDATE pdf_documents SET embedded = ?1 WHERE id = ?2",
+            "UPDATE pdf_documents SET embedded = ?1, status = 'done' WHERE id = ?2",
             rusqlite::params![n as i64, id],
         )
         .map_err(|e| format!("docs: marcar: {e}"))?;
@@ -452,8 +484,8 @@ pub fn list() -> Result<Vec<Documento>, String> {
     crate::with_db(|c| {
         let mut st = c
             .prepare(
-                "SELECT id, filename, path, chunks, embedded, sha, created_at
-                 FROM pdf_documents ORDER BY created_at DESC, id DESC",
+                "SELECT id, filename, path, chunk_count, embedded, content_hash, ingested_at
+                 FROM pdf_documents ORDER BY ingested_at DESC, id DESC",
             )
             .map_err(|e| format!("docs list: {e}"))?;
         let v = st
@@ -466,7 +498,7 @@ pub fn list() -> Result<Vec<Documento>, String> {
 }
 
 /// Borra un documento, sus trozos y sus vectores.
-pub fn delete(id: i64) -> Result<(), String> {
+pub fn delete(id: &str) -> Result<(), String> {
     crate::with_db(|c| {
         let tx = c.unchecked_transaction().map_err(|e| format!("docs tx: {e}"))?;
         // Los tres sitios, o quedan huérfanos: trozos sin documento que siguen
@@ -706,7 +738,7 @@ mod tests {
         // Es el estado más confuso posible: existe en la lista y no contesta a
         // nada, así que parece que está.
         let d = Documento {
-            id: 1,
+            id: "doc-1".into(),
             nombre: "manual.pdf".into(),
             ruta: String::new(),
             trozos: 40,

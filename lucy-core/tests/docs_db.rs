@@ -15,6 +15,28 @@ fn arranca() {
     let p = std::env::temp_dir().join("lucy_core_docs_test.db");
     let _ = std::fs::remove_file(&p);
     lucy_core::init(&p).expect("init");
+    // LA TABLA DE LA V2 SE CREA PRIMERO, tal cual la declara la app Tauri. Es
+    // la forma que tiene la base REAL, y es exactamente lo que el test no
+    // cubría: sobre base vacía el esquema propio se creaba limpio y todo
+    // pasaba; contra la tabla de la app, el esquema viejo moría con «no such
+    // column: sha» y la pestaña entera de Documentos con él.
+    lucy_core::with_db(|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS pdf_documents (
+                 id           TEXT    PRIMARY KEY,
+                 filename     TEXT    NOT NULL,
+                 path         TEXT    NOT NULL,
+                 page_count   INTEGER NOT NULL DEFAULT 0,
+                 chunk_count  INTEGER NOT NULL DEFAULT 0,
+                 ingested_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                 status       TEXT    NOT NULL DEFAULT 'ingesting',
+                 content_hash TEXT    NOT NULL DEFAULT '',
+                 synth_status TEXT    NOT NULL DEFAULT ''
+             );",
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("tabla de la app");
     lucy_core::docs::ensure_schema().expect("esquema");
 }
 
@@ -135,7 +157,7 @@ fn la_cadena_entera_de_un_documento() {
     );
 
     // ── 6. Borrar se lleva las tres cosas ──
-    lucy_core::docs::delete(doc.id).expect("borrar");
+    lucy_core::docs::delete(&doc.id).expect("borrar");
     assert!(lucy_core::docs::list().unwrap().is_empty());
     let huerfanos: i64 = lucy_core::with_db(|c| {
         c.query_row(
