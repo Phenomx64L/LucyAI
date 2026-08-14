@@ -209,7 +209,7 @@ const MAX_NARRATIVA: usize = 600;
 /// de contestar, y ahí dentro ensayan la respuesta —incluidas las etiquetas—. La
 /// V2 cogía el PRIMER `<narrative>` del texto, que en un modelo de estos es el
 /// del borrador: el cristal se quedaba con el ensayo y descartaba la respuesta.
-fn sin_pensamiento(s: &str) -> &str {
+pub(crate) fn sin_pensamiento(s: &str) -> &str {
     match s.rfind("</think>") {
         Some(i) => &s[i + "</think>".len()..],
         None => s,
@@ -225,7 +225,7 @@ fn ultimo_bloque(s: &str) -> &str {
     }
 }
 
-fn recoge(xml: &str, tag: &str) -> Vec<String> {
+pub(crate) fn recoge(xml: &str, tag: &str) -> Vec<String> {
     let abre = format!("<{tag}>");
     let cierra = format!("</{tag}>");
     let mut out = Vec::new();
@@ -274,7 +274,7 @@ fn recoge_flexible(xml: &str, item: &str, contenedor: &str) -> Vec<String> {
     out
 }
 
-fn corta(s: &str, max: usize) -> String {
+pub(crate) fn corta(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
