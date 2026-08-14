@@ -255,6 +255,11 @@ struct PromptInput {
     skills_cat: String,
     /// El modo fijado, ya formateado. Vacío = ninguno.
     preset_txt: String,
+    /// Las reglas que el operador dictó. Se leen en el hilo de la interfaz
+    /// porque son una consulta local de una tabla con doce filas como mucho —
+    /// microsegundos, frente a la petición HTTP del recuerdo que sí justificó
+    /// el hilo aparte.
+    principles: String,
     cwd: String,
     name: String,
     profile: String,
@@ -289,6 +294,10 @@ impl PromptInput {
             skills: &self.skills_cat,
             preset: &self.preset_txt,
             memories: &mems,
+            // Los principios NO dependen de la pregunta: entran siempre, que es
+            // toda su razón de ser. Se leen en cada turno porque son una fila de
+            // SQLite y cambian cuando el operador dicta una.
+            principles: &self.principles,
             working_dir: &self.cwd,
             user_name: &self.name,
             user_profile: &self.profile,
@@ -1048,6 +1057,15 @@ struct ChatTab {
     pending_raw: Option<String>,
     /// Cuándo empezó el turno en curso de esta pestaña.
     turn_start: Option<Instant>,
+    /// El mismo instante en epoch de milisegundos.
+    ///
+    /// HACE FALTA APARTE del `Instant`: los carriles del workspace fechan sus
+    /// entradas con `agent::now_ms()`, y para saber qué comandos son DE ESTE
+    /// turno hay que compararlos con la misma escala. Con el `Instant` no se
+    /// puede, y sin la comparación la memoria automática se llevaría los
+    /// comandos de toda la conversación — incluidos los de la pregunta
+    /// anterior, que no tienen nada que ver.
+    turno_ms: u64,
     /// Tokens cobrados en esta pestaña, para el contador de coste.
     tokens_in: u32,
     tokens_out: u32,
@@ -1139,6 +1157,7 @@ impl ChatTab {
             uid: n,
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
+            turno_ms: 0,
             send_al_terminar: false,
             pending_raw: None,
             drain: drain::Drain::default(),
@@ -1263,13 +1282,14 @@ fn greeting(name: &str) -> String {
 /// operador de que `/crystallize` existe— y una lista recortada a lo ya migrado
 /// enseñaría una versión de Lucy más pequeña de la que hay. Los que aún no
 /// funcionan lo dicen al elegirlos, en vez de no aparecer.
-const SLASH: [(&str, &str, bool); 29] = [
+const SLASH: [(&str, &str, bool); 30] = [
     ("/model", "Cambiar el modelo activo", true),
     ("/clear", "Limpiar el chat actual", true),
     ("/memory", "Explorador de memoria (V1)", true),
     ("/kg", "Grafo de conocimiento (V1)", false),
     ("/link", "Relaciones tipadas entre memorias", false),
     ("/recall", "Recuperar memorias por consulta", true),
+    ("/principio", "Dictar una regla que Lucy aplica siempre", true),
     ("/crystals", "Ver crystals de memoria", false),
     ("/crystallize", "Destilar la sesión en un crystal", false),
     ("/insights", "Insights consolidados", false),
@@ -2813,6 +2833,11 @@ struct App {
     cmp_desde: Option<Instant>,
     cmp_last: String,
     cmp_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Memorias guardándose en segundo plano. Por pestaña porque el aviso va
+    /// a SU carril de Trace: con dos conversaciones a la vez, un «ya lo sabía»
+    /// en la equivocada no dice nada de nada.
+    #[allow(clippy::type_complexity)]
+    mem_rx: Vec<(usize, std::sync::mpsc::Receiver<Result<lucy_core::memories::Guardado, String>>)>,
     /// El informe de cambios, si se ha pedido.
     ///
     /// Se calcula al pulsar y no en cada escaneo: la mayoría de las veces el
@@ -3101,6 +3126,7 @@ impl App {
             cmp_desde: None,
             cmp_last: String::new(),
             cmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mem_rx: Vec::new(),
             inv_drift: None,
             inv_base: None,
             inv_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3216,10 +3242,111 @@ impl App {
             }
             self.absorb_tags(uid, &reply);
             self.turn_finished(uid, reply.chars().count());
+            // LO QUE HACE QUE NO HAYA QUE PEDÍRSELO. Va DESPUÉS de absorber —
+            // hace falta saber qué comandos se ejecutaron— y antes del bucle,
+            // que puede encadenar otro turno encima.
+            self.recordar_turno(uid, &reply);
             // El bucle arranca CUANDO EL TURNO SE CIERRA, no dentro de
             // `absorb_tags`: allí las etiquetas se van absorbiendo según llegan
             // y un `<EXECUTE>` a medio recibir es un comando a medio escribir.
             self.auto_step(uid);
+        }
+    }
+
+    /// Guarda lo que se aprendió en este turno, si mereció la pena.
+    ///
+    /// SIN PREGUNTAR Y SIN AVISAR EN LA CONVERSACIÓN. Una línea de «lo he
+    /// apuntado» por turno convertiría el hilo en un acuse de recibo; queda en el
+    /// carril de Trace, que es donde se mira cuando algo no cuadra.
+    ///
+    /// EN UN HILO, porque `memories::save` habla con el embebedor para la segunda
+    /// etapa de deduplicación y eso es una petición HTTP. Hacerlo aquí congelaría
+    /// la ventana justo al terminar de escribir la respuesta — el fallo con el que
+    /// empezó esta migración.
+    fn recordar_turno(&mut self, uid: usize, reply: &str) {
+        let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
+        // La pregunta es el último mensaje del OPERADOR, no el turno entero: los
+        // turnos automáticos —devolver la salida de un comando— no traen pregunta
+        // nueva y se recordarían con el texto de la fontanería.
+        let pregunta = self.tabs[ti]
+            .log
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .map(|m| m.text.clone())
+            .unwrap_or_default();
+        // DE ESTE TURNO, no de la conversación. `ws.exec` acumula hasta doscientas
+        // entradas de toda la sesión: sin filtrar por cuándo empezó el turno, la
+        // memoria de «¿por qué no imprime?» se llevaría también los comandos de
+        // la pregunta anterior sobre el certificado, y quedaría escrita como si
+        // todos hubieran sido parte del mismo hallazgo.
+        let desde = self.tabs[ti].turno_ms;
+        let comandos: Vec<(String, bool)> = self.tabs[ti]
+            .ws
+            .exec
+            .iter()
+            .filter(|e| e.ts >= desde)
+            .map(|e| (e.cmd.clone(), e.ok))
+            .collect();
+        let herramientas = self.tabs[ti]
+            .ws
+            .trace
+            .iter()
+            .filter(|t| t.ts >= desde && t.phase == "obs")
+            .count();
+        let limpio = lucy_core::tags::clean_display(reply).text;
+
+        let t = lucy_core::memories::Turno {
+            pregunta: &pregunta,
+            respuesta: &limpio,
+            comandos: &comandos,
+            herramientas,
+            fallo: false,
+        };
+        if !lucy_core::memories::merece(&t) {
+            return;
+        }
+        let nueva = lucy_core::memories::from_turn(&t);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::memories::save(&nueva));
+        });
+        self.mem_rx.push((uid, rx));
+    }
+
+    /// Recoge lo que se guardó y lo anota en el Trace.
+    fn pump_memorias(&mut self) {
+        use lucy_core::memories::Accion;
+        let mut llegados: Vec<(usize, Result<lucy_core::memories::Guardado, String>)> = Vec::new();
+        self.mem_rx.retain(|(uid, rx)| match rx.try_recv() {
+            Ok(r) => {
+                llegados.push((*uid, r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for (uid, r) in llegados {
+            let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { continue };
+            let (label, detail) = match r {
+                Ok(g) if g.es_nueva() => {
+                    ("Recordado".to_string(), format!("memoria {}", g.id))
+                }
+                // «Ya lo sabías» NO es un fallo y no se pinta como tal: es el
+                // dique funcionando, y verlo es la única forma de saber que
+                // funciona.
+                Ok(g) => match g.accion {
+                    Accion::Duplicada { motivo } => ("Ya lo sabía".to_string(), motivo),
+                    _ => ("Recordado".to_string(), String::new()),
+                },
+                Err(e) => ("No se pudo recordar".to_string(), e),
+            };
+            self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "info".into(),
+                label,
+                detail,
+                ..Default::default()
+            });
         }
     }
 
@@ -3398,6 +3525,7 @@ impl eframe::App for App {
         // botón girando.
         self.pump_inventario();
         self.pump_compliance();
+        self.pump_memorias();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
@@ -5166,6 +5294,7 @@ _(detenido por el operador)_");
                 Err(e) => self.di(&format!("No pude capturar tu pantalla: {e}")),
             },
             "/recall" => self.slash_recall(args),
+            "/principio" => self.slash_principio(args),
             "/consolidate" => self.slash_consolidate(),
             "/snapshot" => self.slash_snapshot(),
             "/capabilities" => self.slash_capabilities(),
@@ -5340,6 +5469,50 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             "Esto es lo que recordaría con «{consulta}»:{como}\n\n{}",
             r.bloque
         ));
+    }
+
+    /// `/principio` — dicta una regla que Lucy aplicará siempre.
+    ///
+    /// UN COMANDO Y NO UNA ETIQUETA que el modelo escriba. Un principio manda
+    /// sobre el comportamiento por defecto en todos los turnos siguientes, así
+    /// que quien lo dicta tiene que ser el operador a propósito — no algo que
+    /// Lucy decida guardarse porque le pareció importante. Es la única pieza de
+    /// la memoria que a propósito NO es automática.
+    fn slash_principio(&mut self, regla: &str) {
+        if regla.trim().is_empty() {
+            let lista = match lucy_core::principles::list() {
+                Ok(v) if v.is_empty() => {
+                    "Todavía no hay ninguno.".to_string()
+                }
+                Ok(v) => v
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        format!(
+                            "[P{}] {}{}",
+                            i + 1,
+                            p.regla,
+                            if p.activo { "" } else { "  (desactivado)" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(e) => format!("No se pudieron leer: {e}"),
+            };
+            self.di(&format!(
+                "Reglas que aplico siempre:\n\n{lista}\n\nPara añadir una: \
+                 `/principio en producción avisa antes de reiniciar un servicio`."
+            ));
+            return;
+        }
+        match lucy_core::principles::add("", regla.trim(), None) {
+            Ok(_) => self.di(&format!(
+                "Anotado. A partir de ahora lo aplico en todos los turnos, sin repetirlo:\n\n\
+                 «{}»",
+                regla.trim()
+            )),
+            Err(e) => self.di(&e),
+        }
     }
 
     /// `/consolidate` — qué memorias se fundirían, sin fundirlas.
@@ -5717,6 +5890,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         self.tabs[self.tab].ws.status.running = true;
         self.tabs[self.tab].ws.status.model = self.chat_model.clone();
         self.tabs[self.tab].turn_start = Some(Instant::now());
+        self.tabs[self.tab].turno_ms = lucy_core::agent::now_ms();
         self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
             phase: "info".into(),
             label: "Orden enviada".into(),
@@ -6446,6 +6620,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             log: self.log_lines.clone().unwrap_or_default(),
             hosts: prompt::hosts_block(&self.remote_hosts),
             skills_cat: lucy_core::skills::catalog(&self.skills),
+            principles: lucy_core::principles::render(None),
             preset_txt: self
                 .preset
                 .as_deref()
@@ -6545,6 +6720,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         t.rx = Some(start_turn(pi, String::new(), conv, modelo, privado, t.stop.clone()));
         self.tabs[ti].ws.status.running = true;
         self.tabs[ti].turn_start = Some(Instant::now());
+        self.tabs[ti].turno_ms = lucy_core::agent::now_ms();
     }
 
     /// Corre un paso que el operador acaba de aprobar.
@@ -13277,6 +13453,44 @@ mod bucle {
     }
 
     #[test]
+    fn la_memoria_de_un_turno_no_se_lleva_los_comandos_del_anterior() {
+        // `ws.exec` acumula hasta doscientas entradas de toda la sesión. Sin
+        // filtrar por cuándo empezó el turno, la memoria de «¿por qué no
+        // imprime?» se llevaría también los comandos de la pregunta anterior
+        // sobre el certificado, y quedaría escrita como si todos hubieran sido
+        // parte del mismo hallazgo.
+        use lucy_core::agent::{ExecEntry, Workspace};
+        let mut ws = Workspace::default();
+        ws.exec_push(ExecEntry {
+            cmd: "Get-ChildItem Cert:".into(),
+            ok: true,
+            ts: 1_000,
+            ..Default::default()
+        });
+        ws.exec_push(ExecEntry {
+            cmd: "Restart-Service Spooler".into(),
+            ok: true,
+            ts: 5_000,
+            ..Default::default()
+        });
+
+        // El turno empezó en 4 000: solo el segundo comando es suyo.
+        let desde = 4_000u64;
+        let mios: Vec<&str> = ws
+            .exec
+            .iter()
+            .filter(|e| e.ts >= desde)
+            .map(|e| e.cmd.as_str())
+            .collect();
+        assert_eq!(mios, vec!["Restart-Service Spooler"]);
+
+        // Y `exec_push` NO pisa la marca de tiempo que se le pasa: si la
+        // sobrescribiera con «ahora», el filtro miraría siempre el mismo instante
+        // y se llevaría todo.
+        assert_eq!(ws.exec[0].ts, 1_000, "exec_push reescribió el ts");
+    }
+
+    #[test]
     fn la_edad_de_la_linea_base_se_lee_como_la_diria_una_persona() {
         // Importa cuánto: comparar contra una foto de hace seis meses da un
         // informe enorme que no dice nada, y sin la edad delante nadie se da
@@ -13470,18 +13684,26 @@ mod paleta {
         // un comando que se traga la orden y no hace nada.
         let listos: Vec<&str> =
             SLASH.iter().filter(|(_, _, l)| *l).map(|(c, _, _)| *c).collect();
-        assert_eq!(listos.len(), 14, "cambió el número de comandos migrados");
+        assert_eq!(listos.len(), 15, "cambió el número de comandos migrados");
         for c in ["/recall", "/consolidate", "/snapshot", "/capabilities"] {
             assert!(listos.contains(&c), "{c} no está marcado como listo");
         }
     }
 
     #[test]
-    fn el_catalogo_de_comandos_es_el_de_la_v2() {
-        // 29, los mismos que `SLASH` en CockpitShell. Recortarlo a lo ya
-        // migrado enseñaría una Lucy más pequeña de la que hay: la paleta es
-        // una herramienta de descubrimiento antes que un menú.
-        assert_eq!(SLASH.len(), 29);
+    fn el_catalogo_de_comandos_es_el_de_la_v2_mas_lo_que_aqui_existe() {
+        // 29 son los de `SLASH` en CockpitShell. Recortarlo a lo ya migrado
+        // enseñaría una Lucy más pequeña de la que hay: la paleta es una
+        // herramienta de descubrimiento antes que un menú.
+        //
+        // EL TREINTA ES `/principio`, Y NO ESTÁ EN LA V2 A PROPÓSITO. Allí se
+        // dictan hablando —«guarda esta regla como principio»—, o sea que quien
+        // decide escribir una es el MODELO interpretando una frase. Un principio
+        // manda sobre el comportamiento por defecto en todos los turnos
+        // siguientes; que exista un camino explícito para dictarlo, y que ese
+        // camino sea del operador y no de Lucy, es la diferencia entre una regla
+        // y algo que Lucy se guardó porque le pareció importante.
+        assert_eq!(SLASH.len(), 30);
         for (cmd, desc, _) in SLASH {
             assert!(cmd.starts_with('/'), "{cmd} no empieza por barra");
             assert!(!desc.is_empty(), "{cmd} sin descripción no se descubre");
