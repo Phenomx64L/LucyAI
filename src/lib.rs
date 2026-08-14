@@ -52,6 +52,9 @@ pub mod logs;
 /// El registro de auditoría. La tabla la creó la app Tauri y el shell nativo
 /// ejecutaba comandos sin dejar constancia de ninguno.
 pub mod audit;
+/// Escribir memorias, con la deduplicación en la puerta. Era la mitad que le
+/// faltaba entera al shell nativo: leía el corpus y no podía añadirle una fila.
+pub mod memories;
 /// Inventario de un equipo: puertos, servicios, software, certificados, tareas.
 /// Sin JSON fabricado a mano, que es lo que tumbaba el inventario entero.
 pub mod inventory;

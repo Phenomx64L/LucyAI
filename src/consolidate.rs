@@ -69,7 +69,7 @@ pub struct Report {
 /// Solo las de tres letras o más: sin ese filtro, "de", "la", "el" y "the"
 /// dominan la intersección y dos textos sobre cosas distintas salen parecidos
 /// por hablar el mismo idioma.
-fn tokens(s: &str) -> HashSet<String> {
+pub(crate) fn tokens(s: &str) -> HashSet<String> {
     s.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() >= 3)
@@ -83,7 +83,7 @@ fn tokens(s: &str) -> HashSet<String> {
 /// Aquí "no tiene etiquetas" no puede significar "coincide perfectamente con
 /// cualquier otra que tampoco tenga": eso fundiría en un montón todas las
 /// memorias sin etiquetar, que no tienen nada que ver entre sí.
-fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
+pub(crate) fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
     if a.is_empty() && b.is_empty() {
         return 0.0;
     }
