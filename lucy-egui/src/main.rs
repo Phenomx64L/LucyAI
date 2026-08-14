@@ -2849,6 +2849,10 @@ struct App {
     mem_rx: Vec<(usize, std::sync::mpsc::Receiver<Result<lucy_core::memories::Guardado, String>>)>,
     /// Las destilaciones de sesión en vuelo.
     cris_rx: Vec<(usize, std::sync::mpsc::Receiver<lucy_core::crystals::Resultado>)>,
+    /// Las búsquedas de `/recall` en vuelo, con la consulta que las pidió.
+    recall_rx: Vec<(usize, std::sync::mpsc::Receiver<(String, lucy_core::memories::Recuerdo)>)>,
+    /// La revisión de duplicados en vuelo, si hay una. `bool` = aplicar de verdad.
+    dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
     /// Todavía no se ha mirado ninguna vez en esta ejecución.
@@ -3168,6 +3172,8 @@ impl App {
             cmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mem_rx: Vec::new(),
             cris_rx: Vec::new(),
+            recall_rx: Vec::new(),
+            dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
             mant_primera: true,
@@ -3532,12 +3538,15 @@ impl App {
                     "Sesión destilada".to_string(),
                     format!("cristal {id} · {} lecciones nuevas · {}", r.lecciones, r.motivo),
                 ),
-                // La marca se levanta para que un fallo pasajero —Ollama recién
-                // arrancado, el modelo cargándose— pueda reintentarse al cerrar el
-                // turno siguiente en vez de dejar la sesión sin cristal para
-                // siempre.
+                // La marca se levanta SOLO si el núcleo dice que reintentar puede
+                // salir bien —Ollama caído, modelo aún no instalado—. Un fallo
+                // determinista, como un modelo que no cumple el formato, falla
+                // igual en cada intento: levantar la marca ahí era pagar noventa
+                // segundos de Ollama en CADA cierre de turno, para siempre.
                 None => {
-                    self.cris_hechas.remove(&self.tabs[ti].sesion);
+                    if r.reintentable {
+                        self.cris_hechas.remove(&self.tabs[ti].sesion);
+                    }
                     ("No se destiló".to_string(), r.motivo)
                 }
             };
@@ -3763,6 +3772,8 @@ impl eframe::App for App {
         self.pump_compliance();
         self.pump_memorias();
         self.pump_cristales();
+        self.pump_recall();
+        self.pump_dedup();
         self.pump_mantenimiento();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
@@ -5470,6 +5481,7 @@ _(detenido por el operador)_");
     fn slash_exec(&mut self, cmd: &str, args: &str) {
         match cmd {
             "/clear" => {
+                let uid = self.tabs[self.tab].uid;
                 let t = &mut self.tabs[self.tab];
                 t.log.clear();
                 t.ws.reset();
@@ -5482,6 +5494,12 @@ _(detenido por el operador)_");
                 t.fork_stop.store(true, std::sync::atomic::Ordering::Relaxed);
                 t.fork_rx.clear();
                 t.espera = None;
+                // CONVERSACIÓN NUEVA, SESIÓN NUEVA. El cristal es de la sesión y
+                // no hay más de uno: conservando el identificador, la segunda
+                // conversación de la pestaña —y todas las siguientes— quedaba
+                // vetada de destilarse para siempre, sin que nada lo dijera.
+                t.sesion = format!("egui-{}-{uid}", ahora_epoch());
+                t.turno_ms = 0;
             }
             "/memory" => self.view = View::Memoria,
             // Rota entre los tres en vez de abrir un menú: un comando de barra
@@ -5684,29 +5702,57 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             self.di("Escribe qué buscar: `/recall disco lleno`.");
             return;
         }
-        let r = prompt::recall(consulta, lucy_core::prompt::model_is_weak(&self.chat_model));
-        if r.is_empty() {
-            self.di(&format!(
-                "Nada parecido a «{consulta}».\n\nSe ha buscado por significado y también \
-                 por palabras, así que esto no es que falte Ollama: es que no hay nada \
-                 guardado que se parezca."
-            ));
-            return;
+        // EN UN HILO, aunque sea «solo una búsqueda». Recordar embebe la
+        // consulta, y eso es una petición HTTP con treinta segundos de plazo:
+        // con Ollama cargando un modelo en frío, hacerla aquí congelaba la
+        // ventana entera — el fallo por el que existe esta migración, metido de
+        // contrabando en un comando de barra.
+        let uid = self.tabs[self.tab].uid;
+        let q = consulta.to_string();
+        let debil = lucy_core::prompt::model_is_weak(&self.chat_model);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send((q.clone(), prompt::recall(&q, debil)));
+        });
+        self.recall_rx.push((uid, rx));
+        self.di("Buscando en la memoria…");
+    }
+
+    /// Recoge las búsquedas de `/recall` y las escribe en su conversación.
+    fn pump_recall(&mut self) {
+        let mut llegados: Vec<(usize, (String, lucy_core::memories::Recuerdo))> = Vec::new();
+        self.recall_rx.retain(|(uid, rx)| match rx.try_recv() {
+            Ok(r) => {
+                llegados.push((*uid, r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for (uid, (consulta, r)) in llegados {
+            let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { continue };
+            let texto = if r.is_empty() {
+                format!(
+                    "Nada parecido a «{consulta}».\n\nSe ha buscado por significado y también \
+                     por palabras, así que esto no es que falte Ollama: es que no hay nada \
+                     guardado que se parezca."
+                )
+            } else {
+                // POR QUÉ CAMINO LLEGÓ. Con el respaldo léxico, Lucy encuentra
+                // menos y peor; quien esté mirando por qué no se acordó de algo
+                // evidente necesita saber que estaba trabajando con una mano
+                // atada.
+                let como = if r.lexico {
+                    "  (por palabras — el embebedor no contestó, así que esto encuentra menos)"
+                } else if r.documentos > 0 {
+                    "  (por significado, memorias y documentos)"
+                } else {
+                    "  (por significado)"
+                };
+                format!("Esto es lo que recordaría con «{consulta}»:{como}\n\n{}", r.bloque)
+            };
+            self.tabs[ti].log.push(ChatMsg::new(false, texto));
         }
-        // POR QUÉ CAMINO LLEGÓ. Con el respaldo léxico, Lucy encuentra menos y
-        // peor; quien esté mirando por qué no se acordó de algo evidente necesita
-        // saber que estaba trabajando con una mano atada.
-        let como = if r.lexico {
-            "  (por palabras — el embebedor no contestó, así que esto encuentra menos)"
-        } else if r.documentos > 0 {
-            "  (por significado, memorias y documentos)"
-        } else {
-            "  (por significado)"
-        };
-        self.di(&format!(
-            "Esto es lo que recordaría con «{consulta}»:{como}\n\n{}",
-            r.bloque
-        ));
     }
 
     /// `/principio` — dicta una regla que Lucy aplicará siempre.
@@ -5759,18 +5805,56 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// modificara la base de datos al escribirlo sería la peor forma de ofrecer
     /// una función destructiva: sin ver antes qué toca.
     fn slash_consolidate(&mut self) {
-        let m = match lucy_core::consolidate::run(true) {
-            Err(e) => format!("No se pudo revisar: {e}"),
-            Ok(r) if r.clusters_found == 0 => {
-                format!("Ninguna repetida entre las {} más recientes.", r.scanned)
+        // En seco y EN UN HILO. La pasada es puro CPU y disco —no llama a
+        // ningún modelo— pero son medio millón de comparaciones sobre una
+        // conexión del pool, y el pool lo comparten los hilos de fondo: si el
+        // mantenimiento está consolidando en ese momento, esperar la conexión
+        // aquí congela la ventana el rato que él tarde.
+        self.lanza_dedup(true);
+        self.di("Revisando duplicados…");
+    }
+
+    /// Lanza la revisión de duplicados en un hilo. `aplicar` = fundir de verdad.
+    fn lanza_dedup(&mut self, dry_run: bool) {
+        if self.dedup_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::consolidate::run(dry_run));
+        });
+        self.dedup_rx = Some(rx);
+    }
+
+    /// Recoge la revisión de duplicados. El resultado va a los DOS sitios que la
+    /// piden —la vista de Memoria y el hilo de chat— porque el operador puede
+    /// haberla lanzado desde cualquiera y estar mirando el otro.
+    fn pump_dedup(&mut self) {
+        let Some(rx) = &self.dedup_rx else { return };
+        let r = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.dedup_rx = None;
+                return;
             }
-            Ok(r) => {
+        };
+        self.dedup_rx = None;
+        let m = match &r {
+            Err(e) => format!("No se pudo revisar: {e}"),
+            Ok(rep) if !rep.dry_run => {
+                format!("Fundidas {} memorias en {} grupos.", rep.memories_merged, rep.clusters_found)
+            }
+            Ok(rep) if rep.clusters_found == 0 => {
+                format!("Ninguna repetida entre las {} más recientes.", rep.scanned)
+            }
+            Ok(rep) => {
                 let mut s = format!(
                     "**{} grupos · {} memorias** se fundirían, de {} miradas. No se ha \
                      tocado nada.\n\n",
-                    r.clusters_found, r.memories_merged, r.scanned
+                    rep.clusters_found, rep.memories_merged, rep.scanned
                 );
-                for c in r.clusters.iter().take(10) {
+                for c in rep.clusters.iter().take(10) {
                     s.push_str(&format!(
                         "- «{}» absorbe {} — parecido {:.0} %\n",
                         c.canonical_title,
@@ -5782,6 +5866,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 s
             }
         };
+        // Tras fundir de verdad, la lista de la vista se relee.
+        if matches!(&r, Ok(rep) if !rep.dry_run) {
+            self.mems = load_memories();
+        }
+        self.dedup = Some(r);
         self.di(&m);
     }
 
@@ -6958,7 +7047,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         t.rx = Some(start_turn(pi, String::new(), conv, modelo, privado, t.stop.clone()));
         self.tabs[ti].ws.status.running = true;
         self.tabs[ti].turn_start = Some(Instant::now());
-        self.tabs[ti].turno_ms = lucy_core::agent::now_ms();
+        // `turno_ms` NO SE TOCA AQUÍ, y la omisión es la corrección. Este es el
+        // turno automático que devuelve la salida de un comando, y el comando
+        // corrió ANTES de que este turno empezara: re-fechar la marca aquí dejaba
+        // el comando fuera de su propia ventana, así que la memoria automática de
+        // una orden con ejecución salía SIEMPRE sin comandos. La ventana es de la
+        // ORDEN del operador —la marca se pone en `send`— y todos los turnos
+        // automáticos que cuelgan de esa orden comparten la suya.
     }
 
     /// Corre un paso que el operador acaba de aprobar.
@@ -12739,13 +12834,18 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // ha corrido jamás: lo primero que haga tiene que ser enseñar qué
             // fundiría, no fundirlo. El botón de aplicar solo aparece después,
             // y solo si encontró algo.
-            if ui.button("Buscar duplicados").clicked() {
-                self.dedup = Some(lucy_core::consolidate::run(true));
+            // En un hilo, por el pool: si el mantenimiento está consolidando en
+            // ese momento, esperar aquí su conexión congela la ventana.
+            let girando = self.dedup_rx.is_some();
+            if ui.add_enabled(!girando, egui::Button::new(if girando { "Buscando…" } else { "Buscar duplicados" })).clicked() {
+                self.lanza_dedup(true);
             }
             if let Some(Ok(r)) = &self.dedup {
-                if r.clusters_found > 0 && r.dry_run && ui.button("Fundir").clicked() {
-                    self.dedup = Some(lucy_core::consolidate::run(false));
-                    self.mems = load_memories();
+                if r.clusters_found > 0 && r.dry_run {
+                    let puede = !girando;
+                    if ui.add_enabled(puede, egui::Button::new("Fundir")).clicked() {
+                        self.lanza_dedup(false);
+                    }
                 }
             }
         });
