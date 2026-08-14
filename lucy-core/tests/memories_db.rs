@@ -198,4 +198,51 @@ fn el_camino_de_escritura_entero() {
     assert!(save(&New::nueva("  ", "algo")).is_err());
     assert!(save(&New::nueva("algo", "   ")).is_err());
     assert_eq!(cuantas(), 0);
+
+    // ── 5. El recuerdo funciona SIN servicio de embeddings ──
+    //
+    // Es la mitad que faltaba: la versión anterior buscaba solo con vectores y
+    // devolvía vacío si el embebedor no contestaba. En una máquina sin Ollama
+    // —o con Ollama caído— Lucy no recordaba NADA nunca, y el síntoma era
+    // simplemente que parecía tener mala memoria.
+    //
+    // Este test corre SIN Ollama: si el respaldo léxico no funcionara, aquí no
+    // saldría ni una línea.
+    limpia();
+    save(&New::nueva(
+        "Certificado de la VPN",
+        "El certificado de la VPN se renueva desde la consola de la autoridad certificadora interna cada doce meses",
+    )
+    .con_tags(&["vpn"]))
+    .expect("vpn");
+    save(&New::nueva(
+        "Servidor de impresión",
+        "El servicio Spooler del servidor de impresión se reinicia cuando la cola se atasca",
+    )
+    .con_tags(&["impresion"]))
+    .expect("impresion");
+
+    let r = lucy_core::memories::recall("cómo renuevo el certificado de la VPN", 5);
+    assert!(!r.is_empty(), "no recordó nada sin embeddings: {r:?}");
+    assert!(r.lexico, "no marcó que iba con el respaldo léxico: {r:?}");
+    assert!(
+        r.bloque.contains("autoridad certificadora"),
+        "recordó lo que no era: {}",
+        r.bloque
+    );
+    // Y NO se trae la otra: encontrar poco es mejor que no encontrar nada, pero
+    // traerlo todo sería peor que las dos cosas.
+    assert!(!r.bloque.contains("Spooler"), "se trajo media tabla: {}", r.bloque);
+
+    // Cada memoria en UNA línea. Con saltos dentro, la lista del prompt se parte
+    // en viñetas falsas y el modelo lee media memoria como un elemento aparte.
+    assert_eq!(
+        r.bloque.lines().count(),
+        r.memorias,
+        "las líneas no cuadran con las memorias: {}",
+        r.bloque
+    );
+    for l in r.bloque.lines() {
+        assert!(l.starts_with("- "), "línea sin viñeta: {l}");
+    }
 }
