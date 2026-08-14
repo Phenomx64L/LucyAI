@@ -347,6 +347,11 @@ impl Section for Actions {
              · <TOOL>readlines:C:\\ruta|desde|cuántas</TOOL> — un tramo concreto. Es lo que \
              usas cuando `readfile` te avise de que recortó: lo que buscas en un log casi \
              siempre está al final, no en los primeros miles de caracteres.\n\
+             · <TOOL>pdf_search:qué buscar</TOOL> — los manuales y guías que el operador ha \
+             ingerido. ÚSALA sin que te lo pidan cuando la pregunta sea sobre un producto, \
+             un procedimiento o una configuración concreta: si hay un manual de eso, dice \
+             más y mejor que lo que tú recuerdes, y citarlo es la diferencia entre una \
+             respuesta y una respuesta comprobable.\n\
              Y dos para cambiar ficheros, que NO escriben solas: preparan el cambio en \
              el panel de Artefactos con su diff, y escribe el operador al aprobarlo.\n\
              · <TOOL>writefile:C:\\ruta\\fichero.txt|||CONTENIDO</TOOL>\n\

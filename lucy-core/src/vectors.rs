@@ -222,6 +222,141 @@ pub fn embed_blocking(text: &str) -> Result<(Vec<f32>, String), String> {
 /// la app Tauri cuando el índice no está listo: para el tamaño de un corpus
 /// personal —miles, no millones— cuesta milisegundos y no arrastra sqlite-vec al
 /// crate compartido.
+/// Cuántos textos van en una petición al embebedor.
+///
+/// Treinta y dos. El límite no es el servidor sino la memoria del modelo: cada
+/// texto de un lote se procesa a la vez, y un lote de trescientos trozos de
+/// manual hace que Ollama reserve de golpe lo que no tiene.
+pub const EMBED_LOTE: usize = 32;
+
+/// Vectores de VARIOS textos en una sola petición.
+///
+/// EXISTE PORQUE `embed_blocking` ES DE UNO EN UNO. Un manual de trescientas
+/// páginas son unos cuatrocientos trozos, y con la función de uno en uno eso son
+/// cuatrocientas peticiones HTTP EN SERIE, cada una con treinta segundos de
+/// plazo. Ingerir un documento por ese camino no es lento: es una tarde.
+///
+/// Usa `/api/embed`, que acepta una lista, y cae a la vieja `/api/embeddings` de
+/// uno en uno si el Ollama instalado es anterior — perder el lote es ir despacio,
+/// y fallar es no poder ingerir nada.
+pub fn embed_batch(textos: &[String]) -> Result<(Vec<Vec<f32>>, String), String> {
+    if textos.is_empty() {
+        return Ok((vec![], DEFAULT_EMBED_MODEL.to_string()));
+    }
+    let body = serde_json::json!({ "model": DEFAULT_EMBED_MODEL, "input": textos });
+    let resp = ureq::post(&format!("{OLLAMA}/api/embed"))
+        .set("content-type", "application/json")
+        // Más que los 30 s de uno suelto: son treinta y dos textos en la misma
+        // petición, y el plazo tiene que dar para el lote entero.
+        .timeout(std::time::Duration::from_secs(120))
+        .send_string(&body.to_string());
+
+    let resp = match resp {
+        Ok(r) => r,
+        // Un Ollama anterior a `/api/embed` contesta 404. Se cae al camino
+        // lento en vez de rendirse: ir despacio es peor que ir rápido, y no
+        // poder ingerir es peor que las dos cosas.
+        Err(_) => return uno_a_uno(textos),
+    };
+    let cuerpo = resp
+        .into_string()
+        .map_err(|e| format!("respuesta de Ollama ilegible: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&cuerpo).map_err(|e| format!("JSON inválido de Ollama: {e}"))?;
+    let Some(arr) = json["embeddings"].as_array() else {
+        return uno_a_uno(textos);
+    };
+    let vs: Vec<Vec<f32>> = arr
+        .iter()
+        .map(|v| {
+            v.as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect())
+                .unwrap_or_default()
+        })
+        .collect();
+    // UNO POR TEXTO, o no vale. Un lote que devuelve menos vectores que textos
+    // desalinea la correspondencia y cada trozo acaba con el vector del
+    // siguiente — que no da error, da búsquedas que devuelven el párrafo de al
+    // lado.
+    if vs.len() != textos.len() || vs.iter().any(|v| v.is_empty()) {
+        return uno_a_uno(textos);
+    }
+    Ok((vs, DEFAULT_EMBED_MODEL.to_string()))
+}
+
+fn uno_a_uno(textos: &[String]) -> Result<(Vec<Vec<f32>>, String), String> {
+    let mut out = Vec::with_capacity(textos.len());
+    let mut modelo = DEFAULT_EMBED_MODEL.to_string();
+    for t in textos {
+        let (v, m) = embed_blocking(t)?;
+        modelo = m;
+        out.push(v);
+    }
+    Ok((out, modelo))
+}
+
+/// Guarda —o reemplaza— los vectores de un conjunto de entidades.
+///
+/// `ON CONFLICT` sobre `(entity_type, entity_id)`: reingerir un documento tiene
+/// que sustituir sus vectores, no acumular una segunda copia que competiría con
+/// la primera en cada búsqueda.
+pub fn upsert(
+    entity_type: &str,
+    filas: &[(String, String, Vec<f32>)],
+    modelo: &str,
+) -> Result<usize, String> {
+    if filas.is_empty() {
+        return Ok(0);
+    }
+    crate::with_db(|c| {
+        let tx = c
+            .unchecked_transaction()
+            .map_err(|e| format!("vectors upsert tx: {e}"))?;
+        for (entity_id, texto, v) in filas {
+            tx.execute(
+                "INSERT INTO embeddings (id, entity_type, entity_id, text, vec, dims, model)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                     text = excluded.text, vec = excluded.vec,
+                     dims = excluded.dims, model = excluded.model",
+                rusqlite::params![
+                    format!("{entity_type}:{entity_id}"),
+                    entity_type,
+                    entity_id,
+                    texto,
+                    vec_to_blob(v),
+                    v.len() as i64,
+                    modelo,
+                ],
+            )
+            .map_err(|e| format!("vectors upsert: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("vectors upsert commit: {e}"))?;
+        Ok(filas.len())
+    })
+}
+
+/// Crea la tabla de vectores si no está. Mismo DDL que la app.
+pub fn ensure_schema() -> Result<(), String> {
+    crate::with_db(|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS embeddings (
+                 id           TEXT PRIMARY KEY,
+                 entity_type  TEXT NOT NULL,
+                 entity_id    TEXT NOT NULL,
+                 text         TEXT NOT NULL,
+                 vec          BLOB NOT NULL,
+                 dims         INTEGER NOT NULL,
+                 model        TEXT NOT NULL,
+                 created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_entity
+                 ON embeddings(entity_type, entity_id);",
+        )
+        .map_err(|e| format!("vectors: esquema: {e}"))
+    })
+}
+
 pub fn load_stored(entity_type: &str) -> Result<Vec<StoredVector>, String> {
     crate::with_db(|conn| {
         let mut stmt = conn
