@@ -458,6 +458,105 @@ fn cosine_dup(texto: &str) -> Option<Guardado> {
     })
 }
 
+// ── Escribir sola ───────────────────────────────────────────────────────────
+//
+// LO QUE HACE QUE NO HAYA QUE PEDÍRSELO. Hasta aquí, una memoria solo existía si
+// el modelo emitía una etiqueta o el operador escribía un comando — o sea, si
+// alguien se acordaba. Una memoria que depende de que alguien se acuerde es una
+// memoria que no se escribe: el día que hace falta acordarse es justo el día en
+// que se está resolviendo un incidente y nadie está pensando en documentar.
+//
+// SE ENGANCHA AL CIERRE DEL TURNO y no a que al modelo se le ocurra. El cierre es
+// un evento del programa, ocurre siempre, y en ese momento se sabe todo lo que
+// hace falta para decidir: qué se preguntó, qué corrió y cómo acabó.
+
+/// Qué pasó en un turno. Lo que hace falta para decidir si merece una fila.
+#[derive(Debug, Clone, Default)]
+pub struct Turno<'a> {
+    /// Lo que escribió el operador.
+    pub pregunta: &'a str,
+    /// Lo que contestó Lucy, ya sin etiquetas.
+    pub respuesta: &'a str,
+    /// Los comandos que se ejecutaron de verdad, con si fueron bien.
+    pub comandos: &'a [(String, bool)],
+    /// Cuántas herramientas de lectura se cumplieron.
+    pub herramientas: usize,
+    /// El turno terminó con error del proveedor.
+    pub fallo: bool,
+}
+
+/// Largo mínimo de la respuesta para que el turno valga.
+///
+/// Doscientos caracteres. Por debajo es un «hecho», un «sí» o un «ese servicio
+/// está parado» — cierto, pero nada que valga la pena recordar dentro de seis
+/// meses.
+pub const MIN_RESPUESTA: usize = 200;
+
+/// ¿Este turno merece quedarse?
+///
+/// PURA, para que la regla se pueda discutir sin base de datos. Y con el listón
+/// donde está por una razón concreta: lo que merece una fila es un DESENLACE, no
+/// una charla. Un turno que solo habló no tiene nada que recordar dentro de seis
+/// meses; uno que midió algo en la máquina, sí — y es exactamente lo que se
+/// querría tener a mano la próxima vez que pase.
+pub fn merece(t: &Turno) -> bool {
+    // Un turno que falló no concluyó nada. Guardar su respuesta a medias sería
+    // guardar una hipótesis con aspecto de hallazgo.
+    if t.fallo {
+        return false;
+    }
+    if t.pregunta.trim().is_empty() || t.respuesta.trim().len() < MIN_RESPUESTA {
+        return false;
+    }
+    // TOCÓ LA MÁQUINA. Es la línea entera: sin esto se guardaría una fila por
+    // cada «¿qué tal?», y en un mes la memoria sería un registro de
+    // conversaciones en vez de un registro de hechos.
+    !t.comandos.is_empty() || t.herramientas > 0
+}
+
+/// La memoria que sale de un turno.
+///
+/// SIN LLAMAR AL MODELO, y es deliberado: esto corre al cerrar CADA turno, y una
+/// petición extra por turno es un coste que nadie ha pedido y una espera que
+/// nadie ve. Es el mismo razonamiento por el que no se portó la tercera etapa de
+/// deduplicación.
+///
+/// Lo que se guarda es lo que ya se sabe sin preguntarle a nadie: qué se
+/// preguntó, qué se ejecutó y a qué se llegó. Un resumen redactado sería más
+/// bonito y costaría una llamada por turno.
+pub fn from_turn(t: &Turno) -> New {
+    let titulo: String = t
+        .pregunta
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(90)
+        .collect();
+    let mut cuerpo = String::new();
+    if !t.comandos.is_empty() {
+        cuerpo.push_str("Se ejecutó:\n");
+        for (c, ok) in t.comandos.iter().take(6) {
+            cuerpo.push_str(&format!("- {c}{}\n", if *ok { "" } else { "  (con error)" }));
+        }
+        cuerpo.push('\n');
+    }
+    cuerpo.push_str(t.respuesta.trim());
+    New {
+        title: if titulo.is_empty() { "Consulta".into() } else { titulo },
+        content: cuerpo,
+        // Etiquetada como automática para poder distinguirla de lo que dictó el
+        // operador. Sin la marca, dentro de un mes no hay forma de saber qué
+        // decidió una persona y qué se quedó solo.
+        tags: vec!["auto".into()],
+        session_id: String::new(),
+        // Dos y no uno: es un desenlace medido en la máquina, que vale más que
+        // una nota suelta. Y no tres, que se reserva para lo que alguien marcó.
+        importance: 2,
+    }
+}
+
 // ── Recordar ────────────────────────────────────────────────────────────────
 //
 // EN EL NÚCLEO Y NO EN LA VENTANA. Estaba en el shell, en diez líneas que
@@ -641,6 +740,76 @@ fn lexico(query: &str, limite: usize) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn turno<'a>(pregunta: &'a str, respuesta: &'a str, cmds: &'a [(String, bool)]) -> Turno<'a> {
+        Turno { pregunta, respuesta, comandos: cmds, herramientas: 0, fallo: false }
+    }
+
+    #[test]
+    fn solo_se_guarda_lo_que_toco_la_maquina() {
+        // ES LA LÍNEA ENTERA. Sin esto se guardaría una fila por cada «¿qué
+        // tal?», y en un mes la memoria sería un registro de conversaciones en
+        // vez de un registro de hechos.
+        let larga = "x".repeat(MIN_RESPUESTA + 50);
+        let cmd = vec![("Get-Service Spooler".to_string(), true)];
+
+        assert!(merece(&turno("¿por qué no imprime?", &larga, &cmd)));
+        assert!(!merece(&turno("¿qué tal?", &larga, &[])), "guardó una charla");
+        // Una herramienta de lectura también cuenta: leer un log es medir.
+        let mut t = turno("¿qué dice el log?", &larga, &[]);
+        t.herramientas = 1;
+        assert!(merece(&t));
+    }
+
+    #[test]
+    fn un_turno_que_fallo_no_concluyo_nada() {
+        // Guardar su respuesta a medias sería guardar una hipótesis con aspecto
+        // de hallazgo — y con el aval de haber quedado escrita.
+        let larga = "x".repeat(MIN_RESPUESTA + 50);
+        let cmd = vec![("Get-Service".to_string(), true)];
+        let mut t = turno("algo", &larga, &cmd);
+        t.fallo = true;
+        assert!(!merece(&t));
+    }
+
+    #[test]
+    fn una_respuesta_de_dos_palabras_no_es_un_hallazgo() {
+        // «Sí», «hecho», «ese servicio está parado»: cierto, y nada que valga la
+        // pena recordar dentro de seis meses.
+        let cmd = vec![("Get-Service".to_string(), true)];
+        assert!(!merece(&turno("¿está parado?", "Sí, está parado.", &cmd)));
+    }
+
+    #[test]
+    fn la_memoria_automatica_lleva_lo_que_corrio_y_se_marca_como_tal() {
+        let cmds = vec![
+            ("Restart-Service Spooler".to_string(), true),
+            ("Get-Service Spooler".to_string(), false),
+        ];
+        let n = from_turn(&turno(
+            "¿por qué no imprime la impresora del segundo piso?",
+            "El servicio Spooler estaba detenido. Se reinició y la cola volvió a fluir.",
+            &cmds,
+        ));
+        assert!(n.content.contains("Restart-Service Spooler"));
+        // Y si un comando falló, se dice: media verdad sobre lo que se ejecutó es
+        // peor que no tener la fila.
+        assert!(n.content.contains("(con error)"), "{}", n.content);
+        assert!(n.content.contains("volvió a fluir"));
+        // MARCADA COMO AUTOMÁTICA. Sin eso, dentro de un mes no hay forma de
+        // saber qué decidió una persona y qué se quedó solo.
+        assert!(n.tags.contains(&"auto".to_string()));
+        assert_eq!(n.importance, 2);
+        // El título es la pregunta, recortada y en una línea.
+        assert!(n.title.starts_with("¿por qué no imprime"));
+        assert!(!n.title.contains('\n'));
+    }
+
+    #[test]
+    fn un_titulo_larguisimo_no_desborda_la_lista() {
+        let n = from_turn(&turno(&"a".repeat(400), "b", &[]));
+        assert!(n.title.chars().count() <= 90);
+    }
 
     #[test]
     fn el_listón_de_un_documento_es_mas_alto_que_el_de_una_memoria() {
