@@ -1066,6 +1066,14 @@ struct ChatTab {
     /// comandos de toda la conversación — incluidos los de la pregunta
     /// anterior, que no tienen nada que ver.
     turno_ms: u64,
+    /// Identificador de ESTA conversación, para el cristal.
+    ///
+    /// Lleva la hora de arranque además del número de pestaña, y hace falta: el
+    /// `uid` es un contador que empieza en cero cada vez que se abre el programa,
+    /// así que la primera pestaña de hoy y la de mañana compartirían nombre — y
+    /// como no hay más de un cristal por sesión, la de mañana no se cristalizaría
+    /// nunca.
+    sesion: String,
     /// Tokens cobrados en esta pestaña, para el contador de coste.
     tokens_in: u32,
     tokens_out: u32,
@@ -1158,6 +1166,7 @@ impl ChatTab {
             ws: lucy_core::agent::Workspace::default(),
             turn_start: None,
             turno_ms: 0,
+            sesion: format!("egui-{}-{n}", ahora_epoch()),
             send_al_terminar: false,
             pending_raw: None,
             drain: drain::Drain::default(),
@@ -2838,6 +2847,16 @@ struct App {
     /// en la equivocada no dice nada de nada.
     #[allow(clippy::type_complexity)]
     mem_rx: Vec<(usize, std::sync::mpsc::Receiver<Result<lucy_core::memories::Guardado, String>>)>,
+    /// Las destilaciones de sesión en vuelo.
+    cris_rx: Vec<(usize, std::sync::mpsc::Receiver<lucy_core::crystals::Resultado>)>,
+    /// Sesiones que ya tienen cristal —o lo están destilando ahora mismo.
+    ///
+    /// EN MEMORIA Y NO EN LA BASE, aunque la base también lo sepa. La consulta de
+    /// `existe()` solo ve lo ESCRITO, y una destilación tarda medio minuto: entre
+    /// que empieza y termina caben varios cierres de turno, y cada uno lanzaría su
+    /// propio hilo contra Ollama para acabar descartado. Esto corta el segundo
+    /// antes de que salga.
+    cris_hechas: std::collections::HashSet<String>,
     /// El informe de cambios, si se ha pedido.
     ///
     /// Se calcula al pulsar y no en cada escaneo: la mayoría de las veces el
@@ -3127,6 +3146,8 @@ impl App {
             cmp_last: String::new(),
             cmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             mem_rx: Vec::new(),
+            cris_rx: Vec::new(),
+            cris_hechas: std::collections::HashSet::new(),
             inv_drift: None,
             inv_base: None,
             inv_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3246,6 +3267,11 @@ impl App {
             // hace falta saber qué comandos se ejecutaron— y antes del bucle,
             // que puede encadenar otro turno encima.
             self.recordar_turno(uid, &reply);
+            // Y la sesión entera, que es otra cosa: la memoria del turno contesta
+            // «¿ya miré esto?», y el cristal contesta «¿cómo lo arreglé hace tres
+            // semanas?» — que no fue un turno, fueron once, y ninguno por separado
+            // tiene la respuesta.
+            self.cristalizar(uid);
             // El bucle arranca CUANDO EL TURNO SE CIERRA, no dentro de
             // `absorb_tags`: allí las etiquetas se van absorbiendo según llegan
             // y un `<EXECUTE>` a medio recibir es un comando a medio escribir.
@@ -3306,12 +3332,125 @@ impl App {
         if !lucy_core::memories::merece(&t) {
             return;
         }
-        let nueva = lucy_core::memories::from_turn(&t);
+        let mut nueva = lucy_core::memories::from_turn(&t);
+        // De qué conversación salió. Sin esto todas las memorias automáticas
+        // quedan huérfanas y no hay forma de volver de un cristal a las filas que
+        // se escribieron mientras se destilaba.
+        nueva.session_id = self.tabs[ti].sesion.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(lucy_core::memories::save(&nueva));
         });
         self.mem_rx.push((uid, rx));
+    }
+
+    /// La transcripción de la pestaña, tal como se le enseña al destilador.
+    ///
+    /// CON LOS COMANDOS DENTRO. Un resumen hecho solo con lo que se dijo describe
+    /// una conversación; lo que hace falta recordar dentro de tres semanas es qué
+    /// se corrió y qué contestó la máquina. La salida se recorta porque un
+    /// inventario entero se comería el contexto del modelo local sin aportar nada
+    /// que se pueda destilar en una frase.
+    fn transcripcion(log: &[ChatMsg]) -> String {
+        const MAX_SALIDA: usize = 400;
+        let mut s = String::new();
+        for m in log {
+            match &m.role {
+                Role::User => s.push_str(&format!("Operador: {}\n", m.text.trim())),
+                Role::Lucy => {
+                    let limpio = lucy_core::tags::clean_display(&m.text).text;
+                    if !limpio.trim().is_empty() {
+                        s.push_str(&format!("Lucy: {}\n", limpio.trim()));
+                    }
+                }
+                Role::Exec(cmd, ok, out) => {
+                    let corte: String = out.chars().take(MAX_SALIDA).collect();
+                    s.push_str(&format!(
+                        "[comando] {cmd} -> {}{}\n",
+                        corte.trim(),
+                        if *ok { "" } else { "  (con error)" }
+                    ));
+                }
+            }
+        }
+        s
+    }
+
+    /// Destila la sesión entera, si da la talla.
+    ///
+    /// SE LLAMA AL CERRAR CADA TURNO y casi siempre no hace nada: las puertas son
+    /// puras y se evalúan antes de despertar a Ollama, y en cuanto hay un cristal
+    /// de esta sesión una consulta de un microsegundo lo corta. Solo cuando todo
+    /// eso pasa se paga la llamada al modelo — en un hilo, porque tarda entre diez
+    /// y treinta segundos y nadie la está esperando.
+    fn cristalizar(&mut self, uid: usize) {
+        let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
+        // Ya lo tiene: se corta aquí y no se construye ni la transcripción.
+        if self.cris_hechas.contains(&self.tabs[ti].sesion) {
+            return;
+        }
+        let turnos = self.tabs[ti].log.iter().filter(|m| m.role == Role::Lucy).count();
+        let herramientas = self.tabs[ti].ws.exec.len()
+            + self.tabs[ti].ws.trace.iter().filter(|t| t.phase == "obs").count();
+        // La transcripción es lo caro de montar, así que las dos puertas que se
+        // pueden mirar sin ella se miran antes.
+        let s = lucy_core::crystals::Sesion { turnos, herramientas, caracteres: usize::MAX };
+        if lucy_core::crystals::merece(&s).is_err() {
+            return;
+        }
+        let texto = Self::transcripcion(&self.tabs[ti].log);
+        let s = lucy_core::crystals::Sesion { caracteres: texto.chars().count(), ..s };
+        if lucy_core::crystals::merece(&s).is_err() {
+            return;
+        }
+        // Se marca ANTES de lanzar el hilo. La destilación tarda medio minuto y en
+        // ese hueco caben tres cierres de turno más: sin la marca se lanzarían tres
+        // hilos que hablarían con Ollama a la vez para acabar los tres descartados
+        // por el `existe()` del final.
+        let sesion = self.tabs[ti].sesion.clone();
+        self.cris_hechas.insert(sesion.clone());
+        let stop = self.tabs[ti].fork_stop.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::crystals::cristaliza(&sesion, &texto, &s, &stop));
+        });
+        self.cris_rx.push((uid, rx));
+    }
+
+    /// Recoge la destilación y la anota en el Trace.
+    fn pump_cristales(&mut self) {
+        let mut llegados: Vec<(usize, lucy_core::crystals::Resultado)> = Vec::new();
+        self.cris_rx.retain(|(uid, rx)| match rx.try_recv() {
+            Ok(r) => {
+                llegados.push((*uid, r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for (uid, r) in llegados {
+            let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { continue };
+            let (label, detail) = match r.id {
+                Some(id) => (
+                    "Sesión destilada".to_string(),
+                    format!("cristal {id} · {} lecciones nuevas · {}", r.lecciones, r.motivo),
+                ),
+                // La marca se levanta para que un fallo pasajero —Ollama recién
+                // arrancado, el modelo cargándose— pueda reintentarse al cerrar el
+                // turno siguiente en vez de dejar la sesión sin cristal para
+                // siempre.
+                None => {
+                    self.cris_hechas.remove(&self.tabs[ti].sesion);
+                    ("No se destiló".to_string(), r.motivo)
+                }
+            };
+            self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                phase: "info".into(),
+                label,
+                detail,
+                ..Default::default()
+            });
+        }
     }
 
     /// Recoge lo que se guardó y lo anota en el Trace.
@@ -3526,6 +3665,7 @@ impl eframe::App for App {
         self.pump_inventario();
         self.pump_compliance();
         self.pump_memorias();
+        self.pump_cristales();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
         }
@@ -13450,6 +13590,49 @@ mod bucle {
         // Y filtrar y ordenar se componen.
         let f = inv_filas(&inv, Puertos, "s", Some((0, true)));
         assert_eq!(f.iter().map(|&i| inv.ports[i].port).collect::<Vec<_>>(), vec![22]);
+    }
+
+    #[test]
+    fn la_transcripcion_lleva_los_comandos_y_no_solo_lo_que_se_dijo() {
+        // Un resumen hecho solo con lo que se dijo describe una conversación. Lo
+        // que hace falta recordar dentro de tres semanas es qué se corrió y qué
+        // contestó la máquina.
+        let log = vec![
+            ChatMsg::new(true, "no imprime SRV-04".into()),
+            ChatMsg::exec("Get-Service Spooler".into(), true, "Status: Stopped".into()),
+            ChatMsg::new(false, "El spooler está parado.".into()),
+        ];
+        let t = App::transcripcion(&log);
+        assert!(t.contains("Operador: no imprime SRV-04"));
+        assert!(t.contains("[comando] Get-Service Spooler -> Status: Stopped"));
+        assert!(t.contains("Lucy: El spooler está parado."));
+    }
+
+    #[test]
+    fn un_comando_fallido_se_marca_en_la_transcripcion() {
+        // El modelo destila esto sin ver el código de salida: si el fallo no está
+        // escrito, una lección puede acabar recomendando el comando que no
+        // funcionó.
+        let log = vec![ChatMsg::exec("Stop-Service X".into(), false, "Acceso denegado".into())];
+        assert!(App::transcripcion(&log).contains("(con error)"));
+    }
+
+    #[test]
+    fn la_salida_de_un_comando_enorme_no_se_come_el_contexto() {
+        // Un inventario entero son cientos de miles de caracteres y no aporta
+        // nada que se pueda destilar en una frase.
+        let log = vec![ChatMsg::exec("Get-Process".into(), true, "x".repeat(50_000))];
+        assert!(App::transcripcion(&log).chars().count() < 600);
+    }
+
+    #[test]
+    fn una_sesion_de_hoy_y_otra_de_manana_no_comparten_nombre() {
+        // El `uid` es un contador que empieza en cero cada arranque. Con él a
+        // secas, la primera pestaña de mañana parecería la de hoy — y como no hay
+        // más de un cristal por sesión, la de mañana no se cristalizaría nunca.
+        let a = format!("egui-{}-0", 1_700_000_000i64);
+        let b = format!("egui-{}-0", 1_700_086_400i64);
+        assert_ne!(a, b);
     }
 
     #[test]
