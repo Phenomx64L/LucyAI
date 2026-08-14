@@ -14,39 +14,27 @@
 
 use std::fmt::Write;
 
-/// Cuántas memorias se recuerdan por turno.
+/// Lo que hay que recordar para contestar a esto.
 ///
-/// Cinco. Con más, el prompt se llena de cosas tangencialmente parecidas y el
-/// modelo empieza a construir sobre lo que se le recordó en vez de sobre lo que
-/// se le preguntó — el fallo típico de la recuperación semántica generosa.
-const RECALL_LIMIT: usize = 5;
-
-/// Parecido mínimo para que una memoria entre.
+/// EL MECANISMO SE FUE AL NÚCLEO, y aquí queda la política: cuánto presupuesto
+/// darle según el modelo. Estaba entero aquí, en diez líneas que buscaban solo
+/// entre memorias con vectores y devolvían vacío si el embebedor no contestaba —
+/// o sea que en una máquina sin Ollama, Lucy no recordaba NADA nunca y el
+/// síntoma era simplemente que parecía tener mala memoria.
 ///
-/// Más alto que el 0.25 del buscador de la vista de Memoria, y a propósito: allí
-/// el operador está buscando y juzga él; aquí se le mete al modelo sin que nadie
-/// lo mire, y una memoria irrelevante inyectada en silencio es peor que ninguna.
-const RECALL_MIN: f32 = 0.4;
-
-/// Las memorias parecidas a esta orden, ya formateadas. Vacío = ninguna.
+/// `lucy_core::memories::recall` busca por tres caminos: memorias, trozos de
+/// documento ingerido, y palabras cuando no hay vectores. Que viva allí es lo que
+/// hace que el shell y la app recuerden lo mismo — con esto aquí, cada frontend
+/// tenía su propia idea de qué viene al caso.
 ///
-/// Es lo que hace que Lucy sea la misma entre sesiones: sin esto, cada arranque
-/// empieza sin saber nada de lo que ya se resolvió en esta máquina.
-///
-/// FALLA EN SILENCIO A PROPÓSITO. La búsqueda necesita el embebedor local, y si
-/// Ollama no está corriendo no hay recuerdo posible — pero tampoco hay nada roto
-/// que anunciar: la orden se manda igual, solo que sin memoria. Convertir eso en
-/// un error visible castigaría al operador por una función que ni pidió.
-pub fn recall(query: &str) -> String {
-    let Ok((hits, _)) = lucy_core::vectors::search(query, "memory", RECALL_LIMIT, RECALL_MIN)
-    else {
-        return String::new();
-    };
-    let mut s = String::new();
-    for h in &hits {
-        let _ = writeln!(s, "- {}", h.text.replace('\n', " "));
-    }
-    s
+/// SIGUE FALLANDO EN SILENCIO. Si no hay nada que recordar, la orden se manda
+/// igual: convertirlo en un error visible castigaría al operador por una función
+/// que ni pidió.
+pub fn recall(query: &str, weak: bool) -> lucy_core::memories::Recuerdo {
+    // Un modelo flojo se ahoga con el prompt entero y contesta en prosa sin
+    // emitir una sola etiqueta; recortar lo que se le recuerda es lo primero que
+    // le deja sitio para lo que se le está preguntando.
+    lucy_core::memories::recall(query, if weak { 2 } else { 5 })
 }
 
 /// Los equipos remotos configurados, ya formateados. Vacío = no hay ninguno.

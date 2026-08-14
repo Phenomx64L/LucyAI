@@ -275,7 +275,11 @@ impl PromptInput {
         let mems = if query.trim().is_empty() {
             String::new()
         } else {
-            prompt::recall(query)
+            // El bloque ya viene formateado. Lo demás del recuerdo —cuántas
+            // memorias, cuántos documentos, si fue por palabras— es para que la
+            // interfaz pueda decirlo, no para el modelo: al modelo le da igual
+            // por qué camino llegó lo que está leyendo.
+            prompt::recall(query, self.weak).bloque
         };
         lucy_core::prompt::build(&lucy_core::prompt::Ctx {
             machine: Some(&self.snap),
@@ -5313,16 +5317,29 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             self.di("Escribe qué buscar: `/recall disco lleno`.");
             return;
         }
-        let r = prompt::recall(consulta);
-        if r.trim().is_empty() {
+        let r = prompt::recall(consulta, lucy_core::prompt::model_is_weak(&self.chat_model));
+        if r.is_empty() {
             self.di(&format!(
-                "Nada parecido a «{consulta}».\n\nSi esperabas algo: la búsqueda necesita \
-                 Ollama para el embebedor, y solo encuentra memorias que tengan su vector \
-                 calculado."
+                "Nada parecido a «{consulta}».\n\nSe ha buscado por significado y también \
+                 por palabras, así que esto no es que falte Ollama: es que no hay nada \
+                 guardado que se parezca."
             ));
             return;
         }
-        self.di(&format!("Esto es lo que recordaría con «{consulta}»:\n\n{r}"));
+        // POR QUÉ CAMINO LLEGÓ. Con el respaldo léxico, Lucy encuentra menos y
+        // peor; quien esté mirando por qué no se acordó de algo evidente necesita
+        // saber que estaba trabajando con una mano atada.
+        let como = if r.lexico {
+            "  (por palabras — el embebedor no contestó, así que esto encuentra menos)"
+        } else if r.documentos > 0 {
+            "  (por significado, memorias y documentos)"
+        } else {
+            "  (por significado)"
+        };
+        self.di(&format!(
+            "Esto es lo que recordaría con «{consulta}»:{como}\n\n{}",
+            r.bloque
+        ));
     }
 
     /// `/consolidate` — qué memorias se fundirían, sin fundirlas.
