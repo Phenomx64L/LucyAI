@@ -62,6 +62,13 @@ pub mod principles;
 /// Cristales: el resumen de una sesión entera. Lo que una memoria por turno no
 /// puede contestar, porque aquello no fue un turno sino once.
 pub mod crystals;
+/// Insights: el patrón que se repite entre memorias que nadie escribió juntas.
+/// Agrupa por CONTENIDO y no por etiquetas — ver la cabecera del módulo.
+pub mod insights;
+/// El calendario del mantenimiento, por vencimiento persistido y no por
+/// temporizador: un `sleep(48h)` no despierta nunca en un portátil que se cierra
+/// cada tarde.
+pub mod maintenance;
 /// Documentos ingeridos. La pieza de la que sale gran parte de la memoria, y
 /// cuyo último eslabón es que `pdf_search` esté en el catálogo de herramientas.
 pub mod docs;
