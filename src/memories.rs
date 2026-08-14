@@ -318,7 +318,7 @@ pub fn save(n: &New) -> Result<Guardado, String> {
         return Ok(g);
     }
 
-    crate::with_db(|c| {
+    let g = crate::with_db(|c| {
         let tx = c
             .unchecked_transaction()
             .map_err(|e| format!("memories: tx: {e}"))?;
@@ -339,7 +339,33 @@ pub fn save(n: &New) -> Result<Guardado, String> {
         let id = tx.last_insert_rowid();
         tx.commit().map_err(|e| format!("memories: commit: {e}"))?;
         Ok(Guardado { id, accion: Accion::Guardada })
-    })
+    })?;
+
+    // Y SU VECTOR, o la fila nace medio invisible. Sin esto, nada de lo que
+    // escribe este programa entraba jamás en la búsqueda por significado — ni en
+    // su propia deduplicación por coseno, que compara contra vectores que nadie
+    // escribía. El recuerdo parecía funcionar porque el respaldo léxico tapaba el
+    // agujero encontrando menos.
+    //
+    // FUERA DE `with_db`, y eso no es una preferencia: embeber es una petición
+    // HTTP con treinta segundos de plazo, y dentro del closure se haría con una
+    // conexión del pool en la mano — cuatro guardados concurrentes con Ollama
+    // lento agotarían el pool entero y pararían hasta las lecturas.
+    //
+    // Best-effort: sin Ollama la fila queda solo léxica, que es exactamente lo
+    // que el respaldo sabe manejar. `ensure_schema` de vectores por si esta base
+    // aún no tiene la tabla — este camino puede ser el primero en necesitarla.
+    if g.es_nueva() {
+        if let Ok((v, m)) = crate::vectors::embed_blocking(&format!("{title}. {content}")) {
+            let _ = crate::vectors::ensure_schema();
+            let _ = crate::vectors::upsert(
+                "memory",
+                &[(g.id.to_string(), format!("{title} — {content}"), v)],
+                &m,
+            );
+        }
+    }
+    Ok(g)
 }
 
 fn recorta(s: &str, max: usize) -> String {

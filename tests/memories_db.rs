@@ -23,11 +23,15 @@ fn arranca() {
     lucy_core::init(&p).expect("init");
 }
 
-/// Deja la tabla vacía entre secciones.
+/// Deja la tabla vacía entre secciones — y la de vectores también: en una
+/// máquina con Ollama corriendo, `save` los escribe, y un vector huérfano de una
+/// sección anterior contaminaría la deduplicación de la siguiente.
 fn limpia() {
     lucy_core::memories::ensure_schema().expect("esquema");
+    lucy_core::vectors::ensure_schema().expect("esquema vectores");
     lucy_core::with_db(|c| {
         c.execute("DELETE FROM agent_memories", []).map_err(|e| e.to_string())?;
+        c.execute("DELETE FROM embeddings", []).map_err(|e| e.to_string())?;
         Ok(())
     })
     .expect("limpiar");
@@ -127,7 +131,8 @@ fn el_camino_de_escritura_entero() {
     .con_tags(&["impresion", "spooler"]))
     .expect("paráfrasis");
     if parafrasis.es_nueva() {
-        // Sin servicio de embeddings, que es como corre esto en integración.
+        // Sin servicio de embeddings: la paráfrasis entra, y es la consecuencia
+        // documentada arriba.
         assert_eq!(cuantas(), 2, "la paráfrasis entró, que es lo esperado sin etapa 2");
         let r = lucy_core::consolidate::run(false).expect("consolidar");
         assert_eq!(
@@ -135,10 +140,24 @@ fn el_camino_de_escritura_entero() {
             "la consolidación la fundió — si esto cambia, el umbral se ha tocado y hay \
              que revisar qué MÁS está fundiendo ahora"
         );
+    } else {
+        // CON Ollama corriendo, la etapa 2 la caza — y que esta rama sea
+        // alcanzable es la prueba de que `save` escribe vectores: antes no los
+        // escribía nadie, así que la etapa 2 comparaba contra una tabla vacía y
+        // esta rama era código muerto en CUALQUIER máquina, con el síntoma de
+        // que las paráfrasis se acumulaban igual con el servicio levantado.
+        match &parafrasis.accion {
+            Accion::Duplicada { motivo } => {
+                assert!(motivo.contains("dice lo mismo"), "motivo raro: {motivo}")
+            }
+            otra => panic!("no era nueva pero tampoco duplicada: {otra:?}"),
+        }
+        assert_eq!(cuantas(), 1, "la duplicada por coseno no debe dejar fila");
     }
 
-    // Y algo distinto SÍ entra. Sin esto, un deduplicador que rechace todo
-    // pasaría este test igual de bien.
+    // Y algo distinto SÍ entra, corra lo que corra en esta máquina. Sin esto, un
+    // deduplicador que rechace todo pasaría este test igual de bien.
+    let antes = cuantas();
     let c = save(&New::nueva(
         "Rotar el certificado de la VPN",
         "El certificado de la VPN se renueva desde la consola de la autoridad certificadora interna",
@@ -146,8 +165,7 @@ fn el_camino_de_escritura_entero() {
     .con_tags(&["vpn", "certificados"]))
     .expect("tercera");
     assert!(c.es_nueva(), "rechazó una memoria que no se parece: {:?}", c.accion);
-    // Tres: la original, la paráfrasis que ninguna pasada de texto caza, y ésta.
-    assert_eq!(cuantas(), 3);
+    assert_eq!(cuantas(), antes + 1);
 
     // ── 2. Un secreto no llega al disco, ni por las etiquetas ──
     limpia();
@@ -221,6 +239,16 @@ fn el_camino_de_escritura_entero() {
     )
     .con_tags(&["impresion"]))
     .expect("impresion");
+    // SE BORRAN LOS VECTORES A PROPÓSITO: esta sección prueba el RESPALDO, y en
+    // una máquina con Ollama corriendo el guardado acaba de embeber las dos
+    // filas — el recuerdo iría por significado y `lexico` saldría falso. El
+    // respaldo tiene que probarse igual corra lo que corra en esta máquina.
+    lucy_core::vectors::ensure_schema().expect("esquema vectores");
+    lucy_core::with_db(|c| {
+        c.execute("DELETE FROM embeddings", []).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("sin vectores");
 
     let r = lucy_core::memories::recall("cómo renuevo el certificado de la VPN", 5);
     assert!(!r.is_empty(), "no recordó nada sin embeddings: {r:?}");
