@@ -55,6 +55,10 @@ pub mod audit;
 /// Escribir memorias, con la deduplicación en la puerta. Era la mitad que le
 /// faltaba entera al shell nativo: leía el corpus y no podía añadirle una fila.
 pub mod memories;
+/// Los principios: reglas que Lucy aplica SIEMPRE, no cuando vienen al caso.
+/// Por eso no pasan por la búsqueda semántica — ahí solo aparecerían cuando ya
+/// no hacían falta.
+pub mod principles;
 /// Documentos ingeridos. La pieza de la que sale gran parte de la memoria, y
 /// cuyo último eslabón es que `pdf_search` esté en el catálogo de herramientas.
 pub mod docs;
