@@ -59,6 +59,9 @@ pub mod memories;
 /// Por eso no pasan por la búsqueda semántica — ahí solo aparecerían cuando ya
 /// no hacían falta.
 pub mod principles;
+/// Cristales: el resumen de una sesión entera. Lo que una memoria por turno no
+/// puede contestar, porque aquello no fue un turno sino once.
+pub mod crystals;
 /// Documentos ingeridos. La pieza de la que sale gran parte de la memoria, y
 /// cuyo último eslabón es que `pdf_search` esté en el catálogo de herramientas.
 pub mod docs;
