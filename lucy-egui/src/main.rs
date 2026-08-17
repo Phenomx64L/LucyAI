@@ -1608,44 +1608,190 @@ fn card_on(
     });
 }
 
-/// El texto largo de la tarjeta de privacidad, según esté encendida o no.
+// ── El lenguaje de Configuración ────────────────────────────────────────────
+//
+// La V2 no apila tarjetas con un título encima: pone PANELES, y dentro de cada
+// panel FILAS de «etiqueta a la izquierda, control a la derecha» separadas por
+// una línea. Es lo que hace que una pantalla con quince ajustes se lea de un
+// vistazo: el ojo baja por la columna de etiquetas y solo se detiene donde hay
+// algo que decidir. Apilado, cada ajuste ocupa el mismo peso visual que los
+// demás y hay que leerlos todos.
+
+/// Un panel: marco, cabecera con icono y rótulo, y lo que le metan dentro.
 ///
-/// Fuera de la tarjeta para que el cálculo de altura y el pintado usen LA MISMA
-/// cadena. Con el texto escrito dos veces, cambiar una frase deja la altura
-/// calculada sobre la otra y el contenido se sale por abajo sin que nada falle.
-fn privacidad_texto(activo: bool) -> &'static str {
-    if activo {
-        "ACTIVO. Solo se puede hablar con modelos locales de Ollama; cualquier proveedor de \
-         nube se rechaza antes de montar la petición, así que ni el prompt ni tus memorias \
-         llegan a salir."
-    } else {
-        "Apagado. Con un modelo de nube elegido, tu pregunta viaja junto a lo que Lucy \
-         recuerde del equipo y a la salida de los comandos que se hayan ejecutado."
+/// `derecha` es lo que va al otro extremo de la cabecera —un botón, una
+/// insignia—, que es donde la V2 pone el estado del panel entero.
+fn panel(
+    ui: &mut egui::Ui,
+    ancho: f32,
+    icono: icons::Icon,
+    titulo: &str,
+    derecha: impl FnOnce(&mut egui::Ui),
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::none()
+        .fill(theme::bg2())
+        .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+        .rounding(egui::Rounding::same(theme::R_LG))
+        .inner_margin(egui::Margin::same(16.0))
+        .show(ui, |ui| {
+            ui.set_width(ancho - 32.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            row_align(ui, 22.0, egui::Align::Center, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let (r, _) = ui.allocate_exact_size(egui::vec2(15.0, 15.0), egui::Sense::hover());
+                icons::draw(ui.painter(), icono, r.center(), 14.0, theme::acc());
+                ui.add(egui::Label::new(theme::instrument_label(titulo, theme::faint())));
+                right(ui, 22.0, derecha);
+            });
+            ui.add_space(10.0);
+            add(ui);
+        });
+}
+
+/// Una fila de ajuste: etiqueta (y su explicación) a la izquierda, control a la
+/// derecha, y una línea de separación debajo.
+///
+/// `sub` es la línea pequeña bajo la etiqueta. La V2 la usa para el matiz que no
+/// cabe en el nombre —«todo el tráfico a Ollama local»— y sin ella la mitad de
+/// los ajustes serían adivinanzas.
+///
+/// La línea NO se pinta bajo la última fila: un separador que no separa nada es
+/// un subrayado del panel.
+fn fila(
+    ui: &mut egui::Ui,
+    etiqueta: &str,
+    sub: Option<&str>,
+    ultima: bool,
+    control: impl FnOnce(&mut egui::Ui),
+) {
+    let alto = if sub.is_some() { 42.0 } else { 32.0 };
+    // EL CONTROL SE COLOCA PRIMERO, en un reparto de derecha a izquierda, y no
+    // es un capricho de orden: puesto después, el bloque de la etiqueta se lleva
+    // todo el ancho disponible —una etiqueta con explicación larga ocupa la fila
+    // entera— y el control acaba empujado fuera de la tarjeta. Colocándolo
+    // primero se queda con lo suyo y la etiqueta envuelve en lo que sobra, que
+    // es exactamente el reparto que se ve en la V2.
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), alto),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            ui.set_min_height(alto);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            control(ui);
+            ui.add_space(GAP);
+            // EL ANCHO DE LA ETIQUETA SE MIDE Y SE IMPONE. Un `ui.vertical`
+            // anidado dentro de este reparto no hereda lo que queda: pide el
+            // ancho entero, la explicación larga no envuelve donde debe, y la
+            // fila acaba midiendo más que su tarjeta. Preguntando aquí —después
+            // del control, que ya se llevó lo suyo— sale exactamente el hueco
+            // libre, y `set_max_width` sobre una caja de ese tamaño hace que el
+            // texto envuelva dentro.
+            let libre = ui.available_width().max(60.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(libre, alto),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_max_width(libre);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(
+                        egui::RichText::new(etiqueta)
+                            .size(theme::FS_FOOTNOTE)
+                            .color(theme::txt2()),
+                    );
+                    if let Some(s) = sub {
+                        ui.label(
+                            egui::RichText::new(s)
+                                .size(theme::FS_CAPTION)
+                                .color(theme::faint()),
+                        );
+                    }
+                },
+            );
+        },
+    );
+    if !ultima {
+        let r = ui.available_rect_before_wrap();
+        ui.painter().hline(
+            r.left()..=r.right(),
+            r.top(),
+            egui::Stroke::new(1.0_f32, theme::bdr()),
+        );
+        ui.add_space(1.0);
     }
 }
 
-/// Una tarjeta que se DIMENSIONA SOLA, con el mismo aspecto que `card_on`.
+/// Un control segmentado: varias opciones en un grupo, una activa.
 ///
-/// `card_on` recibe la altura escrita a mano, y para casi todas las tarjetas de
-/// Configuración va bien: su contenido son filas de altura conocida. No vale
-/// cuando dentro hay un párrafo que se ajusta al ancho —dos líneas en una
-/// ventana ancha, cuatro en una estrecha— y menos si además lleva un aviso que
-/// aparece y desaparece. Con una altura fija, el caso largo se sale por abajo, y
-/// `card_on` no recorta: se superpone a la sección siguiente.
+/// EN VEZ DE UNA CASILLA para lo que tiene dos estados con nombre. «Activado /
+/// Apagado» dice qué pasa en cada posición; una casilla marcada obliga a deducir
+/// qué significa que esté marcada, y para un ajuste como la privacidad esa
+/// deducción es justo la que no se puede pedir.
 ///
-/// Estimar la altura contando caracteres sería adivinar el ancho de la fuente.
-/// Esto no estima: deja que egui mida el texto, que es quien lo va a pintar.
-fn card_auto(ui: &mut egui::Ui, ancho: f32, pad: f32, fill: egui::Color32, add: impl FnOnce(&mut egui::Ui)) {
+/// Devuelve el índice pulsado, si se pulsó alguno.
+fn segmentado(ui: &mut egui::Ui, ancho: f32, opciones: &[&str], activo: usize) -> Option<usize> {
+    let n = opciones.len().max(1);
+    let w = (ancho / n as f32).floor();
+    let mut elegido = None;
     egui::Frame::none()
-        .fill(fill)
-        .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
-        .rounding(egui::Rounding::same(theme::R_LG))
-        .inner_margin(egui::Margin::same(pad))
+        .fill(theme::bg3())
+        .rounding(egui::Rounding::same(theme::R_SM))
+        .inner_margin(egui::Margin::same(3.0))
         .show(ui, |ui| {
-            ui.set_width(ancho - pad * 2.0);
-            ui.spacing_mut().item_spacing.y = 0.0;
-            add(ui);
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(|ui| {
+                for (i, o) in opciones.iter().enumerate() {
+                    let on = i == activo;
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::click());
+                    if on || resp.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::Rounding::same(theme::R_SM - 2.0),
+                            if on { theme::acc() } else { theme::bg4() },
+                        );
+                    }
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        *o,
+                        egui::FontId::proportional(theme::FS_CAPTION),
+                        if on { theme::acc_ink() } else { theme::txt3() },
+                    );
+                    if resp.clicked() {
+                        elegido = Some(i);
+                    }
+                }
+            });
         });
+    elegido
+}
+
+/// Una insignia de estado: punto, texto, y el color que corresponda.
+fn insignia(ui: &mut egui::Ui, texto: &str, ok: bool) {
+    let color = if ok { theme::acc() } else { theme::txt3() };
+    let fondo = if ok { theme::acc_bg() } else { theme::bg3() };
+    let font = egui::FontId::proportional(theme::FS_CAPTION);
+    let w = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), color).size().x);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w + 28.0, 22.0), egui::Sense::hover());
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(11.0),
+        fondo,
+        egui::Stroke::new(1.0_f32, if ok { theme::acc_line() } else { theme::bdr() }),
+    );
+    ui.painter().circle_filled(
+        egui::pos2(rect.left() + 11.0, rect.center().y),
+        3.0,
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 19.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        texto,
+        font,
+        color,
+    );
 }
 
 /// Celda de tabla de ancho exacto: así las columnas casan fila a fila en vez de
@@ -10454,703 +10600,614 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// meter una clave es un segundo sitio donde equivocarse.
     fn configuracion(&mut self, ui: &mut egui::Ui) {
         let s = self.sys.snapshot();
+        // Cabecera: título y la versión, como la píldora de la V2. La versión no
+        // estaba en ninguna pantalla, y es el primer dato que pide cualquiera
+        // que reporte un fallo.
         row_align(ui, 30.0, egui::Align::Center, |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
             ui.label(
                 egui::RichText::new("Configuración")
                     .size(theme::FS_TITLE)
                     .color(theme::txt()),
             );
+            insignia(ui, &format!("Lucy v{}", env!("CARGO_PKG_VERSION")), true);
         });
-        ui.add_space(10.0);
+        ui.add_space(12.0);
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let full = (ui.available_width() - 8.0).clamp(240.0, 760.0);
+                // DOS COLUMNAS cuando hay sitio, una cuando no. El corte está
+                // donde una columna dejaría de caber sin que las filas de
+                // «etiqueta ↔ control» se peguen: por debajo, apiladas se leen
+                // mejor que estrechas.
+                let disponible = ui.available_width() - 8.0;
+                let dos = disponible >= 900.0;
+                let col = if dos {
+                    ((disponible - GAP) / 2.0).min(620.0)
+                } else {
+                    disponible.clamp(240.0, 760.0)
+                };
 
-                // ── quién eres ───────────────────────────────────────────────
-                section(ui, "Operador", None);
-                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::bg2(), |ui| {
-                    let mut n = user_name();
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut n)
-                                .hint_text("Tu nombre")
-                                .desired_width(260.0),
-                        )
-                        .changed()
-                    {
-                        set_user_name(&n);
-                    }
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Con esto te saluda Lucy y salen tus iniciales en el hilo. Si se \n                             deja vacío usa el usuario de Windows, que es una cuenta y no un \n                             nombre.",
-                        )
-                        .size(theme::FS_CAPTION)
-                        .color(theme::faint()),
-                    );
-                });
-
-                // ── modelo ───────────────────────────────────────────────────
-                section(ui, "Modelo por defecto", None);
-                card_on(ui, egui::vec2(full, 66.0), 14.0, theme::bg2(), |ui| {
-                    row_align(ui, 20.0, egui::Align::Center, |ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(
-                            egui::RichText::new(lucy_core::models::icon(&self.chat_model))
-                                .size(14.0)
-                                .color(theme::acc()),
-                        );
-                        ui.label(
-                            egui::RichText::new(lucy_core::models::describe(&self.chat_model))
-                                .size(theme::FS_BODY)
-                                .color(theme::txt()),
-                        );
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    ui.vertical(|ui| {
+                        ui.set_width(col);
+                        self.cfg_columna_izquierda(ui, col);
                     });
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Se recuerda entre arranques. Se cambia desde el selector de \
-                             Terminal IA.",
-                        )
-                        .size(theme::FS_CAPTION)
-                        .color(theme::faint()),
-                    );
-                });
-
-                // ── privacidad ───────────────────────────────────────────────
-                //
-                // ESTE INTERRUPTOR NO ESTABA EN NINGUNA PANTALLA, y era el único
-                // ajuste que decide si lo que escribes SALE de este equipo. Vivía
-                // solo en `/privacy`, o sea que había que saber que existe para
-                // poder usarlo — y quien más lo necesita es justo quien no lo
-                // sabe. En una vista que ofrece elegir el tema y apagar las
-                // animaciones, la ausencia de éste no era una omisión menor.
-                //
-                // Va ANTES que proveedores y modelo a propósito: es la decisión
-                // que gobierna a las otras dos.
-                section(ui, "Privacidad", None);
-                // El aviso se calcula FUERA: dentro del cierre, `self` está
-                // prestado por el `checkbox` que escribe `self.privacy`.
-                let aviso = lucy_core::cloud::allowed(&self.chat_model, self.privacy).err();
-                let mut on = self.privacy;
-                card_auto(ui, full, 14.0, theme::bg2(), |ui| {
-                    ui.checkbox(&mut on, "Nada sale de este equipo")
-                        .on_hover_text("Lo mismo que el comando /privacy");
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(privacidad_texto(on))
-                            .size(theme::FS_CAPTION)
-                            .color(if on { theme::acc() } else { theme::faint() }),
-                    );
-                    // Y SI DEJA MUDO AL MODELO ELEGIDO, se dice AQUÍ. El comando
-                    // equivalente ya lo avisaba; sin esto, encenderlo desde esta
-                    // pantalla no fallaba hasta el turno siguiente, y el error
-                    // aparecía en otra vista — lejos del interruptor que lo causó.
-                    if let Some(e) = &aviso {
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(format!("⚠ {e}"))
-                                .size(theme::FS_CAPTION)
-                                .color(theme::amber()),
-                        );
+                    if dos {
+                        ui.vertical(|ui| {
+                            ui.set_width(col);
+                            self.cfg_columna_derecha(ui, col, &s);
+                        });
                     }
                 });
-                self.privacy = on;
+                if !dos {
+                    ui.add_space(GAP);
+                    self.cfg_columna_derecha(ui, col, &s);
+                }
+                ui.add_space(GAP);
+            });
+    }
 
-                // ── proveedores ──────────────────────────────────────────────
-                section(ui, "Proveedores", None);
-                let n = lucy_core::models::GROUPS.len();
-                card_on(
+    /// Modelo, privacidad, Ollama e interfaz: lo que gobierna cómo se comporta.
+    fn cfg_columna_izquierda(&mut self, ui: &mut egui::Ui, col: f32) {
+        // ── modelo y comportamiento ──────────────────────────────────────────
+        let aviso = lucy_core::cloud::allowed(&self.chat_model, self.privacy).err();
+        let mut privado = self.privacy;
+        let mut tope = self.max_loops;
+        let modelo = self.chat_model.clone();
+        let desc = lucy_core::models::describe(&modelo);
+        panel(
+            ui,
+            col,
+            icons::Icon::Sparkles,
+            "Modelo y comportamiento",
+            |_| {},
+            |ui| {
+                fila(ui, "Modelo activo", Some(&desc), false, |ui| {
+                    ui.label(
+                        egui::RichText::new(&modelo)
+                            .size(theme::FS_FOOTNOTE)
+                            .monospace()
+                            .color(theme::txt()),
+                    );
+                });
+                // EL SEGMENTADO Y NO UNA CASILLA, porque los dos estados tienen
+                // nombre y consecuencia. Una casilla marcada obliga a deducir
+                // qué significa estar marcada, y para el ajuste que decide si
+                // tus datos salen del equipo esa deducción no se puede pedir.
+                fila(
                     ui,
-                    egui::vec2(full, 28.0 + n as f32 * 24.0),
-                    14.0,
-                    theme::bg2(),
+                    "Modo privacidad",
+                    Some("todo el tráfico a Ollama local"),
+                    false,
                     |ui| {
-                        for g in lucy_core::models::GROUPS {
-                            let local = g.provider == "ollama";
-                            let ok = with_key(g.provider);
-                            row_align(ui, 24.0, egui::Align::Center, |ui| {
-                                ui.spacing_mut().item_spacing.x = 8.0;
-                                ui.label(
-                                    egui::RichText::new("●")
-                                        .size(8.0)
-                                        .color(if ok { theme::acc() } else { theme::faint() }),
-                                );
-                                cell(
-                                    ui,
-                                    170.0,
-                                    24.0,
-                                    false,
-                                    egui::RichText::new(g.label)
-                                        .size(theme::FS_FOOTNOTE)
-                                        .color(theme::txt2()),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{} modelos", g.options.len()))
-                                        .size(theme::FS_CAPTION)
-                                        .color(theme::faint()),
-                                );
-                                right(ui, 24.0, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(if local {
-                                            "local · sin clave"
-                                        } else if ok {
-                                            "clave guardada"
-                                        } else {
-                                            "sin clave"
-                                        })
-                                        .size(theme::FS_CAPTION)
-                                        .color(
-                                            if ok || local { theme::txt3() } else { theme::amber() },
-                                        ),
-                                    );
-                                });
-                            });
+                        if let Some(i) =
+                            segmentado(ui, 180.0, &["Activado", "Apagado"], usize::from(!privado))
+                        {
+                            privado = i == 0;
                         }
                     },
                 );
-                ui.add_space(6.0);
-                // AQUÍ PONÍA que las claves «se escriben desde la app principal»
-                // y que «aquí no se muestran ni se editan». Las dos cosas eran
-                // falsas desde que existe la sección de Claves de API unos
-                // centímetros más abajo: mandaba al operador a abrir otro
-                // programa para hacer algo que tenía delante. Un texto de ayuda
-                // que miente cuesta más que la ausencia de texto.
+                fila(
+                    ui,
+                    "Tope de pasos seguidos",
+                    Some("comandos encadenados sin aprobar, por orden"),
+                    aviso.is_none(),
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut tope)
+                                .range(MAX_LOOPS_MIN..=MAX_LOOPS_MAX)
+                                .speed(0.25),
+                        );
+                    },
+                );
+                if let Some(e) = &aviso {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(format!("⚠ {e}"))
+                            .size(theme::FS_CAPTION)
+                            .color(theme::amber()),
+                    );
+                }
+            },
+        );
+        self.privacy = privado;
+        self.max_loops = tope;
+
+        // ── ollama ───────────────────────────────────────────────────────────
+        //
+        // DE ÉL DEPENDE LA MITAD DE LA MEMORIA y no lo decía ninguna pantalla.
+        // Sin embebedor no hay recuerdo por significado —solo por palabras, que
+        // encuentra bastante menos— y sin modelo de texto no hay cristales ni
+        // patrones. Cuando algo de eso no aparece, la pregunta es siempre «¿está
+        // Ollama?», y la respuesta había que buscarla en una terminal.
+        //
+        // Todo sale de la lista YA CACHEADA y de una función pura: esto no
+        // cuesta una petición por frame, que fue el fallo de `list_models` sin
+        // plazo y no se repite.
+        ui.add_space(GAP);
+        let vivo = !self.models.is_empty();
+        let n_modelos = self.models.len();
+        let embebedor = self
+            .models
+            .iter()
+            .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL));
+        let destilador = lucy_core::crystals::elige(&self.models);
+        let mut redetectar = false;
+        panel(
+            ui,
+            col,
+            icons::Icon::Database,
+            "Ollama · modelos locales",
+            |ui| {
+                let t = if vivo {
+                    format!("{n_modelos} detectados")
+                } else {
+                    "no responde".to_string()
+                };
+                insignia(ui, &t, vivo);
+            },
+            |ui| {
+                // Las dos cosas que la memoria le pide, cada una con lo que se
+                // PIERDE si falta — no un ✓/✗ que no dice qué se pierde.
+                fila(
+                    ui,
+                    "Recuerdo por significado",
+                    Some(if embebedor {
+                        "busca por lo que quieres decir, no por las palabras exactas"
+                    } else {
+                        "sin él, Lucy recuerda solo por palabras y encuentra bastante menos"
+                    }),
+                    false,
+                    |ui| {
+                        insignia(
+                            ui,
+                            if embebedor {
+                                lucy_core::vectors::DEFAULT_EMBED_MODEL
+                            } else {
+                                "falta"
+                            },
+                            embebedor,
+                        );
+                    },
+                );
+                fila(
+                    ui,
+                    "Cristales y patrones",
+                    Some(match &destilador {
+                        Some(_) => "destila las sesiones y busca lo que se repite",
+                        None => "sin modelo de texto no se destila ninguna sesión",
+                    }),
+                    true,
+                    |ui| {
+                        insignia(
+                            ui,
+                            destilador.as_deref().unwrap_or("falta"),
+                            destilador.is_some(),
+                        );
+                    },
+                );
+                if !embebedor {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "ollama pull {}",
+                            lucy_core::vectors::DEFAULT_EMBED_MODEL
+                        ))
+                        .size(theme::FS_CAPTION)
+                        .monospace()
+                        .color(theme::amber()),
+                    );
+                }
+                ui.add_space(8.0);
+                row_align(ui, 24.0, egui::Align::Center, |ui| {
+                    right(ui, 24.0, |ui| {
+                        redetectar = ui.small_button("↻ Redetectar").clicked();
+                    });
+                });
+            },
+        );
+        if redetectar {
+            self.models = lucy_core::chat::list_models();
+        }
+
+        // ── interfaz ─────────────────────────────────────────────────────────
+        ui.add_space(GAP);
+        let mut nuevo_tema: Option<theme::Mode> = None;
+        let mut nuevo_motion: Option<bool> = None;
+        panel(
+            ui,
+            col,
+            icons::Icon::Settings,
+            "Interfaz",
+            |_| {},
+            |ui| {
+                let actual = theme::mode();
+                let i = theme::Mode::ALL.iter().position(|m| *m == actual).unwrap_or(0);
+                fila(
+                    ui,
+                    "Tema",
+                    Some(
+                        "«del sistema» mira si las aplicaciones están en claro, no la barra \
+                         de tareas",
+                    ),
+                    false,
+                    |ui| {
+                        let etiquetas: Vec<&str> =
+                            theme::Mode::ALL.iter().map(|m| m.label()).collect();
+                        if let Some(k) = segmentado(ui, 240.0, &etiquetas, i) {
+                            if k != i {
+                                nuevo_tema = Some(theme::Mode::ALL[k]);
+                            }
+                        }
+                    },
+                );
+                let mov = motion();
+                fila(
+                    ui,
+                    "Animaciones",
+                    Some(
+                        "escritura progresiva y transiciones · LUCY_NO_MOTION=1 las apaga al \
+                         arrancar",
+                    ),
+                    true,
+                    |ui| {
+                        if let Some(k) =
+                            segmentado(ui, 180.0, &["Activadas", "Apagadas"], usize::from(!mov))
+                        {
+                            nuevo_motion = Some(k == 0);
+                        }
+                    },
+                );
+            },
+        );
+        if let Some(m) = nuevo_tema {
+            self.tema_pendiente = Some(m);
+        }
+        if let Some(v) = nuevo_motion {
+            set_motion(v);
+        }
+    }
+
+    /// Claves, operador, skills y el equipo: lo que se da de alta una vez.
+    fn cfg_columna_derecha(
+        &mut self,
+        ui: &mut egui::Ui,
+        col: f32,
+        s: &lucy_core::system::SysSnapshot,
+    ) {
+        // ── claves de API ────────────────────────────────────────────────────
+        //
+        // UN SOLO PANEL, y antes eran dos: «Proveedores» listaba los mismos
+        // nombres con un punto de color y mandaba a la app de escritorio a
+        // ponerlas —cosa que dejó de ser verdad el día que se añadió la otra
+        // sección—, y «Claves de API» los volvía a listar para escribirlas. El
+        // operador leía dos veces la misma lista y una de las dos le mentía.
+        let mut guardar: Option<(String, String)> = None;
+        let mut borrar: Option<String> = None;
+        let n_claves = lucy_core::keys::PROVIDERS
+            .iter()
+            .filter(|(k, _, _)| lucy_core::keys::hint(k).is_some())
+            .count();
+        let total = lucy_core::keys::PROVIDERS.len();
+        panel(
+            ui,
+            col,
+            icons::Icon::Shield,
+            "Claves API",
+            |ui| {
+                let t = format!("{n_claves} de {total}");
+                insignia(ui, &t, n_claves > 0);
+            },
+            |ui| {
+                let ultimo = total.saturating_sub(1);
+                for (i, (clave, etiqueta, donde)) in lucy_core::keys::PROVIDERS.iter().enumerate() {
+                    match lucy_core::keys::hint(clave) {
+                        // GUARDADA se enseña con una pista de cuatro caracteres,
+                        // nunca entera. Distingue la de producción de la de
+                        // pruebas, que es lo único que hace falta, y no sirve
+                        // para reconstruirla ni acaba en una captura.
+                        Some(pista) => {
+                            fila(ui, etiqueta, Some(&pista), i == ultimo, |ui| {
+                                if ui.small_button("Quitar").clicked() {
+                                    borrar = Some(clave.to_string());
+                                }
+                                ui.add_space(6.0);
+                                insignia(ui, "configurada", true);
+                            });
+                        }
+                        None => {
+                            let buf = self.api_keys.entry(clave.to_string()).or_default();
+                            let mut pedir = false;
+                            fila(ui, etiqueta, Some(donde), i == ultimo, |ui| {
+                                let te = ui.add(
+                                    egui::TextEdit::singleline(buf)
+                                        .password(true)
+                                        .desired_width(150.0)
+                                        .hint_text("pegar clave"),
+                                );
+                                let intro = te.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let pulsado = ui
+                                    .add_enabled(
+                                        !buf.trim().is_empty(),
+                                        egui::Button::new("Guardar").small(),
+                                    )
+                                    .clicked();
+                                pedir = (intro || pulsado) && !buf.trim().is_empty();
+                            });
+                            if pedir {
+                                guardar = Some((clave.to_string(), buf.trim().to_string()));
+                            }
+                        }
+                    }
+                }
+                ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(
-                        "El punto verde es que hay clave guardada. Se ponen y se quitan más \
-                         abajo, en «Claves de API».",
+                        "Se guardan en el Credential Manager de Windows, en el mismo sitio del \
+                         que las lee la app de escritorio. Ollama no necesita clave: es local.",
                     )
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
                 );
+            },
+        );
+        if let Some((p, k)) = guardar {
+            self.api_key_msg = match lucy_core::keys::set(&p, &k) {
+                // El campo se vacía al guardar: dejar la clave escrita en un
+                // cuadro de texto es dejarla en memoria y en pantalla para nada.
+                Ok(()) => {
+                    self.api_keys.remove(&p);
+                    olvidar_claves();
+                    String::new()
+                }
+                Err(e) => e,
+            };
+        }
+        if let Some(p) = borrar {
+            self.api_key_msg = lucy_core::keys::delete(&p).err().unwrap_or_default();
+            olvidar_claves();
+        }
+        if !self.api_key_msg.is_empty() {
+            ui.label(
+                egui::RichText::new(&self.api_key_msg)
+                    .size(theme::FS_CAPTION)
+                    .color(theme::red()),
+            );
+        }
 
-                // ── ollama ───────────────────────────────────────────────────
-                //
-                // DE ÉL DEPENDE LA MITAD DE LA MEMORIA y no lo decía ninguna
-                // pantalla. Sin embebedor no hay recuerdo por significado —solo
-                // por palabras, que encuentra bastante menos— y sin un modelo de
-                // texto no hay cristales ni patrones. Cuando algo de eso no
-                // aparece, la pregunta es siempre «¿está Ollama?», y la respuesta
-                // había que ir a buscarla a una terminal.
-                //
-                // Todo sale de la lista YA CACHEADA (`self.models`) y de una
-                // función pura, así que esto no cuesta ni una petición por frame:
-                // ese fue el fallo de `list_models` sin plazo, y no se repite.
-                section(ui, "Ollama (modelos locales)", None);
-                let embebedor = self
-                    .models
-                    .iter()
-                    .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL));
-                let destilador = lucy_core::crystals::elige(&self.models);
-                card_auto(ui, full, 14.0, theme::bg2(), |ui| {
-                    let vivo = !self.models.is_empty();
-                    row_align(ui, 22.0, egui::Align::Center, |ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(
-                            egui::RichText::new("●")
-                                .size(8.0)
-                                .color(if vivo { theme::acc() } else { theme::amber() }),
-                        );
-                        ui.label(
-                            egui::RichText::new(if vivo {
-                                format!("{} modelos instalados", self.models.len())
-                            } else {
-                                "no responde en localhost:11434".to_string()
-                            })
-                            .size(theme::FS_FOOTNOTE)
-                            .color(if vivo { theme::txt2() } else { theme::amber() }),
-                        );
-                        right(ui, 22.0, |ui| {
-                            if ui.small_button("↻ Redetectar").clicked() {
-                                self.models = lucy_core::chat::list_models();
-                            }
-                        });
-                    });
-                    ui.add_space(6.0);
-                    // Las dos cosas que la memoria le pide, cada una con lo que
-                    // pasa si falta — no un ✓/✗ que no dice qué se pierde.
-                    for (etiqueta, ok, dice) in [
-                        (
-                            "Recuerdo por significado",
-                            embebedor,
-                            if embebedor {
-                                format!("con {}", lucy_core::vectors::DEFAULT_EMBED_MODEL)
-                            } else {
-                                format!(
-                                    "falta {} — Lucy recuerda solo por palabras y encuentra \
-                                     bastante menos (ollama pull {})",
-                                    lucy_core::vectors::DEFAULT_EMBED_MODEL,
-                                    lucy_core::vectors::DEFAULT_EMBED_MODEL
-                                )
-                            },
-                        ),
-                        (
-                            "Cristales y patrones",
-                            destilador.is_some(),
-                            match &destilador {
-                                Some(m) => format!("destilaría con {m}"),
-                                None => "sin modelo de texto no se destila ninguna sesión"
-                                    .to_string(),
-                            },
-                        ),
-                    ] {
-                        row_align(ui, 20.0, egui::Align::Center, |ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
-                            cell(
-                                ui,
-                                160.0,
-                                20.0,
-                                false,
-                                egui::RichText::new(etiqueta)
-                                    .size(theme::FS_CAPTION)
-                                    .color(theme::faint()),
-                            );
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(dice)
-                                        .size(theme::FS_CAPTION)
-                                        .color(if ok { theme::txt3() } else { theme::amber() }),
-                                )
-                                .truncate(),
-                            );
-                        });
-                    }
-                });
-
-                // ── equipo ───────────────────────────────────────────────────
-                section(ui, "Este equipo", None);
-                let elev = match lucy_core::elevate::state() {
-                    lucy_core::elevate::Elevation::Already => ("Administrador", theme::acc()),
-                    lucy_core::elevate::Elevation::CanPrompt => {
-                        ("Sin privilegios · UAC disponible", theme::txt3())
-                    }
-                    lucy_core::elevate::Elevation::Unavailable => {
-                        ("Sin privilegios · UAC desactivado", theme::amber())
-                    }
-                };
-                card_on(ui, egui::vec2(full, 96.0), 14.0, theme::bg2(), |ui| {
-                    for (k, v, c) in [
-                        ("Equipo", s.host.clone(), theme::txt2()),
-                        ("Sistema", s.os.clone(), theme::txt2()),
-                        ("Privilegios", elev.0.to_string(), elev.1),
-                    ] {
-                        row_align(ui, 22.0, egui::Align::Center, |ui| {
-                            cell(
-                                ui,
-                                110.0,
-                                22.0,
-                                false,
-                                egui::RichText::new(k)
-                                    .size(theme::FS_CAPTION)
-                                    .color(theme::faint()),
-                            );
-                            ui.label(egui::RichText::new(v).size(theme::FS_FOOTNOTE).color(c));
-                        });
-                    }
-                });
-
-                // ── interfaz ─────────────────────────────────────────────────
-                section(ui, "Interfaz", None);
-                card_on(ui, egui::vec2(full, 62.0), 14.0, theme::bg2(), |ui| {
-                    row_align(ui, 26.0, egui::Align::Center, |ui| {
-                        ui.label(
-                            egui::RichText::new("Tema")
-                                .size(theme::FS_FOOTNOTE)
-                                .color(theme::txt2()),
-                        );
-                        ui.add_space(10.0);
-                        let actual = theme::mode();
-                        for m in theme::Mode::ALL {
-                            if ui.selectable_label(actual == m, m.label()).clicked() && actual != m
-                            {
-                                theme::switch(ui.ctx(), m);
-                            }
-                        }
-                    });
-                    ui.add_space(5.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "«Del sistema» sigue a Windows: mira si las aplicaciones \
-                             están en claro, no la barra de tareas — mucha gente las \
-                             tiene cruzadas.",
-                        )
-                        .size(theme::FS_CAPTION)
-                        .color(theme::faint()),
-                    );
-                });
-                card_on(ui, egui::vec2(full, 70.0), 14.0, theme::bg2(), |ui| {
-                    let mut on = motion();
-                    if ui
-                        .checkbox(&mut on, "Animaciones y escritura progresiva")
-                        .changed()
-                    {
-                        set_motion(on);
-                    }
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Al apagarlo, el texto aparece de golpe y nada se desvanece. \
-                             LUCY_NO_MOTION=1 hace lo mismo desde el arranque.",
-                        )
-                        .size(theme::FS_CAPTION)
-                        .color(theme::faint()),
-                    );
-                });
-
-                // ── skills ───────────────────────────────────────────────────
-                section(ui, "Skills", None);
-                let mut instalar = false;
-                let mut quitar: Option<String> = None;
-                card_on(
+        // ── operador y lo que Lucy sabe de él ────────────────────────────────
+        //
+        // JUNTOS PORQUE SON LO MISMO: quién eres, y lo que Lucy ha ido apuntando
+        // sobre ti. Y esa lista es la mitad de confianza de la función: lo que
+        // hay ahí lo escribió un modelo, sin que nadie lo aprobara, y viaja en
+        // todos los prompts a partir de entonces. Un almacén así sin forma de
+        // verlo ni de vaciarlo no es una memoria: es algo que se te queda
+        // pegado.
+        ui.add_space(GAP);
+        let perfil = lucy_core::profile::all().unwrap_or_default();
+        let mut olvidar: Option<String> = None;
+        let n_perfil = perfil.len();
+        panel(
+            ui,
+            col,
+            icons::Icon::Desktop,
+            "Operador",
+            |ui| {
+                if n_perfil > 0 {
+                    let t = format!("{n_perfil} datos");
+                    insignia(ui, &t, true);
+                }
+            },
+            |ui| {
+                let mut n = user_name();
+                fila(
                     ui,
-                    egui::vec2(full, (self.skills.len().max(1) as f32) * 26.0 + 62.0),
-                    14.0,
-                    theme::bg2(),
+                    "Tu nombre",
+                    Some(
+                        "si se deja vacío usa el usuario de Windows, que es una cuenta y no un \
+                         nombre",
+                    ),
+                    perfil.is_empty(),
                     |ui| {
-                        row_align(ui, 26.0, egui::Align::Center, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{} instalados", self.skills.len()))
-                                    .size(theme::FS_FOOTNOTE)
-                                    .color(theme::txt2()),
-                            );
-                            right(ui, 24.0, |ui| {
-                                if ui
-                                    .button("Instalar…")
-                                    .on_hover_text(
-                                        "Elige la carpeta de un skill, o una que contenga \
-                                         varios — un repositorio descargado sirve tal cual",
-                                    )
-                                    .clicked()
-                                {
-                                    instalar = true;
-                                }
-                            });
-                        });
-                        ui.add_space(4.0);
-                        if self.skills.is_empty() {
-                            ui.label(
-                                egui::RichText::new(
-                                    "Ninguno. Un skill es una carpeta con un SKILL.md dentro.",
-                                )
-                                .size(theme::FS_CAPTION)
-                                .color(theme::faint()),
-                            );
-                        }
-                        for k in &self.skills {
-                            row_align(ui, 22.0, egui::Align::Center, |ui| {
-                                cell(
-                                    ui,
-                                    150.0,
-                                    22.0,
-                                    false,
-                                    egui::RichText::new(&k.name)
-                                        .size(theme::FS_CAPTION)
-                                        .monospace()
-                                        .color(theme::acc()),
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&k.description)
-                                            .size(theme::FS_MICRO)
-                                            .color(theme::txt3()),
-                                    )
-                                    .truncate(),
-                                );
-                                right(ui, 18.0, |ui| {
-                                    if ui.small_button("×").on_hover_text("Quitar").clicked() {
-                                        quitar = Some(k.name.clone());
-                                    }
-                                });
-                            });
-                        }
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Lucy los ve y pide el que encaje. Se instalan en tu perfil, \
-                                 así que sobreviven a reinstalar Lucy.",
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut n)
+                                    .hint_text("Tu nombre")
+                                    .desired_width(160.0),
                             )
-                            .size(theme::FS_CAPTION)
-                            .color(theme::faint()),
-                        );
+                            .changed()
+                        {
+                            set_user_name(&n);
+                        }
                     },
                 );
-                if instalar {
-                    // Bloqueante a propósito: es el diálogo del sistema, y
-                    // mientras está abierto no hay nada que animar detrás.
-                    if let Some(dir) = rfd::FileDialog::new()
-                        .set_title("Carpeta del skill (o una que contenga varios)")
-                        .pick_folder()
-                    {
-                        let destino = lucy_core::skills::user_dir();
-                        self.skills_msg = match destino {
-                            Some(d) => match lucy_core::skills::install(&dir, &d) {
-                                Ok(v) => {
-                                    self.skills = cargar_skills();
-                                    format!("Instalados: {}", v.join(", "))
-                                }
-                                Err(e) => e,
-                            },
-                            None => "No se pudo resolver tu perfil de usuario.".into(),
-                        };
-                    }
+                if perfil.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Lucy todavía no ha apuntado nada sobre ti. Lo hace sola cuando le \
+                             cuentas algo que le servirá otro día.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                    );
                 }
-                if let Some(n) = quitar {
-                    self.skills_msg = match lucy_core::skills::uninstall(&n) {
-                        Ok(()) => {
-                            self.skills = cargar_skills();
-                            // Un modo fijado que ya no existe dejaría el prompt
-                            // pidiendo un procedimiento ausente en cada turno.
-                            if self.preset.as_deref() == Some(n.as_str()) {
-                                self.preset = None;
-                            }
-                            format!("«{n}» quitado.")
+                let ultimo = n_perfil.saturating_sub(1);
+                for (i, e) in perfil.iter().enumerate() {
+                    let etiqueta = e.key.replace('_', " ");
+                    fila(ui, &etiqueta, Some(&e.value), i == ultimo, |ui| {
+                        if ui
+                            .small_button("×")
+                            .on_hover_text("Que Lucy lo olvide")
+                            .clicked()
+                        {
+                            olvidar = Some(e.key.clone());
                         }
-                        Err(e) => e,
-                    };
+                    });
+                }
+            },
+        );
+        if let Some(k) = olvidar {
+            let _ = lucy_core::profile::forget(&k);
+        }
+
+        // ── skills ───────────────────────────────────────────────────────────
+        ui.add_space(GAP);
+        let mut instalar = false;
+        let mut quitar: Option<String> = None;
+        let n_skills = self.skills.len();
+        panel(
+            ui,
+            col,
+            icons::Icon::Bolt,
+            "Skills",
+            |ui| {
+                if ui
+                    .small_button("Instalar…")
+                    .on_hover_text(
+                        "Elige la carpeta de un skill, o una que contenga varios — un \
+                         repositorio descargado sirve tal cual",
+                    )
+                    .clicked()
+                {
+                    instalar = true;
+                }
+            },
+            |ui| {
+                if self.skills.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "Ninguno. Un skill es una carpeta con un SKILL.md dentro; Lucy los \
+                             ve y pide el que encaje.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                    );
+                }
+                let ultimo = n_skills.saturating_sub(1);
+                for (i, k) in self.skills.iter().enumerate() {
+                    fila(ui, &k.name, Some(&k.description), i == ultimo, |ui| {
+                        if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                            quitar = Some(k.name.clone());
+                        }
+                    });
+                }
+                if !self.skills.is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Se instalan en tu perfil, así que sobreviven a reinstalar Lucy.",
+                        )
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                    );
                 }
                 if !self.skills_msg.is_empty() {
+                    ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new(&self.skills_msg)
                             .size(theme::FS_CAPTION)
                             .color(theme::txt3()),
                     );
                 }
-
-                section(ui, "Claves de API", None);
-                let mut guardar: Option<(String, String)> = None;
-                let mut borrar: Option<String> = None;
-                card_on(
-                    ui,
-                    egui::vec2(full, lucy_core::keys::PROVIDERS.len() as f32 * 30.0 + 42.0),
-                    14.0,
-                    theme::bg2(),
-                    |ui| {
-                        for (clave, etiqueta, donde) in lucy_core::keys::PROVIDERS {
-                            row_align(ui, 28.0, egui::Align::Center, |ui| {
-                                cell(
-                                    ui,
-                                    120.0,
-                                    28.0,
-                                    false,
-                                    egui::RichText::new(*etiqueta)
-                                        .size(theme::FS_FOOTNOTE)
-                                        .color(theme::txt2()),
-                                );
-                                match lucy_core::keys::hint(clave) {
-                                    // GUARDADA se enseña con una pista de cuatro
-                                    // caracteres, nunca entera. Distingue la de
-                                    // producción de la de pruebas, que es lo
-                                    // único que hace falta, y no sirve para
-                                    // reconstruirla ni acaba en una captura.
-                                    Some(pista) => {
-                                        ui.label(
-                                            egui::RichText::new(pista)
-                                                .size(theme::FS_CAPTION)
-                                                .monospace()
-                                                .color(theme::acc()),
-                                        );
-                                        ui.add_space(8.0);
-                                        if ui.small_button("Quitar").clicked() {
-                                            borrar = Some(clave.to_string());
-                                        }
-                                    }
-                                    None => {
-                                        let buf = self
-                                            .api_keys
-                                            .entry(clave.to_string())
-                                            .or_default();
-                                        let te = ui.add(
-                                            egui::TextEdit::singleline(buf)
-                                                .password(true)
-                                                .desired_width(240.0)
-                                                .hint_text(*donde),
-                                        );
-                                        let intro = te.lost_focus()
-                                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                        let pulsado = ui
-                                            .add_enabled(
-                                                !buf.trim().is_empty(),
-                                                egui::Button::new("Guardar").small(),
-                                            )
-                                            .clicked();
-                                        if (intro || pulsado) && !buf.trim().is_empty() {
-                                            guardar =
-                                                Some((clave.to_string(), buf.trim().to_string()));
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Se guardan en el Credential Manager de Windows, en el mismo \
-                                 sitio que las usa la app de escritorio. Ollama no necesita \
-                                 clave: es local.",
-                            )
-                            .size(theme::FS_CAPTION)
-                            .color(theme::faint()),
-                        );
-                    },
-                );
-                if let Some((p, k)) = guardar {
-                    self.api_key_msg = match lucy_core::keys::set(&p, &k) {
-                        // El campo se vacía al guardar: dejar la clave escrita
-                        // en un cuadro de texto es dejarla en memoria y en
-                        // pantalla para nada.
-                        Ok(()) => {
-                            self.api_keys.remove(&p);
-                            olvidar_claves();
-                            String::new()
+            },
+        );
+        if instalar {
+            // Bloqueante a propósito: es el diálogo del sistema, y mientras está
+            // abierto no hay nada que animar detrás.
+            if let Some(dir) = rfd::FileDialog::new()
+                .set_title("Carpeta del skill (o una que contenga varios)")
+                .pick_folder()
+            {
+                let destino = lucy_core::skills::user_dir();
+                self.skills_msg = match destino {
+                    Some(d) => match lucy_core::skills::install(&dir, &d) {
+                        Ok(v) => {
+                            self.skills = cargar_skills();
+                            format!("Instalados: {}", v.join(", "))
                         }
                         Err(e) => e,
-                    };
+                    },
+                    None => "No se pudo resolver tu perfil de usuario.".into(),
+                };
+            }
+        }
+        if let Some(n) = quitar {
+            self.skills_msg = match lucy_core::skills::uninstall(&n) {
+                Ok(()) => {
+                    self.skills = cargar_skills();
+                    // Un modo fijado que ya no existe dejaría el prompt pidiendo
+                    // un procedimiento ausente en cada turno.
+                    if self.preset.as_deref() == Some(n.as_str()) {
+                        self.preset = None;
+                    }
+                    format!("«{n}» quitado.")
                 }
-                if let Some(p) = borrar {
-                    self.api_key_msg = lucy_core::keys::delete(&p).err().unwrap_or_default();
-                    olvidar_claves();
-                }
-                if !self.api_key_msg.is_empty() {
+                Err(e) => e,
+            };
+        }
+
+        // ── este equipo ──────────────────────────────────────────────────────
+        ui.add_space(GAP);
+        let elev = match lucy_core::elevate::state() {
+            lucy_core::elevate::Elevation::Already => ("Administrador", true),
+            lucy_core::elevate::Elevation::CanPrompt => ("Sin privilegios · UAC disponible", false),
+            lucy_core::elevate::Elevation::Unavailable => {
+                ("Sin privilegios · UAC desactivado", false)
+            }
+        };
+        let db = db_path().map(|p| p.display().to_string()).unwrap_or_default();
+        let lg = log_path().map(|p| p.display().to_string()).unwrap_or_default();
+        panel(
+            ui,
+            col,
+            icons::Icon::Server,
+            "Este equipo",
+            |_| {},
+            |ui| {
+                fila(ui, "Equipo", None, false, |ui| {
                     ui.label(
-                        egui::RichText::new(&self.api_key_msg)
+                        egui::RichText::new(&s.host)
                             .size(theme::FS_CAPTION)
-                            .color(theme::red()),
+                            .color(theme::txt2()),
                     );
-                }
-
-                // ── lo que Lucy ha aprendido ─────────────────────────────────
-                //
-                // ESTA LISTA ES LA MITAD DE CONFIANZA de la función. Lo que hay
-                // aquí lo escribió un modelo, sin que nadie lo aprobara, y viaja
-                // en todos los prompts a partir de entonces. Un almacén así sin
-                // forma de verlo ni de vaciarlo no es una memoria: es algo que
-                // se te queda pegado.
-                section(ui, "Lo que Lucy sabe de ti", None);
-                let perfil = lucy_core::profile::all().unwrap_or_default();
-                let alto = (perfil.len().max(1) as f32 * 22.0 + 30.0).min(240.0);
-                let mut olvidar: Option<String> = None;
-                card_on(ui, egui::vec2(full, alto), 14.0, theme::bg2(), |ui| {
-                    if perfil.is_empty() {
-                        ui.label(
-                            egui::RichText::new(
-                                "Todavía nada. Lucy lo va guardando sola cuando le \
-                                 cuentas algo que le servirá otro día.",
-                            )
-                            .size(theme::FS_CAPTION)
-                            .color(theme::faint()),
-                        );
-                        return;
-                    }
-                    for e in &perfil {
-                        row_align(ui, 20.0, egui::Align::Center, |ui| {
-                            cell(
-                                ui,
-                                150.0,
-                                20.0,
-                                false,
-                                egui::RichText::new(e.key.replace('_', " "))
-                                    .size(theme::FS_CAPTION)
-                                    .color(theme::faint()),
-                            );
-                            ui.label(
-                                egui::RichText::new(&e.value)
-                                    .size(theme::FS_FOOTNOTE)
-                                    .color(theme::txt2()),
-                            );
-                            right(ui, 18.0, |ui| {
-                                if ui
-                                    .small_button("×")
-                                    .on_hover_text("Que Lucy lo olvide")
-                                    .clicked()
-                                {
-                                    olvidar = Some(e.key.clone());
-                                }
-                            });
-                        });
-                    }
                 });
-                if let Some(k) = olvidar {
-                    let _ = lucy_core::profile::forget(&k);
-                }
-
-                // EL TOPE ESTÁ AQUÍ Y EL INTERRUPTOR EN EL COMPOSITOR, y no es un
-                // descuido: cuántos pasos como mucho es un ajuste que se decide
-                // una vez; si ESTA orden corre sola o no es una decisión por
-                // orden. Juntarlos haría que encender el automático costara tres
-                // clics y un cambio de vista.
-                section(ui, "Ejecución automática", None);
-                card_on(ui, egui::vec2(full, 88.0), 14.0, theme::bg2(), |ui| {
-                    row_align(ui, 24.0, egui::Align::Center, |ui| {
-                        ui.label(
-                            egui::RichText::new("Tope de pasos seguidos")
-                                .size(theme::FS_FOOTNOTE)
-                                .color(theme::txt2()),
-                        );
-                        ui.add_space(10.0);
+                fila(ui, "Sistema", None, false, |ui| {
+                    ui.label(
+                        egui::RichText::new(&s.os)
+                            .size(theme::FS_CAPTION)
+                            .color(theme::txt2()),
+                    );
+                });
+                fila(ui, "Privilegios", None, false, |ui| {
+                    insignia(ui, elev.0, elev.1);
+                });
+                for (i, (k, v)) in [("Base de datos", db), ("Log", lg)].into_iter().enumerate() {
+                    let mut copiar = false;
+                    fila(ui, k, None, i == 1, |ui| {
+                        copiar = ghost_icon(ui, icons::Icon::Copy)
+                            .on_hover_text("Copiar la ruta")
+                            .clicked();
                         ui.add(
-                            egui::Slider::new(
-                                &mut self.max_loops,
-                                MAX_LOOPS_MIN..=MAX_LOOPS_MAX,
+                            egui::Label::new(
+                                egui::RichText::new(&v)
+                                    .size(theme::FS_MICRO)
+                                    .monospace()
+                                    .color(theme::txt3()),
                             )
-                            .logarithmic(true)
-                            .integer(),
+                            .truncate(),
                         );
                     });
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Cuántos comandos puede encadenar Lucy sin que nadie los \
-                             apruebe, por orden. La V2 trae 60, pero allí la mayoría \
-                             de las vueltas son lecturas; aquí cada una es un comando \
-                             en este equipo.",
-                        )
-                        .size(theme::FS_CAPTION)
-                        .color(theme::faint()),
-                    );
-                });
-
-                // ── rutas ────────────────────────────────────────────────────
-                section(ui, "Rutas", None);
-                let db = db_path().map(|p| p.display().to_string()).unwrap_or_default();
-                let lg = log_path().map(|p| p.display().to_string()).unwrap_or_default();
-                card_on(ui, egui::vec2(full, 76.0), 14.0, theme::bg2(), |ui| {
-                    for (k, v) in [("Base de datos", db), ("Log", lg)] {
-                        row_align(ui, 26.0, egui::Align::Center, |ui| {
-                            cell(
-                                ui,
-                                110.0,
-                                26.0,
-                                false,
-                                egui::RichText::new(k)
-                                    .size(theme::FS_CAPTION)
-                                    .color(theme::faint()),
-                            );
-                            let mut copiar = false;
-                            right(ui, 26.0, |ui| {
-                                copiar = ghost_icon(ui, icons::Icon::Copy)
-                                    .on_hover_text("Copiar la ruta")
-                                    .clicked();
-                            });
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&v)
-                                        .size(theme::FS_CAPTION)
-                                        .monospace()
-                                        .color(theme::txt3()),
-                                )
-                                .truncate(),
-                            );
-                            if copiar {
-                                ui.ctx().copy_text(v.clone());
-                            }
-                        });
+                    if copiar {
+                        ui.ctx().copy_text(v.clone());
                     }
-                });
-                ui.add_space(GAP);
-            });
+                }
+            },
+        );
     }
 
 
@@ -14208,60 +14265,78 @@ mod layout {
         assert!(r.height() <= CORE_H + 0.5, "mide {}", r.height());
     }
 
-    /// Pinta la tarjeta de privacidad tal cual la pinta la vista.
-    fn privacidad(ancho: f32, activo: bool, aviso: Option<&str>) -> egui::Rect {
-        measure(ancho, |ui| {
-            let mut on = activo;
-            card_auto(ui, ancho, 14.0, theme::bg2(), |ui| {
-                ui.checkbox(&mut on, "Nada sale de este equipo");
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(privacidad_texto(on)).size(theme::FS_CAPTION));
-                if let Some(e) = aviso {
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(format!("⚠ {e}")).size(theme::FS_CAPTION),
-                    );
-                }
+    /// Mide una fila de ajuste dentro de una caja del ancho dado.
+    ///
+    /// La caja se fija con `set_width`, que es LO QUE HACE `panel` en la vista
+    /// real — y hace falta: el banco de medida solo llama a `set_max_width`, que
+    /// no llega al hijo, así que sin esto la fila cree tener toda la pantalla y
+    /// cualquier aserción sobre su ancho compara contra un número que nunca se
+    /// aplicó. Lo comprobé midiendo: 592 disponibles donde se habían pedido 560.
+    fn fila_medida(ancho: f32, etiqueta: &str, sub: Option<&str>, control_w: f32) -> egui::Rect {
+        measure(ancho + 120.0, |ui| {
+            ui.scope(|ui| {
+                ui.set_width(ancho);
+                fila(ui, etiqueta, sub, true, |ui| {
+                    ui.allocate_exact_size(egui::vec2(control_w, 24.0), egui::Sense::hover());
+                });
             });
         })
     }
 
     #[test]
-    fn la_tarjeta_de_privacidad_crece_con_su_contenido_en_vez_de_desbordarse() {
-        // La tarjeta lleva un párrafo que se ajusta al ancho y un aviso que
-        // aparece y desaparece. Con la altura fija de `card_on` —como el resto de
-        // esta vista— el caso largo se sale por abajo y se superpone a la sección
-        // siguiente, porque `card_on` no recorta.
-        let aviso = "Modo privacidad activo: no se llama a Anthropic. Elige un modelo local \
-                     de Ollama, o apaga el modo con /privacy.";
-
-        // El aviso SIEMPRE hace la tarjeta más alta: si no creciera, estaría
-        // pintándose fuera de la caja.
-        let sin = privacidad(760.0, true, None).height();
-        let con = privacidad(760.0, true, Some(aviso)).height();
-        assert!(con > sin, "el aviso no ensanchó la tarjeta: {sin} -> {con}");
-
-        // Y estrecharla la hace crecer, porque el párrafo se parte en más
-        // líneas. Éste es el caso que una altura escrita a mano no puede cubrir:
-        // la ventana tiene un mínimo de 900 px, pero la tarjeta se limita a 760
-        // y baja hasta 240 en `full`.
-        let ancha = privacidad(760.0, false, None).height();
-        let estrecha = privacidad(280.0, false, None).height();
+    fn una_fila_de_ajuste_deja_sitio_al_control_por_larga_que_sea_la_etiqueta() {
+        // EL FALLO QUE TUVO ESTA FUNCIÓN: con el control colocado DESPUÉS de la
+        // etiqueta, el bloque de texto se llevaba todo el ancho disponible y el
+        // control acababa empujado fuera de la tarjeta. Se coloca primero, en un
+        // reparto de derecha a izquierda, y la etiqueta envuelve en lo que sobra.
+        const ANCHO: f32 = 560.0;
+        const CONTROL: f32 = 180.0;
+        let larga = "Una etiqueta con una explicación larguísima que desde luego no cabe \
+                     en una sola línea de esta anchura y tiene que envolver varias veces";
+        let r = fila_medida(ANCHO, "Modo privacidad", Some(larga), CONTROL);
+        // La fila no se sale de su ancho: si el control hubiera sido empujado
+        // fuera, el rect medido sería más ancho que la caja.
         assert!(
-            estrecha > ancha,
-            "al estrechar no creció: {ancha} -> {estrecha}; el texto se está saliendo"
+            r.width() <= ANCHO + 1.0,
+            "la fila mide {} y su caja son {ANCHO}: el control se salió",
+            r.width()
         );
+        // Y crece hacia abajo para alojar el texto envuelto, en vez de recortarlo.
+        let corta = fila_medida(ANCHO, "Tema", Some("una línea"), CONTROL);
+        assert!(
+            r.height() >= corta.height(),
+            "la etiqueta larga no hizo crecer la fila: {} vs {}",
+            r.height(),
+            corta.height()
+        );
+    }
 
-        // Ninguno de los cuatro casos cabría en los 84 px que tenía escritos.
-        for (a, act, av) in [
-            (760.0, true, Some(aviso)),
-            (280.0, true, Some(aviso)),
-            (280.0, false, None),
-            (760.0, false, None),
-        ] {
-            let h = privacidad(a, act, av).height();
-            assert!(h > 0.0 && h < 400.0, "altura absurda: {h}");
-        }
+    #[test]
+    fn una_fila_sin_explicacion_es_mas_baja_que_una_con_ella() {
+        // El subítulo es la línea que la V2 usa para el matiz que no cabe en el
+        // nombre. Si no cambiara la altura, estaría pintándose encima de algo.
+        let sin = fila_medida(560.0, "Equipo", None, 100.0).height();
+        let con = fila_medida(560.0, "Equipo", Some("el nombre de esta máquina"), 100.0).height();
+        assert!(con > sin, "con explicación no creció: {sin} -> {con}");
+    }
+
+    #[test]
+    fn el_segmentado_reparte_su_ancho_entre_las_opciones() {
+        // Tres opciones en el mismo ancho que dos: cada una más estrecha, pero el
+        // grupo entero ocupa lo mismo — que es lo que hace que dos filas
+        // consecutivas con segmentados distintos queden alineadas.
+        let dos = measure(400.0, |ui| {
+            segmentado(ui, 240.0, &["Activado", "Apagado"], 0);
+        });
+        let tres = measure(400.0, |ui| {
+            segmentado(ui, 240.0, &["Conciso", "Equilibrado", "Detallado"], 1);
+        });
+        assert!(
+            (dos.width() - tres.width()).abs() < 4.0,
+            "no ocupan lo mismo: {} vs {}",
+            dos.width(),
+            tres.width()
+        );
     }
 
     #[test]
@@ -14298,14 +14373,6 @@ mod layout {
             .iter()
             .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL)));
         assert!(lucy_core::crystals::elige(&solo_texto).is_some());
-    }
-
-    #[test]
-    fn el_texto_de_privacidad_dice_cosas_distintas_encendido_y_apagado() {
-        // Un interruptor cuya explicación no cambia al pulsarlo no explica nada.
-        assert_ne!(privacidad_texto(true), privacidad_texto(false));
-        assert!(privacidad_texto(true).contains("Ollama"));
-        assert!(privacidad_texto(false).contains("viaja"));
     }
 
     #[test]
