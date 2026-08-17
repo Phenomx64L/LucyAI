@@ -263,7 +263,15 @@ pub fn ensure_schema() -> Result<(), String> {
         for col in [
             "ALTER TABLE agent_memories ADD COLUMN last_accessed_at INTEGER",
             "ALTER TABLE agent_memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE agent_memories ADD COLUMN superseded_by TEXT",
+            // INTEGER, que es como la declara la app (`metrics.rs:282`) y como
+            // está en la base real. Aquí ponía TEXT, y aunque el desajuste
+            // resulta ser benigno —SQLite convierte el «57» que escribe la
+            // consolidación a 57 por la afinidad de la columna, y el filtro
+            // `= ''` sigue excluyendo la fila; medido sobre una copia de la base
+            // real— dos declaraciones distintas de la misma columna significan
+            // que qué tipo tiene depende de qué programa creó la base primero.
+            // Eso convierte cualquier lectura del valor en una ruleta.
+            "ALTER TABLE agent_memories ADD COLUMN superseded_by INTEGER NULL",
             "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = c.execute(col, []);

@@ -20,8 +20,13 @@ fn base() -> PathBuf {
     p
 }
 
-/// El trozo del esquema real que hace falta aquí. Copiado de `utils/db.rs`,
-/// incluidas las columnas que se añaden por `ALTER TABLE` en la app.
+/// El trozo del esquema real que hace falta aquí — COPIADO DE LA BASE DE VERDAD,
+/// no inventado: los tipos salen de un `PRAGMA table_info` sobre la lucy.db real,
+/// incluidas las columnas que la app añade por `ALTER TABLE`.
+///
+/// El tipo de `superseded_by` importa y estaba mal aquí: TEXT en el test,
+/// INTEGER en la base. Un test que fabrica un esquema más cómodo que el real es
+/// exactamente lo que dejó pasar el «no such column: sha» de los documentos.
 const DDL: &str = "
 CREATE TABLE IF NOT EXISTS agent_memories (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,8 +39,10 @@ CREATE TABLE IF NOT EXISTS agent_memories (
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     last_accessed_at INTEGER,
     access_count INTEGER NOT NULL DEFAULT 0,
-    superseded_by TEXT,
-    expires_at INTEGER NOT NULL DEFAULT 0
+    superseded_by INTEGER,
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.5
 );";
 
 fn mete(titulo: &str, texto: &str, tags: &str, importancia: i64) -> i64 {
@@ -211,7 +218,7 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
     .expect("count");
     assert_eq!(hacia_muerta, 0, "una fila retirada por la app salió elegida canónica");
     // Su puntero tampoco se pisó: sigue apuntando a donde la app la mandó.
-    let puntero: String = lucy_core::with_db(|con| {
+    let puntero: i64 = lucy_core::with_db(|con| {
         con.query_row(
             "SELECT superseded_by FROM agent_memories WHERE id = ?1",
             rusqlite::params![muerta],
@@ -220,11 +227,11 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
         .map_err(|e| e.to_string())
     })
     .expect("puntero");
-    assert_eq!(puntero, "999", "consolidar pisó un puntero que no era suyo");
+    assert_eq!(puntero, 999, "consolidar pisó un puntero que no era suyo");
 
     // La canónica sigue viva y las fundidas apuntan a ella.
     let canonica = *quedan.first().expect("queda al menos una");
-    let apuntan: Vec<(i64, Option<String>)> = lucy_core::with_db(|c| {
+    let apuntan: Vec<(i64, Option<i64>)> = lucy_core::with_db(|c| {
         let mut st = c
             .prepare("SELECT id, superseded_by FROM agent_memories WHERE superseded_by IS NOT NULL")
             .map_err(|e| e.to_string())?;
@@ -242,11 +249,7 @@ fn consolidar_saca_de_la_vista_las_memorias_fundidas() {
         if *id == muerta {
             continue;
         }
-        assert_eq!(
-            hacia.as_deref(),
-            Some(canonica.to_string().as_str()),
-            "la memoria {id} apunta a otra cosa"
-        );
+        assert_eq!(*hacia, Some(canonica), "la memoria {id} apunta a otra cosa");
     }
 
     // Y NO SE BORRA NINGUNA FILA: siete entraron, siete están. Una memoria
