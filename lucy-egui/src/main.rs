@@ -1608,6 +1608,46 @@ fn card_on(
     });
 }
 
+/// El texto largo de la tarjeta de privacidad, según esté encendida o no.
+///
+/// Fuera de la tarjeta para que el cálculo de altura y el pintado usen LA MISMA
+/// cadena. Con el texto escrito dos veces, cambiar una frase deja la altura
+/// calculada sobre la otra y el contenido se sale por abajo sin que nada falle.
+fn privacidad_texto(activo: bool) -> &'static str {
+    if activo {
+        "ACTIVO. Solo se puede hablar con modelos locales de Ollama; cualquier proveedor de \
+         nube se rechaza antes de montar la petición, así que ni el prompt ni tus memorias \
+         llegan a salir."
+    } else {
+        "Apagado. Con un modelo de nube elegido, tu pregunta viaja junto a lo que Lucy \
+         recuerde del equipo y a la salida de los comandos que se hayan ejecutado."
+    }
+}
+
+/// Una tarjeta que se DIMENSIONA SOLA, con el mismo aspecto que `card_on`.
+///
+/// `card_on` recibe la altura escrita a mano, y para casi todas las tarjetas de
+/// Configuración va bien: su contenido son filas de altura conocida. No vale
+/// cuando dentro hay un párrafo que se ajusta al ancho —dos líneas en una
+/// ventana ancha, cuatro en una estrecha— y menos si además lleva un aviso que
+/// aparece y desaparece. Con una altura fija, el caso largo se sale por abajo, y
+/// `card_on` no recorta: se superpone a la sección siguiente.
+///
+/// Estimar la altura contando caracteres sería adivinar el ancho de la fuente.
+/// Esto no estima: deja que egui mida el texto, que es quien lo va a pintar.
+fn card_auto(ui: &mut egui::Ui, ancho: f32, pad: f32, fill: egui::Color32, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::none()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0_f32, theme::bdr()))
+        .rounding(egui::Rounding::same(theme::R_LG))
+        .inner_margin(egui::Margin::same(pad))
+        .show(ui, |ui| {
+            ui.set_width(ancho - pad * 2.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui);
+        });
+}
+
 /// Celda de tabla de ancho exacto: así las columnas casan fila a fila en vez de
 /// bailar con el contenido más largo de cada una.
 fn cell(ui: &mut egui::Ui, w: f32, h: f32, align_right: bool, txt: egui::RichText) {
@@ -10479,8 +10519,48 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     );
                 });
 
+                // ── privacidad ───────────────────────────────────────────────
+                //
+                // ESTE INTERRUPTOR NO ESTABA EN NINGUNA PANTALLA, y era el único
+                // ajuste que decide si lo que escribes SALE de este equipo. Vivía
+                // solo en `/privacy`, o sea que había que saber que existe para
+                // poder usarlo — y quien más lo necesita es justo quien no lo
+                // sabe. En una vista que ofrece elegir el tema y apagar las
+                // animaciones, la ausencia de éste no era una omisión menor.
+                //
+                // Va ANTES que proveedores y modelo a propósito: es la decisión
+                // que gobierna a las otras dos.
+                section(ui, "Privacidad", None);
+                // El aviso se calcula FUERA: dentro del cierre, `self` está
+                // prestado por el `checkbox` que escribe `self.privacy`.
+                let aviso = lucy_core::cloud::allowed(&self.chat_model, self.privacy).err();
+                let mut on = self.privacy;
+                card_auto(ui, full, 14.0, theme::bg2(), |ui| {
+                    ui.checkbox(&mut on, "Nada sale de este equipo")
+                        .on_hover_text("Lo mismo que el comando /privacy");
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(privacidad_texto(on))
+                            .size(theme::FS_CAPTION)
+                            .color(if on { theme::acc() } else { theme::faint() }),
+                    );
+                    // Y SI DEJA MUDO AL MODELO ELEGIDO, se dice AQUÍ. El comando
+                    // equivalente ya lo avisaba; sin esto, encenderlo desde esta
+                    // pantalla no fallaba hasta el turno siguiente, y el error
+                    // aparecía en otra vista — lejos del interruptor que lo causó.
+                    if let Some(e) = &aviso {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(format!("⚠ {e}"))
+                                .size(theme::FS_CAPTION)
+                                .color(theme::amber()),
+                        );
+                    }
+                });
+                self.privacy = on;
+
                 // ── proveedores ──────────────────────────────────────────────
-                section(ui, "Proveedores", Some("solo lectura".into()));
+                section(ui, "Proveedores", None);
                 let n = lucy_core::models::GROUPS.len();
                 card_on(
                     ui,
@@ -10532,14 +10612,113 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     },
                 );
                 ui.add_space(6.0);
+                // AQUÍ PONÍA que las claves «se escriben desde la app principal»
+                // y que «aquí no se muestran ni se editan». Las dos cosas eran
+                // falsas desde que existe la sección de Claves de API unos
+                // centímetros más abajo: mandaba al operador a abrir otro
+                // programa para hacer algo que tenía delante. Un texto de ayuda
+                // que miente cuesta más que la ausencia de texto.
                 ui.label(
                     egui::RichText::new(
-                        "Las claves viven en el Credential Manager de Windows y se escriben \
-                         desde la app principal. Aquí no se muestran ni se editan.",
+                        "El punto verde es que hay clave guardada. Se ponen y se quitan más \
+                         abajo, en «Claves de API».",
                     )
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
                 );
+
+                // ── ollama ───────────────────────────────────────────────────
+                //
+                // DE ÉL DEPENDE LA MITAD DE LA MEMORIA y no lo decía ninguna
+                // pantalla. Sin embebedor no hay recuerdo por significado —solo
+                // por palabras, que encuentra bastante menos— y sin un modelo de
+                // texto no hay cristales ni patrones. Cuando algo de eso no
+                // aparece, la pregunta es siempre «¿está Ollama?», y la respuesta
+                // había que ir a buscarla a una terminal.
+                //
+                // Todo sale de la lista YA CACHEADA (`self.models`) y de una
+                // función pura, así que esto no cuesta ni una petición por frame:
+                // ese fue el fallo de `list_models` sin plazo, y no se repite.
+                section(ui, "Ollama (modelos locales)", None);
+                let embebedor = self
+                    .models
+                    .iter()
+                    .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL));
+                let destilador = lucy_core::crystals::elige(&self.models);
+                card_auto(ui, full, 14.0, theme::bg2(), |ui| {
+                    let vivo = !self.models.is_empty();
+                    row_align(ui, 22.0, egui::Align::Center, |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(
+                            egui::RichText::new("●")
+                                .size(8.0)
+                                .color(if vivo { theme::acc() } else { theme::amber() }),
+                        );
+                        ui.label(
+                            egui::RichText::new(if vivo {
+                                format!("{} modelos instalados", self.models.len())
+                            } else {
+                                "no responde en localhost:11434".to_string()
+                            })
+                            .size(theme::FS_FOOTNOTE)
+                            .color(if vivo { theme::txt2() } else { theme::amber() }),
+                        );
+                        right(ui, 22.0, |ui| {
+                            if ui.small_button("↻ Redetectar").clicked() {
+                                self.models = lucy_core::chat::list_models();
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    // Las dos cosas que la memoria le pide, cada una con lo que
+                    // pasa si falta — no un ✓/✗ que no dice qué se pierde.
+                    for (etiqueta, ok, dice) in [
+                        (
+                            "Recuerdo por significado",
+                            embebedor,
+                            if embebedor {
+                                format!("con {}", lucy_core::vectors::DEFAULT_EMBED_MODEL)
+                            } else {
+                                format!(
+                                    "falta {} — Lucy recuerda solo por palabras y encuentra \
+                                     bastante menos (ollama pull {})",
+                                    lucy_core::vectors::DEFAULT_EMBED_MODEL,
+                                    lucy_core::vectors::DEFAULT_EMBED_MODEL
+                                )
+                            },
+                        ),
+                        (
+                            "Cristales y patrones",
+                            destilador.is_some(),
+                            match &destilador {
+                                Some(m) => format!("destilaría con {m}"),
+                                None => "sin modelo de texto no se destila ninguna sesión"
+                                    .to_string(),
+                            },
+                        ),
+                    ] {
+                        row_align(ui, 20.0, egui::Align::Center, |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            cell(
+                                ui,
+                                160.0,
+                                20.0,
+                                false,
+                                egui::RichText::new(etiqueta)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::faint()),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(dice)
+                                        .size(theme::FS_CAPTION)
+                                        .color(if ok { theme::txt3() } else { theme::amber() }),
+                                )
+                                .truncate(),
+                            );
+                        });
+                    }
+                });
 
                 // ── equipo ───────────────────────────────────────────────────
                 section(ui, "Este equipo", None);
@@ -10621,20 +10800,6 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     );
                 });
 
-                // ── automático ───────────────────────────────────────────────
-                //
-                // El TOPE está aquí y el INTERRUPTOR está en el compositor, y no
-                // es un descuido: cuántos pasos como mucho es un ajuste que se
-                // decide una vez; si esta orden corre sola o no, es una decisión
-                // por orden. Ponerlos juntos haría que encender el automático
-                // costara tres clics y un cambio de vista.
-                // ── claves de API ────────────────────────────────────────────
-                //
-                // ESTO FALTABA ENTERO, y era lo que ataba este shell al que
-                // sustituye: las claves se leían del Credential Manager y no
-                // había dónde escribirlas, así que una instalación limpia
-                // arrancaba sin poder hablar con ningún modelo de nube y sin
-                // decir cómo arreglarlo.
                 // ── skills ───────────────────────────────────────────────────
                 section(ui, "Skills", None);
                 let mut instalar = false;
@@ -10911,6 +11076,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     let _ = lucy_core::profile::forget(&k);
                 }
 
+                // EL TOPE ESTÁ AQUÍ Y EL INTERRUPTOR EN EL COMPOSITOR, y no es un
+                // descuido: cuántos pasos como mucho es un ajuste que se decide
+                // una vez; si ESTA orden corre sola o no es una decisión por
+                // orden. Juntarlos haría que encender el automático costara tres
+                // clics y un cambio de vista.
                 section(ui, "Ejecución automática", None);
                 card_on(ui, egui::vec2(full, 88.0), 14.0, theme::bg2(), |ui| {
                     row_align(ui, 24.0, egui::Align::Center, |ui| {
@@ -14036,6 +14206,106 @@ mod layout {
     fn la_tarjeta_de_nucleo_cabe_en_su_caja() {
         let r = measure(120.0, |ui| App::core_card(ui, 120.0, 31, 100.0, 90.0));
         assert!(r.height() <= CORE_H + 0.5, "mide {}", r.height());
+    }
+
+    /// Pinta la tarjeta de privacidad tal cual la pinta la vista.
+    fn privacidad(ancho: f32, activo: bool, aviso: Option<&str>) -> egui::Rect {
+        measure(ancho, |ui| {
+            let mut on = activo;
+            card_auto(ui, ancho, 14.0, theme::bg2(), |ui| {
+                ui.checkbox(&mut on, "Nada sale de este equipo");
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(privacidad_texto(on)).size(theme::FS_CAPTION));
+                if let Some(e) = aviso {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!("⚠ {e}")).size(theme::FS_CAPTION),
+                    );
+                }
+            });
+        })
+    }
+
+    #[test]
+    fn la_tarjeta_de_privacidad_crece_con_su_contenido_en_vez_de_desbordarse() {
+        // La tarjeta lleva un párrafo que se ajusta al ancho y un aviso que
+        // aparece y desaparece. Con la altura fija de `card_on` —como el resto de
+        // esta vista— el caso largo se sale por abajo y se superpone a la sección
+        // siguiente, porque `card_on` no recorta.
+        let aviso = "Modo privacidad activo: no se llama a Anthropic. Elige un modelo local \
+                     de Ollama, o apaga el modo con /privacy.";
+
+        // El aviso SIEMPRE hace la tarjeta más alta: si no creciera, estaría
+        // pintándose fuera de la caja.
+        let sin = privacidad(760.0, true, None).height();
+        let con = privacidad(760.0, true, Some(aviso)).height();
+        assert!(con > sin, "el aviso no ensanchó la tarjeta: {sin} -> {con}");
+
+        // Y estrecharla la hace crecer, porque el párrafo se parte en más
+        // líneas. Éste es el caso que una altura escrita a mano no puede cubrir:
+        // la ventana tiene un mínimo de 900 px, pero la tarjeta se limita a 760
+        // y baja hasta 240 en `full`.
+        let ancha = privacidad(760.0, false, None).height();
+        let estrecha = privacidad(280.0, false, None).height();
+        assert!(
+            estrecha > ancha,
+            "al estrechar no creció: {ancha} -> {estrecha}; el texto se está saliendo"
+        );
+
+        // Ninguno de los cuatro casos cabría en los 84 px que tenía escritos.
+        for (a, act, av) in [
+            (760.0, true, Some(aviso)),
+            (280.0, true, Some(aviso)),
+            (280.0, false, None),
+            (760.0, false, None),
+        ] {
+            let h = privacidad(a, act, av).height();
+            assert!(h > 0.0 && h < 400.0, "altura absurda: {h}");
+        }
+    }
+
+    #[test]
+    fn el_estado_de_ollama_sale_de_la_lista_cacheada_y_no_de_la_red() {
+        // La tarjeta de Ollama contesta dos preguntas —¿hay recuerdo por
+        // significado? ¿se pueden destilar sesiones?— y las dos salen de la lista
+        // ya cacheada más una función pura. Si alguna vez hiciera falta la red
+        // para pintarlas, esto sería una petición por frame: exactamente el fallo
+        // de `list_models` sin plazo que se acaba de arreglar.
+        let instalados: Vec<String> = ["nomic-embed-text:latest", "mistral:latest"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(instalados
+            .iter()
+            .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL)));
+        assert_eq!(
+            lucy_core::crystals::elige(&instalados).as_deref(),
+            Some("mistral:latest")
+        );
+
+        // Y el caso que hay que saber enseñar: Ollama vivo, con embebedor, pero
+        // SIN modelo de texto. Recuerda por significado y no destila nada — dos
+        // estados distintos que un ✓/✗ único mezclaría.
+        let solo_embed = vec!["nomic-embed-text:latest".to_string()];
+        assert!(solo_embed
+            .iter()
+            .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL)));
+        assert_eq!(lucy_core::crystals::elige(&solo_embed), None);
+
+        // Y el inverso: modelo de texto sin embebedor.
+        let solo_texto = vec!["mistral:latest".to_string()];
+        assert!(!solo_texto
+            .iter()
+            .any(|m| m.starts_with(lucy_core::vectors::DEFAULT_EMBED_MODEL)));
+        assert!(lucy_core::crystals::elige(&solo_texto).is_some());
+    }
+
+    #[test]
+    fn el_texto_de_privacidad_dice_cosas_distintas_encendido_y_apagado() {
+        // Un interruptor cuya explicación no cambia al pulsarlo no explica nada.
+        assert_ne!(privacidad_texto(true), privacidad_texto(false));
+        assert!(privacidad_texto(true).contains("Ollama"));
+        assert!(privacidad_texto(false).contains("viaja"));
     }
 
     #[test]
