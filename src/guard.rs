@@ -313,7 +313,19 @@ pub fn tool_result(name: &str, args: &str, body: &str) -> ToolEnvelope {
     ToolEnvelope {
         block: format!(
             "<TOOL_RESULT tool=\"{name}\" arg=\"{args}\">\n{}\n</TOOL_RESULT>",
-            neutraliza_sobre(body)
+            // EL FILTRO DE SECRETOS TAMBIÉN AL SALIR, y esta línea cierra una
+            // asimetría que no se sostenía. Lucy limpiaba lo que ENTRA —una
+            // memoria, un documento ingerido— y mandaba tal cual lo que LEE: un
+            // `readfile` de un `web.config` o de un `appsettings.json` entregaba
+            // su cadena de conexión, con contraseña, al proveedor de nube. Y ese
+            // camino es el COMÚN: leer ficheros para diagnosticar es el trabajo,
+            // guardar memorias es la excepción.
+            //
+            // El operador no pierde nada: tiene la salida entera en su carril,
+            // sin tocar. Quien ve `[REDACTADO]` es el modelo, y para diagnosticar
+            // le basta con saber que ahí HAY una credencial — nunca necesita su
+            // valor.
+            neutraliza_sobre(&crate::memories::scrub(body))
         ),
         retenido: None,
     }
@@ -503,5 +515,52 @@ mod tests {
     #[test]
     fn un_texto_vacio_no_decide_nada() {
         assert!(scan("", Role::Assistant).auto_ok());
+    }
+}
+
+#[cfg(test)]
+mod tests_salida {
+    use super::*;
+
+    #[test]
+    fn un_secreto_leido_de_un_fichero_no_viaja_al_proveedor() {
+        // LA ASIMETRÍA QUE ESTO CIERRA: se limpiaba lo que ENTRA —memorias,
+        // documentos ingeridos— y se mandaba tal cual lo que se LEE. Y leer
+        // ficheros para diagnosticar es el trabajo; guardar memorias es la
+        // excepción, así que el camino sin limpiar era el común.
+        let cfg = "<connectionStrings>\n  \
+                   Server=SRV-04;User Id=sa;Password=Tr0ub4dor3;\n\
+                   </connectionStrings>";
+        let e = tool_result("readfile", "C:\\web.config", cfg);
+        assert!(e.retenido.is_none(), "esto no es una inyección, no hay que retenerlo");
+        assert!(!e.block.contains("Tr0ub4dor3"), "la contraseña viajó: {}", e.block);
+        assert!(e.block.contains("REDACTADO"));
+        // Y lo que NO es secreto sigue llegando entero: redactar de más deja a
+        // Lucy diagnosticando a ciegas.
+        assert!(e.block.contains("SRV-04"), "se llevó por delante el nombre del servidor");
+    }
+
+    #[test]
+    fn una_clave_de_api_en_un_appsettings_tampoco() {
+        for (texto, prohibido) in [
+            ("ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx", "sk-ant-api03"),
+            ("aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCY", "wJalrXUtnFEMI"),
+            ("postgres://admin:Passw0rd@db.local/prod", "Passw0rd"),
+        ] {
+            let e = tool_result("readfile", "cfg", texto);
+            assert!(!e.block.contains(prohibido), "se coló «{prohibido}»: {}", e.block);
+        }
+    }
+
+    #[test]
+    fn el_texto_normal_no_se_toca() {
+        // Lo primero que tiene que hacer un filtro es no estorbar: la inmensa
+        // mayoría de lo que se lee no tiene secretos, y el atajo de los
+        // marcadores hace que ni siquiera se corran los patrones.
+        let salida = "Status   Name        DisplayName\n------   ----        -----------\n\
+                      Stopped  Spooler     Cola de impresión";
+        let e = tool_result("readfile", "x", salida);
+        assert!(e.block.contains("Cola de impresión"));
+        assert!(!e.block.contains("REDACTADO"));
     }
 }

@@ -235,7 +235,7 @@ impl SysMonitor {
     pub fn net_rate(&mut self) -> NetRate {
         self.networks.refresh();
         let (mut recv, mut send) = (0u64, 0u64);
-        for (_iface, data) in self.networks.iter() {
+        for data in self.networks.values() {
             // `total_*` es lo acumulado DESDE EL ARRANQUE del equipo, no desde
             // el último refresco. De ahí que haga falta guardar la lectura
             // anterior: usar esto directamente pinta un contador creciente

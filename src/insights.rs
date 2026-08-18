@@ -556,6 +556,11 @@ pub fn delete(id: i64) -> Result<(), String> {
 }
 
 #[cfg(test)]
+// Las aserciones de este modulo comparan CONSTANTES entre si. Clippy las ve
+// evaluables en compilacion y avisa; no son aserciones muertas sino guardas de
+// invariante: fijan una relacion de diseno para que cambiar un numero rompa el
+// test en vez de cambiar el comportamiento en silencio.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 

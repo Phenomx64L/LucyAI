@@ -119,7 +119,7 @@ pub fn clean_command(raw: &str) -> String {
     let mut c = raw.trim().to_string();
     // Vallas de bloque de código, con o sin lenguaje.
     if let Some(resto) = c.strip_prefix("```") {
-        c = resto.splitn(2, '\n').nth(1).unwrap_or("").to_string();
+        c = resto.split_once('\n').map(|x| x.1).unwrap_or("").to_string();
     }
     if let Some(i) = c.rfind("```") {
         c.truncate(i);
