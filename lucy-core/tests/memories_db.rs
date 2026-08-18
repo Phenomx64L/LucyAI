@@ -299,4 +299,60 @@ fn el_camino_de_escritura_entero() {
         r.bloque
     );
     assert!(r.bloque.contains("autoridad certificadora"), "y la memoria de verdad sí: {}", r.bloque);
+
+    // ── 7. Una memoria FIJADA entra aunque no se parezca a la pregunta ──
+    //
+    // ES LO QUE SIGNIFICA FIJARLA. Sin esto la chincheta sería decorativa:
+    // entraría solo cuando se pareciera a la pregunta, o sea cuando ya no hacía
+    // falta acordarse de ella. Es el mismo razonamiento que separa un principio
+    // de una memoria, aplicado a lo que el operador señaló a mano.
+    limpia();
+    let g = save(&New::nueva(
+        "Ventana de mantenimiento",
+        "Los reinicios de producción solo se hacen los domingos entre las 2 y las 5 de la mañana",
+    ))
+    .expect("guardar");
+    let otra = save(&New::nueva(
+        "Impresora atascada",
+        "La cola del spooler se vacía parando el servicio y borrando la carpeta PRINTERS",
+    ))
+    .expect("guardar");
+
+    // Sin fijar, una pregunta que no tiene nada que ver no la trae.
+    let r = lucy_core::memories::recall("cómo se despliega una aplicación web", 5);
+    assert!(!r.bloque.contains("domingos"), "sin fijar no debería salir: {}", r.bloque);
+
+    lucy_core::memories::set_pinned(g.id, true).expect("fijar");
+    let r = lucy_core::memories::recall("cómo se despliega una aplicación web", 5);
+    assert!(
+        r.bloque.contains("domingos"),
+        "una memoria fijada tiene que entrar sin parecerse: {}",
+        r.bloque
+    );
+    assert_eq!(r.fijadas, 1, "y contarse aparte de las semánticas");
+    // Marcada como lo que es: sin la marca, el modelo no distingue un hecho que
+    // vino al caso de una regla que el operador dejó puesta.
+    assert!(r.bloque.contains("[fijada]"), "{}", r.bloque);
+    // Y la que NO está fijada sigue sin salir: fijar una no trae el resto.
+    assert!(!r.bloque.contains("PRINTERS"), "arrastró una memoria ajena: {}", r.bloque);
+
+    // Fijar sube la importancia a la de «lo decidió una persona», que es lo que
+    // impide que el consolidador la funda con otra.
+    let (_, _, _, imp) = fila(g.id);
+    assert_eq!(imp, lucy_core::memories::FIJADA);
+    let r = lucy_core::consolidate::run(true).expect("consolidar");
+    assert!(
+        r.clusters.iter().all(|c| c.canonical_id != g.id && !c.merged_ids.contains(&g.id)),
+        "el consolidador se metió con una fijada"
+    );
+
+    // Y soltarla la devuelve al techo de lo automático: dejarla en 10 sin la
+    // marca sería una memoria intocable que nada explica.
+    lucy_core::memories::set_pinned(g.id, false).expect("soltar");
+    let (_, _, _, imp) = fila(g.id);
+    assert_eq!(imp, lucy_core::memories::MAX_AUTO_IMPORTANCE);
+    let r = lucy_core::memories::recall("cómo se despliega una aplicación web", 5);
+    assert_eq!(r.fijadas, 0);
+    assert!(!r.bloque.contains("domingos"));
+    let _ = otra;
 }
