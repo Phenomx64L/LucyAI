@@ -2738,6 +2738,22 @@ fn dentro_de(secs: i64) -> String {
     }
 }
 
+/// Recorta un índice a una lista que puede haberse acortado.
+///
+/// SEGURO CON LA LISTA VACÍA POR CONSTRUCCIÓN, y no por un `return` veinte
+/// líneas más arriba. La forma directa —`sel.min(n - 1)`— es una resta con
+/// acarreo en `usize` cuando `n` es cero: no devuelve cero, entra en pánico y
+/// se lleva la aplicación por delante. Hoy hay una guarda que lo evita; mañana
+/// alguien mueve esa guarda y el fallo aparece al escribir una barra seguida de
+/// algo que no casa con ningún comando.
+fn recorta_sel(sel: usize, n: usize) -> usize {
+    if n == 0 {
+        0
+    } else {
+        sel.min(n - 1)
+    }
+}
+
 /// Ahora, en epoch de segundos.
 fn ahora_epoch() -> i64 {
     std::time::SystemTime::now()
@@ -5818,10 +5834,19 @@ _(detenido por el operador)_");
                     if danger { theme::red().linear_multiply(0.85) } else { theme::bg4() },
                 );
             }
-            let fg = if resp.hovered() && danger {
-                theme::txt()
-            } else if resp.hovered() {
-                theme::txt()
+            // SOBRE EL ROJO, BLANCO SIEMPRE — y no el color de texto del tema.
+            // Las dos ramas de aquí eran idénticas, así que el aspa de cerrar
+            // usaba `txt()` también teñida: en tema oscuro eso es casi blanco y
+            // se veía por casualidad, pero en claro es casi NEGRO sobre un rojo
+            // al 85 %, y el único aviso antes de un clic que no se deshace
+            // quedaba ilegible justo al apuntarlo. El relleno rojo no depende
+            // del tema; su tinta tampoco puede.
+            let fg = if resp.hovered() {
+                if danger {
+                    egui::Color32::from_rgb(0xFF, 0xFF, 0xFF)
+                } else {
+                    theme::txt()
+                }
             } else {
                 theme::txt3()
             };
@@ -5881,7 +5906,7 @@ _(detenido por el operador)_");
         });
         // La lista cambia mientras se escribe, así que el índice de hace dos
         // letras puede señalar fuera. Se recorta en vez de entrar en pánico.
-        let sel = (*sel).min(hits.len() - 1);
+        let sel = recorta_sel(*sel, hits.len());
         self.slash_sel = sel;
         let mut elegido: Option<&str> = None;
         if ui.input_mut(|i| {
@@ -6677,7 +6702,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 auto: self.tabs[self.tab].auto,
             };
             if let Some(a) =
-                lucy_core::routing::revisa(&self.chat_model, &tarea, |p| with_key(p))
+                lucy_core::routing::revisa(&self.chat_model, &tarea, with_key)
             {
                 self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
@@ -7396,7 +7421,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         .forks
                         .iter()
                         .find(|f| f.id == *id)
-                        .map_or(true, |f| f.status != ForkStatus::Running)
+                        .is_none_or(|f| f.status != ForkStatus::Running)
                 }),
                 None => false,
             };
@@ -7875,13 +7900,23 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // La línea del comando entra en el hilo como EVENTO, plegada: el
         // comando, si fue bien, y su salida dentro. Con el motivo en lugar del
         // cuerpo cuando se retuvo, porque este campo es el que acaba en el prompt.
+        // AL HILO VA LA VERSIÓN LIMPIA, y esta distinción es la corrección. El
+        // carril de Ejecución de arriba se queda con el volcado CRUDO —es del
+        // operador y no viaja a ninguna parte—, pero `t.log` sí viaja: `history()`
+        // lo interpola literalmente en cada petición al proveedor. Sin limpiar,
+        // un `Get-Content web.config` o un `type appsettings.json` entregaba su
+        // cadena de conexión con contraseña a Anthropic o a Google, en cada turno
+        // posterior de la pestaña y en cada sesión restaurada de disco.
+        //
+        // Lucy no pierde nada para diagnosticar: le basta saber que ahí HAY una
+        // credencial. El operador tampoco: la tiene entera en su panel.
         self.tabs[ti].log.push(ChatMsg::exec(
             cmd.clone(),
             ok,
             if retenido {
                 format!("[salida retenida por el guardrail: {}]", g.reason)
             } else {
-                body.clone()
+                lucy_core::memories::scrub(&body)
             },
         ));
 
@@ -8939,7 +8974,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
             ui.add_space(6.0);
             ui.add_sized(
-                [ui.available_width().min(520.0).max(160.0), 26.0],
+                [ui.available_width().clamp(160.0, 520.0), 26.0],
                 egui::TextEdit::singleline(&mut self.lv_query).hint_text("⌕  Filtrar mensajes…"),
             );
         });
@@ -9106,6 +9141,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// comando ya corrió, y una ventana de error porque no se pudo apuntar sería
     /// castigar al operador por un problema del registro. Se deja en el carril
     /// de Trace, que es donde se mira cuando algo no cuadra.
+    #[allow(clippy::too_many_arguments)]
     fn auditar(
         &mut self,
         ti: Option<usize>,
@@ -9364,7 +9400,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             let c = rect.center();
             let r = 42.0_f32;
             let p = ui.painter();
-            p.circle_stroke(c, r, egui::Stroke::new(9.0, theme::bg4()));
+            p.circle_stroke(c, r, egui::Stroke::new(9.0_f32, theme::bg4()));
             // El arco, a trocitos: egui no dibuja arcos, y una polilínea de
             // sesenta puntos es indistinguible de uno a este tamaño.
             let frac = (pct as f32 / 100.0).clamp(0.0, 1.0);
@@ -9377,7 +9413,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         egui::pos2(c.x + r * t.cos(), c.y + r * t.sin())
                     })
                     .collect();
-                p.add(egui::Shape::line(pts, egui::Stroke::new(9.0, theme::acc())));
+                p.add(egui::Shape::line(pts, egui::Stroke::new(9.0_f32, theme::acc())));
             }
             p.text(
                 egui::pos2(c.x, c.y - 6.0),
@@ -11601,7 +11637,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // APAGAR NO ES BORRAR. Lo que se quiere casi siempre es «ahora no» —el
         // de migración estorba mientras se atiende una incidencia— y para eso
         // desinstalar es demasiado: hay que volver a encontrar la carpeta.
-        let mut alternar: Option<(String, bool)> = None;
+        let alternar: Option<(String, bool)> = None;
         let n_skills = self.skills.len();
         let activos = self.skills.iter().filter(|k| k.activo).count();
         panel(
@@ -11875,7 +11911,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // lo abre un clic — no pasa solo.
             if let Some(d) = rfd::FileDialog::new()
                 .set_title("Dónde guardar la copia")
-                .set_file_name(&format!("lucy-{}.db", ahora_epoch()))
+                .set_file_name(format!("lucy-{}.db", ahora_epoch()))
                 .add_filter("Base de datos", &["db"])
                 .save_file()
             {
@@ -12313,7 +12349,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 title: "CPU",
                                 value: s.cpu_pct,
                                 unit: "%",
-                                spark: &cpu_hist,
+                                spark: cpu_hist,
                                 sub: format!("{} núcleos", s.cores),
                                 ..Default::default()
                             },
@@ -12326,7 +12362,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 title: "RAM",
                                 value: mp,
                                 unit: "%",
-                                spark: &ram_hist,
+                                spark: ram_hist,
                                 sub: format!("{} / {}", fmt_gb(s.mem_used), fmt_gb(s.mem_total)),
                                 ..Default::default()
                             },
@@ -14987,6 +15023,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 }
 
 #[cfg(test)]
+// Varias aserciones de este modulo comparan CONSTANTES entre si. Clippy las ve
+// evaluables en compilacion y avisa, pero no son aserciones muertas: son guardas
+// de invariante — fijan una relacion de diseno para que cambiar un numero rompa
+// el test en vez de romper la interfaz en silencio.
+#[allow(clippy::assertions_on_constants)]
 mod layout {
     use super::*;
 
@@ -15803,12 +15844,22 @@ mod paleta_teclado {
 
     #[test]
     fn un_indice_de_una_lista_mas_larga_se_recorta() {
+        // ESTE TEST NO PROBABA NADA. Decía `assert_eq!(7usize.min(3 - 1), 2)`,
+        // que comprueba la aritmética de Rust y no una línea de Lucy: pasaba
+        // igual con el recorte roto, borrado o nunca escrito. Ahora llama a la
+        // función que usa la paleta.
+        //
         // La lista se acorta con cada letra que se escribe, así que el índice de
-        // hace dos pulsaciones puede señalar fuera. Recortar, no entrar en
-        // pánico ni saltar al principio: la fila de al lado es la que el
-        // operador tenía delante.
-        assert_eq!(7usize.min(3 - 1), 2);
-        assert_eq!(1usize.min(9 - 1), 1);
+        // hace dos pulsaciones puede señalar fuera. Recortar, no saltar al
+        // principio: la fila de al lado es la que el operador tenía delante.
+        assert_eq!(super::recorta_sel(7, 3), 2);
+        assert_eq!(super::recorta_sel(1, 9), 1);
+        assert_eq!(super::recorta_sel(0, 1), 0);
+        // Y EL CASO QUE IMPORTA: con la lista vacía, `sel.min(n - 1)` es una
+        // resta con acarreo en `usize` — no devuelve cero, entra en pánico. Hoy
+        // hay una guarda que lo evita antes de llegar; esto lo hace seguro por
+        // construcción, que es lo que sobrevive a que alguien mueva la guarda.
+        assert_eq!(super::recorta_sel(5, 0), 0);
     }
 }
 
