@@ -136,7 +136,7 @@ fn main() -> eframe::Result {
 /// abría. Ya no hace falta: las ocho están migradas, y ese comentario aguantó
 /// exactamente hasta que dejó de ser cierto — Inventario y Compliance salían
 /// apagados un día después de estar terminados.
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
 enum View {
     Dashboard,
     TerminalIa,
@@ -1843,16 +1843,46 @@ fn segmentado(ui: &mut egui::Ui, ancho: f32, opciones: &[&str], activo: usize) -
             // enseña la escala invertida no es un detalle estético: el orden ES
             // el significado, y «el de más a la izquierda es el más corto» deja
             // de ser cierto.
+            // LA PÍLDORA SE DESLIZA de una opción a otra en vez de saltar. Es la
+            // animación que más dice de todas las de esta pantalla: el
+            // movimiento CONECTA el sitio donde estaba con el sitio donde está,
+            // así que el ojo sigue el cambio en vez de tener que volver a buscar
+            // cuál está encendida. Saltando, cada cambio obliga a releer la fila.
+            //
+            // El valor animado es la POSICIÓN, no la opacidad: dos rellenos
+            // fundiéndose se ven como un parpadeo, y uno moviéndose se ve como
+            // una respuesta.
+            let pos = if motion() {
+                ui.ctx().animate_value_with_time(
+                    ui.id().with("seg-pos"),
+                    activo as f32,
+                    theme::DUR_FAST,
+                )
+            } else {
+                activo as f32
+            };
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let mut primero: Option<egui::Rect> = None;
                 for (i, o) in opciones.iter().enumerate() {
                     let on = i == activo;
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::click());
-                    if on || resp.hovered() {
+                    if primero.is_none() {
+                        primero = Some(rect);
+                        // El relleno activo se pinta UNA vez, en la posición
+                        // interpolada, y antes que los textos para quedar debajo.
+                        let desliz = rect.translate(egui::vec2(pos * (w + 2.0), 0.0));
+                        ui.painter().rect_filled(
+                            desliz,
+                            egui::Rounding::same(theme::R_SM - 2.0),
+                            theme::acc(),
+                        );
+                    }
+                    if !on && resp.hovered() {
                         ui.painter().rect_filled(
                             rect,
                             egui::Rounding::same(theme::R_SM - 2.0),
-                            if on { theme::acc() } else { theme::bg4() },
+                            theme::bg4(),
                         );
                     }
                     ui.painter().text(
@@ -1967,6 +1997,52 @@ fn set_motion(on: bool) {
 /// mundo físico arranca y para de golpe.
 fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
+}
+
+/// La opacidad de entrada de algo que acaba de aparecer, de 0 a 1.
+///
+/// NO SE USA `animate_bool_with_time` PARA ESTO, y ahí había un fallo silencioso:
+/// con un `Id` nuevo esa función devuelve el valor OBJETIVO en el primer frame —
+/// medido, devuelve 1.0— así que una entrada escrita como
+/// `animate_bool_with_time(id_nuevo, true, dur)` no anima nada. Sirve para
+/// alternar entre dos estados de algo que YA existía, no para la aparición.
+///
+/// Así que la aparición se cronometra: la primera vez que se ve un `Id` se anota
+/// cuándo, y a partir de ahí la fracción sale del reloj. Y se pide repintado
+/// MIENTRAS dura — sin eso, en reposo la ventana va a 1 Hz y una entrada de
+/// 200 ms se vería como un salto de un fotograma, que es peor que no animar.
+fn entrada(ctx: &egui::Context, id: egui::Id, dur: f32) -> f32 {
+    if !motion() {
+        return 1.0;
+    }
+    let ahora = ctx.input(|i| i.time);
+    let t0: f64 = ctx.memory_mut(|m| *m.data.get_temp_mut_or_insert_with(id, || ahora));
+    let t = (((ahora - t0) as f32) / dur.max(0.001)).clamp(0.0, 1.0);
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    ease_out(t)
+}
+
+/// Lo mismo, escalonado: cada elemento de una lista entra un poco después que el
+/// anterior.
+///
+/// EL ESCALONADO SE CORTA PRONTO a propósito. Con veinte filas y 40 ms cada una,
+/// la última entraría casi un segundo después — y una lista que tarda un segundo
+/// en aparecer no se siente elegante, se siente lenta. A partir del sexto todos
+/// entran a la vez.
+fn entrada_lista(ctx: &egui::Context, id: egui::Id, i: usize) -> f32 {
+    if !motion() {
+        return 1.0;
+    }
+    let ahora = ctx.input(|i| i.time);
+    let t0: f64 = ctx.memory_mut(|m| *m.data.get_temp_mut_or_insert_with(id, || ahora));
+    let retraso = (i.min(5) as f64) * 0.045;
+    let t = (((ahora - t0 - retraso) as f32) / theme::DUR_BASE).clamp(0.0, 1.0);
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    ease_out(t)
 }
 
 /// Envuelve un bloque en su opacidad de entrada.
@@ -3270,6 +3346,8 @@ struct App {
     /// límite de un dólar y aun así te has gastado uno ochenta. Un freno que se
     /// puede rodear abriendo otra pestaña no es un freno.
     spend_limit: f64,
+    /// La vista del frame anterior, para saber cuándo reiniciar su entrada.
+    vista_anterior: Option<View>,
     /// Todavía no se ha mirado ninguna vez en esta ejecución.
     mant_primera: bool,
     /// La orden de reponer el tamaño de la ventana ya está mandada. Ver el
@@ -3640,6 +3718,7 @@ impl App {
                 .and_then(|s| s.get_string(K_SPEND))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.0),
+            vista_anterior: None,
             mant_primera: true,
             ventana_curada: false,
             mant_visto: None,
@@ -4630,15 +4709,46 @@ impl eframe::App for App {
             self.ws_width = ancho;
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.view {
-            View::TerminalIa => self.terminal_ia(ui),
-            View::NexShell => self.nexshell(ui),
-            View::Memoria => self.memoria(ui),
-            View::Dashboard => self.sistema(ui),
-            View::LogViewer => self.log_viewer(ui),
-            View::Inventario => self.inventario(ui),
-            View::Compliance => self.compliance(ui),
-            View::Configuracion => self.configuracion(ui),
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // ── La entrada de una vista ──────────────────────────────────────
+            //
+            // Cambiar de módulo es la transición más frecuente de la aplicación
+            // y era un corte seco. Un fundido corto con un empujoncito desde
+            // abajo hace que el contenido se lea como algo que LLEGA, no como
+            // otra pantalla que sustituyó a la de antes sin avisar — que es la
+            // diferencia entre saber que has navegado y tener que releer la
+            // cabecera para situarte.
+            //
+            // La marca lleva la vista dentro, así que volver a una ya visitada
+            // vuelve a animar: la señal es «has cambiado», no «esto es nuevo».
+            // Se reinicia al cambiar, borrando la marca de la vista que entra.
+            let id = egui::Id::new(("vista", self.view));
+            if self.vista_anterior != Some(self.view) {
+                ctx.memory_mut(|m| m.data.remove::<f64>(id));
+                self.vista_anterior = Some(self.view);
+            }
+            let t = entrada(ctx, id, theme::DUR_BASE);
+            // Ocho píxeles y no más: por encima se convierte en un deslizamiento
+            // que hay que esperar, y lo que se busca es que el ojo sepa que algo
+            // ha cambiado sin tener que aguardar a que termine.
+            let dy = (1.0 - t) * 8.0;
+            let mut hijo = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(ui.max_rect().translate(egui::vec2(0.0, dy)))
+                    .layout(*ui.layout()),
+            );
+            hijo.multiply_opacity(t);
+            let ui = &mut hijo;
+            match self.view {
+                View::TerminalIa => self.terminal_ia(ui),
+                View::NexShell => self.nexshell(ui),
+                View::Memoria => self.memoria(ui),
+                View::Dashboard => self.sistema(ui),
+                View::LogViewer => self.log_viewer(ui),
+                View::Inventario => self.inventario(ui),
+                View::Compliance => self.compliance(ui),
+                View::Configuracion => self.configuracion(ui),
+            }
         });
     }
 }
@@ -14247,7 +14357,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for m in filtered {
+                        // Escalonadas: la lista se posa en vez de aparecer de
+                        // golpe. Solo las seis primeras llevan retraso — ver
+                        // `entrada_lista`.
+                        for (n, m) in filtered.iter().enumerate() {
+                            let t = entrada_lista(ui.ctx(), egui::Id::new(("mem-fila", m.id)), n);
+                            ui.scope(|ui| {
+                            ui.multiply_opacity(t);
                             egui::Frame::group(ui.style()).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     // Los puntos toman el color del NIVEL, no
@@ -14346,6 +14462,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     );
                                 }
                                 ui.label(egui::RichText::new(format!("#{}", m.id)).small().weak());
+                            });
                             });
                         }
                     });
@@ -15348,6 +15465,138 @@ mod layout {
                 p.clave
             );
         }
+    }
+
+    /// El interruptor de movimiento es un booleano DE PROCESO y los tests corren
+    /// en paralelo: sin este cerrojo, el que lo apaga se pisa con el que lo
+    /// enciende y falla el que pierda la carrera — con un resultado que no es
+    /// suyo. Mismo problema que tuvo el medidor de bordes, misma cura.
+    static MOV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Corre `n` frames separados `dt` y devuelve la opacidad de cada uno.
+    fn frames(n: usize, dt: f32, f: impl Fn(&egui::Context) -> f32) -> Vec<f32> {
+        let ctx = egui::Context::default();
+        let mut v = Vec::new();
+        let mut t = 0.0_f64;
+        for _ in 0..n {
+            let input = egui::RawInput { time: Some(t), predicted_dt: dt, ..Default::default() };
+            let mut o = 0.0;
+            let _ = ctx.run(input, |c| o = f(c));
+            v.push(o);
+            t += dt as f64;
+        }
+        v
+    }
+
+    #[test]
+    fn una_entrada_empieza_en_cero_y_llega_a_uno() {
+        // EL FALLO QUE ESTO CAZA. Las dos entradas que ya existían usaban
+        // `animate_bool_with_time(id_nuevo, true, dur)`, y esa función devuelve
+        // el valor OBJETIVO en el primer frame de un id nuevo: 1.0. O sea que el
+        // fundido de cada mensaje del hilo y el de las sparklines estaban
+        // escritos, gateados por `motion()`, y no se ejecutaban nunca.
+        let _g = MOV.lock().unwrap_or_else(|e| e.into_inner());
+        set_motion(true);
+        let v = frames(12, 0.03, |c| {
+            entrada(c, egui::Id::new("prueba-entrada"), theme::DUR_BASE)
+        });
+        assert!(v[0] < 0.2, "no empieza cerca de cero: {}", v[0]);
+        assert!(v.last().copied().unwrap_or(0.0) > 0.99, "no llega a uno: {v:?}");
+        // Y sube sin retroceder: una entrada que parpadea es peor que ninguna.
+        for par in v.windows(2) {
+            assert!(par[1] >= par[0] - 0.001, "retrocedió: {par:?}");
+        }
+        // El mismo `animate_bool_with_time` que se usaba antes NO anima, que es
+        // lo que hacía falta demostrar para justificar la primitiva propia.
+        let viejo = frames(3, 0.03, |c| {
+            c.animate_bool_with_time(egui::Id::new("prueba-vieja"), true, theme::DUR_BASE)
+        });
+        assert_eq!(viejo[0], 1.0, "si esto cambia, `entrada` ya no hace falta");
+    }
+
+    #[test]
+    fn sin_movimiento_todo_aparece_entero_y_de_una_vez() {
+        // El interruptor de Configuración tiene que APAGARLO de verdad: si una
+        // animación se colara, quien lo apaga por mareo o por batería seguiría
+        // pagándola.
+        let _g = MOV.lock().unwrap_or_else(|e| e.into_inner());
+        set_motion(false);
+        let v = frames(3, 0.03, |c| entrada(c, egui::Id::new("sin-mov"), theme::DUR_SLOW));
+        assert!(v.iter().all(|&x| x == 1.0), "animó con el movimiento apagado: {v:?}");
+        let l = frames(3, 0.03, |c| entrada_lista(c, egui::Id::new("sin-mov-lista"), 4));
+        assert!(l.iter().all(|&x| x == 1.0), "la lista animó estando apagada: {l:?}");
+        set_motion(true);
+    }
+
+    #[test]
+    fn el_escalonado_de_una_lista_se_corta_pronto() {
+        // Con veinte filas a 45 ms cada una, la última entraría casi un segundo
+        // después: una lista que tarda un segundo en aparecer no se siente
+        // elegante, se siente lenta.
+        let _g = MOV.lock().unwrap_or_else(|e| e.into_inner());
+        set_motion(true);
+        let ctx = egui::Context::default();
+        // DOS FRAMES: el primero SIEMBRA el instante de aparición y por
+        // definición devuelve cero; la fracción solo significa algo a partir del
+        // segundo. Medir uno solo daba cero para todos y el test decía «el
+        // escalonado no se nota» sobre una medida que no medía nada.
+        let en = |i: usize| {
+            let id = egui::Id::new(("lista", i));
+            let mut o = 0.0;
+            for t in [0.0_f64, 0.12] {
+                let input = egui::RawInput { time: Some(t), ..Default::default() };
+                let _ = ctx.run(input, |c| o = entrada_lista(c, id, i));
+            }
+            o
+        };
+        // La primera va por delante de la quinta...
+        assert!(en(0) > en(5), "el escalonado no se nota");
+        // ...pero de la sexta en adelante todos van juntos.
+        assert_eq!(en(6), en(20), "el escalonado no se corta: la fila 20 llegaría tardísimo");
+    }
+
+    #[test]
+    fn la_pildora_del_segmentado_se_desliza_en_vez_de_saltar() {
+        // ES LA ANIMACIÓN QUE MÁS DICE de esta pantalla: el movimiento CONECTA
+        // el sitio donde estaba la selección con el sitio donde está, así que el
+        // ojo la sigue en vez de tener que volver a buscar cuál está encendida.
+        // Saltando, cada cambio obliga a releer la fila entera.
+        let _g = MOV.lock().unwrap_or_else(|e| e.into_inner());
+        set_motion(true);
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("pos-prueba");
+        // Asentada en la opción 0.
+        let mut v = 0.0;
+        for t in [0.0_f64, 0.5] {
+            let input = egui::RawInput { time: Some(t), ..Default::default() };
+            let _ = ctx.run(input, |c| {
+                v = c.animate_value_with_time(id, 0.0, theme::DUR_FAST)
+            });
+        }
+        assert_eq!(v, 0.0);
+        // Se pide la 2. En el frame del cambio la píldora sigue DONDE ESTABA —no
+        // se teletransporta— y a partir del siguiente va en camino. Lo que el
+        // test fija es que en algún momento esté ENTRE las dos: eso es lo que
+        // distingue un deslizamiento de un salto.
+        let mut vista_en_medio = false;
+        for t in [0.52_f64, 0.55, 0.58] {
+            let input = egui::RawInput { time: Some(t), ..Default::default() };
+            let _ = ctx.run(input, |c| {
+                v = c.animate_value_with_time(id, 2.0, theme::DUR_FAST)
+            });
+            if v > 0.01 && v < 1.99 {
+                vista_en_medio = true;
+            }
+        }
+        assert!(vista_en_medio, "saltó en vez de deslizarse: acabó en {v}");
+        // Y acaba llegando.
+        for t in [0.6_f64, 0.7, 0.8] {
+            let input = egui::RawInput { time: Some(t), ..Default::default() };
+            let _ = ctx.run(input, |c| {
+                v = c.animate_value_with_time(id, 2.0, theme::DUR_FAST)
+            });
+        }
+        assert!((v - 2.0).abs() < 0.01, "no llegó a su sitio: {v}");
     }
 
     #[test]
