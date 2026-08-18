@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn la_descripcion_dice_lo_que_se_PIERDE_y_no_solo_lo_que_se_borra() {
+    fn la_descripcion_dice_lo_que_se_pierde_y_no_solo_lo_que_se_borra() {
         // «Se borrarán 14 filas» no permite decidir. Lo que hace falta saber es
         // qué deja de poder hacerse después.
         assert!(Purga::Retiradas.describe(&Recuento::default()).contains("rastro"));
