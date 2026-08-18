@@ -251,8 +251,10 @@ fn score_inner(conn: &Connection) -> Result<AnnealingReport, String> {
         .map_err(|e| e.to_string())?;
 
     // Per-tag buckets keyed by tag string.
-    let mut by_tag: HashMap<String, Vec<(i64, i32, i64, HashSet<String>)>> =
-        HashMap::new();
+    // (id, importancia, creado, etiquetas) — con nombre, porque una tupla de
+    // cuatro dentro de un Vec dentro de un HashMap no se lee de un vistazo.
+    type Candidata = (i64, i32, i64, HashSet<String>);
+    let mut by_tag: HashMap<String, Vec<Candidata>> = HashMap::new();
 
     let rows = stmt.query_map([], |r| {
         let id: i64        = r.get(0)?;

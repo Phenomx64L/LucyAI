@@ -1,3 +1,9 @@
+// Varias escaleras de este fichero tienen ramas que devuelven lo mismo a
+// proposito: son tablas de busqueda donde dos entradas comparten valor, y
+// escribirlas por separado es lo que documenta que son dos casos distintos.
+// Revisadas una a una en la auditoria; colapsarlas esconderia lo que dicen.
+#![allow(clippy::if_same_then_else)]
+
 // ── AI — Integración con Gemini (ask_lucy + ask_lucy_stream) ────────────────────
 
 use keyring::Entry;
@@ -85,7 +91,14 @@ const LOCAL_COMPLETION_CACHE_MAX: usize = 256;
 // would just thrash the LRU. Sub-prompts (the real win) are small.
 const LOCAL_COMPLETION_MAX_PROMPT: usize = 16_384;
 
-static LOCAL_COMPLETION_CACHE: once_cell::sync::Lazy<Mutex<(std::collections::HashMap<u64, String>, std::collections::VecDeque<u64>)>>
+/// Una cache LRU sencilla: el mapa guarda, la cola recuerda el orden de uso.
+///
+/// CON NOMBRE porque el tipo desnudo son tres niveles de genericos en una linea
+/// y no se lee. Lo que hay que entender de un vistazo es «mapa mas cola de
+/// desalojo», no la firma.
+type CacheLru<V> = Mutex<(std::collections::HashMap<u64, V>, std::collections::VecDeque<u64>)>;
+
+static LOCAL_COMPLETION_CACHE: once_cell::sync::Lazy<CacheLru<String>>
     = once_cell::sync::Lazy::new(|| Mutex::new((std::collections::HashMap::with_capacity(LOCAL_COMPLETION_CACHE_MAX + 1), std::collections::VecDeque::with_capacity(LOCAL_COMPLETION_CACHE_MAX + 1))));
 
 /// FNV-1a 64-bit over model | system | user. Same family as `_embed_key`;
@@ -910,20 +923,8 @@ pub async fn change_agent_dir(path: String) -> Result<String, String> {
 /// Ver: https://github.com/Phenomx64L/LucyAI
 /// build_system_prompt — now delegates to the composable prompt_sections module.
 /// Kept as a thin wrapper to preserve the same call signature for ask_lucy/ask_lucy_stream.
-fn build_system_prompt(
-    lang: &str,
-    context: &str,
-    hosts_context: &str,
-    user_name: &str,
-    prompt: &str,
-    working_dir: &str,
-    runbooks_dir: Option<&str>,
-    model_is_weak: bool,
-) -> String {
-    crate::commands::prompt_sections::build_system_prompt_v2(
-        lang, context, hosts_context, user_name, prompt, working_dir, runbooks_dir,
-        model_is_weak,
-    )
+fn build_system_prompt(p: &crate::commands::prompt_sections::PromptV2) -> String {
+    crate::commands::prompt_sections::build_system_prompt_v2(p)
 }
 
 /// Legacy monolithic build — preserved for reference and rollback.
@@ -1092,6 +1093,11 @@ fn build_system_prompt_legacy(
 }
 // ── ASK LUCY (respuesta única) ────────────────────────────────────────────────
 
+/// Firma fijada por el contrato IPC con el frontend: cada parametro es un campo
+/// que el lado Svelte envia por nombre en su `invoke()`. Agruparlos en una
+/// struct para complacer al lint obligaria a cambiar todas las llamadas del
+/// frontend, y el lint mide legibilidad, no protocolos.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn ask_lucy(
     prompt: String,
@@ -1156,16 +1162,17 @@ pub async fn ask_lucy(
     let final_prompt = if provider == "local" {
         String::new() // local builds its own system+user messages in the "local" arm
     } else {
-        build_system_prompt(
-            lang_instruction(user_lang),
-            context.as_deref().unwrap_or_default(),
-            &hosts_context,
-            &user_name,
-            &prompt,
-            &cwd,
-            runbooks_dir.as_deref(),
-            crate::commands::prompt_sections::model_is_weak(&model),
-        )
+        build_system_prompt(&crate::commands::prompt_sections::PromptV2 {
+            lang: lang_instruction(user_lang),
+            context: context.as_deref().unwrap_or_default(),
+            hosts_context: &hosts_context,
+            user_name: &user_name,
+            prompt: &prompt,
+            working_dir: &cwd,
+            runbooks_dir: runbooks_dir.as_deref(),
+            model_is_weak: crate::commands::prompt_sections::model_is_weak(&model),
+            ..Default::default()
+        })
     };
 
     // v1.7.231 #8 — local completion cache: identical (model, system+user) →
@@ -1330,6 +1337,11 @@ pub async fn ask_lucy(
 
 // ── ASK LUCY STREAMING (SSE) ──────────────────────────────────────────────────
 
+/// Firma fijada por el contrato IPC con el frontend: cada parametro es un campo
+/// que el lado Svelte envia por nombre en su `invoke()`. Agruparlos en una
+/// struct para complacer al lint obligaria a cambiar todas las llamadas del
+/// frontend, y el lint mide legibilidad, no protocolos.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn ask_lucy_stream(
     window: tauri::Window,
@@ -1392,16 +1404,17 @@ pub async fn ask_lucy_stream(
     let final_prompt = if provider == "local" {
         String::new() // local builds its own system+user messages in the "local" arm
     } else {
-        build_system_prompt(
-            lang_instruction(user_lang),
-            context.as_deref().unwrap_or_default(),
-            &hosts_context,
-            &user_name,
-            &prompt,
-            &cwd,
-            runbooks_dir.as_deref(),
-            crate::commands::prompt_sections::model_is_weak(&model),
-        )
+        build_system_prompt(&crate::commands::prompt_sections::PromptV2 {
+            lang: lang_instruction(user_lang),
+            context: context.as_deref().unwrap_or_default(),
+            hosts_context: &hosts_context,
+            user_name: &user_name,
+            prompt: &prompt,
+            working_dir: &cwd,
+            runbooks_dir: runbooks_dir.as_deref(),
+            model_is_weak: crate::commands::prompt_sections::model_is_weak(&model),
+            ..Default::default()
+        })
     };
 
     // v1.7.231 #8 — local completion cache (streaming). On a hit, replay the

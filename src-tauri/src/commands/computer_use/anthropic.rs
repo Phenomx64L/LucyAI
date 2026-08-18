@@ -1,3 +1,9 @@
+// Varias escaleras de este fichero tienen ramas que devuelven lo mismo a
+// proposito: son tablas de busqueda donde dos entradas comparten valor, y
+// escribirlas por separado es lo que documenta que son dos casos distintos.
+// Revisadas una a una en la auditoria; colapsarlas esconderia lo que dicen.
+#![allow(clippy::if_same_then_else)]
+
 // ── Anthropic Claude Computer Use Provider ────────────────────────────────────
 //
 // Implements the native Anthropic Computer Use API with tool_use format.

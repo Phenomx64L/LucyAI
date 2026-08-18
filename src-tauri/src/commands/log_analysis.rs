@@ -113,7 +113,7 @@ fn analyze_lines(lines: &[String], bucket_minutes: usize) -> Result<LogAnalysisR
         }
     }
     let mut top_sources: Vec<(String, usize)> = source_counts.into_iter().collect();
-    top_sources.sort_by(|a, b| b.1.cmp(&a.1));
+    top_sources.sort_by_key(|b| std::cmp::Reverse(b.1));
     top_sources.truncate(10);
 
     // Error clustering — group by normalized pattern
@@ -150,7 +150,7 @@ fn analyze_lines(lines: &[String], bucket_minutes: usize) -> Result<LogAnalysisR
             level,
         })
         .collect();
-    error_clusters.sort_by(|a, b| b.count.cmp(&a.count));
+    error_clusters.sort_by_key(|b| std::cmp::Reverse(b.count));
     error_clusters.truncate(50); // Top 50 clusters
 
     // Timeline buckets

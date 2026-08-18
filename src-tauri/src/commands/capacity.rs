@@ -49,6 +49,11 @@ pub struct TrendStats {
 
 /// Save a metrics sample. Called from frontend every 5 min when dashboard is open,
 /// or from a background tick. If `host_id` is empty, reads local system metrics.
+/// Firma fijada por el contrato IPC con el frontend: cada parametro es un campo
+/// que el lado Svelte envia por nombre en su `invoke()`. Agruparlos en una
+/// struct para complacer al lint obligaria a cambiar todas las llamadas del
+/// frontend, y el lint mide legibilidad, no protocolos.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn save_metrics_sample(
     host_id: Option<String>,

@@ -939,7 +939,7 @@ pub async fn get_tasklist() -> Result<Vec<TaskEntry>, String> {
                 mem_kb,
             });
         }
-        tasks.sort_by(|a, b| b.mem_kb.cmp(&a.mem_kb));
+        tasks.sort_by_key(|b| std::cmp::Reverse(b.mem_kb));
         Ok(tasks)
     }).await.map_err(|e| format!("Error interno tasklist: {}", e))?
 }

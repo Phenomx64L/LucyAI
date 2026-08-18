@@ -273,7 +273,10 @@ fn export_token_usage_csv(dir: &std::path::Path, total: &mut u64) -> BundleFileS
                WHERE timestamp >= datetime('now', '-30 days') \
                ORDER BY timestamp DESC \
                LIMIT 5000";
-    let result: Result<Vec<(String, String, i64, i64, f64, String)>, String> = shared_db(|conn| {
+    // Seis columnas sin nombre no dicen cual es cual. El alias al menos dice
+    // que es UNA FILA, que es lo que se pierde en la tupla desnuda.
+    type FilaEvento = (String, String, i64, i64, f64, String);
+    let result: Result<Vec<FilaEvento>, String> = shared_db(|conn| {
         let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
         let v = stmt.query_map([], |r| Ok((
             r.get::<_, String>(0).unwrap_or_default(),

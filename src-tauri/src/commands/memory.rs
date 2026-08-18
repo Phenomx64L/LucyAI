@@ -945,7 +945,7 @@ pub async fn memory_graph(
             for t in &m.node.tags { *tag_freq.entry(t.to_lowercase()).or_insert(0) += 1; }
         }
         let mut top_tags: Vec<(String, i64)> = tag_freq.into_iter().collect();
-        top_tags.sort_by(|a, b| b.1.cmp(&a.1));
+        top_tags.sort_by_key(|b| std::cmp::Reverse(b.1));
         top_tags.truncate(12);
 
         let stats = MemoryGraphStats {

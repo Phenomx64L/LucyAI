@@ -456,7 +456,7 @@ pub async fn security_skills_search(
             })
         })
         .collect();
-    hits.sort_by(|a, b| b.score.cmp(&a.score));
+    hits.sort_by_key(|b| std::cmp::Reverse(b.score));
     hits.truncate(limit);
     Ok(hits)
 }
@@ -663,7 +663,7 @@ pub async fn security_skills_auto_route(user_prompt: String) -> Result<AutoRoute
                 Some(SkillSearchHit { meta: m.clone(), score: s, preview: preview(&m.description, 240) })
             })
             .collect();
-        hits.sort_by(|a, b| b.score.cmp(&a.score));
+        hits.sort_by_key(|b| std::cmp::Reverse(b.score));
         hits
     };
     if let Some(top) = kw_hits.first() {

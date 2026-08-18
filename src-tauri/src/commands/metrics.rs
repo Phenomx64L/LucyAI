@@ -2369,7 +2369,6 @@ pub fn touch_memories_by_ids(ids: Vec<i64>) -> Result<usize, String> {
               WHERE id IN ({placeholders})"
         );
         conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
-            .map(|n| n)
             .map_err(|e| format!("touch by ids: {}", e))
     })
 }

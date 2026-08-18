@@ -156,7 +156,7 @@ pub mod db_auto_backup {
                     Some((e.path(), m))
                 })
                 .collect();
-        items.sort_by(|a, b| b.1.cmp(&a.1)); // más nuevo primero
+        items.sort_by_key(|b| std::cmp::Reverse(b.1)); // más nuevo primero
         for (path, _) in items.into_iter().skip(KEEP) {
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_file(path.with_extension("db.sig"));

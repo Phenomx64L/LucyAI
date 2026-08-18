@@ -568,6 +568,11 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
 
 // ── STREAMING SSH/WinRM CON INPUT INTERACTIVO ─────────────────────────────────
 
+/// Firma fijada por el contrato IPC con el frontend: cada parametro es un campo
+/// que el lado Svelte envia por nombre en su `invoke()`. Agruparlos en una
+/// struct para complacer al lint obligaria a cambiar todas las llamadas del
+/// frontend, y el lint mide legibilidad, no protocolos.
+#[allow(clippy::too_many_arguments)]
 /// Inicia un proceso SSH (Linux) o WinRM (Windows) en background y emite chunks
 /// vía eventos Tauri. El frontend escucha "ssh-out-{session_id}", "ssh-err-{session_id}",
 /// "ssh-done-{session_id}". Permite input interactivo (sudo, y/n) vía send_shell_input.

@@ -267,7 +267,7 @@ pub async fn activity_feed(hours: Option<i64>) -> Result<ActivityFeed, String> {
         }
 
         // Final sort: newest first. Stable so we keep insertion order on ties.
-        events.sort_by(|a, b| b.ts.cmp(&a.ts));
+        events.sort_by_key(|b| std::cmp::Reverse(b.ts));
         // Hard cap total events for the widget — counters in `summary` still
         // reflect the full window.
         events.truncate(20);

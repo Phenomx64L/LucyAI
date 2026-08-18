@@ -689,6 +689,11 @@ pub async fn read_remote_file(
         .map_err(|_| "El archivo contiene bytes no-UTF8 — solo se admiten archivos de texto para edición".to_string())
 }
 
+/// Firma fijada por el contrato IPC con el frontend: cada parametro es un campo
+/// que el lado Svelte envia por nombre en su `invoke()`. Agruparlos en una
+/// struct para complacer al lint obligaria a cambiar todas las llamadas del
+/// frontend, y el lint mide legibilidad, no protocolos.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn write_remote_file(
     host: String,

@@ -103,7 +103,7 @@ pub fn capture() -> SystemSnapshot {
     top_cpu_procs.truncate(10);
 
     // Top 10 by RAM
-    procs.sort_by(|a, b| b.mem_mb.cmp(&a.mem_mb));
+    procs.sort_by_key(|b| std::cmp::Reverse(b.mem_mb));
     procs.truncate(10);
     let top_ram_procs = procs;
 

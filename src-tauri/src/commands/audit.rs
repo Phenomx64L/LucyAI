@@ -108,6 +108,11 @@ async fn _drain_audit_buffer() {
 /// id immediately; the entry is queued and flushed by the background
 /// drainer at most 500 ms later. Frontend uses the id only as a reactive-
 /// store key, not a foreign reference.
+/// Firma fijada por el contrato IPC con el frontend: cada parametro es un campo
+/// que el lado Svelte envia por nombre en su `invoke()`. Agruparlos en una
+/// struct para complacer al lint obligaria a cambiar todas las llamadas del
+/// frontend, y el lint mide legibilidad, no protocolos.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn save_audit_entry(
     timestamp: String,

@@ -1146,42 +1146,70 @@ pub fn build_composable_prompt(ctx: &PromptContext) -> String {
 
 // ── Public API for ai.rs ─────────────────────────────────────────────────────
 
+/// Todo lo que hace falta para construir el prompt de sistema.
+///
+/// UNA STRUCT Y NO NUEVE ARGUMENTOS, y no es por complacer a un lint. Con nueve
+/// parametros posicionales —de los que SEIS son `&str`— el compilador no puede
+/// avisar de nada: intercambiar `context` con `hosts_context`, o `user_name` con
+/// `prompt`, compila igual y produce un prompt sutilmente equivocado que nadie
+/// nota hasta que Lucy contesta algo raro sobre la maquina de otro.
+///
+/// La misma forma que ya usa `lucy_core::prompt::Ctx` en el shell nativo: esto
+/// converge las dos mitades en vez de separarlas mas.
+pub struct PromptV2<'a> {
+    pub lang: &'a str,
+    pub context: &'a str,
+    pub hosts_context: &'a str,
+    pub user_name: &'a str,
+    pub prompt: &'a str,
+    pub working_dir: &'a str,
+    pub runbooks_dir: Option<&'a str>,
+    /// El consejo sobre sub-agentes. Lo apaga el comando `/serial`.
+    pub allow_fork_advice: bool,
+    /// Modelo flojo siguiendo instrucciones: se le manda lo justo.
+    pub model_is_weak: bool,
+}
+
+impl<'a> Default for PromptV2<'a> {
+    fn default() -> Self {
+        Self {
+            lang: "es",
+            context: "",
+            hosts_context: "",
+            user_name: "",
+            prompt: "",
+            working_dir: "",
+            runbooks_dir: None,
+            // Encendido por defecto: apagarlo es lo excepcional y lo pide un
+            // comando explicito.
+            allow_fork_advice: true,
+            model_is_weak: false,
+        }
+    }
+}
+
 /// Drop-in replacement for the old monolithic build_system_prompt.
 /// Same signature, same output semantics, but internally composable.
 ///
 /// Computes the fork advisor inline so every caller benefits without
 /// a wider API change. Callers that need to bypass advice (e.g.
 /// `/serial` slash command) should use `build_system_prompt_v2_with_options`.
-pub fn build_system_prompt_v2(
-    lang: &str,
-    context: &str,
-    hosts_context: &str,
-    user_name: &str,
-    prompt: &str,
-    working_dir: &str,
-    runbooks_dir: Option<&str>,
-    model_is_weak: bool,
-) -> String {
-    build_system_prompt_v2_with_options(
-        lang, context, hosts_context, user_name, prompt, working_dir, runbooks_dir,
-        /* allow_fork_advice = */ true,
-        model_is_weak,
-    )
-}
+
 
 /// Same as `build_system_prompt_v2` but lets the caller suppress the
 /// fork advice for a single turn — used by the `/serial` slash command.
-pub fn build_system_prompt_v2_with_options(
-    lang: &str,
-    context: &str,
-    hosts_context: &str,
-    user_name: &str,
-    prompt: &str,
-    working_dir: &str,
-    runbooks_dir: Option<&str>,
-    allow_fork_advice: bool,
-    model_is_weak: bool,
-) -> String {
+pub fn build_system_prompt_v2(p: &PromptV2) -> String {
+    let PromptV2 {
+        lang,
+        context,
+        hosts_context,
+        user_name,
+        prompt,
+        working_dir,
+        runbooks_dir,
+        allow_fork_advice,
+        model_is_weak,
+    } = *p;
     let user_profile = std::env::var("USERPROFILE")
         .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
     let core_mem_block = crate::commands::memory::render_core_sync();
@@ -1397,14 +1425,20 @@ mod sig_tests {
 
     #[test]
     fn weak_model_prompt_is_trimmed_and_strong_is_full() {
-        let weak = build_system_prompt_v2(
-            "Respond in Spanish.", "", "", "Ivan", "crea un archivo y abrelo",
-            "C:\\Users\\x", None, /* model_is_weak = */ true,
-        );
-        let strong = build_system_prompt_v2(
-            "Respond in Spanish.", "", "", "Ivan", "crea un archivo y abrelo",
-            "C:\\Users\\x", None, /* model_is_weak = */ false,
-        );
+        // Los campos van POR NOMBRE, que es la mitad del motivo del refactor:
+        // con nueve parámetros posicionales —seis de ellos `&str`— cruzar dos
+        // por descuido compilaba igual y daba un prompt sutilmente equivocado.
+        // Aquí, además, se ve de un vistazo que lo ÚNICO que cambia entre los
+        // dos casos es `model_is_weak`, que es justo lo que el test afirma.
+        let base = PromptV2 {
+            lang: "Respond in Spanish.",
+            user_name: "Ivan",
+            prompt: "crea un archivo y abrelo",
+            working_dir: "C:\\Users\\x",
+            ..Default::default()
+        };
+        let weak = build_system_prompt_v2(&PromptV2 { model_is_weak: true, ..base });
+        let strong = build_system_prompt_v2(&PromptV2 { model_is_weak: false, ..base });
         // Weak prompt drops the advanced sections → strictly shorter.
         assert!(weak.len() < strong.len(),
             "weak prompt ({}) should be shorter than strong ({})", weak.len(), strong.len());

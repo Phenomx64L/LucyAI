@@ -781,6 +781,10 @@ pub struct McpTestResult {
     pub error: Option<String>,
 }
 
+/// Doce columnas de una fila son doce. Agruparlas en una struct intermedia solo
+/// para el lint anadiria una traduccion en medio —fila -> struct -> struct— sin
+/// que nada quede mas claro.
+#[allow(clippy::too_many_arguments)]
 fn row_to_server(
     id: String,
     name: String,

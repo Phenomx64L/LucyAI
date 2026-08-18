@@ -267,7 +267,10 @@ struct CachedEmbedding {
     model_used: String,
 }
 
-static EMBED_CACHE: once_cell::sync::Lazy<Mutex<(std::collections::HashMap<u64, CachedEmbedding>, VecDeque<u64>)>>
+/// La misma cache LRU que en `ai.rs`: mapa mas cola de desalojo.
+type CacheLru<V> = Mutex<(std::collections::HashMap<u64, V>, VecDeque<u64>)>;
+
+static EMBED_CACHE: once_cell::sync::Lazy<CacheLru<CachedEmbedding>>
     = once_cell::sync::Lazy::new(|| Mutex::new((std::collections::HashMap::with_capacity(EMBED_CACHE_MAX + 1), VecDeque::with_capacity(EMBED_CACHE_MAX + 1))));
 
 /// FNV-1a 64-bit. Same algorithm as the frontend cache; collision risk
