@@ -25,6 +25,51 @@ enum Seg {
     Circle((f32, f32), f32),
     /// Rectángulo con esquinas redondeadas: `(min, max, radio)`.
     Rect((f32, f32), (f32, f32), f32),
+    /// Una polibézier cúbica: `[p0, c1, c2, p1, c1, c2, p1, …]`.
+    ///
+    /// HACE FALTA DE VERDAD y no es refinamiento. Tabler dibuja el engranaje, las
+    /// chispas y las flechas circulares con curvas; aproximarlas con rectas —que
+    /// es lo que había— convierte un engranaje en un polígono dentado y una
+    /// chispa de lados cóncavos en una estrella de picos. A 15 px la diferencia
+    /// no es sutil: es la mitad de la sensación de «tosco».
+    Curve(&'static [(f32, f32)]),
+    /// Arco de circunferencia: `(centro, radio, grados_inicio, grados_fin)`.
+    ///
+    /// Los grados van como en SVG: 0 a la derecha y creciendo en el sentido de
+    /// las agujas del reloj, porque en pantalla la Y crece hacia abajo.
+    Arc((f32, f32), f32, f32, f32),
+}
+
+/// En cuántos tramos se parte una curva.
+///
+/// Doce. Un icono ocupa entre catorce y veinticuatro píxeles: por encima de esto
+/// los tramos caen por debajo del píxel y solo se paga el coste.
+const TRAMOS: usize = 12;
+
+/// Muestrea una bézier cúbica en `TRAMOS` puntos.
+fn cubica(p0: (f32, f32), c1: (f32, f32), c2: (f32, f32), p1: (f32, f32)) -> Vec<(f32, f32)> {
+    (0..=TRAMOS)
+        .map(|i| {
+            let t = i as f32 / TRAMOS as f32;
+            let u = 1.0 - t;
+            let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            (
+                a * p0.0 + b * c1.0 + c * c2.0 + d * p1.0,
+                a * p0.1 + b * c1.1 + c * c2.1 + d * p1.1,
+            )
+        })
+        .collect()
+}
+
+/// Los puntos de un arco, en la rejilla de 24.
+fn arco(c: (f32, f32), r: f32, desde: f32, hasta: f32) -> Vec<(f32, f32)> {
+    let n = TRAMOS.max(((hasta - desde).abs() / 15.0) as usize);
+    (0..=n)
+        .map(|i| {
+            let g = (desde + (hasta - desde) * i as f32 / n as f32).to_radians();
+            (c.0 + r * g.cos(), c.1 + r * g.sin())
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,28 +137,31 @@ impl Icon {
                 Seg::Rect((14.0, 14.0), (20.0, 20.0), 1.5),
             ],
             // Dos destellos de cuatro puntas, uno grande y uno pequeño.
+            // `sparkles`: LOS LADOS SON CÓNCAVOS, y ahí estaba la diferencia. En
+            // Tabler cada punta se traza con un arco que se hunde hacia el
+            // centro; con rectas salía una estrella de picos, que es otra figura
+            // — y encima una que compite con el icono de alerta.
+            //
+            // Cada aspa es una bézier cuya tangente sale del centro, así que la
+            // curva «tira» hacia dentro. `f` es cuánto: 0.55 es el valor que
+            // aproxima un cuarto de círculo, y es exactamente la concavidad que
+            // usa Tabler.
             Self::Sparkles => &[
-                Seg::Path(&[
+                // Estrella grande, centro (9,10), radio 6.
+                Seg::Curve(&[
                     (9.0, 4.0),
-                    (10.7, 8.3),
-                    (15.0, 10.0),
-                    (10.7, 11.7),
-                    (9.0, 16.0),
-                    (7.3, 11.7),
-                    (3.0, 10.0),
-                    (7.3, 8.3),
-                    (9.0, 4.0),
+                    (9.0, 7.3), (5.7, 10.0), (3.0, 10.0),
+                    (5.7, 10.0), (9.0, 12.7), (9.0, 16.0),
+                    (9.0, 12.7), (12.3, 10.0), (15.0, 10.0),
+                    (12.3, 10.0), (9.0, 7.3), (9.0, 4.0),
                 ]),
-                Seg::Path(&[
+                // Estrella pequeña, centro (17,16), radio 3.
+                Seg::Curve(&[
                     (17.0, 13.0),
-                    (17.9, 15.1),
-                    (20.0, 16.0),
-                    (17.9, 16.9),
-                    (17.0, 19.0),
-                    (16.1, 16.9),
-                    (14.0, 16.0),
-                    (16.1, 15.1),
-                    (17.0, 13.0),
+                    (17.0, 14.65), (15.35, 16.0), (14.0, 16.0),
+                    (15.35, 16.0), (17.0, 17.35), (17.0, 19.0),
+                    (17.0, 17.35), (18.65, 16.0), (20.0, 16.0),
+                    (18.65, 16.0), (17.0, 14.65), (17.0, 13.0),
                 ]),
             ],
             Self::Terminal => &[
@@ -177,24 +225,53 @@ impl Icon {
                 Seg::Path(&[(6.6, 17.4), (10.1, 13.9)]),
                 Seg::Path(&[(17.4, 17.4), (13.9, 13.9)]),
             ],
-            // Engranaje aproximado con un octógono dentado y el eje.
+            // `settings`: EL ENGRANAJE DE TABLER TIENE LOS LÓBULOS REDONDEADOS.
+            // Antes era un polígono de veinticuatro vértices rectos, y el
+            // resultado a quince píxeles era una rueda dentada de picos — más
+            // parecida a un aviso que a un ajuste. Cada esquina del contorno
+            // lleva ahora su propia curva corta, que es lo que le da el aspecto
+            // de pieza torneada en vez de sierra.
             Self::Settings => &[
-                Seg::Path(&[
-                    (10.3, 3.5), (13.7, 3.5), (14.4, 6.0), (16.6, 6.9), (18.9, 5.6),
-                    (20.6, 8.4), (18.9, 10.2), (18.9, 13.8), (20.6, 15.6), (18.9, 18.4),
-                    (16.6, 17.1), (14.4, 18.0), (13.7, 20.5), (10.3, 20.5), (9.6, 18.0),
-                    (7.4, 17.1), (5.1, 18.4), (3.4, 15.6), (5.1, 13.8), (5.1, 10.2),
-                    (3.4, 8.4), (5.1, 5.6), (7.4, 6.9), (9.6, 6.0), (10.3, 3.5),
+                Seg::Curve(&[
+                    (10.3, 3.6),
+                    (10.5, 2.8), (13.5, 2.8), (13.7, 3.6),
+                    (13.9, 4.4), (14.0, 5.5), (14.5, 6.1),
+                    (15.1, 6.6), (16.0, 6.9), (16.7, 6.8),
+                    (17.5, 6.7), (18.3, 5.5), (19.0, 5.9),
+                    (19.8, 6.3), (21.0, 8.0), (20.6, 8.6),
+                    (20.2, 9.3), (19.1, 9.8), (18.9, 10.5),
+                    (18.7, 11.2), (18.7, 12.8), (18.9, 13.5),
+                    (19.1, 14.2), (20.2, 14.7), (20.6, 15.4),
+                    (21.0, 16.0), (19.8, 17.7), (19.0, 18.1),
+                    (18.3, 18.5), (17.5, 17.3), (16.7, 17.2),
+                    (16.0, 17.1), (15.1, 17.4), (14.5, 17.9),
+                    (14.0, 18.5), (13.9, 19.6), (13.7, 20.4),
+                    (13.5, 21.2), (10.5, 21.2), (10.3, 20.4),
+                    (10.1, 19.6), (10.0, 18.5), (9.5, 17.9),
+                    (8.9, 17.4), (8.0, 17.1), (7.3, 17.2),
+                    (6.5, 17.3), (5.7, 18.5), (5.0, 18.1),
+                    (4.2, 17.7), (3.0, 16.0), (3.4, 15.4),
+                    (3.8, 14.7), (4.9, 14.2), (5.1, 13.5),
+                    (5.3, 12.8), (5.3, 11.2), (5.1, 10.5),
+                    (4.9, 9.8), (3.8, 9.3), (3.4, 8.6),
+                    (3.0, 8.0), (4.2, 6.3), (5.0, 5.9),
+                    (5.7, 5.5), (6.5, 6.7), (7.3, 6.8),
+                    (8.0, 6.9), (8.9, 6.6), (9.5, 6.1),
+                    (10.0, 5.5), (10.1, 4.4), (10.3, 3.6),
                 ]),
                 Seg::Circle((12.0, 12.0), 3.0),
             ],
+            // `refresh`: DOS ARCOS DE VERDAD. Antes era una polilínea de doce
+            // puntos aproximando el círculo, y a este tamaño los tramos rectos
+            // se ven: el aro salía poligonal justo en un icono que gira, donde
+            // cualquier faceta se convierte en un parpadeo al animarlo.
             Self::Refresh => &[
-                Seg::Path(&[(20.0, 11.0), (20.0, 6.0), (15.5, 6.0)]),
-                Seg::Path(&[
-                    (19.5, 9.0), (18.0, 6.5), (15.0, 4.8), (11.5, 4.6), (8.2, 6.0),
-                    (5.8, 8.6), (4.9, 12.0), (5.6, 15.5), (7.8, 18.2), (11.0, 19.6),
-                    (14.5, 19.5), (17.4, 18.0),
-                ]),
+                // Arco superior, de las 10 a las 2 pasando por arriba.
+                Seg::Arc((12.0, 12.0), 7.0, 160.0, 340.0),
+                Seg::Path(&[(19.6, 5.5), (19.0, 9.4), (15.2, 8.8)]),
+                // Y el inferior, simétrico.
+                Seg::Arc((12.0, 12.0), 7.0, -20.0, 160.0),
+                Seg::Path(&[(4.4, 18.5), (5.0, 14.6), (8.8, 15.2)]),
             ],
             // `bolt`: el rayo de Tabler. Un solo trazo cerrado — la figura es
             // el contorno, no un relleno, que es lo que la deja legible a 17px
@@ -277,13 +354,53 @@ pub fn draw(painter: &egui::Painter, icon: Icon, center: Pos2, size: f32, color:
     let p = |(x, y): (f32, f32)| -> Pos2 {
         egui::pos2(center.x + (x - 12.0) * k, center.y + (y - 12.0) * k)
     };
+    // LOS EXTREMOS REDONDEADOS SON LA MITAD DEL PARECIDO, y faltaban en todos.
+    // Tabler dibuja con `stroke-linecap="round"` y `stroke-linejoin="round"`;
+    // egui corta los trazos en plano y une las esquinas en pico. A quince
+    // píxeles eso no se lee como «otro estilo», se lee como tosco: cada final de
+    // línea es un tajo y cada codo un pincho.
+    //
+    // Un círculo relleno del radio del trazo en cada vértice ES un extremo
+    // redondeado —y de paso redondea las uniones—, que es la forma barata de
+    // conseguirlo sin tocar el teselador.
+    let redondear = |pts: &[Pos2]| {
+        let r = stroke.width * 0.5;
+        for q in pts {
+            painter.circle_filled(*q, r, color);
+        }
+    };
+    let mut trazo = |pts: Vec<Pos2>| {
+        painter.add(egui::Shape::line(pts.clone(), stroke));
+        redondear(&pts);
+    };
     for seg in icon.segs() {
         match seg {
-            Seg::Path(pts) => {
-                painter.add(egui::Shape::line(
-                    pts.iter().map(|&t| p(t)).collect(),
-                    stroke,
-                ));
+            Seg::Path(pts) => trazo(pts.iter().map(|&t| p(t)).collect()),
+            Seg::Curve(pts) => {
+                // [p0, c1, c2, p1, c1, c2, p1, …]: cada tramo reusa el final del
+                // anterior como principio.
+                let mut salida: Vec<Pos2> = Vec::new();
+                let mut i = 0;
+                while i + 3 < pts.len() {
+                    let muestras = cubica(pts[i], pts[i + 1], pts[i + 2], pts[i + 3]);
+                    // El primer punto de cada tramo repite el último del previo.
+                    let desde = usize::from(!salida.is_empty());
+                    salida.extend(muestras[desde..].iter().map(|&t| p(t)));
+                    i += 3;
+                }
+                if !salida.is_empty() {
+                    painter.add(egui::Shape::line(salida.clone(), stroke));
+                    // Solo los EXTREMOS: redondear los doce puntos de muestreo
+                    // de cada tramo engordaría la curva entera.
+                    redondear(&[salida[0], salida[salida.len() - 1]]);
+                }
+            }
+            Seg::Arc(c, r, a, b) => {
+                let pts: Vec<Pos2> = arco(*c, *r, *a, *b).iter().map(|&t| p(t)).collect();
+                painter.add(egui::Shape::line(pts.clone(), stroke));
+                if pts.len() >= 2 {
+                    redondear(&[pts[0], pts[pts.len() - 1]]);
+                }
             }
             Seg::Circle(c, r) => {
                 painter.circle_stroke(p(*c), r * k, stroke);
@@ -344,6 +461,22 @@ mod tests {
                         vec![(x - r, y - r), (x + r, y + r)]
                     }
                     Seg::Rect(a, b, _) => vec![*a, *b],
+                    // Los PUNTOS MUESTREADOS y no los de control: una bézier
+                    // puede tener un control fuera de la rejilla y quedar dentro
+                    // —es lo normal en una curva pronunciada— y al revés, todos
+                    // los controles dentro no garantiza que la curva no se
+                    // asome. Lo que se dibuja es la muestra, así que es lo que
+                    // hay que medir.
+                    Seg::Curve(p) => {
+                        let mut v = Vec::new();
+                        let mut i = 0;
+                        while i + 3 < p.len() {
+                            v.extend(super::cubica(p[i], p[i + 1], p[i + 2], p[i + 3]));
+                            i += 3;
+                        }
+                        v
+                    }
+                    Seg::Arc(c, r, a, b) => super::arco(*c, *r, *a, *b),
                 };
                 for (x, y) in pts {
                     assert!(
@@ -352,6 +485,37 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn una_curva_empieza_y_acaba_donde_dice() {
+        // Si el muestreo no clavara los extremos, dos tramos consecutivos de una
+        // polibézier no se tocarían: el contorno del engranaje saldría con
+        // grietas de una décima de píxel, que a este tamaño se ven como puntos.
+        let v = super::cubica((0.0, 0.0), (1.0, 5.0), (9.0, 5.0), (10.0, 0.0));
+        assert_eq!(v.first().copied(), Some((0.0, 0.0)));
+        assert_eq!(v.last().copied(), Some((10.0, 0.0)));
+        // Y en medio se separa de la recta: si no, no es una curva.
+        let medio = v[v.len() / 2];
+        assert!(medio.1 > 1.0, "la curva no se curva: {medio:?}");
+    }
+
+    #[test]
+    fn un_arco_recorre_los_grados_que_se_le_piden() {
+        // Cero a la derecha y creciendo hacia abajo, como en SVG — la Y de la
+        // pantalla crece al revés que la de la clase de matemáticas, y confundir
+        // eso pone la flecha de recargar girando al contrario.
+        let v = super::arco((12.0, 12.0), 6.0, 0.0, 90.0);
+        let (x0, y0) = v[0];
+        assert!((x0 - 18.0).abs() < 0.01 && (y0 - 12.0).abs() < 0.01, "empieza en {x0},{y0}");
+        let (x1, y1) = *v.last().unwrap();
+        assert!((x1 - 12.0).abs() < 0.01 && (y1 - 18.0).abs() < 0.01, "acaba en {x1},{y1}");
+        // Todos los puntos a la misma distancia del centro: es un arco, no una
+        // espiral.
+        for (x, y) in &v {
+            let d = ((x - 12.0).powi(2) + (y - 12.0).powi(2)).sqrt();
+            assert!((d - 6.0).abs() < 0.01, "radio {d} en ({x},{y})");
         }
     }
 
