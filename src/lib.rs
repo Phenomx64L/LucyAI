@@ -100,6 +100,10 @@ pub mod prompt;
 /// Enrutado: avisa cuando el modelo elegido se queda corto para lo que se pide.
 /// NO cambia el modelo por su cuenta — ver la cabecera del módulo.
 pub mod routing;
+/// Cuidados de la base: copiarla, contar qué hay dentro y quitar lo que sobra.
+/// Enseñar dónde vive algo irreemplazable sin ofrecer copiarlo es media
+/// instrucción.
+pub mod upkeep;
 /// Las conversaciones abiertas, para que sobrevivan al cierre.
 pub mod session;
 /// Capturar la pantalla. La mitad de VER de `local_screen.rs`; conducir el

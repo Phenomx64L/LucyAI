@@ -89,6 +89,100 @@ pub fn hint(provider: &str) -> Option<String> {
     Some(format!("••••{}", v.chars().skip(n - 4).collect::<String>()))
 }
 
+/// Qué dijo el proveedor cuando se le preguntó si la clave sirve.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Prueba {
+    /// Contestó y la aceptó.
+    Vale,
+    /// Contestó y la rechazó. El texto es suyo, no nuestro.
+    NoVale(String),
+    /// No se pudo preguntar: sin red, sin clave, o el proveedor no contestó.
+    ///
+    /// SEPARADO DE `NoVale` A PROPÓSITO. «Tu clave no sirve» y «no he podido
+    /// comprobarlo» llevan a sitios distintos: el primero a generar otra clave,
+    /// el segundo a mirar la red. Juntarlos haría que un corte de dos minutos
+    /// pareciera una credencial revocada.
+    NoSeSabe(String),
+}
+
+/// Cuánto se espera a que el proveedor conteste.
+///
+/// Ocho segundos. Es una comprobación que alguien pidió con un clic y está
+/// mirando: más allá de eso lo que hace falta es decir «no contesta», no seguir
+/// esperando.
+pub const PRUEBA_TIMEOUT: u64 = 8;
+
+/// Pregunta al proveedor si la clave guardada sirve.
+///
+/// LA PREGUNTA MÁS BARATA QUE ACEPTE CADA UNO, y ninguna genera texto: se pide el
+/// catálogo de modelos, que es una lectura. Mandar una conversación de prueba
+/// costaría dinero cada vez que alguien pulsa el botón — y el botón está para
+/// usarlo sin pensárselo.
+///
+/// Una clave GUARDADA solo dice que existe. Una caducada, revocada o pegada con
+/// un espacio de más se descubre igual de bien en mitad de un incidente, que es
+/// exactamente cuando no se quiere descubrir.
+pub fn probe(provider: &str) -> Prueba {
+    let Some(clave) = get(provider) else {
+        return Prueba::NoSeSabe("no hay clave guardada".into());
+    };
+    let (url, cabecera, valor) = match provider {
+        "anthropic" => (
+            "https://api.anthropic.com/v1/models",
+            "x-api-key",
+            clave.clone(),
+        ),
+        "gemini" => (
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            "x-goog-api-key",
+            clave.clone(),
+        ),
+        "openai" => ("https://api.openai.com/v1/models", "authorization", format!("Bearer {clave}")),
+        "xai" => ("https://api.x.ai/v1/models", "authorization", format!("Bearer {clave}")),
+        "deepseek" => (
+            "https://api.deepseek.com/models",
+            "authorization",
+            format!("Bearer {clave}"),
+        ),
+        "nvidia" => (
+            "https://integrate.api.nvidia.com/v1/models",
+            "authorization",
+            format!("Bearer {clave}"),
+        ),
+        otro => return Prueba::NoSeSabe(format!("no sé cómo comprobar «{otro}»")),
+    };
+    let mut req = ureq::get(url).timeout(std::time::Duration::from_secs(PRUEBA_TIMEOUT));
+    req = req.set(cabecera, &valor);
+    // Anthropic exige la versión de su API también para listar.
+    if provider == "anthropic" {
+        req = req.set("anthropic-version", "2023-06-01");
+    }
+    match req.call() {
+        Ok(_) => Prueba::Vale,
+        // 401/403 es el proveedor diciendo que no: eso SÍ se sabe.
+        Err(ureq::Error::Status(401 | 403, _)) => {
+            Prueba::NoVale("el proveedor la rechaza — caducada, revocada o mal pegada".into())
+        }
+        Err(ureq::Error::Status(429, _)) => {
+            // Aceptó la credencial y se queja del ritmo: la clave sirve.
+            Prueba::Vale
+        }
+        Err(ureq::Error::Status(c, _)) => Prueba::NoSeSabe(format!("contestó {c}")),
+        Err(e) => Prueba::NoSeSabe(format!("no se pudo preguntar: {e}")),
+    }
+}
+
+/// La clave guardada. Privada a propósito: el valor no sale de este módulo más
+/// que para viajar al proveedor.
+///
+/// Por `entry`, que es quien conoce la convención del nombre —`{proveedor}_api_key`—
+/// y no repitiéndola aquí: dos sitios que construyen la misma clave son dos
+/// sitios que acaban construyéndola distinto.
+fn get(provider: &str) -> Option<String> {
+    let e = entry(provider).ok()?;
+    e.get_password().ok().filter(|k| !k.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
