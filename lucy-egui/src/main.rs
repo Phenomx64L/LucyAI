@@ -1770,7 +1770,15 @@ fn segmentado(ui: &mut egui::Ui, ancho: f32, opciones: &[&str], activo: usize) -
         .inner_margin(egui::Margin::same(3.0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
+            // DE IZQUIERDA A DERECHA, IMPUESTO. `ui.horizontal` hereda la
+            // dirección del padre, y `fila` reparte de derecha a izquierda para
+            // que el control se quede con su sitio: heredándola, las opciones
+            // salían al revés — «Detallado · Equilibrado · Conciso» donde el
+            // código dice Conciso, Equilibrado, Detallado. Un segmentado que
+            // enseña la escala invertida no es un detalle estético: el orden ES
+            // el significado, y «el de más a la izquierda es el más corto» deja
+            // de ser cierto.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 for (i, o) in opciones.iter().enumerate() {
                     let on = i == activo;
                     let (rect, resp) =
@@ -3143,6 +3151,20 @@ struct App {
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
     /// Cuánto se extiende Lucy al contestar.
     tono: lucy_core::prompt::Tono,
+    /// El último aviso de enrutado, para enseñarlo bajo el compositor.
+    ///
+    /// Ahí y no en el hilo: es una advertencia sobre la orden que se acaba de
+    /// mandar, no parte de la conversación. En el hilo quedaría intercalada
+    /// entre lo que preguntaste y lo que Lucy contestó, como si lo hubiera dicho
+    /// ella.
+    ruta_aviso: Option<String>,
+    /// Avisar cuando el modelo elegido se queda corto para lo que se pide.
+    ///
+    /// ENCENDIDO DE FÁBRICA y apagable. Un aviso que hay que descubrir para
+    /// activarlo no protege a quien no sabe que existe — que es justo quien
+    /// manda una auditoría con un modelo de 0.6B sin saber que se le va a
+    /// atragantar.
+    enrutado: bool,
     /// Tope de gasto de la sesión en dólares. `0` = sin límite.
     ///
     /// LA SESIÓN Y NO LA PESTAÑA, aunque los tokens se acumulen por pestaña: con
@@ -3270,6 +3292,8 @@ const K_PRIVACY: &str = "lucy.privacy";
 const K_SPEND: &str = "lucy.spend_limit";
 /// Cuánto se extiende Lucy al contestar.
 const K_TONO: &str = "lucy.tono";
+/// Si Lucy avisa cuando el modelo elegido se queda corto.
+const K_RUTA: &str = "lucy.enrutado";
 /// Clave del modo fijado.
 const K_PRESET: &str = "lucy.preset";
 /// Clave del tema visual.
@@ -3494,6 +3518,11 @@ impl App {
                 .and_then(|s| s.get_string(K_TONO))
                 .map(|v| lucy_core::prompt::Tono::from_key(&v))
                 .unwrap_or_default(),
+            ruta_aviso: None,
+            enrutado: storage
+                .and_then(|s| s.get_string(K_RUTA))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(true),
             spend_limit: storage
                 .and_then(|s| s.get_string(K_SPEND))
                 .and_then(|v| v.parse().ok())
@@ -4001,6 +4030,7 @@ impl eframe::App for App {
         storage.set_string(K_PRIVACY, self.privacy.to_string());
         storage.set_string(K_SPEND, self.spend_limit.to_string());
         storage.set_string(K_TONO, self.tono.key().to_string());
+        storage.set_string(K_RUTA, self.enrutado.to_string());
         storage.set_string(K_THEME, theme::mode().key().to_string());
         storage.set_string(K_PRESET, self.preset.clone().unwrap_or_default());
         // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
@@ -5097,6 +5127,39 @@ impl App {
 
     /// El compositor: adjuntar, dictar, escribir, enviar.
     fn composer(&mut self, ui: &mut egui::Ui) {
+        // El aviso de enrutado, ENCIMA del compositor y con su botón de cerrar.
+        // Se queda hasta que el operador lo quita o manda otra orden: un aviso
+        // que se desvanece solo es un aviso que se pierde justo mientras se lee
+        // la respuesta que venía a matizar.
+        if let Some(a) = self.ruta_aviso.clone() {
+            let mut cerrar = false;
+            egui::Frame::none()
+                .fill(theme::amber_bg())
+                .stroke(egui::Stroke::new(1.0_f32, theme::amber()))
+                .rounding(egui::Rounding::same(theme::R_MD))
+                .inner_margin(egui::Margin::symmetric(11.0, 7.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(egui::RichText::new("⚠").size(12.0).color(theme::amber()));
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&a)
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::txt2()),
+                            )
+                            .wrap(),
+                        );
+                        right(ui, 18.0, |ui| {
+                            cerrar = ui.small_button("×").clicked();
+                        });
+                    });
+                });
+            if cerrar {
+                self.ruta_aviso = None;
+            }
+            ui.add_space(6.0);
+        }
         let busy = self.tabs[self.tab].busy();
         let mut enviar = false;
         let mut detener = false;
@@ -6450,6 +6513,36 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // La cola del log, fresca. Va DENTRO del prompt de sistema, y leída solo
         // al arrancar Lucy contestaba sobre un log de hace horas.
         self.reload_log();
+        // EL AVISO DE ENRUTADO SE DA AQUÍ Y LA ORDEN SALE IGUAL. No es una
+        // puerta: bloquear el envío convertiría una recomendación en una
+        // aplicación que te discute lo que le pides. Se dice lo que va a pasar y
+        // la decisión sigue siendo de quien está delante — puede cambiar de
+        // modelo y volver a mandarla, o seguir.
+        //
+        // Al carril de Trace y no a la conversación: en un hilo, un párrafo de
+        // consejo antes de cada respuesta se vuelve ruido en dos días, y el
+        // primero que se aprende a saltar es el que sale siempre en el mismo
+        // sitio.
+        if self.enrutado {
+            let tarea = lucy_core::routing::Tarea {
+                texto: &text,
+                imagenes: imagenes.len(),
+                auto: self.tabs[self.tab].auto,
+            };
+            if let Some(a) =
+                lucy_core::routing::revisa(&self.chat_model, &tarea, |p| with_key(p))
+            {
+                self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
+                    phase: "info".into(),
+                    label: "El modelo se queda corto".into(),
+                    detail: a.texto(),
+                    ..Default::default()
+                });
+                self.ruta_aviso = Some(a.texto());
+            } else {
+                self.ruta_aviso = None;
+            }
+        }
         let pi = self.prompt_input();
         let consulta = text.clone();
         prompt.push_str(&text);
@@ -10753,9 +10846,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let mut tope = self.max_loops;
         let mut tope_gasto = self.spend_limit;
         let mut tono = self.tono;
+        let mut enrutado = self.enrutado;
         let gastado = self.gasto_sesion();
         let modelo = self.chat_model.clone();
-        let desc = lucy_core::models::describe(&modelo);
+        let desc = lucy_core::models::describe(&modelo).to_string();
         panel(
             ui,
             col,
@@ -10763,7 +10857,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             "Modelo y comportamiento",
             |_| {},
             |ui| {
-                fila(ui, "Modelo activo", Some(&desc), false, |ui| {
+                // La descripción SOLO si dice algo distinto del id. Para un
+                // modelo de Ollama, `describe` devuelve el id tal cual, y la
+                // fila quedaba con la misma cadena arriba y abajo — una línea
+                // que no informa y que hace dudar de si son dos cosas distintas.
+                let sub = (desc != modelo).then_some(desc.as_str());
+                fila(ui, "Modelo activo", sub, false, |ui| {
                     ui.label(
                         egui::RichText::new(&modelo)
                             .size(theme::FS_FOOTNOTE)
@@ -10830,6 +10929,27 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         );
                     },
                 );
+                // El enrutado AVISA, no cambia el modelo. Ver la cabecera de
+                // `lucy_core::routing`: un enrutador que elige en silencio hace
+                // que la respuesta que lees no venga del modelo que
+                // seleccionaste — y aquí cambiar de modelo cambia lo que se
+                // gasta.
+                fila(
+                    ui,
+                    "Avisar si el modelo se queda corto",
+                    Some("antes de mandar una tarea exigente \u{b7} no cambia el modelo por ti"),
+                    false,
+                    |ui| {
+                        if let Some(i) = segmentado(
+                            ui,
+                            180.0,
+                            &["Activado", "Apagado"],
+                            usize::from(!enrutado),
+                        ) {
+                            enrutado = i == 0;
+                        }
+                    },
+                );
                 // EL TONO NO TOCA LO QUE SE EJECUTA, solo cómo se redacta. En
                 // mitad de un incidente, tres párrafos antes del comando son
                 // tres párrafos que saltarse con el servicio caído; aprendiendo
@@ -10867,6 +10987,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         self.max_loops = tope;
         self.spend_limit = tope_gasto.max(0.0);
         self.tono = tono;
+        self.enrutado = enrutado;
 
         // ── ollama ───────────────────────────────────────────────────────────
         //
@@ -10978,24 +11099,54 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             |ui| {
                 let actual = theme::mode();
                 let i = theme::Mode::ALL.iter().position(|m| *m == actual).unwrap_or(0);
-                fila(
-                    ui,
-                    "Tema",
-                    Some(
-                        "«del sistema» mira si las aplicaciones están en claro, no la barra \
-                         de tareas",
-                    ),
-                    false,
-                    |ui| {
-                        let etiquetas: Vec<&str> =
-                            theme::Mode::ALL.iter().map(|m| m.label()).collect();
-                        if let Some(k) = segmentado(ui, 240.0, &etiquetas, i) {
-                            if k != i {
-                                nuevo_tema = Some(theme::Mode::ALL[k]);
-                            }
+                // LA EXPLICACIÓN DEPENDE DE LO ELEGIDO, y antes era siempre la
+                // misma advertencia sobre «del sistema» aunque estuvieras en
+                // oscuro fijo — un texto que no aplica a lo que tienes puesto se
+                // lee una vez, se descarta, y con él se descarta el sitio donde
+                // vive. En «del sistema» sí aparece, porque ahí es donde importa:
+                // Windows tiene DOS ajustes de tema y mucha gente los tiene
+                // cruzados, así que Lucy puede salir clara con la barra oscura y
+                // parecer un fallo.
+                let explica = match actual {
+                    theme::Mode::Auto => {
+                        "sigue a Windows — mira el ajuste de las APLICACIONES, no el de la \
+                         barra de tareas: mucha gente los tiene cruzados"
+                    }
+                    theme::Mode::Dark => "fijo, sin seguir a Windows",
+                    theme::Mode::Light => {
+                        "fijo. Pensado para pantallas con reflejos; el oscuro es el tema de casa"
+                    }
+                };
+                fila(ui, "Tema", Some(explica), false, |ui| {
+                    let etiquetas: Vec<&str> =
+                        theme::Mode::ALL.iter().map(|m| m.label()).collect();
+                    if let Some(k) = segmentado(ui, 240.0, &etiquetas, i) {
+                        if k != i {
+                            nuevo_tema = Some(theme::Mode::ALL[k]);
                         }
-                    },
-                );
+                    }
+                });
+                // Y una muestra de lo que se está eligiendo. Cambiar de tema
+                // repinta la ventana entera, así que una tira de color es
+                // redundante ahí — pero no en «del sistema», donde lo que se ve
+                // depende de un ajuste de Windows que puede cambiar solo al
+                // anochecer, y saber en qué está resolviendo AHORA es la única
+                // forma de entender por qué la ventana se ve como se ve.
+                if actual == theme::Mode::Auto {
+                    fila(
+                        ui,
+                        "Ahora mismo resuelve a",
+                        None,
+                        false,
+                        |ui| {
+                            insignia(
+                                ui,
+                                if theme::light() { "Claro" } else { "Oscuro" },
+                                true,
+                            );
+                        },
+                    );
+                }
                 let mov = motion();
                 fila(
                     ui,
@@ -11211,7 +11362,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         ui.add_space(GAP);
         let mut instalar = false;
         let mut quitar: Option<String> = None;
+        // APAGAR NO ES BORRAR. Lo que se quiere casi siempre es «ahora no» —el
+        // de migración estorba mientras se atiende una incidencia— y para eso
+        // desinstalar es demasiado: hay que volver a encontrar la carpeta.
+        let mut alternar: Option<(String, bool)> = None;
         let n_skills = self.skills.len();
+        let activos = self.skills.iter().filter(|k| k.activo).count();
         panel(
             ui,
             col,
@@ -11251,9 +11407,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 if !self.skills.is_empty() {
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new(
-                            "Se instalan en tu perfil, así que sobreviven a reinstalar Lucy.",
-                        )
+                        egui::RichText::new(format!(
+                            "{activos} de {n_skills} activos. Los apagados siguen en disco y no \
+                             entran en lo que Lucy ve, así que deja de pedirlos. Se instalan en \
+                             tu perfil y sobreviven a reinstalar Lucy."
+                        ))
                         .size(theme::FS_CAPTION)
                         .color(theme::faint()),
                     );
@@ -11287,6 +11445,20 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     None => "No se pudo resolver tu perfil de usuario.".into(),
                 };
             }
+        }
+        if let Some((n, on)) = alternar {
+            self.skills_msg = match lucy_core::skills::set_enabled(&n, on) {
+                Ok(()) => {
+                    self.skills = cargar_skills();
+                    // Un modo fijado que acaba de apagarse dejaría el prompt
+                    // pidiendo un procedimiento que Lucy ya no ve.
+                    if !on && self.preset.as_deref() == Some(n.as_str()) {
+                        self.preset = None;
+                    }
+                    String::new()
+                }
+                Err(e) => e,
+            };
         }
         if let Some(n) = quitar {
             self.skills_msg = match lucy_core::skills::uninstall(&n) {
@@ -13501,6 +13673,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let confirmado = self.mem_confirm;
         let mut armar: Option<i64> = None;
         let mut borrar_id: Option<i64> = None;
+        let mut fijar: Option<(i64, bool)> = None;
 
         match &self.mems {
             Err(e) => {
@@ -13616,6 +13789,38 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     // el acento fijo: así una memoria de
                                     // importancia 3 se distingue de un vistazo
                                     // sin tener que contar puntos.
+                                    // LA CHINCHETA SE DEDUCE DE LA IMPORTANCIA,
+                                    // y no es un atajo: `memories::set_pinned`
+                                    // escribe las dos columnas a la vez y es el
+                                    // único escritor de `pinned` en las dos
+                                    // aplicaciones. Leerla haría falta añadir el
+                                    // campo a `AgentMemory`, que es el tipo que
+                                    // cruza el puente IPC de la app en
+                                    // producción. Hay un test de integración que
+                                    // fija el invariante.
+                                    let fija = m.importance >= lucy_core::memories::FIJADA;
+                                    let pin = ui.add(
+                                        egui::Button::new(
+                                            egui::RichText::new(if fija { "📌" } else { "○" })
+                                                .size(11.0)
+                                                .color(if fija {
+                                                    theme::amber()
+                                                } else {
+                                                    theme::faint()
+                                                }),
+                                        )
+                                        .frame(false),
+                                    );
+                                    if pin
+                                        .on_hover_text(if fija {
+                                            "Fijada: entra en TODOS los prompts. Pulsa para soltarla."
+                                        } else {
+                                            "Fijar: que Lucy la tenga presente siempre, venga o no al caso"
+                                        })
+                                        .clicked()
+                                    {
+                                        fijar = Some((m.id, !fija));
+                                    }
                                     let dots = "●".repeat(m.importance.clamp(1, 3) as usize);
                                     ui.label(
                                         egui::RichText::new(dots)
@@ -13683,6 +13888,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
 
         // Fuera del préstamo de `self.mems`.
+        if let Some((id, on)) = fijar {
+            match lucy_core::memories::set_pinned(id, on) {
+                Ok(()) => self.mems = load_memories(),
+                Err(e) => self.mems = Err(e),
+            }
+        }
         if let Some(id) = armar {
             self.mem_confirm = Some((MemTab::Memorias, id));
         }
