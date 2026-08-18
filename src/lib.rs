@@ -97,6 +97,9 @@ pub mod pricing;
 /// `commands/prompt_sections.rs`, no de su texto: allí se describen herramientas
 /// que este shell todavía no tiene.
 pub mod prompt;
+/// Enrutado: avisa cuando el modelo elegido se queda corto para lo que se pide.
+/// NO cambia el modelo por su cuenta — ver la cabecera del módulo.
+pub mod routing;
 /// Las conversaciones abiertas, para que sobrevivan al cierre.
 pub mod session;
 /// Capturar la pantalla. La mitad de VER de `local_screen.rs`; conducir el
