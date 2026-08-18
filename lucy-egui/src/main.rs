@@ -293,6 +293,9 @@ struct PromptInput {
     /// microsegundos, frente a la petición HTTP del recuerdo que sí justificó
     /// el hilo aparte.
     principles: String,
+    /// Cuánto se extiende Lucy al contestar. Viaja con el prompt porque es el
+    /// prompt lo que cambia — no hay ninguna lógica del shell que dependa de él.
+    tono: lucy_core::prompt::Tono,
     cwd: String,
     name: String,
     profile: String,
@@ -331,6 +334,7 @@ impl PromptInput {
             // toda su razón de ser. Se leen en cada turno porque son una fila de
             // SQLite y cambian cuando el operador dicta una.
             principles: &self.principles,
+            tono: self.tono,
             working_dir: &self.cwd,
             user_name: &self.name,
             user_profile: &self.profile,
@@ -629,6 +633,14 @@ enum NextAuto {
     Pause(String),
     /// Se acabó el presupuesto de pasos. El modo se apaga.
     Ceiling(String),
+    /// Se cruzó el tope de gasto de la sesión. El modo se apaga.
+    ///
+    /// APARTE DE `Ceiling` aunque las dos apaguen el modo, porque lo que hay que
+    /// hacer después no se parece: el tope de pasos significa «esta cadena no
+    /// converge, míralo», y el de gasto significa «se acabó el dinero que pusiste
+    /// para hoy». Con un solo motivo, el mensaje tendría que ser vago en los dos
+    /// casos.
+    Gasto(String),
 }
 
 /// ESTO ES EL BUCLE. Todo lo demás ya existía: Lucy proponía un comando, alguien
@@ -656,6 +668,8 @@ fn next_auto(
     ocupado: bool,
     loops: u32,
     max: u32,
+    gastado: f64,
+    tope_gasto: f64,
     plan: &[lucy_core::agent::PlanStep],
 ) -> NextAuto {
     use lucy_core::agent::StepStatus;
@@ -665,6 +679,23 @@ fn next_auto(
     let Some(step) = plan.iter().find(|s| s.status == StepStatus::Pending) else {
         return NextAuto::Idle;
     };
+    // EL DINERO SE MIRA ANTES QUE NADA MÁS, y antes incluso de saber si hay paso
+    // que correr sería peor: sin paso pendiente no se va a gastar nada, y apagar
+    // el modo ahí dejaría la cadena muerta sin motivo. Aquí ya se sabe que la
+    // vuelta siguiente cuesta.
+    //
+    // Cero es SIN LÍMITE, que es como lo dice la V2 y como lo espera cualquiera
+    // que haya visto un campo así. La alternativa —cero significa «no gastes
+    // nada»— convertiría el valor por defecto en un modo automático que no
+    // arranca nunca, y el operador buscaría el fallo donde no está.
+    if tope_gasto > 0.0 && gastado >= tope_gasto {
+        return NextAuto::Gasto(format!(
+            "Llevas {} en esta sesión y el tope está en {}. El automático se apaga; \
+             súbelo en Configuración o sigue paso a paso.",
+            lucy_core::pricing::fmt_usd(gastado),
+            lucy_core::pricing::fmt_usd(tope_gasto)
+        ));
+    }
     if let Some(motivo) = &step.needs_human {
         return NextAuto::Pause(format!("{motivo}. Aprueba el paso para seguir."));
     }
@@ -3110,6 +3141,15 @@ struct App {
     dedup_rx: Option<std::sync::mpsc::Receiver<Result<lucy_core::consolidate::Report, String>>>,
     /// La tanda de mantenimiento en vuelo, si hay una.
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
+    /// Cuánto se extiende Lucy al contestar.
+    tono: lucy_core::prompt::Tono,
+    /// Tope de gasto de la sesión en dólares. `0` = sin límite.
+    ///
+    /// LA SESIÓN Y NO LA PESTAÑA, aunque los tokens se acumulen por pestaña: con
+    /// el tope por pestaña, tres conversaciones de sesenta céntimos no cruzan un
+    /// límite de un dólar y aun así te has gastado uno ochenta. Un freno que se
+    /// puede rodear abriendo otra pestaña no es un freno.
+    spend_limit: f64,
     /// Todavía no se ha mirado ninguna vez en esta ejecución.
     mant_primera: bool,
     /// La orden de reponer el tamaño de la ventana ya está mandada. Ver el
@@ -3226,6 +3266,10 @@ const K_SESSION: &str = "lucy.session";
 const K_WS_WIDTH: &str = "lucy.ws_width";
 /// Clave del modo privacidad.
 const K_PRIVACY: &str = "lucy.privacy";
+/// Tope de gasto de la sesión, en dólares. `0` = sin límite.
+const K_SPEND: &str = "lucy.spend_limit";
+/// Cuánto se extiende Lucy al contestar.
+const K_TONO: &str = "lucy.tono";
 /// Clave del modo fijado.
 const K_PRESET: &str = "lucy.preset";
 /// Clave del tema visual.
@@ -3446,6 +3490,14 @@ impl App {
             dedup_rx: None,
             cris_hechas: std::collections::HashSet::new(),
             mant_rx: None,
+            tono: storage
+                .and_then(|s| s.get_string(K_TONO))
+                .map(|v| lucy_core::prompt::Tono::from_key(&v))
+                .unwrap_or_default(),
+            spend_limit: storage
+                .and_then(|s| s.get_string(K_SPEND))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
             mant_primera: true,
             ventana_curada: false,
             mant_visto: None,
@@ -3947,6 +3999,8 @@ impl eframe::App for App {
         storage.set_string(K_LOOPS, self.max_loops.to_string());
         storage.set_string(K_WS_WIDTH, self.ws_width.to_string());
         storage.set_string(K_PRIVACY, self.privacy.to_string());
+        storage.set_string(K_SPEND, self.spend_limit.to_string());
+        storage.set_string(K_TONO, self.tono.key().to_string());
         storage.set_string(K_THEME, theme::mode().key().to_string());
         storage.set_string(K_PRESET, self.preset.clone().unwrap_or_default());
         // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
@@ -7202,10 +7256,33 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
     }
 
+    /// Lo gastado en TODA la sesión, sumando las pestañas.
+    ///
+    /// Los modelos sin precio en la tabla cuentan como cero — y eso hay que
+    /// saberlo: con un modelo que no está tarifado, el freno no frena. Es
+    /// preferible a inventarle un precio, que daría una cifra falsa con aspecto
+    /// de medida; la interfaz ya dice «coste n/d» cuando pasa.
+    fn gasto_sesion(&self) -> f64 {
+        self.tabs
+            .iter()
+            .filter_map(|t| lucy_core::pricing::cost(&self.chat_model, t.tokens_in, t.tokens_out))
+            .sum()
+    }
+
     fn auto_step(&mut self, uid: usize) {
         let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
+        let gastado = self.gasto_sesion();
+        let tope = self.spend_limit;
         let t = &self.tabs[ti];
-        match next_auto(t.auto, self.exec_rx.is_some(), t.loops, self.max_loops, &t.ws.plan) {
+        match next_auto(
+            t.auto,
+            self.exec_rx.is_some(),
+            t.loops,
+            self.max_loops,
+            gastado,
+            tope,
+            &t.ws.plan,
+        ) {
             NextAuto::Idle => {}
             NextAuto::Run(id, cmd) => {
                 self.tabs[ti].loops += 1;
@@ -7232,6 +7309,23 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     ..Default::default()
                 });
             }
+            // EL GASTO SE DICE EN LA CONVERSACIÓN, no solo en el carril de
+            // Trace. Los otros motivos son de fontanería y quien los busca ya
+            // está mirando ahí; que se haya acabado el dinero que pusiste es una
+            // decisión tuya que Lucy acaba de aplicar, y enterarse exige haber
+            // abierto un panel lateral.
+            NextAuto::Gasto(motivo) => {
+                self.tabs[ti].auto = false;
+                self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
+                    phase: "info".into(),
+                    label: "Tope de gasto alcanzado".into(),
+                    detail: motivo.clone(),
+                    ..Default::default()
+                });
+                self.tabs[ti]
+                    .log
+                    .push(ChatMsg::new(false, format!("**Tope de gasto.** {motivo}")));
+            }
         }
     }
 
@@ -7250,6 +7344,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             hosts: prompt::hosts_block(&self.remote_hosts),
             skills_cat: lucy_core::skills::catalog(&self.skills),
             principles: lucy_core::principles::render(None),
+            tono: self.tono,
             preset_txt: self
                 .preset
                 .as_deref()
@@ -10656,6 +10751,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let aviso = lucy_core::cloud::allowed(&self.chat_model, self.privacy).err();
         let mut privado = self.privacy;
         let mut tope = self.max_loops;
+        let mut tope_gasto = self.spend_limit;
+        let mut tono = self.tono;
+        let gastado = self.gasto_sesion();
         let modelo = self.chat_model.clone();
         let desc = lucy_core::models::describe(&modelo);
         panel(
@@ -10694,13 +10792,65 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     ui,
                     "Tope de pasos seguidos",
                     Some("comandos encadenados sin aprobar, por orden"),
-                    aviso.is_none(),
+                    false,
                     |ui| {
                         ui.add(
                             egui::DragValue::new(&mut tope)
                                 .range(MAX_LOOPS_MIN..=MAX_LOOPS_MAX)
                                 .speed(0.25),
                         );
+                    },
+                );
+                // El gasto se enseña JUNTO al tope, no solo el tope: «llevas
+                // 0,42 de 1,00» es lo que permite decidir si el número está
+                // bien puesto. Un límite sin el consumo al lado es un número
+                // que se pone a ojo una vez y no se vuelve a mirar.
+                fila(
+                    ui,
+                    "Tope de gasto de la sesión",
+                    Some(&if tope_gasto > 0.0 {
+                        format!(
+                            "llevas {} · al cruzarlo se apaga el automático",
+                            lucy_core::pricing::fmt_usd(gastado)
+                        )
+                    } else {
+                        format!(
+                            "llevas {} · 0 = sin límite",
+                            lucy_core::pricing::fmt_usd(gastado)
+                        )
+                    }),
+                    false,
+                    |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut tope_gasto)
+                                .range(0.0..=500.0)
+                                .speed(0.05)
+                                .prefix("$")
+                                .max_decimals(2),
+                        );
+                    },
+                );
+                // EL TONO NO TOCA LO QUE SE EJECUTA, solo cómo se redacta. En
+                // mitad de un incidente, tres párrafos antes del comando son
+                // tres párrafos que saltarse con el servicio caído; aprendiendo
+                // el sistema, un comando a secas no enseña nada.
+                fila(
+                    ui,
+                    "Personalidad de Lucy",
+                    Some("cuánto se extiende al contestar · no cambia qué ejecuta ni qué avisa"),
+                    aviso.is_none(),
+                    |ui| {
+                        let i = lucy_core::prompt::Tono::ALL
+                            .iter()
+                            .position(|t| *t == tono)
+                            .unwrap_or(1);
+                        let etiquetas: Vec<&str> = lucy_core::prompt::Tono::ALL
+                            .iter()
+                            .map(|t| t.label())
+                            .collect();
+                        if let Some(k) = segmentado(ui, 270.0, &etiquetas, i) {
+                            tono = lucy_core::prompt::Tono::ALL[k];
+                        }
                     },
                 );
                 if let Some(e) = &aviso {
@@ -10715,6 +10865,8 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         );
         self.privacy = privado;
         self.max_loops = tope;
+        self.spend_limit = tope_gasto.max(0.0);
+        self.tono = tono;
 
         // ── ollama ───────────────────────────────────────────────────────────
         //
@@ -14843,7 +14995,7 @@ mod bucle {
         // Admins"` —que no casa con ningún patrón de `destructive`— salía
         // `Allow`, `needs_human: None`, y lo corría el bucle sin un clic.
         let p = [paso_en("DC01")];
-        match next_auto(true, false, 0, 8, &p) {
+        match next_auto(true, false, 0, 8, 0.0, 0.0, &p) {
             NextAuto::Pause(m) => {
                 assert!(m.contains("DC01"), "no dice a qué equipo iba: {m}");
                 assert!(m.contains("apruebas tú"), "{m}");
@@ -14858,7 +15010,7 @@ mod bucle {
         // un paso sin `host` es de esta máquina y es para lo que se enciende el
         // automático.
         let p = [paso(StepStatus::Pending, None)];
-        assert!(matches!(next_auto(true, false, 0, 8, &p), NextAuto::Run(_, _)));
+        assert!(matches!(next_auto(true, false, 0, 8, 0.0, 0.0, &p), NextAuto::Run(_, _)));
     }
 
     #[test]
@@ -14867,7 +15019,7 @@ mod bucle {
         // apagaría el modo con un mensaje que no viene a cuento —«8 pasos sin
         // llegar a una respuesta»— en vez de decir lo que pasa de verdad.
         let p = [paso_en("DC01")];
-        assert!(matches!(next_auto(true, false, 8, 8, &p), NextAuto::Pause(_)));
+        assert!(matches!(next_auto(true, false, 8, 8, 0.0, 0.0, &p), NextAuto::Pause(_)));
     }
 
     fn fila(lv: lucy_core::logs::Level, src: &str, m: &str) -> LvRow {
@@ -15196,7 +15348,7 @@ mod bucle {
         t.ws.plan_append(paso(StepStatus::Pending, None));
 
         assert_eq!(t.caducar_pendientes("Caducado — llegó una orden nueva"), 2);
-        assert!(matches!(next_auto(true, false, 0, 8, &t.ws.plan), NextAuto::Idle));
+        assert!(matches!(next_auto(true, false, 0, 8, 0.0, 0.0, &t.ws.plan), NextAuto::Idle));
         // Y NO se borran: el plan es también el registro de la sesión, y un paso
         // que desaparece se lee como un paso que nunca se propuso.
         assert_eq!(t.ws.plan.len(), 3);
@@ -15226,7 +15378,7 @@ mod bucle {
         // Es la garantía entera del modo manual, y la que hace que este cambio
         // no altere lo que ya tenía instalado nadie.
         let p = [paso(StepStatus::Pending, None)];
-        assert_eq!(next_auto(false, false, 0, 8, &p), NextAuto::Idle);
+        assert_eq!(next_auto(false, false, 0, 8, 0.0, 0.0, &p), NextAuto::Idle);
     }
 
     #[test]
@@ -15235,7 +15387,7 @@ mod bucle {
             paso(StepStatus::Done, None),
             PlanStep { id: "s2".into(), detail: "whoami".into(), ..paso(StepStatus::Pending, None) },
         ];
-        assert_eq!(next_auto(true, false, 0, 8, &p), NextAuto::Run("s2".into(), "whoami".into()));
+        assert_eq!(next_auto(true, false, 0, 8, 0.0, 0.0, &p), NextAuto::Run("s2".into(), "whoami".into()));
     }
 
     #[test]
@@ -15243,7 +15395,7 @@ mod bucle {
         // Hay un solo `exec_rx` en toda la app: lanzar el segundo tira el
         // primero y su salida no vuelve a ninguna parte.
         let p = [paso(StepStatus::Pending, None)];
-        assert_eq!(next_auto(true, true, 0, 8, &p), NextAuto::Idle);
+        assert_eq!(next_auto(true, true, 0, 8, 0.0, 0.0, &p), NextAuto::Idle);
     }
 
     #[test]
@@ -15254,7 +15406,7 @@ mod bucle {
             paso(StepStatus::Pending, Some("Se monta la elevación por dentro")),
             PlanStep { id: "s2".into(), ..paso(StepStatus::Pending, None) },
         ];
-        match next_auto(true, false, 0, 8, &p) {
+        match next_auto(true, false, 0, 8, 0.0, 0.0, &p) {
             NextAuto::Pause(m) => assert!(m.contains("elevación"), "{m}"),
             otro => panic!("debería pausar, salió {otro:?}"),
         }
@@ -15264,11 +15416,54 @@ mod bucle {
     fn el_tope_se_gasta_solo_cuando_hay_algo_que_ejecutar() {
         // Un turno de pura conversación no consume presupuesto: si lo hiciera,
         // ocho respuestas sin comandos apagarían el modo sin haber corrido nada.
-        assert_eq!(next_auto(true, false, 8, 8, &[]), NextAuto::Idle);
+        assert_eq!(next_auto(true, false, 8, 8, 0.0, 0.0, &[]), NextAuto::Idle);
         let p = [paso(StepStatus::Pending, None)];
-        assert!(matches!(next_auto(true, false, 8, 8, &p), NextAuto::Ceiling(_)));
+        assert!(matches!(next_auto(true, false, 8, 8, 0.0, 0.0, &p), NextAuto::Ceiling(_)));
         // Justo por debajo del tope todavía corre.
-        assert!(matches!(next_auto(true, false, 7, 8, &p), NextAuto::Run(..)));
+        assert!(matches!(next_auto(true, false, 7, 8, 0.0, 0.0, &p), NextAuto::Run(..)));
+    }
+
+    #[test]
+    fn el_tope_de_gasto_apaga_el_automatico_y_cero_significa_sin_limite() {
+        let p = [paso(StepStatus::Pending, None)];
+        // Cero es SIN LÍMITE, como en la V2 y como espera cualquiera que vea un
+        // campo así. Si cero significara «no gastes nada», el valor de fábrica
+        // sería un automático que no arranca jamás y el operador buscaría el
+        // fallo donde no está.
+        assert!(matches!(
+            next_auto(true, false, 0, 8, 999.0, 0.0, &p),
+            NextAuto::Run(..)
+        ));
+        // Por debajo del tope corre; al alcanzarlo, para.
+        assert!(matches!(
+            next_auto(true, false, 0, 8, 0.49, 0.50, &p),
+            NextAuto::Run(..)
+        ));
+        assert!(matches!(
+            next_auto(true, false, 0, 8, 0.50, 0.50, &p),
+            NextAuto::Gasto(_)
+        ));
+        // Y el motivo lleva las DOS cifras: sin ellas, «se acabó el presupuesto»
+        // no dice si falta un céntimo o si te has pasado diez veces.
+        match next_auto(true, false, 0, 8, 1.25, 0.50, &p) {
+            NextAuto::Gasto(m) => {
+                assert!(m.contains("1.25") && m.contains("0.50"), "{m}");
+                assert!(m.contains("Configuración"), "no dice dónde subirlo: {m}");
+            }
+            otro => panic!("debería frenar por gasto, salió {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn el_gasto_no_frena_un_turno_que_el_operador_pidio_a_mano() {
+        // El freno es del BUCLE, no de Lucy. Con el automático apagado, quien
+        // manda un turno está delante y decidiendo: cortarle ahí convertiría un
+        // tope de gasto en una aplicación que deja de funcionar.
+        let p = [paso(StepStatus::Pending, None)];
+        assert_eq!(
+            next_auto(false, false, 0, 8, 99.0, 0.50, &p),
+            NextAuto::Idle
+        );
     }
 
     #[test]
@@ -15276,7 +15471,7 @@ mod bucle {
         // Sin esto, la última respuesta de la cadena volvería a disparar el
         // último paso una y otra vez.
         let p = [paso(StepStatus::Done, None), paso(StepStatus::Error, None)];
-        assert_eq!(next_auto(true, false, 0, 8, &p), NextAuto::Idle);
+        assert_eq!(next_auto(true, false, 0, 8, 0.0, 0.0, &p), NextAuto::Idle);
     }
 
     #[test]
