@@ -3169,6 +3169,23 @@ struct App {
     mant_rx: Option<std::sync::mpsc::Receiver<lucy_core::maintenance::Tanda>>,
     /// Cuánto se extiende Lucy al contestar.
     tono: lucy_core::prompt::Tono,
+    /// Resultado de probar cada clave: proveedor -> qué dijo.
+    ///
+    /// En un mapa y no en la fila, porque probar es una petición de red y va en
+    /// un hilo: cuando vuelve, la fila que la pidió ya se repintó cien veces.
+    claves_probadas: std::collections::HashMap<String, lucy_core::keys::Prueba>,
+    /// Pruebas de clave en vuelo.
+    prueba_rx: Vec<(String, std::sync::mpsc::Receiver<lucy_core::keys::Prueba>)>,
+    /// El recuento de la base, cacheado. `None` = aún no se ha mirado.
+    recuento: Option<lucy_core::upkeep::Recuento>,
+    /// Cuántos trozos de documento están sin vector.
+    sin_vector: usize,
+    /// Una purga ARMADA: el primer clic arma, el segundo borra.
+    purga_armada: Option<lucy_core::upkeep::Purga>,
+    /// Lo último que dijo un cuidado de la base.
+    upkeep_msg: String,
+    /// El reembebido en vuelo.
+    reembeber_rx: Option<std::sync::mpsc::Receiver<Result<usize, String>>>,
     /// El último aviso de enrutado, para enseñarlo bajo el compositor.
     ///
     /// Ahí y no en el hilo: es una advertencia sobre la orden que se acaba de
@@ -3536,6 +3553,13 @@ impl App {
                 .and_then(|s| s.get_string(K_TONO))
                 .map(|v| lucy_core::prompt::Tono::from_key(&v))
                 .unwrap_or_default(),
+            claves_probadas: std::collections::HashMap::new(),
+            prueba_rx: Vec::new(),
+            recuento: None,
+            sin_vector: 0,
+            purga_armada: None,
+            upkeep_msg: String::new(),
+            reembeber_rx: None,
             ruta_aviso: None,
             enrutado: storage
                 .and_then(|s| s.get_string(K_RUTA))
@@ -4178,6 +4202,7 @@ impl eframe::App for App {
         self.pump_docs();
         self.pump_recall();
         self.pump_dedup();
+        self.pump_upkeep();
         self.pump_mantenimiento();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
@@ -6153,6 +6178,54 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         });
         self.recall_rx.push((uid, rx));
         self.di("Buscando en la memoria…");
+    }
+
+
+    /// Recoge las pruebas de clave y el reembebido.
+    fn pump_upkeep(&mut self) {
+        let mut llegadas: Vec<(String, lucy_core::keys::Prueba)> = Vec::new();
+        self.prueba_rx.retain(|(p, rx)| match rx.try_recv() {
+            Ok(r) => {
+                llegadas.push((p.clone(), r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for (p, r) in llegadas {
+            self.claves_probadas.insert(p, r);
+        }
+        if let Some(rx) = &self.reembeber_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.reembeber_rx = None;
+                    self.upkeep_msg = match r {
+                        Ok(0) => "No había ningún trozo sin vector.".into(),
+                        Ok(n) => format!("{n} trozos vuelven a ser buscables por significado."),
+                        Err(e) => e,
+                    };
+                    self.sin_vector = lucy_core::upkeep::sin_vector();
+                    self.recuento = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.reembeber_rx = None,
+            }
+        }
+    }
+
+    /// Pregunta al proveedor si su clave sirve. En un hilo: es red.
+    fn prueba_clave(&mut self, proveedor: &str) {
+        if self.prueba_rx.iter().any(|(p, _)| p == proveedor) {
+            return;
+        }
+        let p = proveedor.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let q = p.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::keys::probe(&q));
+        });
+        self.claves_probadas.remove(&p);
+        self.prueba_rx.push((p, rx));
     }
 
     /// Recoge las búsquedas de `/recall` y las escribe en su conversación.
@@ -11216,6 +11289,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // operador leía dos veces la misma lista y una de las dos le mentía.
         let mut guardar: Option<(String, String)> = None;
         let mut borrar: Option<String> = None;
+        let mut probar: Option<String> = None;
         let n_claves = lucy_core::keys::PROVIDERS
             .iter()
             .filter(|(k, _, _)| lucy_core::keys::hint(k).is_some())
@@ -11239,12 +11313,59 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         // pruebas, que es lo único que hace falta, y no sirve
                         // para reconstruirla ni acaba en una captura.
                         Some(pista) => {
-                            fila(ui, etiqueta, Some(&pista), i == ultimo, |ui| {
+                            // UNA CLAVE GUARDADA SOLO DICE QUE EXISTE. Caducada,
+                            // revocada o pegada con un espacio de más se
+                            // descubre igual de bien en mitad de un incidente,
+                            // que es cuando no se quiere descubrir.
+                            let estado = self.claves_probadas.get(*clave).cloned();
+                            let probando = self.prueba_rx.iter().any(|(p, _)| p == clave);
+                            let sub = match &estado {
+                                Some(lucy_core::keys::Prueba::Vale) => {
+                                    format!("{pista} · el proveedor la acepta")
+                                }
+                                Some(lucy_core::keys::Prueba::NoVale(m)) => {
+                                    format!("{pista} · {m}")
+                                }
+                                Some(lucy_core::keys::Prueba::NoSeSabe(m)) => {
+                                    format!("{pista} · sin comprobar: {m}")
+                                }
+                                None => pista.clone(),
+                            };
+                            fila(ui, etiqueta, Some(&sub), i == ultimo, |ui| {
                                 if ui.small_button("Quitar").clicked() {
                                     borrar = Some(clave.to_string());
                                 }
-                                ui.add_space(6.0);
-                                insignia(ui, "configurada", true);
+                                ui.add_space(4.0);
+                                if ui
+                                    .add_enabled(
+                                        !probando,
+                                        egui::Button::new(if probando {
+                                            "Probando…"
+                                        } else {
+                                            "Probar"
+                                        })
+                                        .small(),
+                                    )
+                                    .on_hover_text("Pide el catálogo de modelos — no gasta")
+                                    .clicked()
+                                {
+                                    probar = Some(clave.to_string());
+                                }
+                                ui.add_space(4.0);
+                                // TRES ESTADOS Y NO DOS: «la rechaza» y «no he
+                                // podido comprobarlo» llevan a sitios distintos.
+                                match &estado {
+                                    Some(lucy_core::keys::Prueba::Vale) => {
+                                        insignia(ui, "válida", true)
+                                    }
+                                    Some(lucy_core::keys::Prueba::NoVale(_)) => {
+                                        insignia(ui, "no vale", false)
+                                    }
+                                    Some(lucy_core::keys::Prueba::NoSeSabe(_)) => {
+                                        insignia(ui, "sin saber", false)
+                                    }
+                                    None => insignia(ui, "configurada", true),
+                                }
                             });
                         }
                         None => {
@@ -11298,7 +11419,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
         if let Some(p) = borrar {
             self.api_key_msg = lucy_core::keys::delete(&p).err().unwrap_or_default();
+            self.claves_probadas.remove(&p);
             olvidar_claves();
+        }
+        if let Some(p) = probar {
+            self.prueba_clave(&p);
         }
         if !self.api_key_msg.is_empty() {
             ui.label(
@@ -11499,6 +11624,199 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
                 Err(e) => e,
             };
+        }
+
+        // ── la base ──────────────────────────────────────────────────────────
+        //
+        // TODA LA MEMORIA DE LUCY VIVE EN UN FICHERO, y hasta ahora esta vista
+        // enseñaba su ruta y nada más. Enseñar dónde está algo irreemplazable
+        // sin ofrecer copiarlo es dar media instrucción.
+        ui.add_space(GAP);
+        if self.recuento.is_none() {
+            if let Some(p) = db_path() {
+                self.recuento = Some(lucy_core::upkeep::recuento(&p));
+                self.sin_vector = lucy_core::upkeep::sin_vector();
+            }
+        }
+        let r = self.recuento.clone().unwrap_or_default();
+        let armada = self.purga_armada;
+        let reembebiendo = self.reembeber_rx.is_some();
+        let sin_vec = self.sin_vector;
+        let mut copiar = false;
+        let mut recargar = false;
+        let mut reembeber = false;
+        let mut purgar: Option<lucy_core::upkeep::Purga> = None;
+        panel(
+            ui,
+            col,
+            icons::Icon::Database,
+            "La memoria en disco",
+            |ui| {
+                let mb = r.bytes as f64 / 1_048_576.0;
+                insignia(ui, &format!("{mb:.1} MB"), true);
+            },
+            |ui| {
+                // El recuento por tipo es lo que convierte «ocupa 7 MB» en
+                // «casi todo es un PDF que ingeriste en abril» — que es una
+                // frase sobre la que se puede decidir algo.
+                for (etiqueta, n, explica) in [
+                    ("Memorias", r.memorias, "hechos que Lucy recuerda"),
+                    ("· de ellas, automáticas", r.automaticas, "escritas al cerrar un turno"),
+                    ("· fijadas", r.fijadas, "entran en todos los prompts"),
+                    ("Cristales", r.cristales, "sesiones destiladas"),
+                    ("Patrones", r.patrones, "lo que se repite entre memorias"),
+                    ("Trozos de documento", r.trozos, "de los manuales ingeridos"),
+                    ("Retiradas", r.retiradas, "fundidas por la consolidación; ya no se leen"),
+                ] {
+                    fila(ui, etiqueta, Some(explica), false, |ui| {
+                        ui.label(
+                            egui::RichText::new(n.to_string())
+                                .size(theme::FS_FOOTNOTE)
+                                .monospace()
+                                .color(if n == 0 { theme::faint() } else { theme::txt2() }),
+                        );
+                    });
+                }
+                // Trozos sin vector: la vista de Documentos ya lo decía y no
+                // ofrecía arreglarlo. Solo aparece cuando los hay.
+                if sin_vec > 0 {
+                    fila(
+                        ui,
+                        "Trozos sin vector",
+                        Some("solo se encuentran por palabras — pasó si Ollama estaba caído al ingerir"),
+                        false,
+                        |ui| {
+                            if ui
+                                .add_enabled(
+                                    !reembebiendo,
+                                    egui::Button::new(if reembebiendo {
+                                        "Rehaciendo…"
+                                    } else {
+                                        "Rehacer"
+                                    })
+                                    .small(),
+                                )
+                                .clicked()
+                            {
+                                reembeber = true;
+                            }
+                            ui.add_space(6.0);
+                            insignia(ui, &sin_vec.to_string(), false);
+                        },
+                    );
+                }
+                fila(ui, "Copia de seguridad", Some("consistente, aunque Lucy esté escribiendo"), false, |ui| {
+                    copiar = ui.small_button("Guardar copia…").clicked();
+                });
+                fila(ui, "", Some("vuelve a contar lo de arriba"), true, |ui| {
+                    recargar = ui.small_button("↻ Recontar").clicked();
+                });
+                // ── purgas ───────────────────────────────────────────────────
+                //
+                // EN DOS TIEMPOS Y DICIENDO QUÉ SE PIERDE. «Se borrarán 14
+                // filas» no permite decidir; lo que hace falta saber es qué deja
+                // de poder hacerse después.
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("Quitar en lote")
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                );
+                ui.add_space(4.0);
+                for (p, nombre, n) in [
+                    (lucy_core::upkeep::Purga::Retiradas, "Retiradas", r.retiradas),
+                    (lucy_core::upkeep::Purga::Automaticas, "Memorias automáticas", r.automaticas),
+                    (lucy_core::upkeep::Purga::Documentos, "Documentos ingeridos", r.documentos),
+                ] {
+                    let lista = armada == Some(p);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                n > 0,
+                                egui::Button::new(
+                                    egui::RichText::new(if lista {
+                                        format!("¿Borrar {nombre}?")
+                                    } else {
+                                        nombre.to_string()
+                                    })
+                                    .size(theme::FS_CAPTION)
+                                    .color(if lista { theme::red() } else { theme::txt3() }),
+                                )
+                                .small(),
+                            )
+                            .on_hover_text(p.describe(&r))
+                            .clicked()
+                        {
+                            purgar = Some(p);
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("{n}"))
+                                .size(theme::FS_MICRO)
+                                .color(theme::faint()),
+                        );
+                    });
+                    if lista {
+                        ui.label(
+                            egui::RichText::new(p.describe(&r))
+                                .size(theme::FS_MICRO)
+                                .color(theme::amber()),
+                        );
+                    }
+                }
+                if !self.upkeep_msg.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(&self.upkeep_msg)
+                            .size(theme::FS_CAPTION)
+                            .color(theme::txt3()),
+                    );
+                }
+            },
+        );
+        if recargar {
+            self.recuento = None;
+        }
+        if reembeber {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let stop = self.mant_stop.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(lucy_core::upkeep::reembeber(&stop));
+            });
+            self.reembeber_rx = Some(rx);
+            self.upkeep_msg = "Rehaciendo los vectores que faltaban…".into();
+        }
+        if copiar {
+            // El diálogo del sistema es modal: bloquea mientras está abierto, y
+            // lo abre un clic — no pasa solo.
+            if let Some(d) = rfd::FileDialog::new()
+                .set_title("Dónde guardar la copia")
+                .set_file_name(&format!("lucy-{}.db", ahora_epoch()))
+                .add_filter("Base de datos", &["db"])
+                .save_file()
+            {
+                self.upkeep_msg = match lucy_core::upkeep::backup(&d) {
+                    Ok(b) => format!(
+                        "Copia guardada: {:.1} MB en {}",
+                        b as f64 / 1_048_576.0,
+                        d.display()
+                    ),
+                    Err(e) => e,
+                };
+            }
+        }
+        if let Some(p) = purgar {
+            if armada == Some(p) {
+                self.purga_armada = None;
+                self.upkeep_msg = match lucy_core::upkeep::purga(p) {
+                    Ok(n) => format!("{n} filas quitadas."),
+                    Err(e) => e,
+                };
+                self.recuento = None;
+                self.sin_vector = lucy_core::upkeep::sin_vector();
+                self.mems = load_memories();
+            } else {
+                self.purga_armada = Some(p);
+            }
         }
 
         // ── este equipo ──────────────────────────────────────────────────────
