@@ -196,29 +196,133 @@ pub fn disabled() -> Color32 {
     if light() { Color32::from_rgb(0xB4, 0xBD, 0xC7) } else { Color32::from_rgb(0x3C, 0x45, 0x50) }
 }
 
+// ── La paleta de acento ──────────────────────────────────────────────────────
+//
+// UN SOLO COLOR GOBIERNA TODO EL ACENTO de Lucy: la navegación activa, la
+// actividad del agente, el progreso, lo hecho. Por eso se puede cambiar sin
+// tocar nada más — y por eso hay que elegirlo con cuidado.
+//
+// LO QUE NO SE OFRECE, Y POR QUÉ. Ni rojo ni ámbar. En esta aplicación el rojo
+// significa «esto ha fallado» y el ámbar «cuidado con esto», y son colores que
+// aparecen sobre comandos destructivos y avisos de seguridad. Un acento del
+// mismo color haría que la mitad de la pantalla pareciera una advertencia — y,
+// peor, que una advertencia de verdad se leyera como decoración. El azul también
+// queda fuera: es el color del operador en el hilo de conversación.
+
+/// Un acento, en sus dos modos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Paleta {
+    /// El nombre que ve el operador.
+    pub nombre: &'static str,
+    /// La clave con la que se guarda. Estable: cambiarla dejaría la elección de
+    /// todo el mundo en el valor de fábrica sin avisar.
+    pub clave: &'static str,
+    claro: (u8, u8, u8),
+    claro_hover: (u8, u8, u8),
+    oscuro: (u8, u8, u8),
+    oscuro_hover: (u8, u8, u8),
+}
+
+/// Las paletas disponibles. La primera es la de casa.
+pub const PALETAS: &[Paleta] = &[
+    Paleta {
+        nombre: "Esmeralda",
+        clave: "esmeralda",
+        claro: (0x12, 0xA3, 0x79),
+        claro_hover: (0x0E, 0x8A, 0x66),
+        oscuro: (0x3D, 0xD6, 0xA4),
+        oscuro_hover: (0x34, 0xC2, 0x96),
+    },
+    Paleta {
+        nombre: "Cian",
+        clave: "cian",
+        claro: (0x0E, 0x8F, 0xA8),
+        claro_hover: (0x0B, 0x77, 0x8C),
+        oscuro: (0x4C, 0xD2, 0xE8),
+        oscuro_hover: (0x3F, 0xBC, 0xD1),
+    },
+    Paleta {
+        nombre: "Violeta",
+        clave: "violeta",
+        claro: (0x6D, 0x4A, 0xCF),
+        claro_hover: (0x5B, 0x3C, 0xB3),
+        oscuro: (0xA8, 0x8B, 0xFF),
+        oscuro_hover: (0x96, 0x79, 0xF0),
+    },
+    Paleta {
+        nombre: "Magenta",
+        clave: "magenta",
+        claro: (0xB8, 0x36, 0x8C),
+        claro_hover: (0x9C, 0x2B, 0x76),
+        oscuro: (0xF0, 0x7A, 0xC4),
+        oscuro_hover: (0xDC, 0x69, 0xB1),
+    },
+];
+
+/// La elegida, por índice en `PALETAS`.
+///
+/// En un atómico y no en la struct de la aplicación por lo mismo que el modo
+/// claro/oscuro: estas funciones las llama cualquier widget en cualquier punto
+/// del árbol, y pasarles el estado por parámetro obligaría a atravesar toda la
+/// interfaz con un argumento que casi nadie usa.
+static ACENTO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// La paleta activa.
+pub fn paleta() -> &'static Paleta {
+    let i = ACENTO.load(std::sync::atomic::Ordering::Relaxed);
+    PALETAS.get(i).unwrap_or(&PALETAS[0])
+}
+
+/// Cambia la paleta. Fuera de rango deja la de casa — una clave de una versión
+/// futura no puede dejar la aplicación sin acento.
+pub fn set_paleta(i: usize) {
+    ACENTO.store(if i < PALETAS.len() { i } else { 0 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// El índice de una clave guardada. Desconocida = la de casa.
+pub fn paleta_de(clave: &str) -> usize {
+    PALETAS.iter().position(|p| p.clave == clave).unwrap_or(0)
+}
+
+/// El acento base, según modo y paleta.
+fn acc_rgb() -> (u8, u8, u8) {
+    let p = paleta();
+    if light() { p.claro } else { p.oscuro }
+}
+
 // ── Acento · la esmeralda de Lucy ────────────────────────────────────────────
 // UN acento por vista. Nav activo, actividad del agente, progreso, "hecho".
 
 /// `--accent`.
 pub fn acc() -> Color32 {
-    if light() { Color32::from_rgb(0x12, 0xA3, 0x79) } else { Color32::from_rgb(0x3D, 0xD6, 0xA4) }
+    let (r, g, b) = acc_rgb();
+    Color32::from_rgb(r, g, b)
 }
 /// `--accent-hover`.
 pub fn acc_hover() -> Color32 {
-    if light() { Color32::from_rgb(0x0E, 0x8A, 0x66) } else { Color32::from_rgb(0x34, 0xC2, 0x96) }
+    let p = paleta();
+    let (r, g, b) = if light() { p.claro_hover } else { p.oscuro_hover };
+    Color32::from_rgb(r, g, b)
 }
 /// `--accent-ink` — texto SOBRE un relleno de acento sólido.
 pub fn acc_ink() -> Color32 {
     if light() { Color32::from_rgb(0xFF, 0xFF, 0xFF) } else { Color32::from_rgb(0x07, 0x13, 0x0E) }
 }
-/// `--accent-bg` — `rgba(61,214,164,0.12)`: chip teñido, píldora activa.
+/// `--accent-bg` — el acento al 12 %: chip teñido, píldora activa.
+///
+/// CALCULADO DEL ACENTO y no escrito a mano como antes. Con cuatro paletas, una
+/// tabla de tintes premultiplicados serían veinte números que hay que recalcular
+/// a mano cada vez que se toca un color — y que se desincronizan en silencio,
+/// dejando un chip verde en una interfaz violeta.
 pub fn acc_bg() -> Color32 {
-    if light() { Color32::from_rgba_premultiplied(2, 20, 15, 31) } else { Color32::from_rgba_premultiplied(7, 25, 19, 31) }
+    let (r, g, b) = acc_rgb();
+    Color32::from_rgba_unmultiplied(r, g, b, 31)
 }
-/// `--accent-line` — `rgba(61,214,164,0.28)`.
+/// `--accent-line` — el acento al 28 %.
 #[allow(dead_code)]
 pub fn acc_line() -> Color32 {
-    if light() { Color32::from_rgba_premultiplied(6, 55, 41, 87) } else { Color32::from_rgba_premultiplied(17, 59, 45, 71) }
+    let (r, g, b) = acc_rgb();
+    Color32::from_rgba_unmultiplied(r, g, b, 71)
 }
 
 // ── Semánticos ───────────────────────────────────────────────────────────────

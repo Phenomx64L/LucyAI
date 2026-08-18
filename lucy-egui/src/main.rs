@@ -45,6 +45,28 @@ fn ventana_enana(ancho: f32, alto: f32) -> bool {
     ancho + 1.0 < VENTANA_MIN[0] || alto + 1.0 < VENTANA_MIN[1]
 }
 
+/// El icono de la ventana, empotrado en el binario.
+///
+/// EMPOTRADO Y NO LEÍDO DE DISCO: un icono que se carga por ruta es un icono que
+/// desaparece al mover el ejecutable, y el fallo se ve solo en la barra de tareas
+/// —donde nadie mira dos veces— así que puede durar meses sin que nadie lo
+/// reporte.
+///
+/// Si el PNG no decodifica se devuelve uno VACÍO en vez de reventar: quedarse sin
+/// arrancar por un adorno sería un mal negocio. Es el mismo fichero que usa la
+/// app de escritorio, copiado de sus iconos.
+fn icono_ventana() -> egui::IconData {
+    const PNG: &[u8] = include_bytes!("../assets/lucy-icon.png");
+    match image::load_from_memory(PNG) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            egui::IconData { rgba: rgba.into_raw(), width, height }
+        }
+        Err(_) => egui::IconData { rgba: Vec::new(), width: 0, height: 0 },
+    }
+}
+
 fn main() -> eframe::Result {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -67,7 +89,14 @@ fn main() -> eframe::Result {
             .with_resizable(true)
             // El título SIGUE siendo el humano: sale en la barra de tareas y en
             // el Alt+Tab, que son los dos sitios donde alguien lo lee.
-            .with_title("Lucy · egui (Fase 1)"),
+            .with_title("Lucy · egui (Fase 1)")
+            // Y EL ICONO, por el mismo motivo y con más peso. La barra de título
+            // del sistema está apagada —la cabecera propia ocupa su sitio— así
+            // que los ÚNICOS lugares donde Lucy se identifica ante el escritorio
+            // son esos dos, y en los dos manda el icono antes que el texto. Sin
+            // él, una ventana sin decoraciones y con el icono genérico de un
+            // binario cualquiera es indistinguible de cualquier cosa.
+            .with_icon(std::sync::Arc::new(icono_ventana())),
         ..Default::default()
     };
     eframe::run_native(
@@ -1656,6 +1685,15 @@ fn card_on(
 /// crecería el doble para dejar aire a un campo que no lo necesita.
 const FILA_ETIQUETA: f32 = 0.55;
 
+/// Ancho mínimo del lado del control, en píxeles.
+///
+/// Doscientos veinte: lo que necesitan los dos widgets más anchos que hay —un
+/// segmentado de tres opciones, y el par «Guardar + campo de clave»— para no
+/// solaparse con la etiqueta. Por debajo de esto la fila deja de repartir por
+/// porcentaje y le quita el sitio a la etiqueta, que puede envolver a más
+/// líneas sin perder nada; un botón encogido deja de poder pulsarse.
+const FILA_CONTROL_MIN: f32 = 220.0;
+
 /// Un panel: marco, cabecera con icono y rótulo, y lo que le metan dentro.
 ///
 /// `derecha` es lo que va al otro extremo de la cabecera —un botón, una
@@ -1718,9 +1756,17 @@ fn fila(
     // posible: la etiqueta envuelve dentro de lo suyo y el valor se recorta
     // dentro de lo suyo. Un reparto que depende de quién dibuje primero es un
     // reparto que se rompe con el texto de mañana.
+    // EL CONTROL TIENE UN MÍNIMO, y la etiqueta cede lo que haga falta.
+    //
+    // Con la ventana estrecha, un reparto por porcentaje deja al control sin
+    // sitio: los botones «Guardar» y el campo de clave se metían encima del
+    // nombre del proveedor —se leía «console.anthropic.co**Guardar**»— porque
+    // el 45 % de una columna estrecha no da para los dos. Quien tiene que
+    // encogerse es la etiqueta, que envuelve a más líneas sin perder nada; un
+    // botón encogido deja de poder pulsarse.
     let total = ui.available_width();
-    let w_etiqueta = (total * FILA_ETIQUETA).max(100.0).min(total - 80.0).max(60.0);
-    let w_control = (total - w_etiqueta - GAP).max(60.0);
+    let w_control = FILA_CONTROL_MIN.max(total * (1.0 - FILA_ETIQUETA)).min(total - 80.0);
+    let w_etiqueta = (total - w_control - GAP).max(60.0);
     ui.allocate_ui_with_layout(
         egui::vec2(total, alto),
         egui::Layout::left_to_right(egui::Align::Center),
@@ -1748,15 +1794,16 @@ fn fila(
                 },
             );
             ui.add_space(GAP);
-            ui.allocate_ui_with_layout(
-                egui::vec2(w_control, alto),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    ui.set_max_width(w_control);
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    control(ui);
-                },
-            );
+            // POR `right`, el ayudante que ya usa el resto de la aplicación, y
+            // no por un `allocate_ui_with_layout` propio: la versión de aquí
+            // llamaba además a `set_max_width` dentro del reparto de derecha a
+            // izquierda, y eso movía el borde desde el que ese reparto empieza a
+            // contar. El resultado era que los controles no llegaban a su lado
+            // derecho y cada fila lo dejaba en un sitio distinto —medido: 464,
+            // 439 y 409 donde tenían que estar los tres en 700—, que es el
+            // desorden que se ve en la captura.
+            let _ = w_control;
+            right(ui, alto, control);
         },
     );
     if !ultima {
@@ -3329,6 +3376,8 @@ const K_SPEND: &str = "lucy.spend_limit";
 const K_TONO: &str = "lucy.tono";
 /// Si Lucy avisa cuando el modelo elegido se queda corto.
 const K_RUTA: &str = "lucy.enrutado";
+/// La paleta de acento.
+const K_PALETA: &str = "lucy.paleta";
 /// Clave del modo fijado.
 const K_PRESET: &str = "lucy.preset";
 /// Clave del tema visual.
@@ -3377,6 +3426,12 @@ impl App {
         if let Some(n) = storage.and_then(|s| s.get_string(K_NAME)) {
             set_user_name(&n);
         }
+        theme::set_paleta(
+            storage
+                .and_then(|s| s.get_string(K_PALETA))
+                .map(|v| theme::paleta_de(&v))
+                .unwrap_or(0),
+        );
         set_motion(
             storage
                 .and_then(|s| s.get_string(K_MOTION))
@@ -4073,6 +4128,7 @@ impl eframe::App for App {
         storage.set_string(K_SPEND, self.spend_limit.to_string());
         storage.set_string(K_TONO, self.tono.key().to_string());
         storage.set_string(K_RUTA, self.enrutado.to_string());
+        storage.set_string(K_PALETA, theme::paleta().clave.to_string());
         storage.set_string(K_THEME, theme::mode().key().to_string());
         storage.set_string(K_PRESET, self.preset.clone().unwrap_or_default());
         // Las conversaciones. `save` lo llama eframe cada treinta segundos y al
@@ -11189,6 +11245,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         ui.add_space(GAP);
         let mut nuevo_tema: Option<theme::Mode> = None;
         let mut nuevo_motion: Option<bool> = None;
+        let mut nueva_paleta: Option<usize> = None;
         panel(
             ui,
             col,
@@ -11246,6 +11303,31 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         },
                     );
                 }
+                // UN SOLO COLOR GOBIERNA TODO EL ACENTO —navegación activa,
+                // actividad del agente, progreso, hecho— así que cambiarlo aquí
+                // cambia la aplicación entera. Ni rojo ni ámbar en la lista: en
+                // Lucy significan «ha fallado» y «cuidado», y un acento de ese
+                // color haría que media pantalla pareciera una advertencia y que
+                // una advertencia de verdad se leyera como decoración.
+                let pal = theme::PALETAS
+                    .iter()
+                    .position(|p| p.clave == theme::paleta().clave)
+                    .unwrap_or(0);
+                fila(
+                    ui,
+                    "Color de acento",
+                    Some("lo que se ilumina: navegación, progreso, hecho"),
+                    false,
+                    |ui| {
+                        let etiquetas: Vec<&str> =
+                            theme::PALETAS.iter().map(|p| p.nombre).collect();
+                        if let Some(k) = segmentado(ui, 300.0, &etiquetas, pal) {
+                            if k != pal {
+                                nueva_paleta = Some(k);
+                            }
+                        }
+                    },
+                );
                 let mov = motion();
                 fila(
                     ui,
@@ -11270,6 +11352,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
         if let Some(v) = nuevo_motion {
             set_motion(v);
+        }
+        if let Some(k) = nueva_paleta {
+            theme::set_paleta(k);
         }
     }
 
@@ -15111,6 +15196,117 @@ mod layout {
             "el panel mide {} y su columna son {COL}",
             r.width()
         );
+    }
+
+    /// El borde derecho del control de una fila, que es lo que decide si una
+    /// columna de ajustes se lee ordenada o parece rota.
+    fn borde_control(col: f32, control: impl Fn(&mut egui::Ui) + Copy) -> i32 {
+        // POR HILO Y NO EN UN `static`. Aquí había un `AtomicI32` global y los
+        // tests de Rust corren en PARALELO: dos que midieran a la vez se pisaban
+        // el valor, y el fallo aparecía en el que perdiera la carrera — con un
+        // número que no era suyo. Un test que falla por lo que hace otro es peor
+        // que no tener test.
+        thread_local! {
+            static BORDE: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+        }
+        measure(col + 200.0, |ui| {
+            ui.scope(|ui| {
+                ui.set_width(col);
+                fila(ui, "Etiqueta", Some("su explicación"), true, |ui| {
+                    let r = ui.scope(|ui| control(ui)).response.rect;
+                    BORDE.set(r.right());
+                });
+            });
+        });
+        BORDE.get() as i32
+    }
+
+    #[test]
+    fn los_controles_de_una_columna_acaban_todos_en_la_misma_linea() {
+        // EL DESORDEN DE LA CAPTURA. Cada control quedaba en un sitio distinto
+        // —medido: 464, 439 y 409 donde los tres debían estar en 700— porque la
+        // fila llamaba a `set_max_width` dentro de un reparto de derecha a
+        // izquierda, y eso mueve el borde desde el que ese reparto cuenta. Con
+        // los bordes desalineados, una columna de ajustes parece rota aunque
+        // cada fila por separado esté bien.
+        const COL: f32 = 700.0;
+        let seg2 = borde_control(COL, |ui| {
+            segmentado(ui, 180.0, &["Activado", "Apagado"], 1);
+        });
+        let seg3 = borde_control(COL, |ui| {
+            segmentado(ui, 270.0, &["Conciso", "Equilibrado", "Detallado"], 1);
+        });
+        let num = borde_control(COL, |ui| {
+            let mut n = 200u32;
+            ui.add(egui::DragValue::new(&mut n));
+        });
+        let ins = borde_control(COL, |ui| insignia(ui, "válida", true));
+        for (nombre, x) in [("2 opciones", seg2), ("3 opciones", seg3), ("número", num), ("insignia", ins)] {
+            assert!(
+                (x as f32 - COL).abs() <= 2.0,
+                "el control «{nombre}» acaba en {x} y la columna en {COL}"
+            );
+        }
+    }
+
+    #[test]
+    fn con_la_ventana_estrecha_el_control_conserva_su_sitio() {
+        // EL FALLO AL REDIMENSIONAR. Con un reparto por porcentaje puro, una
+        // columna estrecha dejaba al control sin espacio y los botones se metían
+        // encima del nombre del proveedor: se leía «console.anthropic.coGuardar».
+        // Quien tiene que ceder es la etiqueta, que envuelve a más líneas sin
+        // perder nada; un botón encogido deja de poder pulsarse.
+        //
+        // El par «Guardar + campo» es el control más ancho que hay en esta vista.
+        for col in [320.0_f32, 420.0, 560.0, 700.0] {
+            let x = borde_control(col, |ui| {
+                ui.add_enabled(false, egui::Button::new("Guardar").small());
+                let mut s = String::new();
+                ui.add(egui::TextEdit::singleline(&mut s).desired_width(150.0));
+            });
+            assert!(
+                (x as f32 - col).abs() <= 2.0,
+                "a {col} de ancho el control acaba en {x}: se ha salido o no llega"
+            );
+        }
+    }
+
+    #[test]
+    fn cambiar_de_paleta_cambia_todo_el_acento_a_la_vez() {
+        // El acento vive en cinco funciones y todas tienen que moverse juntas:
+        // una que se quedara con el color viejo dejaría un chip verde en una
+        // interfaz violeta, y eso es peor que no poder cambiar el color.
+        let antes = (theme::acc(), theme::acc_hover(), theme::acc_bg(), theme::acc_line());
+        let violeta = theme::paleta_de("violeta");
+        theme::set_paleta(violeta);
+        let ahora = (theme::acc(), theme::acc_hover(), theme::acc_bg(), theme::acc_line());
+        assert_ne!(antes.0, ahora.0, "el acento no cambió");
+        assert_ne!(antes.1, ahora.1, "el hover se quedó atrás");
+        assert_ne!(antes.2, ahora.2, "el tinte de fondo se quedó atrás");
+        assert_ne!(antes.3, ahora.3, "la línea se quedó atrás");
+        // Y el tinte sigue siendo un TINTE: translúcido, no un relleno. Es lo
+        // que hace que una píldora activa deje ver la superficie de debajo en
+        // vez de taparla. (Los canales no se pueden comparar con los del acento:
+        // `Color32` guarda premultiplicado, así que un tinte al 12 % tiene los
+        // valores escalados y no los mismos.)
+        assert!(theme::acc_bg().a() < 255, "el tinte se ha vuelto opaco");
+        assert!(theme::acc_line().a() > theme::acc_bg().a(), "la línea debe marcar más que el fondo");
+        assert_eq!(theme::acc().a(), 255, "el acento sólido no puede ser translúcido");
+
+        // Una clave desconocida —de una versión futura, o corrupta— deja la de
+        // casa en vez de dejar la aplicación sin acento.
+        assert_eq!(theme::paleta_de("loquesea"), 0);
+        theme::set_paleta(999);
+        assert_eq!(theme::paleta().clave, "esmeralda");
+
+        // Y ni rojo ni ámbar ni azul: en Lucy significan otra cosa.
+        for p in theme::PALETAS {
+            assert!(
+                !["rojo", "ambar", "ámbar", "azul"].contains(&p.clave),
+                "«{}» choca con un color que ya tiene significado",
+                p.clave
+            );
+        }
     }
 
     #[test]
