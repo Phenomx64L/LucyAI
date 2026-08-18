@@ -547,7 +547,7 @@ mod tests {
     fn un_skill_que_no_esta_dice_cuales_si() {
         // «No existe» a secas deja al modelo probando nombres, y cada intento
         // cuesta un turno de red. Con la lista delante acierta al siguiente.
-        let ks = vec![crate::skills::parse("dns", "---\ndescription: d\n---\ncuerpo")];
+        let ks = vec![crate::skills::parse("dns", "---\ndescription: d\n---\ncuerpo", true)];
         let r = run_with_skills("skill", "loquesea", &ks).unwrap();
         assert!(!r.ok);
         assert!(r.body.contains("dns"), "{}", r.body);
@@ -558,7 +558,8 @@ mod tests {
         // El recordatorio no es adorno: un procedimiento escrito hace meses
         // puede no encajar con la máquina de hoy, y lo que hay que hacer
         // entonces es mandar lo que se ve, no lo que dice el papel.
-        let ks = vec![crate::skills::parse("dns", "---\ndescription: d\n---\nMira resolv.conf")];
+        let ks =
+            vec![crate::skills::parse("dns", "---\ndescription: d\n---\nMira resolv.conf", true)];
         let r = run_with_skills("skill", "dns", &ks).unwrap();
         assert!(r.ok);
         assert!(r.body.contains("Mira resolv.conf"));

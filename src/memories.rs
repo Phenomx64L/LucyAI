@@ -273,6 +273,10 @@ pub fn ensure_schema() -> Result<(), String> {
             // Eso convierte cualquier lectura del valor en una ruleta.
             "ALTER TABLE agent_memories ADD COLUMN superseded_by INTEGER NULL",
             "ALTER TABLE agent_memories ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
+            // La chincheta. Existe en la base real porque la añade la app; se
+            // declara aquí también para que una instalación que arranque por el
+            // shell nativo tenga la misma tabla que una que arranque por la app.
+            "ALTER TABLE agent_memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = c.execute(col, []);
         }
@@ -374,6 +378,61 @@ pub fn save(n: &New) -> Result<Guardado, String> {
         }
     }
     Ok(g)
+}
+
+/// Importancia de una memoria FIJADA a mano.
+///
+/// Diez, que es la convención de la app y la que ya respeta el consolidador: por
+/// encima de este número no se funde nada. Es el número que distingue «esto lo
+/// decidió una persona» de todo lo que Lucy se apuntó sola, y por eso ninguna
+/// pasada automática puede concedérselo — la escritura de turno topa en 3 y la
+/// consolidación en 9.
+pub const FIJADA: i64 = 10;
+
+/// Fija o suelta una memoria.
+///
+/// FIJAR ES DOS COSAS A LA VEZ, y las dos hacen falta. La columna `pinned` es lo
+/// que la app enseña con su chincheta; la importancia en [`FIJADA`] es lo que la
+/// pone por delante en el recuerdo y lo que impide que el consolidador la funda
+/// con otra. Escribir solo una de las dos daría una chincheta decorativa —se ve
+/// fijada y se comporta como cualquiera— o lo contrario, una memoria intocable
+/// que nada explica.
+///
+/// Al soltarla vuelve a 3, que es el techo de lo automático: no se puede
+/// recuperar la importancia que tenía antes —nadie la guardó— y dejarla en 10
+/// sin la marca sería justo la memoria intocable sin explicación.
+pub fn set_pinned(id: i64, fijada: bool) -> Result<(), String> {
+    ensure_schema()?;
+    crate::with_db(|c| {
+        c.execute(
+            "UPDATE agent_memories SET pinned = ?1, importance = ?2 WHERE id = ?3",
+            rusqlite::params![
+                i64::from(fijada),
+                if fijada { FIJADA } else { MAX_AUTO_IMPORTANCE },
+                id
+            ],
+        )
+        .map_err(|e| format!("memories: fijar: {e}"))?;
+        Ok(())
+    })
+}
+
+/// Cambia la importancia de una memoria, sin tocar la chincheta.
+///
+/// El tope es [`FIJADA`] menos uno: llegar a diez es fijarla, y eso tiene su
+/// propia función porque escribe además la columna. Un deslizador que pudiera
+/// poner diez dejaría memorias con la importancia de fijada y sin la marca.
+pub fn set_importance(id: i64, importancia: i64) -> Result<(), String> {
+    ensure_schema()?;
+    let n = importancia.clamp(1, FIJADA - 1);
+    crate::with_db(|c| {
+        c.execute(
+            "UPDATE agent_memories SET importance = ?1 WHERE id = ?2",
+            rusqlite::params![n, id],
+        )
+        .map_err(|e| format!("memories: importancia: {e}"))?;
+        Ok(())
+    })
 }
 
 /// Borra una memoria — y su vector, que es la mitad que se olvidaba en todas
@@ -720,6 +779,13 @@ pub struct Recuerdo {
     pub bloque: String,
     pub memorias: usize,
     pub documentos: usize,
+    /// Cuántas entraron por estar FIJADAS, no por parecerse a la pregunta.
+    ///
+    /// Aparte de `memorias` porque llegaron por otro camino, y quien mire por
+    /// qué el prompt trae lo que trae necesita distinguirlos: cuatro fijadas y
+    /// cero semánticas significa que la búsqueda no encontró nada, no que Lucy
+    /// recordara bien.
+    pub fijadas: usize,
     /// Se recurrió a la búsqueda por palabras porque no hubo vectores.
     ///
     /// Se dice en vez de callarlo: el recuerdo léxico encuentra menos y peor, y
@@ -761,6 +827,25 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
 
     let mut r = Recuerdo::default();
     let mut lineas: Vec<String> = Vec::new();
+
+    // ── LAS FIJADAS, ANTES QUE NADA Y SIN PREGUNTARLE AL PARECIDO ────────────
+    //
+    // Es lo que significa fijar una memoria, y sin esto la chincheta sería
+    // decorativa: entrarían solo cuando se parecieran a la pregunta, o sea
+    // cuando ya no hacía falta acordarse de ellas. Es el mismo razonamiento que
+    // separa un principio de una memoria, aplicado a las memorias que el
+    // operador señaló a mano.
+    //
+    // Y NO GASTAN EL PRESUPUESTO de las recordadas por significado: si lo
+    // gastaran, fijar tres memorias dejaría el recuerdo semántico sin sitio y
+    // Lucy dejaría de traer lo que viene al caso. Tienen su propio tope pequeño
+    // — fijar veinte memorias es no fijar ninguna.
+    if let Ok(fijadas) = pinned(MAX_FIJADAS_EN_PROMPT) {
+        for t in &fijadas {
+            lineas.push(format!("- [fijada] {}", una_linea(t)));
+        }
+        r.fijadas = fijadas.len();
+    }
 
     // LA CONSULTA SE EMBEBE UNA VEZ, no una por pata. Las dos patas semánticas
     // usan el mismo vector; pedirlo dos veces era pagar dos viajes a Ollama por
@@ -823,6 +908,40 @@ pub fn recall(query: &str, presupuesto: usize) -> Recuerdo {
 /// Una memoria en una línea. Los saltos romperían la lista del prompt.
 fn una_linea(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Cuántas memorias fijadas entran en el prompt.
+///
+/// Cuatro. El tope es pequeño a propósito y por lo mismo que el de los
+/// principios: si entraran todas, fijar veinte memorias sería no fijar ninguna —
+/// el modelo las promedia y acaba siguiendo las que suenan más fuerte. Y como no
+/// gastan el presupuesto de las semánticas, un número grande aquí desplazaría el
+/// prompt entero hacia lo que el operador marcó hace meses.
+pub const MAX_FIJADAS_EN_PROMPT: usize = 4;
+
+/// Las memorias fijadas, de más importante a más reciente.
+///
+/// Sin filtro de parecido: entran porque alguien las señaló, no porque se
+/// parezcan a la pregunta.
+pub fn pinned(limite: usize) -> Result<Vec<String>, String> {
+    ensure_schema()?;
+    crate::with_db(|c| {
+        let mut st = c
+            .prepare(
+                "SELECT title || ' — ' || content FROM agent_memories
+                 WHERE pinned = 1
+                   AND (superseded_by IS NULL OR superseded_by = '')
+                   AND session_id NOT LIKE 'pdf:%'
+                 ORDER BY importance DESC, created_at DESC LIMIT ?1",
+            )
+            .map_err(|e| format!("memories: fijadas: {e}"))?;
+        let v = st
+            .query_map([limite as i64], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("memories: fijadas: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    })
 }
 
 /// Recuerdo por palabras, sin ningún servicio detrás.

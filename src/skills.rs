@@ -32,6 +32,46 @@ pub struct Skill {
     pub description: String,
     /// Las instrucciones. Lo que se le entrega cuando lo invoca.
     pub body: String,
+    /// Si entra en el catálogo que ve Lucy.
+    ///
+    /// APAGAR NO ES BORRAR, y la diferencia importa: un skill desactivado sigue
+    /// en disco con su procedimiento dentro, listo para volver con un clic. Lo
+    /// que se quiere casi siempre es «ahora no» —el de migración estorba mientras
+    /// se atiende una incidencia— y para eso desinstalar es demasiado: hay que
+    /// volver a encontrar la carpeta y reinstalarla.
+    pub activo: bool,
+}
+
+/// El fichero que marca un skill como apagado.
+///
+/// UN FICHERO Y NO UNA FILA EN LA BASE, para que valga la misma regla que rige
+/// todo este módulo: lo que Lucy aprende acaba siendo un fichero que se puede
+/// leer, copiar a otra máquina y borrar a mano. Un skill apagado desde una base
+/// de datos volvería encendido al copiar la carpeta a otro equipo, y nadie
+/// sabría por qué.
+pub const MARCA_APAGADO: &str = ".disabled";
+
+/// Enciende o apaga un skill. `Ok(())` también si ya estaba como se pide.
+pub fn set_enabled(nombre: &str, activo: bool) -> Result<(), String> {
+    let dir = user_dir()
+        .ok_or("No se pudo resolver tu perfil de usuario.")?
+        .join(nombre);
+    if !dir.is_dir() {
+        return Err(format!("«{nombre}» no está instalado en tu perfil."));
+    }
+    let marca = dir.join(MARCA_APAGADO);
+    if activo {
+        // Que no exista no es un error: apagar dos veces y encender dos veces
+        // tienen que acabar en el mismo sitio.
+        if marca.exists() {
+            std::fs::remove_file(&marca)
+                .map_err(|e| format!("no se pudo activar «{nombre}»: {e}"))?;
+        }
+    } else {
+        std::fs::write(&marca, b"")
+            .map_err(|e| format!("no se pudo desactivar «{nombre}»: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Tope del cuerpo de un skill.
@@ -61,7 +101,11 @@ pub fn discover(dir: &std::path::Path) -> Vec<Skill> {
             }
             let md = std::fs::read_to_string(p.join("SKILL.md")).ok()?;
             let name = p.file_name()?.to_str()?.to_lowercase();
-            Some(parse(&name, &md))
+            // Un skill apagado SE DESCUBRE IGUAL: tiene que salir en la lista
+            // para poder volver a encenderlo. Lo que cambia es que no entra en
+            // el catálogo que ve Lucy.
+            let activo = !p.join(MARCA_APAGADO).exists();
+            Some(parse(&name, &md, activo))
         })
         .collect();
     // Por nombre, para que el catálogo del prompt no cambie de orden entre
@@ -81,7 +125,7 @@ pub fn discover(dir: &std::path::Path) -> Vec<Skill> {
 /// perfectamente útil; exigirle una cabecera sería rechazar lo que alguien
 /// acaba de escribir por una formalidad. Sin descripción, se usa la primera
 /// línea con texto — que es lo que su autor puso primero por algo.
-pub fn parse(name: &str, md: &str) -> Skill {
+pub fn parse(name: &str, md: &str, activo: bool) -> Skill {
     let (cabecera, cuerpo) = match md.strip_prefix("---") {
         Some(resto) => match resto.split_once("\n---") {
             Some((c, b)) => (c, b.trim_start_matches(['\r', '\n'])),
@@ -112,6 +156,7 @@ pub fn parse(name: &str, md: &str) -> Skill {
         name: name.to_string(),
         description: crate::skills::una_linea(&description, 200),
         body: cuerpo.chars().take(MAX_BODY).collect(),
+        activo,
     }
 }
 
@@ -127,6 +172,10 @@ fn una_linea(s: &str, max: usize) -> String {
 
 /// El catálogo, tal como viaja en el prompt. Vacío = no hay skills.
 pub fn catalog(skills: &[Skill]) -> String {
+    // SOLO LOS ACTIVOS, que es todo el efecto de apagar uno: deja de estar en la
+    // lista que el modelo lee, así que deja de pedirlo. El fichero sigue en
+    // disco y volver a encenderlo es un clic.
+    let skills: Vec<&Skill> = skills.iter().filter(|k| k.activo).collect();
     if skills.is_empty() {
         return String::new();
     }
@@ -360,7 +409,7 @@ mod tests {
 
     #[test]
     fn se_lee_la_cabecera_y_el_cuerpo_por_separado() {
-        let k = parse("dns-troubleshoot", CON_CABECERA);
+        let k = parse("dns-troubleshoot", CON_CABECERA, true);
         assert_eq!(k.description, "Diagnostica resolución DNS.");
         assert!(k.body.starts_with("# Pasos"), "{:?}", k.body);
         assert!(!k.body.contains("description:"), "la cabecera se coló en el cuerpo");
@@ -371,7 +420,7 @@ mod tests {
         // Si mandara la cabecera, pedir un skill por el nombre que se ve al
         // mirar el disco no lo encontraría, y eso es un misterio de los que
         // cuestan una tarde.
-        let k = parse("dns-troubleshoot", CON_CABECERA);
+        let k = parse("dns-troubleshoot", CON_CABECERA, true);
         assert_eq!(k.name, "dns-troubleshoot", "el `name:` de la cabecera mandó");
     }
 
@@ -380,7 +429,7 @@ mod tests {
         // Exigir una cabecera sería rechazar lo que alguien acaba de escribir
         // por una formalidad. La descripción sale de la primera línea con texto,
         // que es lo que su autor puso primero por algo.
-        let k = parse("limpieza", "# Limpiar discos\n\nBorra temporales viejos.\n");
+        let k = parse("limpieza", "# Limpiar discos\n\nBorra temporales viejos.\n", true);
         assert_eq!(k.description, "Limpiar discos");
         assert!(k.body.contains("Borra temporales"));
     }
@@ -390,9 +439,9 @@ mod tests {
         // El catálogo es una línea por skill. Una descripción multilínea
         // produciría entradas falsas que el modelo leería como skills que no
         // existen.
-        let k = parse("x", "---\ndescription: uno\n---\ncuerpo");
+        let k = parse("x", "---\ndescription: uno\n---\ncuerpo", true);
         assert!(!k.description.contains('\n'));
-        let k2 = parse("y", "primera\nsegunda\ntercera");
+        let k2 = parse("y", "primera\nsegunda\ntercera", true);
         assert_eq!(k2.description, "primera");
     }
 
@@ -400,7 +449,7 @@ mod tests {
     fn el_catalogo_lleva_nombre_descripcion_y_como_pedirlo() {
         // Sin el cómo, el modelo sabe que existen y no sabe invocarlos — que es
         // peor que no saber que existen.
-        let ks = vec![parse("dns", CON_CABECERA)];
+        let ks = vec![parse("dns", CON_CABECERA, true)];
         let c = catalog(&ks);
         assert!(c.contains("dns"));
         assert!(c.contains("Diagnostica"));
@@ -411,11 +460,35 @@ mod tests {
     }
 
     #[test]
+    fn un_skill_apagado_desaparece_del_catalogo_pero_no_del_disco() {
+        // ESE ES TODO EL EFECTO de apagar uno: deja de estar en la lista que el
+        // modelo lee, así que deja de pedirlo. Apagar no es borrar — el fichero
+        // sigue ahí con su procedimiento dentro, y volver a encenderlo es un
+        // clic en vez de buscar la carpeta y reinstalarla.
+        let apagado = parse("migracion", CON_CABECERA, false);
+        let encendido = parse("dns", CON_CABECERA, true);
+        let c = catalog(&[apagado.clone(), encendido]);
+        assert!(c.contains("dns"), "el activo tiene que salir: {c}");
+        assert!(!c.contains("migracion"), "el apagado no puede salir: {c}");
+        // Y conserva su cuerpo: no es una fila vaciada, es una fila marcada.
+        assert!(!apagado.body.is_empty());
+        assert!(!apagado.activo);
+    }
+
+    #[test]
+    fn con_todos_apagados_el_catalogo_es_vacio_y_no_una_cabecera_huerfana() {
+        // Un bloque que dice «SKILLS DISPONIBLES» y no lista ninguno enseña al
+        // modelo a saltarse ese encabezado, así que el día que sí traiga algo
+        // tampoco lo mirará.
+        assert!(catalog(&[parse("a", CON_CABECERA, false)]).is_empty());
+    }
+
+    #[test]
     fn un_preset_lleva_el_cuerpo_y_permiso_para_no_aplicarlo() {
         // Sin ese permiso, un modo fijado convierte cada pregunta en un clavo
         // para su martillo: se pregunta la hora y contesta con un diagnóstico
         // de DNS porque es lo que dice el modo.
-        let k = parse("dns", CON_CABECERA);
+        let k = parse("dns", CON_CABECERA, true);
         let b = preset_block(&k);
         assert!(b.contains("# Pasos"), "no lleva el cuerpo");
         assert!(b.contains("si no encaja, dilo"), "no le deja salirse: {b}");
@@ -434,7 +507,7 @@ mod tests {
         // Va a pedir `DNS Troubleshoot` cuando la carpeta es
         // `dns-troubleshoot`. Contestar «no existe» a eso es tener razón y no
         // servir de nada.
-        let ks = vec![parse("dns-troubleshoot", CON_CABECERA)];
+        let ks = vec![parse("dns-troubleshoot", CON_CABECERA, true)];
         for pedido in ["dns-troubleshoot", "DNS Troubleshoot", "dns_troubleshoot", "DNSTroubleshoot"] {
             assert!(find(&ks, pedido).is_some(), "no encontró «{pedido}»");
         }
@@ -446,7 +519,7 @@ mod tests {
         // Se carga entero en un turno: un manual de doscientas páginas se
         // llevaría por delante el presupuesto de la conversación.
         let largo = format!("---\ndescription: x\n---\n{}", "y".repeat(MAX_BODY + 5_000));
-        assert_eq!(parse("k", &largo).body.chars().count(), MAX_BODY);
+        assert_eq!(parse("k", &largo, true).body.chars().count(), MAX_BODY);
     }
 
     /// Un directorio temporal propio de este test, y su limpieza.
@@ -473,7 +546,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(n, "reiniciar-spooler");
-        let k = parse(&n, &md);
+        let k = parse(&n, &md, true);
         assert!(k.description.contains("cola de impresión"), "{}", k.description);
         assert!(k.body.contains("Restart-Service Spooler"));
         assert!(k.body.contains("Se reinicia el servicio"));
