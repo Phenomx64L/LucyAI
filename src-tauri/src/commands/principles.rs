@@ -40,7 +40,7 @@ pub fn save_principle(
     if name.len() > 120 || rule.len() > 1000 {
         return Err("save_principle: name <= 120 chars, rule <= 1000 chars".to_string());
     }
-    let pri = priority.unwrap_or(100).max(1).min(1000);
+    let pri = priority.unwrap_or(100).clamp(1, 1000);
     shared_db(|conn| {
         conn.execute(
             "INSERT INTO principles (name, rule, scope, priority)

@@ -159,11 +159,10 @@ pub fn compress_tool_json(input: &str, opts: &TabularOpts) -> Option<String> {
             let mut best: Option<(&String, &Vec<Value>)> = None;
             for (k, v) in map {
                 if let Value::Array(a) = v {
-                    if a.first().map(|e| e.is_object()).unwrap_or(false) {
-                        if best.map(|(_, b)| a.len() > b.len()).unwrap_or(true) {
+                    if a.first().map(|e| e.is_object()).unwrap_or(false)
+                        && best.map(|(_, b)| a.len() > b.len()).unwrap_or(true) {
                             best = Some((k, a));
                         }
-                    }
                 }
             }
             let (k, a) = best?;

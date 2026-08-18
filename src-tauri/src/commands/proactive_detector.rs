@@ -255,7 +255,7 @@ fn try_insert(conn: &rusqlite::Connection, hit: &DetectionHit) -> Result<bool, S
     let (sev, title, detail) = (hit.severity, hit.title.clone(), hit.detail.clone());
     tauri::async_runtime::spawn(async move {
         if let Err(e) = crate::commands::notify_bridge::deliver(
-            &format!("Lucy — {}", title), &detail, &sev,
+            &format!("Lucy — {}", title), &detail, sev,
         ).await {
             crate::utils::logging::write_app_log(
                 "WARNING",
@@ -370,7 +370,7 @@ fn detect_db_integrity_alarm(conn: &rusqlite::Connection) -> Option<DetectionHit
         ),
         // Include a prefix hash so different concrete errors emit separate
         // insights. Same generic "locked" message would otherwise dedupe.
-        dedupe_key: format!("db_integrity_alarm:{}", &preview.chars().take(40).collect::<String>()),
+        dedupe_key: format!("db_integrity_alarm:{}", preview.chars().take(40).collect::<String>()),
         action_hint: Some("/diagnostico → Database"),
     })
 }

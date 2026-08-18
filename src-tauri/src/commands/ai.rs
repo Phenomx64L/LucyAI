@@ -1316,7 +1316,7 @@ pub async fn ask_lucy(
         if let Some(k) = _local_cache_key {
             let truncated = v["choices"].get(0)
                 .and_then(|c| c["finish_reason"].as_str())
-                .map_or(false, |r| r == "length" || r == "max_tokens");
+                .is_some_and(|r| r == "length" || r == "max_tokens");
             let plen = local_msgs.as_ref().map(|(s, u)| s.len() + u.len()).unwrap_or(0);
             if !truncated && _local_completion_cacheable(plen, t) {
                 _local_completion_put(k, t.to_string());

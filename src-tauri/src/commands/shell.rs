@@ -93,7 +93,7 @@ pub async fn execute_powershell(script: String, bypass_token: Option<String>, ti
         let line = format!(
             "[{}] [USR:{}] [PLACEHOLDER_GUARD] {} :: {}",
             timestamp, user, evidence,
-            &crate::utils::secret_scrubber::scrub_for_audit(
+            crate::utils::secret_scrubber::scrub_for_audit(
                 crate::utils::safe_truncate(&script, 200)
             )
         );

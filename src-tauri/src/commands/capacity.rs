@@ -110,7 +110,7 @@ pub async fn get_capacity_trends(
     days: Option<i64>,
 ) -> Result<CapacityTrend, String> {
     let hid = host_id.unwrap_or_default();
-    let d = days.unwrap_or(7).min(365).max(1);
+    let d = days.unwrap_or(7).clamp(1, 365);
 
     tokio::task::spawn_blocking(move || {
         shared_db(|conn| {
@@ -265,9 +265,9 @@ pub async fn capacity_projection(
     forecast_points: Option<i64>,
 ) -> Result<ProjectionOverlay, String> {
     let hid = host_id.unwrap_or_default();
-    let d   = days.unwrap_or(14).min(365).max(2);
-    let fd  = forecast_days.unwrap_or(7).min(60).max(1);
-    let fp  = forecast_points.unwrap_or(24).min(240).max(2);
+    let d   = days.unwrap_or(14).clamp(2, 365);
+    let fd  = forecast_days.unwrap_or(7).clamp(1, 60);
+    let fp  = forecast_points.unwrap_or(24).clamp(2, 240);
 
     tokio::task::spawn_blocking(move || {
         shared_db(|conn| {
@@ -369,7 +369,7 @@ fn fit_linear(
         // Clamp to [0, 110] — metrics are percentages; a slight overshoot is
         // useful so the line still shows "you'll cross 95%" rather than
         // capping invisibly at 100.
-        y = y.max(0.0).min(110.0);
+        y = y.clamp(0.0, 110.0);
         projection.push((ts, y));
     }
 

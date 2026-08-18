@@ -400,7 +400,7 @@ pub async fn execute_cmd(
 #[tauri::command]
 pub async fn execute_wmic(query: String) -> Result<String, String> {
     // Permission check (user-defined rules)
-    let perm = super::metrics::check_permission(format!("wmic {}", &query), "command".to_string()).await?;
+    let perm = super::metrics::check_permission(format!("wmic {}", query), "command".to_string()).await?;
     match perm.action.as_str() {
         "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
         "ask" => return Err(format!("Comando requiere aprobación: {}.", perm.reason)),
@@ -462,7 +462,7 @@ pub async fn execute_wmic(query: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn execute_netsh(args: String) -> Result<String, String> {
     // Permission check (user-defined rules)
-    let perm = super::metrics::check_permission(format!("netsh {}", &args), "command".to_string()).await?;
+    let perm = super::metrics::check_permission(format!("netsh {}", args), "command".to_string()).await?;
     match perm.action.as_str() {
         "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
         "ask" => return Err(format!("Comando requiere aprobación: {}.", perm.reason)),
@@ -513,7 +513,7 @@ pub async fn execute_reg(args: String, bypass_token: Option<String>) -> Result<S
         return Err(crate::utils::placeholder_guard::refusal_message(&evidence));
     }
     // Permission check (user-defined rules)
-    let perm = super::metrics::check_permission(format!("reg {}", &args), "command".to_string()).await?;
+    let perm = super::metrics::check_permission(format!("reg {}", args), "command".to_string()).await?;
     match perm.action.as_str() {
         "block" => return Err(format!("Permiso denegado: {}", perm.reason)),
         "ask" => return Err(format!("Comando requiere aprobación: {}.", perm.reason)),
@@ -1436,7 +1436,7 @@ pub async fn search_files(
     }
 
     audit(&format!("[{}] [HOST:{}] [SEARCH_FILES] dir={} pattern=\"{:?}\" glob={:?}",
-        ts(), host(), &directory, &patterns, &glob_ext));
+        ts(), host(), directory, patterns, glob_ext));
 
     // P5 audit: the walk + per-file blocking reads can stall the tokio
     // executor for many seconds on big trees. Lift the entire traversal

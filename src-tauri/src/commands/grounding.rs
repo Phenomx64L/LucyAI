@@ -359,7 +359,7 @@ pub async fn memory_instances_for(
     memory_id: String,
     limit: Option<i64>,
 ) -> Result<Vec<MemoryInstance>, String> {
-    let cap = limit.unwrap_or(20).max(1).min(200);
+    let cap = limit.unwrap_or(20).clamp(1, 200);
     let mid_int: Option<i64> = memory_id.parse().ok();
 
     shared_db(move |conn| {
@@ -424,7 +424,7 @@ pub async fn memory_instances_search(
     query: String,
     limit: Option<i64>,
 ) -> Result<Vec<InstanceHit>, String> {
-    let cap = limit.unwrap_or(10).max(1).min(50);
+    let cap = limit.unwrap_or(10).clamp(1, 50);
     shared_db(move |conn| {
         let mut stmt = conn.prepare(
             "SELECT mi.id, mi.memory_kind, mi.memory_id, mi.memory_id_text, \

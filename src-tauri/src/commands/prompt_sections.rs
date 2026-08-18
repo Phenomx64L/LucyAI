@@ -1276,7 +1276,7 @@ pub fn local_model_supports_tools(model: &str) -> bool {
     if m.contains("qwen3") || m.contains("qwen-3") {
         // Vetted family, but only at a viable size. No size in the name → trust
         // the family (Ollama's default qwen3 tag is a mid-size build).
-        return parse_param_billions(&m).map_or(true, |b| b >= 7.0);
+        return parse_param_billions(&m).is_none_or(|b| b >= 7.0);
     }
     false
 }

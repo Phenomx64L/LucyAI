@@ -62,7 +62,7 @@ pub async fn analyze_log_patterns(
     lines: Vec<String>,
     bucket_minutes: Option<usize>,
 ) -> Result<LogAnalysisResult, String> {
-    let bucket_mins = bucket_minutes.unwrap_or(60).max(1).min(1440);
+    let bucket_mins = bucket_minutes.unwrap_or(60).clamp(1, 1440);
 
     // Parse on a blocking thread — can be CPU-intensive for large logs
     tokio::task::spawn_blocking(move || {

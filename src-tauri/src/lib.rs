@@ -147,7 +147,7 @@ pub fn run() {
     {
         use std::thread::available_parallelism;
         let workers = available_parallelism()
-            .map(|n| n.get().min(8).max(2))
+            .map(|n| n.get().clamp(2, 8))
             .unwrap_or(4);
         if let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(workers)

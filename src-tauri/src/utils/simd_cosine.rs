@@ -280,8 +280,8 @@ pub struct BenchReport {
 pub async fn bench_cosine(iters: Option<u32>, dim: Option<u32>) -> Result<BenchReport, String> {
     use std::time::Instant;
 
-    let iters = iters.unwrap_or(50_000).min(500_000).max(1_000);
-    let dim   = dim.unwrap_or(768).min(4_096).max(64) as usize;
+    let iters = iters.unwrap_or(50_000).clamp(1_000, 500_000);
+    let dim   = dim.unwrap_or(768).clamp(64, 4_096) as usize;
 
     // Deterministic random vectors (xorshift64). Same seed across runs.
     let make = |seed: u64| -> Vec<f32> {

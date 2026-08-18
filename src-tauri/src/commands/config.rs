@@ -58,7 +58,7 @@ pub fn get_configured_providers() -> Result<Vec<String>, String> {
     // `tavily` va incluido para que la UI renderice su fila de estado (es una
     // herramienta auxiliar de búsqueda web, no un proveedor LLM).
     let mut transient_err: Option<String> = None;
-    for provider in KEYED_PROVIDERS.iter().copied() {
+    for provider in KEYED_PROVIDERS {
         let key_name = format!("{}_api_key", provider);
         match Entry::new("LucySysAdmin", &key_name) {
             Ok(entry) => match entry.get_password() {

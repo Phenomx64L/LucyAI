@@ -1221,7 +1221,7 @@ pub async fn save_agent_memory(
             return Ok(dup);
         }
 
-        let imp  = importance.unwrap_or(1).max(1).min(3);
+        let imp  = importance.unwrap_or(1).clamp(1, 3);
         // v1.7.236 (audit): tags and files are agent-controlled and were the ONLY
         // fields persisted UNSCRUBBED — a secret smuggled into a tag/file entry
         // (e.g. a token pasted as a "tag") bypassed the title/content scrub above.
@@ -1305,7 +1305,7 @@ fn stage1_fts_dedup(
     title: &str,
     content: &str,
 ) -> Result<Option<SaveMemoryResult>, String> {
-    let probe = format!("{} {}", title, &content.chars().take(200).collect::<String>());
+    let probe = format!("{} {}", title, content.chars().take(200).collect::<String>());
     let safe_q = probe
         .split_whitespace()
         .filter(|w| w.len() > 2 && !w.chars().any(|c| c.is_control()))
@@ -1369,7 +1369,7 @@ async fn stage2_embedding_dedup(
     content: &str,
 ) -> Result<Option<SaveMemoryResult>, String> {
     // Build the same probe as stage 1 — title + first chunk of content
-    let probe = format!("{}\n{}", title, &content.chars().take(800).collect::<String>());
+    let probe = format!("{}\n{}", title, content.chars().take(800).collect::<String>());
 
     // Embed via Ollama. If embeddings aren't available we silently skip.
     let embed_res = crate::commands::embeddings::embed_via_ollama_pub(&probe, None).await;
@@ -1476,8 +1476,8 @@ NO — si son compatibles, complementarios o hablan de asuntos distintos. \
 Ante la duda responde NO.";
     let user = format!(
         "VIEJO:\n{}\n\nNUEVO:\n{}",
-        &old_text.chars().take(700).collect::<String>(),
-        &new_text.chars().take(700).collect::<String>()
+        old_text.chars().take(700).collect::<String>(),
+        new_text.chars().take(700).collect::<String>()
     );
     let body = serde_json::json!({
         "model": "qwen3:4b",
@@ -1513,7 +1513,7 @@ Ante la duda responde NO.";
 /// embedded), so this costs one extra Ollama round-trip only when a band
 /// candidate actually exists.
 async fn stage3_contradiction_check(title: &str, content: &str) -> Option<i64> {
-    let probe = format!("{}\n{}", title, &content.chars().take(800).collect::<String>());
+    let probe = format!("{}\n{}", title, content.chars().take(800).collect::<String>());
     let (query_vec, query_model) = crate::commands::embeddings::embed_via_ollama_pub(&probe, None)
         .await
         .ok()?;
@@ -1597,7 +1597,7 @@ pub async fn search_agent_memories(
     // del recall, que SI quiere documentacion. Gemelo del fix de dedup v1.7.237.
     exclude_documents: Option<bool>,
 ) -> Result<Vec<AgentMemory>, String> {
-    let lim = limit.unwrap_or(10).max(1).min(50);
+    let lim = limit.unwrap_or(10).clamp(1, 50);
     if query.trim().is_empty() {
         return with_db(|_conn| get_recent_memories(Some(lim)));
     }
@@ -1908,7 +1908,7 @@ pub async fn search_agent_memories_expanded(
     query: String,
     limit: Option<i64>,
 ) -> Result<Vec<AgentMemory>, String> {
-    let lim = limit.unwrap_or(10).max(1).min(50);
+    let lim = limit.unwrap_or(10).clamp(1, 50);
     if query.trim().is_empty() {
         return get_recent_memories(Some(lim));
     }
@@ -2221,7 +2221,7 @@ pub fn consolidate_agent_memories(
     if new_title.trim().is_empty() || new_content.trim().is_empty() {
         return Err("consolidate_agent_memories: new_title and new_content required".to_string());
     }
-    let imp = importance.unwrap_or(2).max(1).min(3);
+    let imp = importance.unwrap_or(2).clamp(1, 3);
     let tags = new_tags.unwrap_or_else(|| "[\"consolidated\"]".to_string());
 
     with_db(|conn| {
@@ -2314,7 +2314,7 @@ pub fn memory_browser_stats() -> Result<MemoryBrowserStats, String> {
 #[tauri::command]
 pub fn get_recent_memories_filtered(limit: Option<i64>, importance: Option<i64>) -> Result<Vec<AgentMemory>, String> {
     with_db(|conn| {
-        let lim = limit.unwrap_or(15).max(1).min(50);
+        let lim = limit.unwrap_or(15).clamp(1, 50);
         let imp = importance.unwrap_or(0);
         let sql = format!(
             "SELECT id, session_id, title, content, tags, files, importance, created_at
@@ -2359,8 +2359,7 @@ pub fn touch_memories_by_ids(ids: Vec<i64>) -> Result<usize, String> {
     }
     let ids: Vec<i64> = ids.into_iter().take(50).collect();
     with_db(move |conn| {
-        let placeholders = std::iter::repeat("?")
-            .take(ids.len())
+        let placeholders = std::iter::repeat_n("?", ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -2370,7 +2369,7 @@ pub fn touch_memories_by_ids(ids: Vec<i64>) -> Result<usize, String> {
               WHERE id IN ({placeholders})"
         );
         conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
-            .map(|n| n as usize)
+            .map(|n| n)
             .map_err(|e| format!("touch by ids: {}", e))
     })
 }
@@ -2394,7 +2393,7 @@ pub fn set_memory_pinned(id: i64, pinned: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn get_pinned_memories(limit: Option<i64>) -> Result<Vec<AgentMemory>, String> {
     with_db(|conn| {
-        let lim = limit.unwrap_or(5).max(1).min(10);
+        let lim = limit.unwrap_or(5).clamp(1, 10);
         let sql = "SELECT id, session_id, title, content, tags, files, importance, created_at
                    FROM agent_memories
                    WHERE pinned = 1
@@ -2588,7 +2587,7 @@ pub fn save_conversation_turn(
 /// prod"). Returns up to `limit` turns, newest first when ranks tie.
 #[tauri::command]
 pub fn recall_conversations(query: String, limit: Option<i64>) -> Result<Vec<ConversationTurn>, String> {
-    let lim = limit.unwrap_or(15).max(1).min(50);
+    let lim = limit.unwrap_or(15).clamp(1, 50);
     let safe_q: String = query
         .split_whitespace()
         .filter(|w| !w.is_empty())
@@ -3350,7 +3349,7 @@ pub fn list_crystals(
     project:    Option<String>,
     limit:      Option<i64>,
 ) -> Result<Vec<AgentCrystal>, String> {
-    let lim = limit.unwrap_or(20).max(1).min(100);
+    let lim = limit.unwrap_or(20).clamp(1, 100);
     with_db(|conn| {
         let (sql, params): (&str, Vec<Box<dyn rusqlite::ToSql>>) = match (session_id.as_deref(), project.as_deref()) {
             (Some(s), Some(p)) => (
@@ -4120,7 +4119,7 @@ pub async fn reflect_run(dry_run: Option<bool>) -> Result<ReflectReport, String>
 /// most-confident, most-recurrent insights surface first.
 #[tauri::command]
 pub fn list_insights(limit: Option<i64>) -> Result<Vec<AgentInsight>, String> {
-    let lim = limit.unwrap_or(20).max(1).min(100);
+    let lim = limit.unwrap_or(20).clamp(1, 100);
     with_db(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, content, fingerprint, confidence, reinforcements, \
@@ -4288,7 +4287,7 @@ pub fn graph_rebuild_edges_run() -> Result<GraphRebuildReport, String> {
         session_groups.entry(n.session_id.as_str()).or_default().push(n.id);
     }
     let mut session_count = 0i64;
-    for (_, members) in session_groups.iter() {
+    for members in session_groups.values() {
         if members.len() < 2 { continue; }
         let m: Vec<i64> = members.iter().take(GRAPH_SESSION_GROUP_LIMIT).copied().collect();
         for i in 0..m.len() {
@@ -4380,8 +4379,8 @@ pub fn graph_neighbors(
     limit:    Option<i64>,
 ) -> Result<Vec<GraphNeighbor>, String> {
     if seed_id <= 0 { return Err("graph_neighbors: invalid seed_id".to_string()); }
-    let hops = max_hops.unwrap_or(2).max(1).min(4);
-    let lim  = limit.unwrap_or(15).max(1).min(50);
+    let hops = max_hops.unwrap_or(2).clamp(1, 4);
+    let lim  = limit.unwrap_or(15).clamp(1, 50);
     const HOP_DECAY: f64 = 0.5;
 
     // BFS with score + path-type tracking
