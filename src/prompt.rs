@@ -74,6 +74,8 @@ pub struct Ctx<'a> {
     /// haría que el modelo leyera «en producción avisa antes» con el mismo peso
     /// que «el servidor de impresión es SRV-04».
     pub principles: &'a str,
+    /// Cuánto se extiende al contestar.
+    pub tono: Tono,
     /// Modelo flojo siguiendo instrucciones: se le manda lo justo.
     pub weak_model: bool,
     /// Si este shell puede ejecutar lo que proponga. Cambia el contrato entero:
@@ -102,6 +104,7 @@ impl Default for Ctx<'_> {
             preset: "",
             memories: "",
             principles: "",
+            tono: Tono::Equilibrado,
             weak_model: false,
             can_execute: false,
             auto: false,
@@ -482,6 +485,28 @@ impl Section for Principles {
     }
 }
 
+struct Estilo;
+impl Section for Estilo {
+    fn name(&self) -> &'static str {
+        "Estilo"
+    }
+    /// El equilibrado no renderiza nada: es el comportamiento por defecto, y
+    /// describirlo sería gastar tokens en cada turno para pedir lo que ya iba a
+    /// pasar.
+    fn relevant(&self, c: &Ctx) -> bool {
+        !c.tono.instruccion().is_empty()
+    }
+    /// Justo detrás de las reglas del operador y delante del preset: es una
+    /// preferencia suya sobre CÓMO se le habla, así que enmarca lo que venga —
+    /// pero cede ante una regla que él dictó a propósito.
+    fn priority(&self) -> u32 {
+        9
+    }
+    fn render(&self, c: &Ctx) -> String {
+        format!("CÓMO CONTESTAR\n{}", c.tono.instruccion())
+    }
+}
+
 struct Preset;
 impl Section for Preset {
     fn name(&self) -> &'static str {
@@ -697,6 +722,7 @@ fn secciones() -> Vec<Box<dyn Section>> {
         Box::new(Actions),
         Box::new(Elevation),
         Box::new(Principles),
+        Box::new(Estilo),
         Box::new(Preset),
         Box::new(Skills),
         Box::new(HostRouting),
@@ -753,6 +779,78 @@ fn prompt_weak(c: &Ctx) -> String {
 /// Las secciones estables van primero y luego la marca de caché: no es estética,
 /// es lo que permite que Anthropic cobre la mitad de arriba como lectura de
 /// caché en vez de como tokens nuevos en cada turno de la conversación.
+/// Cuánto se extiende Lucy al contestar.
+///
+/// NO ES UN AJUSTE DE GUSTO. En mitad de un incidente, tres párrafos de contexto
+/// antes del comando son tres párrafos que hay que saltarse con el servicio
+/// caído; aprendiendo algo nuevo, un comando a secas no enseña nada. La misma
+/// respuesta correcta sirve o estorba según cuándo llegue.
+///
+/// Lo que NO cambia en ninguno de los tres: qué se ejecuta, qué se propone y qué
+/// se avisa. El tono gobierna la prosa, no el juicio — un modo «conciso» que se
+/// saltara una advertencia de comando destructivo sería otra cosa distinta y
+/// peligrosa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tono {
+    /// Lo mínimo para actuar.
+    Conciso,
+    /// El de fábrica.
+    #[default]
+    Equilibrado,
+    /// Con el porqué y las alternativas.
+    Detallado,
+}
+
+impl Tono {
+    pub const ALL: [Tono; 3] = [Tono::Conciso, Tono::Equilibrado, Tono::Detallado];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tono::Conciso => "Conciso",
+            Tono::Equilibrado => "Equilibrado",
+            Tono::Detallado => "Detallado",
+        }
+    }
+
+    /// La clave con la que se guarda. Estable y en minúsculas: cambiarla dejaría
+    /// la preferencia de todo el mundo en su valor de fábrica sin avisar.
+    pub fn key(self) -> &'static str {
+        match self {
+            Tono::Conciso => "conciso",
+            Tono::Equilibrado => "equilibrado",
+            Tono::Detallado => "detallado",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Tono {
+        match k {
+            "conciso" => Tono::Conciso,
+            "detallado" => Tono::Detallado,
+            _ => Tono::Equilibrado,
+        }
+    }
+
+    /// Lo que se le dice al modelo. Vacío en el equilibrado: es el
+    /// comportamiento por defecto, y describirlo gastaría tokens en cada turno
+    /// para pedir lo que ya iba a hacer.
+    pub fn instruccion(self) -> &'static str {
+        match self {
+            Tono::Equilibrado => "",
+            Tono::Conciso => {
+                "Responde con lo MÍNIMO para que el operador pueda actuar: el hallazgo y el \
+                 siguiente paso. Sin preámbulo, sin recapitular lo que se acaba de leer y sin \
+                 ofrecer alternativas que nadie pidió. Si un comando basta como respuesta, el \
+                 comando ES la respuesta."
+            }
+            Tono::Detallado => {
+                "Explica el PORQUÉ además del qué: qué mira cada comando, qué significaría cada \
+                 resultado posible y qué alternativas había. El operador está aprendiendo el \
+                 sistema, no solo arreglándolo."
+            }
+        }
+    }
+}
+
 pub fn build(c: &Ctx) -> String {
     if c.weak_model {
         return prompt_weak(c);
@@ -784,6 +882,62 @@ pub fn build(c: &Ctx) -> String {
     }
     p.truncate(p.trim_end().len());
     p
+}
+
+#[cfg(test)]
+mod tests_tono {
+    use super::*;
+
+    #[test]
+    fn el_equilibrado_no_gasta_ni_un_token() {
+        // Es el comportamiento por defecto: describirlo sería pagar en CADA
+        // turno de CADA conversación por pedir lo que ya iba a pasar.
+        assert!(Tono::Equilibrado.instruccion().is_empty());
+        let c = Ctx { tono: Tono::Equilibrado, ..Default::default() };
+        assert!(!Estilo.relevant(&c), "el equilibrado no debe renderizar sección");
+        // Y los otros dos sí dicen algo, o el ajuste no haría nada.
+        for t in [Tono::Conciso, Tono::Detallado] {
+            assert!(!t.instruccion().is_empty(), "{:?} no dice nada", t);
+            assert!(Estilo.relevant(&Ctx { tono: t, ..Default::default() }));
+        }
+    }
+
+    #[test]
+    fn el_tono_cede_ante_una_regla_que_dicto_el_operador() {
+        // Los principios son instrucciones que alguien escribió a propósito; el
+        // tono es una preferencia de forma. Si el tono se leyera antes, «sé
+        // conciso» podría recortar una regla que el operador puso para que se
+        // cumpliera siempre.
+        assert!(Principles.priority() < Estilo.priority());
+        // Y por delante del preset, que enmarca la tarea pero no cómo se habla.
+        assert!(Estilo.priority() < Preset.priority());
+    }
+
+    #[test]
+    fn la_clave_guardada_sobrevive_a_ir_y_volver() {
+        // Si `key`/`from_key` no cuadraran, la preferencia de todo el mundo
+        // volvería al valor de fábrica en el siguiente arranque, en silencio.
+        for t in Tono::ALL {
+            assert_eq!(Tono::from_key(t.key()), t);
+        }
+        // Y una clave desconocida —de una versión futura, o corrupta— cae en el
+        // de fábrica en vez de romper el arranque.
+        assert_eq!(Tono::from_key("loquesea"), Tono::Equilibrado);
+        assert_eq!(Tono::default(), Tono::Equilibrado);
+    }
+
+    #[test]
+    fn el_tono_manda_sobre_la_prosa_y_no_sobre_lo_que_se_ejecuta() {
+        // La línea que no se puede cruzar: un modo «conciso» que se saltara un
+        // aviso de comando destructivo no sería más breve, sería peligroso. Las
+        // tres instrucciones hablan de cómo REDACTAR y ninguna toca qué correr.
+        for t in Tono::ALL {
+            let i = t.instruccion().to_lowercase();
+            for prohibido in ["ejecuta", "sin preguntar", "no avises", "omite el aviso"] {
+                assert!(!i.contains(prohibido), "{:?} toca la ejecución: {i}", t);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
