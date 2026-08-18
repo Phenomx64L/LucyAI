@@ -340,6 +340,29 @@ fn el_camino_de_escritura_entero() {
     // impide que el consolidador la funda con otra.
     let (_, _, _, imp) = fila(g.id);
     assert_eq!(imp, lucy_core::memories::FIJADA);
+
+    // LAS DOS COLUMNAS VAN JUNTAS, y de eso depende que la vista pueda deducir
+    // la chincheta de la importancia sin leer `pinned` — que es lo que hace,
+    // porque `AgentMemory` no lleva esa columna y añadírsela tocaría el tipo que
+    // cruza el puente IPC de la app en producción. `set_pinned` es el único
+    // escritor de `agent_memories.pinned` en las dos aplicaciones, así que el
+    // invariante se sostiene; este test es lo que impide que deje de hacerlo.
+    let (fijada, importancia): (i64, i64) = lucy_core::with_db(|c| {
+        c.query_row(
+            "SELECT pinned, importance FROM agent_memories WHERE id = ?1",
+            rusqlite::params![g.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .expect("fila");
+    assert_eq!(fijada, 1);
+    assert_eq!(importancia, lucy_core::memories::FIJADA);
+    assert_eq!(
+        fijada == 1,
+        importancia >= lucy_core::memories::FIJADA,
+        "las dos columnas se han desincronizado: la vista deduce la chincheta de la importancia"
+    );
     let r = lucy_core::consolidate::run(true).expect("consolidar");
     assert!(
         r.clusters.iter().all(|c| c.canonical_id != g.id && !c.merged_ids.contains(&g.id)),
