@@ -1648,6 +1648,14 @@ fn card_on(
 // algo que decidir. Apilado, cada ajuste ocupa el mismo peso visual que los
 // demás y hay que leerlos todos.
 
+/// Qué parte del ancho de una fila se lleva la etiqueta.
+///
+/// Poco más de la mitad. La etiqueta lleva además la explicación —dos líneas de
+/// texto que envuelven— y el control casi siempre es un segmentado o un número,
+/// que ocupan poco. Al revés, la explicación saldría a cuatro líneas y la fila
+/// crecería el doble para dejar aire a un campo que no lo necesita.
+const FILA_ETIQUETA: f32 = 0.55;
+
 /// Un panel: marco, cabecera con icono y rótulo, y lo que le metan dentro.
 ///
 /// `derecha` es lo que va al otro extremo de la cabecera —un botón, una
@@ -1697,33 +1705,33 @@ fn fila(
     control: impl FnOnce(&mut egui::Ui),
 ) {
     let alto = if sub.is_some() { 42.0 } else { 32.0 };
-    // EL CONTROL SE COLOCA PRIMERO, en un reparto de derecha a izquierda, y no
-    // es un capricho de orden: puesto después, el bloque de la etiqueta se lleva
-    // todo el ancho disponible —una etiqueta con explicación larga ocupa la fila
-    // entera— y el control acaba empujado fuera de la tarjeta. Colocándolo
-    // primero se queda con lo suyo y la etiqueta envuelve en lo que sobra, que
-    // es exactamente el reparto que se ve en la V2.
+    // DOS MITADES CON ANCHO FIJO, y ninguna puede empujar a la otra.
+    //
+    // Aquí hubo antes un reparto de derecha a izquierda —el control primero, la
+    // etiqueta en lo que sobrara— y ROMPIÓ LA PANTALLA. En ese reparto, lo que
+    // no cabe desborda hacia la IZQUIERDA: con un valor largo como
+    // `gemini-3.1-pro-preview::high` y su explicación al lado, la fila empezaba
+    // setenta y seis píxeles fuera del panel, y las etiquetas aparecían cortadas
+    // por delante — «asos seguidos», «asto de la sesión».
+    //
+    // Con los dos anchos calculados antes de dibujar nada, no hay negociación
+    // posible: la etiqueta envuelve dentro de lo suyo y el valor se recorta
+    // dentro de lo suyo. Un reparto que depende de quién dibuje primero es un
+    // reparto que se rompe con el texto de mañana.
+    let total = ui.available_width();
+    let w_etiqueta = (total * FILA_ETIQUETA).max(100.0).min(total - 80.0).max(60.0);
+    let w_control = (total - w_etiqueta - GAP).max(60.0);
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), alto),
-        egui::Layout::right_to_left(egui::Align::Center),
+        egui::vec2(total, alto),
+        egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.set_min_height(alto);
-            ui.spacing_mut().item_spacing.x = 6.0;
-            control(ui);
-            ui.add_space(GAP);
-            // EL ANCHO DE LA ETIQUETA SE MIDE Y SE IMPONE. Un `ui.vertical`
-            // anidado dentro de este reparto no hereda lo que queda: pide el
-            // ancho entero, la explicación larga no envuelve donde debe, y la
-            // fila acaba midiendo más que su tarjeta. Preguntando aquí —después
-            // del control, que ya se llevó lo suyo— sale exactamente el hueco
-            // libre, y `set_max_width` sobre una caja de ese tamaño hace que el
-            // texto envuelva dentro.
-            let libre = ui.available_width().max(60.0);
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui_with_layout(
-                egui::vec2(libre, alto),
+                egui::vec2(w_etiqueta, alto),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    ui.set_max_width(libre);
+                    ui.set_max_width(w_etiqueta);
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.label(
                         egui::RichText::new(etiqueta)
@@ -1737,6 +1745,16 @@ fn fila(
                                 .color(theme::faint()),
                         );
                     }
+                },
+            );
+            ui.add_space(GAP);
+            ui.allocate_ui_with_layout(
+                egui::vec2(w_control, alto),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.set_max_width(w_control);
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    control(ui);
                 },
             );
         },
@@ -10863,12 +10881,20 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // que no informa y que hace dudar de si son dos cosas distintas.
                 let sub = (desc != modelo).then_some(desc.as_str());
                 fila(ui, "Modelo activo", sub, false, |ui| {
-                    ui.label(
-                        egui::RichText::new(&modelo)
-                            .size(theme::FS_FOOTNOTE)
-                            .monospace()
-                            .color(theme::txt()),
-                    );
+                    // TRUNCADO: un id como `gemini-3.1-pro-preview::high` son
+                    // veintiocho caracteres en monoespaciada, y en una ventana
+                    // estrecha no cabe en su mitad. Sin esto pediría el ancho
+                    // entero y volvería a desbordar la fila.
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&modelo)
+                                .size(theme::FS_FOOTNOTE)
+                                .monospace()
+                                .color(theme::txt()),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(&modelo);
                 });
                 // EL SEGMENTADO Y NO UNA CASILLA, porque los dos estados tienen
                 // nombre y consecuencia. Una casilla marcada obliga a deducir
@@ -14671,6 +14697,101 @@ mod layout {
             "la etiqueta larga no hizo crecer la fila: {} vs {}",
             r.height(),
             corta.height()
+        );
+    }
+
+    #[test]
+    fn un_control_ancho_no_empuja_la_etiqueta_fuera_del_panel() {
+        // EL FALLO QUE ROMPIÓ LA PANTALLA. Con `gemini-3.1-pro-preview::high`
+        // —veintiocho caracteres en monoespaciada— más su etiqueta y su
+        // explicación, la fila dejó de caber; y como reparte de derecha a
+        // izquierda, lo que no cabe desborda hacia la IZQUIERDA: fuera del
+        // panel y fuera de la ventana. En la captura se leían «asos seguidos» y
+        // «asto de la sesión», con el principio de cada etiqueta cortado.
+        const ANCHO: f32 = 560.0;
+        let r = measure(ANCHO + 200.0, |ui| {
+            ui.scope(|ui| {
+                ui.set_width(ANCHO);
+                fila(
+                    ui,
+                    "Modelo activo",
+                    Some("Gemini 3.1 Pro — Esfuerzo Alto (razonamiento profundo)"),
+                    true,
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new("gemini-3.1-pro-preview::high")
+                                .size(theme::FS_FOOTNOTE)
+                                .monospace(),
+                        );
+                    },
+                );
+            });
+        });
+        assert!(
+            r.width() <= ANCHO + 1.0,
+            "la fila mide {} y su caja son {ANCHO}: se sale por la izquierda",
+            r.width()
+        );
+        assert!(
+            r.left() >= -1.0,
+            "la fila empieza en {} — se ha salido por la izquierda de la ventana",
+            r.left()
+        );
+    }
+
+    #[test]
+    fn un_panel_con_sus_filas_no_se_sale_de_su_columna() {
+        // La estructura REAL de Configuración: una columna de 620 con un panel
+        // dentro y las filas de verdad. El test de `fila` suelta pasaba y la
+        // pantalla estaba rota igual, así que lo que hay que medir es esto.
+        const COL: f32 = 620.0;
+        let r = measure(1800.0, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(COL);
+                    panel(
+                        ui,
+                        COL,
+                        icons::Icon::Sparkles,
+                        "Modelo y comportamiento",
+                        |_| {},
+                        |ui| {
+                            fila(
+                                ui,
+                                "Modelo activo",
+                                Some("Gemini 3.1 Pro — Esfuerzo Alto (razonamiento profundo)"),
+                                false,
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new("gemini-3.1-pro-preview::high")
+                                            .size(theme::FS_FOOTNOTE)
+                                            .monospace(),
+                                    );
+                                },
+                            );
+                            fila(
+                                ui,
+                                "Modo privacidad",
+                                Some("todo el tráfico a Ollama local"),
+                                true,
+                                |ui| {
+                                    segmentado(ui, 180.0, &["Activado", "Apagado"], 1);
+                                },
+                            );
+                        },
+                    );
+                });
+            });
+        });
+        assert!(
+            r.left() >= -1.0,
+            "el panel empieza en {} — su contenido se sale por la izquierda",
+            r.left()
+        );
+        assert!(
+            r.width() <= COL + 1.0,
+            "el panel mide {} y su columna son {COL}",
+            r.width()
         );
     }
 
