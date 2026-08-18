@@ -144,13 +144,51 @@ pub fn model_is_weak(model: &str) -> bool {
     // Y si no está en el catálogo es de Ollama, que se descubre en la máquina.
     // Ahí sí hay que adivinar, y el tamaño en el nombre es lo único que hay.
     let m = model.to_ascii_lowercase();
-    m.contains("-mini")
-        || m.contains("-lite")
-        || m.contains(":8b")
-        || m.contains(":7b")
-        || m.contains(":3b")
-        || m.contains(":1")
-        || m.starts_with("local-")
+    if m.contains("-mini") || m.contains("-lite") || m.starts_with("local-") {
+        return true;
+    }
+    // EL TAMAÑO SE LEE, NO SE BUSCA COMO CADENA. Aquí había una lista —`:8b`,
+    // `:7b`, `:3b`, `:1`— que fallaba en las dos direcciones:
+    //
+    //   · `qwen3:0.6b` NO casaba con ninguna. El modelo más pequeño que se puede
+    //     instalar recibía el prompt largo de seis mil tokens, se ahogaba, y
+    //     contestaba en prosa sin emitir una sola etiqueta — que es exactamente
+    //     el síntoma que esta función existe para evitar.
+    //   · `:1` casaba con `llama3.1:13b` y con `:14b`, así que modelos de trece
+    //     y catorce mil millones de parámetros recibían el prompt recortado y
+    //     perdían instrucciones que sí habrían seguido.
+    //
+    // Leer el número no tiene ninguno de los dos problemas y no hay que
+    // mantener una lista que envejece con cada modelo nuevo.
+    tam_b(&m).is_some_and(|b| b <= MAX_B_FLOJO)
+}
+
+/// Hasta cuántos mil millones de parámetros un modelo local se considera flojo.
+///
+/// Ocho, que es donde estaba el listón de la lista anterior (`:8b` era el mayor
+/// que enumeraba). No es una medida de calidad absoluta —hay modelos de 7B mejores
+/// que otros de 13B— sino de cuánta instrucción aguantan antes de perder el hilo,
+/// y ahí el tamaño sigue siendo el mejor indicador que hay en un nombre.
+pub const MAX_B_FLOJO: f32 = 8.0;
+
+/// Los miles de millones de parámetros que anuncia el nombre. `None` = no lo dice.
+///
+/// `qwen3:0.6b` → 0.6 · `deepseek-r1:1.5b` → 1.5 · `llama3.1:70b` → 70 ·
+/// `mistral:latest` → None.
+fn tam_b(m: &str) -> Option<f32> {
+    // Tras los dos puntos está la etiqueta, que es donde Ollama pone el tamaño.
+    // Sin ellos no hay nada que leer: `mistral` a secas no dice de qué tamaño es.
+    let etiqueta = m.split_once(':')?.1;
+    let cifras: String = etiqueta
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    // Y tiene que ir seguido de `b`, o `qwen3:2024` sería un modelo de dos mil
+    // millones de parámetros en vez de una fecha.
+    if cifras.is_empty() || !etiqueta[cifras.len()..].starts_with('b') {
+        return None;
+    }
+    cifras.parse().ok()
 }
 
 /// Una pieza del prompt.
@@ -882,6 +920,43 @@ pub fn build(c: &Ctx) -> String {
     }
     p.truncate(p.trim_end().len());
     p
+}
+
+#[cfg(test)]
+mod tests_tamano {
+    use super::*;
+
+    #[test]
+    fn el_tamano_se_lee_del_nombre_y_no_se_busca_como_cadena() {
+        assert_eq!(tam_b("qwen3:0.6b"), Some(0.6));
+        assert_eq!(tam_b("deepseek-r1:1.5b"), Some(1.5));
+        assert_eq!(tam_b("llama3.1:70b"), Some(70.0));
+        assert_eq!(tam_b("mistral:latest"), None, "«latest» no dice tamaño");
+        assert_eq!(tam_b("mistral"), None, "sin etiqueta no hay nada que leer");
+        // Y una etiqueta que empieza por cifras sin ser un tamaño no cuela: eso
+        // convertiría una fecha en dos mil millones de parámetros.
+        assert_eq!(tam_b("qwen3:2024"), None);
+    }
+
+    #[test]
+    fn los_dos_fallos_de_la_lista_anterior_estan_cerrados() {
+        // El modelo MÁS PEQUEÑO que se puede instalar no se reconocía: recibía
+        // el prompt largo, se ahogaba y contestaba en prosa sin emitir una sola
+        // etiqueta, que es justo el síntoma que esta función evita. Está
+        // instalado en la máquina de desarrollo, así que no es hipotético.
+        assert!(model_is_weak("qwen3:0.6b"), "el 0.6B no se veía como flojo");
+        assert!(model_is_weak("deepseek-r1:1.5b"));
+        assert!(model_is_weak("mistral:7b"));
+        // Y por el otro lado: `:1` casaba con trece y catorce mil millones, que
+        // recibían el prompt recortado y perdían instrucciones que sí habrían
+        // seguido.
+        assert!(!model_is_weak("llama3.1:13b"), "un 13B no es un modelo flojo");
+        assert!(!model_is_weak("qwen2.5:14b"));
+        assert!(!model_is_weak("llama3.1:70b"));
+        // Justo en el listón: ocho entra, nueve no.
+        assert!(model_is_weak("loquesea:8b"));
+        assert!(!model_is_weak("loquesea:9b"));
+    }
 }
 
 #[cfg(test)]

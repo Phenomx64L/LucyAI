@@ -76,6 +76,12 @@ pub fn cost(model: &str, input: u32, output: u32) -> Option<f64> {
 /// con Flash se ve como 0,00 $ y el contador parece roto. Por encima, dos bastan
 /// y más solo ensucian.
 pub fn fmt_usd(total: f64) -> String {
+    // EL CERO NEGATIVO EXISTE Y SE IMPRIME. `{:.2}` sobre `-0.0` escribe
+    // «-0.00», y eso salía en la vista de Configuración: «llevas $-0.00». Un
+    // contador a cero con signo hace dudar de todas las demás cifras de la
+    // pantalla, que es mucho daño para un carácter. Sumar cero costes puede
+    // producirlo, así que se normaliza aquí y no en cada sitio que suma.
+    let total = if total == 0.0 { 0.0 } else { total };
     if total > 0.0 && total < 0.01 {
         format!("${total:.4}")
     } else {
@@ -160,5 +166,23 @@ mod tests {
         assert_eq!(fmt_usd(0.0007), "$0.0007");
         assert_eq!(fmt_usd(0.42), "$0.42");
         assert_eq!(fmt_usd(12.5), "$12.50");
+    }
+}
+
+#[cfg(test)]
+mod tests_cero {
+    use super::*;
+
+    #[test]
+    fn el_cero_no_sale_con_signo_menos() {
+        // «llevas $-0.00» es lo que se veía en la vista de Configuración. Un
+        // contador a cero con signo negativo hace dudar de todas las demás
+        // cifras de la pantalla, que es mucho daño para un carácter.
+        assert_eq!(fmt_usd(0.0), "$0.00");
+        // Y el caso que lo produce: la suma de una lista vacía de modelos SIN
+        // precio puede dar cero negativo, que `{:.2}` imprime con el signo.
+        let vacio: f64 = [].iter().sum();
+        assert_eq!(fmt_usd(vacio), "$0.00");
+        assert_eq!(fmt_usd(-0.0), "$0.00", "el cero negativo se imprime con signo");
     }
 }
