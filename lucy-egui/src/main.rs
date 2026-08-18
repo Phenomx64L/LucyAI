@@ -1,4 +1,4 @@
-//! Lucy — Fase 1 · shell nativo egui (paso 1).
+﻿//! Lucy — Fase 1 · shell nativo egui (paso 1).
 //!
 //! Una app egui REAL: rail izquierdo + 3 vistas. Prueba de extremo a extremo del
 //! camino de migración — nativo, sin WebView, sin Tauri:
@@ -174,6 +174,30 @@ impl View {
             View::TerminalIa => "Terminal IA",
             View::NexShell => "NexShell",
             View::LogViewer => "Log Viewer",
+            View::Inventario => "Inventario",
+            View::Compliance => "Compliance",
+            View::Memoria => "Memoria",
+            View::Configuracion => "Configuración",
+        }
+    }
+
+    /// El título que encabeza la página del módulo.
+    ///
+    /// AQUÍ Y NO EN CADA VISTA. Escritos sueltos, cada uno cogió su propia
+    /// regla: «Dashboard de sistema», «Visor de logs» e «Inventario» en
+    /// mayúscula inicial, y «COMPLIANCE» y «MEMORIA» gritados. Encima Memoria
+    /// iba en `strong()` a tamaño normal en vez de a `FS_TITLE`, así que además
+    /// de gritar era más pequeño. Seis pantallas, cuatro criterios.
+    ///
+    /// Puede ser MÁS LARGO que `label()`: en la barra lateral cabe «Dashboard» y
+    /// encabezando la página dice mejor «Dashboard de sistema». Lo que no puede
+    /// es cambiar de estilo de una pantalla a otra.
+    fn titulo(self) -> &'static str {
+        match self {
+            View::Dashboard => "Dashboard de sistema",
+            View::TerminalIa => "Terminal IA",
+            View::NexShell => "NexShell",
+            View::LogViewer => "Visor de logs",
             View::Inventario => "Inventario",
             View::Compliance => "Compliance",
             View::Memoria => "Memoria",
@@ -1817,6 +1841,63 @@ fn fila(
     }
 }
 
+/// Las dos columnas de Configuración, con el ancho decidido ANTES de dibujar.
+///
+/// NINGUNA PUEDE EMPUJAR A LA OTRA, y ese es todo el punto. Aquí había un
+/// `horizontal_top` con dos `vertical` dentro, cada uno con su `set_width`, y en
+/// egui `set_width` NO RECORTA: es un deseo, no un límite. Un hijo que pinte más
+/// ancho que su columna hace crecer el rect del `vertical`, y entonces el
+/// reparto horizontal coloca la segunda columna detrás del ancho REAL de la
+/// primera —no del pedido—, así que la columna derecha se iba fuera de la
+/// ventana. En la captura eso era la insignia de Claves API cortada a «1 c», los
+/// campos de clave saliéndose por el borde y «Quitar» leyéndose «Qui».
+///
+/// Con los dos huecos reservados antes de dibujar nada, lo que se desborde se
+/// desborda DENTRO de lo suyo y no se lleva por delante a la otra mitad.
+/// `contenido` se llama UNA VEZ POR HUECO, con 0 para el izquierdo y 1 para el
+/// derecho. Un solo cierre y no dos porque los dos lados dibujan desde `&mut
+/// self`, y dos cierres que lo capturen a la vez no se pueden prestar.
+fn dos_columnas(ui: &mut egui::Ui, col: f32, mut contenido: impl FnMut(&mut egui::Ui, usize)) {
+    let alto = ui.available_height().max(1.0);
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for i in 0..2 {
+            if i == 1 {
+                ui.add_space(GAP);
+            }
+            let esquina = ui.cursor().min;
+            let hueco = egui::Rect::from_min_size(esquina, egui::vec2(col, alto));
+            let mut hijo = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(hueco)
+                    .layout(egui::Layout::top_down(egui::Align::LEFT)),
+            );
+            hijo.set_max_width(col);
+            // RECORTE SOLO A LO ANCHO. Lo que se desborde se corta en el borde de
+            // su columna en vez de pintarse encima de la otra; a lo alto no se
+            // toca, que es por donde la columna crece de verdad.
+            hijo.set_clip_rect(
+                egui::Rect::from_x_y_ranges(
+                    esquina.x..=esquina.x + col,
+                    ui.clip_rect().y_range(),
+                )
+                .intersect(ui.clip_rect()),
+            );
+            contenido(&mut hijo, i);
+            let usado = hijo.min_rect().height();
+            // SE RESERVA `col` DE ANCHO PASE LO QUE PASE. Aquí estaba el fallo:
+            // `allocate_ui_with_layout` avanza el cursor con el ancho REAL del
+            // hijo, así que un contenido demasiado ancho corría la columna
+            // siguiente. Reservando el rect a mano, el desbordamiento se queda
+            // en casa.
+            ui.allocate_rect(
+                egui::Rect::from_min_size(esquina, egui::vec2(col, usado.max(1.0))),
+                egui::Sense::hover(),
+            );
+        }
+    });
+}
+
 /// Un control segmentado: varias opciones en un grupo, una activa.
 ///
 /// EN VEZ DE UNA CASILLA para lo que tiene dos estados con nombre. «Activado /
@@ -1824,8 +1905,27 @@ fn fila(
 /// qué significa que esté marcada, y para un ajuste como la privacidad esa
 /// deducción es justo la que no se puede pedir.
 ///
+/// `clave` NOMBRA EL CONTROL, y no es decoración: la posición de la píldora se
+/// anima, y esa animación se guarda por `Id`. Con el `Id` derivado del sitio que
+/// el widget ocupaba —`ui.id()`— DOS SEGMENTADOS DE LA MISMA PANTALLA COMPARTÍAN
+/// ESTADO: cada uno pisaba el destino del otro en la misma pasada y ninguno
+/// llegaba nunca al suyo. En la captura eso se veía como seis píldoras paradas
+/// en sitios fraccionarios y, lo grave, la de Tema sobre «Claro» con la
+/// aplicación en oscuro. Un control que enseña un valor que no es el puesto no
+/// es un fallo estético: es falso, y se cree.
+///
+/// Tampoco vale derivarla de las etiquetas: «Activado / Apagado» sale dos veces
+/// en la misma columna. Y con un nombre propio la animación además sobrevive a
+/// reordenar el panel, que con `ui.id()` la reiniciaba.
+///
 /// Devuelve el índice pulsado, si se pulsó alguno.
-fn segmentado(ui: &mut egui::Ui, ancho: f32, opciones: &[&str], activo: usize) -> Option<usize> {
+fn segmentado(
+    ui: &mut egui::Ui,
+    clave: &str,
+    ancho: f32,
+    opciones: &[&str],
+    activo: usize,
+) -> Option<usize> {
     let n = opciones.len().max(1);
     let w = (ancho / n as f32).floor();
     let mut elegido = None;
@@ -1854,7 +1954,7 @@ fn segmentado(ui: &mut egui::Ui, ancho: f32, opciones: &[&str], activo: usize) -
             // una respuesta.
             let pos = if motion() {
                 ui.ctx().animate_value_with_time(
-                    ui.id().with("seg-pos"),
+                    egui::Id::new(("seg-pos", clave)),
                     activo as f32,
                     theme::DUR_FAST,
                 )
@@ -1963,10 +2063,27 @@ fn section(ui: &mut egui::Ui, title: &str, sub: Option<String>) {
 ///
 /// El icono en acento y la etiqueta en `faint` es el patrón del CSS, y es lo
 /// que hace que el ojo encuentre la sección antes de leerla.
-fn panel_title(ui: &mut egui::Ui, icon: &str, title: &str) {
+/// EL ICONO ES UN `Icon`, NO UN CARÁCTER. Aquí pasaban glifos sueltos —«▣» para
+/// el procesador, «◈» para la RAM, «▤» para el disco— y eso dejaba dos idiomas
+/// gráficos a diez centímetros uno del otro: la barra lateral con los trazos de
+/// Tabler y las tarjetas con símbolos de la fuente del sistema. Peor: «◈» salía
+/// además en la tarjeta de Red, así que dos tarjetas distintas llevaban el mismo
+/// dibujo, que es la única cosa que un icono no puede hacer.
+/// El título de un módulo, con el mismo peso y el mismo tamaño en las ocho
+/// pantallas. Ver [`View::titulo`] para por qué hay una función y no seis
+/// `RichText` sueltos.
+fn titulo_modulo(ui: &mut egui::Ui, v: View) {
+    ui.label(
+        egui::RichText::new(v.titulo())
+            .size(theme::FS_TITLE)
+            .color(theme::txt()),
+    );
+}
+
+fn panel_title(ui: &mut egui::Ui, icon: icons::Icon, title: &str) {
     row_align(ui, 16.0, egui::Align::Center, |ui| {
         ui.spacing_mut().item_spacing.x = 7.0;
-        ui.label(egui::RichText::new(icon).size(13.0).color(theme::acc()));
+        icons::show(ui, icon, 14.0, theme::acc());
         ui.add(egui::Label::new(theme::instrument_label(title, theme::faint())));
     });
 }
@@ -2969,7 +3086,7 @@ fn seg(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
 /// Struct y no nueve argumentos posicionales: con nueve, `color` y `sub` se
 /// intercambian sin que el compilador diga nada.
 struct Kpi<'a> {
-    icon: &'a str,
+    icon: icons::Icon,
     title: &'a str,
     /// Cifra: se anima desde el valor anterior. Ignorada si `text` no está vacío.
     value: f32,
@@ -2992,7 +3109,10 @@ struct Kpi<'a> {
 impl Default for Kpi<'_> {
     fn default() -> Self {
         Self {
-            icon: "",
+            // Un icono por defecto y no un hueco: `Kpi` se construye con
+            // `..Default::default()` y una tarjeta sin icono se lee como que
+            // falta algo, no como que no lleva.
+            icon: icons::Icon::Desktop,
             title: "",
             value: 0.0,
             unit: "",
@@ -8813,11 +8933,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 if vivo { theme::acc() } else { theme::amber() },
             );
             ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("Visor de logs")
-                    .size(theme::FS_TITLE)
-                    .color(theme::txt()),
-            );
+            titulo_modulo(ui, View::LogViewer);
             ui.add_space(6.0);
 
             // ── modo ──
@@ -9358,11 +9474,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let mut parar = false;
         let corriendo = self.cmp_rx.is_some();
         row_align(ui, 30.0, egui::Align::Center, |ui| {
-            ui.label(
-                egui::RichText::new("COMPLIANCE")
-                    .size(theme::FS_TITLE)
-                    .color(theme::txt()),
-            );
+            titulo_modulo(ui, View::Compliance);
             ui.add_space(10.0);
             // La pastilla dice NORMA, EQUIPO Y CUÁNTOS controles. Los tres hacen
             // falta: sin la norma no se sabe contra qué se mide, y sin el número
@@ -10112,9 +10224,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 },
             );
             ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("Inventario").size(theme::FS_TITLE).color(theme::txt()),
-            );
+            titulo_modulo(ui, View::Inventario);
             ui.add_space(8.0);
             if self.inv_host_picker(ui) {
                 escanear = true;
@@ -10960,7 +11070,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         card(ui, size, 14.0, |ui| {
             row_align(ui, 18.0, egui::Align::Center, |ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
-                ui.label(egui::RichText::new(k.icon).size(14.0).color(theme::acc()));
+                icons::show(ui, k.icon, 14.0, theme::acc());
                 ui.add(egui::Label::new(theme::instrument_label(k.title, theme::faint())));
             });
             ui.add_space(8.0);
@@ -11086,11 +11196,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // que reporte un fallo.
         row_align(ui, 30.0, egui::Align::Center, |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            ui.label(
-                egui::RichText::new("Configuración")
-                    .size(theme::FS_TITLE)
-                    .color(theme::txt()),
-            );
+            titulo_modulo(ui, View::Configuracion);
             insignia(ui, &format!("Lucy v{}", env!("CARGO_PKG_VERSION")), true);
         });
         ui.add_space(12.0);
@@ -11110,20 +11216,18 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     disponible.clamp(240.0, 760.0)
                 };
 
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = GAP;
-                    ui.vertical(|ui| {
-                        ui.set_width(col);
-                        self.cfg_columna_izquierda(ui, col);
-                    });
-                    if dos {
-                        ui.vertical(|ui| {
-                            ui.set_width(col);
+                if dos {
+                    // Las dos mitades se piden con el ancho ya decidido: así una
+                    // que se desborde no arrastra a la otra fuera de la ventana.
+                    dos_columnas(ui, col, |ui, i| {
+                        if i == 0 {
+                            self.cfg_columna_izquierda(ui, col);
+                        } else {
                             self.cfg_columna_derecha(ui, col, &s);
-                        });
-                    }
-                });
-                if !dos {
+                        }
+                    });
+                } else {
+                    self.cfg_columna_izquierda(ui, col);
                     ui.add_space(GAP);
                     self.cfg_columna_derecha(ui, col, &s);
                 }
@@ -11182,7 +11286,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     false,
                     |ui| {
                         if let Some(i) =
-                            segmentado(ui, 180.0, &["Activado", "Apagado"], usize::from(!privado))
+                            segmentado(
+                                ui,
+                                "privacidad",
+                                180.0,
+                                &["Activado", "Apagado"],
+                                usize::from(!privado),
+                            )
                         {
                             privado = i == 0;
                         }
@@ -11243,6 +11353,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     |ui| {
                         if let Some(i) = segmentado(
                             ui,
+                            "enrutado",
                             180.0,
                             &["Activado", "Apagado"],
                             usize::from(!enrutado),
@@ -11269,7 +11380,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             .iter()
                             .map(|t| t.label())
                             .collect();
-                        if let Some(k) = segmentado(ui, 270.0, &etiquetas, i) {
+                        if let Some(k) = segmentado(ui, "tono", 270.0, &etiquetas, i) {
                             tono = lucy_core::prompt::Tono::ALL[k];
                         }
                     },
@@ -11422,7 +11533,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 fila(ui, "Tema", Some(explica), false, |ui| {
                     let etiquetas: Vec<&str> =
                         theme::Mode::ALL.iter().map(|m| m.label()).collect();
-                    if let Some(k) = segmentado(ui, 240.0, &etiquetas, i) {
+                    if let Some(k) = segmentado(ui, "tema", 240.0, &etiquetas, i) {
                         if k != i {
                             nuevo_tema = Some(theme::Mode::ALL[k]);
                         }
@@ -11467,7 +11578,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     |ui| {
                         let etiquetas: Vec<&str> =
                             theme::PALETAS.iter().map(|p| p.nombre).collect();
-                        if let Some(k) = segmentado(ui, 300.0, &etiquetas, pal) {
+                        if let Some(k) = segmentado(ui, "paleta", 300.0, &etiquetas, pal) {
                             if k != pal {
                                 nueva_paleta = Some(k);
                             }
@@ -11485,7 +11596,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     true,
                     |ui| {
                         if let Some(k) =
-                            segmentado(ui, 180.0, &["Activadas", "Apagadas"], usize::from(!mov))
+                            segmentado(
+                                ui,
+                                "animaciones",
+                                180.0,
+                                &["Activadas", "Apagadas"],
+                                usize::from(!mov),
+                            )
                         {
                             nuevo_motion = Some(k == 0);
                         }
@@ -12232,7 +12349,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             );
             ui.add_space(20.0);
             card_on(ui, egui::vec2(460.0, 132.0), 16.0, theme::bg2(), |ui| {
-                panel_title(ui, "◉", "Qué falta");
+                panel_title(ui, icons::Icon::Bolt, "Qué falta");
                 ui.add_space(10.0);
                 for line in [
                     "El sondeo remoto (`get_remote_health_windows` / `_linux`)",
@@ -12317,11 +12434,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
         // ── cabecera ─────────────────────────────────────────────────────────
         row_align(ui, 30.0, egui::Align::Center, |ui| {
-            ui.label(
-                egui::RichText::new("Dashboard de sistema")
-                    .size(theme::FS_TITLE)
-                    .color(theme::txt()),
-            );
+            titulo_modulo(ui, View::Dashboard);
             self.host_picker(ui);
 
             let (sal_txt, sal_col, sal_bg) = if alerts.iter().any(|(v, _)| *v == Sev::Bad) {
@@ -12455,7 +12568,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ui,
                             egui::vec2(kw, KPI_H),
                             Kpi {
-                                icon: "▣",
+                                icon: icons::Icon::Cpu,
                                 title: "CPU",
                                 value: s.cpu_pct,
                                 unit: "%",
@@ -12468,7 +12581,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ui,
                             egui::vec2(kw, KPI_H),
                             Kpi {
-                                icon: "◈",
+                                icon: icons::Icon::Ram,
                                 title: "RAM",
                                 value: mp,
                                 unit: "%",
@@ -12483,7 +12596,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 ui,
                                 egui::vec2(kw, KPI_H),
                                 Kpi {
-                                    icon: "▤",
+                                    icon: icons::Icon::Disk,
                                     title: "Disco sistema",
                                     value: pct,
                                     unit: "%",
@@ -12505,7 +12618,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ui,
                             egui::vec2(kw, KPI_H),
                             Kpi {
-                                icon: "◱",
+                                icon: icons::Icon::Desktop,
                                 title: "Sistema",
                                 text: s.host.clone(),
                                 sub: s.os.clone(),
@@ -12524,7 +12637,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 block(ui, ent[2], |ui| {
                     row(ui, NET_H, |ui| {
                         card(ui, egui::vec2(netw, NET_H), 14.0, |ui| {
-                            panel_title(ui, "◈", "Red");
+                            panel_title(ui, icons::Icon::Network, "Red");
                             ui.add_space(10.0);
                             row_align(ui, 22.0, egui::Align::Max, |ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -12549,7 +12662,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         });
 
                         card(ui, egui::vec2(svw, NET_H), 14.0, |ui| {
-                            panel_title(ui, "◉", "Servicios detenidos");
+                            panel_title(ui, icons::Icon::Server, "Servicios detenidos");
                             ui.add_space(10.0);
                             if services.is_empty() {
                                 ui.label(
@@ -14116,7 +14229,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     fn memoria(&mut self, ui: &mut egui::Ui) {
         // ── Las pestañas ─────────────────────────────────────────────────────
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("MEMORIA").strong());
+            titulo_modulo(ui, View::Memoria);
             ui.add_space(8.0);
             for (t, nombre) in [
                 (MemTab::Memorias, "Memorias"),
@@ -15336,7 +15449,7 @@ mod layout {
                                 Some("todo el tráfico a Ollama local"),
                                 true,
                                 |ui| {
-                                    segmentado(ui, 180.0, &["Activado", "Apagado"], 1);
+                                    segmentado(ui, "privacidad", 180.0, &["Activado", "Apagado"], 1);
                                 },
                             );
                         },
@@ -15389,10 +15502,10 @@ mod layout {
         // cada fila por separado esté bien.
         const COL: f32 = 700.0;
         let seg2 = borde_control(COL, |ui| {
-            segmentado(ui, 180.0, &["Activado", "Apagado"], 1);
+            segmentado(ui, "dos", 180.0, &["Activado", "Apagado"], 1);
         });
         let seg3 = borde_control(COL, |ui| {
-            segmentado(ui, 270.0, &["Conciso", "Equilibrado", "Detallado"], 1);
+            segmentado(ui, "tres", 270.0, &["Conciso", "Equilibrado", "Detallado"], 1);
         });
         let num = borde_control(COL, |ui| {
             let mut n = 200u32;
@@ -15404,6 +15517,342 @@ mod layout {
                 (x as f32 - COL).abs() <= 2.0,
                 "el control «{nombre}» acaba en {x} y la columna en {COL}"
             );
+        }
+    }
+
+    /// Dónde acaba pintado de verdad cada trozo de un segmentado: la píldora y
+    /// el texto de cada opción.
+    ///
+    /// MIDE LA PINTURA, no el reparto. Los tests de arriba comprueban que el
+    /// control ocupa el sitio que le toca, y pasaban con la pantalla rota: el
+    /// borde derecho caía donde debía y aun así se leía «Activad» con la
+    /// píldora encima. Lo que falla es lo que se dibuja DENTRO, y para verlo
+    /// hay que mirar la lista de formas que egui acaba emitiendo.
+    fn pintura(
+        ancho: f32,
+        add: impl Fn(&mut egui::Ui),
+    ) -> (Vec<egui::Rect>, Vec<(String, egui::Rect)>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(ancho + 400.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        let mut pildoras = Vec::new();
+        let mut textos = Vec::new();
+        // Dos pasadas, por lo mismo que en `measure`: en la primera el atlas de
+        // fuentes todavía se está montando y los anchos de texto salen mal.
+        for _ in 0..2 {
+            pildoras.clear();
+            textos.clear();
+            let salida = ctx.run(input.clone(), |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none())
+                    .show(ctx, |ui| {
+                        ui.set_max_width(ancho);
+                        add(ui);
+                    });
+            });
+            fn recorre(
+                s: &egui::Shape,
+                pildoras: &mut Vec<egui::Rect>,
+                textos: &mut Vec<(String, egui::Rect)>,
+            ) {
+                match s {
+                    // El único relleno con el color de acento es la píldora: el
+                    // fondo del grupo es bg3 y el resalte del ratón bg4.
+                    egui::Shape::Rect(r) if r.fill == theme::acc() => pildoras.push(r.rect),
+                    egui::Shape::Text(t) => textos.push((
+                        t.galley.text().to_string(),
+                        t.galley.rect.translate(t.pos.to_vec2()),
+                    )),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| recorre(s, pildoras, textos)),
+                    _ => {}
+                }
+            }
+            for cs in &salida.shapes {
+                recorre(&cs.shape, &mut pildoras, &mut textos);
+            }
+        }
+        (pildoras, textos)
+    }
+
+    /// La píldora de un segmentado y los textos de sus opciones.
+    fn una_pildora(
+        ancho: f32,
+        add: impl Fn(&mut egui::Ui),
+    ) -> (egui::Rect, Vec<(String, egui::Rect)>) {
+        let (p, t) = pintura(ancho, add);
+        assert_eq!(p.len(), 1, "tiene que pintarse una píldora y solo una");
+        (p[0], t)
+    }
+
+    /// Lo mismo, pero DENTRO DE UNA FILA, que es como lo usa la pantalla.
+    ///
+    /// `fila` reparte de derecha a izquierda para que el control se quede con su
+    /// sitio, y `segmentado` se dibuja dentro de ese reparto. Medirlo suelto en
+    /// un panel de izquierda a derecha no reproduce nada.
+    fn pintura_en_fila(
+        col: f32,
+        ancho: f32,
+        opciones: &[&str],
+        activo: usize,
+    ) -> (egui::Rect, Vec<(String, egui::Rect)>) {
+        una_pildora(col + 200.0, |ui| {
+            ui.scope(|ui| {
+                ui.set_width(col);
+                fila(ui, "Modo privacidad", Some("todo el tráfico a Ollama local"), true, |ui| {
+                    segmentado(ui, "prueba", ancho, opciones, activo);
+                });
+            });
+        })
+    }
+
+    fn pintura_segmentado(
+        ancho: f32,
+        opciones: &[&str],
+        activo: usize,
+    ) -> (egui::Rect, Vec<(String, egui::Rect)>) {
+        una_pildora(ancho, |ui| {
+            segmentado(ui, "prueba", ancho, opciones, activo);
+        })
+    }
+
+    #[test]
+    fn la_pildora_no_pisa_el_texto_ni_dentro_de_una_fila() {
+        // «Activad» + píldora «Apagado». «Concis» + píldora «Equilibrado».
+        // «Oscur» + píldora «Claro». Tres veces en la misma captura, y el
+        // segmentado suelto pasa sus tests: lo que lo rompe es el reparto de
+        // derecha a izquierda de `fila`, que es donde vive de verdad.
+        //
+        // Se prueba a varias anchuras de columna porque la de la captura es una
+        // ventana concreta, y el fallo tiene que morir en todas.
+        for col in [420.0_f32, 560.0, 620.0, 700.0] {
+            for (ancho, opciones) in [
+                (180.0_f32, &["Activado", "Apagado"][..]),
+                (270.0, &["Conciso", "Equilibrado", "Detallado"][..]),
+                (240.0, &["Oscuro", "Claro", "Del sistema"][..]),
+            ] {
+                for activo in 0..opciones.len() {
+                    let (p, textos) = pintura_en_fila(col, ancho, opciones, activo);
+                    let (_, t) = textos
+                        .iter()
+                        .find(|(s, _)| s == opciones[activo])
+                        .expect("cada opción pinta su texto");
+                    assert!(
+                        p.left() <= t.left() + 1.0 && p.right() >= t.right() - 1.0,
+                        "col={col} {opciones:?} activo={activo}: la píldora \
+                         [{:.0},{:.0}] no cubre su propio texto [{:.0},{:.0}]",
+                        p.left(),
+                        p.right(),
+                        t.left(),
+                        t.right()
+                    );
+                    for (s, t) in &textos {
+                        if s == opciones[activo] || s == "Modo privacidad" {
+                            continue;
+                        }
+                        assert!(
+                            t.right() <= p.left() + 1.0 || t.left() >= p.right() - 1.0,
+                            "col={col} {opciones:?} activo={activo}: la píldora \
+                             [{:.0},{:.0}] pisa «{s}» [{:.0},{:.0}]",
+                            p.left(),
+                            p.right(),
+                            t.left(),
+                            t.right()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn los_titulos_de_modulo_siguen_todos_la_misma_regla() {
+        // Seis pantallas y cuatro criterios: «Dashboard de sistema» y «Visor de
+        // logs» en mayúscula inicial, «COMPLIANCE» y «MEMORIA» gritados. Una
+        // aplicación que cambia de voz al cambiar de pestaña se lee como varias
+        // aplicaciones cosidas.
+        for v in View::ALL {
+            let t = v.titulo();
+            assert!(!t.is_empty(), "«{}» no tiene título", v.label());
+            // GRITAR NO ES UN ESTILO, es otro estilo. Se permite mayúscula
+            // interior —«Terminal IA», «NexShell»— y se prohíbe la palabra
+            // entera en mayúsculas, que es lo que hacía COMPLIANCE.
+            assert_ne!(
+                t,
+                t.to_uppercase(),
+                "«{t}» va entero en mayúsculas y los demás no"
+            );
+            let primera = t.chars().next().unwrap();
+            assert!(
+                primera.is_uppercase(),
+                "«{t}» empieza en minúscula y los demás no"
+            );
+        }
+    }
+
+    #[test]
+    fn una_columna_que_se_desborda_no_empuja_a_la_de_al_lado() {
+        // LA COLUMNA DERECHA CORTADA POR LA VENTANA. La insignia de Claves API
+        // se leía «1 c», los campos de clave se salían por el borde y «Quitar»
+        // era «Qui». La causa no estaba en la columna derecha: estaba en que la
+        // izquierda pintaba más ancho de lo pedido y el reparto horizontal
+        // colocaba la segunda detrás del ancho REAL de la primera.
+        //
+        // `set_width` en egui es un deseo, no un límite, así que basta un hijo
+        // demasiado ancho —una insignia con un id de modelo largo, un campo de
+        // texto— para mover la mitad de la pantalla.
+        const COL: f32 = 620.0;
+        // `Cell` porque `measure` toma un `Fn` y lo corre dos veces —la primera
+        // pasada monta el atlas de fuentes— y un cierre compartido no puede
+        // escribir en una variable capturada por valor.
+        let izq = std::cell::Cell::new(0.0_f32);
+        let der = std::cell::Cell::new(0.0_f32);
+        let _ = measure(2000.0, |ui| {
+            dos_columnas(ui, COL, |ui, i| {
+                if i == 0 {
+                    // Un hijo que NO CABE, que es lo que pasa de verdad con una
+                    // insignia larga dentro de un panel.
+                    let (r, _) = ui.allocate_exact_size(
+                        egui::vec2(COL + 260.0, 20.0),
+                        egui::Sense::hover(),
+                    );
+                    izq.set(r.right());
+                } else {
+                    der.set(ui.min_rect().left());
+                }
+            });
+        });
+        let (izq_der, der_izq) = (izq.get(), der.get());
+        assert!(
+            izq_der > COL,
+            "el test no está probando nada: el hijo de la izquierda tenía que \
+             desbordarse y acabó en {izq_der:.0}"
+        );
+        assert!(
+            (der_izq - (COL + GAP)).abs() <= 1.0,
+            "la columna derecha empieza en {der_izq:.0} y su sitio es {:.0}: la \
+             izquierda se la ha llevado por delante",
+            COL + GAP
+        );
+    }
+
+    #[test]
+    fn varios_segmentados_en_la_misma_pantalla_no_se_pisan_la_animacion() {
+        // LA CAPTURA. Seis segmentados a la vez, cada píldora parada en un sitio
+        // fraccionario distinto, y la de Tema sobre «Claro» con la aplicación en
+        // oscuro. Un control que enseña un valor que no es el puesto no es feo:
+        // es falso, y se cree.
+        //
+        // La posición se anima con `animate_value_with_time`, y esa animación se
+        // guarda POR `Id`. Si dos segmentados comparten `Id`, cada uno pisa el
+        // destino del otro en la misma pasada y ninguno llega nunca a su sitio.
+        // Por eso los tests de uno suelto pasan con la pantalla rota.
+        const COL: f32 = 620.0;
+        // El de arriba en la posición 1, el de abajo en la 0: si comparten
+        // estado, el segundo acaba viajando hacia el destino del primero, que es
+        // lo que ponía la píldora de Tema sobre «Claro».
+        let (pildoras, textos) = pintura(COL + 200.0, |ui| {
+            ui.scope(|ui| {
+                ui.set_width(COL);
+                fila(ui, "Personalidad", None, false, |ui| {
+                    segmentado(ui, "tono", 270.0, &["Conciso", "Equilibrado", "Detallado"], 1);
+                });
+                fila(ui, "Tema", None, true, |ui| {
+                    segmentado(ui, "tema", 240.0, &["Oscuro", "Claro", "Del sistema"], 0);
+                });
+            });
+        });
+        assert_eq!(pildoras.len(), 2, "tienen que pintarse dos píldoras, una por control");
+        // Cada píldora tiene que cubrir el texto de SU opción puesta. Se emparejan
+        // por altura: la de Tema es la de abajo.
+        for (etiqueta, buscar) in [("Personalidad", "Equilibrado"), ("Tema", "Oscuro")] {
+            let (_, t) = textos
+                .iter()
+                .find(|(s, _)| s == buscar)
+                .unwrap_or_else(|| panic!("«{buscar}» tiene que pintarse"));
+            let p = pildoras
+                .iter()
+                .find(|p| p.top() <= t.center().y && p.bottom() >= t.center().y)
+                .unwrap_or_else(|| {
+                    panic!("{etiqueta}: ninguna píldora está a la altura de «{buscar}»")
+                });
+            assert!(
+                p.left() <= t.left() + 1.0 && p.right() >= t.right() - 1.0,
+                "{etiqueta}: la píldora está en [{:.0},{:.0}] y «{buscar}», que es \
+                 lo puesto, en [{:.0},{:.0}]: el control enseña otra cosa",
+                p.left(),
+                p.right(),
+                t.left(),
+                t.right()
+            );
+        }
+    }
+
+    #[test]
+    fn la_pildora_del_segmentado_cae_sobre_la_opcion_activa() {
+        // EL CONTROL QUE MIENTE. En la captura, con la aplicación en oscuro, la
+        // píldora de Tema estaba sobre «Claro». Un control que enseña un valor
+        // distinto del que está puesto no es feo: es falso, y se cree.
+        for (ancho, opciones) in [
+            (180.0_f32, &["Activado", "Apagado"][..]),
+            (270.0, &["Conciso", "Equilibrado", "Detallado"][..]),
+            (240.0, &["Oscuro", "Claro", "Del sistema"][..]),
+        ] {
+            for activo in 0..opciones.len() {
+                let (p, textos) = pintura_segmentado(ancho, opciones, activo);
+                let (_, t) = textos
+                    .iter()
+                    .find(|(s, _)| s == opciones[activo])
+                    .expect("cada opción pinta su texto");
+                // El texto del activo tiene que caer DENTRO de la píldora: es lo
+                // que hace que se lea como elegido.
+                assert!(
+                    p.left() <= t.left() + 1.0 && p.right() >= t.right() - 1.0,
+                    "con {opciones:?} activo={activo}: la píldora está en \
+                     [{:.0},{:.0}] y su texto «{}» en [{:.0},{:.0}]",
+                    p.left(),
+                    p.right(),
+                    opciones[activo],
+                    t.left(),
+                    t.right()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn la_pildora_no_pisa_el_texto_de_las_demas_opciones() {
+        // «Activad» + píldora «Apagado». «Concis» + píldora «Equilibrado».
+        // «Oscur» + píldora «Claro». Tres veces el mismo fallo en la misma
+        // captura: la píldora se come la última letra de la opción de al lado.
+        for (ancho, opciones) in [
+            (180.0_f32, &["Activado", "Apagado"][..]),
+            (270.0, &["Conciso", "Equilibrado", "Detallado"][..]),
+            (240.0, &["Oscuro", "Claro", "Del sistema"][..]),
+            (300.0, &["Esmeralda", "Cian", "Violeta", "Magenta"][..]),
+        ] {
+            for activo in 0..opciones.len() {
+                let (p, textos) = pintura_segmentado(ancho, opciones, activo);
+                for (s, t) in &textos {
+                    if s == opciones[activo] {
+                        continue;
+                    }
+                    assert!(
+                        t.right() <= p.left() + 1.0 || t.left() >= p.right() - 1.0,
+                        "con {opciones:?} activo={activo}: la píldora \
+                         [{:.0},{:.0}] pisa «{s}» [{:.0},{:.0}]",
+                        p.left(),
+                        p.right(),
+                        t.left(),
+                        t.right()
+                    );
+                }
+            }
         }
     }
 
@@ -15614,10 +16063,10 @@ mod layout {
         // grupo entero ocupa lo mismo — que es lo que hace que dos filas
         // consecutivas con segmentados distintos queden alineadas.
         let dos = measure(400.0, |ui| {
-            segmentado(ui, 240.0, &["Activado", "Apagado"], 0);
+            segmentado(ui, "dos", 240.0, &["Activado", "Apagado"], 0);
         });
         let tres = measure(400.0, |ui| {
-            segmentado(ui, 240.0, &["Conciso", "Equilibrado", "Detallado"], 1);
+            segmentado(ui, "tres", 240.0, &["Conciso", "Equilibrado", "Detallado"], 1);
         });
         assert!(
             (dos.width() - tres.width()).abs() < 4.0,
@@ -15675,7 +16124,7 @@ mod layout {
                 ui,
                 size,
                 Kpi {
-                    icon: "▣",
+                    icon: icons::Icon::Cpu,
                     title: "CPU",
                     value: 100.0,
                     unit: "%",
@@ -15697,7 +16146,7 @@ mod layout {
                 ui,
                 size,
                 Kpi {
-                    icon: "▤",
+                    icon: icons::Icon::Disk,
                     title: "Disco sistema",
                     value: 100.0,
                     unit: "%",
@@ -15715,7 +16164,7 @@ mod layout {
                 ui,
                 size,
                 Kpi {
-                    icon: "◱",
+                    icon: icons::Icon::Desktop,
                     title: "Sistema",
                     text: "WORKSTATION-16".into(),
                     sub: "Windows 11 Pro 26200".into(),

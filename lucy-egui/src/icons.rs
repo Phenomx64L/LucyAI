@@ -125,6 +125,17 @@ pub enum Icon {
     Pause,
     /// `player-play` — reanudarlo.
     Play,
+    /// `cpu` — la tarjeta de procesador del Dashboard.
+    Cpu,
+    /// Un módulo de memoria — la tarjeta de RAM.
+    ///
+    /// NO `topology-star`, que es el de Memoria (la que Lucy recuerda). Son dos
+    /// cosas distintas y el mismo dibujo para las dos ya se leía mal.
+    Ram,
+    /// Una unidad de disco — la tarjeta de almacenamiento.
+    Disk,
+    /// `world` — la tarjeta de red.
+    Network,
 }
 
 impl Icon {
@@ -339,8 +350,72 @@ impl Icon {
             // primero porque `Seg::Path` traza segmentos sueltos y sin él queda
             // una uve abierta en vez de un triángulo.
             Self::Play => &[Seg::Path(&[(7.0, 4.0), (20.0, 12.0), (7.0, 20.0), (7.0, 4.0)])],
+            // `cpu`: el encapsulado, el troquel dentro y las ocho patillas. Las
+            // patillas SON el icono —sin ellas es un cuadrado dentro de otro,
+            // que ya es `maximize`— así que van cortas pero las ocho.
+            Self::Cpu => &[
+                Seg::Rect((5.0, 5.0), (19.0, 19.0), 2.0),
+                Seg::Rect((9.0, 9.0), (15.0, 15.0), 1.0),
+                Seg::Path(&[(3.0, 10.0), (5.0, 10.0)]),
+                Seg::Path(&[(3.0, 14.0), (5.0, 14.0)]),
+                Seg::Path(&[(10.0, 3.0), (10.0, 5.0)]),
+                Seg::Path(&[(14.0, 3.0), (14.0, 5.0)]),
+                Seg::Path(&[(19.0, 10.0), (21.0, 10.0)]),
+                Seg::Path(&[(19.0, 14.0), (21.0, 14.0)]),
+                Seg::Path(&[(10.0, 19.0), (10.0, 21.0)]),
+                Seg::Path(&[(14.0, 19.0), (14.0, 21.0)]),
+            ],
+            // Un módulo DIMM: la placa alargada, los chips y las dos pestañas de
+            // abajo. Tumbado y ancho para que no se confunda con el procesador,
+            // que es cuadrado — a trece píxeles la silueta es lo único que
+            // distingue una tarjeta de la de al lado.
+            Self::Ram => &[
+                Seg::Rect((2.0, 7.0), (22.0, 16.0), 1.5),
+                Seg::Path(&[(6.0, 10.0), (6.0, 13.0)]),
+                Seg::Path(&[(10.0, 10.0), (10.0, 13.0)]),
+                Seg::Path(&[(14.0, 10.0), (14.0, 13.0)]),
+                Seg::Path(&[(18.0, 10.0), (18.0, 13.0)]),
+                Seg::Path(&[(6.0, 16.0), (6.0, 18.0)]),
+                Seg::Path(&[(18.0, 16.0), (18.0, 18.0)]),
+            ],
+            // Una unidad: la carcasa y el testigo. El punto va a la derecha
+            // porque es donde lo lleva cualquier disco, y es lo que hace que se
+            // lea como aparato y no como un rectángulo cualquiera.
+            Self::Disk => &[
+                Seg::Rect((3.0, 7.0), (21.0, 17.0), 2.0),
+                Seg::Path(&[(7.0, 12.0), (14.0, 12.0)]),
+                Seg::Circle((17.5, 12.0), 1.1),
+            ],
+            // `world`: el globo, el ecuador y los dos meridianos. Los meridianos
+            // son curvas de verdad —con rectas el globo sale como un ojo— y cada
+            // uno arranca y acaba EN LOS POLOS, que es lo que cierra la esfera.
+            Self::Network => &[
+                Seg::Circle((12.0, 12.0), 9.0),
+                Seg::Path(&[(3.0, 12.0), (21.0, 12.0)]),
+                Seg::Curve(&[(12.0, 3.0), (7.2, 6.0), (7.2, 18.0), (12.0, 21.0)]),
+                Seg::Curve(&[(12.0, 3.0), (16.8, 6.0), (16.8, 18.0), (12.0, 21.0)]),
+            ],
         }
     }
+
+    /// Todos los iconos, en el orden en que se declaran.
+    ///
+    /// AQUÍ Y NO EN LOS TESTS. Había una copia dentro de `mod tests` y se quedó
+    /// corta: la enum tenía veinticinco variantes y la lista veintitrés, así que
+    /// `Pause` y `Play` no los miraba nadie. Una lista que solo conocen los tests
+    /// se olvida de actualizar justo cuando se añade lo que había que probar.
+    ///
+    /// Sigue habiendo que añadir a mano cada variante nueva; lo que cambia es que
+    /// ahora hay UN sitio y está al lado del `match` que también hay que tocar.
+    #[cfg(test)]
+    pub const ALL: &'static [Icon] = &[
+        Self::Grid, Self::Sparkles, Self::Terminal, Self::FileText, Self::Database,
+        Self::Shield, Self::Memory, Self::Settings, Self::Refresh, Self::Bolt,
+        Self::ChevronDown, Self::Clip, Self::Mic, Self::ArrowUp, Self::Plus,
+        Self::Close, Self::Copy, Self::Desktop, Self::Server, Self::Pencil,
+        Self::Minimize, Self::Maximize, Self::Restore, Self::Pause, Self::Play,
+        Self::Cpu, Self::Ram, Self::Disk, Self::Network,
+    ];
 }
 
 /// Dibuja un icono centrado en `center`, ocupando `size` píxeles de lado.
@@ -369,7 +444,7 @@ pub fn draw(painter: &egui::Painter, icon: Icon, center: Pos2, size: f32, color:
             painter.circle_filled(*q, r, color);
         }
     };
-    let mut trazo = |pts: Vec<Pos2>| {
+    let trazo = |pts: Vec<Pos2>| {
         painter.add(egui::Shape::line(pts.clone(), stroke));
         redondear(&pts);
     };
@@ -427,15 +502,10 @@ pub fn show(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) -> egui::R
 mod tests {
     use super::*;
 
-    /// Los 22 iconos, uno por uno.
-    const ALL: [Icon; 23] = [
-        Icon::Grid, Icon::Sparkles, Icon::Terminal, Icon::FileText, Icon::Database,
-        Icon::Shield, Icon::Memory, Icon::Settings, Icon::Refresh, Icon::Bolt,
-        Icon::ChevronDown,
-        Icon::Clip, Icon::Mic, Icon::ArrowUp, Icon::Plus, Icon::Close, Icon::Copy,
-        Icon::Desktop, Icon::Server, Icon::Pencil, Icon::Minimize, Icon::Maximize,
-        Icon::Restore,
-    ];
+    /// La lista vive en `Icon::ALL`, junto al `match` que la acompaña. La copia
+    /// que había aquí se quedó dos iconos corta sin que nadie se enterara.
+    use super::Icon as I;
+    const ALL: &[Icon] = I::ALL;
 
     #[test]
     fn ningun_icono_esta_vacio() {
