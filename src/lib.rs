@@ -99,6 +99,10 @@ pub mod pricing;
 pub mod prompt;
 /// Enrutado: avisa cuando el modelo elegido se queda corto para lo que se pide.
 /// NO cambia el modelo por su cuenta — ver la cabecera del módulo.
+/// La historia de los escaneos de compliance. El escaneo dice qué cumple; esto
+/// dice QUÉ SE HA ROTO, que es la pregunta de verdad — un control que ya fallaba
+/// es deuda conocida, uno que pasaba y hoy falla es una noticia.
+pub mod posture;
 pub mod routing;
 /// Los atajos de la pantalla vacía, escritos por un modelo local pequeño a
 /// partir del estado real del equipo. Los de fábrica son genéricos y envejecen
