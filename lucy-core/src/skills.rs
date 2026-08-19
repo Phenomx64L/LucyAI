@@ -40,6 +40,18 @@ pub struct Skill {
     /// se atiende una incidencia— y para eso desinstalar es demasiado: hay que
     /// volver a encontrar la carpeta y reinstalarla.
     pub activo: bool,
+    /// Dónde vive su carpeta.
+    ///
+    /// HACE FALTA PARA PODER APAGARLO. `set_enabled` resolvía la ruta por su
+    /// cuenta contra el perfil del usuario, y los skills NO SOLO VIVEN AHÍ: el
+    /// shell los busca además junto al ejecutable y en `./skills` del proyecto.
+    /// Los cinco que trae Lucy salen de esa última, así que apagarlos fallaba
+    /// siempre con «no está instalado en tu perfil» — un mensaje que además
+    /// mandaba a buscar el problema donde no estaba.
+    ///
+    /// Vacío cuando el skill no viene de un directorio, que hoy solo pasa en los
+    /// tests de `parse`.
+    pub dir: std::path::PathBuf,
 }
 
 /// El fichero que marca un skill como apagado.
@@ -52,14 +64,25 @@ pub struct Skill {
 pub const MARCA_APAGADO: &str = ".disabled";
 
 /// Enciende o apaga un skill. `Ok(())` también si ya estaba como se pide.
-pub fn set_enabled(nombre: &str, activo: bool) -> Result<(), String> {
-    let dir = user_dir()
-        .ok_or("No se pudo resolver tu perfil de usuario.")?
-        .join(nombre);
-    if !dir.is_dir() {
-        return Err(format!("«{nombre}» no está instalado en tu perfil."));
+/// SE LE PASA EL SKILL, no su nombre. Antes resolvía la ruta por su cuenta
+/// contra el perfil del usuario y daba por hecho que todos viven ahí; no es
+/// verdad —el shell los busca también junto al ejecutable y en `./skills`— así
+/// que apagar cualquiera de los que trae Lucy fallaba con «no está instalado en
+/// tu perfil», que además manda a buscar el problema donde no está.
+///
+/// La marca sigue yendo DENTRO de la carpeta del skill, que es lo que hace que
+/// el estado viaje con ella al copiarla a otra máquina. Si esa carpeta no se
+/// puede escribir —una instalación en Archivos de programa— el error lo dice
+/// con la ruta, en vez de callarse o mentir sobre el perfil.
+pub fn set_enabled(k: &Skill, activo: bool) -> Result<(), String> {
+    let nombre = &k.name;
+    if !k.dir.is_dir() {
+        return Err(format!(
+            "no se encuentra la carpeta de «{nombre}»: {}",
+            k.dir.display()
+        ));
     }
-    let marca = dir.join(MARCA_APAGADO);
+    let marca = k.dir.join(MARCA_APAGADO);
     if activo {
         // Que no exista no es un error: apagar dos veces y encender dos veces
         // tienen que acabar en el mismo sitio.
@@ -105,7 +128,9 @@ pub fn discover(dir: &std::path::Path) -> Vec<Skill> {
             // para poder volver a encenderlo. Lo que cambia es que no entra en
             // el catálogo que ve Lucy.
             let activo = !p.join(MARCA_APAGADO).exists();
-            Some(parse(&name, &md, activo))
+            let mut k = parse(&name, &md, activo);
+            k.dir = p;
+            Some(k)
         })
         .collect();
     // Por nombre, para que el catálogo del prompt no cambie de orden entre
@@ -156,6 +181,9 @@ pub fn parse(name: &str, md: &str, activo: bool) -> Skill {
         name: name.to_string(),
         description: crate::skills::una_linea(&description, 200),
         body: cuerpo.chars().take(MAX_BODY).collect(),
+        // `parse` recibe un texto, no un directorio: quien lo tenga lo pone
+        // después. Es lo que hace `discover`.
+        dir: std::path::PathBuf::new(),
         activo,
     }
 }
@@ -534,6 +562,53 @@ mod tests {
         let d = dir.join(nombre);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("SKILL.md"), "---\ndescription: d\n---\ncuerpo").unwrap();
+    }
+
+    #[test]
+    fn se_puede_apagar_un_skill_que_no_vive_en_el_perfil() {
+        // EL FALLO DE LA CAPTURA. `set_enabled` resolvía la ruta contra el perfil
+        // del usuario y daba por hecho que todos viven ahí. No es verdad: el
+        // shell los busca también junto al ejecutable y en `./skills`, y los
+        // cinco que trae Lucy salen de esa última. Apagar cualquiera contestaba
+        // «no está instalado en tu perfil» y no apagaba nada — con un mensaje
+        // que encima manda a buscar el problema donde no está.
+        let dir = tmp("fuera_del_perfil");
+        poner(&dir, "dns-troubleshoot");
+        let k = discover(&dir).into_iter().next().expect("tiene que descubrirse");
+        assert!(k.activo, "recién puesto tiene que estar activo");
+        assert_eq!(k.dir, dir.join("dns-troubleshoot"), "no sabe dónde vive");
+
+        set_enabled(&k, false).expect("apagar tiene que funcionar viva donde viva");
+        let apagado = discover(&dir).into_iter().next().unwrap();
+        assert!(!apagado.activo, "sigue activo después de apagarlo");
+        // Y deja de estar en lo que Lucy ve, que es todo el efecto de apagarlo.
+        assert!(
+            catalog(&[apagado.clone()]).is_empty(),
+            "un skill apagado no puede seguir en el catálogo"
+        );
+
+        set_enabled(&apagado, true).expect("volver a encenderlo tiene que funcionar");
+        assert!(discover(&dir).into_iter().next().unwrap().activo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apagar_dos_veces_acaba_donde_apagar_una() {
+        // Encender lo que ya está encendido no puede ser un error: la interfaz
+        // manda el estado que quiere, no la diferencia.
+        let dir = tmp("idempotente");
+        poner(&dir, "ssl-check");
+        let k = discover(&dir).into_iter().next().unwrap();
+        set_enabled(&k, false).unwrap();
+        let k = discover(&dir).into_iter().next().unwrap();
+        set_enabled(&k, false).unwrap();
+        assert!(!discover(&dir).into_iter().next().unwrap().activo);
+        let k = discover(&dir).into_iter().next().unwrap();
+        set_enabled(&k, true).unwrap();
+        let k = discover(&dir).into_iter().next().unwrap();
+        set_enabled(&k, true).unwrap();
+        assert!(discover(&dir).into_iter().next().unwrap().activo);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
