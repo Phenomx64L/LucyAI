@@ -10418,11 +10418,18 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             );
 
             let ancho = ((ui.available_width() - 24.0) / 3.0).max(120.0);
+            // UN CERO NO SE PINTA DE ALARMA. La tarjeta de fallas llevaba franja
+            // roja con un `0` dentro: cero fallas es la mejor noticia del panel
+            // y salía con el color de la peor. Con la cuenta a cero la franja se
+            // apaga, y el rojo queda para cuando hay algo rojo que contar.
+            let tono = |n: usize, c: egui::Color32| if n == 0 { theme::bdr2() } else { c };
             cmp_tarjeta(ui, ancho, cuenta(Estado::Pasa), "CONFORMES", theme::acc());
             ui.add_space(8.0);
-            cmp_tarjeta(ui, ancho, cuenta(Estado::Aviso), "AVISOS", theme::amber());
+            let n_av = cuenta(Estado::Aviso);
+            cmp_tarjeta(ui, ancho, n_av, "AVISOS", tono(n_av, theme::amber()));
             ui.add_space(8.0);
-            cmp_tarjeta(ui, ancho, cuenta(Estado::Falla), "FALLAS", theme::red());
+            let n_fa = cuenta(Estado::Falla);
+            cmp_tarjeta(ui, ancho, n_fa, "FALLAS", tono(n_fa, theme::red()));
         });
         // Los que no se pudieron medir van FUERA del porcentaje y se dicen aquí.
         // Meterlos en el denominador hundiría la nota por un permiso; dejarlos
@@ -10574,18 +10581,38 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                             .color(col),
                                     );
                                     ui.add_space(10.0);
+                                    // LA SEVERIDAD SOLO SE TIÑE SI EL CONTROL NO
+                                    // PASA. Se teñía siempre, así que un control
+                                    // CONFORME enseñaba «crítica» en rojo al
+                                    // lado de su propio visto verde: seis filas
+                                    // donde no pasa nada, gritando. Y cada rojo
+                                    // de más resta al rojo que sí importa —
+                                    // exactamente lo que dice la tarjeta del
+                                    // Dashboard sobre no teñir la cifra.
+                                    //
+                                    // La severidad de un control que pasa no es
+                                    // una advertencia: es una etiqueta que dice
+                                    // cuánto habría dolido. Sigue estando, en
+                                    // gris, porque ordena la lista y explica por
+                                    // qué un fallo es «aviso» y no «falla».
                                     ui.label(
                                         egui::RichText::new(r.check.severity.label())
                                             .size(theme::FS_CAPTION)
-                                            .color(match r.check.severity {
-                                                lucy_core::compliance::Severidad::Critical => {
-                                                    theme::red()
-                                                }
-                                                lucy_core::compliance::Severidad::High => {
-                                                    theme::amber()
-                                                }
-                                                _ => theme::txt3(),
-                                            }),
+                                            .color(
+                                                if r.estado == lucy_core::compliance::Estado::Pasa {
+                                                    theme::txt3()
+                                                } else {
+                                                    match r.check.severity {
+                                                        lucy_core::compliance::Severidad::Critical => {
+                                                            theme::red()
+                                                        }
+                                                        lucy_core::compliance::Severidad::High => {
+                                                            theme::amber()
+                                                        }
+                                                        _ => theme::txt3(),
+                                                    }
+                                                },
+                                            ),
                                     );
                                 });
                             });
