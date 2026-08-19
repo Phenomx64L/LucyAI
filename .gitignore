@@ -20,3 +20,10 @@ desktop.ini
 # la reproducibilidad. Si el prototipo se convierte en la migración real, querer
 # saber con qué versión exacta de eframe se midió el bake-off deja de ser
 # curiosidad y pasa a ser la evidencia de la decisión.
+
+# -- Estado local de los skills ----------------------------------------------
+# El fichero .disabled marca un skill apagado, y vive DENTRO de su carpeta para
+# que el estado viaje con ella al copiarla a otra maquina. Para los skills que
+# trae el repositorio eso es justo lo que NO se quiere: commitearlo dejaria a
+# todo el que clone con los skills apagados porque alguien los probo una vez.
+**/skills/*/.disabled
