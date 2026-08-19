@@ -443,6 +443,34 @@ pub fn is_multi_step(resp: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn una_lista_en_markdown_sale_intacta() {
+        // LA SOSPECHA. En una captura, la respuesta salia con el «2.» en una
+        // linea y su texto en la siguiente.  recorta etiquetas
+        // por RANGOS DE BYTES, asi que un recorte a mitad de una linea de lista
+        // dejaria el marcador colgando — y eso se ve exactamente asi.
+        //
+        // Este test dice si la culpa es nuestra o del modelo.
+        let md = "1. Primero, lo que pasa.
+2. Segundo, lo que hay que mirar.
+   - anidado
+";
+        // Se compara recortado:  quita el espacio del final, que
+        // es correcto y no tiene nada que ver con la estructura de la lista.
+        assert_eq!(clean_display(md).text, md.trim_end(), "la lista limpia se ha tocado");
+    }
+
+    #[test]
+    fn una_etiqueta_dentro_de_una_lista_no_parte_el_marcador() {
+        // El caso que si podria ser culpa nuestra: una herramienta invocada
+        // dentro de un punto de la lista.
+        let md = "1. Miro la RAM.
+2. <TOOL>readfile:x</TOOL>Miro el disco.
+";
+        let out = clean_display(md).text;
+        assert!(out.contains("2. Miro el disco."), "el marcador quedo colgando: {out:?}");
+    }
+
     use super::*;
 
     #[test]
