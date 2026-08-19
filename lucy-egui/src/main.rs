@@ -14,6 +14,7 @@
 
 mod avatar;
 mod drain;
+mod i18n;
 mod icons;
 mod prompt;
 mod theme;
@@ -167,18 +168,18 @@ enum MemTab {
 }
 
 impl View {
-    /// El nombre que ve el operador.
+    /// El nombre que ve el operador, en su idioma.
     fn label(self) -> &'static str {
-        match self {
-            View::Dashboard => "Dashboard",
-            View::TerminalIa => "Terminal IA",
-            View::NexShell => "NexShell",
-            View::LogViewer => "Log Viewer",
-            View::Inventario => "Inventario",
-            View::Compliance => "Compliance",
-            View::Memoria => "Memoria",
-            View::Configuracion => "Configuración",
-        }
+        i18n::t(match self {
+            View::Dashboard => "nav.dashboard",
+            View::TerminalIa => "nav.terminalia",
+            View::NexShell => "nav.nexshell",
+            View::LogViewer => "nav.logviewer",
+            View::Inventario => "nav.inventario",
+            View::Compliance => "nav.compliance",
+            View::Memoria => "nav.memoria",
+            View::Configuracion => "nav.configuracion",
+        })
     }
 
     /// El título que encabeza la página del módulo.
@@ -193,16 +194,16 @@ impl View {
     /// encabezando la página dice mejor «Dashboard de sistema». Lo que no puede
     /// es cambiar de estilo de una pantalla a otra.
     fn titulo(self) -> &'static str {
-        match self {
-            View::Dashboard => "Dashboard de sistema",
-            View::TerminalIa => "Terminal IA",
-            View::NexShell => "NexShell",
-            View::LogViewer => "Visor de logs",
-            View::Inventario => "Inventario",
-            View::Compliance => "Compliance",
-            View::Memoria => "Memoria",
-            View::Configuracion => "Configuración",
-        }
+        i18n::t(match self {
+            View::Dashboard => "titulo.dashboard",
+            View::TerminalIa => "titulo.terminalia",
+            View::NexShell => "titulo.nexshell",
+            View::LogViewer => "titulo.logviewer",
+            View::Inventario => "titulo.inventario",
+            View::Compliance => "titulo.compliance",
+            View::Memoria => "titulo.memoria",
+            View::Configuracion => "titulo.configuracion",
+        })
     }
 
     /// Para qué sirve este módulo, en el cuadro que sale al pasar el ratón por
@@ -218,53 +219,16 @@ impl View {
     /// diferencia entre una pantalla vacía que se entiende y una que parece
     /// estropeada.
     fn ayuda(self) -> &'static str {
-        match self {
-            View::Dashboard => {
-                "Cómo está el equipo ahora mismo: procesador, memoria, disco, red, qué \
-                 servicios automáticos están caídos y qué procesos mandan. Se refresca \
-                 solo. Con el selector de al lado miras este equipo o cualquiera de los \
-                 que tengas dados de alta."
-            }
-            View::TerminalIa => {
-                "Pídele las cosas en español y Lucy propone el comando, lo ejecuta si lo \
-                 apruebas y te cuenta qué salió. Cada pestaña es una conversación aparte, \
-                 con su propio plan y su propia traza. Todo lo que ejecuta queda anotado \
-                 en el Log Viewer."
-            }
-            View::NexShell => {
-                "Una PowerShell de verdad: en este equipo, o en uno remoto por WinRM. \
-                 También acepta que le pidas el comando en español y te lo escribe en la \
-                 línea para que lo revises antes de soltarlo. Los equipos se dan de alta \
-                 en el carril de la izquierda."
-            }
-            View::LogViewer => {
-                "Qué se ha ejecutado, con qué resultado y cuánto tardó — la auditoría de \
-                 Lucy, en vivo. En «Archivo» miras en cambio los ficheros de log de una \
-                 carpeta del equipo, que es otra cosa."
-            }
-            View::Inventario => {
-                "Una foto de lo que este equipo tiene: puertos a la escucha, servicios, \
-                 software instalado, certificados y tareas programadas. No se mira solo — \
-                 hay que pulsar Escanear, y hasta entonces los recuentos están en blanco."
-            }
-            View::Compliance => {
-                "Pasa los controles CIS al equipo y te dice cuáles no cumple y con qué se \
-                 ha mirado cada uno. Hay que pulsar Escanear. Señala lo que está flojo; \
-                 arreglarlo sigue siendo cosa tuya."
-            }
-            View::Memoria => {
-                "Lo que Lucy recuerda: hechos sueltos, sesiones destiladas, manuales que le \
-                 has dado y los principios que le has puesto. Casi todo se escribe solo. \
-                 Entra aquí cuando repita algo viejo o no encuentre lo que ya le contaste. \
-                 Buscar por significado necesita Ollama."
-            }
-            View::Configuracion => {
-                "Lo que se da de alta una vez: la clave del proveedor, tu nombre, el modelo \
-                 y el aspecto. Sin ninguna clave guardada solo funcionan los modelos locales \
-                 de Ollama. Aquí están también el tope de gasto de la sesión y la copia de \
-                 seguridad de la memoria."
-            }
-        }
+        i18n::t(match self {
+            View::Dashboard => "ayuda.dashboard",
+            View::TerminalIa => "ayuda.terminalia",
+            View::NexShell => "ayuda.nexshell",
+            View::LogViewer => "ayuda.logviewer",
+            View::Inventario => "ayuda.inventario",
+            View::Compliance => "ayuda.compliance",
+            View::Memoria => "ayuda.memoria",
+            View::Configuracion => "ayuda.configuracion",
+        })
     }
 
     /// Su icono, el mismo que usa la V2.
@@ -3751,6 +3715,12 @@ const K_PRIVACY: &str = "lucy.privacy";
 /// Tope de gasto de la sesión, en dólares. `0` = sin límite.
 const K_SPEND: &str = "lucy.spend_limit";
 /// Cuánto se extiende Lucy al contestar.
+/// El idioma de la interfaz.
+///
+/// CON LA CLAVE DE LA V1 dentro (`es`, `en`, `pt`…), no con un índice: un índice
+/// se rompe en cuanto se añade un idioma en medio de la lista, y lo que quedaría
+/// guardado sería «el tercero», que mañana es otro.
+const K_LANG: &str = "lucy.idioma";
 const K_TONO: &str = "lucy.tono";
 /// Si Lucy avisa cuando el modelo elegido se queda corto.
 const K_RUTA: &str = "lucy.enrutado";
@@ -3794,6 +3764,21 @@ const DEFAULT_MODEL: &str = "gemini-3.5-flash";
 
 impl App {
     fn new(storage: Option<&dyn eframe::Storage>) -> Self {
+        // EL IDIOMA, LO PRIMERO DE TODO. Va antes que cualquier otra cosa porque
+        // el resto del constructor y el primer frame ya piden textos: puesto más
+        // abajo, la primera pantalla saldría en español y cambiaría sola al
+        // segundo frame, que se ve como un parpadeo.
+        //
+        // Sin nada guardado, español. Lo suyo sería heredar lo que el operador
+        // eligiera en la app de escritorio —la V1 lo deja en `lucy_user_lang`—
+        // pero eso vive en el almacenamiento local del WebView y desde aquí no
+        // se lee; queda para cuando este shell tenga su propio instalador.
+        if let Some(l) = storage
+            .and_then(|s| s.get_string(K_LANG))
+            .and_then(|v| i18n::Lang::de_clave(&v))
+        {
+            i18n::set(l);
+        }
         let models = lucy_core::chat::list_models();
         // Lo que el operador eligió la última vez manda sobre el valor por
         // defecto: cambiar de modelo en cada arranque es la clase de fricción
@@ -4503,6 +4488,7 @@ impl eframe::App for App {
         storage.set_string(K_WS_WIDTH, self.ws_width.to_string());
         storage.set_string(K_PRIVACY, self.privacy.to_string());
         storage.set_string(K_SPEND, self.spend_limit.to_string());
+        storage.set_string(K_LANG, i18n::lang().clave().to_string());
         storage.set_string(K_TONO, self.tono.key().to_string());
         storage.set_string(K_RUTA, self.enrutado.to_string());
         storage.set_string(K_PALETA, theme::paleta().clave.to_string());
@@ -11776,6 +11762,28 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         "fijo. Pensado para pantallas con reflejos; el oscuro es el tema de casa"
                     }
                 };
+                // EL IDIOMA, EL PRIMERO DE LA SECCIÓN. Es lo único de esta
+                // pantalla que alguien puede necesitar sin entender el resto de
+                // la pantalla, así que enterrarlo debajo del tema y del acento
+                // sería pedirle que lea en un idioma que no tiene para llegar a
+                // ponerlo en el suyo. Los idiomas se nombran EN SU IDIOMA por lo
+                // mismo: «Deutsch» se reconoce, «Alemán» no si no sabes español.
+                let idioma = i18n::lang();
+                let i_lang = idioma.idx();
+                let langs: Vec<&str> = i18n::Lang::ALL.iter().map(|l| l.nombre()).collect();
+                fila(
+                    ui,
+                    i18n::t("cfg.idioma"),
+                    Some(i18n::t("cfg.idioma.sub")),
+                    false,
+                    |ui| {
+                        if let Some(k) = segmentado(ui, "idioma", 360.0, &langs, i_lang) {
+                            if k != i_lang {
+                                i18n::set(i18n::Lang::ALL[k]);
+                            }
+                        }
+                    },
+                );
                 fila(ui, "Tema", Some(explica), false, |ui| {
                     let etiquetas: Vec<&str> =
                         theme::Mode::ALL.iter().map(|m| m.label()).collect();
@@ -15953,6 +15961,33 @@ mod layout {
                 }
             }
         }
+    }
+
+    #[test]
+    fn los_ocho_modulos_tienen_sus_tres_textos_en_los_cinco_idiomas() {
+        // Los tres `match` de `View` son exhaustivos, así que el compilador ya
+        // obliga a que cada módulo tenga sus tres claves. Lo que NO comprueba es
+        // que esas claves existan en la tabla: un dedazo —«titulo.logwiewer»—
+        // compila igual y sale «‹falta›» en pantalla, y solo se ve entrando en
+        // esa pestaña con ese idioma puesto.
+        let previo = i18n::lang();
+        for l in i18n::Lang::ALL {
+            i18n::set(l);
+            for v in View::ALL {
+                for (que, texto) in
+                    [("nav", v.label()), ("título", v.titulo()), ("ayuda", v.ayuda())]
+                {
+                    assert_ne!(
+                        texto,
+                        "‹falta›",
+                        "«{}» no tiene {que} en {}",
+                        v.label(),
+                        l.nombre()
+                    );
+                }
+            }
+        }
+        i18n::set(previo);
     }
 
     #[test]
