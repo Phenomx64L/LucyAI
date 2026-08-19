@@ -72,7 +72,7 @@ fn arco(c: (f32, f32), r: f32, desde: f32, hasta: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     /// `layout-grid` — Dashboard.
     Grid,

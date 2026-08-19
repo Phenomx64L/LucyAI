@@ -1505,24 +1505,63 @@ fn set_user_name(n: &str) {
     }
 }
 
+/// Los saludos de cada franja. Varios por franja, no uno.
+///
+/// PORQUE «BUENOS DÍAS» SIEMPRE ES UN CARTEL, y esta pantalla la ves cinco veces
+/// al día. Un saludo que no cambia nunca deja de leerse a la tercera; uno que
+/// cambia un poco se sigue mirando y hace que la aplicación parezca despierta.
+///
+/// AMABLES Y TRIVIALES, sin gracia forzada. Es lo primero que hay antes de
+/// pedirle algo a Lucy en mitad de una incidencia: un chiste ahí sobra, y un
+/// saludo seco sobra igual.
+const SALUDOS: [(&str, &[&str]); 3] = [
+    (
+        "mañana",
+        &["Buenos días", "Buen día", "Arrancamos", "Empezamos"],
+    ),
+    (
+        "tarde",
+        &["Buenas tardes", "Buena tarde", "Seguimos", "Aquí estamos"],
+    ),
+    (
+        "noche",
+        &["Buenas noches", "Buena noche", "Se hace tarde", "Última vuelta"],
+    ),
+];
+
 /// Saludo por franja horaria, como el `empty-state` de la V2.
-fn greeting(name: &str) -> String {
+///
+/// `n` elige cuál de la franja. Se le pasa el día del año, no un azar: dentro de
+/// la misma sesión no cambia —un saludo que baila en cada repintado sería un
+/// parpadeo— y de un día a otro sí.
+fn greeting_n(name: &str, n: usize) -> String {
     // LOCAL, no UTC. Con UTC el saludo decía "Buenos días" a las diez de la
     // noche en México — seis horas de desfase.
     let (h, _, _) = lucy_core::system::local_time();
-    let word = if h < 12 {
-        "Buenos días"
+    let franja = if h < 12 {
+        0
     } else if h < 19 {
-        "Buenas tardes"
+        1
     } else {
-        "Buenas noches"
+        2
     };
+    let opciones = SALUDOS[franja].1;
+    let word = i18n::tr(opciones[n % opciones.len()]);
     let first = name.split_whitespace().next().unwrap_or("");
     if first.is_empty() {
         word.to_string()
     } else {
         format!("{word}, {first}")
     }
+}
+
+fn greeting(name: &str) -> String {
+    // El día del año: estable dentro de una sesión, distinto mañana.
+    let dia = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() / 86_400) as usize)
+        .unwrap_or(0);
+    greeting_n(name, dia)
 }
 
 /// La paleta de comandos: los mismos 29 que la V2, con su descripción.
@@ -1571,6 +1610,37 @@ const SLASH: [(&str, &str, bool); 30] = [
 /// de qué va, y lo que se envía es una instrucción completa. Un chip que enviara
 /// su propio texto —"Salud del sistema"— le daría a Lucy tres palabras sueltas
 /// en lugar de una tarea.
+/// El icono de un atajo escrito por el modelo, deducido de su etiqueta.
+///
+/// LO ELIGE EL CÓDIGO, NO EL MODELO. Pedirle además un icono a un modelo de
+/// seiscientos millones de parámetros es pedirle que acierte con una lista
+/// cerrada que no ve, y devolvería nombres inventados que habría que mapear
+/// igual. Por palabra clave sale bien la mayoría de las veces y nunca falla:
+/// lo que no encaja se queda con el rayo, que es el icono de «una tarea».
+fn icono_de_chip(etiqueta: &str) -> icons::Icon {
+    let b = etiqueta.to_lowercase();
+    let tiene = |ps: &[&str]| ps.iter().any(|p| b.contains(p));
+    if tiene(&["servicio", "spooler", "daemon", "service"]) {
+        icons::Icon::Server
+    } else if tiene(&["disco", "espacio", "disk", "almacen"]) {
+        icons::Icon::Disk
+    } else if tiene(&["red", "dns", "conexión", "conexion", "network", "ip"]) {
+        icons::Icon::Network
+    } else if tiene(&["memoria", "ram"]) {
+        icons::Icon::Ram
+    } else if tiene(&["cpu", "procesador", "carga"]) {
+        icons::Icon::Cpu
+    } else if tiene(&["error", "log", "evento", "registro"]) {
+        icons::Icon::FileText
+    } else if tiene(&["segur", "vulnerab", "parche", "firewall", "cortafuegos", "certificad"]) {
+        icons::Icon::Shield
+    } else if tiene(&["actualiz", "update", "reinici"]) {
+        icons::Icon::Refresh
+    } else {
+        icons::Icon::Bolt
+    }
+}
+
 const SUGGESTIONS: [(icons::Icon, &str, &str); 4] = [
     (
         icons::Icon::Grid,
@@ -3632,6 +3702,21 @@ struct App {
     /// El modelo viaja al lado porque hace falta al VOLVER para tarifar: quien
     /// tituló pudo ser un Flash mientras el chat va con otra cosa.
     titulo_rx: Vec<(usize, String, std::sync::mpsc::Receiver<Titulado>)>,
+    /// Los atajos de la pantalla vacía, escritos para este equipo.
+    ///
+    /// Vacío = todavía no hay ninguno y mandan los de fábrica. Que el respaldo
+    /// sea la lista de siempre y no un hueco es lo que permite que esto falle en
+    /// silencio: sin Ollama, sin clave o con el modelo diciendo tonterías, la
+    /// pantalla queda exactamente como estaba.
+    chips: Vec<lucy_core::suggest::Chip>,
+    /// Cuándo se pidieron por última vez, en segundos desde la época.
+    chips_ts: Option<i64>,
+    /// La petición en vuelo: `(modelo, rx)`.
+    #[allow(clippy::type_complexity)]
+    chips_rx: Option<(
+        String,
+        std::sync::mpsc::Receiver<Result<(Vec<lucy_core::suggest::Chip>, u32, u32), String>>,
+    )>,
     /// Lo gastado en poner nombres, aparte.
     ///
     /// APARTE PORQUE SE TARIFA DISTINTO. El gasto de una pestaña se calcula con
@@ -3796,6 +3881,13 @@ const K_SPEND: &str = "lucy.spend_limit";
 /// CON LA CLAVE DE LA V1 dentro (`es`, `en`, `pt`…), no con un índice: un índice
 /// se rompe en cuanto se añade un idioma en medio de la lista, y lo que quedaría
 /// guardado sería «el tercero», que mañana es otro.
+/// Cuándo se pidieron por última vez los atajos de la pantalla vacía.
+///
+/// SE GUARDA LA MARCA Y NO LOS ATAJOS. Se recalculan al arrancar si toca, y en
+/// medio día el equipo puede haber cambiado: guardarlos enseñaría al abrir unos
+/// atajos que hablan de un servicio que ya arrancó. La marca sola basta para no
+/// pedirlos cinco veces al día.
+const K_CHIPS_TS: &str = "lucy.chips_ts";
 const K_LANG: &str = "lucy.idioma";
 const K_TONO: &str = "lucy.tono";
 /// Si Lucy avisa cuando el modelo elegido se queda corto.
@@ -4050,6 +4142,11 @@ impl App {
             claves_probadas: std::collections::HashMap::new(),
             prueba_rx: Vec::new(),
             titulo_rx: Vec::new(),
+            chips: Vec::new(),
+            chips_ts: storage
+                .and_then(|s| s.get_string(K_CHIPS_TS))
+                .and_then(|v| v.parse().ok()),
+            chips_rx: None,
             gasto_titulos: 0.0,
             recuento: None,
             sin_vector: 0,
@@ -4565,6 +4662,9 @@ impl eframe::App for App {
         storage.set_string(K_PRIVACY, self.privacy.to_string());
         storage.set_string(K_SPEND, self.spend_limit.to_string());
         storage.set_string(K_LANG, i18n::lang().clave().to_string());
+        if let Some(t) = self.chips_ts {
+            storage.set_string(K_CHIPS_TS, t.to_string());
+        }
         storage.set_string(K_TONO, self.tono.key().to_string());
         storage.set_string(K_RUTA, self.enrutado.to_string());
         storage.set_string(K_PALETA, theme::paleta().clave.to_string());
@@ -4699,6 +4799,13 @@ impl eframe::App for App {
         self.pump_dedup();
         self.pump_upkeep();
         self.pump_titulos();
+        self.pump_chips();
+        // Solo cuando hay una pantalla vacía delante: pedirlos con el operador
+        // en mitad de una conversación gastaría CPU para adornar algo que no se
+        // está mirando.
+        if self.view == View::TerminalIa && self.tabs[self.tab].log.is_empty() {
+            self.pide_chips();
+        }
         self.pump_mantenimiento();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
@@ -5432,7 +5539,23 @@ impl App {
             // Dos filas de dos, como la V2. En una sola fila los cuatro chips
             // se estiran a lo ancho de la ventana y dejan de leerse como
             // botones.
-            for par in SUGGESTIONS.chunks(2) {
+            // LOS ESCRITOS PARA ESTE EQUIPO SI LOS HAY, y los de fábrica si no.
+            // Los de fábrica no desaparecen: son el respaldo, y por eso esto
+            // puede fallar en silencio sin dejar la pantalla vacía de verdad.
+            let propios: Vec<(icons::Icon, String, String)> = self
+                .chips
+                .iter()
+                .map(|c| (icono_de_chip(&c.etiqueta), c.etiqueta.clone(), c.orden.clone()))
+                .collect();
+            let lista: Vec<(icons::Icon, String, String)> = if propios.is_empty() {
+                SUGGESTIONS
+                    .iter()
+                    .map(|(i, l, o)| (*i, i18n::tr(l).to_string(), i18n::tr(o).to_string()))
+                    .collect()
+            } else {
+                propios
+            };
+            for par in lista.chunks(2) {
                 ui.horizontal(|ui| {
                     // `vertical_centered` deja el cursor a la izquierda; hay que
                     // centrar la fila a mano contra el ancho que ocupa.
@@ -5440,7 +5563,7 @@ impl App {
                     ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                     for (icon, label, order) in par {
                         if chip(ui, *icon, label) {
-                            enviar = Some(order.to_string());
+                            enviar = Some(order.clone());
                         }
                     }
                 });
@@ -6769,6 +6892,83 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.reembeber_rx = None,
             }
+        }
+    }
+
+    /// Pide los atajos de la pantalla vacía, si toca. En un hilo: es red.
+    ///
+    /// SE INTENTA UNA VEZ Y NO SE REINTENTA, aunque falle. La marca de tiempo se
+    /// pone AL PEDIR y no al recibir, así que un Ollama caído no deja a la
+    /// aplicación llamando a una puerta cerrada cada frame durante doce horas.
+    fn pide_chips(&mut self) {
+        if self.chips_rx.is_some() {
+            return;
+        }
+        let ahora = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if !lucy_core::suggest::vencido(self.chips_ts, ahora) {
+            return;
+        }
+        let Some(fuente) = lucy_core::suggest::elige_fuente(&self.models, self.privacy) else {
+            // Sin nadie que los escriba: se marca igual, o esto se preguntaría
+            // en cada frame de la pantalla vacía.
+            self.chips_ts = Some(ahora);
+            return;
+        };
+        // Solo los errores del log, no las dos mil líneas: al modelo le sobra
+        // todo lo que salió bien, y con un 0.6B el contexto de más no es lento,
+        // es peor — deja de mirar los datos y repite el formato del ejemplo.
+        let errores: Vec<String> = self
+            .log_lines
+            .as_ref()
+            .map(|v| {
+                v.iter()
+                    .filter(|l| {
+                        let b = l.to_lowercase();
+                        b.contains("error") || b.contains("fail") || b.contains("fatal")
+                    })
+                    .rev()
+                    .take(3)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let ctx = lucy_core::suggest::contexto(&self.sys.snapshot(), &self.services, &errores);
+        let modelo = fuente.modelo().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::suggest::pide_a(&ctx, &fuente));
+        });
+        self.chips_ts = Some(ahora);
+        self.chips_rx = Some((modelo, rx));
+    }
+
+    /// Recoge los atajos que estaban en vuelo.
+    fn pump_chips(&mut self) {
+        let Some((modelo, rx)) = &self.chips_rx else { return };
+        match rx.try_recv() {
+            Ok(r) => {
+                let modelo = modelo.clone();
+                self.chips_rx = None;
+                // Un fallo se traga: los de fábrica siguen puestos y la pantalla
+                // queda como estaba. Avisar de que no se ha podido embellecer
+                // una pantalla vacía sería ruido sobre algo que nadie pidió.
+                if let Ok((chips, ent, sal)) = r {
+                    // NI UNO NI DOS: con menos de tres, la rejilla queda coja al
+                    // lado de los cuatro de fábrica, y media pantalla propia y
+                    // media genérica se lee peor que la genérica entera.
+                    if chips.len() >= 3 {
+                        self.chips = chips;
+                    }
+                    if let Some(c) = lucy_core::pricing::cost(&modelo, ent, sal) {
+                        self.gasto_titulos += c;
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.chips_rx = None,
         }
     }
 
@@ -16852,6 +17052,57 @@ mod hilo {
         assert!(g.ends_with(", Iván"), "salió: {g}");
         // Y sin nombre, saluda igual en vez de dejar una coma colgando.
         assert!(!greeting("").contains(','));
+    }
+
+    #[test]
+    fn el_icono_de_un_atajo_sale_de_lo_que_dice() {
+        // Lo elige el código y no el modelo: pedirle además un icono a un 0.6B
+        // es pedirle que acierte con una lista cerrada que no ve.
+        use icons::Icon;
+        for (etiqueta, esperado) in [
+            ("Spooler caído", Icon::Server),
+            ("Disco C al 93%", Icon::Disk),
+            ("Resolución DNS lenta", Icon::Network),
+            ("RAM al 90%", Icon::Ram),
+            ("Errores del registro", Icon::FileText),
+            ("Certificado a punto de caducar", Icon::Shield),
+            ("Actualizaciones pendientes", Icon::Refresh),
+        ] {
+            assert_eq!(
+                icono_de_chip(etiqueta),
+                esperado,
+                "«{etiqueta}» no cae en su icono"
+            );
+        }
+        // Y lo que no encaja NO se queda sin icono: el rayo es «una tarea».
+        assert_eq!(icono_de_chip("Cualquier otra cosa"), Icon::Bolt);
+    }
+
+    #[test]
+    fn el_saludo_cambia_de_un_dia_a_otro_pero_no_dentro_del_dia() {
+        // Un saludo que no cambia nunca deja de leerse a la tercera vez que
+        // abres la pantalla. Uno que cambia en cada repintado es un parpadeo.
+        let hoy: Vec<String> = (0..4).map(|_| greeting_n("Luna", 7)).collect();
+        assert!(hoy.windows(2).all(|p| p[0] == p[1]), "baila dentro del día: {hoy:?}");
+        let distintos: std::collections::HashSet<String> =
+            (0..8).map(|d| greeting_n("Luna", d)).collect();
+        assert!(distintos.len() > 1, "no cambia nunca: {distintos:?}");
+    }
+
+    #[test]
+    fn todas_las_franjas_tienen_saludo_y_ninguno_grita() {
+        for (franja, ops) in SALUDOS {
+            assert!(!ops.is_empty(), "la franja «{franja}» se ha quedado sin saludos");
+            for s in ops {
+                assert!(!s.contains('!') && !s.contains('¡'), "«{s}» grita");
+                // Son saludos, no frases: por encima de esto compiten con el
+                // nombre del operador, que es lo que se lee.
+                assert!(
+                    s.split_whitespace().count() <= 3,
+                    "«{s}» es una frase, no un saludo"
+                );
+            }
+        }
     }
 }
 
