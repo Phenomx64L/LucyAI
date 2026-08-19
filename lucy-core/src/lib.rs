@@ -100,6 +100,9 @@ pub mod prompt;
 /// Enrutado: avisa cuando el modelo elegido se queda corto para lo que se pide.
 /// NO cambia el modelo por su cuenta — ver la cabecera del módulo.
 pub mod routing;
+/// Ponerle nombre a una pestaña con un modelo local, o con el de nube más
+/// barato, o —si no hay ninguno— recortando la orden por palabras enteras.
+pub mod titles;
 /// Cuidados de la base: copiarla, contar qué hay dentro y quitar lo que sobra.
 /// Enseñar dónde vive algo irreemplazable sin ofrecer copiarlo es media
 /// instrucción.
