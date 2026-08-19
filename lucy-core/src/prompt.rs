@@ -178,7 +178,7 @@ pub const MAX_B_FLOJO: f32 = 8.0;
 ///
 /// `qwen3:0.6b` → 0.6 · `deepseek-r1:1.5b` → 1.5 · `llama3.1:70b` → 70 ·
 /// `mistral:latest` → None.
-fn tam_b(m: &str) -> Option<f32> {
+pub fn tam_b(m: &str) -> Option<f32> {
     // Tras los dos puntos está la etiqueta, que es donde Ollama pone el tamaño.
     // Sin ellos no hay nada que leer: `mistral` a secas no dice de qué tamaño es.
     let etiqueta = m.split_once(':')?.1;

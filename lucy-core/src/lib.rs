@@ -100,6 +100,10 @@ pub mod prompt;
 /// Enrutado: avisa cuando el modelo elegido se queda corto para lo que se pide.
 /// NO cambia el modelo por su cuenta — ver la cabecera del módulo.
 pub mod routing;
+/// Los atajos de la pantalla vacía, escritos por un modelo local pequeño a
+/// partir del estado real del equipo. Los de fábrica son genéricos y envejecen
+/// mal: con dos servicios caídos, «Salud del sistema» tapa la respuesta.
+pub mod suggest;
 /// Ponerle nombre a una pestaña con un modelo local, o con el de nube más
 /// barato, o —si no hay ninguno— recortando la orden por palabras enteras.
 pub mod titles;
