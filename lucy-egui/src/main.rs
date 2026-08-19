@@ -1743,14 +1743,18 @@ fn rel_time(created_at: i64) -> String {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let d = (now - created_at).max(0);
+    // La misma plantilla que `hace_cuanto` para minutos y horas: es la misma
+    // frase y compartirla evita traducirla dos veces con dos redacciones.
     if d < 60 {
-        "ahora".into()
+        i18n::tr("ahora").into()
     } else if d < 3600 {
-        format!("hace {} min", d / 60)
+        i18n::trf("hace {n} min", &[("n", &(d / 60).to_string())])
     } else if d < 86_400 {
-        format!("hace {} h", d / 3600)
+        i18n::trf("hace {n} h", &[("n", &(d / 3600).to_string())])
     } else {
-        format!("hace {} d", d / 86_400)
+        // En días va la forma CORTA: esto se pinta al final de cada fila de
+        // memoria, donde «hace 12 días» empuja el resto de la fila.
+        i18n::trf("hace {n} d", &[("n", &(d / 86_400).to_string())])
     }
 }
 
@@ -3283,11 +3287,14 @@ fn celda(ui: &mut egui::Ui, texto: &str, ancho: f32, color: egui::Color32, mono:
 /// enorme que no dice nada, y sin la edad delante nadie se da cuenta de que ése
 /// es el problema.
 fn hace_cuanto(secs: i64) -> String {
+    // POR PLANTILLA TRADUCIDA Y NO POR `format!`. El hueco cambia de sitio entre
+    // idiomas —«hace 3 días», «vor 3 Tagen», «3 days ago»— y con un `format!` la
+    // frase queda clavada al orden del español. Ver `i18n::trf`.
     match secs {
-        s if s < 90 => "hace un momento".to_string(),
-        s if s < 5_400 => format!("hace {} min", s / 60),
-        s if s < 172_800 => format!("hace {} h", s / 3_600),
-        s => format!("hace {} días", s / 86_400),
+        s if s < 90 => i18n::tr("hace un momento").to_string(),
+        s if s < 5_400 => i18n::trf("hace {n} min", &[("n", &(s / 60).to_string())]),
+        s if s < 172_800 => i18n::trf("hace {n} h", &[("n", &(s / 3_600).to_string())]),
+        s => i18n::trf("hace {n} días", &[("n", &(s / 86_400).to_string())]),
     }
 }
 

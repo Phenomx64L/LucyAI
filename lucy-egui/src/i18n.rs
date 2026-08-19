@@ -156,6 +156,50 @@ pub fn tr<'a>(es: &'a str) -> &'a str {
     }
 }
 
+/// Traduce una plantilla y rellena sus huecos.
+///
+/// LOS HUECOS VAN CON NOMBRE, `{n}` y no `{}`, y ésa es toda la razón de que
+/// esto exista en vez de un `format!`. El hueco CAMBIA DE SITIO al traducir:
+/// «hace {n} días» es «vor {n} Tagen» en alemán y «{n} days ago» en inglés, y
+/// con huecos posicionales la traducción no puede reordenar sin que el valor
+/// acabe en el sitio equivocado. Con nombre, la frase se escribe en cada idioma
+/// como se dice en ese idioma.
+///
+/// Los valores llegan YA FORMATEADOS. Un `{:.1}` no sobrevive a una tabla de
+/// traducción —nadie va a mantener el número de decimales en cinco idiomas— así
+/// que el redondeo se decide donde se conoce el dato y aquí solo se pega texto.
+///
+/// Un hueco que la traducción se haya dejado NO se inventa: se queda sin
+/// rellenar y se ve. Es feo a propósito — el test `las_plantillas_conservan_sus_huecos`
+/// lo impide antes de llegar aquí, y si algo se colara, un «hace días» sin
+/// número es más honesto que un número puesto donde parezca.
+pub fn trf(plantilla: &'static str, pares: &[(&str, &str)]) -> String {
+    let mut s = tr(plantilla).to_string();
+    for (k, v) in pares {
+        s = s.replace(&format!("{{{k}}}"), v);
+    }
+    s
+}
+
+/// Los nombres de los huecos de una plantilla, en orden de aparición.
+///
+/// Público porque lo usa el test que compara plantilla y traducciones, y ese
+/// test es la mitad del valor de este mecanismo.
+pub fn huecos(s: &str) -> Vec<&str> {
+    let mut v = Vec::new();
+    let mut resto = s;
+    while let Some(a) = resto.find('{') {
+        let Some(b) = resto[a..].find('}') else { break };
+        let nombre = &resto[a + 1..a + b];
+        // `{{` escapado, o un hueco vacío: ni uno ni otro son un nombre.
+        if !nombre.is_empty() && nombre.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            v.push(nombre);
+        }
+        resto = &resto[a + b + 1..];
+    }
+    v
+}
+
 /// La frase de un texto español, si está.
 ///
 /// BÚSQUEDA BINARIA sobre la tabla ordenada. Con cientos de frases y una pantalla
@@ -183,6 +227,10 @@ macro_rules! f {
 /// `tr` devuelve el español, que es lo que se quiere. Que falten es la decisión,
 /// no un olvido.
 pub const FRASES: &[Frase] = &[
+    // ── Plantillas con hueco ────────────────────────────────────────────────
+    // El hueco lleva NOMBRE y cambia de sitio entre idiomas — que es justo por
+    // lo que existe `trf`. Ver el test que comprueba que ninguna traducción se
+    // deja uno por el camino.
     f!(
         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
         "Open Lucy at least once to create the DB, or run as the same user.",
@@ -238,6 +286,7 @@ pub const FRASES: &[Frase] = &[
         "Chercher un modèle…",
         "Modell suchen…",
     ),
+    f!("CPU alta ({pct}%)", "High CPU ({pct}%)", "CPU alta ({pct}%)", "CPU élevé ({pct}%)", "Hohe CPU-Last ({pct}%)"),
     f!(
         "Cada cristal es una sesión destilada. Se escriben solos al cerrar turnos; sus lecciones ya son memorias y sobreviven aunque borres el cristal.",
         "Each crystal is a distilled session. They write themselves when turns close; their lessons are already memories and survive even if you delete the crystal.",
@@ -623,6 +672,27 @@ pub const FRASES: &[Frase] = &[
         "Impossible de consulter — la raison est ci-dessus.",
         "Abfrage nicht möglich — der Grund steht oben.",
     ),
+    f!(
+        "No se pudo grabar: {e}",
+        "Could not record: {e}",
+        "Não foi possível gravar: {e}",
+        "Impossible d'enregistrer : {e}",
+        "Aufnahme nicht möglich: {e}",
+    ),
+    f!(
+        "No se pudo leer «{ruta}»: {e}",
+        "Could not read «{ruta}»: {e}",
+        "Não foi possível ler «{ruta}»: {e}",
+        "Impossible de lire « {ruta} » : {e}",
+        "«{ruta}» konnte nicht gelesen werden: {e}",
+    ),
+    f!(
+        "No se pudo traducir: {e}",
+        "Could not translate: {e}",
+        "Não foi possível traduzir: {e}",
+        "Impossible de traduire : {e}",
+        "Übersetzung nicht möglich: {e}",
+    ),
     f!("Nueva terminal", "New terminal", "Novo terminal", "Nouveau terminal", "Neues Terminal"),
     f!(
         "Nunca ha corrido en esta base — correrá en la próxima comprobación.",
@@ -638,6 +708,13 @@ pub const FRASES: &[Frase] = &[
         "Ollama · modelos locais",
         "Ollama · modèles locaux",
         "Ollama · lokale Modelle",
+    ),
+    f!(
+        "Ollama · {n} modelos",
+        "Ollama · {n} models",
+        "Ollama · {n} modelos",
+        "Ollama · {n} modèles",
+        "Ollama · {n} Modelle",
     ),
     f!("Operador", "Operator", "Operador", "Opérateur", "Operator"),
     f!(
@@ -738,6 +815,7 @@ pub const FRASES: &[Frase] = &[
          Prüfprotokoll, live. Unter «Datei» siehst du stattdessen die Logdateien eines \
          Ordners auf dem Rechner, was etwas anderes ist.",
     ),
+    f!("RAM alta ({pct}%)", "High RAM ({pct}%)", "RAM alta ({pct}%)", "RAM élevée ({pct}%)", "Hohe RAM-Auslastung ({pct}%)"),
     f!("Razonamiento", "Reasoning", "Raciocínio", "Raisonnement", "Denkprozess"),
     f!(
         "Recuerdo por significado",
@@ -924,6 +1002,7 @@ pub const FRASES: &[Frase] = &[
         "Windows demandera une confirmation (UAC)",
         "Windows fragt nach Bestätigung (UAC)",
     ),
+    f!("ahora", "now", "agora", "à l'instant", "jetzt"),
     f!(
         "antes de mandar una tarea exigente · no cambia el modelo por ti",
         "before you send a demanding task · doesn't switch the model for you",
@@ -1003,6 +1082,25 @@ pub const FRASES: &[Frase] = &[
         "n'est plus conforme",
         "erfüllt es nicht mehr",
     ),
+    f!("hace un momento", "just now", "há um momento", "à l'instant", "gerade eben"),
+    f!("hace {n} d", "{n}d ago", "há {n} d", "il y a {n} j", "vor {n} T."),
+    f!("hace {n} días", "{n} days ago", "há {n} dias", "il y a {n} jours", "vor {n} Tagen"),
+    f!("hace {n} h", "{n} h ago", "há {n} h", "il y a {n} h", "vor {n} Std."),
+    f!("hace {n} min", "{n} min ago", "há {n} min", "il y a {n} min", "vor {n} Min."),
+    f!(
+        "llevas {gastado} · 0 = sin límite",
+        "you've spent {gastado} · 0 = no limit",
+        "levas {gastado} · 0 = sem limite",
+        "vous avez dépensé {gastado} · 0 = sans limite",
+        "bisher {gastado} · 0 = kein Limit",
+    ),
+    f!(
+        "llevas {gastado} · al cruzarlo se apaga el automático",
+        "you've spent {gastado} · crossing it turns the automatic off",
+        "levas {gastado} · ao ultrapassá-lo o automático desliga-se",
+        "vous avez dépensé {gastado} · au-delà, l'automatique s'arrête",
+        "bisher {gastado} · beim Überschreiten schaltet sich der Automatik-Modus ab",
+    ),
     f!(
         "lo que se ilumina: navegación, progreso, hecho",
         "what lights up: navigation, progress, done",
@@ -1043,6 +1141,7 @@ pub const FRASES: &[Frase] = &[
         "vide = ssh-agent ou ~/.ssh/id_ed25519",
         "leer = ssh-agent oder ~/.ssh/id_ed25519",
     ),
+    f!("visto {n} veces", "seen {n} times", "visto {n} vezes", "vu {n} fois", "{n}-mal gesehen"),
     f!(
         "vuelve a contar lo de arriba",
         "counts everything above again",
@@ -1059,6 +1158,27 @@ pub const FRASES: &[Frase] = &[
         "já não se pode medir",
         "ne peut plus être mesuré",
         "lässt sich nicht mehr messen",
+    ),
+    f!(
+        "{n} memorias detrás",
+        "{n} memories behind it",
+        "{n} memórias por trás",
+        "{n} mémoires derrière",
+        "{n} Erinnerungen dahinter",
+    ),
+    f!(
+        "{pista} · el proveedor la acepta",
+        "{pista} · the provider accepts it",
+        "{pista} · o fornecedor aceita-a",
+        "{pista} · le fournisseur l'accepte",
+        "{pista} · der Anbieter akzeptiert ihn",
+    ),
+    f!(
+        "{vivas} de {total} memorias vivas",
+        "{vivas} of {total} live memories",
+        "{vivas} de {total} memórias vivas",
+        "{vivas} sur {total} mémoires vivantes",
+        "{vivas} von {total} lebenden Erinnerungen",
     ),
     f!("¿borrar?", "delete?", "apagar?", "supprimer ?", "löschen?"),
     f!("↻ Recontar", "↻ Recount", "↻ Recontar", "↻ Recompter", "↻ Neu zählen"),
@@ -1369,6 +1489,59 @@ mod tests {
         );
         assert!(crate::mem_tags("").is_empty());
         assert!(crate::mem_tags("[]").is_empty());
+    }
+
+    #[test]
+    fn las_plantillas_conservan_sus_huecos_en_los_cinco_idiomas() {
+        // EL ÚNICO FALLO QUE ESTE MECANISMO PUEDE TENER. Si una traducción se
+        // deja un `{n}`, la frase sale sin el número —«hace días»— y si se
+        // inventa uno que no existe, sale el `{loquesea}` crudo en pantalla.
+        // Las dos cosas pasan por descuido al traducir y ninguna la ve el
+        // compilador, porque para él son cadenas.
+        //
+        // Se compara por CONJUNTO y no por orden: reordenar es justamente lo que
+        // esto viene a permitir —«vor {n} Tagen» frente a «{n} days ago»— así
+        // que exigir el mismo orden anularía el mecanismo entero.
+        for f in FRASES {
+            let esperados: std::collections::BTreeSet<&str> =
+                huecos(f.es).into_iter().collect();
+            if esperados.is_empty() {
+                continue;
+            }
+            for (i, t) in f.otros.iter().enumerate() {
+                let hay: std::collections::BTreeSet<&str> = huecos(t).into_iter().collect();
+                assert_eq!(
+                    hay,
+                    esperados,
+                    "«{}» en {}: los huecos no coinciden",
+                    hasta(f.es, 40),
+                    Lang::ALL[i + 1].nombre()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn los_huecos_se_leen_por_nombre_y_no_se_confunden() {
+        assert_eq!(huecos("hace {n} días"), vec!["n"]);
+        assert_eq!(huecos("{a} de {b} memorias"), vec!["a", "b"]);
+        // Sin huecos, y sin confundir una llave suelta con uno.
+        assert!(huecos("Configuración").is_empty());
+        assert!(huecos("un { sin cerrar").is_empty());
+        // Un `{}` posicional NO es un hueco con nombre: si alguien mete uno en la
+        // tabla tiene que verse que no se va a rellenar, no colarse como válido.
+        assert!(huecos("hace {} días").is_empty());
+    }
+
+    #[test]
+    fn una_plantilla_se_rellena_en_el_idioma_puesto() {
+        let _g = cerrojo();
+        set(Lang::Es);
+        assert_eq!(trf("hace {n} días", &[("n", "3")]), "hace 3 días");
+        set(Lang::De);
+        // Y en alemán el hueco va en otro sitio, que es el motivo de todo esto.
+        assert_eq!(trf("hace {n} días", &[("n", "3")]), "vor 3 Tagen");
+        set(Lang::Es);
     }
 
     #[test]
