@@ -1783,7 +1783,13 @@ const GAP: f32 = 10.0;
 // 18 + 8 + 41 + (10 + 26 + 6) + 16 + 28 = 153.6 medidos; 156 deja holgura.
 const KPI_H: f32 = 156.0;
 const NET_H: f32 = 106.0; // 16 + 10 + 3×18 + 28
-const CORE_H: f32 = 44.0; // 16 + 6 + 4 + 18
+/// Alto de la tira de núcleos. UNA fila, pase lo que pase con la cuenta.
+///
+/// Antes eran tarjetas de 44 px en rejilla: con treinta y dos núcleos, tres
+/// filas y más de doscientos píxeles que empujaban discos y procesos fuera de la
+/// pantalla. Treinta y dos es lo normal hoy y ciento veintiocho no es raro en un
+/// servidor; con rejilla, ese equipo no cabría de ninguna manera.
+const TIRA_H: f32 = 34.0;
 const DISK_H: f32 = 78.0; // 18 + 8 + 5 + 8 + 16 + 24
 const PROC_ROW: f32 = 22.0;
 
@@ -2266,7 +2272,10 @@ fn section(ui: &mut egui::Ui, title: &str, sub: Option<String>) {
     ui.add_space(GAP + 4.0);
     row_align(ui, 18.0, egui::Align::Center, |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        ui.add(egui::Label::new(theme::instrument_label(title, theme::faint())));
+        // Como `fila` y `panel`: traduce el ayudante, no el sitio de llamada.
+        // Por aquí pasan los rótulos del Dashboard —«Núcleos», «Discos», «Top
+        // procesos»— y de las tablas de Inventario.
+        ui.add(egui::Label::new(theme::instrument_label(i18n::tr(title), theme::faint())));
         if let Some(s) = sub {
             ui.label(
                 egui::RichText::new(s)
@@ -11661,42 +11670,58 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         });
     }
 
-    /// Tarjeta de un núcleo: `C7`, su porcentaje, y una barra fina.
+    /// Los núcleos en UNA TIRA, no en una rejilla de tarjetas.
     ///
-    /// Función aparte y no un bloque dentro del bucle porque es la pieza que se
-    /// repite 32 veces: si una sola se sale de su caja, la rejilla entera se
-    /// descuadra. Suelta, un test la puede medir.
-    fn core_card(ui: &mut egui::Ui, w: f32, i: usize, pct: f32, host_cpu: f32) {
-        card(ui, egui::vec2(w, CORE_H), 9.0, |ui| {
-            row_align(ui, 16.0, egui::Align::Center, |ui| {
-                ui.label(
-                    egui::RichText::new(format!("C{i}"))
-                        .size(theme::FS_CAPTION)
-                        .monospace()
-                        .color(theme::faint()),
-                );
-                right(ui, 16.0, |ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{pct:.0}%"))
-                            .size(theme::FS_FOOTNOTE)
-                            .monospace()
-                            .color(theme::txt2()),
-                    );
-                });
-            });
-            ui.add_space(6.0);
-            meter(
-                ui,
-                w - 18.0,
-                4.0,
-                pct / 100.0,
-                theme::core_color(pct, host_cpu),
-                // Cada núcleo necesita su propia animación: con una sola clave
-                // los 32 compartirían valor y la rejilla parpadearía a la vez.
-                &format!("core-{i}"),
-                theme::DUR_BASE,
+    /// TREINTA Y DOS TARJETAS SON TRES FILAS Y DOSCIENTOS PÍXELES para decir «1 %»
+    /// veinticuatro veces. Con esa rejilla, el Dashboard empujaba los discos y los
+    /// procesos —que sí cambian y sí importan— fuera de la pantalla, y hacía falta
+    /// desplazarse para ver lo que se venía a mirar.
+    ///
+    /// Y LA CIFRA POR NÚCLEO NO ERA LO QUE SE LEÍA. Con treinta y dos, lo que se
+    /// busca de un vistazo es el PATRÓN: si hay uno clavado al 100 mientras el
+    /// resto duerme, si están todos al 40, si hay ocho calientes seguidos. Eso lo
+    /// dice una tira de barras mejor que treinta y dos números, que obligan a
+    /// leerlos uno a uno. El número exacto sigue estando: al pasar el ratón.
+    ///
+    /// SIN ANIMAR, y es un cambio a propósito. Cada tarjeta animaba su barra con
+    /// su propia clave; treinta y dos interpolaciones por frame para un valor que
+    /// se remuestrea cada segundo es gasto sin lectura, y en una tira estrecha el
+    /// movimiento se ve como ruido en vez de como cambio.
+    fn nucleos_tira(ui: &mut egui::Ui, ancho: f32, cores: &[f32], host_cpu: f32) {
+        let n = cores.len().max(1);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ancho, TIRA_H), egui::Sense::hover());
+        // El hueco sale del ancho disponible y no al revés: con ciento veintiocho
+        // núcleos, dos píxeles fijos de separación se comerían la mitad de la
+        // tira y las barras quedarían en filo.
+        let paso = ancho / n as f32;
+        let hueco = (paso * 0.18).clamp(1.0, 3.0);
+        let w = (paso - hueco).max(1.0);
+        for (i, pct) in cores.iter().enumerate() {
+            let x = rect.left() + paso * i as f32;
+            let alto = (TIRA_H * (pct / 100.0).clamp(0.02, 1.0)).max(2.0);
+            let barra = egui::Rect::from_min_size(
+                egui::pos2(x, rect.bottom() - alto),
+                egui::vec2(w, alto),
             );
-        });
+            // El canal apagado detrás: sin él, un núcleo a cero desaparece y la
+            // tira parece tener menos núcleos de los que hay.
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, TIRA_H)),
+                egui::Rounding::same(1.0),
+                theme::bg3(),
+            );
+            ui.painter().rect_filled(
+                barra,
+                egui::Rounding::same(1.0),
+                theme::core_color(*pct, host_cpu),
+            );
+            // El número exacto, al señalar. `interact` sobre el rect entero de la
+            // columna y no sobre la barra: apuntar a una barra de tres píxeles de
+            // alto —un núcleo parado— sería imposible.
+            let col = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(paso, TIRA_H));
+            ui.interact(col, ui.id().with(("core", i)), egui::Sense::hover())
+                .on_hover_text(format!("C{i} · {pct:.0}%"));
+        }
     }
 
     /// Configuración — lo que Lucy sabe de sí misma en este equipo.
@@ -13327,16 +13352,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     let host_cpu = s.cpu_pct;
                     block(ui, ent[3], |ui| {
                         section(ui, "Núcleos", Some(cores.len().to_string()));
-                        let ccols = fit_cols(full, 100.0);
-                        let ccw = cell_w(full, ccols);
-                        for (r, chunk) in cores.chunks(ccols).enumerate() {
-                            row(ui, CORE_H, |ui| {
-                                for (c, pct) in chunk.iter().enumerate() {
-                                    Self::core_card(ui, ccw, r * ccols + c, *pct, host_cpu);
-                                }
-                            });
-                            ui.add_space(GAP);
-                        }
+                        row(ui, TIRA_H, |ui| {
+                            Self::nucleos_tira(ui, full, cores, host_cpu);
+                        });
+                        ui.add_space(GAP);
                     });
                 }
 
@@ -15919,37 +15938,42 @@ mod layout {
     }
 
     #[test]
-    fn una_fila_de_tarjetas_no_crece_en_diagonal() {
-        // LA REGRESIÓN. Dentro de una fila sin altura fijada, cada tarjeta
-        // agrandaba el hueco disponible de la siguiente, que se centraba en un
-        // hueco mayor y se desbordaba más: la rejilla de núcleos salía
-        // escalonada en diagonal y creciendo. Ocho tarjetas en fila tienen que
-        // medir exactamente lo que mide una.
+    fn la_tira_de_nucleos_es_una_fila_tenga_los_que_tenga() {
+        // LO QUE VINO A ARREGLAR. Con tarjetas en rejilla, treinta y dos núcleos
+        // eran tres filas y más de doscientos píxeles, y eso empujaba discos y
+        // procesos —que sí cambian y sí importan— fuera de la pantalla. Con
+        // ciento veintiocho, que no es raro en un servidor, no cabía de ninguna
+        // manera.
         let w = 900.0;
-        let cw = cell_w(w, 8);
-        let r = measure(w, |ui| {
-            row(ui, CORE_H, |ui| {
-                for i in 0..8 {
-                    App::core_card(ui, cw, i, 50.0, 20.0);
-                }
+        for n in [1_usize, 4, 32, 128, 256] {
+            let cores: Vec<f32> = (0..n).map(|i| (i % 100) as f32).collect();
+            let r = measure(w, |ui| {
+                row(ui, TIRA_H, |ui| App::nucleos_tira(ui, w, &cores, 20.0));
             });
-        });
-        assert!(
-            r.height() <= CORE_H + 0.5,
-            "ocho tarjetas de núcleo en fila miden {} de alto; una sola mide {CORE_H}",
-            r.height()
-        );
-        assert!(
-            r.width() <= w + 0.5,
-            "la fila mide {} de ancho y el hueco era {w}",
-            r.width()
-        );
+            assert!(
+                r.height() <= TIRA_H + 0.5,
+                "con {n} núcleos la tira mide {} y su caja son {TIRA_H}",
+                r.height()
+            );
+            assert!(
+                r.width() <= w + 0.5,
+                "con {n} núcleos la tira mide {} de ancho y el hueco era {w}",
+                r.width()
+            );
+        }
     }
 
     #[test]
-    fn la_tarjeta_de_nucleo_cabe_en_su_caja() {
-        let r = measure(120.0, |ui| App::core_card(ui, 120.0, 31, 100.0, 90.0));
-        assert!(r.height() <= CORE_H + 0.5, "mide {}", r.height());
+    fn ningun_nucleo_desaparece_de_la_tira() {
+        // Un núcleo parado tiene que seguir viéndose, o la tira parece tener
+        // menos núcleos de los que hay — y «faltan cuatro» es una lectura mucho
+        // peor que «cuatro están a cero».
+        let cores = vec![0.0_f32; 32];
+        let (_, textos) = pintura(900.0, |ui| {
+            row(ui, TIRA_H, |ui| App::nucleos_tira(ui, 880.0, &cores, 0.0));
+        });
+        // No pinta texto: los números salen al señalar, no en la tira.
+        assert!(textos.is_empty(), "la tira no debería escribir cifras: {textos:?}");
     }
 
     /// Mide una fila de ajuste dentro de una caja del ancho dado.

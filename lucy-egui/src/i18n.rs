@@ -340,6 +340,7 @@ pub const FRASES: &[Frase] = &[
         "Désinstaller : supprime le dossier du skill",
         "Deinstallieren: löscht den Skill-Ordner",
     ),
+    f!("Discos", "Disks", "Discos", "Disques", "Datenträger"),
     f!(
         "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
         "Pick a skill's folder, or one holding several — a downloaded repository works as is",
@@ -354,6 +355,18 @@ pub const FRASES: &[Frase] = &[
         "Escreve um comando, ou diz-me o que queres saber e eu traduzo.",
         "Écris une commande, ou dis-moi ce que tu veux savoir et je la traduis.",
         "Schreib einen Befehl, oder sag mir, was du wissen willst, und ich übersetze es.",
+    ),
+    f!(
+        "Escribe una orden y Lucy la ejecuta — el plan, la salida y el trace\n\
+         se llenan en el workspace →",
+        "Type a command and Lucy runs it — the plan, the output and the trace\n\
+         fill up in the workspace →",
+        "Escreve uma ordem e a Lucy executa-a — o plano, a saída e o rasto\n\
+         preenchem-se no workspace →",
+        "Écris une commande et Lucy l'exécute — le plan, la sortie et la trace\n\
+         se remplissent dans le workspace →",
+        "Schreib einen Befehl und Lucy führt ihn aus — Plan, Ausgabe und Spur\n\
+         füllen sich im Workspace →",
     ),
     f!(
         "Escribe una orden…   ·   Shift+Enter = salto de línea",
@@ -576,6 +589,7 @@ pub const FRASES: &[Frase] = &[
         "N'a jamais tourné sur cette base — tournera à la prochaine vérification.",
         "Ist in dieser Datenbank noch nie gelaufen — läuft bei der nächsten Prüfung.",
     ),
+    f!("Núcleos", "Cores", "Núcleos", "Cœurs", "Kerne"),
     f!(
         "Ollama · modelos locales",
         "Ollama · local models",
@@ -718,6 +732,16 @@ pub const FRASES: &[Frase] = &[
         "Sem linha de base para esta máquina.",
         "Aucune ligne de base pour cette machine.",
         "Keine Baseline für diesen Rechner.",
+    ),
+    f!(
+        "Sin privilegios y con UAC desactivado: hay que abrir Lucy con una cuenta de \
+         administrador.",
+        "No privileges and UAC is off: you have to open Lucy with an administrator account.",
+        "Sem privilégios e com o UAC desativado: tens de abrir a Lucy com uma conta de \
+         administrador.",
+        "Sans privilèges et avec l'UAC désactivé : il faut ouvrir Lucy avec un compte \
+         administrateur.",
+        "Keine Rechte und UAC ist aus: Du musst Lucy mit einem Administratorkonto öffnen.",
     ),
     f!("Sistema", "System", "Sistema", "Système", "System"),
     f!("Skills", "Skills", "Skills", "Skills", "Skills"),
@@ -1199,6 +1223,7 @@ mod tests {
         todos.extend(literales_tras("fila(", 60));
         todos.extend(literales_tras("panel(", 140));
         todos.extend(literales_tras("insignia(ui,", 30));
+        todos.extend(literales_tras("section(ui,", 30));
         todos.extend(literales_tras("i18n::tr(", 20));
         // Los subtítulos de `fila`, que son la mitad del texto de la pantalla y
         // que el primer literal de cada llamada no ve. `Some(` pilla también
@@ -1228,12 +1253,17 @@ mod tests {
         // en el momento en que ha pasado, en vez de aparecer meses después en
         // una captura con media pantalla en español.
         //
-        // 95 antes de traducir, 51 después. Lo que queda son casi todas
-        // PLANTILLAS CON HUECO —`Falta: {}`, `Listo para operar en {}`— y esas no
-        // se arreglan metiendo la cadena en la tabla: el orden de los huecos
-        // cambia entre idiomas y hay que decidir caso por caso si se traduce la
-        // plantilla o se compone la frase de otra forma. Más los nombres de
-        // marca, que no se traducen y nunca bajarán de aquí.
+        // 95 → 51, y sigue en 51 tras traducir el Dashboard: al añadir `section`
+        // a la lista de arriba afloraron tantos rótulos nuevos como frases se
+        // habían traducido. No es un empate malo — es que el contador estaba
+        // midiendo de menos y ahora mide más superficie por el mismo número.
+        //
+        // Lo que queda son casi todas PLANTILLAS CON HUECO
+        // —`Falta: {}`, `Listo para operar en {}`— y esas no se arreglan
+        // metiendo la cadena en la tabla: el orden de los huecos cambia entre
+        // idiomas y hay que decidir caso por caso si se traduce la plantilla o
+        // se compone la frase de otra forma. Más los nombres de marca, que no se
+        // traducen y nunca bajarán de aquí.
         const TOPE: usize = 51;
         assert!(
             faltan.len() <= TOPE,
