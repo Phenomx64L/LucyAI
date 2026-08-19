@@ -1222,6 +1222,17 @@ struct ChatTab {
     uid: usize,
     title: String,
     log: Vec<ChatMsg>,
+    /// A qué mensaje del hilo escribe la cola de revelado.
+    ///
+    /// AL SUYO, NO AL ÚLTIMO. Esto era `log.last_mut()` y ahí estaba el fallo
+    /// que corta las frases: al cerrar un turno, `absorb_tags` añade la fila del
+    /// comando ejecutado, así que el último mensaje del hilo deja de ser la
+    /// burbuja de Lucy. Lo que quedara por revelar se pegaba entonces a la fila
+    /// del comando —donde no se pinta— y la respuesta se quedaba a medias en
+    /// pantalla, cortada donde alcanzara el ritmo de escritura. Es el «Voy a
+    /// compro» de la captura: no faltaba texto, estaba escrito en el sitio
+    /// equivocado.
+    drain_dest: Option<usize>,
     input: String,
     /// El workspace de ESTA pestaña.
     ///
@@ -1371,6 +1382,7 @@ impl ChatTab {
                 format!("Terminal {}", n + 1)
             },
             log: Vec::new(),
+            drain_dest: None,
             input: String::new(),
             attachments: Vec::new(),
             rx: None,
@@ -1389,6 +1401,34 @@ impl ChatTab {
     /// otra orden por delante partiría la conversación en dos.
     fn busy(&self) -> bool {
         self.rx.is_some() || self.drain.busy() || self.espera.is_some()
+    }
+
+    /// Abre el hueco de la respuesta y apunta la cola de revelado hacia él.
+    ///
+    /// LAS DOS COSAS JUNTAS, siempre. Separadas, cada sitio que empieza un turno
+    /// tenía que acordarse de la segunda, y el que se olvidara dejaría el texto
+    /// escribiéndose en el mensaje de antes sin que nada fallara.
+    fn abre_respuesta(&mut self) {
+        self.log.push(ChatMsg::new(false, String::new()));
+        self.drain_dest = Some(self.log.len() - 1);
+    }
+
+    /// Escribe en su mensaje lo que la cola acaba de soltar.
+    fn revela(&mut self, texto: &str) {
+        if texto.is_empty() {
+            return;
+        }
+        let Some(i) = self.drain_dest else { return };
+        if let Some(m) = self.log.get_mut(i) {
+            m.text.push_str(texto);
+        }
+    }
+
+    /// Vuelca de golpe lo que quede en cola. Antes de empezar otro turno, para
+    /// que el resto de una respuesta no se pegue a la siguiente.
+    fn vuelca(&mut self) {
+        let resto = self.drain.flush();
+        self.revela(&resto);
     }
 
     /// Caduca los pasos que quedaron sin aprobar. Devuelve cuántos eran.
@@ -4443,11 +4483,7 @@ impl App {
         let mut vivo = false;
         for t in &mut self.tabs {
             let out = t.drain.tick(now);
-            if !out.is_empty() {
-                if let Some(last) = t.log.last_mut() {
-                    last.text.push_str(&out);
-                }
-            }
+            t.revela(&out);
             vivo |= t.drain.busy();
         }
         vivo
@@ -5610,8 +5646,11 @@ impl App {
         let modelo = self.chat_model.clone();
         let privado = self.privacy;
         let t = &mut self.tabs[self.tab];
-        t.drain.flush();
-        t.log.push(ChatMsg::new(false, String::new()));
+        // Se VUELCA, no se tira. Aquí ponía `t.drain.flush();` a secas, con el
+        // valor devuelto descartado: reintentar borraba de la pantalla el final
+        // de la respuesta anterior sin que nada lo dijera.
+        t.vuelca();
+        t.abre_respuesta();
         t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         // Sin consulta: reintentar no es una pregunta nueva, así que no hay
         // memorias que buscar y el hilo arranca de inmediato.
@@ -6054,15 +6093,10 @@ impl App {
                     f.result = "Cancelado — el operador detuvo la respuesta".into();
                 }
             }
-            let resto = t.drain.flush();
-            if let Some(last) = t.log.last_mut() {
-                last.text.push_str(&resto);
-                // Se dice que se paró. Una respuesta cortada sin marca se lee
-                // como una respuesta que terminó mal.
-                last.text.push_str("
-
-_(detenido por el operador)_");
-            }
+            t.vuelca();
+            // Se dice que se paró. Una respuesta cortada sin marca se lee como
+            // una respuesta que terminó mal.
+            t.revela("\n\n_(detenido por el operador)_");
         }
         // Enviar con un PDF a medio extraer lo mandaría sin él y borraría el
         // chip: el operador vería marcharse su adjunto sin que llegara nunca.
@@ -6409,6 +6443,8 @@ _(detenido por el operador)_");
                 t.log.clear();
                 t.ws.reset();
                 t.drain.flush();
+                // El destino apuntaba a un mensaje que ya no existe.
+                t.drain_dest = None;
                 // Los sub-agentes de la conversación que se acaba de borrar no
                 // tienen dónde volver, así que se paran de verdad: el
                 // interruptor corta sus peticiones, y soltar los canales quita la
@@ -7161,12 +7197,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // pertenece. La cola escribe siempre en el último mensaje del hilo,
             // así que empezar un turno nuevo con texto pendiente lo pegaría a
             // la respuesta siguiente — mezclando dos respuestas en una.
-            let resto = t.drain.flush();
-            if !resto.is_empty() {
-                if let Some(last) = t.log.last_mut() {
-                    last.text.push_str(&resto);
-                }
-            }
+            t.vuelca();
             // El título de la pestaña pasa a ser la primera orden: con tres
             // terminales abiertas, "Terminal 2" no dice cuál era cuál.
             //
@@ -7259,7 +7290,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let privado = self.privacy;
         {
             let t = &mut self.tabs[self.tab];
-            t.log.push(ChatMsg::new(false, String::new()));
+            t.abre_respuesta();
             t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             t.rx = Some(start_turn(pi, consulta, conv, modelo, privado, t.stop.clone()));
         }
@@ -8138,15 +8169,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // al arrancar Lucy contestaba sobre un log de hace horas.
         self.reload_log();
         let pi = self.prompt_input();
-        {
-            let t = &mut self.tabs[ti];
-            let resto = t.drain.flush();
-            if !resto.is_empty() {
-                if let Some(last) = t.log.last_mut() {
-                    last.text.push_str(&resto);
-                }
-            }
-        }
+        self.tabs[ti].vuelca();
         // Con la conversación entera: la salida del comando se entiende contra
         // la pregunta que la provocó, y sin ella Lucy resume a ciegas.
         let mut conv = self.history(ti);
@@ -8156,7 +8179,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let t = &mut self.tabs[ti];
         // La línea del comando ya se añadió en `pump_exec`: aquí solo se abre el
         // hueco de la respuesta.
-        t.log.push(ChatMsg::new(false, String::new()));
+        t.abre_respuesta();
         t.stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         // Sin consulta: la salida de un comando no es una pregunta nueva.
         t.rx = Some(start_turn(pi, String::new(), conv, modelo, privado, t.stop.clone()));
@@ -12093,7 +12116,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // entero: `Skill.activo`, `skills::set_enabled`, el recuento de activos y
         // hasta el texto que explica qué pasa con los apagados. Lo que faltaba
         // era el interruptor.
-        let mut alternar: Option<(String, bool)> = None;
+        let mut alternar: Option<(lucy_core::skills::Skill, bool)> = None;
         let n_skills = self.skills.len();
         let activos = self.skills.iter().filter(|k| k.activo).count();
         panel(
@@ -12156,7 +12179,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         ) {
                             let on = j == 0;
                             if on != k.activo {
-                                alternar = Some((k.name.clone(), on));
+                                alternar = Some((k.clone(), on));
                             }
                         }
                     });
@@ -12203,13 +12226,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 };
             }
         }
-        if let Some((n, on)) = alternar {
-            self.skills_msg = match lucy_core::skills::set_enabled(&n, on) {
+        if let Some((k, on)) = alternar {
+            self.skills_msg = match lucy_core::skills::set_enabled(&k, on) {
                 Ok(()) => {
                     self.skills = cargar_skills();
                     // Un modo fijado que acaba de apagarse dejaría el prompt
                     // pidiendo un procedimiento que Lucy ya no ve.
-                    if !on && self.preset.as_deref() == Some(n.as_str()) {
+                    if !on && self.preset.as_deref() == Some(k.name.as_str()) {
                         self.preset = None;
                     }
                     String::new()
@@ -15955,6 +15978,52 @@ mod layout {
                 "«{t}» empieza en minúscula y los demás no"
             );
         }
+    }
+
+    #[test]
+    fn lo_que_queda_por_revelar_va_a_su_mensaje_y_no_al_ultimo() {
+        // «Voy a compro» — la respuesta cortada a mitad de palabra de la captura.
+        // El texto llega entero y se revela a ritmo; al cerrar el turno,
+        // `absorb_tags` añade la fila del comando ejecutado. Como la cola
+        // escribía en `log.last_mut()`, el resto de la frase se pegaba a ESA
+        // fila —donde no se pinta— y la respuesta se quedaba donde hubiera
+        // alcanzado el ritmo de escritura. No faltaba texto: estaba en el sitio
+        // equivocado, que es peor porque no se nota que se ha perdido.
+        const FRASE: &str = "Voy a comprobar dónde está el escritorio.";
+        let mut t = ChatTab::new(0);
+        t.abre_respuesta();
+        t.drain.push(FRASE);
+        // Un frame revela un trozo, no la frase entera.
+        let a = std::time::Instant::now();
+        t.drain.tick(a);
+        let trozo = t.drain.tick(a + std::time::Duration::from_millis(20));
+        t.revela(&trozo);
+        assert!(t.drain.busy(), "el test no prueba nada si ya se reveló todo");
+        // Y AQUÍ entra la fila del comando, que es lo que lo rompía.
+        t.log.push(ChatMsg::exec("[Environment]::GetFolderPath()".into(), true, String::new()));
+        t.vuelca();
+        assert_eq!(
+            t.log[0].text, FRASE,
+            "la respuesta no está entera en su burbuja"
+        );
+        assert!(
+            t.log[1].text.is_empty(),
+            "parte de la respuesta se ha ido a la fila del comando: «{}»",
+            t.log[1].text
+        );
+    }
+
+    #[test]
+    fn reintentar_no_se_come_el_final_de_la_respuesta_anterior() {
+        // `t.drain.flush();` con el valor descartado: lo que quedara por revelar
+        // desaparecía de la pantalla al reintentar, sin que nada lo dijera.
+        let mut t = ChatTab::new(0);
+        t.abre_respuesta();
+        t.drain.push("una respuesta a medio escribir");
+        t.vuelca();
+        t.abre_respuesta();
+        assert_eq!(t.log[0].text, "una respuesta a medio escribir");
+        assert!(t.log[1].text.is_empty(), "la burbuja nueva tiene que salir vacía");
     }
 
     #[test]
