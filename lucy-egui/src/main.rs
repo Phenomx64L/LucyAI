@@ -2000,7 +2000,22 @@ fn segmentado(
     activo: usize,
 ) -> Option<usize> {
     let n = opciones.len().max(1);
-    let w = (ancho / n as f32).floor();
+    // EL ANCHO PEDIDO ES UN TOPE, NO UNA PROMESA. Aquí se repartía `ancho` a
+    // secas —una constante: 180, 240, 270, 300, 360— y la columna que lo
+    // contiene NO es constante. Al estrechar la ventana, el control seguía
+    // pidiendo lo mismo y se salía: con el recorte por columna no se lleva por
+    // delante la mitad de al lado, pero se corta, y en la captura eso era
+    // «Deutsch» directamente ausente y «Del sistema» leyéndose «Del sistem».
+    //
+    // Un idioma que no se puede elegir porque no cabe es un idioma que no
+    // existe — y es justo el control que hace falta cuando no entiendes el
+    // resto de la pantalla.
+    //
+    // Se descuentan los márgenes del grupo (3 por lado) y los huecos entre
+    // opciones, o el reparto se pasaría por esos píxeles.
+    let huecos = 6.0 + (n as f32 - 1.0) * 2.0;
+    let disponible = (ui.available_width() - huecos).max(n as f32 * 24.0);
+    let w = (ancho.min(disponible) / n as f32).floor();
     let mut elegido = None;
     egui::Frame::none()
         .fill(theme::bg3())
@@ -16088,6 +16103,43 @@ mod layout {
                 "«{}» no acaba en punto",
                 v.label()
             );
+        }
+    }
+
+    #[test]
+    fn un_segmentado_cabe_en_su_columna_por_estrecha_que_sea() {
+        // AL REDIMENSIONAR SE ROMPE. Los segmentados piden un ancho FIJO —180,
+        // 240, 270, 300, 360— y la columna no lo es: al estrechar la ventana el
+        // control sigue pidiendo lo mismo y se sale. Con el recorte por columna
+        // que ya hay, no se lleva por delante la mitad de al lado, pero se corta:
+        // en la captura «Deutsch» no está y «Del sistema» se lee «Del sistem».
+        //
+        // Un idioma que no se puede elegir porque no cabe es un idioma que no
+        // existe, y es justo el control que alguien necesita cuando no entiende
+        // el resto de la pantalla.
+        for col in [360.0_f32, 420.0, 520.0, 620.0, 760.0] {
+            for (ancho, opciones) in [
+                (360.0_f32, &["Español", "English", "Português", "Français", "Deutsch"][..]),
+                (300.0, &["Esmeralda", "Cian", "Violeta", "Magenta"][..]),
+                (240.0, &["Oscuro", "Claro", "Del sistema"][..]),
+            ] {
+                let (p, textos) = pintura_en_fila(col, ancho, opciones, opciones.len() - 1);
+                let derecha = textos
+                    .iter()
+                    .filter(|(s, _)| opciones.contains(&s.as_str()))
+                    .map(|(_, r)| r.right())
+                    .fold(f32::MIN, f32::max);
+                assert!(
+                    derecha <= col + 1.0,
+                    "col={col}: la última opción de {opciones:?} acaba en {derecha:.0} \
+                     y la columna en {col:.0} — no cabe y se corta",
+                    );
+                assert!(
+                    p.right() <= col + 1.0,
+                    "col={col}: la píldora de {opciones:?} acaba en {:.0}, fuera de {col:.0}",
+                    p.right()
+                );
+            }
         }
     }
 
