@@ -895,8 +895,23 @@ struct LvRow {
     /// normal en un fichero de log: repetirla en una columna aparte gastaría
     /// sesenta píxeles para decir dos veces lo mismo.
     t: String,
+    /// El día, `AAAA-MM-DD`. Vacío cuando la línea no trae fecha fiable.
+    ///
+    /// SEPARADO DE LA HORA porque no se pinta en la fila: sirve para poner una
+    /// línea entre días. Sin ella, la lista salta de `03:31` a `17:07` sin decir
+    /// que son días distintos, y quien la lee entiende que pasaron catorce horas
+    /// esta madrugada.
+    dia: String,
     lv: lucy_core::logs::Level,
-    /// De dónde sale: el `source` de la auditoría, o el nombre del equipo.
+    /// El EQUIPO, aparte del origen.
+    ///
+    /// Iban pegados en un solo campo —`WORSKTATION-16 · agente`— dentro de una
+    /// columna de noventa y seis píxeles, así que se leía «WORSKTATION-1…» en
+    /// TODAS las filas: noventa y seis píxeles para repetir lo mismo y esconder
+    /// el origen, que es la parte que sí cambia. Separados, el equipo se puede
+    /// colapsar cuando es el mismo en todas.
+    host: String,
+    /// De dónde sale: el `source` de la auditoría.
     src: String,
     m: String,
 }
@@ -937,6 +952,11 @@ fn lv_filtrar(
             q.is_empty()
                 || r.m.to_lowercase().contains(&q)
                 || r.src.to_lowercase().contains(&q)
+                // Y POR EQUIPO. El nombre del equipo vivía dentro de `src`
+                // —`WORSKTATION-16 · agente`— y al separarlo en su propio campo
+                // para poder colapsar la columna, buscar «WIN-AD» dejó de
+                // encontrar nada. Lo cazó el test que ya existía.
+                || r.host.to_lowercase().contains(&q)
         })
         .map(|(i, _)| i)
         .collect()
@@ -978,6 +998,35 @@ fn lv_hora_de(created_at: i64, iso: &str) -> String {
         return iso[11..19].to_string();
     }
     String::new()
+}
+
+/// El día de una fila de auditoría, `AAAA-MM-DD`. Vacío si no se sabe.
+///
+/// SOLO PARA AGRUPAR, no se pinta en la fila. Sirve para poner una línea entre
+/// días: sin ella la lista salta de `03:31` a `17:07` sin decir que son días
+/// distintos, y se lee como que pasaron catorce horas esta madrugada.
+///
+/// Cuentas de calendario a mano y no una dependencia de fechas: son días desde
+/// 1970 y el algoritmo civil de Howard Hinnant, que es exacto y cabe en quince
+/// líneas. Traer `chrono` entero para escribir una fecha cada veinte filas sería
+/// pagar un árbol de dependencias por una división.
+fn lv_dia_de(created_at: i64) -> String {
+    if created_at <= 0 {
+        return String::new();
+    }
+    // Días desde la época, con la división hacia abajo — no `/`, que trunca
+    // hacia cero y daría el día equivocado para fechas anteriores a 1970.
+    let z = created_at.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// La hora local en `HH:MM:SS`, para el indicador de última lectura.
@@ -9835,14 +9884,68 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // que convierte una vista de texto en una que tira la tasa de refresco.
         // `show_rows` pide altura fija, así que las líneas no se parten — se
         // recortan a lo ancho y la entera se lee en el globo al pasar por encima.
+        // EL EQUIPO SE COLAPSA CUANDO ES EL MISMO EN TODAS. Con una sola máquina
+        // —el caso normal— la columna repetía «WORSKTATION-1…» en cada fila:
+        // noventa y seis píxeles gastados en decir lo mismo veinte veces,
+        // mientras el mensaje se cortaba por la derecha. Si hay varios equipos la
+        // columna vuelve, porque entonces sí distingue.
+        let mut hosts = visibles
+            .iter()
+            .map(|i| self.lv_rows[*i].host.as_str())
+            .filter(|h| !h.is_empty());
+        let primero = hosts.next();
+        let unico = primero.filter(|p| hosts.all(|h| h == *p)).map(str::to_string);
+        if let Some(h) = &unico {
+            ui.horizontal(|ui| {
+                ui.add_space(4.0);
+                insignia(ui, h, true);
+            });
+            ui.add_space(4.0);
+        }
+
         let alto = 20.0_f32;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(
             ui,
             alto,
             visibles.len(),
             |ui, rango| {
+                // El día de la fila ANTERIOR a la primera visible, para que el
+                // separador no salga otra vez al desplazarse dentro de un mismo
+                // día — y para que sí salga si el corte del desplazamiento cae
+                // justo entre dos.
+                let mut dia_previo = rango
+                    .start
+                    .checked_sub(1)
+                    .and_then(|p| visibles.get(p))
+                    .map(|i| self.lv_rows[*i].dia.clone())
+                    .unwrap_or_default();
                 for k in rango {
                     let r = &self.lv_rows[visibles[k]];
+                    // LA LÍNEA ENTRE DÍAS. La lista salta de 03:31 a 17:07 sin
+                    // avisar de que son días distintos, y eso se lee como que
+                    // pasaron catorce horas esta madrugada.
+                    if !r.dia.is_empty() && r.dia != dia_previo {
+                        if !dia_previo.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.set_height(alto);
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(&r.dia)
+                                        .monospace()
+                                        .size(theme::FS_MICRO)
+                                        .color(theme::faint()),
+                                );
+                                let y = ui.min_rect().center().y;
+                                let x = ui.min_rect().right() + 8.0;
+                                ui.painter().hline(
+                                    x..=ui.max_rect().right(),
+                                    y,
+                                    egui::Stroke::new(1.0_f32, theme::bdr()),
+                                );
+                            });
+                        }
+                        dia_previo = r.dia.clone();
+                    }
                     let col = match r.lv {
                         lucy_core::logs::Level::Error => theme::red(),
                         lucy_core::logs::Level::Warn => theme::amber(),
@@ -9876,9 +9979,23 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             )
                             .truncate(),
                         );
-                        if !r.src.is_empty() {
+                        // El equipo solo si hay más de uno: si es siempre el
+                        // mismo ya está dicho arriba, en la insignia.
+                        if unico.is_none() && !r.host.is_empty() {
                             ui.add_sized(
                                 [96.0, alto],
+                                egui::Label::new(
+                                    egui::RichText::new(&r.host)
+                                        .monospace()
+                                        .size(theme::FS_CAPTION)
+                                        .color(theme::txt3()),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        if !r.src.is_empty() {
+                            ui.add_sized(
+                                [72.0, alto],
                                 egui::Label::new(
                                     egui::RichText::new(&r.src)
                                         .monospace()
@@ -11441,12 +11558,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     .iter()
                     .map(|e| LvRow {
                         t: lv_hora_de(e.created_at, &e.timestamp),
+                        dia: lv_dia_de(e.created_at),
                         lv: lucy_core::audit::level_of(e),
-                        src: if e.host_name.is_empty() {
-                            e.source.clone()
-                        } else {
-                            format!("{} · {}", e.host_name, e.source)
-                        },
+                        host: e.host_name.clone(),
+                        src: e.source.clone(),
                         // El comando es la fila; la salida solo si no hay
                         // comando. Enseñar los dos juntos llenaría la línea de
                         // volcado y taparía justo lo que se busca.
@@ -11525,7 +11640,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             .rev()
             .map(|l| LvRow {
                 t: String::new(),
+                // Un fichero de log no trae fecha en columna aparte —viene
+                // dentro de la linea— ni equipo: lo que se lee es UN fichero.
+                dia: String::new(),
                 lv: lucy_core::logs::Level::sniff(&l),
+                host: String::new(),
                 src: origen.to_string(),
                 m: l,
             })
@@ -17255,6 +17374,25 @@ mod hilo {
     }
 
     #[test]
+    fn el_dia_de_una_fila_sale_bien_incluso_en_los_bordes() {
+        // Cuentas de calendario a mano: exactas, pero de las que fallan en
+        // silencio. Un día mal calculado no rompe nada — pone el separador donde
+        // no toca, o no lo pone, y la lista vuelve a leerse como si catorce
+        // horas hubieran pasado esta madrugada.
+        assert_eq!(lv_dia_de(0), "");
+        assert_eq!(lv_dia_de(-5), "");
+        assert_eq!(lv_dia_de(1), "1970-01-01");
+        assert_eq!(lv_dia_de(86_399), "1970-01-01");
+        assert_eq!(lv_dia_de(86_400), "1970-01-02");
+        // Un bisiesto de verdad, con su 29 de febrero.
+        assert_eq!(lv_dia_de(1_709_164_800), "2024-02-29");
+        assert_eq!(lv_dia_de(1_709_251_200), "2024-03-01");
+        // Y 2100 NO es bisiesto, que es donde se cae una regla de tres líneas.
+        assert_eq!(lv_dia_de(4_107_456_000), "2100-02-28");
+        assert_eq!(lv_dia_de(4_107_542_400), "2100-03-01");
+    }
+
+    #[test]
     fn el_icono_de_un_atajo_sale_de_lo_que_dice() {
         // Lo elige el código y no el modelo: pedirle además un icono a un 0.6B
         // es pedirle que acierte con una lista cerrada que no ve.
@@ -17662,7 +17800,14 @@ mod bucle {
     }
 
     fn fila(lv: lucy_core::logs::Level, src: &str, m: &str) -> LvRow {
-        LvRow { t: "14:22:12".into(), lv, src: src.into(), m: m.into() }
+        LvRow {
+            t: "14:22:12".into(),
+            dia: "2026-08-19".into(),
+            lv,
+            host: src.into(),
+            src: "agente".into(),
+            m: m.into(),
+        }
     }
 
     fn muestra() -> Vec<LvRow> {
