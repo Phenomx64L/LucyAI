@@ -169,16 +169,20 @@ enum MemTab {
 
 impl View {
     /// El nombre que ve el operador, en su idioma.
+    ///
+    /// NexShell, Log Viewer y Terminal IA no están en la tabla de traducción a
+    /// propósito: son partes de Lucy CON NOMBRE, no descripciones. `tr` devuelve
+    /// el español, que es justo lo que se quiere.
     fn label(self) -> &'static str {
-        i18n::t(match self {
-            View::Dashboard => "nav.dashboard",
-            View::TerminalIa => "nav.terminalia",
-            View::NexShell => "nav.nexshell",
-            View::LogViewer => "nav.logviewer",
-            View::Inventario => "nav.inventario",
-            View::Compliance => "nav.compliance",
-            View::Memoria => "nav.memoria",
-            View::Configuracion => "nav.configuracion",
+        i18n::tr(match self {
+            View::Dashboard => "Dashboard",
+            View::TerminalIa => "Terminal IA",
+            View::NexShell => "NexShell",
+            View::LogViewer => "Log Viewer",
+            View::Inventario => "Inventario",
+            View::Compliance => "Compliance",
+            View::Memoria => "Memoria",
+            View::Configuracion => "Configuración",
         })
     }
 
@@ -194,15 +198,15 @@ impl View {
     /// encabezando la página dice mejor «Dashboard de sistema». Lo que no puede
     /// es cambiar de estilo de una pantalla a otra.
     fn titulo(self) -> &'static str {
-        i18n::t(match self {
-            View::Dashboard => "titulo.dashboard",
-            View::TerminalIa => "titulo.terminalia",
-            View::NexShell => "titulo.nexshell",
-            View::LogViewer => "titulo.logviewer",
-            View::Inventario => "titulo.inventario",
-            View::Compliance => "titulo.compliance",
-            View::Memoria => "titulo.memoria",
-            View::Configuracion => "titulo.configuracion",
+        i18n::tr(match self {
+            View::Dashboard => "Dashboard de sistema",
+            View::TerminalIa => "Terminal IA",
+            View::NexShell => "NexShell",
+            View::LogViewer => "Visor de logs",
+            View::Inventario => "Inventario",
+            View::Compliance => "Compliance",
+            View::Memoria => "Memoria",
+            View::Configuracion => "Configuración",
         })
     }
 
@@ -219,15 +223,52 @@ impl View {
     /// diferencia entre una pantalla vacía que se entiende y una que parece
     /// estropeada.
     fn ayuda(self) -> &'static str {
-        i18n::t(match self {
-            View::Dashboard => "ayuda.dashboard",
-            View::TerminalIa => "ayuda.terminalia",
-            View::NexShell => "ayuda.nexshell",
-            View::LogViewer => "ayuda.logviewer",
-            View::Inventario => "ayuda.inventario",
-            View::Compliance => "ayuda.compliance",
-            View::Memoria => "ayuda.memoria",
-            View::Configuracion => "ayuda.configuracion",
+        i18n::tr(match self {
+            View::Dashboard => {
+                "Cómo está el equipo ahora mismo: procesador, memoria, disco, red, qué \
+                 servicios automáticos están caídos y qué procesos mandan. Se refresca \
+                 solo. Con el selector de al lado miras este equipo o cualquiera de los \
+                 que tengas dados de alta."
+            }
+            View::TerminalIa => {
+                "Pídele las cosas en español y Lucy propone el comando, lo ejecuta si lo \
+                 apruebas y te cuenta qué salió. Cada pestaña es una conversación aparte, \
+                 con su propio plan y su propia traza. Todo lo que ejecuta queda anotado \
+                 en el Log Viewer."
+            }
+            View::NexShell => {
+                "Una PowerShell de verdad: en este equipo, o en uno remoto por WinRM. \
+                 También acepta que le pidas el comando en español y te lo escribe en la \
+                 línea para que lo revises antes de soltarlo. Los equipos se dan de alta \
+                 en el carril de la izquierda."
+            }
+            View::LogViewer => {
+                "Qué se ha ejecutado, con qué resultado y cuánto tardó — la auditoría de \
+                 Lucy, en vivo. En «Archivo» miras en cambio los ficheros de log de una \
+                 carpeta del equipo, que es otra cosa."
+            }
+            View::Inventario => {
+                "Una foto de lo que este equipo tiene: puertos a la escucha, servicios, \
+                 software instalado, certificados y tareas programadas. No se mira solo — \
+                 hay que pulsar Escanear, y hasta entonces los recuentos están en blanco."
+            }
+            View::Compliance => {
+                "Pasa los controles CIS al equipo y te dice cuáles no cumple y con qué se \
+                 ha mirado cada uno. Hay que pulsar Escanear. Señala lo que está flojo; \
+                 arreglarlo sigue siendo cosa tuya."
+            }
+            View::Memoria => {
+                "Lo que Lucy recuerda: hechos sueltos, sesiones destiladas, manuales que \
+                 le has dado y los principios que le has puesto. Casi todo se escribe \
+                 solo. Entra aquí cuando repita algo viejo o no encuentre lo que ya le \
+                 contaste. Buscar por significado necesita Ollama."
+            }
+            View::Configuracion => {
+                "Lo que se da de alta una vez: la clave del proveedor, tu nombre, el \
+                 modelo y el aspecto. Sin ninguna clave guardada solo funcionan los \
+                 modelos locales de Ollama. Aquí están también el tope de gasto de la \
+                 sesión y la copia de seguridad de la memoria."
+            }
         })
     }
 
@@ -421,6 +462,16 @@ impl PromptInput {
             // SQLite y cambian cuando el operador dicta una.
             principles: &self.principles,
             tono: self.tono,
+            // EL MISMO QUE LA INTERFAZ. Se lee del global —que es atómico, y
+            // esto corre en el hilo del turno— en vez de viajar dentro de
+            // `PromptInput`: es un ajuste, no un dato del turno, y llevarlo en la
+            // estructura obligaría a copiarlo en cada uno de los sitios que
+            // arrancan un turno. El que se olvidara contestaría en español con la
+            // pantalla en otro idioma, sin que nada fallara.
+            //
+            // Las dos enums se hablan POR SU CLAVE (`es`, `pt`…), que es la misma
+            // que guarda la V1. Un test comprueba que ninguna se queda coja.
+            idioma: lucy_core::prompt::Idioma::from_key(i18n::lang().clave()),
             working_dir: &self.cwd,
             user_name: &self.name,
             user_profile: &self.profile,
@@ -1839,6 +1890,12 @@ fn fila(
     ultima: bool,
     control: impl FnOnce(&mut egui::Ui),
 ) {
+    // LA TRADUCCIÓN LA HACE LA FILA, no cada sitio de llamada. Es la diferencia
+    // entre seis cambios y ciento cincuenta: por aquí pasan todas las etiquetas y
+    // todas las explicaciones de Configuración. Lo que no esté en la tabla sale
+    // en español, que es lo que ya salía.
+    let etiqueta = i18n::tr(etiqueta);
+    let sub = sub.map(i18n::tr);
     let alto = if sub.is_some() { 42.0 } else { 32.0 };
     // DOS MITADES CON ANCHO FIJO, y ninguna puede empujar a la otra.
     //
@@ -2076,7 +2133,7 @@ fn segmentado(
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        *o,
+                        i18n::tr(o),
                         egui::FontId::proportional(theme::FS_CAPTION),
                         if on { theme::acc_ink() } else { theme::txt3() },
                     );
@@ -2091,6 +2148,10 @@ fn segmentado(
 
 /// Una insignia de estado: punto, texto, y el color que corresponda.
 fn insignia(ui: &mut egui::Ui, texto: &str, ok: bool) {
+    // Muchas insignias llevan una cifra («6 detectados») y esas no están en la
+    // tabla: salen en español, que es lo que salía antes. Las que son texto puro
+    // —«configurada», «válida»— sí se traducen desde aquí.
+    let texto = i18n::tr(texto);
     let color = if ok { theme::acc() } else { theme::txt3() };
     let fondo = if ok { theme::acc_bg() } else { theme::bg3() };
     let font = egui::FontId::proportional(theme::FS_CAPTION);
@@ -2210,7 +2271,7 @@ fn panel_title(ui: &mut egui::Ui, icon: icons::Icon, title: &str) {
     row_align(ui, 16.0, egui::Align::Center, |ui| {
         ui.spacing_mut().item_spacing.x = 7.0;
         icons::show(ui, icon, 14.0, theme::acc());
-        ui.add(egui::Label::new(theme::instrument_label(title, theme::faint())));
+        ui.add(egui::Label::new(theme::instrument_label(i18n::tr(title), theme::faint())));
     });
 }
 
@@ -11457,10 +11518,20 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // mejor que estrechas.
                 let disponible = ui.available_width() - 8.0;
                 let dos = disponible >= 900.0;
+                // EL TOPE ERA 620 Y SOBRABA MEDIA PANTALLA. En una ventana de
+                // 1900 px eso son 1250 usados y 650 negros a la derecha, con los
+                // controles apretados dentro de la columna: «Del sistema» sin
+                // sitio y cinco idiomas a cuarenta píxeles por opción.
+                //
+                // 820 y no «todo lo que haya»: una fila de ajustes es
+                // «etiqueta ↔ control», y por encima de ese ancho los dos
+                // extremos quedan tan lejos que hay que recorrer la línea con el
+                // dedo para saber qué controla qué. El límite es de lectura, no
+                // de estética — pero 620 era conservador de más.
                 let col = if dos {
-                    ((disponible - GAP) / 2.0).min(620.0)
+                    ((disponible - GAP) / 2.0).min(820.0)
                 } else {
-                    disponible.clamp(240.0, 760.0)
+                    disponible.clamp(240.0, 820.0)
                 };
 
                 if dos {
@@ -11736,7 +11807,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ui.add_space(8.0);
                 row_align(ui, 24.0, egui::Align::Center, |ui| {
                     right(ui, 24.0, |ui| {
-                        redetectar = ui.small_button("↻ Redetectar").clicked();
+                        redetectar = ui.small_button(i18n::tr("↻ Redetectar")).clicked();
                     });
                 });
             },
@@ -11783,22 +11854,50 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // sería pedirle que lea en un idioma que no tiene para llegar a
                 // ponerlo en el suyo. Los idiomas se nombran EN SU IDIOMA por lo
                 // mismo: «Deutsch» se reconoce, «Alemán» no si no sabes español.
+                // UN DESPLEGABLE Y NO UN SEGMENTADO, que es lo que había. Cinco
+                // nombres largos —«Português», «Français»— en la mitad de una
+                // fila salen a cuarenta píxeles por opción: con la ventana ancha
+                // se leen apretados y con la ventana estrecha no se leen. Un
+                // segmentado es para tres opciones cortas; con cinco largas el
+                // control correcto es otro.
                 let idioma = i18n::lang();
-                let i_lang = idioma.idx();
-                let langs: Vec<&str> = i18n::Lang::ALL.iter().map(|l| l.nombre()).collect();
+                let mut nuevo_idioma = None;
                 fila(
                     ui,
-                    i18n::t("cfg.idioma"),
-                    Some(i18n::t("cfg.idioma.sub")),
+                    "Idioma",
+                    // LA COBERTURA SE DICE EN LA PROPIA PANTALLA mientras sea
+                    // parcial. Una aplicación a medio traducir se lee como una
+                    // traducción rota; dicha de antemano, se lee como lo que es.
+                    // Esta frase se borra cuando no quede pantalla sin pasar.
+                    Some(
+                        "de la interfaz y de lo que Lucy responde · traducidas esta pantalla, \
+                         la navegación y la ayuda; las demás van en camino",
+                    ),
                     false,
                     |ui| {
-                        if let Some(k) = segmentado(ui, "idioma", 360.0, &langs, i_lang) {
-                            if k != i_lang {
-                                i18n::set(i18n::Lang::ALL[k]);
-                            }
-                        }
+                        egui::ComboBox::from_id_salt("cfg-idioma")
+                            .selected_text(idioma.nombre())
+                            .width(180.0)
+                            .show_ui(ui, |ui| {
+                                for l in i18n::Lang::ALL {
+                                    // El nombre EN SU IDIOMA: quien busca el
+                                    // suyo lo busca como lo llama él, y si la
+                                    // pantalla está ahora en uno que no entiende,
+                                    // «Alemán» no le sirve para encontrar el
+                                    // alemán.
+                                    if ui
+                                        .selectable_label(l == idioma, l.nombre())
+                                        .clicked()
+                                    {
+                                        nuevo_idioma = Some(l);
+                                    }
+                                }
+                            });
                     },
                 );
+                if let Some(l) = nuevo_idioma {
+                    i18n::set(l);
+                }
                 fila(ui, "Tema", Some(explica), false, |ui| {
                     let etiquetas: Vec<&str> =
                         theme::Mode::ALL.iter().map(|m| m.label()).collect();
@@ -11949,7 +12048,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 None => pista.clone(),
                             };
                             fila(ui, etiqueta, Some(&sub), i == ultimo, |ui| {
-                                if ui.small_button("Quitar").clicked() {
+                                if ui.small_button(i18n::tr("Quitar")).clicked() {
                                     borrar = Some(clave.to_string());
                                 }
                                 ui.add_space(4.0);
@@ -11963,7 +12062,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                         })
                                         .small(),
                                     )
-                                    .on_hover_text("Pide el catálogo de modelos — no gasta")
+                                    .on_hover_text(i18n::tr("Pide el catálogo de modelos — no gasta"))
                                     .clicked()
                                 {
                                     probar = Some(clave.to_string());
@@ -11993,14 +12092,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     egui::TextEdit::singleline(buf)
                                         .password(true)
                                         .desired_width(150.0)
-                                        .hint_text("pegar clave"),
+                                        .hint_text(i18n::tr("pegar clave")),
                                 );
                                 let intro = te.lost_focus()
                                     && ui.input(|i| i.key_pressed(egui::Key::Enter));
                                 let pulsado = ui
                                     .add_enabled(
                                         !buf.trim().is_empty(),
-                                        egui::Button::new("Guardar").small(),
+                                        egui::Button::new(i18n::tr("Guardar")).small(),
                                     )
                                     .clicked();
                                 pedir = (intro || pulsado) && !buf.trim().is_empty();
@@ -12087,7 +12186,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         if ui
                             .add(
                                 egui::TextEdit::singleline(&mut n)
-                                    .hint_text("Tu nombre")
+                                    .hint_text(i18n::tr("Tu nombre"))
                                     .desired_width(160.0),
                             )
                             .changed()
@@ -12113,7 +12212,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     fila(ui, &etiqueta, Some(&e.value), i == ultimo, |ui| {
                         if ui
                             .small_button("×")
-                            .on_hover_text("Que Lucy lo olvide")
+                            .on_hover_text(i18n::tr("Que Lucy lo olvide"))
                             .clicked()
                         {
                             olvidar = Some(e.key.clone());
@@ -12149,7 +12248,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             "Skills",
             |ui| {
                 if ui
-                    .small_button("Instalar…")
+                    .small_button(i18n::tr("Instalar…"))
                     .on_hover_text(
                         "Elige la carpeta de un skill, o una que contenga varios — un \
                          repositorio descargado sirve tal cual",
@@ -12179,7 +12278,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         // izquierda, que es el orden de las filas de claves.
                         if ui
                             .small_button("×")
-                            .on_hover_text("Desinstalar: borra la carpeta del skill")
+                            .on_hover_text(i18n::tr("Desinstalar: borra la carpeta del skill"))
                             .clicked()
                         {
                             quitar = Some(k.name.clone());
@@ -12358,10 +12457,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     );
                 }
                 fila(ui, "Copia de seguridad", Some("consistente, aunque Lucy esté escribiendo"), false, |ui| {
-                    copiar = ui.small_button("Guardar copia…").clicked();
+                    copiar = ui.small_button(i18n::tr("Guardar copia…")).clicked();
                 });
                 fila(ui, "", Some("vuelve a contar lo de arriba"), true, |ui| {
-                    recargar = ui.small_button("↻ Recontar").clicked();
+                    recargar = ui.small_button(i18n::tr("↻ Recontar")).clicked();
                 });
                 // ── purgas ───────────────────────────────────────────────────
                 //
@@ -12370,7 +12469,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // de poder hacerse después.
                 ui.add_space(10.0);
                 ui.label(
-                    egui::RichText::new("Quitar en lote")
+                    egui::RichText::new(i18n::tr("Quitar en lote"))
                         .size(theme::FS_CAPTION)
                         .color(theme::faint()),
                 );
@@ -12510,7 +12609,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     let mut copiar = false;
                     fila(ui, k, None, i == 1, |ui| {
                         copiar = ghost_icon(ui, icons::Icon::Copy)
-                            .on_hover_text("Copiar la ruta")
+                            .on_hover_text(i18n::tr("Copiar la ruta"))
                             .clicked();
                         ui.add(
                             egui::Label::new(
@@ -12592,7 +12691,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 if self.remote_hosts.is_empty() {
                     ui.add_space(2.0);
                     ui.label(
-                        egui::RichText::new("Sin equipos remotos dados de alta")
+                        egui::RichText::new(i18n::tr("Sin equipos remotos dados de alta"))
                             .size(theme::FS_CAPTION)
                             .color(theme::faint()),
                     );
@@ -12792,7 +12891,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         16.0,
                         if rresp.hovered() { theme::txt() } else { theme::txt3() },
                     );
-                    pedir = rresp.on_hover_text("Actualizar ahora").clicked();
+                    pedir = rresp.on_hover_text(i18n::tr("Actualizar ahora")).clicked();
                 }
             });
             if pedir {
@@ -13228,7 +13327,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             if self.nx_busy {
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new("traduciendo…")
+                    egui::RichText::new(i18n::tr("traduciendo…"))
                         .size(theme::FS_CAPTION)
                         .color(theme::acc()),
                 );
@@ -13237,7 +13336,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             right(ui, 24.0, |ui| {
                 if ui
                     .add(egui::Button::new("⌫").small())
-                    .on_hover_text("Limpiar la pantalla")
+                    .on_hover_text(i18n::tr("Limpiar la pantalla"))
                     .clicked()
                 {
                     // El emulador se rehace: limpiar es empezar de cero, y
@@ -13246,7 +13345,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
                 if ui
                     .add(egui::Button::new("⧉").small())
-                    .on_hover_text("Copiar toda la salida")
+                    .on_hover_text(i18n::tr("Copiar toda la salida"))
                     .clicked()
                 {
                     ui.output_mut(|o| o.copied_text = self.vt.screen().contents());
@@ -13352,7 +13451,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 icons::show(ui, icons::Icon::Terminal, 26.0, theme::faint());
                                 ui.add_space(8.0);
                                 ui.label(
-                                    egui::RichText::new("Listo para operar")
+                                    egui::RichText::new(i18n::tr("Listo para operar"))
                                         .size(theme::FS_HEADING)
                                         .color(theme::txt2()),
                                 );
@@ -13434,7 +13533,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
                 Some(Conexion::Probando) => {
                     ui.label(
-                        egui::RichText::new("conectando…")
+                        egui::RichText::new(i18n::tr("conectando…"))
                             .size(theme::FS_MICRO)
                             .color(theme::amber()),
                     );
@@ -13451,8 +13550,8 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // No abre una sesión persistente, y la V2 tampoco: llama a la puerta
             // y enciende la luz.
             if !matches!(self.nx_estado.get(&h.id), Some(Conexion::Probando)) && ui
-                .add(egui::Button::new("Conectar").small())
-                .on_hover_text("Comprobar que responde y con qué sistema")
+                .add(egui::Button::new(i18n::tr("Conectar")).small())
+                .on_hover_text(i18n::tr("Comprobar que responde y con qué sistema"))
                 .clicked()
             {
                 self.nx_conectar(&h);
@@ -13468,7 +13567,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         .size(theme::FS_CAPTION)
                         .color(theme::acc()),
                 );
-                if ui.add(egui::Button::new("■ Detener").small()).clicked() {
+                if ui.add(egui::Button::new(i18n::tr("■ Detener")).small()).clicked() {
                     // Mata el proceso, no solo deja de mirarlo: al otro lado hay
                     // un comando corriendo en una máquina de verdad, y dejar de
                     // leer no lo para.
@@ -13477,12 +13576,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ui.ctx().request_repaint();
             }
             right(ui, 24.0, |ui| {
-                if ui.add(egui::Button::new("⌫").small()).on_hover_text("Limpiar").clicked() {
+                if ui.add(egui::Button::new("⌫").small()).on_hover_text(i18n::tr("Limpiar")).clicked() {
                     self.nx_lines.remove(&h.id);
                 }
                 if ui
                     .add(egui::Button::new("⧉").small())
-                    .on_hover_text("Copiar la salida")
+                    .on_hover_text(i18n::tr("Copiar la salida"))
                     .clicked()
                 {
                     let t = self
@@ -15974,6 +16073,35 @@ mod layout {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn el_idioma_de_la_pantalla_y_el_de_lucy_no_pueden_separarse() {
+        // SON DOS ENUMS EN DOS SITIOS: `i18n::Lang` gobierna los textos de la
+        // interfaz y `prompt::Idioma` le dice a Lucy en qué contestar. Se hablan
+        // por su clave, y si una crece sin la otra el síntoma es que la pantalla
+        // se pone en francés y Lucy sigue contestando en español — que es peor
+        // que no traducir, porque promete algo que no cumple.
+        for l in i18n::Lang::ALL {
+            let i = lucy_core::prompt::Idioma::from_key(l.clave());
+            assert_eq!(
+                i.key(),
+                l.clave(),
+                "«{}» no tiene su pareja en el prompt: la pantalla iría en {} y Lucy en otro",
+                l.clave(),
+                l.nombre()
+            );
+            // Y el español es el único sin instrucción, porque el prompt ya está
+            // escrito en español. Cualquier otro que salga vacío deja a Lucy
+            // contestando en español con la pantalla en otro idioma.
+            if l != i18n::Lang::Es {
+                assert!(
+                    !i.instruccion().is_empty(),
+                    "{} no le dice nada a Lucy sobre en qué idioma contestar",
+                    l.nombre()
+                );
             }
         }
     }
