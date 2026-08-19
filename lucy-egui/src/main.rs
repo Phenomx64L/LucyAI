@@ -3312,7 +3312,16 @@ fn cmp_tarjeta(ui: &mut egui::Ui, ancho: f32, n: usize, label: &str, col: egui::
 ///
 /// La cifra grande y la etiqueta pequeña debajo, como en la vista que se migra:
 /// el número es el dato y a la vez el botón que abre su tabla.
-fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: usize, fallo: bool, on: bool) -> bool {
+/// `n` a `None` = TODAVÍA NO SE HA MIRADO, que no es lo mismo que cero.
+///
+/// Antes de escanear, las cinco tarjetas enseñaban un `0`. Un cero es una
+/// AFIRMACIÓN sobre el equipo —«este equipo no tiene ningún puerto a la
+/// escucha»— y es falsa: lo que pasa es que nadie ha mirado. Y el texto de abajo
+/// decía «Pulsa Escanear», así que la pantalla se contradecía a sí misma.
+///
+/// El caso de «se miró y falló» ya estaba resuelto con `fallo`; faltaba el de
+/// antes de empezar, que es el que se ve el primer día.
+fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: Option<usize>, fallo: bool, on: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(118.0, 66.0), egui::Sense::click());
     ui.painter().rect(
         rect,
@@ -3331,12 +3340,13 @@ fn inv_tarjeta(ui: &mut egui::Ui, label: &str, n: usize, fallo: bool, on: bool) 
     );
     // Un guion donde iría el número cuando la categoría no se pudo consultar. Un
     // cero afirmaría algo del equipo que nadie ha comprobado.
-    let (cifra, color) = if fallo {
-        ("—".to_string(), theme::red())
-    } else if on {
-        (n.to_string(), theme::acc())
-    } else {
-        (n.to_string(), theme::txt())
+    let (cifra, color) = match (fallo, n) {
+        (true, _) => ("—".to_string(), theme::red()),
+        // Sin escanear: el mismo guion, pero apagado y no en rojo. No ha pasado
+        // nada malo — es que todavía no se ha preguntado.
+        (false, None) => ("—".to_string(), theme::faint()),
+        (false, Some(v)) if on => (v.to_string(), theme::acc()),
+        (false, Some(v)) => (v.to_string(), theme::txt()),
     };
     ui.painter().text(
         egui::pos2(rect.center().x, rect.top() + 26.0),
@@ -3722,6 +3732,12 @@ struct App {
     cmp_host: String,
     cmp_host_menu: bool,
     cmp_rs: Vec<lucy_core::compliance::Resultado>,
+    /// Lo que ha cambiado desde la pasada anterior: `(cuándo fue, qué cambió)`.
+    ///
+    /// `None` = no hay con qué comparar, o no cambió nada. Las dos son un
+    /// «nada que contar» y se enseñan igual: una franja de cambios vacía sería
+    /// una fila de interfaz que solo dice que no hay nada que decir.
+    cmp_cambios: Option<(i64, Vec<lucy_core::posture::Fila>)>,
     cmp_error: String,
     cmp_filtro: Option<lucy_core::compliance::Estado>,
     /// Las filas desplegadas, por id de check. La evidencia va escondida: es lo
@@ -4191,6 +4207,7 @@ impl App {
             cmp_filtro: None,
             cmp_abierto: std::collections::HashSet::new(),
             cmp_rx: None,
+            cmp_cambios: None,
             cmp_desde: None,
             cmp_last: String::new(),
             cmp_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -10027,9 +10044,58 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             return;
         }
         self.cmp_resumen(ui);
+        self.cmp_desde_la_ultima(ui);
         self.cmp_chips(ui);
         ui.add_space(6.0);
         self.cmp_lista(ui);
+    }
+
+    /// Qué ha cambiado desde el escaneo anterior.
+    ///
+    /// ENCIMA DE LA LISTA Y NO EN UNA PESTAÑA. Es la única parte del informe que
+    /// no estaba ayer, y por eso es lo primero que hay que leer: el resto de la
+    /// pantalla dice el estado, y el estado casi siempre es el mismo que la
+    /// última vez. Escondida detrás de una pestaña, nadie la abriría — y lo que
+    /// no se abre es como si no estuviera.
+    ///
+    /// NO SALE NADA cuando no hay con qué comparar o cuando no cambió nada. Una
+    /// franja que dice «sin cambios» es una fila de interfaz cuyo único mensaje
+    /// es que no tiene mensaje, y con el tiempo se deja de mirar — junto con las
+    /// veces que sí trae algo.
+    fn cmp_desde_la_ultima(&mut self, ui: &mut egui::Ui) {
+        use lucy_core::posture::Cambio;
+        let Some((ts, filas)) = &self.cmp_cambios else { return };
+        ui.add_space(8.0);
+        let cuando = hace_cuanto(ahora_epoch() - *ts);
+        section(ui, "Desde el escaneo anterior", Some(cuando));
+        for f in filas {
+            row_align(ui, 22.0, egui::Align::Center, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                // EL COLOR LO PONE LA DIRECCIÓN DEL CAMBIO, no la severidad del
+                // control. Aquí lo que se lee es «esto ha empeorado» o «esto se
+                // ha arreglado»; la severidad ya ordena la lista y sale en la
+                // tabla de abajo.
+                let (glifo, color, que) = match f.cambio {
+                    Cambio::Rompe => ("▼", theme::red(), "ha dejado de cumplir"),
+                    Cambio::Arregla => ("▲", theme::acc(), "ya cumple"),
+                    Cambio::SeDejaDeMedir => ("?", theme::amber(), "ya no se puede medir"),
+                    Cambio::VuelveAMedirse => ("?", theme::txt3(), "vuelve a medirse"),
+                    Cambio::Nuevo => ("+", theme::txt3(), "control nuevo"),
+                };
+                ui.label(egui::RichText::new(glifo).color(color).size(theme::FS_CAPTION));
+                ui.label(
+                    egui::RichText::new(&f.titulo)
+                        .size(theme::FS_FOOTNOTE)
+                        .color(theme::txt2()),
+                );
+                ui.label(
+                    egui::RichText::new(i18n::tr(que))
+                        .size(theme::FS_CAPTION)
+                        .color(theme::faint()),
+                );
+            });
+        }
+        ui.add_space(4.0);
     }
 
     fn cmp_catalogo(&self) -> Vec<lucy_core::compliance::Check> {
@@ -10512,6 +10578,26 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 self.cmp_desde = None;
                 match r {
                     Ok(rs) => {
+                        // LA COMPARACIÓN, ANTES DE GUARDAR. Se busca la pasada
+                        // anterior con el corte en «ahora», así que da igual el
+                        // orden — pero guardar primero y comparar después
+                        // dependería de ese detalle, y esa es la clase de
+                        // dependencia que se rompe al mover una línea.
+                        let ahora = ahora_epoch();
+                        let host = if self.cmp_host.is_empty() {
+                            "local".to_string()
+                        } else {
+                            self.cmp_host.clone()
+                        };
+                        self.cmp_cambios = lucy_core::posture::anterior(&host, ahora)
+                            .ok()
+                            .flatten()
+                            .map(|p| (p.ts, lucy_core::posture::compara(&p, &rs)))
+                            .filter(|(_, v)| !v.is_empty());
+                        // Un fallo al guardar NO se lleva por delante el escaneo:
+                        // lo que se acaba de medir sigue en pantalla y lo único
+                        // que se pierde es poder compararlo la próxima vez.
+                        let _ = lucy_core::posture::guarda(&host, ahora, &rs);
                         self.cmp_rs = rs;
                         self.cmp_last = lv_hora();
                         self.cmp_abierto.clear();
@@ -11024,9 +11110,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // un vistazo desde el otro lado de la mesa, y a la vez es el botón que
         // abre esa tabla. Con chips había que leer el número pequeño entre
         // paréntesis para enterarse de lo mismo.
+        // NUNCA ESCANEADO ≠ CERO. La misma condición que usa el texto de la
+        // tabla de abajo, para que las tarjetas y ese texto no se contradigan.
+        let virgen = self.inv_data.is_empty() && self.inv_last.is_empty();
         ui.horizontal(|ui| {
             for c in C::ALL {
-                let n = self.inv_data.len_de(c);
+                let n = (!virgen).then(|| self.inv_data.len_de(c));
                 // Una categoría que falló NO enseña un cero. Un cero dice «no hay
                 // ninguno», que es un hecho sobre el equipo; lo que pasó es que
                 // no se pudo mirar, y son cosas distintas.

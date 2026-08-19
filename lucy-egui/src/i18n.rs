@@ -334,6 +334,13 @@ pub const FRASES: &[Frase] = &[
         "Erklärt, dass dieser Rechner so ist, wie er sein soll. Ab hier lässt sich sehen, was sich ändert.",
     ),
     f!(
+        "Desde el escaneo anterior",
+        "Since the previous scan",
+        "Desde a análise anterior",
+        "Depuis l'analyse précédente",
+        "Seit dem letzten Scan",
+    ),
+    f!(
         "Desinstalar: borra la carpeta del skill",
         "Uninstall: deletes the skill folder",
         "Desinstalar: apaga a pasta do skill",
@@ -947,6 +954,7 @@ pub const FRASES: &[Frase] = &[
         "cohérent, même si Lucy écrit",
         "konsistent, auch während Lucy schreibt",
     ),
+    f!("control nuevo", "new control", "controlo novo", "nouveau contrôle", "neue Prüfung"),
     f!("coste n/d", "cost n/a", "custo n/d", "coût n/d", "Kosten k. A."),
     f!(
         "cuánto se extiende al contestar · no cambia qué ejecuta ni qué avisa",
@@ -987,6 +995,13 @@ pub const FRASES: &[Frase] = &[
         "filtrar por texto — Enter para pesquisa semântica",
         "filtrer par texte — Entrée pour la recherche sémantique",
         "nach Text filtern — Enter für semantische Suche",
+    ),
+    f!(
+        "ha dejado de cumplir",
+        "no longer compliant",
+        "deixou de cumprir",
+        "n'est plus conforme",
+        "erfüllt es nicht mehr",
     ),
     f!(
         "lo que se ilumina: navegación, progreso, hecho",
@@ -1035,7 +1050,16 @@ pub const FRASES: &[Frase] = &[
         "recompte ce qu'il y a au-dessus",
         "zählt die Werte oben neu",
     ),
+    f!("vuelve a medirse", "measurable again", "volta a medir-se", "de nouveau mesuré", "wird wieder gemessen"),
     f!("válida", "valid", "válida", "valide", "gültig"),
+    f!("ya cumple", "now compliant", "já cumpre", "conforme désormais", "erfüllt es jetzt"),
+    f!(
+        "ya no se puede medir",
+        "can no longer be measured",
+        "já não se pode medir",
+        "ne peut plus être mesuré",
+        "lässt sich nicht mehr messen",
+    ),
     f!("¿borrar?", "delete?", "apagar?", "supprimer ?", "löschen?"),
     f!("↻ Recontar", "↻ Recount", "↻ Recontar", "↻ Recompter", "↻ Neu zählen"),
     f!("↻ Redetectar", "↻ Redetect", "↻ Redetetar", "↻ Redétecter", "↻ Neu erkennen"),
