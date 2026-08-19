@@ -183,6 +183,13 @@ macro_rules! f {
 /// `tr` devuelve el español, que es lo que se quiere. Que falten es la decisión,
 /// no un olvido.
 pub const FRASES: &[Frase] = &[
+    f!(
+        "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
+        "Open Lucy at least once to create the DB, or run as the same user.",
+        "Abre a Lucy pelo menos uma vez para criar a DB, ou corre a partir do mesmo utilizador.",
+        "Ouvre Lucy au moins une fois pour créer la DB, ou lance-la depuis le même utilisateur.",
+        "Öffne Lucy mindestens einmal, um die DB anzulegen, oder starte als derselbe Benutzer.",
+    ),
     f!("Activadas", "On", "Ativadas", "Activées", "Ein"),
     f!("Activado", "On", "Ativado", "Activé", "Ein"),
     f!("Activo", "On", "Ativo", "Actif", "Ein"),
@@ -192,6 +199,13 @@ pub const FRASES: &[Frase] = &[
         "Atualizar agora",
         "Actualiser maintenant",
         "Jetzt aktualisieren",
+    ),
+    f!(
+        "Adjuntar fichero — o arrastra uno a la ventana",
+        "Attach file — or drag one onto the window",
+        "Anexar ficheiro — ou arrasta um para a janela",
+        "Joindre un fichier — ou glisse-en un dans la fenêtre",
+        "Datei anhängen — oder zieh eine ins Fenster",
     ),
     f!(
         "Ahora mismo resuelve a",
@@ -210,6 +224,34 @@ pub const FRASES: &[Frase] = &[
         "Prévenir si le modèle est trop juste",
         "Warnen, wenn das Modell nicht reicht",
     ),
+    f!(
+        "Añadir equipo",
+        "Add machine",
+        "Adicionar máquina",
+        "Ajouter une machine",
+        "Rechner hinzufügen",
+    ),
+    f!(
+        "Buscar modelo…",
+        "Search models…",
+        "Procurar modelo…",
+        "Chercher un modèle…",
+        "Modell suchen…",
+    ),
+    f!(
+        "Cada cristal es una sesión destilada. Se escriben solos al cerrar turnos; sus lecciones ya son memorias y sobreviven aunque borres el cristal.",
+        "Each crystal is a distilled session. They write themselves when turns close; their lessons are already memories and survive even if you delete the crystal.",
+        "Cada cristal é uma sessão destilada. Escrevem-se sozinhos ao fechar turnos; as suas lições já são memórias e sobrevivem mesmo que apagues o cristal.",
+        "Chaque cristal est une session distillée. Ils s'écrivent seuls à la fin des tours ; leurs leçons sont déjà des mémoires et survivent même si tu supprimes le cristal.",
+        "Jeder Kristall ist eine destillierte Sitzung. Sie schreiben sich selbst, wenn Runden enden; ihre Lehren sind bereits Erinnerungen und bleiben, auch wenn du den Kristall löschst.",
+    ),
+    f!(
+        "Cerrar terminal",
+        "Close terminal",
+        "Fechar terminal",
+        "Fermer le terminal",
+        "Terminal schließen",
+    ),
     f!("Claves API", "API keys", "Chaves API", "Clés API", "API-Schlüssel"),
     f!(
         "Color de acento",
@@ -217,6 +259,13 @@ pub const FRASES: &[Frase] = &[
         "Cor de destaque",
         "Couleur d'accent",
         "Akzentfarbe",
+    ),
+    f!(
+        "Comparar esta foto con la línea base",
+        "Compare this snapshot against the baseline",
+        "Comparar esta foto com a linha de base",
+        "Comparer cet instantané avec la ligne de base",
+        "Diese Aufnahme mit der Baseline vergleichen",
     ),
     f!("Compliance", "Compliance", "Conformidade", "Conformité", "Compliance"),
     f!(
@@ -237,6 +286,13 @@ pub const FRASES: &[Frase] = &[
         "Copiar toda a saída",
         "Copier toute la sortie",
         "Ganze Ausgabe kopieren",
+    ),
+    f!(
+        "Correr este comando en este equipo",
+        "Run this command on this machine",
+        "Correr este comando nesta máquina",
+        "Lancer cette commande sur cette machine",
+        "Diesen Befehl auf diesem Rechner ausführen",
     ),
     f!(
         "Cristales y patrones",
@@ -271,14 +327,78 @@ pub const FRASES: &[Frase] = &[
         "System-Übersicht",
     ),
     f!(
+        "Declara que este equipo está como debe. A partir de aquí se puede ver qué cambia.",
+        "Declares this machine is as it should be. From here you can see what changes.",
+        "Declara que esta máquina está como deve estar. A partir daqui vê-se o que muda.",
+        "Déclare que cette machine est dans l'état voulu. À partir de là, on voit ce qui change.",
+        "Erklärt, dass dieser Rechner so ist, wie er sein soll. Ab hier lässt sich sehen, was sich ändert.",
+    ),
+    f!(
         "Desinstalar: borra la carpeta del skill",
         "Uninstall: deletes the skill folder",
         "Desinstalar: apaga a pasta do skill",
         "Désinstaller : supprime le dossier du skill",
         "Deinstallieren: löscht den Skill-Ordner",
     ),
+    f!(
+        "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
+        "Pick a skill's folder, or one holding several — a downloaded repository works as is",
+        "Escolhe a pasta de um skill, ou uma que contenha vários — um repositório descarregado serve tal como está",
+        "Choisis le dossier d'un skill, ou un dossier qui en contient plusieurs — un dépôt téléchargé convient tel quel",
+        "Wähl den Ordner eines Skills, oder einen mit mehreren — ein heruntergeladenes Repository funktioniert direkt",
+    ),
     f!("Equipo", "Machine", "Máquina", "Machine", "Rechner"),
+    f!(
+        "Escribe un comando, o dime qué quieres saber y lo traduzco.",
+        "Type a command, or tell me what you want to know and I'll translate it.",
+        "Escreve um comando, ou diz-me o que queres saber e eu traduzo.",
+        "Écris une commande, ou dis-moi ce que tu veux savoir et je la traduis.",
+        "Schreib einen Befehl, oder sag mir, was du wissen willst, und ich übersetze es.",
+    ),
+    f!(
+        "Escribe una orden…   ·   Shift+Enter = salto de línea",
+        "Type a command…   ·   Shift+Enter = new line",
+        "Escreve uma ordem…   ·   Shift+Enter = quebra de linha",
+        "Écris une commande…   ·   Maj+Entrée = saut de ligne",
+        "Schreib einen Befehl…   ·   Shift+Enter = Zeilenumbruch",
+    ),
+    f!(
+        "Esta foto pasa a ser la nueva línea base",
+        "This snapshot becomes the new baseline",
+        "Esta foto passa a ser a nova linha de base",
+        "Cet instantané devient la nouvelle ligne de base",
+        "Diese Aufnahme wird die neue Baseline",
+    ),
     f!("Este equipo", "This machine", "Esta máquina", "Cette machine", "Dieser Rechner"),
+    f!(
+        "Este modelo no tiene precio en el catálogo",
+        "This model has no price in the catalog",
+        "Este modelo não tem preço no catálogo",
+        "Ce modèle n'a pas de prix au catalogue",
+        "Für dieses Modell gibt es keinen Preis im Katalog",
+    ),
+    f!(
+        "Exportar el run (copia al portapapeles)",
+        "Export the run (copies to clipboard)",
+        "Exportar o run (copia para a área de transferência)",
+        "Exporter le run (copie dans le presse-papiers)",
+        "Run exportieren (in die Zwischenablage)",
+    ),
+    f!(
+        "Extrayendo el texto del PDF…",
+        "Extracting the PDF text…",
+        "A extrair o texto do PDF…",
+        "Extraction du texte du PDF…",
+        "PDF-Text wird extrahiert…",
+    ),
+    f!(
+        "Fijar línea base",
+        "Set baseline",
+        "Fixar linha de base",
+        "Définir la ligne de base",
+        "Baseline festlegen",
+    ),
+    f!("Fundir", "Merge", "Fundir", "Fusionner", "Zusammenführen"),
     f!("Guardar", "Save", "Guardar", "Enregistrer", "Speichern"),
     f!(
         "Guardar copia…",
@@ -292,13 +412,41 @@ pub const FRASES: &[Frase] = &[
     f!("Interfaz", "Interface", "Interface", "Interface", "Oberfläche"),
     f!("Inventario", "Inventory", "Inventário", "Inventaire", "Bestand"),
     f!(
+        "La búsqueda semántica necesita Ollama con un modelo de embeddings (ollama pull nomic-embed-text).",
+        "Semantic search needs Ollama with an embeddings model (ollama pull nomic-embed-text).",
+        "A pesquisa semântica precisa do Ollama com um modelo de embeddings (ollama pull nomic-embed-text).",
+        "La recherche sémantique a besoin d'Ollama avec un modèle d'embeddings (ollama pull nomic-embed-text).",
+        "Die semantische Suche braucht Ollama mit einem Embedding-Modell (ollama pull nomic-embed-text).",
+    ),
+    f!(
         "La memoria en disco",
         "Memory on disk",
         "A memória em disco",
         "La mémoire sur disque",
         "Das Gedächtnis auf der Festplatte",
     ),
+    f!(
+        "Leer la cola de este fichero",
+        "Tail this file",
+        "Ler o fim deste ficheiro",
+        "Lire la fin de ce fichier",
+        "Das Ende dieser Datei lesen",
+    ),
+    f!(
+        "Leer la cola del fichero",
+        "Tail the file",
+        "Ler o fim do ficheiro",
+        "Lire la fin du fichier",
+        "Das Ende der Datei lesen",
+    ),
     f!("Limpiar", "Clear", "Limpar", "Effacer", "Leeren"),
+    f!(
+        "Limpiar el workspace",
+        "Clear the workspace",
+        "Limpar o workspace",
+        "Nettoyer le workspace",
+        "Workspace leeren",
+    ),
     f!(
         "Limpiar la pantalla",
         "Clear screen",
@@ -307,6 +455,13 @@ pub const FRASES: &[Frase] = &[
         "Bildschirm leeren",
     ),
     f!("Listo para operar", "Ready to operate", "Pronto a operar", "Opérationnel", "Einsatzbereit"),
+    f!(
+        "Lo ingerido alimenta el recuerdo y a pdf_search. Los secretos se redactan al entrar.",
+        "What goes in feeds recall and pdf_search. Secrets are redacted on the way in.",
+        "O que é ingerido alimenta a memória e o pdf_search. Os segredos são ocultados à entrada.",
+        "Ce qui est ingéré alimente la mémoire et pdf_search. Les secrets sont masqués à l'entrée.",
+        "Das Aufgenommene speist die Erinnerung und pdf_search. Geheimnisse werden beim Einlesen geschwärzt.",
+    ),
     f!(
         "Lo que Lucy recuerda: hechos sueltos, sesiones destiladas, manuales que le has \
          dado y los principios que le has puesto. Casi todo se escribe solo. Entra aquí \
@@ -347,6 +502,20 @@ pub const FRASES: &[Frase] = &[
          Aussehen. Ohne gespeicherten Schlüssel laufen nur lokale Ollama-Modelle. Auch das \
          Ausgabenlimit der Sitzung und die Sicherung des Gedächtnisses stehen hier.",
     ),
+    f!(
+        "Los dos trabajos corren solos por vencimiento — también si el programa estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
+        "Both jobs run on their own when due — even if the program was closed at the time. This is for when you don't want to wait.",
+        "Os dois trabalhos correm sozinhos por vencimento — mesmo que o programa estivesse fechado na altura. Isto é para não esperar pelo prazo.",
+        "Les deux tâches se lancent seules à échéance — même si le programme était fermé le moment venu. Ceci sert à ne pas attendre le délai.",
+        "Beide Jobs laufen bei Fälligkeit von selbst — auch wenn das Programm zum Termin geschlossen war. Das hier ist, um nicht auf die Frist zu warten.",
+    ),
+    f!(
+        "Lucy todavía no ha apuntado nada sobre ti. Lo hace sola cuando le cuentas algo que le servirá otro día.",
+        "Lucy hasn't noted anything about you yet. She does it on her own when you tell her something that will help another day.",
+        "A Lucy ainda não apontou nada sobre ti. Fá-lo sozinha quando lhe contas algo que lhe servirá noutro dia.",
+        "Lucy n'a encore rien noté sur toi. Elle le fait seule quand tu lui dis quelque chose qui lui servira un autre jour.",
+        "Lucy hat noch nichts über dich notiert. Sie macht das von selbst, wenn du ihr etwas erzählst, das ihr an einem anderen Tag nützt.",
+    ),
     f!("Memoria", "Memory", "Memória", "Mémoire", "Gedächtnis"),
     f!("Modelo activo", "Active model", "Modelo ativo", "Modèle actif", "Aktives Modell"),
     f!(
@@ -358,6 +527,56 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Modo privacidad", "Privacy mode", "Modo privacidade", "Mode confidentialité", "Privatmodus"),
     f!(
+        "Modo privacidad: nada sale de este equipo. Solo modelos locales de Ollama. Se apaga con /privacy.",
+        "Privacy mode: nothing leaves this machine. Local Ollama models only. Turn it off with /privacy.",
+        "Modo privacidade: nada sai desta máquina. Só modelos locais do Ollama. Desliga-se com /privacy.",
+        "Mode confidentialité : rien ne sort de cette machine. Uniquement des modèles locaux d'Ollama. Se désactive avec /privacy.",
+        "Datenschutzmodus: Nichts verlässt diesen Rechner. Nur lokale Ollama-Modelle. Aus mit /privacy.",
+    ),
+    f!(
+        "Ninguno en este estado.",
+        "None in this state.",
+        "Nenhum neste estado.",
+        "Aucun dans cet état.",
+        "Keiner in diesem Zustand.",
+    ),
+    f!(
+        "Ninguno. Un skill es una carpeta con un SKILL.md dentro; Lucy los ve y pide el que encaje.",
+        "None. A skill is a folder with a SKILL.md inside; Lucy sees them and asks for the one that fits.",
+        "Nenhum. Um skill é uma pasta com um SKILL.md dentro; a Lucy vê-os e pede o que encaixa.",
+        "Aucun. Un skill est un dossier qui contient un SKILL.md ; Lucy les voit et demande celui qui convient.",
+        "Keiner. Ein Skill ist ein Ordner mit einer SKILL.md darin; Lucy sieht sie und fordert den passenden an.",
+    ),
+    f!(
+        "Ningún documento todavía. Un manual ingerido contesta preguntas sin que nadie lo mencione — es la fuente principal de la memoria.",
+        "No documents yet. An ingested manual answers questions without anyone mentioning it — it's the main source of memory.",
+        "Ainda nenhum documento. Um manual ingerido responde a perguntas sem que ninguém o mencione — é a fonte principal da memória.",
+        "Aucun document pour l'instant. Un manuel ingéré répond aux questions sans que personne ne le mentionne — c'est la source principale de la mémoire.",
+        "Noch kein Dokument. Ein eingelesenes Handbuch beantwortet Fragen, ohne dass es jemand erwähnt — es ist die Hauptquelle der Erinnerung.",
+    ),
+    f!(
+        "Ningún modelo coincide",
+        "No models match",
+        "Nenhum modelo coincide",
+        "Aucun modèle ne correspond",
+        "Kein Modell passt",
+    ),
+    f!(
+        "No se pudo consultar — el motivo está arriba.",
+        "Couldn't query — the reason is above.",
+        "Não foi possível consultar — o motivo está acima.",
+        "Impossible de consulter — la raison est ci-dessus.",
+        "Abfrage nicht möglich — der Grund steht oben.",
+    ),
+    f!("Nueva terminal", "New terminal", "Novo terminal", "Nouveau terminal", "Neues Terminal"),
+    f!(
+        "Nunca ha corrido en esta base — correrá en la próxima comprobación.",
+        "Never run on this database — it will run at the next check.",
+        "Nunca correu nesta base — vai correr na próxima verificação.",
+        "N'a jamais tourné sur cette base — tournera à la prochaine vérification.",
+        "Ist in dieser Datenbank noch nie gelaufen — läuft bei der nächsten Prüfung.",
+    ),
+    f!(
         "Ollama · modelos locales",
         "Ollama · local models",
         "Ollama · modelos locais",
@@ -365,6 +584,13 @@ pub const FRASES: &[Frase] = &[
         "Ollama · lokale Modelle",
     ),
     f!("Operador", "Operator", "Operador", "Opérateur", "Operator"),
+    f!(
+        "Ordenar por esta columna",
+        "Sort by this column",
+        "Ordenar por esta coluna",
+        "Trier par cette colonne",
+        "Nach dieser Spalte sortieren",
+    ),
     f!(
         "Pasa los controles CIS al equipo y te dice cuáles no cumple y con qué se ha \
          mirado cada uno. Hay que pulsar Escanear. Señala lo que está flojo; arreglarlo \
@@ -383,6 +609,14 @@ pub const FRASES: &[Frase] = &[
          Schwachstellen; das Beheben bleibt deine Sache.",
     ),
     f!(
+        "Pasos que Lucy ha encadenado sola en esta orden. Al llegar al tope se apaga y sigue aprobando el operador.",
+        "Steps Lucy has chained on her own in this command. At the cap she stops and the operator approves again.",
+        "Passos que a Lucy encadeou sozinha nesta ordem. Ao chegar ao limite desliga-se e o operador volta a aprovar.",
+        "Étapes que Lucy a enchaînées seule pour cette demande. Arrivée au plafond, elle s'arrête et l'opérateur reprend les approbations.",
+        "Schritte, die Lucy in diesem Befehl allein verkettet hat. Am Limit schaltet sie ab, und der Operator gibt weiter frei.",
+    ),
+    f!("Pensando…", "Thinking…", "A pensar…", "Réflexion…", "Denkt nach…"),
+    f!(
         "Personalidad de Lucy",
         "Lucy's personality",
         "Personalidade da Lucy",
@@ -397,6 +631,13 @@ pub const FRASES: &[Frase] = &[
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
     f!("Privilegios", "Privileges", "Privilégios", "Privilèges", "Rechte"),
+    f!(
+        "Probar conexión",
+        "Test connection",
+        "Testar ligação",
+        "Tester la connexion",
+        "Verbindung testen",
+    ),
     f!(
         "Pídele las cosas en español y Lucy propone el comando, lo ejecuta si lo apruebas y \
          te cuenta qué salió. Cada pestaña es una conversación aparte, con su propio plan y \
@@ -441,12 +682,21 @@ pub const FRASES: &[Frase] = &[
          Prüfprotokoll, live. Unter «Datei» siehst du stattdessen die Logdateien eines \
          Ordners auf dem Rechner, was etwas anderes ist.",
     ),
+    f!("Razonamiento", "Reasoning", "Raciocínio", "Raisonnement", "Denkprozess"),
     f!(
         "Recuerdo por significado",
         "Recall by meaning",
         "Recordação por significado",
         "Souvenir par le sens",
         "Erinnern nach Bedeutung",
+    ),
+    f!("Rehacer", "Redo", "Refazer", "Rétablir", "Wiederholen"),
+    f!(
+        "Se guardan en el Credential Manager de Windows, en el mismo sitio del que las lee la app de escritorio. Ollama no necesita clave: es local.",
+        "They're saved in the Windows Credential Manager, the same place the desktop app reads them from. Ollama needs no key: it's local.",
+        "Guardam-se no Credential Manager do Windows, no mesmo sítio de onde a app de desktop as lê. O Ollama não precisa de chave: é local.",
+        "Elles sont enregistrées dans le Credential Manager de Windows, là où l'appli de bureau les lit. Ollama n'a pas besoin de clé : il est local.",
+        "Sie werden im Credential Manager von Windows gespeichert, dort, wo die Desktop-App sie liest. Ollama braucht keinen Schlüssel: läuft lokal.",
     ),
     f!(
         "Sin equipos remotos dados de alta",
@@ -455,9 +705,44 @@ pub const FRASES: &[Frase] = &[
         "Aucune machine distante enregistrée",
         "Keine Remote-Rechner eingetragen",
     ),
+    f!(
+        "Sin equipos remotos.",
+        "No remote machines.",
+        "Sem máquinas remotas.",
+        "Aucune machine distante.",
+        "Keine Remote-Rechner.",
+    ),
+    f!(
+        "Sin línea base para este equipo.",
+        "No baseline for this machine.",
+        "Sem linha de base para esta máquina.",
+        "Aucune ligne de base pour cette machine.",
+        "Keine Baseline für diesen Rechner.",
+    ),
     f!("Sistema", "System", "Sistema", "Système", "System"),
     f!("Skills", "Skills", "Skills", "Skills", "Skills"),
     f!("Tema", "Theme", "Tema", "Thème", "Design"),
+    f!(
+        "Todavía no hay ninguno. Hacen falta al menos cuatro memorias del mismo asunto con más de cinco días — la reflexión corre sola cada día, o desde Mantenimiento → Reflexionar ahora.",
+        "None yet. It takes at least four memories on the same subject, more than five days apart — reflection runs on its own each day, or from Maintenance → Reflect now.",
+        "Ainda não há nenhum. São precisas pelo menos quatro memórias do mesmo assunto com mais de cinco dias — a reflexão corre sozinha todos os dias, ou a partir de Manutenção → Refletir agora.",
+        "Il n'y en a encore aucun. Il faut au moins quatre mémoires sur le même sujet, âgées de plus de cinq jours — la réflexion se lance seule chaque jour, ou depuis Maintenance → Réfléchir maintenant.",
+        "Noch keiner. Nötig sind mindestens vier Erinnerungen zum selben Thema, älter als fünf Tage — die Reflexion läuft täglich von selbst, oder über Wartung → Jetzt reflektieren.",
+    ),
+    f!(
+        "Todavía no hay ninguno. Salen solos: una conversación con al menos cuatro turnos y tres comandos o lecturas se destila al cerrar el turno.",
+        "None yet. They come on their own: a conversation with at least four turns and three commands or reads is distilled when the turn closes.",
+        "Ainda não há nenhum. Saem sozinhos: uma conversa com pelo menos quatro turnos e três comandos ou leituras destila-se ao fechar o turno.",
+        "Il n'y en a encore aucun. Ils sortent seuls : une conversation d'au moins quatre tours et trois commandes ou lectures se distille à la fin du tour.",
+        "Noch keiner. Sie entstehen von selbst: Ein Gespräch mit mindestens vier Runden und drei Befehlen oder Lesevorgängen wird beim Abschluss der Runde destilliert.",
+    ),
+    f!(
+        "Todavía no hay ninguno. También se dictan con /principio.",
+        "None yet. You can also dictate them with /principio.",
+        "Ainda não há nenhum. Também se ditam com /principio.",
+        "Il n'y en a encore aucun. Ils se dictent aussi avec /principio.",
+        "Noch keiner. Sie lassen sich auch mit /principio diktieren.",
+    ),
     f!(
         "Tope de gasto de la sesión",
         "Session spending cap",
@@ -480,6 +765,34 @@ pub const FRASES: &[Frase] = &[
         "Textstücke ohne Vektor",
     ),
     f!("Tu nombre", "Your name", "O teu nome", "Ton nom", "Dein Name"),
+    f!(
+        "Un comando, o pídemelo en español…   ·   ↑↓ historial",
+        "A command, or just ask me in plain English…   ·   ↑↓ history",
+        "Um comando, ou pede-mo em português…   ·   ↑↓ histórico",
+        "Une commande, ou demande-le-moi en français…   ·   ↑↓ historique",
+        "Ein Befehl, oder frag mich auf Deutsch…   ·   ↑↓ Verlauf",
+    ),
+    f!(
+        "Un patrón es lo que se repite entre memorias que nadie escribió juntas. Reencontrarlo lo refuerza: la confianza sube con cada vez.",
+        "A pattern is what repeats across memories nobody wrote together. Finding it again reinforces it: confidence rises each time.",
+        "Um padrão é o que se repete entre memórias que ninguém escreveu juntas. Reencontrá-lo reforça-o: a confiança sobe de cada vez.",
+        "Un motif est ce qui se répète entre des mémoires que personne n'a écrites ensemble. Le retrouver le renforce : la confiance monte à chaque fois.",
+        "Ein Muster ist das, was sich zwischen Erinnerungen wiederholt, die niemand zusammen geschrieben hat. Es erneut zu finden verstärkt es: Das Vertrauen steigt mit jedem Mal.",
+    ),
+    f!(
+        "Un principio entra en TODOS los turnos, venga o no al caso — su valor está justo en los turnos donde a nadie se le habría ocurrido recordarlo. Por eso son pocos.",
+        "A principle enters EVERY turn, relevant or not — its value lies precisely in the turns where nobody would have thought to recall it. That's why there are few.",
+        "Um princípio entra em TODOS os turnos, venha ou não a propósito — o seu valor está justamente nos turnos onde a ninguém teria ocorrido lembrá-lo. Por isso são poucos.",
+        "Un principe entre dans TOUS les tours, qu'il soit pertinent ou non — sa valeur est justement dans les tours où personne n'aurait pensé à le rappeler. Voilà pourquoi ils sont peu nombreux.",
+        "Ein Prinzip geht in ALLE Runden ein, ob es passt oder nicht — sein Wert liegt genau in den Runden, in denen niemand daran gedacht hätte. Deshalb sind es wenige.",
+    ),
+    f!(
+        "Un skill fijado enmarca todas las respuestas. Se quita con /preset clear.",
+        "A pinned skill frames every answer. Remove it with /preset clear.",
+        "Um skill fixado enquadra todas as respostas. Tira-se com /preset clear.",
+        "Un skill épinglé encadre toutes les réponses. Se retire avec /preset clear.",
+        "Ein angehefteter Skill prägt alle Antworten. Entfernen mit /preset clear.",
+    ),
     f!(
         "Una PowerShell de verdad: en este equipo, o en uno remoto por WinRM. También \
          acepta que le pidas el comando en español y te lo escribe en la línea para que lo \
@@ -515,14 +828,50 @@ pub const FRASES: &[Frase] = &[
          Zertifikate und geplante Aufgaben. Er schaut nicht von selbst — du musst auf Scannen \
          drücken, bis dahin bleiben die Zahlen leer.",
     ),
+    f!(
+        "Ver cambios",
+        "View changes",
+        "Ver alterações",
+        "Voir les changements",
+        "Änderungen ansehen",
+    ),
+    f!(
+        "Ver la evidencia",
+        "View the evidence",
+        "Ver as provas",
+        "Voir la preuve",
+        "Nachweis ansehen",
+    ),
     f!("Visor de logs", "Log viewer", "Visor de logs", "Visionneuse de logs", "Log-Ansicht"),
     // ── La ayuda de cada módulo ──────────────────────────────────────────────
+    f!(
+        "Volver al inventario",
+        "Back to inventory",
+        "Voltar ao inventário",
+        "Retour à l'inventaire",
+        "Zurück zum Inventar",
+    ),
+    f!(
+        "Windows pedirá confirmación (UAC)",
+        "Windows will ask for confirmation (UAC)",
+        "O Windows vai pedir confirmação (UAC)",
+        "Windows demandera une confirmation (UAC)",
+        "Windows fragt nach Bestätigung (UAC)",
+    ),
     f!(
         "antes de mandar una tarea exigente · no cambia el modelo por ti",
         "before you send a demanding task · doesn't switch the model for you",
         "antes de enviar uma tarefa exigente · não muda o modelo por ti",
         "avant d'envoyer une tâche exigeante · ne change pas le modèle à ta place",
         "vor einer anspruchsvollen Aufgabe · wechselt das Modell nicht für dich",
+    ),
+    f!("audit trail", "audit trail", "registo de auditoria", "piste d'audit", "Audit-Trail"),
+    f!(
+        "buscable por significado",
+        "searchable by meaning",
+        "pesquisável por significado",
+        "recherchable par le sens",
+        "nach Bedeutung durchsuchbar",
     ),
     f!(
         "comandos encadenados sin aprobar, por orden",
@@ -539,6 +888,7 @@ pub const FRASES: &[Frase] = &[
         "cohérent, même si Lucy écrit",
         "konsistent, auch während Lucy schreibt",
     ),
+    f!("coste n/d", "cost n/a", "custo n/d", "coût n/d", "Kosten k. A."),
     f!(
         "cuánto se extiende al contestar · no cambia qué ejecuta ni qué avisa",
         "how much it elaborates when answering · doesn't change what it runs or warns about",
@@ -559,11 +909,25 @@ pub const FRASES: &[Frase] = &[
          Navigation und die Hilfe sind übersetzt; der Rest folgt",
     ),
     f!(
+        "en producción avisa antes de reiniciar un servicio",
+        "in production, warn before restarting a service",
+        "em produção avisa antes de reiniciar um serviço",
+        "en production, prévient avant de redémarrer un service",
+        "in der Produktion warnt sie vor dem Neustart eines Dienstes",
+    ),
+    f!(
         "escritura progresiva y transiciones · LUCY_NO_MOTION=1 las apaga al arrancar",
         "progressive typing and transitions · LUCY_NO_MOTION=1 turns them off at startup",
         "escrita progressiva e transições · LUCY_NO_MOTION=1 desliga-as ao arrancar",
         "écriture progressive et transitions · LUCY_NO_MOTION=1 les désactive au démarrage",
         "schrittweise Ausgabe und Übergänge · LUCY_NO_MOTION=1 schaltet sie beim Start aus",
+    ),
+    f!(
+        "filtrar por texto — Intro para búsqueda semántica",
+        "filter by text — Enter for semantic search",
+        "filtrar por texto — Enter para pesquisa semântica",
+        "filtrer par texte — Entrée pour la recherche sémantique",
+        "nach Text filtern — Enter für semantische Suche",
     ),
     f!(
         "lo que se ilumina: navegación, progreso, hecho",
@@ -581,6 +945,7 @@ pub const FRASES: &[Frase] = &[
         "si tu le laisses vide, on prend l'utilisateur Windows, qui est un compte et pas un nom",
         "wenn leer, gilt der Windows-Benutzer, und das ist ein Konto, kein Name",
     ),
+    f!("sin clave", "no key", "sem chave", "sans clé", "ohne Schlüssel"),
     f!("sin saber", "unknown", "por saber", "inconnue", "ungeprüft"),
     f!(
         "solo se encuentran por palabras — pasó si Ollama estaba caído al ingerir",
@@ -598,6 +963,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("traduciendo…", "translating…", "a traduzir…", "traduction…", "übersetze…"),
     f!(
+        "vacío = ssh-agent o ~/.ssh/id_ed25519",
+        "empty = ssh-agent or ~/.ssh/id_ed25519",
+        "vazio = ssh-agent ou ~/.ssh/id_ed25519",
+        "vide = ssh-agent ou ~/.ssh/id_ed25519",
+        "leer = ssh-agent oder ~/.ssh/id_ed25519",
+    ),
+    f!(
         "vuelve a contar lo de arriba",
         "counts everything above again",
         "volta a contar o de cima",
@@ -605,9 +977,33 @@ pub const FRASES: &[Frase] = &[
         "zählt die Werte oben neu",
     ),
     f!("válida", "valid", "válida", "valide", "gültig"),
+    f!("¿borrar?", "delete?", "apagar?", "supprimer ?", "löschen?"),
     f!("↻ Recontar", "↻ Recount", "↻ Recontar", "↻ Recompter", "↻ Neu zählen"),
     f!("↻ Redetectar", "↻ Redetect", "↻ Redetetar", "↻ Redétecter", "↻ Neu erkennen"),
+    f!("↻ redetectar", "↻ re-detect", "↻ redetetar", "↻ redétecter", "↻ neu erkennen"),
+    f!(
+        "⇈ Reintentar como administrador",
+        "⇈ Retry as administrator",
+        "⇈ Repetir como administrador",
+        "⇈ Réessayer en administrateur",
+        "⇈ Als Administrator wiederholen",
+    ),
+    f!(
+        "⌕  Filtrar mensajes…",
+        "⌕  Filter messages…",
+        "⌕  Filtrar mensagens…",
+        "⌕  Filtrer les messages…",
+        "⌕  Nachrichten filtern…",
+    ),
     f!("■ Detener", "■ Stop", "■ Parar", "■ Arrêter", "■ Stopp"),
+    f!("▸ Ejecutar", "▸ Run", "▸ Executar", "▸ Exécuter", "▸ Ausführen"),
+    f!(
+        "✓ Todos los servicios automáticos en ejecución",
+        "✓ All automatic services running",
+        "✓ Todos os serviços automáticos em execução",
+        "✓ Tous les services automatiques fonctionnent",
+        "✓ Alle automatischen Dienste laufen",
+    ),
 ];
 
 #[cfg(test)]
@@ -682,6 +1078,185 @@ mod tests {
         assert_eq!(Lang::de_clave("de-AT"), Some(Lang::De));
         assert_eq!(Lang::de_clave("ja"), None);
         assert_eq!(Lang::de_clave(""), None);
+    }
+
+    /// El fuente de la pantalla, para poder contar lo que hay sin traducir.
+    ///
+    /// LEER EL PROPIO CÓDIGO EN UN TEST parece raro y es lo único que funciona:
+    /// la alternativa es acordarse de cuánto quedaba, y acordarse es justo lo
+    /// que falla entre una sesión y la siguiente. Solo se compila en los tests.
+    const FUENTE_ENTERA: &str = include_str!("main.rs");
+
+    /// El fuente SIN los módulos de test.
+    ///
+    /// Los tests montan filas y paneles de mentira —«Etiqueta», «WIN-AD»,
+    /// «Gemini 3.1 Pro — Esfuerzo Alto»— y contarlos como interfaz sin traducir
+    /// inflaría la deuda con texto que nadie ve. Peor: haría que traducir de
+    /// verdad no bajara el número, y un contador que no se mueve al trabajar se
+    /// deja de mirar.
+    fn fuente() -> &'static str {
+        match FUENTE_ENTERA.find("#[cfg(test)]") {
+            Some(i) => &FUENTE_ENTERA[..i],
+            None => FUENTE_ENTERA,
+        }
+    }
+
+    /// El primer literal que aparece después de cada `marca`.
+    ///
+    /// Un rascador a mano y no una expresión regular: meter el `regex` entero
+    /// como dependencia para contar cadenas en un test sería pagar un compilado
+    /// largo en cada `cargo test` por cuarenta líneas de trabajo.
+    ///
+    /// Entiende las continuaciones de línea de Rust (`\` al final), que se comen
+    /// el salto Y la sangría siguiente SIN dejar espacio — si esto pusiera un
+    /// espacio, los textos largos no casarían nunca con la tabla y el recuento
+    /// diría que falta lo que ya está.
+    /// Recorta a `n` bytes SIN partir un carácter.
+    ///
+    /// El fuente está lleno de comillas angulares y de rayas, que son de dos y
+    /// tres bytes: cortar por un número redondo revienta a la primera. Se
+    /// retrocede hasta el principio del carácter en el que caiga el corte.
+    fn hasta(s: &str, n: usize) -> &str {
+        let mut i = n.min(s.len());
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        &s[..i]
+    }
+
+    fn literales_tras(marca: &str, salto: usize) -> Vec<String> {
+        let fuente = fuente();
+        let bytes = fuente.as_bytes();
+        let mut out = Vec::new();
+        let mut desde = 0;
+        while let Some(rel) = fuente[desde..].find(marca) {
+            let ini = desde + rel + marca.len();
+            desde = ini;
+            // Se salta lo que haya antes del literal: en `panel(` son `ui`, la
+            // columna y el icono, que no llevan comillas.
+            let Some(mut i) = hasta(&fuente[ini..], salto).find('"') else {
+                continue;
+            };
+            i += ini + 1;
+            let mut s = String::new();
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'"' => break,
+                    b'\\' => {
+                        match bytes.get(i + 1) {
+                            // Continuación: se come el salto y la sangría.
+                            Some(b'\n') => {
+                                i += 2;
+                                while matches!(bytes.get(i), Some(b' ') | Some(b'\r')) {
+                                    i += 1;
+                                }
+                                continue;
+                            }
+                            Some(b'n') => s.push('\n'),
+                            Some(b'"') => s.push('"'),
+                            Some(b'\\') => s.push('\\'),
+                            // `\u{b7}` y demás: se descarta la cadena entera en
+                            // vez de adivinar. Contar mal de menos es honesto;
+                            // contar mal de más diría que hay cobertura que no
+                            // hay.
+                            _ => {
+                                s.clear();
+                                break;
+                            }
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    _ => {
+                        let c = fuente[i..].chars().next().unwrap();
+                        s.push(c);
+                        i += c.len_utf8();
+                        continue;
+                    }
+                }
+            }
+            if s.len() >= 3 && s.chars().any(|c| c.is_alphabetic()) {
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn la_cobertura_no_puede_bajar() {
+        // EL NÚMERO DE ABAJO SOLO PUEDE BAJAR. Es lo que convierte «¿cuánto
+        // falta por traducir?» en algo que vigila el compilador en vez de algo
+        // que hay que recordar entre una sesión y la siguiente — y es lo que
+        // impide que la deuda vuelva a subir al añadir una pantalla nueva.
+        //
+        // Se cuentan los textos que PASAN POR UN AYUDANTE que traduce. Los que
+        // no pasan por ahí no se traducen por mucho que estén en la tabla, y
+        // contarlos daría una cobertura falsa.
+        let mut todos: Vec<String> = Vec::new();
+        // `fila(` y `panel(`: el primer literal es la etiqueta o el título. En
+        // `panel(` hay tres argumentos sin comillas antes (ui, ancho, icono),
+        // de ahí el salto mayor.
+        todos.extend(literales_tras("fila(", 60));
+        todos.extend(literales_tras("panel(", 140));
+        todos.extend(literales_tras("insignia(ui,", 30));
+        todos.extend(literales_tras("i18n::tr(", 20));
+        // Los subtítulos de `fila`, que son la mitad del texto de la pantalla y
+        // que el primer literal de cada llamada no ve. `Some(` pilla también
+        // algún `Some` que no es un subtítulo; da igual, son textos igualmente y
+        // contarlos de más solo hace el listón más exigente.
+        todos.extend(literales_tras("Some(", 2));
+        // Y LAS FAMILIAS QUE NO TRADUCE NINGÚN AYUDANTE. Estas son el grueso de
+        // la deuda: las etiquetas sueltas, los cuadros al pasar el ratón, los
+        // botones y las pistas de los campos. Aquí no hay atajo — cada una hay
+        // que envolverla en `tr` al traducir su pantalla.
+        //
+        // Las que YA están envueltas se detectan igual: el primer literal tras
+        // `RichText::new(` sigue siendo el texto aunque haya un `i18n::tr(` en
+        // medio, y como está en la tabla cuenta como cubierta.
+        todos.extend(literales_tras("RichText::new(", 16));
+        todos.extend(literales_tras(".on_hover_text(", 16));
+        todos.extend(literales_tras("small_button(", 16));
+        todos.extend(literales_tras(".hint_text(", 16));
+        todos.sort();
+        todos.dedup();
+
+        let faltan: Vec<&String> = todos.iter().filter(|s| busca(s).is_none()).collect();
+
+        // MEDIDO, NO ESTIMADO, y SOLO PUEDE BAJAR. Al traducir una pantalla este
+        // número baja y se actualiza aquí; si sube, es que se ha añadido texto
+        // sin pasarlo por la tabla — y entonces este test lo dice en el sitio y
+        // en el momento en que ha pasado, en vez de aparecer meses después en
+        // una captura con media pantalla en español.
+        //
+        // 95 antes de traducir, 51 después. Lo que queda son casi todas
+        // PLANTILLAS CON HUECO —`Falta: {}`, `Listo para operar en {}`— y esas no
+        // se arreglan metiendo la cadena en la tabla: el orden de los huecos
+        // cambia entre idiomas y hay que decidir caso por caso si se traduce la
+        // plantilla o se compone la frase de otra forma. Más los nombres de
+        // marca, que no se traducen y nunca bajarán de aquí.
+        const TOPE: usize = 51;
+        assert!(
+            faltan.len() <= TOPE,
+            "{} textos sin traducir y el tope son {TOPE}. Si acabas de añadir \
+             pantalla, tradúcela; si acabas de traducir una, baja el tope.\n\
+             Los diez primeros:\n{}",
+            faltan.len(),
+            faltan
+                .iter()
+                .take(10)
+                .map(|s| format!("  - {}", hasta(s, 70)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        // Y que el recuento sirva de algo: si de pronto no encuentra textos, el
+        // rascador se ha roto con algún cambio de formato y este test pasaría
+        // siempre diciendo que todo está traducido.
+        assert!(
+            todos.len() > 60,
+            "solo se han encontrado {} textos: el rascador ya no entiende el \
+             código y este test ha dejado de medir nada",
+            todos.len()
+        );
     }
 
     #[test]
