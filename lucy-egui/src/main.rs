@@ -205,6 +205,68 @@ impl View {
         }
     }
 
+    /// Para qué sirve este módulo, en el cuadro que sale al pasar el ratón por
+    /// el interrogante del título.
+    ///
+    /// DICE PARA QUÉ SIRVE Y CUÁNDO SE USA, no qué es. «Inventario: inventaría
+    /// el equipo» no le sirve a nadie; «hay que pulsar Escanear, no se mira
+    /// solo» sí, porque es justo lo que hace que alguien crea que está roto.
+    ///
+    /// Y DICE LA TRAMPA CUANDO LA HAY: que Compliance no arregla nada, que
+    /// buscar por significado necesita Ollama, que el Dashboard mira el equipo
+    /// del selector y no siempre éste. Un requisito no obvio escondido es la
+    /// diferencia entre una pantalla vacía que se entiende y una que parece
+    /// estropeada.
+    fn ayuda(self) -> &'static str {
+        match self {
+            View::Dashboard => {
+                "Cómo está el equipo ahora mismo: procesador, memoria, disco, red, qué \
+                 servicios automáticos están caídos y qué procesos mandan. Se refresca \
+                 solo. Con el selector de al lado miras este equipo o cualquiera de los \
+                 que tengas dados de alta."
+            }
+            View::TerminalIa => {
+                "Pídele las cosas en español y Lucy propone el comando, lo ejecuta si lo \
+                 apruebas y te cuenta qué salió. Cada pestaña es una conversación aparte, \
+                 con su propio plan y su propia traza. Todo lo que ejecuta queda anotado \
+                 en el Log Viewer."
+            }
+            View::NexShell => {
+                "Una PowerShell de verdad: en este equipo, o en uno remoto por WinRM. \
+                 También acepta que le pidas el comando en español y te lo escribe en la \
+                 línea para que lo revises antes de soltarlo. Los equipos se dan de alta \
+                 en el carril de la izquierda."
+            }
+            View::LogViewer => {
+                "Qué se ha ejecutado, con qué resultado y cuánto tardó — la auditoría de \
+                 Lucy, en vivo. En «Archivo» miras en cambio los ficheros de log de una \
+                 carpeta del equipo, que es otra cosa."
+            }
+            View::Inventario => {
+                "Una foto de lo que este equipo tiene: puertos a la escucha, servicios, \
+                 software instalado, certificados y tareas programadas. No se mira solo — \
+                 hay que pulsar Escanear, y hasta entonces los recuentos están en blanco."
+            }
+            View::Compliance => {
+                "Pasa los controles CIS al equipo y te dice cuáles no cumple y con qué se \
+                 ha mirado cada uno. Hay que pulsar Escanear. Señala lo que está flojo; \
+                 arreglarlo sigue siendo cosa tuya."
+            }
+            View::Memoria => {
+                "Lo que Lucy recuerda: hechos sueltos, sesiones destiladas, manuales que le \
+                 has dado y los principios que le has puesto. Casi todo se escribe solo. \
+                 Entra aquí cuando repita algo viejo o no encuentre lo que ya le contaste. \
+                 Buscar por significado necesita Ollama."
+            }
+            View::Configuracion => {
+                "Lo que se da de alta una vez: la clave del proveedor, tu nombre, el modelo \
+                 y el aspecto. Sin ninguna clave guardada solo funcionan los modelos locales \
+                 de Ollama. Aquí están también el tope de gasto de la sesión y la copia de \
+                 seguridad de la memoria."
+            }
+        }
+    }
+
     /// Su icono, el mismo que usa la V2.
     fn icon(self) -> icons::Icon {
         match self {
@@ -245,6 +307,13 @@ enum Role {
     /// Un comando aprobado y corrido: `(comando, ok, salida)`.
     Exec(String, bool, String),
 }
+
+/// Lo que devuelve pedirle un nombre a un modelo: el título y los tokens que
+/// dijo haber gastado, o por qué no pudo.
+///
+/// Con nombre porque desnudo son cuatro niveles en la firma de dos sitios y no
+/// se lee de un vistazo; lo que hay que entender es «un título y su factura».
+type Titulado = Result<(String, u32, u32), String>;
 
 struct ChatMsg {
     role: Role,
@@ -2078,6 +2147,44 @@ fn titulo_modulo(ui: &mut egui::Ui, v: View) {
             .size(theme::FS_TITLE)
             .color(theme::txt()),
     );
+    ui.add_space(7.0);
+    ayuda_icono(ui, v);
+}
+
+/// El interrogante que explica el módulo, al lado de su título.
+///
+/// APAGADO HASTA QUE SE LE ACERCA EL RATÓN. Va en `txt3` y solo se enciende al
+/// señalarlo: una ayuda es para quien la busca, y en color de acento competiría
+/// con lo que la pantalla está intentando decir. Quien ya sabe qué hace el
+/// módulo no debería ver este icono más que de refilón.
+///
+/// El cuadro se dibuja con `on_hover_ui` y ancho tope, no con `on_hover_text`:
+/// estos textos son de doscientos y pico caracteres y sin límite salen en una
+/// sola línea que cruza la pantalla entera.
+fn ayuda_icono(ui: &mut egui::Ui, v: View) {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+    // El `Id` sale del MÓDULO y no de dónde cae el icono: es la lección del
+    // segmentado, donde derivarlo de la posición hacía que dos controles
+    // compartieran animación.
+    let encendido = if motion() {
+        ui.ctx().animate_bool_with_time(
+            egui::Id::new(("ayuda", v.label())),
+            resp.hovered(),
+            theme::DUR_FAST,
+        )
+    } else {
+        f32::from(u8::from(resp.hovered()))
+    };
+    let color = theme::txt3().lerp_to_gamma(theme::acc(), encendido);
+    icons::draw(ui.painter(), icons::Icon::Help, rect.center(), 15.0, color);
+    resp.on_hover_ui(|ui| {
+        ui.set_max_width(340.0);
+        ui.label(
+            egui::RichText::new(v.ayuda())
+                .size(theme::FS_FOOTNOTE)
+                .color(theme::txt2()),
+        );
+    });
 }
 
 fn panel_title(ui: &mut egui::Ui, icon: icons::Icon, title: &str) {
@@ -3435,6 +3542,23 @@ struct App {
     claves_probadas: std::collections::HashMap<String, lucy_core::keys::Prueba>,
     /// Pruebas de clave en vuelo.
     prueba_rx: Vec<(String, std::sync::mpsc::Receiver<lucy_core::keys::Prueba>)>,
+    /// Nombres de pestaña que se están pidiendo a un modelo: `(uid, modelo, rx)`.
+    ///
+    /// POR `uid` Y NO POR ÍNDICE, como el resto de lo que vuelve de un hilo: la
+    /// pestaña puede cerrarse mientras el título viaja, y un índice apuntaría
+    /// entonces a la de al lado — que se encontraría rebautizada con la orden de
+    /// otra conversación.
+    ///
+    /// El modelo viaja al lado porque hace falta al VOLVER para tarifar: quien
+    /// tituló pudo ser un Flash mientras el chat va con otra cosa.
+    titulo_rx: Vec<(usize, String, std::sync::mpsc::Receiver<Titulado>)>,
+    /// Lo gastado en poner nombres, aparte.
+    ///
+    /// APARTE PORQUE SE TARIFA DISTINTO. El gasto de una pestaña se calcula con
+    /// el modelo de chat de ese momento; sumar aquí los tokens del título haría
+    /// que un nombre pedido a un Flash se cobrara al precio del Opus que esté
+    /// puesto. Un contador que exagera es tan inútil como uno que no está.
+    gasto_titulos: f64,
     /// El recuento de la base, cacheado. `None` = aún no se ha mirado.
     recuento: Option<lucy_core::upkeep::Recuento>,
     /// Cuántos trozos de documento están sin vector.
@@ -3824,6 +3948,8 @@ impl App {
                 .unwrap_or_default(),
             claves_probadas: std::collections::HashMap::new(),
             prueba_rx: Vec::new(),
+            titulo_rx: Vec::new(),
+            gasto_titulos: 0.0,
             recuento: None,
             sin_vector: 0,
             purga_armada: None,
@@ -4474,6 +4600,7 @@ impl eframe::App for App {
         self.pump_recall();
         self.pump_dedup();
         self.pump_upkeep();
+        self.pump_titulos();
         self.pump_mantenimiento();
         if let Some(m) = self.tema_pendiente.take() {
             theme::switch(ctx, m);
@@ -4549,26 +4676,23 @@ impl eframe::App for App {
                 }
 
                 ui.horizontal_centered(|ui| {
+                    // SOLO EL NOMBRE DE LA APLICACIÓN. Aquí iba además el del
+                    // módulo, y con eso el sitio donde estás se decía TRES
+                    // veces en la misma pantalla: la barra lateral marcada, esta
+                    // barra, y el título de la página catorce píxeles más abajo.
+                    // Encima las dos últimas no coincidían —«Dashboard» arriba y
+                    // «Dashboard de sistema» debajo—, que es peor que repetir:
+                    // hace dudar de si son dos cosas.
+                    //
+                    // Se queda el título de la página y no éste, porque es el
+                    // que lleva al lado lo que hace falta —el selector de
+                    // equipo, el estado, la ayuda— y porque la barra lateral ya
+                    // marca dónde estás sin gastar una línea.
+                    //
+                    // Con el del módulo se va también el distintivo «COCKPIT»
+                    // que salía en Terminal IA: era el nombre de la interfaz en
+                    // la V2, y aquí no distingue nada de nada.
                     ui.label(egui::RichText::new("✦ Lucy").color(theme::acc()).strong().size(15.0));
-                    ui.add_space(14.0);
-                    ui.label(egui::RichText::new(self.view.label()).color(theme::txt()).size(13.5));
-                    if self.view == View::TerminalIa {
-                        ui.add_space(6.0);
-                        // El badge COCKPIT de la app: fondo tenue del acento,
-                        // versalitas, sin borde.
-                        egui::Frame::none()
-                            .fill(theme::acc().linear_multiply(0.14))
-                            .rounding(egui::Rounding::same(4.0))
-                            .inner_margin(egui::Margin::symmetric(6.0, 2.0))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("COCKPIT")
-                                        .color(theme::acc())
-                                        .size(9.5)
-                                        .strong(),
-                                );
-                            });
-                    }
                     right(ui, 30.0, |ui| self.window_buttons(ui));
                 });
             });
@@ -4881,6 +5005,14 @@ impl App {
     /// el compositor abajo. El compositor VA ABAJO y no arriba: es donde está la
     /// mano cuando se acaba de leer una respuesta.
     fn terminal_ia(&mut self, ui: &mut egui::Ui) {
+        // El título va aquí y no en la barra de arriba, como en los otros siete.
+        // Cuesta una línea en la vista más apretada de la aplicación, y a cambio
+        // el interrogante está en el mismo sitio en las ocho: una ayuda que hay
+        // que buscar en un sitio distinto cada vez no se busca.
+        row_align(ui, 26.0, egui::Align::Center, |ui| {
+            titulo_modulo(ui, View::TerminalIa);
+        });
+        ui.add_space(6.0);
         self.tab_bar(ui);
         ui.add_space(6.0);
 
@@ -4960,7 +5092,25 @@ impl App {
                 ))
                 .rounding(egui::Rounding::same(theme::R_SM))
                 .min_size(egui::vec2(0.0, 26.0));
-                let r = ui.add(b);
+                let mut r = ui.add(b);
+                // LA ORDEN ENTERA AL PASAR EL RATÓN. El título son treinta
+                // caracteres —los pone un modelo, o el recorte— y eso basta para
+                // distinguir tres pestañas de un vistazo pero no para recordar
+                // qué se pidió exactamente. Sin esto, acortar el título habría
+                // sido cambiar un problema por otro.
+                if let Some(primera) = t.log.iter().find(|m| m.role == Role::User) {
+                    let orden = primera.text.trim();
+                    if !orden.is_empty() && orden != t.title {
+                        r = r.on_hover_ui(|ui| {
+                            ui.set_max_width(420.0);
+                            ui.label(
+                                egui::RichText::new(orden)
+                                    .size(theme::FS_FOOTNOTE)
+                                    .color(theme::txt2()),
+                            );
+                        });
+                    }
+                }
                 if r.clicked() {
                     activar = Some(i);
                 }
@@ -6524,6 +6674,59 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
     }
 
+    /// Pide a un modelo que le ponga nombre a una pestaña. En un hilo: es red.
+    ///
+    /// SI NO HAY QUIEN, NO PASA NADA: la pestaña se queda con el recorte que ya
+    /// se le puso, que es un nombre perfectamente utilizable. Esta función no
+    /// avisa de nada al operador cuando no encuentra modelo — un aviso por cada
+    /// pestaña nueva diciendo que no se ha podido embellecer un título sería
+    /// ruido puro sobre algo que nadie ha pedido.
+    fn pide_titulo(&mut self, uid: usize, orden: &str) {
+        if self.titulo_rx.iter().any(|(u, _, _)| *u == uid) {
+            return;
+        }
+        let Some(fuente) = lucy_core::titles::elige(&self.models, self.privacy) else {
+            return;
+        };
+        let modelo = fuente.modelo().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let o = orden.to_string();
+        std::thread::spawn(move || {
+            let _ = tx.send(lucy_core::titles::nombra(&o, &fuente));
+        });
+        self.titulo_rx.push((uid, modelo, rx));
+    }
+
+    /// Recoge los nombres de pestaña que estaban en vuelo.
+    fn pump_titulos(&mut self) {
+        let mut llegados: Vec<(usize, String, Titulado)> = Vec::new();
+        self.titulo_rx.retain(|(uid, modelo, rx)| match rx.try_recv() {
+            Ok(r) => {
+                llegados.push((*uid, modelo.clone(), r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for (uid, modelo, r) in llegados {
+            // Un error se traga en silencio: el recorte sigue puesto y es un
+            // nombre válido. Lo único que se pierde es la mejora.
+            let Ok((titulo, ent, sal)) = r else { continue };
+            if titulo.trim().is_empty() {
+                continue;
+            }
+            // La pestaña pudo cerrarse mientras el título viajaba.
+            let Some(t) = self.tabs.iter_mut().find(|t| t.uid == uid) else { continue };
+            t.title = titulo;
+            // Los tokens de un modelo local son cero y `cost` de un id que no
+            // está tarifado devuelve `None`: en los dos casos no se suma nada,
+            // que es lo correcto.
+            if let Some(c) = lucy_core::pricing::cost(&modelo, ent, sal) {
+                self.gasto_titulos += c;
+            }
+        }
+    }
+
     /// Pregunta al proveedor si su clave sirve. En un hilo: es red.
     fn prueba_clave(&mut self, proveedor: &str) {
         if self.prueba_rx.iter().any(|(p, _)| p == proveedor) {
@@ -6881,6 +7084,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // quitar un fichero en silencio deja al operador esperando una respuesta
         // sobre algo que el modelo nunca llegó a ver.
         let mut retenidos: Vec<(String, String)> = Vec::new();
+        // Fuera del préstamo de la pestaña: la petición del título se lanza
+        // DESPUÉS de soltarla, porque `pide_titulo` necesita `&mut self`.
+        let mut pedir_titulo: Option<(usize, String)> = None;
         for a in &self.tabs[self.tab].attachments {
             adjuntos.push((a.name.clone(), a.blocked.clone()));
             if !a.ready() {
@@ -6963,13 +7169,22 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
             // El título de la pestaña pasa a ser la primera orden: con tres
             // terminales abiertas, "Terminal 2" no dice cuál era cuál.
+            //
+            // EN DOS TIEMPOS. El recorte se pone YA, para que la pestaña nunca
+            // esté un segundo sin nombre; si hay un modelo que pueda titular,
+            // manda el suyo cuando llegue. Al revés —esperar al modelo— dejaría
+            // «Terminal 2» en pantalla justo mientras se lee la respuesta, que es
+            // cuando se mira la barra de pestañas.
             if t.log.is_empty() {
                 let base = if text.trim().is_empty() {
                     adjuntos.first().map(|(n, _)| n.clone()).unwrap_or_default()
                 } else {
                     text.clone()
                 };
-                t.title = base.chars().take(28).collect::<String>().trim().to_string();
+                t.title = lucy_core::titles::recorta(&base);
+                if !base.trim().is_empty() {
+                    pedir_titulo = Some((t.uid, base));
+                }
             }
             // En la conversación se ve la orden del operador, no el prompt con
             // los ficheros pegados: eso es fontanería, no lo que él escribió.
@@ -7024,6 +7239,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     ..Default::default()
                 });
             }
+        }
+        if let Some((uid, orden)) = pedir_titulo {
+            self.pide_titulo(uid, &orden);
         }
 
         // La conversación ENTERA, no solo la orden. Se construye después de
@@ -7758,10 +7976,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// preferible a inventarle un precio, que daría una cifra falsa con aspecto
     /// de medida; la interfaz ya dice «coste n/d» cuando pasa.
     fn gasto_sesion(&self) -> f64 {
-        self.tabs
+        let chat: f64 = self
+            .tabs
             .iter()
             .filter_map(|t| lucy_core::pricing::cost(&self.chat_model, t.tokens_in, t.tokens_out))
-            .sum()
+            .sum();
+        // Y lo de poner nombres, que va tarifado con el modelo que los puso y no
+        // con el del chat. Suele ser cero —titula Ollama— pero cuando no lo es,
+        // es gasto de verdad y el tope de la sesión tiene que verlo.
+        chat + self.gasto_titulos
     }
 
     fn auto_step(&mut self, uid: usize) {
@@ -11864,7 +12087,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // APAGAR NO ES BORRAR. Lo que se quiere casi siempre es «ahora no» —el
         // de migración estorba mientras se atiende una incidencia— y para eso
         // desinstalar es demasiado: hay que volver a encontrar la carpeta.
-        let alternar: Option<(String, bool)> = None;
+        // NUNCA SE ASIGNABA. Estaba declarado a `None` fijo, así que el `if let`
+        // de más abajo —el que llama a `set_enabled`— era código muerto y la
+        // única acción de la fila era la «×» de desinstalar. El motor estaba
+        // entero: `Skill.activo`, `skills::set_enabled`, el recuento de activos y
+        // hasta el texto que explica qué pasa con los apagados. Lo que faltaba
+        // era el interruptor.
+        let mut alternar: Option<(String, bool)> = None;
         let n_skills = self.skills.len();
         let activos = self.skills.iter().filter(|k| k.activo).count();
         panel(
@@ -11898,8 +12127,37 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let ultimo = n_skills.saturating_sub(1);
                 for (i, k) in self.skills.iter().enumerate() {
                     fila(ui, &k.name, Some(&k.description), i == ultimo, |ui| {
-                        if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                        // DESINSTALAR PRIMERO PORQUE LA FILA REPARTE DE DERECHA A
+                        // IZQUIERDA: lo que se añade antes queda más a la
+                        // derecha. La «×» va al borde y el interruptor a su
+                        // izquierda, que es el orden de las filas de claves.
+                        if ui
+                            .small_button("×")
+                            .on_hover_text("Desinstalar: borra la carpeta del skill")
+                            .clicked()
+                        {
                             quitar = Some(k.name.clone());
+                        }
+                        ui.add_space(6.0);
+                        // APAGAR NO ES BORRAR, y por eso son dos controles y no
+                        // uno. Casi siempre lo que se quiere es «ahora no» —el de
+                        // migración estorba mientras atiendes una incidencia— y
+                        // desinstalar para eso obliga a volver a encontrar la
+                        // carpeta dentro de una semana.
+                        if let Some(j) = segmentado(
+                            ui,
+                            // El nombre del skill EN LA CLAVE: si no, los cinco
+                            // interruptores comparten estado de animación y las
+                            // píldoras se persiguen entre sí.
+                            &format!("skill-{}", k.name),
+                            150.0,
+                            &["Activo", "Apagado"],
+                            usize::from(!k.activo),
+                        ) {
+                            let on = j == 0;
+                            if on != k.activo {
+                                alternar = Some((k.name.clone(), on));
+                            }
                         }
                     });
                 }
@@ -12908,6 +13166,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
 
         // ── barra ────────────────────────────────────────────────────────────
+        row_align(ui, 26.0, egui::Align::Center, |ui| {
+            titulo_modulo(ui, View::NexShell);
+        });
+        ui.add_space(6.0);
         row_align(ui, 28.0, egui::Align::Center, |ui| {
             ui.spacing_mut().item_spacing.x = 7.0;
             icons::show(ui, icons::Icon::Terminal, 15.0, theme::acc());
@@ -15691,6 +15953,36 @@ mod layout {
             assert!(
                 primera.is_uppercase(),
                 "«{t}» empieza en minúscula y los demás no"
+            );
+        }
+    }
+
+    #[test]
+    fn cada_modulo_explica_para_que_sirve() {
+        // El cuadro de ayuda es lo único que lee quien abre Lucy por primera vez
+        // y no sabe qué es «Compliance». Si uno se queda sin texto, esa pestaña
+        // es la que no se entiende — y justo esa no avisa de nada al faltar.
+        for v in View::ALL {
+            let a = v.ayuda();
+            assert!(!a.trim().is_empty(), "«{}» no explica para qué sirve", v.label());
+            // El cuadro tiene 340 px de ancho tope: por encima de unas cuarenta
+            // palabras deja de ser una ayuda y pasa a ser un manual, que nadie
+            // lee con el ratón quieto encima de un icono.
+            let palabras = a.split_whitespace().count();
+            assert!(
+                (12..=60).contains(&palabras),
+                "«{}» tiene {palabras} palabras: se lee mal en un cuadro flotante",
+                v.label()
+            );
+            assert!(
+                !a.contains('!') && !a.contains('¡'),
+                "«{}» lleva admiraciones y el resto de la aplicación no",
+                v.label()
+            );
+            assert!(
+                a.trim_end().ends_with('.'),
+                "«{}» no acaba en punto",
+                v.label()
             );
         }
     }

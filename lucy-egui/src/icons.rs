@@ -136,6 +136,8 @@ pub enum Icon {
     Disk,
     /// `world` — la tarjeta de red.
     Network,
+    /// `help-circle` — la ayuda de cada módulo.
+    Help,
 }
 
 impl Icon {
@@ -395,6 +397,20 @@ impl Icon {
                 Seg::Curve(&[(12.0, 3.0), (7.2, 6.0), (7.2, 18.0), (12.0, 21.0)]),
                 Seg::Curve(&[(12.0, 3.0), (16.8, 6.0), (16.8, 18.0), (12.0, 21.0)]),
             ],
+            // `help-circle`. EL GANCHO ES UN ARCO DE 212°, no una curva a ojo:
+            // en Tabler es un `a2.6 2.6 0 1 0 -3 -4`, o sea arco grande, y con
+            // beziers a ojo sale un signo de interrogación torcido que a trece
+            // píxeles se lee como una «s».
+            //
+            // El punto de abajo es un trazo de longitud casi cero: con los
+            // extremos redondeados, eso ES un punto. Mismo truco que los
+            // testigos de `server`.
+            Self::Help => &[
+                Seg::Circle((12.0, 12.0), 9.0),
+                Seg::Path(&[(12.0, 17.0), (12.05, 17.0)]),
+                Seg::Curve(&[(12.0, 13.5), (12.0, 12.8), (12.3, 12.0), (13.0, 12.0)]),
+                Seg::Arc((12.07, 9.57), 2.6, 69.0, -142.8),
+            ],
         }
     }
 
@@ -414,7 +430,7 @@ impl Icon {
         Self::ChevronDown, Self::Clip, Self::Mic, Self::ArrowUp, Self::Plus,
         Self::Close, Self::Copy, Self::Desktop, Self::Server, Self::Pencil,
         Self::Minimize, Self::Maximize, Self::Restore, Self::Pause, Self::Play,
-        Self::Cpu, Self::Ram, Self::Disk, Self::Network,
+        Self::Cpu, Self::Ram, Self::Disk, Self::Network, Self::Help,
     ];
 }
 
