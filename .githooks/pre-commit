@@ -62,8 +62,20 @@ if [ -z "$STAGED" ]; then
 fi
 
 # Detect what kinds of files changed. Bash regex tolerates the path separator.
-RUST_CHANGED=$(echo "$STAGED" | grep -E '^src-tauri/.*\.rs$' || true)
-TAURI_CFG_CHANGED=$(echo "$STAGED" | grep -E '^src-tauri/(Cargo\.toml|tauri\.conf\.json)$' || true)
+#
+# v1.9 — `lucy-core` counts as a Rust change too, and it did not.
+#
+# The gap was NARROWER than it looked, which is why it survived: step 1 already
+# runs `cargo test` in BOTH crates unconditionally, so a core change was always
+# compiled and its tests always ran. What it was NOT doing is checking the
+# things `cargo test --lib` never builds — the Tauri BINARY target and the
+# integration tests. A change to a `lucy-core` signature that keeps both libs
+# compiling but breaks `main.rs` would sail through green.
+#
+# Narrow, but it is exactly the kind of break that shows up at `cargo tauri
+# build` time instead of at commit time, and by then it is three commits old.
+RUST_CHANGED=$(echo "$STAGED" | grep -E '^(src-tauri|lucy-core)/.*\.rs$' || true)
+TAURI_CFG_CHANGED=$(echo "$STAGED" | grep -E '^(src-tauri/(Cargo\.toml|tauri\.conf\.json)|lucy-core/Cargo\.toml)$' || true)
 SVELTE_CHANGED=$(echo "$STAGED" | grep -E '^src/.*\.(svelte|ts|js|mjs)$' || true)
 
 START_TIME=$(date +%s)
