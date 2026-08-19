@@ -405,11 +405,25 @@ pub const FRASES: &[Frase] = &[
         "PDF-Text wird extrahiert…",
     ),
     f!(
+        "Fijada · entra en todos los prompts",
+        "Pinned · goes into every prompt",
+        "Fixada · entra em todos os prompts",
+        "Épinglée · entre dans tous les prompts",
+        "Angeheftet · geht in jeden Prompt",
+    ),
+    f!(
         "Fijar línea base",
         "Set baseline",
         "Fixar linha de base",
         "Définir la ligne de base",
         "Baseline festlegen",
+    ),
+    f!(
+        "Filtrar por esta etiqueta",
+        "Filter by this tag",
+        "Filtrar por esta etiqueta",
+        "Filtrer par cette étiquette",
+        "Nach diesem Tag filtern",
     ),
     f!("Fundir", "Merge", "Fundir", "Fusionner", "Zusammenführen"),
     f!("Guardar", "Save", "Guardar", "Enregistrer", "Speichern"),
@@ -421,6 +435,27 @@ pub const FRASES: &[Frase] = &[
         "Kopie speichern…",
     ),
     f!("Idioma", "Language", "Idioma", "Langue", "Sprache"),
+    f!(
+        "Importancia alta · se recuerda antes que las demás",
+        "High importance · recalled before the rest",
+        "Importância alta · é recordada antes das outras",
+        "Importance haute · rappelée avant les autres",
+        "Hohe Wichtigkeit · wird vor den anderen erinnert",
+    ),
+    f!(
+        "Importancia baja · la última en entrar si no cabe todo",
+        "Low importance · the last one in when not everything fits",
+        "Importância baixa · a última a entrar se não couber tudo",
+        "Importance basse · la dernière à entrer si tout ne tient pas",
+        "Geringe Wichtigkeit · kommt zuletzt rein, wenn nicht alles passt",
+    ),
+    f!(
+        "Importancia normal",
+        "Normal importance",
+        "Importância normal",
+        "Importance normale",
+        "Normale Wichtigkeit",
+    ),
     f!("Instalar…", "Install…", "Instalar…", "Installer…", "Installieren…"),
     f!("Interfaz", "Interface", "Interface", "Interface", "Oberfläche"),
     f!("Inventario", "Inventory", "Inventário", "Inventaire", "Bestand"),
@@ -1287,6 +1322,29 @@ mod tests {
              código y este test ha dejado de medir nada",
             todos.len()
         );
+    }
+
+    #[test]
+    fn las_etiquetas_de_una_memoria_se_leen_como_json_y_como_lista_vieja() {
+        // La columna es un JSON: `["crystal","leccion"]`. Se leía quitando
+        // corchetes y comillas con un `replace`, que funciona hasta que una
+        // etiqueta lleve una coma dentro — y entonces se parte en dos etiquetas
+        // que no existen, en silencio.
+        assert_eq!(
+            crate::mem_tags(r#"["crystal","leccion"]"#),
+            vec!["crystal".to_string(), "leccion".to_string()]
+        );
+        // Una coma DENTRO de una etiqueta ya no la parte.
+        assert_eq!(crate::mem_tags(r#"["dns, lento"]"#), vec!["dns, lento".to_string()]);
+        // Y las filas viejas de la V1, escritas separadas por comas, no pierden
+        // sus etiquetas por un cambio de formato: eso sería perder trabajo del
+        // operador sin decírselo.
+        assert_eq!(
+            crate::mem_tags("prod, web"),
+            vec!["prod".to_string(), "web".to_string()]
+        );
+        assert!(crate::mem_tags("").is_empty());
+        assert!(crate::mem_tags("[]").is_empty());
     }
 
     #[test]

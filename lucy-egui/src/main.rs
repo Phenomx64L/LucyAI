@@ -2222,6 +2222,62 @@ fn segmentado(
     elegido
 }
 
+/// Las etiquetas de una memoria, tal y como vienen de la base.
+///
+/// LA COLUMNA ES UN JSON, no una lista separada por comas: llega
+/// `["crystal","leccion"]`. Aquí se leía quitando corchetes y comillas con un
+/// `replace`, lo cual funciona hasta que una etiqueta lleve una coma dentro — y
+/// entonces se parte en dos etiquetas que no existen, en silencio.
+///
+/// Se parsea de verdad, y si no es JSON válido se cae al reparto por comas: hay
+/// filas viejas escritas por la V1 con ese formato, y perderles las etiquetas
+/// por un cambio de formato sería perder trabajo del operador.
+fn mem_tags(crudo: &str) -> Vec<String> {
+    let t = crudo.trim();
+    if t.is_empty() || t == "[]" {
+        return Vec::new();
+    }
+    if let Ok(v) = serde_json::from_str::<Vec<String>>(t) {
+        return v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    }
+    t.trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Una etiqueta pulsable. Devuelve `true` si se pulsó.
+///
+/// PULSABLE PORQUE LA PREGUNTA ES OBVIA: quien ve una etiqueta quiere ver las
+/// demás que la llevan, y antes eso había que teclearlo en el filtro copiando el
+/// texto a mano.
+///
+/// EN GRIS Y NO EN COLOR. Una fila de memoria ya tiene los puntos de importancia
+/// teñidos por nivel y la chincheta en ámbar; una etiqueta de color más compite
+/// con lo que sí quiere decir algo. Aquí el color se gana, no se reparte.
+fn tag_chip(ui: &mut egui::Ui, texto: &str) -> bool {
+    let font = egui::FontId::proportional(theme::FS_CAPTION);
+    let w = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font.clone(), theme::txt3()).size().x);
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(w + 14.0, 18.0), egui::Sense::click());
+    let hov = resp.hovered();
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(9.0),
+        if hov { theme::bg4() } else { theme::bg3() },
+        egui::Stroke::new(1.0_f32, theme::bdr()),
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        texto,
+        font,
+        if hov { theme::txt2() } else { theme::txt3() },
+    );
+    resp.on_hover_text(i18n::tr("Filtrar por esta etiqueta")).clicked()
+}
+
 /// Una insignia de estado: punto, texto, y el color que corresponda.
 fn insignia(ui: &mut egui::Ui, texto: &str, ok: bool) {
     // Muchas insignias llevan una cifra («6 detectados») y esas no están en la
@@ -15005,6 +15061,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let mut armar: Option<i64> = None;
         let mut borrar_id: Option<i64> = None;
         let mut fijar: Option<(i64, bool)> = None;
+        // La etiqueta que se acaba de pulsar, para filtrar por ella. Fuera del
+        // bucle porque cambiar el filtro dentro sería reordenar la lista que se
+        // está recorriendo.
+        let mut nuevo_filtro: Option<String> = None;
 
         match &self.mems {
             Err(e) => {
@@ -15158,12 +15218,27 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     {
                                         fijar = Some((m.id, !fija));
                                     }
+                                    // LOS PUNTOS DICEN QUÉ SON AL SEÑALARLOS.
+                                    // Tres puntos de colores sin leyenda son un
+                                    // adorno: se ven en cada fila y no se sabe
+                                    // si cuentan algo, miden algo o marcan algo.
+                                    // Y aquí importa saberlo, porque la
+                                    // importancia decide qué recuerda Lucy
+                                    // cuando no cabe todo.
                                     let dots = "●".repeat(m.importance.clamp(1, 3) as usize);
                                     ui.label(
                                         egui::RichText::new(dots)
                                             .color(theme::importance_color(m.importance))
                                             .small(),
-                                    );
+                                    )
+                                    .on_hover_text(match m.importance {
+                                        i if i >= lucy_core::memories::FIJADA => {
+                                            "Fijada · entra en todos los prompts"
+                                        }
+                                        3 => "Importancia alta · se recuerda antes que las demás",
+                                        2 => "Importancia normal",
+                                        _ => "Importancia baja · la última en entrar si no cabe todo",
+                                    });
                                     let title = if m.title.trim().is_empty() {
                                         m.content.chars().take(64).collect::<String>()
                                     } else {
@@ -15209,13 +15284,20 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                         .weak(),
                                     );
                                 }
-                                let tags = m.tags.trim_matches(|c| c == '[' || c == ']');
-                                if !tags.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new(tags.replace('"', ""))
-                                            .small()
-                                            .color(theme::blue()),
-                                    );
+                                // ETIQUETAS COMO CHIPS Y NO COMO UNA CADENA.
+                                // Salían tal cual venían de la base —
+                                // `crystal,leccion`, en AZUL— y eso tenía dos
+                                // problemas. El azul es el color del OPERADOR en
+                                // esta aplicación: usarlo para datos hace que una
+                                // etiqueta parezca algo que escribiste tú. Y una
+                                // lista separada por comas no se puede pulsar,
+                                // así que la pregunta obvia al ver una etiqueta
+                                // —«enséñame las demás de esto»— había que
+                                // teclearla en el filtro.
+                                for t in mem_tags(&m.tags) {
+                                    if tag_chip(ui, &t) {
+                                        nuevo_filtro = Some(t.clone());
+                                    }
                                 }
                                 ui.label(egui::RichText::new(format!("#{}", m.id)).small().weak());
                             });
@@ -15226,6 +15308,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
 
         // Fuera del préstamo de `self.mems`.
+        if let Some(t) = nuevo_filtro {
+            self.mem_search = t;
+            // El filtro por texto ya casa contra las etiquetas, así que no hace
+            // falta un modo aparte: pulsar una etiqueta es escribirla.
+        }
         if let Some((id, on)) = fijar {
             match lucy_core::memories::set_pinned(id, on) {
                 Ok(()) => self.mems = load_memories(),
