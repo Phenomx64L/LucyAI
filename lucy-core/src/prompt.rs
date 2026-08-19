@@ -76,6 +76,8 @@ pub struct Ctx<'a> {
     pub principles: &'a str,
     /// Cuánto se extiende al contestar.
     pub tono: Tono,
+    /// En qué idioma contesta. El mismo que la interfaz.
+    pub idioma: Idioma,
     /// Modelo flojo siguiendo instrucciones: se le manda lo justo.
     pub weak_model: bool,
     /// Si este shell puede ejecutar lo que proponga. Cambia el contrato entero:
@@ -105,6 +107,7 @@ impl Default for Ctx<'_> {
             memories: "",
             principles: "",
             tono: Tono::Equilibrado,
+            idioma: Idioma::Es,
             weak_model: false,
             can_execute: false,
             auto: false,
@@ -259,14 +262,26 @@ impl Section for Identity {
     }
     fn render(&self, c: &Ctx) -> String {
         let mut s = String::from(
-            "Eres Lucy, una asistente de administración de sistemas Windows. Hablas en \
-             español, vas al grano y no adornas.\n\n\
+            "Eres Lucy, una asistente de administración de sistemas Windows. Vas al grano \
+             y no adornas.\n\n\
              NO eres un modelo genérico sin acceso: estás integrada en una aplicación de \
              escritorio que corre EN el equipo del operador y que te entrega sus lecturas \
              reales. Los datos que vienen abajo están medidos en esta máquina hace \
              segundos. Úsalos. No pidas al operador que ejecute comandos para averiguar \
              algo que ya tienes delante, y no digas que no tienes acceso a su equipo.",
         );
+        // EL IDIOMA, PEGADO A LA IDENTIDAD y no en una sección aparte. Es lo
+        // primero que el modelo tiene que saber sobre cómo hablar, y una sección
+        // propia caería más abajo —detrás del estado de la máquina— donde un
+        // modelo pequeño ya ha decidido en qué idioma va.
+        //
+        // Va en el idioma de destino: pedirle en español que conteste en alemán
+        // funciona la mitad de las veces; la frase escrita en alemán lo arrastra
+        // al alemán ella sola.
+        let idioma = c.idioma.instruccion();
+        if !idioma.is_empty() {
+            let _ = write!(s, "\n\n{idioma}");
+        }
         // El nombre y el perfil solo si los hay. "El operador se llama (vacío)"
         // es peor que no decir nada: el modelo lo trata como un dato.
         if !c.user_name.is_empty() {
@@ -817,6 +832,84 @@ fn prompt_weak(c: &Ctx) -> String {
 /// Las secciones estables van primero y luego la marca de caché: no es estética,
 /// es lo que permite que Anthropic cobre la mitad de arriba como lectura de
 /// caché en vez de como tokens nuevos en cada turno de la conversación.
+/// En qué idioma contesta Lucy.
+///
+/// UNA INTERFAZ TRADUCIDA CON LAS RESPUESTAS EN ESPAÑOL NO ESTÁ TRADUCIDA. Es
+/// más: es peor que sin traducir, porque promete algo que no cumple. El idioma
+/// de la interfaz y el de Lucy tienen que ser el mismo, y son dos sitios
+/// distintos — uno es una tabla de textos y el otro una línea de prompt.
+///
+/// LOS CINCO DEL INSTALADOR de la V1, los mismos que la interfaz.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Idioma {
+    #[default]
+    Es,
+    En,
+    Pt,
+    Fr,
+    De,
+}
+
+impl Idioma {
+    /// La clave con la que se guarda, la misma que usa la V1 en
+    /// `lucy_user_lang`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Idioma::Es => "es",
+            Idioma::En => "en",
+            Idioma::Pt => "pt",
+            Idioma::Fr => "fr",
+            Idioma::De => "de",
+        }
+    }
+
+    /// POR PREFIJO, porque lo que la V1 guarda es `es-MX`, no `es`.
+    pub fn from_key(k: &str) -> Idioma {
+        let k = k.trim().to_ascii_lowercase();
+        for i in [Idioma::En, Idioma::Pt, Idioma::Fr, Idioma::De] {
+            if k.starts_with(i.key()) {
+                return i;
+            }
+        }
+        Idioma::Es
+    }
+
+    /// Cómo se le dice al modelo, EN EL IDIOMA DE DESTINO.
+    ///
+    /// La instrucción va escrita en el idioma que se pide y no en español, y eso
+    /// no es adorno: un modelo pequeño al que se le pide en español que conteste
+    /// en alemán contesta en español la mitad de las veces. La instrucción
+    /// escrita en alemán arrastra al modelo al alemán por sí sola.
+    ///
+    /// Y DICE «AUNQUE TE ESCRIBAN EN OTRO», que es el caso real: el operador
+    /// tiene la interfaz en inglés y escribe la orden en español porque le sale
+    /// así. Sin esa frase, el modelo sigue el idioma de la orden y la respuesta
+    /// no casa con la pantalla.
+    pub fn instruccion(self) -> &'static str {
+        match self {
+            // Vacío: es el idioma en el que está escrito el resto del prompt, así
+            // que pedirlo gastaría tokens en cada turno para lo que ya pasa.
+            Idioma::Es => "",
+            Idioma::En => {
+                "Always answer in ENGLISH, even if the operator writes to you in another \
+                 language. Command output and file paths stay exactly as they are."
+            }
+            Idioma::Pt => {
+                "Responde SEMPRE em PORTUGUÊS, mesmo que o operador te escreva noutro idioma. \
+                 A saída dos comandos e os caminhos de ficheiros ficam exatamente como estão."
+            }
+            Idioma::Fr => {
+                "Réponds TOUJOURS en FRANÇAIS, même si l'opérateur t'écrit dans une autre \
+                 langue. La sortie des commandes et les chemins de fichiers restent tels quels."
+            }
+            Idioma::De => {
+                "Antworte IMMER auf DEUTSCH, auch wenn der Operator dir in einer anderen \
+                 Sprache schreibt. Befehlsausgaben und Dateipfade bleiben unverändert."
+            }
+        }
+    }
+}
+
 /// Cuánto se extiende Lucy al contestar.
 ///
 /// NO ES UN AJUSTE DE GUSTO. En mitad de un incidente, tres párrafos de contexto
