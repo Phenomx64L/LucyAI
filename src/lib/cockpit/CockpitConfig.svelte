@@ -1,4 +1,6 @@
 <script>
+  // La interfaz en cinco idiomas. Ver `$lib/i18n`.
+  import { trad, lang as idioma, NOMBRES } from '$lib/i18n';
   /* ==========================================================================
      Lucy 2.0 — Config (cockpit)  ·  Phase F4/views. EDITABLE.
      Real, wired settings:
@@ -606,7 +608,9 @@
             {/each}
           </span>
         </div>
-        <div class="row"><span class="row-l">Idioma</span><span class="row-v">Español <span class="hint-mini">· cámbialo en configuración completa</span></span></div>
+        <!-- Decía «Español» SIEMPRE, cableado. Con la interfaz en alemán, la
+             fila de idioma afirmaba que estaba en español. -->
+        <div class="row"><span class="row-l">{$trad('Idioma')}</span><span class="row-v">{NOMBRES[$idioma]} <span class="hint-mini">· {$trad('cámbialo en configuración completa')}</span></span></div>
       </div>
     </section>
   </div>
