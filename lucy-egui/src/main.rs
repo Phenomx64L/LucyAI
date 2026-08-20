@@ -3998,6 +3998,10 @@ struct App {
     /// en cada frame daría deltas de 16 ms — ruido, no caudal.
     net: lucy_core::system::NetRate,
     procs: Vec<lucy_core::system::ProcInfo>,
+    /// La sonda de procesos, EN SU PROPIO HILO. Ver `ProcProbe`: recorrer la
+    /// tabla de procesos cuesta 19 ms medidos y un frame son 16,7, así que
+    /// hacerlo aquí perdía un frame entero cada tres segundos.
+    proc_probe: lucy_core::system::ProcProbe,
     proc_by_cpu: bool,
     services: Vec<lucy_core::system::DownService>,
     /// Cadencias separadas por COSTE, no por gusto: los medidores van a 1 s,
@@ -4362,6 +4366,7 @@ impl App {
             sys_last: Instant::now(),
             net: lucy_core::system::NetRate::default(),
             procs: Vec::new(),
+            proc_probe: lucy_core::system::ProcProbe::new(),
             proc_by_cpu: false,
             services: Vec::new(),
             // Instantes en el pasado para que las tres cadencias disparen en el
@@ -4952,6 +4957,11 @@ impl eframe::App for App {
         // tiene que poder cerrarse igual, o el botón se quedaría girando para
         // siempre al volver.
         self.pump_services();
+        // Igual que los servicios: fuera del `if` de la vista, para que una
+        // sonda lanzada justo antes de cambiar de pantalla pueda cerrarse.
+        if let Some(v) = self.proc_probe.recoger() {
+            self.procs = v;
+        }
         // Fuera de la vista de Terminal IA también: un comando aprobado tiene
         // que poder terminar aunque el operador se vaya al Dashboard a mirar
         // otra cosa mientras corre.
@@ -12006,9 +12016,20 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             push_hist(&mut self.cpu_hist, s.cpu_pct);
             push_hist(&mut self.ram_hist, mem_pct(&s));
         }
+        // ── procesos: TAMBIÉN EN OTRO HILO ───────────────────────────────────
+        //
+        // Recorrer la tabla de procesos cuesta 19,4 ms medidos y un frame son
+        // 16,7: hacerlo aquí perdía un frame entero cada tres segundos, de forma
+        // regular y perfectamente visible. Es el mismo fallo que ya se había
+        // arreglado para los servicios, en la línea de abajo, y que a los
+        // procesos no se le había aplicado.
+        //
+        // El sello se pone AL PEDIR y no al recibir: si no, mientras la sonda
+        // trabaja el plazo seguiría vencido y se pediría otra vez en cada frame.
         if force || self.procs_last.elapsed() >= Duration::from_secs(3) {
-            self.procs = self.sys.top_processes(8, self.proc_by_cpu);
-            self.procs_last = Instant::now();
+            if self.proc_probe.pedir(8, self.proc_by_cpu) {
+                self.procs_last = Instant::now();
+            }
         }
 
         // ── servicios: EN OTRO HILO ──────────────────────────────────────────
@@ -14053,7 +14074,11 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 if let Some(by_cpu) = cambiar {
                     if by_cpu != self.proc_by_cpu {
                         self.proc_by_cpu = by_cpu;
-                        self.procs = self.sys.top_processes(8, by_cpu);
+                        // Se PIDE, no se espera: el sondeo tarda 19 ms y hacerlo
+                        // aquí congelaba la ventana justo en el clic, que es el
+                        // momento en que peor se lleva.
+                        self.proc_probe.pedir(8, by_cpu);
+                        self.procs_last = Instant::now();
                     }
                 }
                 ui.add_space(GAP);
