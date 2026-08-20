@@ -181,6 +181,27 @@ pub fn trf(plantilla: &'static str, pares: &[(&str, &str)]) -> String {
     s
 }
 
+/// El nombre de un modelo, con su descripción traducida y su marca intacta.
+///
+/// EL CATÁLOGO GUARDA `Nombre — Descripción` EN UNA SOLA CADENA: «Gemini 3.5
+/// Flash — Rendimiento de frontera sostenido». Meter eso entero en la tabla
+/// significaría cuarenta y ocho entradas cuya mitad izquierda es una marca
+/// registrada que un traductor puede tocar sin querer — y «Gemini 3.5 Blitz» en
+/// el selector de modelo es un fallo que nadie sabría explicar.
+///
+/// Se parte por la raya y se traduce SOLO LA DERECHA. Treinta y seis
+/// descripciones en vez de cuarenta y ocho nombres completos, y la parte que
+/// identifica el modelo no pasa por ninguna traducción.
+///
+/// Sin raya —los ids de Ollama, que son `mistral:latest` a secas— se devuelve
+/// tal cual: no hay descripción que traducir.
+pub fn modelo(nombre: &str) -> String {
+    match nombre.split_once(" — ") {
+        Some((marca, desc)) => format!("{marca} — {}", tr(desc)),
+        None => nombre.to_string(),
+    }
+}
+
 /// Los nombres de los huecos de una plantilla, en orden de aparición.
 ///
 /// Público porque lo usa el test que compara plantilla y traducciones, y ese
@@ -250,6 +271,13 @@ pub const FRASES: &[Frase] = &[
         "(keine Änderungen)",
     ),
     f!("1 volumen", "1 volume", "1 volume", "1 volume", "1 Laufwerk"),
+    f!(
+        "1M de contexto, menor costo",
+        "1M context, lower cost",
+        "1M de contexto, menor custo",
+        "1M de contexte, coût réduit",
+        "1M Kontext, geringere Kosten",
+    ),
     f!("AVISOS", "WARNINGS", "AVISOS", "AVERTISSEMENTS", "WARNUNGEN"),
     f!(
         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
@@ -277,11 +305,46 @@ pub const FRASES: &[Frase] = &[
         "Datei anhängen — oder zieh eine ins Fenster",
     ),
     f!(
+        "Agéntico y multimodal (más reciente)",
+        "Agentic and multimodal (latest)",
+        "Agêntico e multimodal (mais recente)",
+        "Agentique et multimodal (le plus récent)",
+        "Agentisch und multimodal (neuestes)",
+    ),
+    f!(
         "Ahora mismo resuelve a",
         "Currently resolves to",
         "Agora resolve para",
         "Actuellement résolu en",
         "Aktuell aufgelöst als",
+    ),
+    f!(
+        "Alto (2× el costo de Opus 5)",
+        "High (2× Opus 5 cost)",
+        "Alto (2× o custo do Opus 5)",
+        "Élevé (2× le coût d'Opus 5)",
+        "Hoch (2× Kosten von Opus 5)",
+    ),
+    f!(
+        "Alto (generación anterior)",
+        "High (previous generation)",
+        "Alto (geração anterior)",
+        "Élevé (génération précédente)",
+        "Hoch (Vorgängergeneration)",
+    ),
+    f!(
+        "Alto (predeterminado)",
+        "High (default)",
+        "Alto (predefinido)",
+        "Élevé (par défaut)",
+        "Hoch (Standard)",
+    ),
+    f!(
+        "Alto rendimiento",
+        "High performance",
+        "Alto desempenho",
+        "Hautes performances",
+        "Hohe Leistung",
     ),
     f!("Animaciones", "Animations", "Animações", "Animations", "Animationen"),
     f!("Apagadas", "Off", "Desligadas", "Désactivées", "Aus"),
@@ -321,6 +384,13 @@ pub const FRASES: &[Frase] = &[
         "Ajouter une machine",
         "Rechner hinzufügen",
     ),
+    f!(
+        "Bajo (sensible a latencia)",
+        "Low (latency-sensitive)",
+        "Baixo (sensível à latência)",
+        "Faible (sensible à la latence)",
+        "Niedrig (latenzsensibel)",
+    ),
     f!("Base de datos", "Database", "Base de dados", "Base de données", "Datenbank"),
     f!("Buscando…", "Searching…", "A procurar…", "Recherche…", "Suche läuft…"),
     f!(
@@ -348,6 +418,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Cancelar", "Cancel", "Cancelar", "Annuler", "Abbrechen"),
     f!("Cargando…", "Loading…", "A carregar…", "Chargement…", "Lädt…"),
+    f!(
+        "Cargas sensibles al costo",
+        "Cost-sensitive workloads",
+        "Cargas sensíveis ao custo",
+        "Charges sensibles au coût",
+        "Kostensensible Workloads",
+    ),
     f!(
         "Cerrar terminal",
         "Close terminal",
@@ -445,6 +522,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Crítico", "Critical", "Crítico", "Critique", "Kritisch"),
     f!(
+        "Código y Razonamiento",
+        "Code and Reasoning",
+        "Código e Raciocínio",
+        "Code et raisonnement",
+        "Code und Reasoning",
+    ),
+    f!(
         "Cómo está el equipo ahora mismo: procesador, memoria, disco, red, qué servicios \
          automáticos están caídos y qué procesos mandan. Se refresca solo. Con el selector \
          de al lado miras este equipo o cualquiera de los que tengas dados de alta.",
@@ -520,6 +604,14 @@ pub const FRASES: &[Frase] = &[
         "{n} CIS-Prüfungen laufen auf {equipo}…",
     ),
     f!("Ejecutar", "Run", "Executar", "Exécuter", "Ausführen"),
+    f!("El más barato", "Cheapest", "O mais barato", "Le moins cher", "Am günstigsten"),
+    f!(
+        "El razonamiento del agente — pensar · actuar · observar — se registra aquí.",
+        "The agent's reasoning — think · act · observe — is logged here.",
+        "O raciocínio do agente — pensar · agir · observar — fica registado aqui.",
+        "Le raisonnement de l'agent — penser · agir · observer — est enregistré ici.",
+        "Das Reasoning des Agenten — denken · handeln · beobachten — wird hier protokolliert.",
+    ),
     f!(
         "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
         "Pick a skill's folder, or one holding several — a downloaded repository works as is",
@@ -530,6 +622,13 @@ pub const FRASES: &[Frase] = &[
     f!("Eliminar", "Delete", "Eliminar", "Supprimer", "Löschen"),
     f!("Enviar", "Send", "Enviar", "Envoyer", "Senden"),
     f!("Equilibrado", "Balanced", "Equilibrado", "Équilibré", "Ausgewogen"),
+    f!(
+        "Equilibrio inteligencia/costo",
+        "Intelligence/cost balance",
+        "Equilíbrio inteligência/custo",
+        "Équilibre intelligence/coût",
+        "Balance Intelligenz/Kosten",
+    ),
     f!("Equipo", "Machine", "Máquina", "Machine", "Rechner"),
     f!("Equipos", "Machines", "Máquinas", "Machines", "Rechner"),
     f!(
@@ -566,6 +665,20 @@ pub const FRASES: &[Frase] = &[
         "Schreib einen Befehl…   ·   Shift+Enter = Zeilenumbruch",
     ),
     f!(
+        "Esfuerzo Alto (razonamiento profundo)",
+        "High Effort (deep reasoning)",
+        "Esforço Alto (raciocínio profundo)",
+        "Effort élevé (raisonnement profond)",
+        "Hoher Aufwand (tiefes Reasoning)",
+    ),
+    f!(
+        "Esfuerzo Medio (balanceado)",
+        "Medium Effort (balanced)",
+        "Esforço Médio (equilibrado)",
+        "Effort moyen (équilibré)",
+        "Mittlerer Aufwand (ausgewogen)",
+    ),
+    f!(
         "Esta foto pasa a ser la nueva línea base",
         "This snapshot becomes the new baseline",
         "Esta foto passa a ser a nova linha de base",
@@ -586,6 +699,34 @@ pub const FRASES: &[Frase] = &[
         "Exportar o run (copia para a área de transferência)",
         "Exporter le run (copie dans le presse-papiers)",
         "Run exportieren (in die Zwischenablage)",
+    ),
+    f!(
+        "Extra Alto (2× el costo de Opus 5)",
+        "Extra High (2× Opus 5 cost)",
+        "Extra Alto (2× o custo do Opus 5)",
+        "Très élevé (2× le coût d'Opus 5)",
+        "Extra Hoch (2× Kosten von Opus 5)",
+    ),
+    f!(
+        "Extra Alto (coding/agéntico)",
+        "Extra High (coding/agentic)",
+        "Extra Alto (código/agêntico)",
+        "Très élevé (code/agentique)",
+        "Extra Hoch (Coding/agentisch)",
+    ),
+    f!(
+        "Extra Alto (generación anterior)",
+        "Extra High (previous generation)",
+        "Extra Alto (geração anterior)",
+        "Très élevé (génération précédente)",
+        "Extra Hoch (Vorgängergeneration)",
+    ),
+    f!(
+        "Extra Alto (tareas más duras)",
+        "Extra High (hardest tasks)",
+        "Extra Alto (tarefas mais duras)",
+        "Très élevé (tâches les plus dures)",
+        "Extra Hoch (härteste Aufgaben)",
     ),
     f!(
         "Extrayendo el texto del PDF…",
@@ -632,7 +773,21 @@ pub const FRASES: &[Frase] = &[
         "Filtrer par cette étiquette",
         "Nach diesem Tag filtern",
     ),
+    f!(
+        "Frontera (trabajo profesional complejo)",
+        "Frontier (complex professional work)",
+        "Fronteira (trabalho profissional complexo)",
+        "Frontière (travail professionnel complexe)",
+        "Frontier (komplexe Profi-Arbeit)",
+    ),
     f!("Fundir", "Merge", "Fundir", "Fusionner", "Zusammenführen"),
+    f!(
+        "Google vía NVIDIA",
+        "Google via NVIDIA",
+        "Google via NVIDIA",
+        "Google via NVIDIA",
+        "Google über NVIDIA",
+    ),
     f!("Guardado", "Saved", "Guardado", "Enregistré", "Gespeichert"),
     f!("Guardar", "Save", "Guardar", "Enregistrer", "Speichern"),
     f!(
@@ -690,6 +845,20 @@ pub const FRASES: &[Frase] = &[
         "Das Gedächtnis auf der Festplatte",
     ),
     f!(
+        "La nube más barata",
+        "Cheapest cloud",
+        "A nuvem mais barata",
+        "Le cloud le moins cher",
+        "Die günstigste Cloud",
+    ),
+    f!(
+        "La salida de cada comando aparece aquí en vivo mientras el agente trabaja.",
+        "Each command's output appears here live while the agent works.",
+        "A saída de cada comando aparece aqui em direto enquanto o agente trabalha.",
+        "La sortie de chaque commande s'affiche ici en direct pendant que l'agent travaille.",
+        "Die Ausgabe jedes Befehls erscheint hier live, während der Agent arbeitet.",
+    ),
+    f!(
         "Leer la cola de este fichero",
         "Tail this file",
         "Ler o fim deste ficheiro",
@@ -703,6 +872,7 @@ pub const FRASES: &[Frase] = &[
         "Lire la fin du fichier",
         "Das Ende der Datei lesen",
     ),
+    f!("Legado", "Legacy", "Legado", "Hérité", "Legacy"),
     f!("Limpiar", "Clear", "Limpar", "Effacer", "Leeren"),
     f!(
         "Limpiar el workspace",
@@ -725,6 +895,13 @@ pub const FRASES: &[Frase] = &[
         "Pronto a operar em {equipo}",
         "Prêt à intervenir sur {equipo}",
         "Einsatzbereit auf {equipo}",
+    ),
+    f!(
+        "Llama más Reciente",
+        "Latest Llama",
+        "Llama mais Recente",
+        "Llama le plus récent",
+        "Neuestes Llama",
     ),
     f!(
         "Lo ingerido alimenta el recuerdo y a pdf_search. Los secretos se redactan al entrar.",
@@ -775,11 +952,25 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Log", "Log", "Log", "Journal", "Log"),
     f!(
+        "Los archivos que Lucy edita o escribe aparecen aquí con su diff.",
+        "Files Lucy edits or writes appear here with their diff.",
+        "Os ficheiros que a Lucy edita ou escreve aparecem aqui com o respetivo diff.",
+        "Les fichiers que Lucy modifie ou écrit apparaissent ici avec leur diff.",
+        "Dateien, die Lucy bearbeitet oder schreibt, erscheinen hier mit Diff.",
+    ),
+    f!(
         "Los dos trabajos corren solos por vencimiento — también si el programa estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
         "Both jobs run on their own when due — even if the program was closed at the time. This is for when you don't want to wait.",
         "Os dois trabalhos correm sozinhos por vencimento — mesmo que o programa estivesse fechado na altura. Isto é para não esperar pelo prazo.",
         "Les deux tâches se lancent seules à échéance — même si le programme était fermé le moment venu. Ceci sert à ne pas attendre le délai.",
         "Beide Jobs laufen bei Fälligkeit von selbst — auch wenn das Programm zum Termin geschlossen war. Das hier ist, um nicht auf die Frist zu warten.",
+    ),
+    f!(
+        "Lucy desglosa la tarea en pasos y los va marcando conforme avanza.",
+        "Lucy breaks the task into steps and checks them off as work progresses.",
+        "A Lucy divide a tarefa em passos e vai marcando-os à medida que avança.",
+        "Lucy découpe la tâche en étapes et les coche au fur et à mesure.",
+        "Lucy zerlegt die Aufgabe in Schritte und hakt sie beim Vorankommen ab.",
     ),
     f!(
         "Lucy todavía no ha apuntado nada sobre ti. Lo hace sola cuando le cuentas algo que le servirá otro día.",
@@ -796,6 +987,34 @@ pub const FRASES: &[Frase] = &[
         "Baseline: {etiqueta} · {cuando}",
     ),
     f!("Mantenimiento", "Maintenance", "Manutenção", "Maintenance", "Wartung"),
+    f!(
+        "Max (problemas frontera)",
+        "Max (frontier problems)",
+        "Máx (problemas de fronteira)",
+        "Max (problèmes frontière)",
+        "Max (Frontier-Probleme)",
+    ),
+    f!(
+        "Medio (ahorro de costo)",
+        "Medium (cost saving)",
+        "Médio (poupança de custo)",
+        "Moyen (économie de coût)",
+        "Mittel (Kostenersparnis)",
+    ),
+    f!(
+        "Medio (generación anterior)",
+        "Medium (previous generation)",
+        "Médio (geração anterior)",
+        "Moyen (génération précédente)",
+        "Mittel (Vorgängergeneration)",
+    ),
+    f!(
+        "Medio (sensible al costo)",
+        "Medium (cost-sensitive)",
+        "Médio (sensível ao custo)",
+        "Moyen (sensible au coût)",
+        "Mittel (kostensensibel)",
+    ),
     f!("Memoria", "Memory", "Memória", "Mémoire", "Gedächtnis"),
     f!("Memorias", "Memories", "Memórias", "Mémoires", "Erinnerungen"),
     f!("Modelo activo", "Active model", "Modelo ativo", "Modèle actif", "Aktives Modell"),
@@ -813,6 +1032,22 @@ pub const FRASES: &[Frase] = &[
         "Modo privacidade: nada sai desta máquina. Só modelos locais do Ollama. Desliga-se com /privacy.",
         "Mode confidentialité : rien ne sort de cette machine. Uniquement des modèles locaux d'Ollama. Se désactive avec /privacy.",
         "Datenschutzmodus: Nichts verlässt diesen Rechner. Nur lokale Ollama-Modelle. Aus mit /privacy.",
+    ),
+    f!(
+        "Máxima Inteligencia",
+        "Maximum Intelligence",
+        "Inteligência Máxima",
+        "Intelligence maximale",
+        "Maximale Intelligenz",
+    ),
+    f!("NVIDIA Flagship", "NVIDIA Flagship", "NVIDIA de Topo", "NVIDIA Flagship", "NVIDIA Flagship"),
+    f!("NVIDIA Máximo", "NVIDIA Max", "NVIDIA Máximo", "NVIDIA Maximum", "NVIDIA Maximum"),
+    f!(
+        "Nada ejecutado aún",
+        "Nothing run yet",
+        "Ainda nada executado",
+        "Encore rien d'exécuté",
+        "Noch nichts ausgeführt",
     ),
     f!(
         "Nada que copiar todavía",
@@ -987,6 +1222,13 @@ pub const FRASES: &[Frase] = &[
         "Demande le catalogue de modèles — ne coûte rien",
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
+    f!(
+        "Potencia Equilibrada",
+        "Balanced Power",
+        "Potência Equilibrada",
+        "Puissance équilibrée",
+        "Ausgewogene Leistung",
+    ),
     f!("Principios", "Principles", "Princípios", "Principes", "Prinzipien"),
     f!("Privilegios", "Privileges", "Privilégios", "Privilèges", "Rechte"),
     f!("Probando…", "Testing…", "A testar…", "Test…", "Test läuft…"),
@@ -1054,6 +1296,20 @@ pub const FRASES: &[Frase] = &[
     f!("RAM alta ({pct}%)", "High RAM ({pct}%)", "RAM alta ({pct}%)", "RAM élevée ({pct}%)", "Hohe RAM-Auslastung ({pct}%)"),
     f!("Razonamiento", "Reasoning", "Raciocínio", "Raisonnement", "Denkprozess"),
     f!(
+        "Razonamiento insignia",
+        "Flagship reasoning",
+        "Raciocínio de topo",
+        "Raisonnement phare",
+        "Flaggschiff-Reasoning",
+    ),
+    f!(
+        "Razonamiento más fuerte",
+        "Strongest reasoning",
+        "Raciocínio mais forte",
+        "Raisonnement le plus fort",
+        "Stärkstes Reasoning",
+    ),
+    f!(
         "Reanudar la actualización",
         "Resume refresh",
         "Retomar a atualização",
@@ -1072,6 +1328,27 @@ pub const FRASES: &[Frase] = &[
     f!("Rehacer", "Redo", "Refazer", "Rétablir", "Wiederholen"),
     f!("Rehaciendo…", "Rebuilding…", "A refazer…", "Reconstruction…", "Neuaufbau…"),
     f!("Reintentar", "Retry", "Tentar de novo", "Réessayer", "Wiederholen"),
+    f!(
+        "Rendimiento de frontera sostenido",
+        "Sustained frontier performance",
+        "Desempenho de fronteira sustentado",
+        "Performance de frontière soutenue",
+        "Dauerhafte Frontier-Leistung",
+    ),
+    f!(
+        "Rápido y Eficiente",
+        "Fast and Efficient",
+        "Rápido e Eficiente",
+        "Rapide et efficace",
+        "Schnell und effizient",
+    ),
+    f!(
+        "Rápido y Ligero",
+        "Fast and Light",
+        "Rápido e Leve",
+        "Rapide et léger",
+        "Schnell und leicht",
+    ),
     f!(
         "Salió con código de error",
         "Exited with an error code",
@@ -1102,6 +1379,7 @@ pub const FRASES: &[Frase] = &[
         "Serveur / Shell",
         "Server / Shell",
     ),
+    f!("Sin artefactos", "No artifacts", "Sem artefactos", "Aucun artefact", "Keine Artefakte"),
     f!("Sin conexión", "Disconnected", "Sem ligação", "Déconnecté", "Nicht verbunden"),
     f!(
         "Sin datos todavía",
@@ -1139,6 +1417,7 @@ pub const FRASES: &[Frase] = &[
         "Keine Baseline für diesen Rechner.",
     ),
     f!("Sin medir", "Unmeasured", "Sem medir", "Non mesurés", "Ungemessen"),
+    f!("Sin plan todavía", "No plan yet", "Ainda sem plano", "Pas encore de plan", "Noch kein Plan"),
     f!(
         "Sin privilegios y con UAC desactivado: hay que abrir Lucy con una cuenta de \
          administrador.",
@@ -1194,6 +1473,7 @@ pub const FRASES: &[Frase] = &[
         "Plafond d'étapes enchaînées",
         "Limit für Schritte in Folge",
     ),
+    f!("Trace vacío", "Empty trace", "Trace vazio", "Trace vide", "Trace leer"),
     f!(
         "Trozos sin vector",
         "Chunks with no vector",
@@ -1367,6 +1647,13 @@ pub const FRASES: &[Frase] = &[
         "in der Produktion warnt sie vor dem Neustart eines Dienstes",
     ),
     f!("escaneando… {s}s", "scanning… {s}s", "a analisar… {s}s", "analyse… {s}s", "scanne… {s}s"),
+    f!(
+        "escribe owner/model",
+        "type owner/model",
+        "escreve owner/model",
+        "écris owner/model",
+        "gib owner/model ein",
+    ),
     f!("escrito", "written", "escrito", "écrit", "geschrieben"),
     f!(
         "escritura progresiva y transiciones · LUCY_NO_MOTION=1 las apaga al arrancar",
@@ -2132,6 +2419,53 @@ mod tests {
         // Y en alemán el hueco va en otro sitio, que es el motivo de todo esto.
         assert_eq!(trf("hace {n} días", &[("n", "3")]), "vor 3 Tagen");
         set(Lang::Es);
+    }
+
+    #[test]
+    fn la_marca_de_un_modelo_no_pasa_por_la_traduccion() {
+        // «Gemini 3.5 Blitz» en el selector sería un fallo que nadie sabría
+        // explicar. La mitad izquierda identifica el modelo y no la toca nadie;
+        // solo se traduce lo que va detrás de la raya.
+        let _g = cerrojo();
+        set(Lang::De);
+        let s = modelo("Gemini 3.5 Flash — Rendimiento de frontera sostenido");
+        assert!(s.starts_with("Gemini 3.5 Flash — "), "la marca se ha tocado: {s}");
+        assert!(!s.contains("Rendimiento"), "la descripción no se ha traducido: {s}");
+        // Sin raya —los ids de Ollama— se devuelve tal cual.
+        assert_eq!(modelo("mistral:latest"), "mistral:latest");
+        set(Lang::Es);
+    }
+
+    #[test]
+    fn todas_las_descripciones_del_catalogo_estan_traducidas() {
+        // Recorriendo el catálogo DE VERDAD: un modelo nuevo con descripción
+        // sin traducir rompe este test en vez de aparecer en una captura.
+        let mut faltan: Vec<&str> = Vec::new();
+        for g in lucy_core::models::GROUPS {
+            for o in g.options {
+                if let Some((_, desc)) = o.name.split_once(" — ") {
+                    // LOS COMANDOS NO SE TRADUCEN. La entrada de Ollama lleva
+                    // `ollama pull <model>` como «descripción» porque es lo que
+                    // hay que teclear para instalarlo: traducirlo daría una
+                    // orden que no existe, y quien la copie se encontrará un
+                    // «comando no reconocido» sin entender por qué.
+                    if desc.starts_with("ollama ") {
+                        continue;
+                    }
+                    if busca(desc).is_none() {
+                        faltan.push(desc);
+                    }
+                }
+            }
+        }
+        faltan.sort();
+        faltan.dedup();
+        assert!(
+            faltan.is_empty(),
+            "{} descripciones del catálogo de modelos salen en español:\n{}",
+            faltan.len(),
+            faltan.iter().take(8).map(|s| format!("  - {s}")).collect::<Vec<_>>().join("\n")
+        );
     }
 
     #[test]

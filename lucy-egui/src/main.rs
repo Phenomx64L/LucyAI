@@ -2951,14 +2951,14 @@ fn ws_empty(ui: &mut egui::Ui, tab: WsTab) {
             });
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new(title)
+            egui::RichText::new(i18n::tr(title))
                 .size(theme::FS_FOOTNOTE)
                 .color(theme::txt2()),
         );
         ui.add_space(6.0);
         ui.set_max_width(230.0);
         ui.label(
-            egui::RichText::new(hint)
+            egui::RichText::new(i18n::tr(hint))
                 .size(theme::FS_CAPTION)
                 .color(theme::txt3()),
         );
@@ -5538,8 +5538,9 @@ impl App {
     /// uno concreto es recorrer una lista con la rueda del ratón.
     fn model_picker(&mut self, ui: &mut egui::Ui, max_w: f32) {
         let icon = lucy_core::models::icon(&self.chat_model);
-        let label = lucy_core::models::describe(&self.chat_model);
-        let pill = model_pill(ui, icon, label, max_w);
+        // La descripcion traducida, la marca intacta. Ver i18n::modelo.
+        let label = i18n::modelo(lucy_core::models::describe(&self.chat_model));
+        let pill = model_pill(ui, icon, &label, max_w);
         let popup_id = ui.make_persistent_id("model-menu");
         if pill.clicked() {
             self.model_query.clear();
@@ -5589,7 +5590,10 @@ impl App {
                             });
                             ui.add_space(2.0);
                             for o in opts {
-                                if model_option(ui, w, o.icon, o.name, o.id == self.chat_model) {
+                                // Cada opcion del desplegable, tambien: es
+                                // donde mas se leen las descripciones.
+                                let etiqueta = i18n::modelo(o.name);
+                                if model_option(ui, w, o.icon, &etiqueta, o.id == self.chat_model) {
                                     elegido = Some(o.id.to_string());
                                 }
                             }
@@ -8907,7 +8911,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             ui.spacing_mut().item_spacing.x = 2.0;
             for (i, t) in WsTab::ALL.iter().enumerate() {
                 let on = self.ws_tab == *t;
-                let mut label = t.label().to_string();
+                let mut label = i18n::tr(t.label()).to_string();
                 if counts[i] > 0 {
                     label.push_str(&format!("  {}", counts[i]));
                 }
@@ -12165,7 +12169,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let mut enrutado = self.enrutado;
         let gastado = self.gasto_sesion();
         let modelo = self.chat_model.clone();
-        let desc = lucy_core::models::describe(&modelo).to_string();
+        let desc = i18n::modelo(lucy_core::models::describe(&modelo));
         panel(
             ui,
             col,
