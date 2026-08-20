@@ -3915,6 +3915,11 @@ mod tests {
         // Es un CEDAZO, no una prueba. Caza el caso normal —una llamada nueva
         // escrita sin envolver— y ha cazado bastantes. Lo que no hace es
         // sustituir a abrir la aplicacion en otro idioma y mirarla.
+        //
+        // CERO, Y AQUI SE QUEDA. Este tope es distinto del de `la_cobertura`:
+        // aquel mide DEUDA —lo que falta por traducir— y baja cuando se
+        // traduce; este mide un ERROR —un sitio que pinta sin envolver— y no
+        // hay ninguno que este bien. Subirlo no documenta nada: apaga el test.
         const TOPE: usize = 0;
         assert!(
             crudos.len() <= TOPE,
