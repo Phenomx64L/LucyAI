@@ -44,6 +44,55 @@ mod tests {
     }
 
     #[test]
+    fn el_sondeo_de_procesos_conserva_el_delta_entre_llamadas() {
+        // LO QUE ESTE HILO EXISTE PARA NO ROMPER. El % de CPU de un proceso es
+        // la diferencia entre dos refrescos. Si el sondeo creara un `System`
+        // nuevo cada vez, la única lectura que habría sería la primera y saldría
+        // a cero para todos: la tabla enseñaría ocho procesos al 0 % ordenados
+        // por CPU, que es una tabla que parece rota sin estarlo.
+        let mut p = ProcProbe::new();
+        assert!(p.pedir(8, true), "el primer sondeo tiene que lanzarse");
+        assert!(!p.pedir(8, true), "con uno en vuelo no se encola otro");
+
+        let primero = espera(&mut p);
+        assert_eq!(primero.len().min(8), primero.len(), "no devuelve más de los pedidos");
+        assert!(!p.ocupado(), "al recoger se cierra el turno");
+
+        // El segundo sondeo YA tiene contra qué medir. En un equipo parado puede
+        // salir todo a cero de verdad, así que lo que se comprueba es que la
+        // sonda siga viva y conteste, no un número concreto.
+        assert!(p.pedir(8, true));
+        let segundo = espera(&mut p);
+        assert!(!segundo.is_empty(), "la segunda vuelta no devolvió nada");
+    }
+
+    fn espera(p: &mut ProcProbe) -> Vec<ProcInfo> {
+        for _ in 0..200 {
+            if let Some(v) = p.recoger() {
+                return v;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("la sonda de procesos no contestó en cinco segundos");
+    }
+
+    #[test]
+    fn los_datos_fijos_del_equipo_se_leen_una_vez_y_no_cambian() {
+        // `System::name()` y `kernel_version()` van al registro de Windows en
+        // cada llamada, y `snapshot()` las pedía cada vez — una vez por frame en
+        // el Dashboard. Ahora salen de `fijos`, así que hay que comprobar que
+        // siguen llegando llenas y que dos snapshots dicen lo mismo.
+        let m = SysMonitor::new();
+        let a = m.snapshot();
+        let b = m.snapshot();
+        assert!(!a.host.is_empty(), "el nombre del equipo no puede venir vacío");
+        assert_eq!(a.host, b.host);
+        assert_eq!(a.os, b.os);
+        assert_eq!(a.kernel, b.kernel);
+        assert_eq!(a.cpu_brand, b.cpu_brand);
+    }
+
+    #[test]
     fn a_first_reading_reports_no_traffic_rather_than_a_spike() {
         // `total_received()` es acumulado desde el arranque del equipo. Sin
         // lectura previa no hay tasa, y devolver el acumulado como si fuera
@@ -195,6 +244,26 @@ pub struct SysMonitor {
     /// (recibido, enviado) acumulados en la última lectura, y cuándo fue.
     /// `None` hasta la primera: ver `NetRate`.
     last_net: Option<(u64, u64, std::time::Instant)>,
+    /// Lo que NO CAMBIA mientras el proceso vive: nombre del equipo, sistema,
+    /// versión del núcleo y modelo de CPU.
+    ///
+    /// Se lee una vez, en `new`. `System::name()` y `kernel_version()` van al
+    /// registro de Windows en CADA llamada, y `snapshot()` las pedía las tres
+    /// cada vez que se construía un snapshot — que en el Dashboard era una vez
+    /// por frame. Medido: 35,7 µs por snapshot, de los que esto es la mayor
+    /// parte. No era un problema de rendimiento, pero es una consulta al
+    /// registro sesenta veces por segundo para leer un dato que se decidió al
+    /// arrancar el equipo.
+    fijos: Fijos,
+}
+
+/// Los datos del equipo que no cambian mientras el proceso vive.
+#[derive(Debug, Clone, Default)]
+struct Fijos {
+    host: String,
+    os: String,
+    kernel: String,
+    cpu_brand: String,
 }
 
 impl Default for SysMonitor {
@@ -207,11 +276,22 @@ impl SysMonitor {
     pub fn new() -> Self {
         let mut sys = System::new_all();
         sys.refresh_all();
+        let fijos = Fijos {
+            host: System::host_name().unwrap_or_default(),
+            os: System::name().unwrap_or_default(),
+            kernel: System::kernel_version().unwrap_or_default(),
+            cpu_brand: sys
+                .cpus()
+                .first()
+                .map(|c| c.brand().trim().to_string())
+                .unwrap_or_default(),
+        };
         Self {
             sys,
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
             last_net: None,
+            fijos,
         }
     }
 
@@ -272,38 +352,20 @@ impl SysMonitor {
     /// de procesos entera. Por eso está aparte del `refresh()` de 1 s — la tabla
     /// del dashboard puede actualizarse más despacio que los medidores sin que
     /// se note, y lo contrario cuesta batería todo el día.
+    ///
+    /// SE MIDIÓ: 19,4 ms. Un frame son 16,7 ms, así que llamar a esto desde el
+    /// hilo de interfaz pierde un frame entero cada vez. Para el Dashboard está
+    /// `ProcProbe`, que hace esto mismo en su propio hilo; esto se queda para
+    /// quien pueda permitirse esperar.
     pub fn top_processes(&mut self, n: usize, by_cpu: bool) -> Vec<ProcInfo> {
         self.sys.refresh_processes();
-        let mut procs: Vec<ProcInfo> = self
-            .sys
-            .processes()
-            .iter()
-            .map(|(pid, p)| ProcInfo {
-                name: p.name().to_string(),
-                pid: pid.as_u32(),
-                cpu_pct: p.cpu_usage(),
-                mem_bytes: p.memory(),
-            })
-            .collect();
-        if by_cpu {
-            procs.sort_by(|a, b| {
-                b.cpu_pct.partial_cmp(&a.cpu_pct).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        } else {
-            procs.sort_by(|a, b| b.mem_bytes.cmp(&a.mem_bytes));
-        }
-        procs.truncate(n);
-        procs
+        top_de(&self.sys, n, by_cpu)
     }
 
+    /// La foto de ahora mismo. Barata a propósito: lo que se lee del sistema en
+    /// cada llamada es solo lo que cambia — el resto sale de `fijos`.
     pub fn snapshot(&self) -> SysSnapshot {
         let per_core = self.sys.cpus().iter().map(|c| c.cpu_usage()).collect();
-        let cpu_brand = self
-            .sys
-            .cpus()
-            .first()
-            .map(|c| c.brand().trim().to_string())
-            .unwrap_or_default();
         let disks = self
             .disks
             .iter()
@@ -315,10 +377,10 @@ impl SysMonitor {
             })
             .collect();
         SysSnapshot {
-            host: System::host_name().unwrap_or_default(),
-            os: System::name().unwrap_or_default(),
-            kernel: System::kernel_version().unwrap_or_default(),
-            cpu_brand,
+            host: self.fijos.host.clone(),
+            os: self.fijos.os.clone(),
+            kernel: self.fijos.kernel.clone(),
+            cpu_brand: self.fijos.cpu_brand.clone(),
             cpu_pct: self.sys.global_cpu_info().cpu_usage(),
             per_core,
             mem_used: self.sys.used_memory(),
@@ -329,6 +391,104 @@ impl SysMonitor {
             cores: self.sys.cpus().len(),
             disks,
         }
+    }
+}
+
+/// Los `n` que más consumen de una tabla de procesos ya refrescada.
+fn top_de(sys: &System, n: usize, by_cpu: bool) -> Vec<ProcInfo> {
+    let mut procs: Vec<ProcInfo> = sys
+        .processes()
+        .iter()
+        .map(|(pid, p)| ProcInfo {
+            name: p.name().to_string(),
+            pid: pid.as_u32(),
+            cpu_pct: p.cpu_usage(),
+            mem_bytes: p.memory(),
+        })
+        .collect();
+    if by_cpu {
+        procs.sort_by(|a, b| b.cpu_pct.partial_cmp(&a.cpu_pct).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        procs.sort_by(|a, b| b.mem_bytes.cmp(&a.mem_bytes));
+    }
+    procs.truncate(n);
+    procs
+}
+
+/// La tabla de procesos, sondeada en SU PROPIO HILO.
+///
+/// POR QUÉ UN HILO QUE VIVE Y NO UNO POR SONDEO. El porcentaje de CPU de un
+/// proceso es un DELTA entre dos refrescos: con un `System` recién creado en
+/// cada sondeo, la primera lectura —la única que habría— sale a cero para
+/// todos, y la tabla enseñaría ocho procesos al 0 % ordenados por CPU. Hay que
+/// conservar el estado entre sondeos, y por eso el hilo dura lo que la
+/// aplicación en vez de nacer y morir con cada petición.
+///
+/// Es el mismo patrón que ya tenían los servicios detenidos, y por el mismo
+/// motivo: lanzarlo desde el hilo de interfaz costaba un frame entero.
+pub struct ProcProbe {
+    pedidos: std::sync::mpsc::Sender<(usize, bool)>,
+    llegadas: std::sync::mpsc::Receiver<Vec<ProcInfo>>,
+    en_vuelo: bool,
+}
+
+impl Default for ProcProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProcProbe {
+    pub fn new() -> Self {
+        let (pedidos, rx_ped) = std::sync::mpsc::channel::<(usize, bool)>();
+        let (tx_res, llegadas) = std::sync::mpsc::channel::<Vec<ProcInfo>>();
+        std::thread::spawn(move || {
+            // `new()` a secas y no `new_all()`: aquí solo interesan los procesos,
+            // y `new_all` también lee discos, redes y componentes.
+            let mut sys = System::new();
+            while let Ok((n, by_cpu)) = rx_ped.recv() {
+                sys.refresh_processes();
+                if tx_res.send(top_de(&sys, n, by_cpu)).is_err() {
+                    break; // se cerró el Dashboard; el hilo se va con él
+                }
+            }
+        });
+        Self { pedidos, llegadas, en_vuelo: false }
+    }
+
+    /// Pide un sondeo si no hay otro en curso. Devuelve si lo lanzó.
+    ///
+    /// La guarda importa: sin ella, una vista que pida en cada frame encola
+    /// sondeos de 19 ms más rápido de lo que el hilo los sirve, y la cola crece
+    /// para siempre enseñando datos cada vez más viejos.
+    pub fn pedir(&mut self, n: usize, by_cpu: bool) -> bool {
+        if self.en_vuelo {
+            return false;
+        }
+        self.en_vuelo = self.pedidos.send((n, by_cpu)).is_ok();
+        self.en_vuelo
+    }
+
+    /// Recoge el resultado si ya llegó. No bloquea.
+    pub fn recoger(&mut self) -> Option<Vec<ProcInfo>> {
+        match self.llegadas.try_recv() {
+            Ok(v) => {
+                self.en_vuelo = false;
+                Some(v)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            // El hilo murió. Se levanta la marca para no quedarse esperando a
+            // alguien que ya no está — el botón se quedaría girando para siempre.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.en_vuelo = false;
+                None
+            }
+        }
+    }
+
+    /// Si hay un sondeo en curso. Es lo que anima el indicador.
+    pub fn ocupado(&self) -> bool {
+        self.en_vuelo
     }
 }
 
