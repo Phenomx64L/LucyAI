@@ -3444,6 +3444,28 @@ mod tests {
     }
 
     #[test]
+    fn el_lector_de_literales_entiende_las_dos_clases_de_salto() {
+        // ESTE REPOSITORIO TIENE `core.autocrlf=true`. En cuanto git toca
+        // main.rs las líneas pasan a CRLF, y entonces una barra de continuación
+        // ya no va seguida de `\n` sino de `\r\n`. Los lectores exigían `\n`
+        // pegado, así que en un clon recién hecho en Windows —la máquina de
+        // destino— TODOS los tests de traducción fallaban, y fallaban diciendo
+        // que veintidós frases estaban sin traducir cuando lo estaban.
+        //
+        // Se descubrió por accidente, al restaurar el fichero con `git checkout`
+        // en mitad de otra cosa. Sin este test, el siguiente en clonar el
+        // repositorio lo habría descubierto igual de por casualidad.
+        let esperado = "una frase partida en dos";
+        for (nombre, fuente) in [
+            ("LF", "\"una frase \\\n         partida en dos\""),
+            ("CRLF", "\"una frase \\\r\n         partida en dos\""),
+        ] {
+            let (v, _) = literal_desde(fuente, 0).expect("tiene que leerse");
+            assert_eq!(v, esperado, "con saltos {nombre} el literal se lee mal");
+        }
+    }
+
+    #[test]
     fn la_tabla_esta_ordenada_porque_la_busqueda_es_binaria() {
         // Una frase fuera de orden no falla: hace que ESA no se encuentre nunca
         // y salga en español para siempre, sin que nada lo diga.
@@ -3581,10 +3603,15 @@ mod tests {
                     b'"' => break,
                     b'\\' => {
                         match bytes.get(i + 1) {
-                            // Continuación: se come el salto y la sangría.
-                            Some(b'\n') => {
+                            // Continuación: se come el salto y la sangría. El
+                            // `\r` cuenta como salto — ver la nota de
+                            // `literal_desde` sobre `core.autocrlf`.
+                            Some(b'\n') | Some(b'\r') => {
                                 i += 2;
-                                while matches!(bytes.get(i), Some(b' ') | Some(b'\r')) {
+                                while matches!(
+                                    bytes.get(i),
+                                    Some(b' ') | Some(b'\t') | Some(b'\r') | Some(b'\n')
+                                ) {
                                     i += 1;
                                 }
                                 continue;
@@ -3793,8 +3820,20 @@ mod tests {
                 b'"' => return Some((out, i + 1)),
                 b'\\' => match b.get(i + 1) {
                     // Continuación: se come el salto y la sangría que sigue.
-                    Some(b'\n') => {
+                    //
+                    // `\r` CUENTA COMO SALTO, y no es un detalle de estilo. Este
+                    // repositorio tiene `core.autocrlf=true`, así que en cuanto
+                    // git toca el fichero las líneas pasan a CRLF y la barra de
+                    // continuación deja de ir seguida de `\n`. Sin esta rama,
+                    // TODOS los tests de traducción fallan en un clon recién
+                    // hecho en Windows —que es la máquina de destino— y fallan
+                    // de la peor manera: diciendo que veintidós frases no están
+                    // traducidas cuando lo están.
+                    Some(b'\n') | Some(b'\r') => {
                         i += 2;
+                        if b.get(i) == Some(&b'\n') {
+                            i += 1;
+                        }
                         while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
                             i += 1;
                         }
