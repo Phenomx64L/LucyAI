@@ -22,7 +22,13 @@ export const LANGS: ReadonlyArray<LangSpec> = [
     { code: 'es-ES', label: '🇪🇸 Español (España)',   stt: 'es-ES', tts: 'es-ES' },
     { code: 'en-US', label: '🇺🇸 English (US)',        stt: 'en-US', tts: 'en-US' },
     { code: 'en-GB', label: '🇬🇧 English (UK)',        stt: 'en-GB', tts: 'en-GB' },
-    { code: 'pt-BR', label: '🇧🇷 Português (Brasil)',  stt: 'pt-BR', tts: 'pt-BR' },
+    // PORTUGAL Y NO BRASIL, decidido a propósito. La interfaz traducida usa las
+    // formas europeas —«ecrã», «utilizador», «definições»— en las dos versiones
+    // de Lucy: son unas mil ciento cincuenta frases ya escritas así. La etiqueta
+    // decía «Brasil» y el texto era de Portugal, que es la peor de las dos
+    // opciones. `stt` y `tts` van con ella para que la voz no quede en otro
+    // acento que la interfaz.
+    { code: 'pt-PT', label: '🇵🇹 Português (Portugal)', stt: 'pt-PT', tts: 'pt-PT' },
     { code: 'fr-FR', label: '🇫🇷 Français',           stt: 'fr-FR', tts: 'fr-FR' },
     { code: 'de-DE', label: '🇩🇪 Deutsch',            stt: 'de-DE', tts: 'de-DE' },
     { code: 'it-IT', label: '🇮🇹 Italiano',           stt: 'it-IT', tts: 'it-IT' },

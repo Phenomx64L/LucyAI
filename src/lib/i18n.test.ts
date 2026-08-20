@@ -24,6 +24,9 @@ describe('i18n', () => {
         // uno hacía que el otro se creyera en español.
         expect(normaliza('es-MX')).toBe('es');
         expect(normaliza('en-US')).toBe('en');
+        // `pt-BR` sigue aquí a propósito aunque la lista de idiomas ya diga
+        // `pt-PT`: quien eligió portugués antes del cambio lo tiene guardado
+        // así, y tiene que seguir viendo la interfaz en portugués.
         expect(normaliza('pt-BR')).toBe('pt');
         expect(normaliza(null)).toBe('es');
         expect(normaliza('klingon')).toBe('es');
