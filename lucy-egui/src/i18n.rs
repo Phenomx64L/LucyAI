@@ -270,6 +270,13 @@ pub const FRASES: &[Frase] = &[
         "(aucun changement)",
         "(keine Änderungen)",
     ),
+    f!(
+        "1 comando propuesto — apruébalo en el panel de Plan",
+        "1 command proposed — approve it in the Plan panel",
+        "1 comando proposto — aprova-o no painel de Plano",
+        "1 commande proposée — approuve-la dans le panneau Plan",
+        "1 Befehl vorgeschlagen — gib ihn im Plan-Panel frei",
+    ),
     f!("1 volumen", "1 volume", "1 volume", "1 volume", "1 Laufwerk"),
     f!(
         "1M de contexto, menor costo",
@@ -425,6 +432,7 @@ pub const FRASES: &[Frase] = &[
         "Charges sensibles au coût",
         "Kostensensible Workloads",
     ),
+    f!("Cerrar", "Close", "Fechar", "Fermer", "Schließen"),
     f!(
         "Cerrar terminal",
         "Close terminal",
@@ -578,6 +586,13 @@ pub const FRASES: &[Frase] = &[
     f!("Detallado", "Detailed", "Detalhado", "Détaillé", "Ausführlich"),
     f!("Detener", "Stop", "Parar", "Arrêter", "Stoppen"),
     f!(
+        "Detener el dictado",
+        "Stop dictation",
+        "Parar o ditado",
+        "Arrêter la dictée",
+        "Diktat stoppen",
+    ),
+    f!(
         "Detenido, sin error de arranque",
         "Stopped, no startup error",
         "Parado, sem erro de arranque",
@@ -664,6 +679,7 @@ pub const FRASES: &[Frase] = &[
         "Écris une commande…   ·   Maj+Entrée = saut de ligne",
         "Schreib einen Befehl…   ·   Shift+Enter = Zeilenumbruch",
     ),
+    f!("Escribir", "Write", "Escrever", "Écrire", "Schreiben"),
     f!(
         "Esfuerzo Alto (razonamiento profundo)",
         "High Effort (deep reasoning)",
@@ -994,6 +1010,7 @@ pub const FRASES: &[Frase] = &[
         "Max (problèmes frontière)",
         "Max (Frontier-Probleme)",
     ),
+    f!("Maximizar", "Maximize", "Maximizar", "Agrandir", "Maximieren"),
     f!(
         "Medio (ahorro de costo)",
         "Medium (cost saving)",
@@ -1017,6 +1034,7 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Memoria", "Memory", "Memória", "Mémoire", "Gedächtnis"),
     f!("Memorias", "Memories", "Memórias", "Mémoires", "Erinnerungen"),
+    f!("Minimizar", "Minimize", "Minimizar", "Réduire", "Minimieren"),
     f!("Modelo activo", "Active model", "Modelo ativo", "Modèle actif", "Aktives Modell"),
     f!(
         "Modelo y comportamiento",
@@ -1048,6 +1066,13 @@ pub const FRASES: &[Frase] = &[
         "Ainda nada executado",
         "Encore rien d'exécuté",
         "Noch nichts ausgeführt",
+    ),
+    f!(
+        "Nada ha cambiado desde la línea base.",
+        "Nothing has changed since the baseline.",
+        "Nada mudou desde a linha de base.",
+        "Rien n’a changé depuis la ligne de base.",
+        "Seit der Baseline hat sich nichts geändert.",
     ),
     f!(
         "Nada que copiar todavía",
@@ -1097,6 +1122,13 @@ pub const FRASES: &[Frase] = &[
         "Não há ficheiros de log em {dir}.",
         "Aucun fichier de log dans {dir}.",
         "Keine Log-Dateien in {dir}.",
+    ),
+    f!(
+        "No hay nada visible que copiar",
+        "Nothing visible to copy",
+        "Não há nada visível para copiar",
+        "Rien de visible à copier",
+        "Nichts Sichtbares zum Kopieren",
     ),
     f!("No se pudo", "Not measured", "Não foi possível", "Non mesuré", "Nicht messbar"),
     f!(
@@ -1151,6 +1183,7 @@ pub const FRASES: &[Frase] = &[
         "Masquer le détail",
         "Details ausblenden",
     ),
+    f!("Ollama offline", "Ollama offline", "Ollama offline", "Ollama hors ligne", "Ollama offline"),
     f!(
         "Ollama · modelos locales",
         "Ollama · local models",
@@ -1336,6 +1369,14 @@ pub const FRASES: &[Frase] = &[
         "Dauerhafte Frontier-Leistung",
     ),
     f!(
+        "Respuesta para el comando en curso (p. ej. y) …",
+        "Reply for the running command (e.g. y) …",
+        "Resposta para o comando em curso (p. ex. y) …",
+        "Réponse pour la commande en cours (p. ex. y) …",
+        "Antwort für den laufenden Befehl (z. B. y) …",
+    ),
+    f!("Restaurar", "Restore", "Restaurar", "Restaurer", "Wiederherstellen"),
+    f!(
         "Rápido y Eficiente",
         "Fast and Efficient",
         "Rápido e Eficiente",
@@ -1474,6 +1515,7 @@ pub const FRASES: &[Frase] = &[
         "Limit für Schritte in Folge",
     ),
     f!("Trace vacío", "Empty trace", "Trace vazio", "Trace vide", "Trace leer"),
+    f!("Transcribiendo…", "Transcribing…", "A transcrever…", "Transcription…", "Transkribiere…"),
     f!(
         "Trozos sin vector",
         "Chunks with no vector",
@@ -1722,6 +1764,13 @@ pub const FRASES: &[Frase] = &[
         "wenn leer, gilt der Windows-Benutzer, und das ist ein Konto, kein Name",
     ),
     f!("sin clave", "no key", "sem chave", "sans clé", "ohne Schlüssel"),
+    f!(
+        "sin dirección aún",
+        "no address yet",
+        "sem endereço ainda",
+        "pas encore d’adresse",
+        "noch keine Adresse",
+    ),
     f!("sin saber", "unknown", "por saber", "inconnue", "ungeprüft"),
     f!(
         "solo se encuentran por palabras — pasó si Ollama estaba caído al ingerir",
@@ -1745,6 +1794,7 @@ pub const FRASES: &[Frase] = &[
         "vide = ssh-agent ou ~/.ssh/id_ed25519",
         "leer = ssh-agent oder ~/.ssh/id_ed25519",
     ),
+    f!("visto 1 vez", "seen once", "visto 1 vez", "vu 1 fois", "1-mal gesehen"),
     f!("visto {n} veces", "seen {n} times", "visto {n} vezes", "vu {n} fois", "{n}-mal gesehen"),
     f!(
         "vuelve a contar lo de arriba",

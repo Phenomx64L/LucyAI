@@ -5634,7 +5634,7 @@ impl App {
                         egui::RichText::new(if online {
                             i18n::trf("Ollama · {n} modelos", &[("n", &self.models.len().to_string())])
                         } else {
-                            "Ollama offline".to_string()
+                            i18n::tr("Ollama offline").to_string()
                         })
                         .size(theme::FS_CAPTION)
                         .color(theme::txt3()),
@@ -5897,7 +5897,7 @@ impl App {
                                     icons::show(ui, icons::Icon::Terminal, 13.0, theme::acc());
                                     ui.label(
                                         egui::RichText::new(if shown.commands == 1 {
-                                            "1 comando propuesto — apruébalo en el panel de Plan"
+                                            i18n::tr("1 comando propuesto — apruébalo en el panel de Plan")
                                                 .to_string()
                                         } else {
                                             format!(
@@ -6126,9 +6126,9 @@ impl App {
                     let modelo = whisper::status();
                     if mresp
                         .on_hover_text(if grabando {
-                            "Detener el dictado".to_string()
+                            i18n::tr("Detener el dictado").to_string()
                         } else if transcribiendo {
-                            "Transcribiendo…".to_string()
+                            i18n::tr("Transcribiendo…").to_string()
                         } else {
                             format!("Dictar — {}", modelo.message())
                         })
@@ -6567,6 +6567,26 @@ impl App {
             });
     }
 
+/// Qué hace cada botón de la barra de título, DECIDIDO POR SU ICONO.
+///
+/// Esto vivía dentro del bucle comparando el TEXTO VISIBLE del botón contra
+/// «Cerrar» y «Minimizar». Funcionaba mientras la aplicación tuviera un solo
+/// idioma; al traducir las etiquetas, los dos primeros botones dejaron de
+/// coincidir con sus cadenas y CERRAR pasaba a maximizar — la ventana se hacía
+/// grande en vez de cerrarse, y no habría forma de relacionar eso con la
+/// traducción.
+///
+/// Suelta y pura para poder fijarlo con un test: decidir comportamiento a
+/// partir de texto de pantalla es un error que no avisa hasta que alguien
+/// cambia el texto, que puede ser meses después.
+fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportCommand {
+    match icon {
+        icons::Icon::Close => egui::ViewportCommand::Close,
+        icons::Icon::Minimize => egui::ViewportCommand::Minimized(true),
+        _ => egui::ViewportCommand::Maximized(!maximizada),
+    }
+}
+
     /// Minimizar, maximizar y cerrar, a la derecha de la barra de título.
     ///
     /// En el orden de Windows —cerrar el ÚLTIMO, pegado a la esquina— porque el
@@ -6578,13 +6598,13 @@ impl App {
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
 
         for (icon, tip, danger) in [
-            (icons::Icon::Close, "Cerrar", true),
+            (icons::Icon::Close, i18n::tr("Cerrar"), true),
             (
                 if maximized { icons::Icon::Restore } else { icons::Icon::Maximize },
-                if maximized { "Restaurar" } else { "Maximizar" },
+                i18n::tr(if maximized { "Restaurar" } else { "Maximizar" }),
                 false,
             ),
-            (icons::Icon::Minimize, "Minimizar", false),
+            (icons::Icon::Minimize, i18n::tr("Minimizar"), false),
         ] {
             let (r, resp) =
                 ui.allocate_exact_size(egui::vec2(34.0, 30.0), egui::Sense::click());
@@ -6616,11 +6636,13 @@ impl App {
             };
             icons::draw(ui.painter(), icon, r.center(), 15.0, fg);
             if resp.on_hover_text(tip).clicked() {
-                ctx.send_viewport_cmd(match tip {
-                    "Cerrar" => egui::ViewportCommand::Close,
-                    "Minimizar" => egui::ViewportCommand::Minimized(true),
-                    _ => egui::ViewportCommand::Maximized(!maximized),
-                });
+                // POR EL ICONO Y NO POR LA ETIQUETA. Esto comparaba `tip`
+                // contra «Cerrar» y «Minimizar», o sea decidia lo que hace un
+                // boton de ventana a partir de su TEXTO VISIBLE. Funcionaba
+                // mientras solo hubiera un idioma; al traducir las etiquetas,
+                // los dos primeros botones dejaron de coincidir y CERRAR pasaba
+                // a maximizar. El icono es lo que identifica al boton.
+                ctx.send_viewport_cmd(Self::orden_de_ventana(icon, maximized));
             }
         }
     }
@@ -9344,7 +9366,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     if !a.applied {
                         ui.add_space(6.0);
                         if ui
-                            .button("Escribir")
+                            .button(i18n::tr("Escribir"))
                             .on_hover_text(i18n::trf("Aplicar el cambio en {ruta}", &[("ruta", &a.path)]))
                             .clicked()
                         {
@@ -9715,7 +9737,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let n = lv_filtrar(&self.lv_rows, self.lv_filter, &self.lv_query).len();
                 if ghost_icon(ui, icons::Icon::Copy)
                     .on_hover_text(if n == 0 {
-                        "No hay nada visible que copiar".to_string()
+                        i18n::tr("No hay nada visible que copiar").to_string()
                     } else {
                         i18n::trf("Copiar las {n} líneas visibles", &[("n", &n.to_string())])
                     })
@@ -11008,7 +11030,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new(if r.efimeros_ignorados == 0 {
-                        "Nada ha cambiado desde la línea base.".to_string()
+                        i18n::tr("Nada ha cambiado desde la línea base.").to_string()
                     } else {
                         // El «sin cambios» se explica: descartar cuarenta filas
                         // por su cuenta y no decirlo hace que la próxima vez que
@@ -14260,7 +14282,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     // algo corriendo, lo que escribes es una
                                     // respuesta PARA ese comando.
                                     .hint_text(if self.nx_busy {
-                                        "Respuesta para el comando en curso (p. ej. y) …"
+                                        i18n::tr("Respuesta para el comando en curso (p. ej. y) …")
                                             .to_string()
                                     } else {
                                         format!("Comando o petición para {}…", h.name)
@@ -14779,7 +14801,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     egui::RichText::new(format!(
                         "{} · {}",
                         h.protocol.label(),
-                        if h.host.is_empty() { "sin dirección aún" } else { &h.host }
+                        if h.host.is_empty() { i18n::tr("sin dirección aún") } else { &h.host }
                     ))
                     .size(theme::FS_CAPTION)
                     .color(theme::faint()),
@@ -15848,7 +15870,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new(if i.refuerzos == 1 {
-                                        "visto 1 vez".to_string()
+                                        i18n::tr("visto 1 vez").to_string()
                                     } else {
                                         i18n::trf("visto {n} veces", &[("n", &i.refuerzos.to_string())])
                                     })
@@ -17520,6 +17542,37 @@ mod hilo {
         // Y 2100 NO es bisiesto, que es donde se cae una regla de tres líneas.
         assert_eq!(lv_dia_de(4_107_456_000), "2100-02-28");
         assert_eq!(lv_dia_de(4_107_542_400), "2100-03-01");
+    }
+
+    #[test]
+    fn cerrar_cierra_en_cualquier_idioma() {
+        // EL BOTÓN DE CERRAR MAXIMIZABA. Esto decidía lo que hace cada botón de
+        // la barra de título comparando su TEXTO VISIBLE contra «Cerrar» y
+        // «Minimizar». Funcionó mientras la aplicación tuvo un solo idioma; al
+        // traducir las etiquetas, los dos primeros dejaron de coincidir con sus
+        // cadenas y cerrar pasó a maximizar.
+        //
+        // Nadie habría relacionado «la ventana se hace grande al pulsar la X»
+        // con haber traducido un tooltip. Decidir comportamiento a partir de
+        // texto de pantalla es un error que no avisa hasta meses después.
+        use icons::Icon;
+        assert!(matches!(
+            App::orden_de_ventana(Icon::Close, false),
+            egui::ViewportCommand::Close
+        ));
+        assert!(matches!(
+            App::orden_de_ventana(Icon::Minimize, false),
+            egui::ViewportCommand::Minimized(true)
+        ));
+        // Y el de maximizar alterna, mire como mire la ventana.
+        assert!(matches!(
+            App::orden_de_ventana(Icon::Maximize, false),
+            egui::ViewportCommand::Maximized(true)
+        ));
+        assert!(matches!(
+            App::orden_de_ventana(Icon::Restore, true),
+            egui::ViewportCommand::Maximized(false)
+        ));
     }
 
     #[test]
