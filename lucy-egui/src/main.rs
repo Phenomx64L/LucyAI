@@ -15348,7 +15348,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 (MemTab::Principios, "Principios"),
                 (MemTab::Mantenimiento, "Mantenimiento"),
             ] {
-                if ui.selectable_label(self.mem_tab == t, nombre).clicked() {
+                // `selectable_label` NO ESTABA EN LA LISTA DE MARCAS del test de
+                // sitios, así que estas seis pestañas salían en español con el
+                // guardia en verde. Es el mismo fallo que `seg(` en el visor y
+                // que `cmp_tarjeta` en compliance: cada ayudante nuevo hay que
+                // añadirlo a mano a esa lista, y ésa es la debilidad de fondo
+                // que el test lleva escrita en su propia nota.
+                if ui.selectable_label(self.mem_tab == t, i18n::tr(nombre)).clicked() {
                     self.mem_tab = t;
                     // Al ENTRAR se relee, no solo la primera vez: si un cristal
                     // acaba de destilarse en segundo plano, volver a su pestaña

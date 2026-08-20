@@ -2291,6 +2291,11 @@ mod tests {
             "lv_chip(ui,",
             "svc_row(ui,",
             "inv_tarjeta(ui,",
+            // Las seis pestañas de Memoria salían en español porque esta marca
+            // no estaba. Cada vez que aparece una pantalla con su propio
+            // ayudante, la lista se queda corta hasta que alguien lo nota — y
+            // hasta ahora lo ha notado siempre el operador, no este test.
+            "selectable_label(",
         ];
         const TRADUCEN_SOLOS: &[&str] = &[
             "fila(",
