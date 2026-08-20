@@ -740,7 +740,10 @@ fn diff_lineas(antes: &str, despues: &str, max: usize) -> Vec<(char, String)> {
     if out.len() > max {
         let sobran = out.len() - max;
         out.truncate(max);
-        out.push((' ', format!("… y {sobran} líneas más")));
+        out.push((
+            ' ',
+            i18n::trf("… y {sobran} líneas más", &[("sobran", &sobran.to_string())]),
+        ));
     }
     out
 }
@@ -833,15 +836,20 @@ fn next_auto(
     // nada»— convertiría el valor por defecto en un modo automático que no
     // arranca nunca, y el operador buscaría el fallo donde no está.
     if tope_gasto > 0.0 && gastado >= tope_gasto {
-        return NextAuto::Gasto(format!(
-            "Llevas {} en esta sesión y el tope está en {}. El automático se apaga; \
-             súbelo en Configuración o sigue paso a paso.",
-            lucy_core::pricing::fmt_usd(gastado),
-            lucy_core::pricing::fmt_usd(tope_gasto)
+        return NextAuto::Gasto(i18n::trf(
+            "Llevas {gastado} en esta sesión y el tope está en {tope}. El automático se \
+             apaga; súbelo en Configuración o sigue paso a paso.",
+            &[
+                ("gastado", &lucy_core::pricing::fmt_usd(gastado)),
+                ("tope", &lucy_core::pricing::fmt_usd(tope_gasto)),
+            ],
         ));
     }
     if let Some(motivo) = &step.needs_human {
-        return NextAuto::Pause(format!("{motivo}. Aprueba el paso para seguir."));
+        return NextAuto::Pause(i18n::trf(
+            "{motivo}. Aprueba el paso para seguir.",
+            &[("motivo", motivo)],
+        ));
     }
     // OTRO EQUIPO NO ES «EL MÍO», y esta puerta faltaba entera.
     //
@@ -865,10 +873,10 @@ fn next_auto(
     // propiedad del contenido; el destino no lo es, y mezclarlos haría que el
     // motivo que se le enseña al operador mintiera sobre quién decidió.
     if !step.host.is_empty() {
-        return NextAuto::Pause(format!(
-            "Este paso corre en «{}», no en este equipo. Un comando en otra máquina lo \
-             apruebas tú.",
-            step.host
+        return NextAuto::Pause(i18n::trf(
+            "Este paso corre en «{equipo}», no en este equipo. Un comando en otra máquina \
+             lo apruebas tú.",
+            &[("equipo", &step.host)],
         ));
     }
     if loops >= max {
@@ -1261,11 +1269,14 @@ impl ChatMsg {
         use lucy_core::session::SavedRole;
         let mut text = s.text.clone();
         if s.images > 0 {
-            text.push_str(&format!(
-                "\n\n_({} imagen{} de este mensaje no se guardaron al cerrar)_",
-                s.images,
-                if s.images == 1 { "" } else { "es" }
-            ));
+            text.push_str(&if s.images == 1 {
+                i18n::tr("\n\n_(1 imagen de este mensaje no se guardó al cerrar)_").to_string()
+            } else {
+                i18n::trf(
+                    "\n\n_({n} imágenes de este mensaje no se guardaron al cerrar)_",
+                    &[("n", &s.images.to_string())],
+                )
+            });
         }
         Self {
             role: match &s.role {
@@ -1448,7 +1459,7 @@ impl ChatTab {
             stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             fork_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             title: if n == 0 {
-                "Nueva Terminal".to_string()
+                i18n::tr("Nueva Terminal").to_string()
             } else {
                 format!("Terminal {}", n + 1)
             },
@@ -3067,7 +3078,7 @@ fn attach_chip(ui: &mut egui::Ui, a: &Attachment) -> bool {
     if a.pending {
         r.on_hover_text(i18n::tr("Extrayendo el texto del PDF…"));
     } else if !ok {
-        r.on_hover_text(format!("No se enviará: {}", a.blocked));
+        r.on_hover_text(i18n::trf("No se enviará: {motivo}", &[("motivo", &a.blocked)]));
     }
     quitar
 }
@@ -3210,7 +3221,7 @@ fn msg_actions(ui: &mut egui::Ui, stamp: &str, right_aligned: bool) -> MsgAction
                 ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::click());
             let c = if resp.hovered() { theme::txt2() } else { theme::faint() };
             icons::draw(ui.painter(), icon, r.center(), 12.0, c);
-            if resp.on_hover_text(tip).clicked() {
+            if resp.on_hover_text(i18n::tr(tip)).clicked() {
                 act = a;
             }
         }
@@ -3329,10 +3340,10 @@ fn hace_cuanto(secs: i64) -> String {
 /// «próxima en 3 h», no «próxima en hace 3 h».
 fn dentro_de(secs: i64) -> String {
     match secs.max(0) {
-        s if s < 90 => "un momento".to_string(),
-        s if s < 5_400 => format!("{} min", s / 60),
-        s if s < 172_800 => format!("{} h", s / 3_600),
-        s => format!("{} días", s / 86_400),
+        s if s < 90 => i18n::tr("un momento").to_string(),
+        s if s < 5_400 => i18n::trf("{n} min", &[("n", &(s / 60).to_string())]),
+        s if s < 172_800 => i18n::trf("{n} h", &[("n", &(s / 3_600).to_string())]),
+        s => i18n::trf("{n} días", &[("n", &(s / 86_400).to_string())]),
     }
 }
 
@@ -4638,10 +4649,10 @@ impl App {
                     self.mant_info = None;
                     let mut lineas = Vec::new();
                     if let Some(c) = t.consolidado {
-                        lineas.push(format!("consolidación: {c}"));
+                        lineas.push(i18n::trf("consolidación: {c}", &[("c", &c.to_string())]));
                     }
                     if let Some(r) = t.reflexionado {
-                        lineas.push(format!("reflexión: {r}"));
+                        lineas.push(i18n::trf("reflexión: {r}", &[("r", &r.to_string())]));
                     }
                     if !lineas.is_empty() {
                         // Al carril de la pestaña activa. No es de ningún turno
@@ -4771,11 +4782,11 @@ impl App {
     fn turno_fallido(&mut self, uid: usize, error: &str) {
         let Some(ti) = self.tabs.iter().position(|t| t.uid == uid) else { return };
         let t = &mut self.tabs[ti];
-        let n = t.caducar_pendientes("Cancelado — falló el turno que lo propuso");
+        let n = t.caducar_pendientes(i18n::tr("Cancelado — falló el turno que lo propuso"));
         t.auto = false;
         t.ws.trace_push(lucy_core::agent::TraceEntry {
             phase: "error".into(),
-            label: "Cadena detenida por un fallo del proveedor".into(),
+            label: i18n::tr("Cadena detenida por un fallo del proveedor").into(),
             detail: if n == 0 {
                 error.to_string()
             } else {
@@ -5118,7 +5129,7 @@ impl eframe::App for App {
                         if let Some(p) = self.preset.clone() {
                             ui.add_space(10.0);
                             ui.label(
-                                egui::RichText::new(format!("modo {p}"))
+                                egui::RichText::new(i18n::trf("modo {p}", &[("p", &p)]))
                                     .color(theme::acc())
                                     .size(10.5),
                             )
@@ -5134,12 +5145,12 @@ impl eframe::App for App {
                         if self.privacy {
                             ui.add_space(10.0);
                             ui.label(
-                                egui::RichText::new("privado").color(theme::acc()).size(10.5),
+                                egui::RichText::new(i18n::tr("privado")).color(theme::acc()).size(10.5),
                             )
-                            .on_hover_text(
+                            .on_hover_text(i18n::tr(
                                 "Modo privacidad: nada sale de este equipo. Solo modelos \
                                  locales de Ollama. Se apaga con /privacy.",
-                            );
+                            ));
                         }
                         // El contador de pasos SOLO aparece con el automático
                         // encendido, y entonces siempre. Es la única señal
@@ -5292,9 +5303,12 @@ impl eframe::App for App {
                     r.center(),
                     egui::Align2::CENTER_CENTER,
                     if encima == 1 {
-                        "Soltar para adjuntar".to_string()
+                        i18n::tr("Soltar para adjuntar").to_string()
                     } else {
-                        format!("Soltar para adjuntar {encima} ficheros")
+                        i18n::trf(
+                            "Soltar para adjuntar {encima} ficheros",
+                            &[("encima", &encima.to_string())],
+                        )
                     },
                     egui::FontId::proportional(18.0),
                     theme::acc(),
@@ -6439,7 +6453,7 @@ impl App {
             // vuelva a encender el automático el bucle empezaría por ellos —
             // ejecutando, un turno más tarde, justo el comando que detuvo.
             t.auto = false;
-            t.caducar_pendientes("Cancelado — el operador detuvo la respuesta");
+            t.caducar_pendientes(i18n::tr("Cancelado — el operador detuvo la respuesta"));
             // Y LA ESPERA DE LOS SUB-AGENTES. Sin esto, detener no detiene: los
             // sub-agentes terminan por su cuenta un minuto después, el lote
             // retenido sale solo, y Lucy arranca un turno nuevo con lo que el
@@ -6462,7 +6476,7 @@ impl App {
             t.vuelca();
             // Se dice que se paró. Una respuesta cortada sin marca se lee como
             // una respuesta que terminó mal.
-            t.revela("\n\n_(detenido por el operador)_");
+            t.revela(i18n::tr("\n\n_(detenido por el operador)_"));
         }
         // Enviar con un PDF a medio extraer lo mandaría sin él y borraría el
         // chip: el operador vería marcharse su adjunto sin que llegara nunca.
@@ -6771,7 +6785,7 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                             p.text(
                                 egui::pos2(r.left() + 130.0, r.center().y),
                                 egui::Align2::LEFT_CENTER,
-                                desc,
+                                i18n::tr(desc),
                                 egui::FontId::proportional(theme::FS_CAPTION),
                                 if *ready { theme::txt2() } else { theme::faint() },
                             );
@@ -6782,7 +6796,7 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                                 p.text(
                                     egui::pos2(r.right() - 10.0, r.center().y),
                                     egui::Align2::RIGHT_CENTER,
-                                    "sin migrar",
+                                    i18n::tr("sin migrar"),
                                     egui::FontId::proportional(theme::FS_MICRO),
                                     theme::faint(),
                                 );
@@ -6792,7 +6806,10 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                             ui.painter().text(
                                 egui::pos2(ui.min_rect().center().x, ui.min_rect().bottom() + 6.0),
                                 egui::Align2::CENTER_CENTER,
-                                format!("+{} más — sigue escribiendo para acotar", hits.len() - shown),
+                                i18n::trf(
+                                    "+{n} más — sigue escribiendo para acotar",
+                                    &[("n", &(hits.len() - shown).to_string())],
+                                ),
                                 egui::FontId::proportional(theme::FS_MICRO),
                                 theme::faint(),
                             );
@@ -6865,19 +6882,22 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                 self.privacy = !self.privacy;
                 let m = if self.privacy {
                     match lucy_core::cloud::allowed(&self.chat_model, true) {
-                        Ok(()) => format!(
+                        Ok(()) => i18n::trf(
                             "Modo privacidad **activado**. Nada sale de este equipo. El \
-                             modelo actual (`{}`) es local, así que puedes seguir.",
-                            self.chat_model
+                             modelo actual (`{modelo}`) es local, así que puedes seguir.",
+                            &[("modelo", &self.chat_model)],
                         ),
-                        Err(e) => format!(
-                            "Modo privacidad **activado**. Nada sale de este equipo.\n\n⚠ {e}"
+                        Err(e) => i18n::trf(
+                            "Modo privacidad **activado**. Nada sale de este equipo.\n\n⚠ {e}",
+                            &[("e", &e)],
                         ),
                     }
                 } else {
-                    "Modo privacidad **apagado**. Vuelven a estar disponibles los modelos \
-                     de nube."
-                        .to_string()
+                    i18n::tr(
+                        "Modo privacidad **apagado**. Vuelven a estar disponibles los modelos \
+                         de nube.",
+                    )
+                    .to_string()
                 };
                 self.di(&m);
             }
@@ -6889,12 +6909,12 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                     a.image = Some(img);
                     t.attachments.push(a);
                     t.input = if args.is_empty() {
-                        "¿Qué ves en mi pantalla? ".into()
+                        i18n::tr("¿Qué ves en mi pantalla? ").into()
                     } else {
                         format!("{args} ")
                     };
                 }
-                Err(e) => self.di(&format!("No pude capturar tu pantalla: {e}")),
+                Err(e) => self.di(&i18n::trf("No pude capturar tu pantalla: {e}", &[("e", &e)])),
             },
             "/recall" => self.slash_recall(args),
             "/principio" => self.slash_principio(args),
@@ -6904,11 +6924,12 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
             "/skills" | "/skills-manager" => self.slash_skills(args),
             "/preset" => self.slash_preset(args),
             "/help" => {
-                let mut s = String::from("Comandos disponibles:\n\n");
+                let mut s = format!("{}\n\n", i18n::tr("Comandos disponibles:"));
                 for (c, desc, listo) in SLASH {
                     s.push_str(&format!(
-                        "- `{c}` — {desc}{}\n",
-                        if listo { "" } else { "  _(sin migrar)_" }
+                        "- `{c}` — {}{}\n",
+                        i18n::tr(desc),
+                        if listo { "" } else { i18n::tr("  _(sin migrar)_") }
                     ));
                 }
                 self.di(&s);
@@ -6921,7 +6942,9 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
 
     /// Escribe una línea de Lucy en el hilo de la pestaña activa.
     fn di(&mut self, texto: &str) {
-        self.tabs[self.tab].log.push(ChatMsg::new(false, texto.to_string()));
+        self.tabs[self.tab]
+            .log
+            .push(ChatMsg::new(false, i18n::tr(texto).to_string()));
     }
 
     /// `/preset <nombre>` fija un procedimiento; `/preset clear` lo quita.
@@ -6935,27 +6958,36 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
         let a = args.trim();
         if a.eq_ignore_ascii_case("clear") || a == "-" {
             match self.preset.take() {
-                Some(p) => self.di(&format!("Modo **{p}** quitado. Vuelvo a contestar libremente.")),
+                Some(p) => self.di(&i18n::trf(
+                    "Modo **{p}** quitado. Vuelvo a contestar libremente.",
+                    &[("p", &p)],
+                )),
                 None => self.di("No había ningún modo puesto."),
             }
             return;
         }
         if a.is_empty() {
             let m = match &self.preset {
-                Some(p) => format!(
-                    "Modo activo: **{p}**.\n\nQuítalo con `/preset clear`."
+                Some(p) => i18n::trf(
+                    "Modo activo: **{p}**.\n\nQuítalo con `/preset clear`.",
+                    &[("p", p)],
                 ),
                 None => {
                     if self.skills.is_empty() {
-                        "No hay ningún modo puesto, y tampoco hay skills instalados.".to_string()
+                        i18n::tr("No hay ningún modo puesto, y tampoco hay skills instalados.")
+                            .to_string()
                     } else {
-                        format!(
-                            "No hay ningún modo puesto.\n\nFija uno con `/preset <nombre>`: {}",
-                            self.skills
-                                .iter()
-                                .map(|k| k.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                        i18n::trf(
+                            "No hay ningún modo puesto.\n\nFija uno con `/preset <nombre>`: {hay}",
+                            &[(
+                                "hay",
+                                &self
+                                    .skills
+                                    .iter()
+                                    .map(|k| k.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            )],
                         )
                     }
                 }
@@ -6967,9 +6999,10 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
             Some(k) => {
                 let (n, d) = (k.name.clone(), k.description.clone());
                 self.preset = Some(n.clone());
-                self.di(&format!(
+                self.di(&i18n::trf(
                     "Modo **{n}** puesto — {d}\n\nA partir de ahora enmarco todo en él. \
-                     Se quita con `/preset clear`."
+                     Se quita con `/preset clear`.",
+                    &[("n", &n), ("d", &d)],
                 ));
             }
             // Los que SÍ hay. «No existe» a secas deja probando nombres.
@@ -6980,7 +7013,10 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                     .map(|k| k.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                self.di(&format!("No hay ningún skill llamado «{a}». Los que hay: {hay}."));
+                self.di(&i18n::trf(
+                    "No hay ningún skill llamado «{a}». Los que hay: {hay}.",
+                    &[("a", a), ("hay", &hay)],
+                ));
             }
         }
     }
@@ -7005,11 +7041,11 @@ fn orden_de_ventana(icon: icons::Icon, maximizada: bool) -> egui::ViewportComman
                 Some(d) => match lucy_core::skills::install(std::path::Path::new(ruta), &d) {
                     Ok(v) => {
                         self.skills = cargar_skills();
-                        format!("Instalados: {}.", v.join(", "))
+                        i18n::trf("Instalados: {lista}.", &[("lista", &v.join(", "))])
                     }
                     Err(e) => e,
                 },
-                None => "No se pudo resolver tu perfil de usuario.".into(),
+                None => i18n::tr("No se pudo resolver tu perfil de usuario.").into(),
             };
             self.di(&m);
             return;
@@ -7023,17 +7059,21 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             );
             return;
         }
-        let mut m = format!("**{} skills instalados**
-
-", self.skills.len());
+        let mut m = format!(
+            "{}\n\n",
+            i18n::trf(
+                "**{n} skills instalados**",
+                &[("n", &self.skills.len().to_string())],
+            )
+        );
         for k in &self.skills {
             m.push_str(&format!("- `{}` — {}
 ", k.name, k.description));
         }
-        m.push_str(
-            "
-Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
-        );
+        m.push_str(&format!(
+            "\n{}",
+            i18n::tr("Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre."),
+        ));
         self.di(&m);
     }
 
@@ -7085,8 +7125,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 Ok(r) => {
                     self.reembeber_rx = None;
                     self.upkeep_msg = match r {
-                        Ok(0) => "No había ningún trozo sin vector.".into(),
-                        Ok(n) => format!("{n} trozos vuelven a ser buscables por significado."),
+                        Ok(0) => i18n::tr("No había ningún trozo sin vector.").into(),
+                        Ok(n) => i18n::trf(
+                            "{n} trozos vuelven a ser buscables por significado.",
+                            &[("n", &n.to_string())],
+                        ),
                         Err(e) => e,
                     };
                     self.sin_vector = lucy_core::upkeep::sin_vector();
@@ -7267,14 +7310,17 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // menos y peor; quien esté mirando por qué no se acordó de algo
                 // evidente necesita saber que estaba trabajando con una mano
                 // atada.
-                let como = if r.lexico {
+                let como = i18n::tr(if r.lexico {
                     "  (por palabras — el embebedor no contestó, así que esto encuentra menos)"
                 } else if r.documentos > 0 {
                     "  (por significado, memorias y documentos)"
                 } else {
                     "  (por significado)"
-                };
-                format!("Esto es lo que recordaría con «{consulta}»:{como}\n\n{}", r.bloque)
+                });
+                i18n::trf(
+                    "Esto es lo que recordaría con «{consulta}»:{como}\n\n{bloque}",
+                    &[("consulta", &consulta), ("como", como), ("bloque", &r.bloque)],
+                )
             };
             self.tabs[ti].log.push(ChatMsg::new(false, texto));
         }
@@ -7291,7 +7337,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if regla.trim().is_empty() {
             let lista = match lucy_core::principles::list() {
                 Ok(v) if v.is_empty() => {
-                    "Todavía no hay ninguno.".to_string()
+                    i18n::tr("Todavía no hay ninguno.").to_string()
                 }
                 Ok(v) => v
                     .iter()
@@ -7301,16 +7347,17 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             "[P{}] {}{}",
                             i + 1,
                             p.regla,
-                            if p.activo { "" } else { "  (desactivado)" }
+                            if p.activo { "" } else { i18n::tr("  (desactivado)") }
                         )
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
-                Err(e) => format!("No se pudieron leer: {e}"),
+                Err(e) => i18n::trf("No se pudieron leer: {e}", &[("e", &e)]),
             };
-            self.di(&format!(
+            self.di(&i18n::trf(
                 "Reglas que aplico siempre:\n\n{lista}\n\nPara añadir una: \
-                 `/principio en producción avisa antes de reiniciar un servicio`."
+                 `/principio en producción avisa antes de reiniciar un servicio`.",
+                &[("lista", &lista)],
             ));
             return;
         }
@@ -7366,12 +7413,21 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         };
         self.dedup_rx = None;
         let m = match &r {
-            Err(e) => format!("No se pudo revisar: {e}"),
+            Err(e) => i18n::trf("No se pudo revisar: {e}", &[("e", &e)]),
             Ok(rep) if !rep.dry_run => {
-                format!("Fundidas {} memorias en {} grupos.", rep.memories_merged, rep.clusters_found)
+                i18n::trf(
+                    "Fundidas {memorias} memorias en {grupos} grupos.",
+                    &[
+                        ("memorias", &rep.memories_merged.to_string()),
+                        ("grupos", &rep.clusters_found.to_string()),
+                    ],
+                )
             }
             Ok(rep) if rep.clusters_found == 0 => {
-                format!("Ninguna repetida entre las {} más recientes.", rep.scanned)
+                i18n::trf(
+                    "Ninguna repetida entre las {n} más recientes.",
+                    &[("n", &rep.scanned.to_string())],
+                )
             }
             Ok(rep) => {
                 let mut s = format!(
@@ -7407,13 +7463,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// un panel que siempre enseña el valor de ahora no la permite.
     fn slash_snapshot(&mut self) {
         let s = self.sys.snapshot();
-        let mut m = format!(
-            "**{}** · {}\n\nCPU {:.0} % · RAM {:.1} de {:.1} GB\n",
-            s.host,
-            s.os,
-            s.cpu_pct,
-            s.mem_used as f64 / 1e9,
-            s.mem_total as f64 / 1e9
+        let mut m = i18n::trf(
+            "**{host}** · {os}\n\nCPU {cpu} % · RAM {usada} de {total} GB\n",
+            &[
+                ("host", &s.host),
+                ("os", &s.os),
+                ("cpu", &format!("{:.0}", s.cpu_pct)),
+                ("usada", &format!("{:.1}", s.mem_used as f64 / 1e9)),
+                ("total", &format!("{:.1}", s.mem_total as f64 / 1e9)),
+            ],
         );
         for d in &s.disks {
             let usado = d.total.saturating_sub(d.avail);
@@ -7453,9 +7511,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             lucy_core::tools::AVAILABLE.iter().map(|(n, _)| *n).collect();
         let remotos = self.remote_hosts.len();
 
-        let mut m = String::from("**Lo que puedo hacer en este equipo**\n\n");
+        let mut m = format!("{}\n\n", i18n::tr("**Lo que puedo hacer en este equipo**"));
         m.push_str(&format!("- Herramientas: {}\n", herramientas.join(", ")));
-        m.push_str("- Ejecutar PowerShell, cmd, wmic, netsh, reg y cscript, con tu aprobación\n");
+        m.push_str(&format!(
+            "{}\n",
+            i18n::tr("- Ejecutar PowerShell, cmd, wmic, netsh, reg y cscript, con tu aprobación"),
+        ));
         m.push_str(&format!(
             "- Equipos remotos dados de alta: {}{}\n",
             remotos,
@@ -7498,7 +7559,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             let nombre = p
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("(sin nombre)")
+                .unwrap_or(i18n::tr("(sin nombre)"))
                 .to_string();
             let uid = self.tabs[self.tab].uid;
             let t = &mut self.tabs[self.tab];
@@ -7643,7 +7704,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             {
                 self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
-                    label: "El modelo se queda corto".into(),
+                    label: i18n::tr("El modelo se queda corto").into(),
                     detail: a.texto(),
                     ..Default::default()
                 });
@@ -7711,18 +7772,23 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // esa propuesta ya no la respalda nadie. Sin esto, escribir «¿qué
             // hora es?» con dos pasos colgando del asunto anterior hacía que el
             // bucle arrancara por ellos en cuanto cerrara este turno.
-            let caducados = t.caducar_pendientes("Caducado — llegó una orden nueva");
+            let caducados = t.caducar_pendientes(i18n::tr("Caducado — llegó una orden nueva"));
             if caducados > 0 {
                 t.ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
-                    label: format!(
-                        "{caducados} paso{} sin aprobar caduca{}",
-                        if caducados == 1 { "" } else { "s" },
-                        if caducados == 1 { "" } else { "n" }
-                    ),
-                    detail: "Eran de la orden anterior. Si los sigues queriendo, pídelos \
-                             otra vez."
-                        .into(),
+                    label: if caducados == 1 {
+                        i18n::tr("1 paso sin aprobar caduca").to_string()
+                    } else {
+                        i18n::trf(
+                            "{caducados} pasos sin aprobar caducan",
+                            &[("caducados", &caducados.to_string())],
+                        )
+                    },
+                    detail: i18n::tr(
+                        "Eran de la orden anterior. Si los sigues queriendo, pídelos \
+                         otra vez.",
+                    )
+                    .into(),
                     ..Default::default()
                 });
             }
@@ -7730,7 +7796,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             for (nombre, motivo) in &retenidos {
                 t.ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
-                    label: format!("Adjunto retenido: {nombre}"),
+                    label: i18n::trf("Adjunto retenido: {nombre}", &[("nombre", nombre)]),
                     detail: motivo.clone(),
                     ..Default::default()
                 });
@@ -7765,7 +7831,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 phase: "info".into(),
                 label: format!("Adjunto · {n}"),
                 detail: if blocked.is_empty() {
-                    "incluido en el prompt".into()
+                    i18n::tr("incluido en el prompt").into()
                 } else {
                     blocked.clone()
                 },
@@ -7785,7 +7851,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         self.tabs[self.tab].turno_ms = lucy_core::agent::now_ms();
         self.tabs[self.tab].ws.trace_push(lucy_core::agent::TraceEntry {
             phase: "info".into(),
-            label: "Orden enviada".into(),
+            label: i18n::tr("Orden enviada").into(),
             detail: format!(
                 "{} · {} · {} caracteres",
                 lucy_core::cloud::provider_of(&self.chat_model).label(),
@@ -7874,7 +7940,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     let Some((nombre, md)) = lucy_core::skills::from_learn(&t.content) else {
                         self.tabs[ti].ws.trace_push(TraceEntry {
                             phase: "error".into(),
-                            label: "No pude apuntar eso".into(),
+                            label: i18n::tr("No pude apuntar eso").into(),
                             detail: "El formato es claves|comando|respuesta, y hace falta al \
                                      menos una clave y una de las dos cosas."
                                 .into(),
@@ -7889,18 +7955,18 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 "{}|||{md}",
                                 ruta.display()
                             ));
-                            a.summary = format!("aprender «{nombre}»");
+                            a.summary = i18n::trf("aprender «{nombre}»", &[("nombre", &nombre)]);
                             self.tabs[ti].ws.artifact_push(a);
                             self.tabs[ti].ws.trace_push(TraceEntry {
                                 phase: "info".into(),
-                                label: format!("Skill propuesto: {nombre}"),
-                                detail: "Apruébalo en Artefactos y quedará instalado.".into(),
+                                label: i18n::trf("Skill propuesto: {nombre}", &[("nombre", &nombre)]),
+                                detail: i18n::tr("Apruébalo en Artefactos y quedará instalado.").into(),
                                 ..Default::default()
                             });
                         }
                         None => self.tabs[ti].ws.trace_push(TraceEntry {
                             phase: "error".into(),
-                            label: "No pude apuntar eso".into(),
+                            label: i18n::tr("No pude apuntar eso").into(),
                             detail: "No se pudo resolver tu perfil de usuario.".into(),
                             ..Default::default()
                         }),
@@ -8049,7 +8115,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 lucy_core::guard::Decision::Block => {
                                     self.tabs[ti].ws.trace_push(TraceEntry {
                                         phase: "info".into(),
-                                        label: "Bloqueado por el guardrail".into(),
+                                        label: i18n::tr("Bloqueado por el guardrail").into(),
                                         detail: g.reason.clone(),
                                         ..Default::default()
                                     });
@@ -8095,7 +8161,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                             .find(|x| x.id == host || x.name == host)
                                             .map(|x| x.name.clone())
                                             .unwrap_or_else(|| host.clone());
-                                        format!("Ejecutar en {nombre}")
+                                        i18n::trf("Ejecutar en {nombre}", &[("nombre", &nombre)])
                                     };
                                     self.tabs[ti].ws.plan_append(PlanStep {
                                         label: etiqueta,
@@ -8116,7 +8182,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         // sin botón. Un paso remoto ejecutado aquí mediría la
                         // máquina equivocada y lo diría como si fuera la buena.
                         None => self.tabs[ti].ws.plan_append(PlanStep {
-                            label: format!("{} — sin migrar a este shell", k.name()),
+                            label: i18n::trf("{paso} — sin migrar a este shell", &[("paso", k.name())]),
                             status: StepStatus::Error,
                             detail: t.content,
                             host,
@@ -8392,11 +8458,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if !hay_presupuesto_tool(self.tabs[ti].tool_loops, self.max_loops) {
             self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                 phase: "info".into(),
-                label: "Tope de vueltas de herramienta".into(),
-                detail: format!(
-                    "{} vueltas pidiendo ficheros sin llegar a una respuesta. El turno \
+                label: i18n::tr("Tope de vueltas de herramienta").into(),
+                detail: i18n::trf(
+                    "{max} vueltas pidiendo ficheros sin llegar a una respuesta. El turno \
                      vuelve a ti; lo que se leyó está en este mismo carril.",
-                    self.max_loops
+                    &[("max", &self.max_loops.to_string())],
                 ),
                 ..Default::default()
             });
@@ -8505,7 +8571,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             NextAuto::Pause(motivo) => {
                 self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
-                    label: "Automático en pausa".into(),
+                    label: i18n::tr("Automático en pausa").into(),
                     detail: motivo,
                     ..Default::default()
                 });
@@ -8518,7 +8584,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 self.tabs[ti].auto = false;
                 self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
-                    label: "Tope de pasos alcanzado".into(),
+                    label: i18n::tr("Tope de pasos alcanzado").into(),
                     detail: motivo,
                     ..Default::default()
                 });
@@ -8532,13 +8598,16 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 self.tabs[ti].auto = false;
                 self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                     phase: "info".into(),
-                    label: "Tope de gasto alcanzado".into(),
+                    label: i18n::tr("Tope de gasto alcanzado").into(),
                     detail: motivo.clone(),
                     ..Default::default()
                 });
                 self.tabs[ti]
                     .log
-                    .push(ChatMsg::new(false, format!("**Tope de gasto.** {motivo}")));
+                    .push(ChatMsg::new(
+                        false,
+                        i18n::trf("**Tope de gasto.** {motivo}", &[("motivo", &motivo)]),
+                    ));
             }
         }
     }
@@ -8694,7 +8763,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     self.tabs[ti].ws.plan_update(&id, StepStatus::Error, None);
                     self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                         phase: "error".into(),
-                        label: "Equipo desconocido".into(),
+                        label: i18n::tr("Equipo desconocido").into(),
                         detail: format!(
                             "El paso iba a «{h}», que no está dado de alta. No se ejecuta \
                              aquí: sería medir la máquina equivocada."
@@ -8784,7 +8853,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             body.push_str(&format!("[stderr]\n{}", err.trim()));
         }
         if body.is_empty() {
-            body = "(sin salida)".into();
+            body = i18n::tr("(sin salida)").into();
         }
 
         // EL ESCANEO VA ANTES DE TOCAR EL HILO, y ahí estaba el fallo. Estaba
@@ -8855,7 +8924,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             cmd.clone(),
             ok,
             if retenido {
-                format!("[salida retenida por el guardrail: {}]", g.reason)
+                i18n::trf("[salida retenida por el guardrail: {motivo}]", &[("motivo", &g.reason)])
             } else {
                 lucy_core::memories::scrub(&body)
             },
@@ -8865,7 +8934,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             self.tabs[ti].auto = false;
             self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                 phase: "info".into(),
-                label: "Salida retenida por el guardrail".into(),
+                label: i18n::tr("Salida retenida por el guardrail").into(),
                 detail: g.reason.clone(),
                 ..Default::default()
             });
@@ -9432,7 +9501,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         }
         self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
             phase: if ok { "obs" } else { "error" }.into(),
-            label: if ok { "Fichero escrito" } else { "No se pudo escribir" }.into(),
+            label: i18n::tr(if ok { "Fichero escrito" } else { "No se pudo escribir" }).into(),
             detail: path.clone(),
             ..Default::default()
         });
@@ -9457,7 +9526,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// compañero, no otro programa.
     fn export_run(&self) -> String {
         let mut s = String::new();
-        s.push_str(&format!("# Run de Lucy · {}\n", self.chat_model));
+        s.push_str(&i18n::trf(
+            "# Run de Lucy · {modelo}\n",
+            &[("modelo", &self.chat_model)],
+        ));
         if !self.tabs[self.tab].ws.plan.is_empty() {
             s.push_str("\n## Plan\n");
             for p in &self.tabs[self.tab].ws.plan {
@@ -9465,7 +9537,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
         }
         if !self.tabs[self.tab].ws.exec.is_empty() {
-            s.push_str("\n## Ejecución\n");
+            s.push_str(&format!("\n## {}\n", i18n::tr("Ejecución")));
             for e in &self.tabs[self.tab].ws.exec {
                 s.push_str(&format!(
                     "\n$ {}\n{}\n",
@@ -9537,7 +9609,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
         ui.add_space(8.0);
         ui.add(egui::Label::new(theme::instrument_label(
-            &format!("Dónde mirar en {}", h.name),
+            &i18n::trf("Dónde mirar en {equipo}", &[("equipo", &h.name)]),
             theme::faint(),
         )));
         ui.add_space(6.0);
@@ -9556,7 +9628,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if self.lv_files_rx.is_some() {
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(format!("buscando en {}…", self.lv_dir))
+                egui::RichText::new(i18n::trf(
+                    "buscando en {ruta}…",
+                    &[("ruta", &self.lv_dir)],
+                ))
                     .size(theme::FS_CAPTION)
                     .color(theme::txt3()),
             );
@@ -9702,7 +9777,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     }
                     ui.add_space(6.0);
                     let ph = if self.lv_host.is_empty() {
-                        "C:\\ruta\\al\\archivo.log"
+                        i18n::tr("C:\\ruta\\al\\archivo.log")
                     } else {
                         "/var/log/syslog"
                     };
@@ -9802,7 +9877,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 .iter()
                 .find(|h| h.id == self.lv_host)
                 .map(|h| h.name.clone())
-                .unwrap_or_else(|| "Equipo".into())
+                .unwrap_or_else(|| i18n::tr("Equipo").into())
         };
         let boton = ui.add(
             egui::Button::new(
@@ -10208,7 +10283,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if let (Err(err), Some(ti)) = (r, ti) {
             self.tabs[ti].ws.trace_push(lucy_core::agent::TraceEntry {
                 phase: "error".into(),
-                label: "No se pudo registrar en la auditoría".into(),
+                label: i18n::tr("No se pudo registrar en la auditoría").into(),
                 detail: err,
                 ..Default::default()
             });
@@ -10331,7 +10406,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 .iter()
                 .find(|h| h.id == self.cmp_host)
                 .map(|h| h.name.clone())
-                .unwrap_or_else(|| "Equipo".into())
+                .unwrap_or_else(|| i18n::tr("Equipo").into())
         }
     }
 
@@ -10474,7 +10549,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             self.cmp_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             self.cmp_rx = None;
             self.cmp_desde = None;
-            self.cmp_error = "Revisión detenida.".into();
+            self.cmp_error = i18n::tr("Revisión detenida.").into();
         }
         if escanear {
             self.cmp_escanear();
@@ -10792,7 +10867,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             match self.remote_hosts.iter().find(|h| h.id == self.cmp_host) {
                 Some(h) => Some(h.clone()),
                 None => {
-                    self.cmp_error = "Ese equipo ya no está dado de alta.".into();
+                    self.cmp_error = i18n::tr("Ese equipo ya no está dado de alta.").into();
                     return;
                 }
             }
@@ -10866,7 +10941,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.cmp_rx = None;
                 self.cmp_desde = None;
-                self.cmp_error = "La revisión se cortó sin devolver nada.".into();
+                self.cmp_error = i18n::tr("La revisión se cortó sin devolver nada.").into();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
@@ -10891,7 +10966,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // «Servicios (0)» sin este aviso se toma por un hecho del servidor.
         if let Some(p) = self.inv_data.parcial.clone() {
             ui.add_space(4.0);
-            aviso_rojo(ui, &format!("Foto incompleta: {p}"));
+            aviso_rojo(ui, &i18n::trf("Foto incompleta: {p}", &[("p", &p)]));
         }
         // Las secciones que fallaron, cada una con su motivo. Van arriba y no
         // dentro de su pestaña: si el operador está mirando Puertos, tiene que
@@ -10956,7 +11031,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         row_align(ui, 26.0, egui::Align::Center, |ui| {
             match &base {
                 Some((label, ts)) => {
-                    let etiqueta = if label.trim().is_empty() { "sin etiqueta" } else { label };
+                    let etiqueta = if label.trim().is_empty() { i18n::tr("sin etiqueta") } else { label };
                     ui.label(
                         egui::RichText::new(i18n::trf(
                             "Línea base: {etiqueta} · {cuando}",
@@ -11051,7 +11126,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 r.label = b.label;
                 self.inv_drift = Some(r);
             }
-            Ok(None) => self.inv_error = "Este equipo no tiene línea base todavía.".into(),
+            Ok(None) => self.inv_error = i18n::tr("Este equipo no tiene línea base todavía.").into(),
             Err(e) => self.inv_error = e,
         }
     }
@@ -11068,11 +11143,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         // El «sin cambios» se explica: descartar cuarenta filas
                         // por su cuenta y no decirlo hace que la próxima vez que
                         // alguien eche en falta un puerto sospeche del programa.
-                        format!(
+                        i18n::trf(
                             "Nada ha cambiado desde la línea base.\n\
-                             ({} puertos dinámicos ignorados — el sistema los reparte en \
+                             ({n} puertos dinámicos ignorados — el sistema los reparte en \
                              cada arranque.)",
-                            r.efimeros_ignorados
+                            &[("n", &r.efimeros_ignorados.to_string())],
                         )
                     })
                     .size(theme::FS_FOOTNOTE)
@@ -11180,7 +11255,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             } else if !self.inv_last.is_empty() {
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new(format!("escaneado {}", self.inv_last))
+                    egui::RichText::new(i18n::trf(
+                        "escaneado {hora}",
+                        &[("hora", &self.inv_last)],
+                    ))
                         .size(theme::FS_CAPTION)
                         .color(theme::acc()),
                 );
@@ -11253,7 +11331,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 .iter()
                 .find(|h| h.id == self.inv_host)
                 .map(|h| h.name.clone())
-                .unwrap_or_else(|| "Equipo".into())
+                .unwrap_or_else(|| i18n::tr("Equipo").into())
         }
     }
 
@@ -11476,7 +11554,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let r = ui.add_sized(
                     [w, 22.0],
                     egui::Label::new(
-                        egui::RichText::new(format!("{titulo}{flecha}"))
+                        egui::RichText::new(format!("{}{flecha}", i18n::tr(titulo)))
                             .size(theme::FS_CAPTION)
                             .color(if activa { theme::acc() } else { theme::txt3() }),
                     )
@@ -11545,10 +11623,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 // hace 20672d» en rojo manda a renovar un
                                 // certificado que puede estar impecable.
                                 let (txt, col) = match c.days_left(ahora) {
-                                    None => ("fecha ilegible".to_string(), theme::txt3()),
-                                    Some(d) if d < 0 => {
-                                        (format!("caducó hace {}d", -d), theme::red())
+                                    None => {
+                                        (i18n::tr("fecha ilegible").to_string(), theme::txt3())
                                     }
+                                    Some(d) if d < 0 => (
+                                        i18n::trf("caducó hace {d}d", &[("d", &(-d).to_string())]),
+                                        theme::red(),
+                                    ),
                                     Some(d) if d <= 30 => (format!("{d}d"), theme::amber()),
                                     Some(d) => (format!("{d}d"), theme::txt3()),
                                 };
@@ -11596,7 +11677,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 Some(h) => Some(h.clone()),
                 None => {
                     self.inv_error =
-                        "Ese equipo ya no está dado de alta. Elige otro en el desplegable."
+                        i18n::tr("Ese equipo ya no está dado de alta. Elige otro en el desplegable.")
                             .into();
                     return;
                 }
@@ -11661,7 +11742,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.inv_rx = None;
                 self.inv_desde = None;
-                self.inv_error = "El escaneo se cortó sin devolver nada.".into();
+                self.inv_error = i18n::tr("El escaneo se cortó sin devolver nada.").into();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
@@ -11752,7 +11833,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // líneas, milisegundos. Lo que justificó un hilo —una sesión remota— es
         // el otro camino, y va por hilo.
         match lucy_core::logs::tail(std::path::Path::new(&ruta), LV_LINES) {
-            Ok(l) => self.lv_absorber(l, "este equipo"),
+            Ok(l) => self.lv_absorber(l, i18n::tr("este equipo")),
             Err(e) => {
                 self.lv_rows.clear();
                 self.lv_error = format!("No se pudo leer «{ruta}»: {e}");
@@ -11774,7 +11855,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             return;
         }
         let Some(h) = self.remote_hosts.iter().find(|h| h.id == self.lv_host).cloned() else {
-            self.lv_error = "Ese equipo ya no está dado de alta.".into();
+            self.lv_error = i18n::tr("Ese equipo ya no está dado de alta.").into();
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -11830,7 +11911,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         Err(e) => {
                             self.lv_rows.clear();
                             self.lv_error =
-                                format!("No se pudo leer «{}» en {nombre}: {e}", self.lv_path.trim());
+                                i18n::trf(
+                                    "No se pudo leer «{ruta}» en {equipo}: {e}",
+                                    &[
+                                        ("ruta", self.lv_path.trim()),
+                                        ("equipo", &nombre),
+                                        ("e", &e),
+                                    ],
+                                );
                             self.lv_last.clear();
                         }
                     }
@@ -11851,7 +11939,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         Ok(f) => self.lv_files = f,
                         Err(e) => {
                             self.lv_files.clear();
-                            self.lv_error = format!("No se pudo listar «{}»: {e}", self.lv_dir);
+                            self.lv_error = i18n::trf(
+                                "No se pudo listar «{ruta}»: {e}",
+                                &[("ruta", &self.lv_dir), ("e", &e)],
+                            );
                         }
                     }
                 }
@@ -11964,7 +12055,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     t.tr_rx = None;
                 }
                 Ok(Err(e)) => {
-                    t.log.push(ChatMsg::new(false, format!("No se pudo transcribir: {e}")));
+                    t.log.push(ChatMsg::new(false, i18n::trf("No se pudo transcribir: {e}", &[("e", &e)])));
                     t.tr_rx = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => t.tr_rx = None,
@@ -12302,14 +12393,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     ui,
                     "Tope de gasto de la sesión",
                     Some(&if tope_gasto > 0.0 {
-                        format!(
-                            "llevas {} · al cruzarlo se apaga el automático",
-                            lucy_core::pricing::fmt_usd(gastado)
+                        i18n::trf(
+                            "llevas {g} · al cruzarlo se apaga el automático",
+                            &[("g", &lucy_core::pricing::fmt_usd(gastado))],
                         )
                     } else {
-                        format!(
-                            "llevas {} · 0 = sin límite",
-                            lucy_core::pricing::fmt_usd(gastado)
+                        i18n::trf(
+                            "llevas {g} · 0 = sin límite",
+                            &[("g", &lucy_core::pricing::fmt_usd(gastado))],
                         )
                     }),
                     false,
@@ -12740,7 +12831,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             icons::Icon::Shield,
             "Claves API",
             |ui| {
-                let t = format!("{n_claves} de {total}");
+                let t = i18n::trf(
+                    "{n_claves} de {total}",
+                    &[
+                        ("n_claves", &n_claves.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                );
                 insignia(ui, &t, n_claves > 0);
             },
             |ui| {
@@ -12765,9 +12862,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 Some(lucy_core::keys::Prueba::NoVale(m)) => {
                                     format!("{pista} · {m}")
                                 }
-                                Some(lucy_core::keys::Prueba::NoSeSabe(m)) => {
-                                    format!("{pista} · sin comprobar: {m}")
-                                }
+                                Some(lucy_core::keys::Prueba::NoSeSabe(m)) => i18n::trf(
+                                    "{pista} · sin comprobar: {m}",
+                                    &[("pista", &pista), ("m", &m)],
+                                ),
                                 None => pista.clone(),
                             };
                             fila(ui, etiqueta, Some(&sub), i == ultimo, |ui| {
@@ -13055,7 +13153,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // Bloqueante a propósito: es el diálogo del sistema, y mientras está
             // abierto no hay nada que animar detrás.
             if let Some(dir) = rfd::FileDialog::new()
-                .set_title("Carpeta del skill (o una que contenga varios)")
+                .set_title(i18n::tr("Carpeta del skill (o una que contenga varios)"))
                 .pick_folder()
             {
                 let destino = lucy_core::skills::user_dir();
@@ -13067,7 +13165,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         }
                         Err(e) => e,
                     },
-                    None => "No se pudo resolver tu perfil de usuario.".into(),
+                    None => i18n::tr("No se pudo resolver tu perfil de usuario.").into(),
                 };
             }
         }
@@ -13209,9 +13307,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 n > 0,
                                 egui::Button::new(
                                     egui::RichText::new(if lista {
-                                        format!("¿Borrar {nombre}?")
+                                        i18n::trf(
+                                            "¿Borrar {nombre}?",
+                                            &[("nombre", i18n::tr(nombre))],
+                                        )
                                     } else {
-                                        nombre.to_string()
+                                        i18n::tr(nombre).to_string()
                                     })
                                     .size(theme::FS_CAPTION)
                                     .color(if lista { theme::red() } else { theme::txt3() }),
@@ -13257,15 +13358,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let _ = tx.send(lucy_core::upkeep::reembeber(&stop));
             });
             self.reembeber_rx = Some(rx);
-            self.upkeep_msg = "Rehaciendo los vectores que faltaban…".into();
+            self.upkeep_msg = i18n::tr("Rehaciendo los vectores que faltaban…").into();
         }
         if copiar {
             // El diálogo del sistema es modal: bloquea mientras está abierto, y
             // lo abre un clic — no pasa solo.
             if let Some(d) = rfd::FileDialog::new()
-                .set_title("Dónde guardar la copia")
+                .set_title(i18n::tr("Dónde guardar la copia"))
                 .set_file_name(format!("lucy-{}.db", ahora_epoch()))
-                .add_filter("Base de datos", &["db"])
+                .add_filter(i18n::tr("Base de datos"), &["db"])
                 .save_file()
             {
                 self.upkeep_msg = match lucy_core::upkeep::backup(&d) {
@@ -13429,7 +13530,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     row(ui, 16.0, |ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(line)
+                                egui::RichText::new(i18n::tr(line))
                                     .size(theme::FS_CAPTION)
                                     .color(theme::txt2()),
                             )
@@ -13475,7 +13576,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         // arranque deja de leerse.
         let crashed = self.services.iter().filter(|s| s.crashed()).count();
         if crashed > 0 {
-            a.push((Sev::Warn, format!("{crashed} servicio(s) con fallo de arranque")));
+            a.push((
+                Sev::Warn,
+                i18n::trf(
+                    "{crashed} servicio(s) con fallo de arranque",
+                    &[("crashed", &crashed.to_string())],
+                ),
+            ));
         }
         a
     }
@@ -13775,7 +13882,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 // quedan: una lista recortada en silencio miente
                                 // sobre el estado del equipo.
                                 ui.label(
-                                    egui::RichText::new(format!("+{} más", hidden + 1))
+                                    egui::RichText::new(i18n::trf(
+                                        "+{n} más",
+                                        &[("n", &(hidden + 1).to_string())],
+                                    ))
                                         .size(theme::FS_CAPTION)
                                         .color(theme::faint()),
                                 );
@@ -13965,12 +14075,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if let Some((nombre, fallo)) = preguntar {
             let orden = if fallo {
                 i18n::trf(
-                    "El servicio «{svc}» falló al arrancar en este equipo. Mira por qué,                      revisa sus últimos eventos y dime si conviene reintentarlo.",
+                    "El servicio «{svc}» falló al arrancar en este equipo. Mira por qué, \
+                     revisa sus últimos eventos y dime si conviene reintentarlo.",
                     &[("svc", &nombre)],
                 )
             } else {
                 i18n::trf(
-                    "El servicio «{svc}» es de inicio automático y está parado en este                      equipo. Dime para qué sirve, si importa que esté parado y qué haría                      falta para arrancarlo.",
+                    "El servicio «{svc}» es de inicio automático y está parado en este \
+                     equipo. Dime para qué sirve, si importa que esté parado y qué haría \
+                     falta para arrancarlo.",
                     &[("svc", &nombre)],
                 )
             };
@@ -14269,9 +14382,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // cambia no distingue lo uno de lo otro.
                 let s = self.nx_started.map_or(0, |t| t.elapsed().as_secs());
                 ui.label(
-                    egui::RichText::new(format!("ejecutando… {s}s"))
-                        .size(theme::FS_CAPTION)
-                        .color(theme::acc()),
+                    egui::RichText::new(i18n::trf(
+                        "ejecutando… {s}s",
+                        &[("s", &s.to_string())],
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::acc()),
                 );
                 if ui.add(egui::Button::new(i18n::tr("■ Detener")).small()).clicked() {
                     // Mata el proceso, no solo deja de mirarlo: al otro lado hay
@@ -14358,7 +14474,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                         i18n::tr("Respuesta para el comando en curso (p. ej. y) …")
                                             .to_string()
                                     } else {
-                                        format!("Comando o petición para {}…", h.name)
+                                        i18n::trf("Comando o petición para {equipo}…", &[("equipo", &h.name)])
                                     })
                                     .desired_width(ui.available_width() - 34.0)
                                     .frame(false)
@@ -14525,7 +14641,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             Ok(()) => self.nx_lines_mut(id).push(('c', format!("↳ {texto}"))),
             Err(e) => self
                 .nx_lines_mut(id)
-                .push(('e', format!("No se pudo enviar la respuesta: {e}"))),
+                .push((
+                    'e',
+                    i18n::trf("No se pudo enviar la respuesta: {e}", &[("e", &e.to_string())]),
+                )),
         }
     }
 
@@ -14639,8 +14758,12 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 let parado = self.nx_stop.load(std::sync::atomic::Ordering::Relaxed);
                 self.nx_lines_mut(&id).push((
                     'e',
-                    if parado { "(detenido)" } else { "(el comando terminó con error)" }
-                        .to_string(),
+                    i18n::tr(if parado {
+                        "(detenido)"
+                    } else {
+                        "(el comando terminó con error)"
+                    })
+                    .to_string(),
                 ));
             }
         }
@@ -15228,7 +15351,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 self.nx_busy = false;
                 let destino = self.nx_destino.take();
                 if cmd.is_empty() || cmd.contains(lucy_core::nexshell::NO_COMMAND) {
-                    self.nx_aviso(destino.as_ref(), "No supe convertir eso en un comando.");
+                    self.nx_aviso(destino.as_ref(), i18n::tr("No supe convertir eso en un comando."));
                     return;
                 }
                 // La traducción vuelve al equipo QUE LA PIDIÓ. Sin guardar el
@@ -15478,10 +15601,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ],
                         )
                     } else {
-                        format!(
-                            "{} grupos fundidos · {} memorias marcadas. No se borró ninguna: \
-                             quedan etiquetadas y fuera de las consultas vivas.",
-                            r.clusters_found, r.memories_merged
+                        i18n::trf(
+                            "{grupos} grupos fundidos · {memorias} memorias marcadas. No se \
+                             borró ninguna: quedan etiquetadas y fuera de las consultas vivas.",
+                            &[
+                                ("grupos", &r.clusters_found.to_string()),
+                                ("memorias", &r.memories_merged.to_string()),
+                            ],
                         )
                     })
                     .size(theme::FS_CAPTION)
@@ -16049,7 +16175,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         lucy_core::docs::ingest(&ruta, &tx, &stop);
                     });
                     self.doc_rx = Some(rx);
-                    self.doc_estado = Some(("Extrayendo texto…".into(), false));
+                    self.doc_estado = Some((i18n::tr("Extrayendo texto…").into(), false));
                 }
             }
             if ingiriendo && ui.button(i18n::tr("Cancelar")).clicked() {
@@ -16127,7 +16253,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             });
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    egui::RichText::new(format!("{} trozos", d.trozos))
+                                    egui::RichText::new(i18n::trf(
+                                        "{n} trozos",
+                                        &[("n", &d.trozos.to_string())],
+                                    ))
                                         .small()
                                         .weak(),
                                 );
@@ -16186,21 +16315,42 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let mut fin = false;
         while let Ok(p) = rx.try_recv() {
             self.doc_estado = Some(match p {
-                Paso::Extrayendo => ("Extrayendo texto…".into(), false),
-                Paso::Troceando(n) => (format!("Troceando: {n} trozos"), false),
-                Paso::Embebiendo(h, total) => (format!("Embebiendo {h}/{total}…"), false),
+                Paso::Extrayendo => (i18n::tr("Extrayendo texto…").into(), false),
+                Paso::Troceando(n) => (
+                    i18n::trf("Troceando: {n} trozos", &[("n", &n.to_string())]),
+                    false,
+                ),
+                Paso::Embebiendo(h, total) => (
+                    i18n::trf(
+                        "Embebiendo {h}/{total}…",
+                        &[("h", &h.to_string()), ("total", &total.to_string())],
+                    ),
+                    false,
+                ),
                 Paso::Listo(d) => {
                     fin = true;
                     self.docs_l = Some(lucy_core::docs::list());
-                    (format!("«{}» ingerido: {} trozos, todos con vector.", d.nombre, d.trozos), false)
+                    (
+                        i18n::trf(
+                            "«{nombre}» ingerido: {trozos} trozos, todos con vector.",
+                            &[("nombre", &d.nombre), ("trozos", &d.trozos.to_string())],
+                        ),
+                        false,
+                    )
                 }
                 Paso::SinVectores(d, e) => {
                     fin = true;
                     self.docs_l = Some(lucy_core::docs::list());
                     (
-                        format!(
-                            "«{}» quedó buscable por palabras ({} de {} con vector): {e}",
-                            d.nombre, d.vectorizados, d.trozos
+                        i18n::trf(
+                            "«{nombre}» quedó buscable por palabras ({hechos} de {total} con \
+                             vector): {e}",
+                            &[
+                                ("nombre", &d.nombre),
+                                ("hechos", &d.vectorizados.to_string()),
+                                ("total", &d.trozos.to_string()),
+                                ("e", &e),
+                            ],
                         ),
                         false,
                     )
@@ -16378,9 +16528,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 };
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(titulo).strong());
+                        ui.label(egui::RichText::new(i18n::tr(titulo)).strong());
                         ui.label(
-                            egui::RichText::new(explica).size(theme::FS_CAPTION).color(theme::faint()),
+                            egui::RichText::new(i18n::tr(explica))
+                                .size(theme::FS_CAPTION)
+                                .color(theme::faint()),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
@@ -16408,14 +16560,25 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         Some((cuando, nota)) => {
                             let faltan = (cuando + cada) - ahora_epoch();
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "Última vez {} · {}",
-                                    rel_time(*cuando),
-                                    if faltan <= 0 {
-                                        "vencido: correrá en la próxima comprobación".to_string()
-                                    } else {
-                                        format!("próxima en {}", dentro_de(faltan))
-                                    }
+                                egui::RichText::new(i18n::trf(
+                                    "Última vez {cuando} · {plazo}",
+                                    &[
+                                        ("cuando", &rel_time(*cuando)),
+                                        (
+                                            "plazo",
+                                            &if faltan <= 0 {
+                                                i18n::tr(
+                                                    "vencido: correrá en la próxima comprobación",
+                                                )
+                                                .to_string()
+                                            } else {
+                                                i18n::trf(
+                                                    "próxima en {plazo}",
+                                                    &[("plazo", &dentro_de(faltan))],
+                                                )
+                                            },
+                                        ),
+                                    ],
                                 ))
                                 .small()
                                 .weak(),
