@@ -1853,7 +1853,14 @@ const GAP: f32 = 10.0;
 // texto de abajo — y los tests de `layout` miden que ninguna se pase.
 // 18 + 8 + 41 + (10 + 26 + 6) + 16 + 28 = 153.6 medidos; 156 deja holgura.
 const KPI_H: f32 = 156.0;
-const NET_H: f32 = 106.0; // 16 + 10 + 3×18 + 28
+// 16 (rótulo) + 10 + 3×18 (filas) + 16 («+N más») + 28 (relleno) = 124.
+//
+// ERA 106, y su propio comentario decía «16 + 10 + 3×18 + 28», que suman 108:
+// llevaba dos píxeles de menos desde que se escribió. Y ninguna de las dos
+// cuentas contaba la línea del «+N más», que aparece justo cuando el equipo
+// tiene muchos servicios caídos y se montaba encima del rótulo de «Núcleos».
+// Medido con el arnés de los tests: 123 px de contenido en una caja de 106.
+const NET_H: f32 = 124.0;
 /// Alto de la tira de núcleos. UNA fila, pase lo que pase con la cuenta.
 ///
 /// Antes eran tarjetas de 44 px en rejilla: con treinta y dos núcleos, tres
@@ -2650,6 +2657,132 @@ fn meter(ui: &mut egui::Ui, w: f32, h: f32, frac: f32, color: egui::Color32, key
     }
 }
 
+/// Alto de un chip de alerta, y el hueco entre filas de chips.
+const ALERTA_H: f32 = 20.0;
+const ALERTA_GAP: f32 = 5.0;
+
+/// Los colores de una banda: `(texto, fondo)`.
+///
+/// UNO SOLO PARA TODA LA PANTALLA. `theme::disk_color` avisaba en ámbar desde
+/// 80, `theme::meter_color` no tenía ámbar y saltaba a rojo en 90, y las
+/// alertas empezaban en 86. El mismo disco al 85 % salía verde, ámbar y sin
+/// avisar a la vez. Ahora el corte lo pone `thresholds` y esto solo lo pinta.
+fn color_nivel(n: lucy_core::thresholds::Nivel) -> (egui::Color32, egui::Color32) {
+    use lucy_core::thresholds::Nivel;
+    match n {
+        Nivel::Ok => (theme::acc(), theme::acc_bg()),
+        Nivel::Aviso => (theme::amber(), theme::amber_bg()),
+        Nivel::Critico => (theme::red(), theme::red_bg()),
+    }
+}
+
+/// Lo que ocupa un chip de alerta, texto incluido.
+fn alerta_ancho(ui: &egui::Ui, texto: &str) -> f32 {
+    let font = egui::FontId::proportional(theme::FS_CAPTION);
+    let t = ui.fonts(|f| f.layout_no_wrap(texto.to_string(), font, theme::txt()).size().x);
+    // 9 px de relleno a cada lado, como el `Frame` que lo dibuja.
+    t + 18.0
+}
+
+/// Reparte los chips en filas que DE VERDAD caben.
+///
+/// ESTO ES LA CORRECCIÓN, y merece la pena decir qué estaba roto. La altura de
+/// la tira salía de `alertas.len() / 3` —tres por fila, siempre— mientras el
+/// contenido se repartía por ancho real con `horizontal_wrapped`. Cuando un
+/// chip no cabía en el resto de la fila, egui lo metía igual en la rendija que
+/// quedara y el texto se partía casi carácter a carácter.
+///
+/// Medido con seis alertas: en español se salía por debajo de 700 px de ancho;
+/// en alemán, a 1000 px la caja decía 70 px y el contenido ocupaba 73, a 900
+/// ocupaba 448 y a 640, mil ciento ocho. Mil cien píxeles de tira de alertas en
+/// una ventana de 1280, que es una ventana de todos los días.
+///
+/// `primera` es lo que hay que dejar libre en la primera fila para la cabecera.
+fn alertas_filas(ui: &egui::Ui, ancho: f32, textos: &[String], primera: f32) -> Vec<Vec<usize>> {
+    let mut filas: Vec<Vec<usize>> = Vec::new();
+    let mut actual: Vec<usize> = Vec::new();
+    let mut usado = primera;
+    for (i, t) in textos.iter().enumerate() {
+        let w = alerta_ancho(ui, t) + 8.0; // 8 = separación entre chips
+        // Un chip más ancho que la fila entera va solo en la suya y se trunca al
+        // pintarse. Sin este caso, el bucle no avanzaría nunca.
+        if !actual.is_empty() && usado + w > ancho {
+            filas.push(std::mem::take(&mut actual));
+            usado = 0.0;
+        }
+        usado += w;
+        actual.push(i);
+    }
+    if !actual.is_empty() {
+        filas.push(actual);
+    }
+    filas
+}
+
+/// Cómo se lee una tendencia: «C:\ sube 0.5 pts/día».
+///
+/// LA UNIDAD VA EN LA FRASE. «C:\ +0.5» no dice de qué: podría ser el porcentaje
+/// de ahora, gigas, o lo que ha cambiado desde ayer. Puntos porcentuales por día
+/// es lo que se ha medido y es lo único que se puede afirmar.
+fn frase_tendencia(rotulo: &str, t: &lucy_core::history::Tendencia) -> String {
+    use lucy_core::history::Rumbo;
+    let pts = format!("{:.1}", t.por_dia.abs());
+    let cola = match t.rumbo {
+        Rumbo::Sube => i18n::trf("sube {pts} pts/día", &[("pts", &pts)]),
+        Rumbo::Baja => i18n::trf("baja {pts} pts/día", &[("pts", &pts)]),
+        Rumbo::Estable => i18n::tr("estable").to_string(),
+    };
+    format!("{rotulo} {cola}")
+}
+
+/// Qué color merece una tendencia.
+///
+/// SUBIR NO ES MALO POR SÍ SOLO. Una CPU que sube tres puntos al día porque se
+/// empezó un proyecto nuevo no es una avería, y pintarla en rojo gasta el color
+/// que hace falta para lo que sí lo es. Ámbar para lo que se mueve hacia arriba
+/// —que es lo que merece una mirada— y neutro para el resto.
+fn nivel_tendencia(t: &lucy_core::history::Tendencia) -> lucy_core::thresholds::Nivel {
+    use lucy_core::history::Rumbo;
+    match t.rumbo {
+        Rumbo::Sube => lucy_core::thresholds::Nivel::Aviso,
+        _ => lucy_core::thresholds::Nivel::Ok,
+    }
+}
+
+/// Lo que mide la caja de la tira con `n` filas de chips.
+///
+/// Una función y no la cuenta suelta porque la escribe el que pinta y la lee el
+/// test: separadas, el test comprueba una fórmula que ya no es la que se usa.
+fn alertas_alto(n_filas: usize) -> f32 {
+    let n = n_filas.max(1) as f32;
+    24.0 + n * ALERTA_H + (n - 1.0) * ALERTA_GAP
+}
+
+/// Un chip de alerta. Devuelve si se pulsó.
+fn alerta_chip(ui: &mut egui::Ui, w: f32, texto: &str, nivel: lucy_core::thresholds::Nivel) -> bool {
+    let (col, bg) = color_nivel(nivel);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, ALERTA_H), egui::Sense::click());
+    ui.painter().rect_filled(rect, egui::Rounding::same(999.0), bg);
+    if resp.hovered() {
+        ui.painter().rect_stroke(
+            rect,
+            egui::Rounding::same(999.0),
+            egui::Stroke::new(1.0_f32, col),
+        );
+    }
+    let font = egui::FontId::proportional(theme::FS_CAPTION);
+    // Se pinta con el painter recortado al chip: un texto más largo que el
+    // hueco se corta en el borde en vez de salirse por encima del siguiente.
+    ui.painter_at(rect).text(
+        rect.left_center() + egui::vec2(9.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        texto,
+        font,
+        col,
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
 /// Fila de un servicio detenido: LED + nombre en mono.
 ///
 /// El LED es neutro por defecto. Estuvo en ámbar para todas las filas, y una
@@ -2698,8 +2831,14 @@ fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) -> bool {
 }
 
 /// Tarjeta de un volumen: punto de montaje, porcentaje, barra y espacio libre.
-fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
+fn disk_card(
+    ui: &mut egui::Ui,
+    w: f32,
+    d: &lucy_core::system::DiskInfo,
+    u: &lucy_core::thresholds::Umbrales,
+) {
     let pct = disk_pct(d);
+    let (col_pct, _) = color_nivel(u.disco(pct));
     card(ui, egui::vec2(w, DISK_H), 12.0, |ui| {
         row_align(ui, 18.0, egui::Align::Center, |ui| {
             ui.label(
@@ -2713,12 +2852,12 @@ fn disk_card(ui: &mut egui::Ui, w: f32, d: &lucy_core::system::DiskInfo) {
                     egui::RichText::new(format!("{pct:.0}%"))
                         .size(theme::FS_FOOTNOTE)
                         .monospace()
-                        .color(theme::disk_color(pct)),
+                        .color(col_pct),
                 );
             });
         });
         ui.add_space(8.0);
-        meter(ui, w - 24.0, 5.0, pct / 100.0, theme::disk_color(pct), &d.mount, theme::DUR_SLOW);
+        meter(ui, w - 24.0, 5.0, pct / 100.0, col_pct, &d.mount, theme::DUR_SLOW);
         ui.add_space(8.0);
         ui.add(
             egui::Label::new(
@@ -3534,6 +3673,13 @@ struct Kpi<'a> {
     /// la línea sería una recta. Ahí va una barra de ocupación, que sí dice algo.
     spark: &'a [f32],
     bar: Option<f32>,
+    /// En qué banda cae el valor. Decide el color de la barra.
+    ///
+    /// LO DECIDE EL EQUIPO Y NO LA TARJETA. Antes la barra usaba
+    /// `theme::meter_color`, que solo tenía rojo a partir de 90 — mientras la
+    /// tarjeta del mismo volumen avisaba en ámbar desde 80 y la tira de alertas
+    /// desde 86. Tres cortes para el mismo número en la misma pantalla.
+    nivel: lucy_core::thresholds::Nivel,
     sub: String,
     /// Segunda línea de detalle. Existe porque la tarjeta de SISTEMA necesita
     /// dos y un `\n` no serviría: el truncado que impide que un nombre largo
@@ -3554,6 +3700,7 @@ impl Default for Kpi<'_> {
             text: String::new(),
             spark: &[],
             bar: None,
+            nivel: lucy_core::thresholds::Nivel::Ok,
             sub: String::new(),
             sub2: String::new(),
         }
@@ -3612,12 +3759,86 @@ impl WsTab {
     }
 }
 
-/// Gravedad de una alerta derivada. Dos niveles, como la V2: uno colorea el
-/// chip del equipo de ámbar y el otro de rojo.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Sev {
-    Warn,
-    Bad,
+/// Qué hacer cuando se pulsa una alerta.
+///
+/// UNA ALERTA QUE NO LLEVA A NINGÚN SITIO ES MEDIA HERRAMIENTA. «Disco C:\ al
+/// 95 %» dice qué pasa y deja al operador buscando por su cuenta dónde se mira
+/// eso; el patrón de pulsar un servicio caído para que Lucy lo investigue ya
+/// existía en esta misma pantalla y funcionaba, y no había motivo para que las
+/// demás alertas no lo tuvieran.
+#[derive(Clone, PartialEq, Eq)]
+enum Accion {
+    /// Al inventario, donde están los volúmenes con su detalle.
+    Disco,
+    /// Que Lucy mire los servicios que fallaron al arrancar.
+    Servicios,
+    /// Ordenar los procesos por esa columna: quién se está comiendo la máquina
+    /// es la siguiente pregunta, y la tabla ya está en pantalla.
+    PorCpu,
+    PorRam,
+}
+
+/// Una alerta derivada del estado del equipo.
+#[derive(Clone)]
+struct Alerta {
+    nivel: lucy_core::thresholds::Nivel,
+    texto: String,
+    accion: Accion,
+}
+
+/// Cuánto tiene que aguantar un estado PEOR antes de creérselo.
+///
+/// Corto: cuando algo empeora hay que enterarse. Tres segundos son tres
+/// muestras, suficiente para descartar un pico de un frame y poco para retrasar
+/// una noticia de verdad.
+const SALUD_EMPEORA: Duration = Duration::from_secs(3);
+
+/// Y cuánto tiene que aguantar uno MEJOR. Bastante más.
+///
+/// Asimétrico a propósito. Una CPU que roza el 90 % mientras se compila cruza
+/// el corte arriba y abajo varias veces por minuto, y con el mismo plazo en las
+/// dos direcciones el indicador del equipo parpadea entre rojo y verde. Un
+/// indicador que parpadea deja de mirarse, que es el mismo razonamiento por el
+/// que los servicios parados limpios no levantan alerta.
+const SALUD_MEJORA: Duration = Duration::from_secs(20);
+
+/// El estado de salud del equipo, estabilizado.
+struct Salud {
+    nivel: lucy_core::thresholds::Nivel,
+    /// Desde cuándo está así. Se enseña: «Atención · desde hace 6 min» dice
+    /// mucho más que «Atención», y distingue un problema que acaba de aparecer
+    /// de uno que lleva toda la mañana y nadie ha mirado.
+    desde: Instant,
+    /// Un estado distinto que todavía no ha aguantado bastante.
+    candidato: Option<(lucy_core::thresholds::Nivel, Instant)>,
+}
+
+impl Salud {
+    fn nueva(ahora: Instant) -> Self {
+        Self { nivel: lucy_core::thresholds::Nivel::Ok, desde: ahora, candidato: None }
+    }
+
+    /// Mete una observación. Solo cambia de estado si aguanta su plazo.
+    fn observa(&mut self, obs: lucy_core::thresholds::Nivel, ahora: Instant) {
+        if obs == self.nivel {
+            self.candidato = None;
+            return;
+        }
+        let plazo = if obs > self.nivel { SALUD_EMPEORA } else { SALUD_MEJORA };
+        match self.candidato {
+            // El candidato cambió: vuelve a empezar a contar. Sin esto, tres
+            // observaciones distintas seguidas sumarían plazo entre ellas y el
+            // equipo saltaría a un estado que nunca se sostuvo.
+            Some((n, _)) if n != obs => self.candidato = Some((obs, ahora)),
+            Some((_, t)) if ahora.duration_since(t) >= plazo => {
+                self.nivel = obs;
+                self.desde = ahora;
+                self.candidato = None;
+            }
+            Some(_) => {}
+            None => self.candidato = Some((obs, ahora)),
+        }
+    }
 }
 
 struct App {
@@ -4010,6 +4231,28 @@ struct App {
     /// elegir entre medidores lentos o un PowerShell por segundo.
     procs_last: Instant,
     svc_last: Instant,
+    /// Hora de la última sonda de servicios TERMINADA.
+    ///
+    /// APARTE DEL SELLO GENERAL, y no por gusto. El de la cabecera se refresca
+    /// cada segundo y se refiere a CPU, RAM y red. La lista de servicios llega
+    /// cada treinta segundos, y si la sonda falla —PowerShell bloqueado por
+    /// política— se conserva la última buena, que es lo correcto. Lo que no era
+    /// correcto es enseñar «Atención · 3 servicios con fallo» debajo de una hora
+    /// que no es la de ese dato.
+    svc_stamp: String,
+    /// Los umbrales del equipo seleccionado. Se leen al arrancar y al cambiar de
+    /// equipo: es una consulta a la base y no tiene nada que hacer en el pintado.
+    umbrales: lucy_core::thresholds::Umbrales,
+    /// La salud del equipo, estabilizada. Ver `Salud`.
+    salud: Salud,
+    /// Si la tira de alertas está desplegada. Cerrada enseña el recuento.
+    alertas_abiertas: bool,
+    /// Lo que dice el historial. Se recalcula cada pocos minutos, no por frame:
+    /// son hasta cuarenta y tres mil filas y una recta por métrica.
+    hist: lucy_core::history::Resumen,
+    hist_last: Instant,
+    /// Cuándo se guardó la última muestra, en epoch.
+    hist_guardado: i64,
     /// Un comando aprobado que se está ejecutando: el id de su paso del plan y
     /// el canal por el que llegará `(salida, error, ok, ms)`.
     ///
@@ -4374,6 +4617,16 @@ impl App {
             // esperando 30 segundos a que aparezcan los servicios.
             procs_last: Instant::now() - Duration::from_secs(60),
             svc_last: Instant::now() - Duration::from_secs(60),
+            svc_stamp: String::from("—"),
+            umbrales: lucy_core::thresholds::de("local"),
+            salud: Salud::nueva(Instant::now()),
+            alertas_abiertas: false,
+            hist: lucy_core::history::Resumen::default(),
+            // En el pasado para que el primer frame ya calcule: abrir el
+            // Dashboard y esperar cinco minutos a saber si el disco sube sería
+            // no tener la función.
+            hist_last: Instant::now() - Duration::from_secs(3600),
+            hist_guardado: 0,
             exec_rx: None,
             svc_rx: None,
             cpu_hist: Vec::new(),
@@ -12015,6 +12268,49 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             let s = self.sys.snapshot();
             push_hist(&mut self.cpu_hist, s.cpu_pct);
             push_hist(&mut self.ram_hist, mem_pct(&s));
+
+            // ── el historial en disco ────────────────────────────────────────
+            //
+            // Una muestra por minuto, no por segundo: la pregunta que contesta
+            // —«¿esto es nuevo?»— se hace en escala de días, y al segundo serían
+            // 2,6 millones de filas al mes por equipo.
+            //
+            // SOLO DEL EQUIPO LOCAL, porque es lo único que se mide aquí. Un
+            // remoto se sondea por WinRM y ese bloque todavía vive en la app
+            // Tauri; guardar sus métricas bajo este `host_id` mezclaría dos
+            // máquinas en la misma serie, y la tendencia saldría de la media de
+            // dos cosas que no tienen nada que ver.
+            let ahora = ahora_epoch();
+            if self.selected_host == "local"
+                && ahora - self.hist_guardado >= lucy_core::history::CADA_SECS
+            {
+                self.hist_guardado = ahora;
+                let m = lucy_core::history::Muestra {
+                    ts: ahora,
+                    cpu: s.cpu_pct,
+                    mem: mem_pct(&s),
+                    discos: s.disks.iter().map(|d| (d.mount.clone(), disk_pct(d))).collect(),
+                };
+                // Un fallo al escribir NO se propaga: el panel funciona sin
+                // historial, y dejar la pantalla en blanco porque no se pudo
+                // apuntar una muestra sería cambiar un lujo por lo básico.
+                let _ = lucy_core::history::guarda("local", &m);
+            }
+        }
+
+        // El resumen del historial, cada cinco minutos. Lee hasta cuarenta y
+        // tres mil filas y ajusta una recta por métrica: es barato, pero no
+        // sesenta veces por segundo para enseñar una frase que cambia una vez
+        // al día.
+        if force || self.hist_last.elapsed() >= Duration::from_secs(300) {
+            self.hist_last = Instant::now();
+            if self.selected_host == "local" {
+                self.hist = lucy_core::history::resumen(
+                    "local",
+                    lucy_core::history::DIAS,
+                    ahora_epoch(),
+                );
+            }
         }
         // ── procesos: TAMBIÉN EN OTRO HILO ───────────────────────────────────
         //
@@ -12091,6 +12387,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         match rx.try_recv() {
             Ok(Some(v)) => {
                 self.services = v;
+                self.svc_stamp = stamp_now();
                 self.svc_rx = None;
             }
             // Sonda fallida o hilo caído: se cierra el turno y se deja intacta
@@ -12182,7 +12479,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
             }
             if let Some(frac) = k.bar {
                 ui.add_space(12.0);
-                meter(ui, inner_w, 5.0, frac, theme::meter_color(frac * 100.0), k.title, theme::DUR_SLOW);
+                meter(ui, inner_w, 5.0, frac, color_nivel(k.nivel).0, k.title, theme::DUR_SLOW);
                 ui.add_space(8.0);
             }
 
@@ -12821,6 +13118,90 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                 }
             },
         );
+        ui.add_space(GAP);
+        self.cfg_umbrales(ui, col);
+    }
+
+    /// A partir de qué número avisa el Dashboard, para ESTE equipo.
+    ///
+    /// POR EQUIPO Y NO GLOBAL. Un servidor de compilación al 90 % de CPU está
+    /// haciendo su trabajo, y un panel que lo pinta en rojo todas las tardes
+    /// enseña a no mirarlo — que es exactamente lo contrario de para lo que
+    /// está. Los de fábrica son los que había siempre; esto solo permite
+    /// moverlos donde estorban.
+    fn cfg_umbrales(&mut self, ui: &mut egui::Ui, col: f32) {
+        let mut u = self.umbrales;
+        let mut tocado = false;
+        let mut restaurar = false;
+        let de_fabrica = u == lucy_core::thresholds::Umbrales::default();
+        panel(
+            ui,
+            col,
+            icons::Icon::Bolt,
+            "Umbrales de este equipo",
+            |ui| {
+                // El botón SOLO si hay algo que devolver. Un «volver a los de
+                // fábrica» siempre visible en un panel que ya está de fábrica es
+                // un control que no hace nada, y esos enseñan a no leer los
+                // demás.
+                if !de_fabrica
+                    && ui.small_button(i18n::tr("Volver a los de fábrica")).clicked()
+                {
+                    restaurar = true;
+                }
+            },
+            |ui| {
+                ui.add(egui::Label::new(
+                    egui::RichText::new(i18n::tr(
+                        "Un servidor de compilación al 90 % está trabajando. Lo que aquí se \
+                         ajusta cambia el color, las alertas y el indicador de salud — solo \
+                         en este equipo.",
+                    ))
+                    .size(theme::FS_CAPTION)
+                    .color(theme::faint()),
+                ));
+                ui.add_space(8.0);
+                // Los seis en pares: el aviso y el crítico de cada métrica
+                // juntos, que es como se leen — uno dice cuándo mirar y el otro
+                // cuándo actuar, y separarlos obliga a recomponerlos mentalmente.
+                let campos: [(&str, &mut f32, f32, f32); 6] = [
+                    ("CPU · aviso", &mut u.cpu_aviso, 1.0, 99.0),
+                    ("CPU · crítico", &mut u.cpu_critico, 1.0, 100.0),
+                    ("RAM · aviso", &mut u.mem_aviso, 1.0, 99.0),
+                    ("RAM · crítico", &mut u.mem_critico, 1.0, 100.0),
+                    ("Disco · aviso", &mut u.disco_aviso, 1.0, 99.0),
+                    ("Disco · crítico", &mut u.disco_critico, 1.0, 100.0),
+                ];
+                let ultimo = campos.len() - 1;
+                for (i, (etiqueta, valor, min, max)) in campos.into_iter().enumerate() {
+                    fila(ui, etiqueta, None, i == ultimo, |ui| {
+                        let r = ui.add(
+                            egui::DragValue::new(valor)
+                                .speed(0.5)
+                                .range(min..=max)
+                                .suffix(" %"),
+                        );
+                        if r.changed() {
+                            tocado = true;
+                        }
+                    });
+                }
+            },
+        );
+        if restaurar {
+            let _ = lucy_core::thresholds::olvida("local");
+            self.umbrales = lucy_core::thresholds::Umbrales::default();
+        } else if tocado {
+            // SE GUARDA YA, sin botón de aplicar. Todo lo demás en esta pantalla
+            // funciona así, y un panel que sí lo pidiera dejaría al operador sin
+            // saber cuáles de sus cambios están puestos.
+            //
+            // `sane` corrige un aviso por encima del crítico en vez de
+            // rechazarlo: se escribe así arrastrando el control, y negarse a
+            // guardar deja un formulario que no explica qué le pasa.
+            self.umbrales = u.sane();
+            let _ = lucy_core::thresholds::guarda("local", &self.umbrales);
+        }
     }
 
     /// Claves, operador, skills y la memoria: lo que se da de alta una vez.
@@ -13569,26 +13950,42 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
     /// 80 % es una máquina trabajando, un disco al 80 % es una máquina a la que
     /// le queda poco. Un único umbral para todo es cómo un panel acaba avisando
     /// tarde de lo que importa y pronto de lo que no.
-    fn alerts(&self, s: &lucy_core::system::SysSnapshot) -> Vec<(Sev, String)> {
+    fn alerts(&self, s: &lucy_core::system::SysSnapshot) -> Vec<Alerta> {
+        use lucy_core::thresholds::Nivel;
+        let u = self.umbrales;
         let mut a = Vec::new();
+
+        // UN SOLO TEXTO POR MÉTRICA, con el nivel aparte. Antes había dos
+        // frases —«CPU al 94%» y «CPU alta (94%)»— que decían lo mismo con
+        // distinta cara, y eso son dos entradas de traducción y dos formas de
+        // leer el mismo hecho. El color ya dice cuánto de grave es.
         let cpu = s.cpu_pct;
-        if cpu >= 90.0 {
-            a.push((Sev::Bad, format!("CPU al {cpu:.0}%")));
-        } else if cpu >= 78.0 {
-            a.push((Sev::Warn, format!("CPU alta ({cpu:.0}%)")));
+        if u.cpu(cpu) != Nivel::Ok {
+            a.push(Alerta {
+                nivel: u.cpu(cpu),
+                texto: i18n::trf("CPU al {pct}%", &[("pct", &format!("{cpu:.0}"))]),
+                accion: Accion::PorCpu,
+            });
         }
         let mp = mem_pct(s);
-        if mp >= 92.0 {
-            a.push((Sev::Bad, format!("RAM al {mp:.0}%")));
-        } else if mp >= 82.0 {
-            a.push((Sev::Warn, format!("RAM alta ({mp:.0}%)")));
+        if u.mem(mp) != Nivel::Ok {
+            a.push(Alerta {
+                nivel: u.mem(mp),
+                texto: i18n::trf("RAM al {pct}%", &[("pct", &format!("{mp:.0}"))]),
+                accion: Accion::PorRam,
+            });
         }
         for d in &s.disks {
             let pct = disk_pct(d);
-            if pct >= 93.0 {
-                a.push((Sev::Bad, format!("Disco {} al {pct:.0}%", d.mount)));
-            } else if pct >= 86.0 {
-                a.push((Sev::Warn, format!("Disco {} al {pct:.0}%", d.mount)));
+            if u.disco(pct) != Nivel::Ok {
+                a.push(Alerta {
+                    nivel: u.disco(pct),
+                    texto: i18n::trf(
+                        "Disco {mount} al {pct}%",
+                        &[("mount", &d.mount), ("pct", &format!("{pct:.0}"))],
+                    ),
+                    accion: Accion::Disco,
+                });
             }
         }
         // Solo los CAÍDOS. Un servicio parado limpio se informa en su tarjeta y
@@ -13597,13 +13994,14 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // arranque deja de leerse.
         let crashed = self.services.iter().filter(|s| s.crashed()).count();
         if crashed > 0 {
-            a.push((
-                Sev::Warn,
-                i18n::trf(
+            a.push(Alerta {
+                nivel: Nivel::Aviso,
+                texto: i18n::trf(
                     "{crashed} servicio(s) con fallo de arranque",
                     &[("crashed", &crashed.to_string())],
                 ),
-            ));
+                accion: Accion::Servicios,
+            });
         }
         a
     }
@@ -13621,30 +14019,42 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // porque mandarle la orden a Lucy cambia de pantalla, y hacerlo en
         // mitad de pintar el Dashboard es repintar lo que ya no se ve.
         let mut preguntar: Option<(String, bool)> = None;
+        // La alerta pulsada, por lo mismo: su acción puede cambiar de pantalla.
+        let mut accion: Option<Accion> = None;
         let s = self.sys.snapshot();
         let net = self.net;
         let alerts = self.alerts(&s);
         let ctx = ui.ctx().clone();
 
+        // La salud, ESTABILIZADA. Ver `Salud`: una CPU que roza el corte
+        // mientras se compila lo cruza varias veces por minuto, y sin esto el
+        // indicador del equipo parpadeaba entre rojo y verde a 1 Hz.
+        let peor = alerts
+            .iter()
+            .map(|a| a.nivel)
+            .max()
+            .unwrap_or(lucy_core::thresholds::Nivel::Ok);
+        self.salud.observa(peor, Instant::now());
+
         // La entrada escalonada sigue corriendo aunque no llegue ningún dato:
         // hay que pedir repintado mientras dure, o se vería a saltos de 1 Hz.
-        if self.entrance(5) < 1.0 {
+        if self.entrance(6) < 1.0 {
             ctx.request_repaint();
         }
-        let ent: [f32; 6] = std::array::from_fn(|i| self.entrance(i));
+        let ent: [f32; 7] = std::array::from_fn(|i| self.entrance(i));
 
         // ── cabecera ─────────────────────────────────────────────────────────
         row_align(ui, 30.0, egui::Align::Center, |ui| {
             titulo_modulo(ui, View::Dashboard);
             self.host_picker(ui);
 
-            let (sal_txt, sal_col, sal_bg) = if alerts.iter().any(|(v, _)| *v == Sev::Bad) {
-                ("Crítico", theme::red(), theme::red_bg())
-            } else if alerts.is_empty() {
-                ("Saludable", theme::acc(), theme::acc_bg())
-            } else {
-                ("Atención", theme::amber(), theme::amber_bg())
+            use lucy_core::thresholds::Nivel;
+            let sal_txt = match self.salud.nivel {
+                Nivel::Critico => "Crítico",
+                Nivel::Aviso => "Atención",
+                Nivel::Ok => "Saludable",
             };
+            let (sal_col, sal_bg) = color_nivel(self.salud.nivel);
             egui::Frame::none()
                 .fill(sal_bg)
                 .rounding(egui::Rounding::same(999.0))
@@ -13657,7 +14067,28 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             .size(theme::FS_CAPTION)
                             .color(sal_col),
                     );
+                    // DESDE CUÁNDO. «Atención» a secas no distingue un problema
+                    // que acaba de aparecer de uno que lleva toda la mañana y
+                    // nadie ha mirado, que es la diferencia entre mirarlo ahora
+                    // y mirarlo el lunes. Solo si no está sano: «Saludable desde
+                    // hace 3 h» es ruido.
+                    let secs = self.salud.desde.elapsed().as_secs();
+                    if self.salud.nivel != Nivel::Ok && secs >= 60 {
+                        ui.label(
+                            egui::RichText::new(i18n::trf(
+                                "· desde hace {plazo}",
+                                &[("plazo", &dentro_de(secs as i64))],
+                            ))
+                            .size(theme::FS_CAPTION)
+                            .color(sal_col.gamma_multiply(0.75)),
+                        );
+                    }
                 });
+            // EL SELLO DICE A QUÉ SE REFIERE. Este es el de las métricas —CPU,
+            // RAM, red— que se remuestrean cada segundo. El de los servicios va
+            // en su tarjeta, porque llega cada treinta segundos y puede quedarse
+            // viejo si la sonda falla; enseñar los dos bajo la misma hora hacía
+            // que uno de los dos mintiera.
             ui.label(
                 egui::RichText::new(i18n::trf(
                     "act. {hora}",
@@ -13666,7 +14097,8 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     .size(theme::FS_CAPTION)
                     .monospace()
                     .color(theme::faint()),
-            );
+            )
+            .on_hover_text(i18n::tr("CPU, RAM y red. Los servicios tienen su propia hora."));
 
             let mut pedir = false;
             right(ui, 26.0, |ui| {
@@ -13717,39 +14149,94 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
 
                 // ── tira de alertas ──────────────────────────────────────────
                 if !alerts.is_empty() {
+                    // UNA SOLA ALERTA NO SE RESUME. «⚠ 1 aviso» es
+                    // estrictamente peor que «Disco C:\ al 95 %», y siempre
+                    // cabe: resumir ahí sería esconder por norma.
+                    let abierta = self.alertas_abiertas || alerts.len() == 1;
+                    let textos: Vec<String> = alerts.iter().map(|a| a.texto.clone()).collect();
+                    let criticas = alerts
+                        .iter()
+                        .filter(|a| a.nivel == lucy_core::thresholds::Nivel::Critico)
+                        .count();
+                    let cabecera = if criticas > 0 {
+                        i18n::trf(
+                            "⚠ {criticas} críticas · {avisos} avisos",
+                            &[
+                                ("criticas", &criticas.to_string()),
+                                ("avisos", &(alerts.len() - criticas).to_string()),
+                            ],
+                        )
+                    } else {
+                        i18n::trf(
+                            "⚠ {avisos} avisos",
+                            &[("avisos", &alerts.len().to_string())],
+                        )
+                    };
+                    let cab_w = alerta_ancho(ui, &cabecera) + 8.0;
+
+                    // LA ALTURA SE MIDE, no se estima. Ver `alertas_filas`: la
+                    // estimación era `len/3` y con seis alertas en alemán a 900
+                    // px la caja decía 70 px mientras el contenido ocupaba 448.
+                    let interior = full - 24.0;
+                    // Cerrada es UNA fila sin chips: solo la cabecera. Así el
+                    // bucle de abajo es el mismo en los dos casos.
+                    let filas = if abierta {
+                        alertas_filas(ui, interior, &textos, cab_w)
+                    } else {
+                        vec![Vec::new()]
+                    };
+                    let h = alertas_alto(filas.len());
+
                     block(ui, ent[0], |ui| {
-                        let h = 22.0 + 16.0 * (1 + alerts.len() / 3) as f32;
                         card_on(ui, egui::vec2(full, h), 12.0, theme::bg2(), |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "⚠ {} alerta{}",
-                                        alerts.len(),
-                                        if alerts.len() > 1 { "s" } else { "" }
-                                    ))
-                                    .size(theme::FS_FOOTNOTE)
-                                    .color(theme::amber())
-                                    .strong(),
-                                );
-                                for (sev, txt) in &alerts {
-                                    let (c, bg) = match sev {
-                                        Sev::Bad => (theme::red(), theme::red_bg()),
-                                        Sev::Warn => (theme::amber(), theme::amber_bg()),
-                                    };
-                                    egui::Frame::none()
-                                        .fill(bg)
-                                        .rounding(egui::Rounding::same(999.0))
-                                        .inner_margin(egui::Margin::symmetric(9.0, 2.0))
-                                        .show(ui, |ui| {
-                                            ui.label(
-                                                egui::RichText::new(txt)
-                                                    .size(theme::FS_CAPTION)
-                                                    .color(c),
-                                            );
-                                        });
+                            let mut alternar = false;
+                            for (n, fila) in filas.iter().enumerate() {
+                                if n > 0 {
+                                    ui.add_space(ALERTA_GAP);
                                 }
-                            });
+                                row(ui, ALERTA_H, |ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    // La cabecera va en la primera fila y es el
+                                    // botón de abrir y cerrar.
+                                    if n == 0 {
+                                        let (r, resp) = ui.allocate_exact_size(
+                                            egui::vec2(cab_w - 8.0, ALERTA_H),
+                                            egui::Sense::click(),
+                                        );
+                                        ui.painter().text(
+                                            r.left_center(),
+                                            egui::Align2::LEFT_CENTER,
+                                            &cabecera,
+                                            egui::FontId::proportional(theme::FS_FOOTNOTE),
+                                            if criticas > 0 { theme::red() } else { theme::amber() },
+                                        );
+                                        // Sin desplegable cuando solo hay una:
+                                        // ya está entera a la vista.
+                                        if alerts.len() > 1
+                                            && resp
+                                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                                .on_hover_text(i18n::tr(if abierta {
+                                                    "Plegar las alertas"
+                                                } else {
+                                                    "Ver las alertas"
+                                                }))
+                                                .clicked()
+                                        {
+                                            alternar = true;
+                                        }
+                                    }
+                                    for &i in fila {
+                                        let w = alerta_ancho(ui, &textos[i])
+                                            .min(ui.available_width());
+                                        if alerta_chip(ui, w, &textos[i], alerts[i].nivel) {
+                                            accion = Some(alerts[i].accion.clone());
+                                        }
+                                    }
+                                });
+                            }
+                            if alternar {
+                                self.alertas_abiertas = !self.alertas_abiertas;
+                            }
                         });
                     });
                     ui.add_space(GAP);
@@ -13812,6 +14299,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                     // recta. Lo que se quiere saber es cuánto
                                     // queda, y eso lo dice la ocupación.
                                     bar: Some(pct / 100.0),
+                                    nivel: self.umbrales.disco(pct),
                                     sub: i18n::trf(
                                         "{libre} libres de {total}",
                                         &[
@@ -13819,6 +14307,25 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                                             ("total", &fmt_gb(d.total)),
                                         ],
                                     ),
+                                    // LO QUE SE VIENE A PREGUNTAR de un disco no
+                                    // es «cuánto» sino «cuándo». Al 87 % subiendo
+                                    // medio punto al día se llena en veintiséis
+                                    // días y cabe en el mantenimiento del mes; el
+                                    // mismo 87 % subiendo ocho es esta tarde.
+                                    sub2: self
+                                        .hist
+                                        .discos
+                                        .iter()
+                                        .find(|(m, _)| *m == d.mount)
+                                        .and_then(|(_, t)| {
+                                            t.dias_hasta(pct, 100.0).map(|dias| {
+                                                i18n::trf(
+                                                    "se llena en ~{dias} días",
+                                                    &[("dias", &format!("{dias:.0}"))],
+                                                )
+                                            })
+                                        })
+                                        .unwrap_or_default(),
                                     ..Default::default()
                                 },
                             );
@@ -13870,8 +14377,25 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                             });
                         });
 
+                        let svc_stamp = self.svc_stamp.clone();
                         card(ui, egui::vec2(svw, NET_H), 14.0, |ui| {
-                            panel_title(ui, icons::Icon::Server, "Servicios detenidos");
+                            row_align(ui, 16.0, egui::Align::Center, |ui| {
+                                panel_title(ui, icons::Icon::Server, "Servicios detenidos");
+                                // SU PROPIA HORA. Esta lista llega cada treinta
+                                // segundos y, si la sonda falla —PowerShell
+                                // bloqueado por política—, se conserva la última
+                                // buena: lo correcto. Lo que no lo era es
+                                // enseñarla bajo el sello de la cabecera, que se
+                                // refresca cada segundo y habla de CPU y RAM.
+                                right(ui, 16.0, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(&svc_stamp)
+                                            .size(theme::FS_CAPTION)
+                                            .monospace()
+                                            .color(theme::faint()),
+                                    );
+                                });
+                            });
                             ui.add_space(10.0);
                             if services.is_empty() {
                                 ui.label(
@@ -13951,7 +14475,7 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                         for chunk in disks.chunks(dcols) {
                             row(ui, DISK_H, |ui| {
                                 for d in chunk {
-                                    disk_card(ui, dcw, d);
+                                    disk_card(ui, dcw, d, &self.umbrales);
                                 }
                             });
                             ui.add_space(GAP);
@@ -13959,8 +14483,77 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
                     });
                 }
 
+                // ── historial ────────────────────────────────────────────────
+                //
+                // LA FRANJA QUE CONVIERTE UN PANEL EN UN DIAGNÓSTICO. «CPU al
+                // 91 %» no distingue una hora punta de una fuga que lleva
+                // subiendo desde el martes, y esa es la pregunta que se hace
+                // delante del número.
+                //
+                // No aparece hasta que hay con qué. Una franja que dice
+                // «estable» con veinte minutos de datos es peor que no estar:
+                // afirma algo sobre el equipo que nadie ha medido.
+                if self.hist.muestras > 0 {
+                    let h = &self.hist;
+                    block(ui, ent[5], |ui| {
+                        let desde = h
+                            .desde_ts
+                            .map(|t| dentro_de(ahora_epoch() - t))
+                            .unwrap_or_default();
+                        section(
+                            ui,
+                            "Historial",
+                            Some(i18n::trf(
+                                "{n} muestras desde hace {plazo}",
+                                &[("n", &h.muestras.to_string()), ("plazo", &desde)],
+                            )),
+                        );
+                        row(ui, 22.0, |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            let mut algo = false;
+                            for (rotulo, t) in [("CPU", h.cpu), ("RAM", h.mem)] {
+                                if let Some(t) = t {
+                                    algo = true;
+                                    let w = alerta_ancho(ui, &frase_tendencia(rotulo, &t));
+                                    alerta_chip(
+                                        ui,
+                                        w.min(ui.available_width()),
+                                        &frase_tendencia(rotulo, &t),
+                                        nivel_tendencia(&t),
+                                    );
+                                }
+                            }
+                            for (mount, t) in &h.discos {
+                                algo = true;
+                                let txt = frase_tendencia(mount, t);
+                                let w = alerta_ancho(ui, &txt);
+                                alerta_chip(
+                                    ui,
+                                    w.min(ui.available_width()),
+                                    &txt,
+                                    nivel_tendencia(t),
+                                );
+                            }
+                            // SE DICE QUE TODAVÍA NO SE SABE, en vez de callar.
+                            // Una franja vacía se lee como «no pasa nada», que
+                            // es una afirmación; lo que ocurre es que aún no hay
+                            // seis horas de muestras.
+                            if !algo {
+                                ui.label(
+                                    egui::RichText::new(i18n::tr(
+                                        "todavía no hay bastante para una tendencia",
+                                    ))
+                                    .size(theme::FS_CAPTION)
+                                    .color(theme::faint()),
+                                );
+                            }
+                        });
+                        ui.add_space(GAP);
+                    });
+                }
+
                 // ── top procesos ─────────────────────────────────────────────
-                let t_proc = ent[5];
+                let t_proc = ent[6];
                 let procs = &self.procs;
                 let mut cambiar: Option<bool> = None;
                 let by_cpu = self.proc_by_cpu;
@@ -14097,6 +14690,48 @@ Un skill es una carpeta con un `SKILL.md` \n                 dentro. Se buscan j
         // La pregunta CAMBIA SEGÚN EL CÓDIGO DE SALIDA: uno que se paró limpio
         // casi siempre está así a propósito, y preguntarlo como si fuera una
         // avería llevaría a Lucy a inventarse un problema.
+        // UNA ALERTA QUE LLEVA A ALGÚN SITIO. «Disco C:\ al 95 %» decía qué
+        // pasa y dejaba al operador buscando dónde se mira eso; el patrón de
+        // pulsar un servicio caído para que Lucy lo investigue ya existía en
+        // esta pantalla y no había motivo para que las demás no lo tuvieran.
+        match accion {
+            Some(Accion::Disco) => self.view = View::Inventario,
+            // Quién se está comiendo la máquina es la siguiente pregunta, y la
+            // tabla ya está abajo: se reordena por esa columna en vez de mandar
+            // al operador a otra pantalla.
+            Some(Accion::PorCpu | Accion::PorRam) => {
+                let por_cpu = accion == Some(Accion::PorCpu);
+                if por_cpu != self.proc_by_cpu {
+                    self.proc_by_cpu = por_cpu;
+                    self.proc_probe.pedir(8, por_cpu);
+                    self.procs_last = Instant::now();
+                }
+            }
+            Some(Accion::Servicios) => {
+                let caidos: Vec<String> = self
+                    .services
+                    .iter()
+                    .filter(|s| s.crashed())
+                    .map(|s| s.name.clone())
+                    .collect();
+                if !caidos.is_empty() {
+                    // TODOS DE UNA, y no uno por uno: cuando fallan varios a la
+                    // vez suele ser una causa común —una dependencia, un disco,
+                    // una actualización— y preguntarlos por separado le esconde
+                    // a Lucy justo el dato que lo explica.
+                    let orden = i18n::trf(
+                        "Estos servicios fallaron al arrancar en este equipo: {lista}. Mira \
+                         si tienen una causa común, revisa sus últimos eventos y dime qué \
+                         haría falta para levantarlos.",
+                        &[("lista", &caidos.join(", "))],
+                    );
+                    self.view = View::TerminalIa;
+                    self.send(orden);
+                }
+            }
+            None => {}
+        }
+
         if let Some((nombre, fallo)) = preguntar {
             let orden = if fallo {
                 i18n::trf(
@@ -16706,6 +17341,144 @@ mod layout {
                 r.width()
             );
         }
+    }
+
+    #[test]
+    fn la_tira_de_alertas_cabe_en_su_caja_a_cualquier_ancho() {
+        // EL FALLO QUE ESTO CIERRA, con los números medidos. La altura salía de
+        // `alertas.len() / 3` —tres por fila, siempre— mientras el contenido se
+        // repartía por ancho real con `horizontal_wrapped`. Cuando un chip no
+        // cabía en el resto de la fila, egui lo metía igual en la rendija que
+        // quedara y el texto se partía casi carácter a carácter:
+        //
+        //   seis alertas, 900 px, en alemán → caja 70 px, contenido 448
+        //   seis alertas, 640 px, en alemán → caja 70 px, contenido 1108
+        //
+        // Mil cien píxeles de tira de alertas en una ventana de 1280. Y llegó a
+        // ser alcanzable al traducir: en español no rompía hasta los 700.
+        const ES: &[&str] = &[
+            "CPU al 94%",
+            "RAM al 93%",
+            "Disco C:\\ al 95%",
+            "Disco D:\\ al 91%",
+            "Disco E:\\ al 88%",
+            "3 servicio(s) con fallo de arranque",
+        ];
+        // El alemán es más largo, y un recurso de red es lo más largo que un
+        // punto de montaje llega a ser de verdad.
+        const DE: &[&str] = &[
+            "Prozessor bei 94 %",
+            "Arbeitsspeicher bei 93 %",
+            "Datenträger C:\\ bei 95 %",
+            "Datenträger D:\\ bei 91 %",
+            "Datenträger \\\\fileserver01\\respaldos bei 88 %",
+            "3 Dienst(e) mit Startfehler",
+        ];
+        for textos in [ES, DE] {
+            for n in [1_usize, 2, 3, 6] {
+                for full in [1600.0_f32, 1200.0, 1000.0, 900.0, 700.0, 640.0, 420.0, 240.0] {
+                    let lista: Vec<String> =
+                        textos.iter().take(n).map(|s| s.to_string()).collect();
+                    let cab = "⚠ 2 críticas · 4 avisos".to_string();
+                    let r = measure(full, |ui| {
+                        let cab_w = alerta_ancho(ui, &cab) + 8.0;
+                        let filas = alertas_filas(ui, full - 24.0, &lista, cab_w);
+                        let h = alertas_alto(filas.len());
+                        card_on(ui, egui::vec2(full, h), 12.0, theme::bg2(), |ui| {
+                            for (i, fila) in filas.iter().enumerate() {
+                                if i > 0 {
+                                    ui.add_space(ALERTA_GAP);
+                                }
+                                row(ui, ALERTA_H, |ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    if i == 0 {
+                                        ui.allocate_exact_size(
+                                            egui::vec2(cab_w - 8.0, ALERTA_H),
+                                            egui::Sense::hover(),
+                                        );
+                                    }
+                                    for &j in fila {
+                                        let w = alerta_ancho(ui, &lista[j])
+                                            .min(ui.available_width());
+                                        alerta_chip(
+                                            ui,
+                                            w,
+                                            &lista[j],
+                                            lucy_core::thresholds::Nivel::Aviso,
+                                        );
+                                    }
+                                });
+                            }
+                        });
+                    });
+                    let esperado = measure(full, |ui| {
+                        let cab_w = alerta_ancho(ui, &cab) + 8.0;
+                        let filas = alertas_filas(ui, full - 24.0, &lista, cab_w);
+                        card_on(
+                            ui,
+                            egui::vec2(full, alertas_alto(filas.len())),
+                            12.0,
+                            theme::bg2(),
+                            |_| {},
+                        );
+                    });
+                    assert!(
+                        r.height() <= esperado.height() + 0.5,
+                        "con {n} alertas a {full} px la caja mide {} y el contenido {}",
+                        esperado.height(),
+                        r.height()
+                    );
+                    assert!(
+                        r.width() <= full + 0.5,
+                        "con {n} alertas a {full} px la tira se sale por la derecha: {}",
+                        r.width()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn la_salud_no_parpadea_con_un_pico() {
+        use lucy_core::thresholds::Nivel;
+        let t0 = Instant::now();
+        let mut s = Salud::nueva(t0);
+        assert_eq!(s.nivel, Nivel::Ok);
+
+        // UN PICO DE UN SEGUNDO NO CAMBIA NADA. Una CPU que roza el corte
+        // mientras se compila lo cruza varias veces por minuto; sin esto el
+        // indicador del equipo parpadeaba entre rojo y verde a 1 Hz, y un
+        // indicador que parpadea deja de mirarse.
+        s.observa(Nivel::Critico, t0 + Duration::from_secs(1));
+        assert_eq!(s.nivel, Nivel::Ok, "un segundo no basta para creérselo");
+
+        // Pero cuando aguanta, se adopta — y rápido, porque empeorar es noticia.
+        s.observa(Nivel::Critico, t0 + Duration::from_secs(5));
+        assert_eq!(s.nivel, Nivel::Critico);
+
+        // Y para volver hace falta MUCHO más: si no, cada valle del pico
+        // devolvería el indicador a verde y estaríamos igual.
+        let t1 = t0 + Duration::from_secs(6);
+        s.observa(Nivel::Ok, t1);
+        s.observa(Nivel::Ok, t1 + Duration::from_secs(10));
+        assert_eq!(s.nivel, Nivel::Critico, "diez segundos no bastan para bajar");
+        s.observa(Nivel::Ok, t1 + Duration::from_secs(25));
+        assert_eq!(s.nivel, Nivel::Ok);
+    }
+
+    #[test]
+    fn dos_estados_alternos_no_suman_plazo_entre_ellos() {
+        // EL FALLO SUTIL de un contador único: si el candidato cambia y el reloj
+        // no se reinicia, «crítico, aviso, crítico, aviso» suma plazo y el
+        // equipo salta a un estado que nunca se sostuvo tres segundos seguidos.
+        use lucy_core::thresholds::Nivel;
+        let t0 = Instant::now();
+        let mut s = Salud::nueva(t0);
+        for i in 0..20 {
+            let n = if i % 2 == 0 { Nivel::Critico } else { Nivel::Aviso };
+            s.observa(n, t0 + Duration::from_secs(i));
+        }
+        assert_eq!(s.nivel, Nivel::Ok, "ninguno de los dos aguantó su plazo");
     }
 
     #[test]

@@ -576,7 +576,17 @@ pub const FRASES: &[Frase] = &[
         "C:\\Pfad\\zur\\Datei.log",
     ),
     f!("CONFORMES", "COMPLIANT", "CONFORMES", "CONFORMES", "ERFÜLLT"),
+    f!("CPU al {pct}%", "CPU at {pct}%", "CPU a {pct}%", "CPU à {pct} %", "CPU bei {pct}%"),
     f!("CPU alta ({pct}%)", "High CPU ({pct}%)", "CPU alta ({pct}%)", "CPU élevé ({pct}%)", "Hohe CPU-Last ({pct}%)"),
+    f!("CPU · aviso", "CPU · warning", "CPU · aviso", "CPU · avertissement", "CPU · Warnung"),
+    f!("CPU · crítico", "CPU · critical", "CPU · crítico", "CPU · critique", "CPU · kritisch"),
+    f!(
+        "CPU, RAM y red. Los servicios tienen su propia hora.",
+        "CPU, RAM and network. Services have their own timestamp.",
+        "CPU, RAM e rede. Os serviços têm a sua própria hora.",
+        "CPU, RAM et réseau. Les services ont leur propre heure.",
+        "CPU, RAM und Netz. Dienste haben ihren eigenen Zeitstempel.",
+    ),
     f!(
         "Cada cristal es una sesión destilada. Se escriben solos al cerrar turnos; sus lecciones ya son memorias y sobreviven aunque borres el cristal.",
         "Each crystal is a distilled session. They write themselves when turns close; their lessons are already memories and survive even if you delete the crystal.",
@@ -886,6 +896,27 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Dirección", "Address", "Endereço", "Adresse", "Adresse"),
     f!("Disco sistema", "System disk", "Disco do sistema", "Disque système", "Systemlaufwerk"),
+    f!(
+        "Disco {mount} al {pct}%",
+        "Disk {mount} at {pct}%",
+        "Disco {mount} a {pct}%",
+        "Disque {mount} à {pct} %",
+        "Laufwerk {mount} bei {pct}%",
+    ),
+    f!(
+        "Disco · aviso",
+        "Disk · warning",
+        "Disco · aviso",
+        "Disque · avertissement",
+        "Laufwerk · Warnung",
+    ),
+    f!(
+        "Disco · crítico",
+        "Disk · critical",
+        "Disco · crítico",
+        "Disque · critique",
+        "Laufwerk · kritisch",
+    ),
     f!("Discos", "Disks", "Discos", "Disques", "Datenträger"),
     f!(
         "Dispositivo de red",
@@ -1192,6 +1223,13 @@ pub const FRASES: &[Frase] = &[
         "Voici ce dont je me souviendrais avec «{consulta}» :{como}\n\n{bloque}",
         "Daran würde ich mich bei «{consulta}» erinnern:{como}\n\n{bloque}",
     ),
+    f!(
+        "Estos servicios fallaron al arrancar en este equipo: {lista}. Mira si tienen una causa común, revisa sus últimos eventos y dime qué haría falta para levantarlos.",
+        "These services failed to start on this machine: {lista}. Check whether they share a common cause, review their latest events and tell me what it would take to bring them up.",
+        "Estes serviços falharam ao arrancar nesta máquina: {lista}. Vê se têm uma causa comum, revê os últimos eventos e diz-me o que seria preciso para os pôr a funcionar.",
+        "Ces services n'ont pas réussi à démarrer sur cette machine : {lista}. Regarde s'ils ont une cause commune, vérifie leurs derniers événements et dis-moi ce qu'il faudrait pour les relancer.",
+        "Diese Dienste konnten auf diesem Rechner nicht starten: {lista}. Prüf, ob es eine gemeinsame Ursache gibt, sieh dir ihre letzten Ereignisse an und sag mir, was nötig wäre, um sie zum Laufen zu bringen.",
+    ),
     f!("Etiquetas", "Tags", "Etiquetas", "Étiquettes", "Tags"),
     f!(
         "Explorador de memoria (V1)",
@@ -1361,6 +1399,7 @@ pub const FRASES: &[Frase] = &[
         "J'ai exécuté la commande que tu as proposée, voici sa sortie littérale. {cola}\n\n$ {cmd}\n\n{body}",
         "Ich habe den vorgeschlagenen Befehl ausgeführt, das ist seine wörtliche Ausgabe. {cola}\n\n$ {cmd}\n\n{body}",
     ),
+    f!("Historial", "History", "Histórico", "Historique", "Verlauf"),
     f!("Idioma", "Language", "Idioma", "Langue", "Sprache"),
     f!(
         "Importancia alta · se recuerda antes que las demás",
@@ -2080,6 +2119,13 @@ pub const FRASES: &[Frase] = &[
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
     f!(
+        "Plegar las alertas",
+        "Collapse alerts",
+        "Recolher os alertas",
+        "Replier les alertes",
+        "Warnungen einklappen",
+    ),
+    f!(
         "Por CLAVE, no por contraseña: la confianza se establece antes. Autoriza tu clave pública en el servidor (`~/.ssh/authorized_keys`) o ten la privada cargada en `ssh-agent`.",
         "By KEY, not password: trust is established beforehand. Authorize your public key on the server (`~/.ssh/authorized_keys`) or have the private one loaded in `ssh-agent`.",
         "Por CHAVE, não por palavra-passe: a confiança estabelece-se antes. Autoriza a tua chave pública no servidor (`~/.ssh/authorized_keys`) ou tem a privada carregada no `ssh-agent`.",
@@ -2187,7 +2233,10 @@ pub const FRASES: &[Frase] = &[
          Prüfprotokoll, live. Unter «Datei» siehst du stattdessen die Logdateien eines \
          Ordners auf dem Rechner, was etwas anderes ist.",
     ),
+    f!("RAM al {pct}%", "RAM at {pct}%", "RAM a {pct}%", "RAM à {pct} %", "RAM bei {pct}%"),
     f!("RAM alta ({pct}%)", "High RAM ({pct}%)", "RAM alta ({pct}%)", "RAM élevée ({pct}%)", "Hohe RAM-Auslastung ({pct}%)"),
+    f!("RAM · aviso", "RAM · warning", "RAM · aviso", "RAM · avertissement", "RAM · Warnung"),
+    f!("RAM · crítico", "RAM · critical", "RAM · crítico", "RAM · critique", "RAM · kritisch"),
     f!("Razonamiento", "Reasoning", "Raciocínio", "Raisonnement", "Denkprozess"),
     f!(
         "Razonamiento insignia",
@@ -2584,6 +2633,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Tu nombre", "Your name", "O teu nome", "Ton nom", "Dein Name"),
     f!(
+        "Umbrales de este equipo",
+        "Thresholds for this machine",
+        "Limiares desta máquina",
+        "Seuils de cette machine",
+        "Schwellenwerte dieses Rechners",
+    ),
+    f!(
         "Un comando, o pídemelo en español…   ·   ↑↓ historial",
         "A command, or just ask me in plain English…   ·   ↑↓ history",
         "Um comando, ou pede-mo em português…   ·   ↑↓ histórico",
@@ -2603,6 +2659,13 @@ pub const FRASES: &[Frase] = &[
         "Um princípio entra em TODOS os turnos, venha ou não a propósito — o seu valor está justamente nos turnos onde a ninguém teria ocorrido lembrá-lo. Por isso são poucos.",
         "Un principe entre dans TOUS les tours, qu'il soit pertinent ou non — sa valeur est justement dans les tours où personne n'aurait pensé à le rappeler. Voilà pourquoi ils sont peu nombreux.",
         "Ein Prinzip geht in ALLE Runden ein, ob es passt oder nicht — sein Wert liegt genau in den Runden, in denen niemand daran gedacht hätte. Deshalb sind es wenige.",
+    ),
+    f!(
+        "Un servidor de compilación al 90 % está trabajando. Lo que aquí se ajusta cambia el color, las alertas y el indicador de salud — solo en este equipo.",
+        "A build server at 90% is just doing its job. What you set here changes the color, the alerts and the health indicator — on this machine only.",
+        "Um servidor de compilação a 90 % está a trabalhar. O que aqui se ajusta muda a cor, os alertas e o indicador de saúde — só nesta máquina.",
+        "Un serveur de compilation à 90 % est en train de travailler. Ce que tu règles ici change la couleur, les alertes et l'indicateur de santé — uniquement sur cette machine.",
+        "Ein Buildserver bei 90 % tut nur seine Arbeit. Was du hier einstellst, ändert Farbe, Warnungen und Zustandsanzeige — nur auf diesem Rechner.",
     ),
     f!(
         "Un skill fijado enmarca todas las respuestas. Se quita con /preset clear.",
@@ -2676,10 +2739,18 @@ pub const FRASES: &[Frase] = &[
         "Voir la dernière décision de routing",
         "Letzte Routing-Entscheidung ansehen",
     ),
+    f!("Ver las alertas", "Show alerts", "Ver os alertas", "Voir les alertes", "Warnungen anzeigen"),
     f!("Ver sus logs", "View its logs", "Ver os seus logs", "Voir ses logs", "Logs ansehen"),
     f!("Versión", "Version", "Versão", "Version", "Version"),
     f!("Visor de logs", "Log viewer", "Visor de logs", "Visionneuse de logs", "Log-Ansicht"),
     // ── La ayuda de cada módulo ──────────────────────────────────────────────
+    f!(
+        "Volver a los de fábrica",
+        "Reset to defaults",
+        "Voltar aos de fábrica",
+        "Rétablir les valeurs d'usine",
+        "Auf Standard zurücksetzen",
+    ),
     f!(
         "Volver al inventario",
         "Back to inventory",
@@ -2712,6 +2783,13 @@ pub const FRASES: &[Frase] = &[
         "[sortie retenue par le guardrail : {motivo}]",
         "[Ausgabe vom guardrail zurückgehalten: {motivo}]",
     ),
+    f!(
+        "a partir de qué número avisa y a partir de cuál alarma",
+        "at what number it warns and at what it goes critical",
+        "a partir de que número avisa e a partir de qual alarma",
+        "à partir de quelle valeur elle avertit et à partir de laquelle elle passe en critique",
+        "ab welchem Wert gewarnt und ab welchem alarmiert wird",
+    ),
     f!("act. {hora}", "upd. {hora}", "atu. {hora}", "maj {hora}", "akt. {hora}"),
     f!("ahora", "now", "agora", "à l'instant", "jetzt"),
     f!("alta", "high", "alta", "élevée", "hoch"),
@@ -2737,6 +2815,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("audit trail", "audit trail", "registo de auditoria", "piste d'audit", "Audit-Trail"),
     f!("baja", "low", "baixa", "faible", "niedrig"),
+    f!(
+        "baja {pts} pts/día",
+        "down {pts} pts/day",
+        "desce {pts} pts/dia",
+        "baisse de {pts} pts/jour",
+        "fällt um {pts} Pkt./Tag",
+    ),
     f!(
         "busca patrones entre memorias con más de cinco días",
         "looks for patterns across memories older than five days",
@@ -2886,6 +2971,7 @@ pub const FRASES: &[Frase] = &[
         "écriture progressive et transitions · LUCY_NO_MOTION=1 les désactive au démarrage",
         "schrittweise Ausgabe und Übergänge · LUCY_NO_MOTION=1 schaltet sie beim Start aus",
     ),
+    f!("estable", "steady", "estável", "stable", "stabil"),
     f!("este equipo", "this machine", "esta máquina", "ce poste", "dieser Rechner"),
     f!("fecha ilegible", "unreadable date", "data ilegível", "date illisible", "Datum unlesbar"),
     f!(
@@ -3025,6 +3111,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("reflexión: {r}", "reflection: {r}", "reflexão: {r}", "réflexion : {r}", "Reflexion: {r}"),
     f!(
+        "se llena en ~{dias} días",
+        "full in ~{dias} days",
+        "enche em ~{dias} dias",
+        "plein dans ~{dias} jours",
+        "voll in ~{dias} Tagen",
+    ),
+    f!(
         "si se deja vacío usa el usuario de Windows, que es una cuenta y no un nombre",
         "if left empty it uses the Windows user, which is an account and not a name",
         "se ficar vazio usa o utilizador do Windows, que é uma conta e não um nome",
@@ -3069,6 +3162,20 @@ pub const FRASES: &[Frase] = &[
         "só se encontram por palavras — aconteceu se o Ollama estava em baixo ao ingerir",
         "on ne les trouve que par mots — arrive si Ollama était en panne à l'ingestion",
         "nur über Wörter auffindbar — passiert, wenn Ollama beim Einlesen aus war",
+    ),
+    f!(
+        "sube {pts} pts/día",
+        "up {pts} pts/day",
+        "sobe {pts} pts/dia",
+        "monte de {pts} pts/jour",
+        "steigt um {pts} Pkt./Tag",
+    ),
+    f!(
+        "todavía no hay bastante para una tendencia",
+        "not enough yet for a trend",
+        "ainda não chega para uma tendência",
+        "pas encore assez de données pour une tendance",
+        "noch zu wenig für einen Trend",
     ),
     f!(
         "todavía vive en src-tauri, junto al transporte WinRM y a",
@@ -3241,6 +3348,13 @@ pub const FRASES: &[Frase] = &[
         "{n} Erinnerungen dahinter",
     ),
     f!("{n} min", "{n} min", "{n} min", "{n} min", "{n} Min."),
+    f!(
+        "{n} muestras desde hace {plazo}",
+        "{n} samples over the last {plazo}",
+        "{n} amostras desde há {plazo}",
+        "{n} mesures depuis {plazo}",
+        "{n} Messwerte seit {plazo}",
+    ),
     f!("{n} núcleos", "{n} cores", "{n} núcleos", "{n} cœurs", "{n} Kerne"),
     // SINGULAR Y PLURAL COMO DOS FRASES: en alemán el plural de «Laufwerk» es
     // «Laufwerke» y en francés cambia el artículo. Pegar una «s» al final solo
@@ -3309,6 +3423,13 @@ pub const FRASES: &[Frase] = &[
         "· delas, automáticas",
         "· dont automatiques",
         "· davon automatisch",
+    ),
+    f!(
+        "· desde hace {plazo}",
+        "· for the last {plazo}",
+        "· desde há {plazo}",
+        "· depuis {plazo}",
+        "· seit {plazo}",
     ),
     f!(
         "· {n} dinámicos ignorados",
@@ -3393,11 +3514,25 @@ pub const FRASES: &[Frase] = &[
     f!("◈ Semántica", "◈ Semantic", "◈ Semântica", "◈ Sémantique", "◈ Semantisch"),
     f!("● ESCANEADO {hora}", "● SCANNED {hora}", "● ANALISADO {hora}", "● ANALYSÉ {hora}", "● GESCANNT {hora}"),
     f!(
+        "⚠ {avisos} avisos",
+        "⚠ {avisos} warnings",
+        "⚠ {avisos} avisos",
+        "⚠ {avisos} avertissements",
+        "⚠ {avisos} Warnungen",
+    ),
+    f!(
         "⚠ {cat}: se enseñan {vistas} de {total}. Una lista recortada en silencio se lee como una lista completa.",
         "⚠ {cat}: showing {vistas} of {total}. A list trimmed in silence reads like a complete one.",
         "⚠ {cat}: mostram-se {vistas} de {total}. Uma lista cortada em silêncio lê-se como uma lista completa.",
         "⚠ {cat} : affichage de {vistas} sur {total}. Une liste tronquée en silence se lit comme une liste complète.",
         "⚠ {cat}: {vistas} von {total} werden angezeigt. Eine still gekürzte Liste liest sich wie eine vollständige.",
+    ),
+    f!(
+        "⚠ {criticas} críticas · {avisos} avisos",
+        "⚠ {criticas} critical · {avisos} warnings",
+        "⚠ {criticas} críticas · {avisos} avisos",
+        "⚠ {criticas} critiques · {avisos} avertissements",
+        "⚠ {criticas} kritisch · {avisos} Warnungen",
     ),
     f!(
         "⚠ {sin} de {total} no se pudieron medir y quedan fuera del porcentaje — el motivo \
