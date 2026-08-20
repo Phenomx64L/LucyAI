@@ -248,7 +248,7 @@ macro_rules! f {
 /// `tr` devuelve el español, que es lo que se quiere. Que falten es la decisión,
 /// no un olvido.
 pub const FRASES: &[Frase] = &[
-    // ── Dashboard ───────────────────────────────────────────────────────────
+    // ── Servicios detenidos, ya accionables ─────────────────────────────────
     f!(
         "#{id} · sesión {sesion} · {chars} caracteres leídos",
         "#{id} · session {sesion} · {chars} characters read",
@@ -599,6 +599,13 @@ pub const FRASES: &[Frase] = &[
         "Arrêté, sans erreur de démarrage",
         "Gestoppt, kein Startfehler",
     ),
+    f!(
+        "Detenido, sin error de arranque · pulsa para que Lucy lo mire",
+        "Stopped, no startup error · click for Lucy to check it",
+        "Parado, sem erro de arranque · clica para a Lucy ver",
+        "Arrêté, sans erreur de démarrage · clique pour que Lucy regarde",
+        "Gestoppt, kein Startfehler · klick, damit Lucy nachschaut",
+    ),
     f!("Disco sistema", "System disk", "Disco do sistema", "Disque système", "Systemlaufwerk"),
     f!("Discos", "Disks", "Discos", "Disques", "Datenträger"),
     f!(
@@ -626,6 +633,34 @@ pub const FRASES: &[Frase] = &[
         "O raciocínio do agente — pensar · agir · observar — fica registado aqui.",
         "Le raisonnement de l'agent — penser · agir · observer — est enregistré ici.",
         "Das Reasoning des Agenten — denken · handeln · beobachten — wird hier protokolliert.",
+    ),
+    f!(
+        "El servicio «{svc}» es de inicio automático y está parado en este equipo. Dime \
+         para qué sirve, si importa que esté parado y qué haría falta para arrancarlo.",
+        "The «{svc}» service is set to start automatically and is stopped on this machine. \
+         Tell me what it is for, whether it matters that it is stopped and what it would \
+         take to start it.",
+        "O serviço «{svc}» é de arranque automático e está parado nesta máquina. Diz-me \
+         para que serve, se importa que esteja parado e o que seria preciso para o arrancar.",
+        "Le service « {svc} » démarre normalement tout seul et il est arrêté sur cette \
+         machine. Dis-moi à quoi il sert, si c'est gênant qu'il soit arrêté et ce qu'il \
+         faudrait pour le lancer.",
+        "Der Dienst «{svc}» startet normalerweise automatisch und ist auf diesem Rechner \
+         gestoppt. Sag mir, wofür er da ist, ob das Stoppen ein Problem ist und was nötig \
+         wäre, um ihn zu starten.",
+    ),
+    // ── Dashboard ───────────────────────────────────────────────────────────
+    f!(
+        "El servicio «{svc}» falló al arrancar en este equipo. Mira por qué, revisa sus \
+         últimos eventos y dime si conviene reintentarlo.",
+        "The «{svc}» service failed to start on this machine. Find out why, check its \
+         latest events and tell me whether it is worth retrying.",
+        "O serviço «{svc}» falhou ao arrancar nesta máquina. Vê porquê, revê os seus \
+         últimos eventos e diz-me se convém tentar de novo.",
+        "Le service « {svc} » n'a pas démarré sur cette machine. Cherche pourquoi, \
+         examine ses derniers événements et dis-moi s'il vaut la peine de réessayer.",
+        "Der Dienst «{svc}» konnte auf diesem Rechner nicht starten. Finde heraus warum, \
+         sieh dir seine letzten Ereignisse an und sag mir, ob ein erneuter Versuch lohnt.",
     ),
     f!(
         "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
@@ -1396,6 +1431,13 @@ pub const FRASES: &[Frase] = &[
         "Saiu com código de erro",
         "Terminé avec un code d'erreur",
         "Mit Fehlercode beendet",
+    ),
+    f!(
+        "Salió con código de error · pulsa para que Lucy lo investigue",
+        "Exited with an error code · click for Lucy to look into it",
+        "Saiu com código de erro · clica para a Lucy investigar",
+        "Terminé avec un code d'erreur · clique pour que Lucy enquête",
+        "Mit Fehlercode beendet · klick, damit Lucy nachsieht",
     ),
     f!("Saludable", "Healthy", "Saudável", "Sain", "Gesund"),
     f!(

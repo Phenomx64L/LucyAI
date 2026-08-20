@@ -2637,8 +2637,9 @@ fn meter(ui: &mut egui::Ui, w: f32, h: f32, frac: f32, color: egui::Color32, key
 /// El LED es neutro por defecto. Estuvo en ámbar para todas las filas, y una
 /// máquina normal parecía un muro de avisos donde las filas que importaban no
 /// tenían contra qué destacar.
-fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) {
+fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) -> bool {
     let h = 18.0;
+    let mut pulsado = false;
     ui.allocate_ui_with_layout(
         egui::vec2(w, h),
         egui::Layout::left_to_right(egui::Align::Center),
@@ -2652,22 +2653,30 @@ fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) {
             };
             let (r, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
             ui.painter().circle_filled(r.center(), 2.5, dot);
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(name)
-                        .size(theme::FS_CAPTION)
-                        .monospace()
-                        .color(txt),
+            let resp = ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(name)
+                            .size(theme::FS_CAPTION)
+                            .monospace()
+                            .color(txt),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click()),
                 )
-                .truncate(),
-            )
-            .on_hover_text(i18n::tr(if crashed {
-                "Salió con código de error"
-            } else {
-                "Detenido, sin error de arranque"
-            }));
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                // EL CUADRO DICE QUE SE PUEDE PULSAR, no solo qué le pasa al
+                // servicio. Un dato que se puede pulsar y no lo anuncia es un
+                // dato que nadie pulsa.
+                .on_hover_text(i18n::tr(if crashed {
+                    "Salió con código de error · pulsa para que Lucy lo investigue"
+                } else {
+                    "Detenido, sin error de arranque · pulsa para que Lucy lo mire"
+                }));
+            pulsado = resp.clicked();
         },
     );
+    pulsado
 }
 
 /// Tarjeta de un volumen: punto de montaje, porcentaje, barra y espacio libre.
@@ -13451,6 +13460,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
     /// bordes verticales caen unos sobre otros en vez de aparecer donde el
     /// contenido de cada tarjeta decida.
     fn sistema(&mut self, ui: &mut egui::Ui) {
+        // El servicio que se acaba de pulsar, si hay alguno. Fuera del dibujo
+        // porque mandarle la orden a Lucy cambia de pantalla, y hacerlo en
+        // mitad de pintar el Dashboard es repintar lo que ya no se ve.
+        let mut preguntar: Option<(String, bool)> = None;
         let s = self.sys.snapshot();
         let net = self.net;
         let alerts = self.alerts(&s);
@@ -13722,7 +13735,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             for line in services[..shown].chunks(scols) {
                                 row(ui, 18.0, |ui| {
                                     for sv in line {
-                                        svc_row(ui, cw, &sv.name, sv.crashed());
+                                        if svc_row(ui, cw, &sv.name, sv.crashed()) {
+                                            preguntar = Some((sv.name.clone(), sv.crashed()));
+                                        }
                                     }
                                 });
                             }
@@ -13904,6 +13919,35 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
                 ui.add_space(GAP);
             });
+
+        // UN SERVICIO CAÍDO DEJA DE SER UN DATO SIN SALIDA. Antes se veía que
+        // el spooler estaba parado y ahí acababa todo: para hacer algo había
+        // que cambiar de pantalla y volver a escribir el nombre a mano.
+        //
+        // Y LO QUE SE MANDA ES UNA PREGUNTA, NO UN `Start-Service`. Arrancar un
+        // servicio desde una tarjeta del Dashboard sería ejecutar algo con
+        // privilegios a un clic y sin plan, que es justo lo que esta aplicación
+        // no hace en ningún otro sitio. Lucy propone el comando y lo apruebas
+        // tú, igual que con todo lo demás.
+        //
+        // La pregunta CAMBIA SEGÚN EL CÓDIGO DE SALIDA: uno que se paró limpio
+        // casi siempre está así a propósito, y preguntarlo como si fuera una
+        // avería llevaría a Lucy a inventarse un problema.
+        if let Some((nombre, fallo)) = preguntar {
+            let orden = if fallo {
+                i18n::trf(
+                    "El servicio «{svc}» falló al arrancar en este equipo. Mira por qué,                      revisa sus últimos eventos y dime si conviene reintentarlo.",
+                    &[("svc", &nombre)],
+                )
+            } else {
+                i18n::trf(
+                    "El servicio «{svc}» es de inicio automático y está parado en este                      equipo. Dime para qué sirve, si importa que esté parado y qué haría                      falta para arrancarlo.",
+                    &[("svc", &nombre)],
+                )
+            };
+            self.view = View::TerminalIa;
+            self.send(orden);
+        }
     }
 
     /// NexShell: una terminal que además entiende lo que le pides en español.
