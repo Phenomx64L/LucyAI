@@ -279,6 +279,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("1 volumen", "1 volume", "1 volume", "1 volume", "1 Laufwerk"),
     f!(
+        "192.168.1.10 ó servidor.empresa.local",
+        "192.168.1.10 or server.company.local",
+        "192.168.1.10 ou servidor.empresa.local",
+        "192.168.1.10 ou serveur.entreprise.local",
+        "192.168.1.10 oder server.firma.local",
+    ),
+    f!(
         "1M de contexto, menor costo",
         "1M context, lower cost",
         "1M de contexto, menor custo",
@@ -442,7 +449,9 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Certificados", "Certificates", "Certificados", "Certificats", "Zertifikate"),
     f!("Claro", "Light", "Claro", "Clair", "Hell"),
+    f!("Clave privada", "Private key", "Chave privada", "Clé privée", "Privater Schlüssel"),
     f!("Claves API", "API keys", "Chaves API", "Clés API", "API-Schlüssel"),
+    f!("Color", "Color", "Cor", "Couleur", "Farbe"),
     f!(
         "Color de acento",
         "Accent colour",
@@ -467,6 +476,13 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Conciso", "Concise", "Conciso", "Concis", "Knapp"),
     f!("Conectado", "Connected", "Ligado", "Connecté", "Verbunden"),
+    f!(
+        "Conectado en {ms} ms",
+        "Connected in {ms} ms",
+        "Ligado em {ms} ms",
+        "Connecté en {ms} ms",
+        "Verbunden in {ms} ms",
+    ),
     f!("Conectando…", "Connecting…", "A ligar…", "Connexion…", "Verbinde…"),
     f!("Conectar", "Connect", "Ligar", "Connecter", "Verbinden"),
     f!("Configuración", "Settings", "Configuração", "Réglages", "Einstellungen"),
@@ -478,6 +494,7 @@ pub const FRASES: &[Frase] = &[
         "Conteneur (Docker)",
         "Container (Docker)",
     ),
+    f!("Contraseña", "Password", "Palavra-passe", "Mot de passe", "Passwort"),
     f!("Conversación", "Conversation", "Conversa", "Conversation", "Gespräch"),
     f!("Copia de seguridad", "Backup", "Cópia de segurança", "Sauvegarde", "Sicherung"),
     f!("Copiado", "Copied", "Copiado", "Copié", "Kopiert"),
@@ -553,6 +570,13 @@ pub const FRASES: &[Frase] = &[
          automatischen Dienste ausgefallen sind und welche Prozesse oben stehen. Aktualisiert \
          sich von selbst. Mit der Auswahl daneben siehst du diesen oder einen anderen Rechner.",
     ),
+    f!(
+        "DOMINIO/usuario",
+        "DOMAIN/user",
+        "DOMÍNIO/utilizador",
+        "DOMAINE/utilisateur",
+        "DOMÄNE/benutzer",
+    ),
     f!("Dashboard", "Dashboard", "Painel", "Tableau de bord", "Übersicht"),
     f!(
         "Dashboard de sistema",
@@ -606,6 +630,7 @@ pub const FRASES: &[Frase] = &[
         "Arrêté, sans erreur de démarrage · clique pour que Lucy regarde",
         "Gestoppt, kein Startfehler · klick, damit Lucy nachschaut",
     ),
+    f!("Dirección", "Address", "Endereço", "Adresse", "Adresse"),
     f!("Disco sistema", "System disk", "Disco do sistema", "Disque système", "Systemlaufwerk"),
     f!("Discos", "Disks", "Discos", "Disques", "Datenträger"),
     f!(
@@ -617,6 +642,20 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Documentos", "Documents", "Documentos", "Documents", "Dokumente"),
     f!("Editar", "Edit", "Editar", "Modifier", "Bearbeiten"),
+    f!(
+        "Editar equipo",
+        "Edit machine",
+        "Editar máquina",
+        "Modifier la machine",
+        "Rechner bearbeiten",
+    ),
+    f!(
+        "Ej. Prod-Web-01",
+        "E.g. Prod-Web-01",
+        "Ex. Prod-Web-01",
+        "Ex. Prod-Web-01",
+        "Z. B. Prod-Web-01",
+    ),
     f!("Ejecución", "Execution", "Execução", "Exécution", "Ausführung"),
     f!(
         "Ejecutando {n} controles CIS en {equipo}…",
@@ -668,6 +707,13 @@ pub const FRASES: &[Frase] = &[
          examine ses derniers événements et dis-moi s'il vaut la peine de réessayer.",
         "Der Dienst «{svc}» konnte auf diesem Rechner nicht starten. Finde heraus warum, \
          sieh dir seine letzten Ereignisse an und sag mir, ob ein erneuter Versuch lohnt.",
+    ),
+    f!(
+        "El servidor remoto debe tener WinRM habilitado. Ejecuta allí: Enable-PSRemoting -Force",
+        "The remote server needs WinRM enabled. Run this there: Enable-PSRemoting -Force",
+        "O servidor remoto tem de ter o WinRM ativado. Executa lá: Enable-PSRemoting -Force",
+        "Le serveur distant doit avoir WinRM activé. Exécute là-bas : Enable-PSRemoting -Force",
+        "Auf dem Remote-Server muss WinRM aktiviert sein. Führe dort aus: Enable-PSRemoting -Force",
     ),
     f!(
         "Elige la carpeta de un skill, o una que contenga varios — un repositorio descargado sirve tal cual",
@@ -765,6 +811,7 @@ pub const FRASES: &[Frase] = &[
         "Ce modèle n'a pas de prix au catalogue",
         "Für dieses Modell gibt es keinen Preis im Katalog",
     ),
+    f!("Etiquetas", "Tags", "Etiquetas", "Étiquettes", "Tags"),
     f!(
         "Exportar el run (copia al portapapeles)",
         "Export the run (copies to clipboard)",
@@ -810,6 +857,13 @@ pub const FRASES: &[Frase] = &[
     f!("FALLAS", "FAILURES", "FALHAS", "ÉCHECS", "FEHLER"),
     f!("Falla", "Failure", "Falha", "Échec", "Fehler"),
     f!("Fallas", "Failures", "Falhas", "Échecs", "Fehler"),
+    f!(
+        "Falta: {campos}",
+        "Missing: {campos}",
+        "Em falta: {campos}",
+        "Manque : {campos}",
+        "Fehlt: {campos}",
+    ),
     f!(
         "Fijada · entra en todos los prompts",
         "Pinned · goes into every prompt",
@@ -1229,7 +1283,15 @@ pub const FRASES: &[Frase] = &[
         "Impossible de traduire : {e}",
         "Übersetzung nicht möglich: {e}",
     ),
+    f!("Nombre", "Name", "Nome", "Nom", "Name"),
     f!("Nueva terminal", "New terminal", "Novo terminal", "Nouveau terminal", "Neues Terminal"),
+    f!(
+        "Nuevo equipo remoto",
+        "New remote machine",
+        "Nova máquina remota",
+        "Nouvelle machine distante",
+        "Neuer Remote-Rechner",
+    ),
     f!("Nunca", "Never", "Nunca", "Jamais", "Nie"),
     f!(
         "Nunca ha corrido en esta base — correrá en la próxima comprobación.",
@@ -1319,11 +1381,25 @@ pub const FRASES: &[Frase] = &[
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
     f!(
+        "Por CLAVE, no por contraseña: la confianza se establece antes. Autoriza tu clave pública en el servidor (`~/.ssh/authorized_keys`) o ten la privada cargada en `ssh-agent`.",
+        "By KEY, not password: trust is established beforehand. Authorize your public key on the server (`~/.ssh/authorized_keys`) or have the private one loaded in `ssh-agent`.",
+        "Por CHAVE, não por palavra-passe: a confiança estabelece-se antes. Autoriza a tua chave pública no servidor (`~/.ssh/authorized_keys`) ou tem a privada carregada no `ssh-agent`.",
+        "Par CLÉ, pas par mot de passe : la confiance s'établit avant. Autorise ta clé publique sur le serveur (`~/.ssh/authorized_keys`) ou garde la privée chargée dans `ssh-agent`.",
+        "Mit SCHLÜSSEL, nicht mit Passwort: Das Vertrauen wird vorher hergestellt. Hinterlege deinen öffentlichen Schlüssel auf dem Server (`~/.ssh/authorized_keys`) oder halte den privaten im `ssh-agent` geladen.",
+    ),
+    f!(
         "Potencia Equilibrada",
         "Balanced Power",
         "Potência Equilibrada",
         "Puissance équilibrée",
         "Ausgewogene Leistung",
+    ),
+    f!(
+        "PowerShell · PTY",
+        "PowerShell · PTY",
+        "PowerShell · PTY",
+        "PowerShell · PTY",
+        "PowerShell · PTY",
     ),
     f!("Principios", "Principles", "Princípios", "Principes", "Prinzipien"),
     f!("Privilegios", "Privileges", "Privilégios", "Privilèges", "Rechte"),
@@ -1336,6 +1412,8 @@ pub const FRASES: &[Frase] = &[
         "Tester la connexion",
         "Verbindung testen",
     ),
+    f!("Protocolo", "Protocol", "Protocolo", "Protocole", "Protokoll"),
+    f!("Puerto", "Port", "Porta", "Port", "Port"),
     f!("Puertos", "Ports", "Portas", "Ports", "Ports"),
     f!(
         "Pulsa Escanear para hacerle una foto a este equipo.",
@@ -1678,6 +1756,7 @@ pub const FRASES: &[Frase] = &[
          Zertifikate und geplante Aufgaben. Er schaut nicht von selbst — du musst auf Scannen \
          drücken, bis dahin bleiben die Zahlen leer.",
     ),
+    f!("Usuario", "Username", "Utilizador", "Utilisateur", "Benutzer"),
     f!(
         "Ver cambios",
         "View changes",
@@ -1771,6 +1850,7 @@ pub const FRASES: &[Frase] = &[
         "der Oberfläche und dessen, was Lucy antwortet · dieser Bildschirm, die \
          Navigation und die Hilfe sind übersetzt; der Rest folgt",
     ),
+    f!("dirección", "address", "endereço", "adresse", "Adresse"),
     f!("editado", "edited", "editado", "édité", "bearbeitet"),
     f!(
         "en producción avisa antes de reiniciar un servicio",
@@ -1841,6 +1921,7 @@ pub const FRASES: &[Frase] = &[
     f!("media", "medium", "média", "moyenne", "mittel"),
     f!("memoria", "memory", "memória", "mémoire", "Gedächtnis"),
     f!("no vale", "not valid", "não serve", "invalide", "ungültig"),
+    f!("nombre", "name", "nome", "nom", "Name"),
     f!("nuevo", "new", "novo", "nouveau", "neu"),
     f!("pegar clave", "paste key", "colar chave", "coller la clé", "Schlüssel einfügen"),
     f!(
@@ -1881,6 +1962,7 @@ pub const FRASES: &[Frase] = &[
         "aller Datenverkehr zum lokalen Ollama",
     ),
     f!("traduciendo…", "translating…", "a traduzir…", "traduction…", "übersetze…"),
+    f!("usuario", "username", "utilizador", "utilisateur", "Benutzer"),
     f!(
         "vacío = ssh-agent o ~/.ssh/id_ed25519",
         "empty = ssh-agent or ~/.ssh/id_ed25519",
@@ -2305,6 +2387,8 @@ mod tests {
             "segmentado(",
             "instrument_label(",
             "cmp_tarjeta(",
+            "etiqueta_campo(",
+            "campo(ui,",
             "i18n::tr",
         ];
         let f = fuente();
@@ -2745,6 +2829,22 @@ mod tests {
             // propósito: `tr` devuelve el español, que es lo que se quiere.
             if e.label() != "OK" && busca(e.label()).is_none() {
                 faltan.push(e.label());
+            }
+        }
+        // Los campos que `Host::missing()` nombra —«nombre», «dirección»,
+        // «usuario»— salen en la franja ámbar del formulario de equipo remoto, y
+        // vienen del core como los demás.
+        for c in ["nombre", "dirección", "usuario"] {
+            if busca(c).is_none() {
+                faltan.push(c);
+            }
+        }
+        // Y el requisito de cada protocolo, que se enseña ANTES de intentar la
+        // conexión. Solo los que dicen algo: la mayoría lo tienen vacío.
+        for p in lucy_core::hosts::Protocol::ALL {
+            let r = p.requirement();
+            if !r.is_empty() && busca(r).is_none() {
+                faltan.push(r);
             }
         }
         assert!(

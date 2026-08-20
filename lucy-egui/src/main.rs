@@ -630,17 +630,24 @@ fn color_hex(s: &str) -> Option<egui::Color32> {
 
 /// Una etiqueta de campo del formulario de equipos.
 fn etiqueta_campo(t: &str) -> egui::RichText {
-    egui::RichText::new(t).size(theme::FS_CAPTION).color(theme::txt3())
+    // TRADUCE EL AYUDANTE, como `fila` y `panel`. Por aqui pasan todas las
+    // etiquetas del formulario de equipo remoto —«Nombre», «Protocolo»,
+    // «Direccion», «Puerto», «Usuario», «Contrasena», «Etiquetas», «Color»— y
+    // el modal entero salia en español con la interfaz en otro idioma.
+    egui::RichText::new(i18n::tr(t)).size(theme::FS_CAPTION).color(theme::txt3())
 }
 
 /// Una fila de «etiqueta + campo de texto» del formulario.
 fn campo(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, pista: &str) {
     row_align(ui, 26.0, egui::Align::Center, |ui| {
+        // La etiqueta la traduce `etiqueta_campo`; la PISTA hay que hacerla
+        // aqui, y es la mitad que mas se lee: «Ej. Prod-Web-01» dentro del
+        // campo vacio es lo que dice que formato espera.
         cell(ui, 110.0, 26.0, false, etiqueta_campo(etiqueta));
         ui.add(
             egui::TextEdit::singleline(valor)
                 .desired_width(300.0)
-                .hint_text(pista),
+                .hint_text(i18n::tr(pista)),
         );
     });
     ui.add_space(6.0);
@@ -14714,7 +14721,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // El local, primero y sin adornos.
             let local_sel = self.nx_host.is_none();
             if self
-                .nx_host_row(ui, "Este equipo", "PowerShell · PTY", theme::acc(), local_sel)
+                .nx_host_row(
+                    ui,
+                    i18n::tr("Este equipo"),
+                    "PowerShell · PTY",
+                    theme::acc(),
+                    local_sel,
+                )
                 .clicked()
             {
                 self.nx_host = None;
@@ -14848,7 +14861,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         let mut cerrar = false;
         let mut guardar = false;
         let mut probar = false;
-        egui::Window::new(if self.nx_edit_nuevo { "Nuevo equipo remoto" } else { "Editar equipo" })
+        egui::Window::new(i18n::tr(if self.nx_edit_nuevo {
+            "Nuevo equipo remoto"
+        } else {
+            "Editar equipo"
+        }))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -15015,7 +15032,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         .inner_margin(egui::Margin::symmetric(10.0, 7.0))
                         .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new(req)
+                                // Viene de `hosts::Protocol::requirement()`, en
+                                // `lucy-core`, que no sabe de idiomas: se
+                                // traduce aqui, en el punto de uso.
+                                egui::RichText::new(i18n::tr(req))
                                     .size(theme::FS_CAPTION)
                                     .color(theme::txt2()),
                             );
@@ -15024,7 +15044,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 if let Some(r) = &self.nx_test {
                     ui.add_space(6.0);
                     let (col, txt) = match r {
-                        Ok(ms) => (theme::acc(), format!("Conectado en {ms} ms")),
+                        Ok(ms) => (
+                            theme::acc(),
+                            i18n::trf("Conectado en {ms} ms", &[("ms", &ms.to_string())]),
+                        ),
                         Err(e) => (theme::red(), e.clone()),
                     };
                     ui.label(egui::RichText::new(txt).size(theme::FS_CAPTION).color(col));
@@ -15060,7 +15083,22 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // pulsar.
                 if !falta.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("Falta: {}", falta.join(", ")))
+                        egui::RichText::new(i18n::trf(
+                                "Falta: {campos}",
+                                // CADA NOMBRE DE CAMPO POR SEPARADO. `missing()`
+                                // devuelve «nombre», «dirección» y «usuario»
+                                // desde `lucy-core`, y traducir la lista ya
+                                // unida dejaría una frase mitad en un idioma y
+                                // mitad en otro.
+                                &[(
+                                    "campos",
+                                    &falta
+                                        .iter()
+                                        .map(|c| i18n::tr(c))
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                )],
+                            ))
                             .size(theme::FS_MICRO)
                             .color(theme::amber()),
                     );
