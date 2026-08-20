@@ -3335,7 +3335,12 @@ fn ahora_epoch() -> i64 {
 
 /// Una tarjeta del resumen de compliance: cifra grande, etiqueta, barra de color
 /// a la izquierda. No se pulsa — para filtrar están los chips de debajo.
+/// Como `fila` y `panel`: TRADUCE EL AYUDANTE, no el sitio de llamada. Por
+/// aquí salen «CONFORMES», «AVISOS» y «FALLAS», que estaban en español con la
+/// interfaz en alemán porque este ayudante es propio de la pantalla y no pasaba
+/// por ninguno de los que ya traducían.
 fn cmp_tarjeta(ui: &mut egui::Ui, ancho: f32, n: usize, label: &str, col: egui::Color32) {
+    let label = i18n::tr(label);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ancho, 110.0), egui::Sense::hover());
     ui.painter().rect(
         rect,
@@ -10153,10 +10158,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new(if self.cmp_rx.is_some() {
-                        format!(
-                            "Ejecutando {} controles CIS en {}…",
-                            self.cmp_catalogo().len(),
-                            self.cmp_nombre()
+                        // Hueco CON NOMBRE: en alemán el equipo va antes que
+                        // la cuenta, y con `{}` posicional la frase quedaría
+                        // clavada al orden del español.
+                        i18n::trf(
+                            "Ejecutando {n} controles CIS en {equipo}…",
+                            &[
+                                ("n", &self.cmp_catalogo().len().to_string()),
+                                ("equipo", &self.cmp_nombre()),
+                            ],
                         )
                     } else {
                         "Pulsa Escanear para pasar los controles CIS a este equipo.".into()
@@ -10325,13 +10335,19 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             ui.add_space(10.0);
             if let Some(t0) = self.cmp_desde {
                 ui.label(
-                    egui::RichText::new(format!("escaneando… {}s", t0.elapsed().as_secs()))
+                    egui::RichText::new(i18n::trf(
+                        "escaneando… {s}s",
+                        &[("s", &t0.elapsed().as_secs().to_string())],
+                    ))
                         .size(theme::FS_CAPTION)
                         .color(theme::amber()),
                 );
             } else if !self.cmp_last.is_empty() {
                 ui.label(
-                    egui::RichText::new(format!("● ESCANEADO {}", self.cmp_last))
+                    egui::RichText::new(i18n::trf(
+                        "● ESCANEADO {hora}",
+                        &[("hora", &self.cmp_last)],
+                    ))
                         .size(theme::FS_CAPTION)
                         .monospace()
                         .color(theme::acc()),
@@ -10339,7 +10355,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             }
             right(ui, 30.0, |ui| {
                 let b = egui::Button::new(
-                    egui::RichText::new(if corriendo { "■  Parar" } else { "⛨  Escanear" })
+                    egui::RichText::new(i18n::tr(if corriendo { "■  Parar" } else { "⛨  Escanear" }))
                         .size(theme::FS_CAPTION)
                         .color(if corriendo { theme::txt() } else { theme::acc_ink() }),
                 )
@@ -10445,10 +10461,13 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
         if sin_medir > 0 {
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(format!(
-                    "⚠ {sin_medir} de {} no se pudieron medir y quedan fuera del porcentaje \
-                     — el motivo está en cada fila.",
-                    self.cmp_rs.len()
+                egui::RichText::new(i18n::trf(
+                    "⚠ {sin} de {total} no se pudieron medir y quedan fuera del \
+                     porcentaje — el motivo está en cada fila.",
+                    &[
+                        ("sin", &sin_medir.to_string()),
+                        ("total", &self.cmp_rs.len().to_string()),
+                    ],
                 ))
                 .size(theme::FS_CAPTION)
                 .color(theme::amber()),
@@ -10469,7 +10488,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ("Sin medir", cuenta(Estado::Error), Some(Estado::Error)),
             ];
             for (label, n, e) in opciones {
-                if lv_chip(ui, label, n, self.cmp_filtro == e) {
+                if lv_chip(ui, i18n::tr(label), n, self.cmp_filtro == e) {
                     self.cmp_filtro = e;
                 }
                 ui.add_space(6.0);
@@ -10583,7 +10602,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     }
                                     ui.add_space(8.0);
                                     ui.label(
-                                        egui::RichText::new(r.estado.label())
+                                        egui::RichText::new(i18n::tr(r.estado.label()))
                                             .size(theme::FS_CAPTION)
                                             .color(col),
                                     );
@@ -10603,7 +10622,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                     // gris, porque ordena la lista y explica por
                                     // qué un fallo es «aviso» y no «falla».
                                     ui.label(
-                                        egui::RichText::new(r.check.severity.label())
+                                        egui::RichText::new(i18n::tr(r.check.severity.label()))
                                             .size(theme::FS_CAPTION)
                                             .color(
                                                 if r.estado == lucy_core::compliance::Estado::Pasa {
