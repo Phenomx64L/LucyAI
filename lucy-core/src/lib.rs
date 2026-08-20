@@ -103,6 +103,13 @@ pub mod prompt;
 /// dice QUÉ SE HA ROTO, que es la pregunta de verdad — un control que ya fallaba
 /// es deuda conocida, uno que pasaba y hoy falla es una noticia.
 pub mod posture;
+/// El historial de métricas en disco. El Dashboard sabía decir «CPU al 91 %» y
+/// no sabía decir si eso es nuevo, que es la pregunta que se hace de verdad
+/// delante de ese número.
+pub mod history;
+/// A partir de qué número se avisa. Había tres escalas distintas para el mismo
+/// dato en la misma pantalla; ahora hay una, y se puede mover por equipo.
+pub mod thresholds;
 pub mod routing;
 /// Los atajos de la pantalla vacía, escritos por un modelo local pequeño a
 /// partir del estado real del equipo. Los de fábrica son genéricos y envejecen
