@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 import { FRASES } from './i18n-table';
@@ -88,5 +91,50 @@ describe('i18n', () => {
         ).toBeLessThanOrEqual(40);
     });
 
+    it('toda frase envuelta en $trad está en la tabla', () => {
+        // LA GUARDA QUE IMPORTA DE VERDAD, y la que evita la única forma en que
+        // este trabajo puede EMPEORAR la aplicación: convertir un
+        // `isEN ? 'Save' : 'Guardar'` en `$trad('Guardar')` sin que «Guardar»
+        // esté en la tabla. No falla nada, no avisa nada — y quien tenía Lucy
+        // en inglés empieza a ver esa frase en español.
+        //
+        // `trad` devuelve el español cuando no encuentra la clave, que es lo
+        // correcto para una pantalla sin convertir. Aquí no: aquí alguien ya
+        // decidió que esa frase se traduce.
+        const raiz = fileURLToPath(new URL('..', import.meta.url));
+        const faltan: string[] = [];
+        const vistas = new Set<string>();
+        for (const f of ficheros(raiz)) {
+            // El propio módulo NO: sus comentarios traen ejemplos de uso
+            // —`{$tradf('Faltan {n}', { n: 3 })}`— y un ejemplo no es una
+            // llamada. Exigirle entrada obligaría a meter en la tabla una
+            // frase que no se pinta en ninguna parte.
+            if (f.endsWith('i18n.ts')) continue;
+            const s = readFileSync(f, 'utf8');
+            for (const m of s.matchAll(/\$?\btradf?\(\s*'((?:[^'\\]|\\.)*)'/g)) {
+                const clave = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+                if (vistas.has(clave)) continue;
+                vistas.add(clave);
+                if (!FRASES[clave]) faltan.push(`${f.slice(raiz.length)}: ${clave}`);
+            }
+        }
+        // Hay que ver ALGO: si el rastreador deja de encontrar llamadas —porque
+        // cambió el nombre, o la extensión, o la ruta— este test pasaría
+        // siempre diciendo que todo está bien.
+        expect(vistas.size, 'el rastreador no encontró ninguna llamada a trad').toBeGreaterThan(50);
+        expect(faltan, `${faltan.length} envueltas sin entrada:\n${faltan.slice(0, 10).join('\n')}`)
+            .toEqual([]);
+    });
+
     afterEach(() => ponIdioma('es'));
 });
+
+function ficheros(dir: string): string[] {
+    const out: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) out.push(...ficheros(p));
+        else if (/\.(svelte|ts)$/.test(e.name) && !e.name.includes('.test.')) out.push(p);
+    }
+    return out;
+}
