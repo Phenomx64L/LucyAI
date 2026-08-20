@@ -231,6 +231,20 @@ pub const FRASES: &[Frase] = &[
     // El hueco lleva NOMBRE y cambia de sitio entre idiomas — que es justo por
     // lo que existe `trf`. Ver el test que comprueba que ninguna traducción se
     // deja uno por el camino.
+    f!(
+        "(el comando no devolvió nada)",
+        "(the command returned nothing)",
+        "(o comando não devolveu nada)",
+        "(la commande n'a rien renvoyé)",
+        "(der Befehl gab nichts zurück)",
+    ),
+    f!(
+        "(sin cambios)",
+        "(no changes)",
+        "(sem alterações)",
+        "(aucun changement)",
+        "(keine Änderungen)",
+    ),
     f!("AVISOS", "WARNINGS", "AVISOS", "AVERTISSEMENTS", "WARNUNGEN"),
     f!(
         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
@@ -266,6 +280,10 @@ pub const FRASES: &[Frase] = &[
     f!("Animaciones", "Animations", "Animações", "Animations", "Animationen"),
     f!("Apagadas", "Off", "Desligadas", "Désactivées", "Aus"),
     f!("Apagado", "Off", "Desligado", "Désactivé", "Aus"),
+    f!("Archivo", "Archive", "Arquivo", "Fichiers", "Archiv"),
+    f!("Artefactos", "Artifacts", "Artefactos", "Artefacts", "Artefakte"),
+    f!("Atención", "Warning", "Atenção", "Attention", "Achtung"),
+    f!("Auditoría", "Audit", "Auditoria", "Audit", "Audit"),
     f!(
         "Avisar si el modelo se queda corto",
         "Warn if the model falls short",
@@ -281,6 +299,15 @@ pub const FRASES: &[Frase] = &[
         "Adicionar máquina",
         "Ajouter une machine",
         "Rechner hinzufügen",
+    ),
+    f!("Base de datos", "Database", "Base de dados", "Base de données", "Datenbank"),
+    f!("Buscando…", "Searching…", "A procurar…", "Recherche…", "Suche läuft…"),
+    f!(
+        "Buscar duplicados",
+        "Find duplicates",
+        "Procurar duplicados",
+        "Chercher les doublons",
+        "Duplikate suchen",
     ),
     f!(
         "Buscar modelo…",
@@ -306,6 +333,8 @@ pub const FRASES: &[Frase] = &[
         "Fermer le terminal",
         "Terminal schließen",
     ),
+    f!("Certificados", "Certificates", "Certificados", "Certificats", "Zertifikate"),
+    f!("Claro", "Light", "Claro", "Clair", "Hell"),
     f!("Claves API", "API keys", "Chaves API", "Clés API", "API-Schlüssel"),
     f!(
         "Color de acento",
@@ -332,7 +361,22 @@ pub const FRASES: &[Frase] = &[
     f!("Conectar", "Connect", "Ligar", "Connecter", "Verbinden"),
     f!("Configuración", "Settings", "Configuração", "Réglages", "Einstellungen"),
     f!("Conformes", "Compliant", "Conformes", "Conformes", "Erfüllt"),
+    f!("Conversación", "Conversation", "Conversa", "Conversation", "Gespräch"),
     f!("Copia de seguridad", "Backup", "Cópia de segurança", "Sauvegarde", "Sicherung"),
+    f!(
+        "Copiar el informe en CSV",
+        "Copy report as CSV",
+        "Copiar o relatório em CSV",
+        "Copier le rapport en CSV",
+        "Bericht als CSV kopieren",
+    ),
+    f!(
+        "Copiar el inventario en CSV",
+        "Copy inventory as CSV",
+        "Copiar o inventário em CSV",
+        "Copier l'inventaire en CSV",
+        "Inventar als CSV kopieren",
+    ),
     f!("Copiar la ruta", "Copy path", "Copiar o caminho", "Copier le chemin", "Pfad kopieren"),
     f!("Copiar la salida", "Copy output", "Copiar a saída", "Copier la sortie", "Ausgabe kopieren"),
     f!(
@@ -349,6 +393,8 @@ pub const FRASES: &[Frase] = &[
         "Lancer cette commande sur cette machine",
         "Diesen Befehl auf diesem Rechner ausführen",
     ),
+    f!("Corriendo…", "Running…", "A correr…", "En cours…", "Läuft…"),
+    f!("Cristales", "Crystals", "Cristais", "Cristaux", "Kristalle"),
     f!(
         "Cristales y patrones",
         "Crystals and patterns",
@@ -356,6 +402,7 @@ pub const FRASES: &[Frase] = &[
         "Cristaux et motifs",
         "Kristalle und Muster",
     ),
+    f!("Crítico", "Critical", "Crítico", "Critique", "Kritisch"),
     f!(
         "Cómo está el equipo ahora mismo: procesador, memoria, disco, red, qué servicios \
          automáticos están caídos y qué procesos mandan. Se refresca solo. Con el selector \
@@ -388,6 +435,7 @@ pub const FRASES: &[Frase] = &[
         "Déclare que cette machine est dans l'état voulu. À partir de là, on voit ce qui change.",
         "Erklärt, dass dieser Rechner so ist, wie er sein soll. Ab hier lässt sich sehen, was sich ändert.",
     ),
+    f!("Del sistema", "System", "Do sistema", "Du système", "Systemvorgabe"),
     f!(
         "Desde el escaneo anterior",
         "Since the previous scan",
@@ -402,8 +450,19 @@ pub const FRASES: &[Frase] = &[
         "Désinstaller : supprime le dossier du skill",
         "Deinstallieren: löscht den Skill-Ordner",
     ),
+    f!("Detener", "Stop", "Parar", "Arrêter", "Stoppen"),
+    f!(
+        "Detenido, sin error de arranque",
+        "Stopped, no startup error",
+        "Parado, sem erro de arranque",
+        "Arrêté, sans erreur de démarrage",
+        "Gestoppt, kein Startfehler",
+    ),
+    f!("Disco sistema", "System disk", "Disco do sistema", "Disque système", "Systemlaufwerk"),
     f!("Discos", "Disks", "Discos", "Disques", "Datenträger"),
+    f!("Documentos", "Documents", "Documentos", "Documents", "Dokumente"),
     f!("Editar", "Edit", "Editar", "Modifier", "Bearbeiten"),
+    f!("Ejecución", "Execution", "Execução", "Exécution", "Ausführung"),
     f!(
         "Ejecutando {n} controles CIS en {equipo}…",
         "Running {n} CIS controls on {equipo}…",
@@ -420,7 +479,9 @@ pub const FRASES: &[Frase] = &[
         "Wähl den Ordner eines Skills, oder einen mit mehreren — ein heruntergeladenes Repository funktioniert direkt",
     ),
     f!("Eliminar", "Delete", "Eliminar", "Supprimer", "Löschen"),
+    f!("Enviar", "Send", "Enviar", "Envoyer", "Senden"),
     f!("Equipo", "Machine", "Máquina", "Machine", "Rechner"),
+    f!("Equipos", "Machines", "Máquinas", "Machines", "Rechner"),
     f!(
         "Escribe un comando, o dime qué quieres saber y lo traduzco.",
         "Type a command, or tell me what you want to know and I'll translate it.",
@@ -487,11 +548,25 @@ pub const FRASES: &[Frase] = &[
         "Angeheftet · geht in jeden Prompt",
     ),
     f!(
+        "Fijada: entra en TODOS los prompts. Pulsa para soltarla.",
+        "Pinned: goes into EVERY prompt. Click to unpin.",
+        "Fixada: entra em TODOS os prompts. Clica para a soltar.",
+        "Épinglée : entre dans TOUS les prompts. Clique pour la détacher.",
+        "Angeheftet: geht in ALLE Prompts. Klick zum Lösen.",
+    ),
+    f!(
         "Fijar línea base",
         "Set baseline",
         "Fixar linha de base",
         "Définir la ligne de base",
         "Baseline festlegen",
+    ),
+    f!(
+        "Fijar: que Lucy la tenga presente siempre, venga o no al caso",
+        "Pin: Lucy keeps it in mind always, relevant or not",
+        "Fixar: que a Lucy a tenha sempre presente, venha ou não a propósito",
+        "Épingler : que Lucy l'ait toujours en tête, utile ou pas",
+        "Anheften: Lucy hat sie immer präsent, ob passend oder nicht",
     ),
     f!(
         "Filtrar por esta etiqueta",
@@ -531,6 +606,7 @@ pub const FRASES: &[Frase] = &[
         "Importance normale",
         "Normale Wichtigkeit",
     ),
+    f!("Ingiriendo…", "Ingesting…", "A ingerir…", "Ingestion…", "Einlesen…"),
     f!("Instalar…", "Install…", "Instalar…", "Installer…", "Installieren…"),
     f!("Interfaz", "Interface", "Interface", "Interface", "Oberfläche"),
     f!("Inventario", "Inventory", "Inventário", "Inventaire", "Bestand"),
@@ -625,6 +701,7 @@ pub const FRASES: &[Frase] = &[
          Aussehen. Ohne gespeicherten Schlüssel laufen nur lokale Ollama-Modelle. Auch das \
          Ausgabenlimit der Sitzung und die Sicherung des Gedächtnisses stehen hier.",
     ),
+    f!("Log", "Log", "Log", "Journal", "Log"),
     f!(
         "Los dos trabajos corren solos por vencimiento — también si el programa estuvo cerrado cuando tocaba. Esto es para no esperar al plazo.",
         "Both jobs run on their own when due — even if the program was closed at the time. This is for when you don't want to wait.",
@@ -639,7 +716,9 @@ pub const FRASES: &[Frase] = &[
         "Lucy n'a encore rien noté sur toi. Elle le fait seule quand tu lui dis quelque chose qui lui servira un autre jour.",
         "Lucy hat noch nichts über dich notiert. Sie macht das von selbst, wenn du ihr etwas erzählst, das ihr an einem anderen Tag nützt.",
     ),
+    f!("Mantenimiento", "Maintenance", "Manutenção", "Maintenance", "Wartung"),
     f!("Memoria", "Memory", "Memória", "Mémoire", "Gedächtnis"),
+    f!("Memorias", "Memories", "Memórias", "Mémoires", "Erinnerungen"),
     f!("Modelo activo", "Active model", "Modelo ativo", "Modèle actif", "Aktives Modell"),
     f!(
         "Modelo y comportamiento",
@@ -655,6 +734,13 @@ pub const FRASES: &[Frase] = &[
         "Modo privacidade: nada sai desta máquina. Só modelos locais do Ollama. Desliga-se com /privacy.",
         "Mode confidentialité : rien ne sort de cette machine. Uniquement des modèles locaux d'Ollama. Se désactive avec /privacy.",
         "Datenschutzmodus: Nichts verlässt diesen Rechner. Nur lokale Ollama-Modelle. Aus mit /privacy.",
+    ),
+    f!(
+        "Nada que copiar todavía",
+        "Nothing to copy yet",
+        "Nada para copiar ainda",
+        "Rien à copier pour l'instant",
+        "Noch nichts zum Kopieren",
     ),
     f!(
         "Ninguno en este estado.",
@@ -744,6 +830,7 @@ pub const FRASES: &[Frase] = &[
         "Trier par cette colonne",
         "Nach dieser Spalte sortieren",
     ),
+    f!("Oscuro", "Dark", "Escuro", "Sombre", "Dunkel"),
     f!(
         "Pasa los controles CIS al equipo y te dice cuáles no cumple y con qué se ha \
          mirado cada uno. Hay que pulsar Escanear. Señala lo que está flojo; arreglarlo \
@@ -768,6 +855,14 @@ pub const FRASES: &[Frase] = &[
         "Étapes que Lucy a enchaînées seule pour cette demande. Arrivée au plafond, elle s'arrête et l'opérateur reprend les approbations.",
         "Schritte, die Lucy in diesem Befehl allein verkettet hat. Am Limit schaltet sie ab, und der Operator gibt weiter frei.",
     ),
+    f!("Patrones", "Patterns", "Padrões", "Motifs", "Muster"),
+    f!(
+        "Pausar la actualización",
+        "Pause refresh",
+        "Pausar a atualização",
+        "Suspendre l'actualisation",
+        "Aktualisierung pausieren",
+    ),
     f!("Pensando…", "Thinking…", "A pensar…", "Réflexion…", "Denkt nach…"),
     f!(
         "Personalidad de Lucy",
@@ -783,7 +878,10 @@ pub const FRASES: &[Frase] = &[
         "Demande le catalogue de modèles — ne coûte rien",
         "Fragt den Modellkatalog ab — kostet nichts",
     ),
+    f!("Principios", "Principles", "Princípios", "Principes", "Prinzipien"),
     f!("Privilegios", "Privileges", "Privilégios", "Privilèges", "Rechte"),
+    f!("Probando…", "Testing…", "A testar…", "Test…", "Test läuft…"),
+    f!("Probar", "Test", "Testar", "Tester", "Testen"),
     f!(
         "Probar conexión",
         "Test connection",
@@ -791,6 +889,7 @@ pub const FRASES: &[Frase] = &[
         "Tester la connexion",
         "Verbindung testen",
     ),
+    f!("Puertos", "Ports", "Portas", "Ports", "Ports"),
     f!(
         "Pulsa Escanear para pasar los controles CIS a este equipo.",
         "Press Scan to run the CIS controls on this machine.",
@@ -825,6 +924,7 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Quitar", "Remove", "Remover", "Retirer", "Entfernen"),
     f!("Quitar en lote", "Bulk remove", "Remover em lote", "Retirer en lot", "Mehrere entfernen"),
+    f!("Qué falta", "What's missing", "O que falta", "Ce qui manque", "Was fehlt"),
     f!(
         "Qué se ha ejecutado, con qué resultado y cuánto tardó — la auditoría de Lucy, en \
          vivo. En «Archivo» miras en cambio los ficheros de log de una carpeta del equipo, \
@@ -845,19 +945,44 @@ pub const FRASES: &[Frase] = &[
     f!("RAM alta ({pct}%)", "High RAM ({pct}%)", "RAM alta ({pct}%)", "RAM élevée ({pct}%)", "Hohe RAM-Auslastung ({pct}%)"),
     f!("Razonamiento", "Reasoning", "Raciocínio", "Raisonnement", "Denkprozess"),
     f!(
+        "Reanudar la actualización",
+        "Resume refresh",
+        "Retomar a atualização",
+        "Reprendre l'actualisation",
+        "Aktualisierung fortsetzen",
+    ),
+    f!(
         "Recuerdo por significado",
         "Recall by meaning",
         "Recordação por significado",
         "Souvenir par le sens",
         "Erinnern nach Bedeutung",
     ),
+    f!("Red", "Network", "Rede", "Réseau", "Netzwerk"),
     f!("Rehacer", "Redo", "Refazer", "Rétablir", "Wiederholen"),
+    f!("Rehaciendo…", "Rebuilding…", "A refazer…", "Reconstruction…", "Neuaufbau…"),
+    f!(
+        "Salió con código de error",
+        "Exited with an error code",
+        "Saiu com código de erro",
+        "Terminé avec un code d'erreur",
+        "Mit Fehlercode beendet",
+    ),
+    f!("Saludable", "Healthy", "Saudável", "Sain", "Gesund"),
     f!(
         "Se guardan en el Credential Manager de Windows, en el mismo sitio del que las lee la app de escritorio. Ollama no necesita clave: es local.",
         "They're saved in the Windows Credential Manager, the same place the desktop app reads them from. Ollama needs no key: it's local.",
         "Guardam-se no Credential Manager do Windows, no mesmo sítio de onde a app de desktop as lê. O Ollama não precisa de chave: é local.",
         "Elles sont enregistrées dans le Credential Manager de Windows, là où l'appli de bureau les lit. Ollama n'a pas besoin de clé : il est local.",
         "Sie werden im Credential Manager von Windows gespeichert, dort, wo die Desktop-App sie liest. Ollama braucht keinen Schlüssel: läuft lokal.",
+    ),
+    f!("Servicios", "Services", "Serviços", "Services", "Dienste"),
+    f!(
+        "Servicios detenidos",
+        "Stopped services",
+        "Serviços parados",
+        "Services arrêtés",
+        "Gestoppte Dienste",
     ),
     f!(
         "Sin equipos remotos dados de alta",
@@ -893,6 +1018,9 @@ pub const FRASES: &[Frase] = &[
     ),
     f!("Sistema", "System", "Sistema", "Système", "System"),
     f!("Skills", "Skills", "Skills", "Skills", "Skills"),
+    f!("Software", "Software", "Software", "Logiciels", "Software"),
+    f!("Sub-agentes", "Sub-agents", "Subagentes", "Sous-agents", "Sub-Agenten"),
+    f!("Tareas", "Tasks", "Tarefas", "Tâches", "Aufgaben"),
     f!("Tema", "Theme", "Tema", "Thème", "Design"),
     f!(
         "Todavía no hay ninguno. Hacen falta al menos cuatro memorias del mismo asunto con más de cinco días — la reflexión corre sola cada día, o desde Mantenimiento → Reflexionar ahora.",
@@ -916,6 +1044,7 @@ pub const FRASES: &[Frase] = &[
         "Noch keiner. Sie lassen sich auch mit /principio diktieren.",
     ),
     f!("Todos", "All", "Todos", "Tous", "Alle"),
+    f!("Top procesos", "Top processes", "Top processos", "Top processus", "Top-Prozesse"),
     f!(
         "Tope de gasto de la sesión",
         "Session spending cap",
@@ -1266,8 +1395,16 @@ pub const FRASES: &[Frase] = &[
         "✓ Tous les services automatiques fonctionnent",
         "✓ Alle automatischen Dienste laufen",
     ),
+    f!("⟳  Escanear", "⟳  Scan", "⟳  Analisar", "⟳  Analyser", "⟳  Scannen"),
     f!("＋ Añadir", "＋ Add", "＋ Adicionar", "＋ Ajouter", "＋ Hinzufügen"),
     // ── Compliance ──────────────────────────────────────────────────────────
+    f!(
+        "＋ Ingerir documento",
+        "＋ Ingest document",
+        "＋ Ingerir documento",
+        "＋ Ingérer un document",
+        "＋ Dokument einlesen",
+    ),
 ];
 
 #[cfg(test)]
@@ -1442,6 +1579,118 @@ mod tests {
             if s.len() >= 3 && s.chars().any(|c| c.is_alphabetic()) {
                 out.push(s);
             }
+        }
+        out
+    }
+
+    #[test]
+    fn ningun_sitio_pinta_texto_sin_pasarlo_por_la_traduccion() {
+        // EL FALLO QUE TENÍA EL OTRO TEST, y que costó varias capturas del
+        // operador descubrir: comprobaba que la frase estuviera EN LA TABLA, no
+        // que el sitio que la pinta la pase por `tr`. Una frase traducida a
+        // cinco idiomas cuyo `ui.button("↻ Recargar")` nunca se envolvió contaba
+        // como cubierta y salía en español. Media aplicación estaba así mientras
+        // el número decía cuarenta y ocho.
+        //
+        // Esto mide lo contrario: los SITIOS. Un literal con prosa dentro de una
+        // llamada que pinta y sin `i18n::tr` cerca es una cadena que va a salir
+        // en español pase lo que pase.
+        //
+        // Los ayudantes que traducen por dentro —`fila`, `panel`, `section`,
+        // `insignia`, `segmentado`, `instrument_label`— no cuentan: sus
+        // literales ya salen traducidos.
+        const PINTAN: &[&str] = &[
+            "RichText::new(",
+            "ui.button(",
+            "small_button(",
+            ".on_hover_text(",
+            ".hint_text(",
+            "egui::Button::new(",
+            ".selected_text(",
+        ];
+        const TRADUCEN_SOLOS: &[&str] = &[
+            "fila(",
+            "panel(",
+            "section(",
+            "insignia(",
+            "segmentado(",
+            "instrument_label(",
+            "cmp_tarjeta(",
+            "i18n::tr",
+        ];
+        let f = fuente();
+        let lineas: Vec<&str> = f.lines().collect();
+        let mut crudos: Vec<String> = Vec::new();
+        for (i, l) in lineas.iter().enumerate() {
+            let t = l.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            if !PINTAN.iter().any(|p| l.contains(p)) {
+                continue;
+            }
+            // La ventana: el literal puede caer unas líneas por debajo de la
+            // llamada, y el `tr` unas por encima.
+            let desde = i.saturating_sub(3);
+            let hasta = (i + 4).min(lineas.len());
+            let ventana = lineas[desde..hasta].join("\n");
+            if TRADUCEN_SOLOS.iter().any(|a| ventana.contains(a)) {
+                continue;
+            }
+            if ventana.contains("format!") {
+                // Las plantillas van por `trf` y son otra conversación.
+                continue;
+            }
+            for s in literales_de(l) {
+                if s.chars().count() >= 3
+                    && s.chars().any(|c| c.is_alphabetic())
+                    && !s.chars().all(|c| c.is_ascii_lowercase() || "._-/0123456789".contains(c))
+                {
+                    crudos.push(s);
+                }
+            }
+        }
+        crudos.sort();
+        crudos.dedup();
+        // Medido. Lo que queda son sobre todo textos que se componen antes de
+        // pintarse y algún nombre propio.
+        const TOPE: usize = 30;
+        assert!(
+            crudos.len() <= TOPE,
+            "{} sitios pintan texto sin pasarlo por la traducción y el tope son \
+             {TOPE}. Estos salen en español en cualquier idioma:\n{}",
+            crudos.len(),
+            crudos
+                .iter()
+                .take(12)
+                .map(|s| format!("  - {}", hasta(s, 60)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    /// Los literales de una línea, ya desescapados de lo básico.
+    fn literales_de(l: &str) -> Vec<String> {
+        let b = l.as_bytes();
+        let (mut out, mut i) = (Vec::new(), 0);
+        while i < b.len() {
+            if b[i] != b'"' {
+                i += 1;
+                continue;
+            }
+            let ini = i + 1;
+            let mut j = ini;
+            while j < b.len() {
+                match b[j] {
+                    b'"' => break,
+                    b'\\' => j += 2,
+                    _ => j += 1,
+                }
+            }
+            if j <= b.len() && ini <= j && l.is_char_boundary(ini) && l.is_char_boundary(j.min(l.len())) {
+                out.push(l[ini..j.min(l.len())].to_string());
+            }
+            i = j + 1;
         }
         out
     }

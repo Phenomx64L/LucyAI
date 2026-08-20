@@ -589,9 +589,19 @@ fn apply_visuals(ctx: &egui::Context) {
 /// `letter-spacing` en `RichText`, así que hay que bajar a `LayoutJob` — por eso
 /// vive aquí y no repetido en cada vista.
 pub fn instrument_label(text: &str, color: Color32) -> egui::text::LayoutJob {
+    // TRADUCE AQUÍ, como `fila` y `panel`. Por esta función pasan TODOS los
+    // rótulos en versalitas de la aplicación —«DISCO SISTEMA», «SERVICIOS
+    // DETENIDOS», «TOP PROCESOS», «CONVERSACIÓN», «EQUIPOS»— y estaban saliendo
+    // en español en cualquier idioma. Envolverlos uno a uno eran veintitantos
+    // sitios; aquí es una línea, y los que se añadan mañana entran solos.
+    //
+    // `theme` pasa a depender de `i18n`, que es una capa por encima de lo que
+    // este módulo hacía. Se acepta a sabiendas: los dos son la interfaz del
+    // mismo binario, y la alternativa —repetir el envoltorio en cada sitio— es
+    // justo la que ya fallo una vez.
     let mut job = egui::text::LayoutJob::default();
     job.append(
-        &text.to_uppercase(),
+        &crate::i18n::tr(text).to_uppercase(),
         0.0,
         egui::TextFormat {
             font_id: egui::FontId::new(FS_MICRO, egui::FontFamily::Monospace),

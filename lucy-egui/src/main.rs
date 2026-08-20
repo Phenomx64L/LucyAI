@@ -672,10 +672,10 @@ fn confirm_strip(ui: &mut egui::Ui, cmd: &str) -> bool {
             );
             ui.add_space(6.0);
             row(ui, 24.0, |ui| {
-                if ui.button("Ejecutar").clicked() {
+                if ui.button(i18n::tr("Ejecutar")).clicked() {
                     ejecutar = true;
                 }
-                let _ = ui.button("Cancelar");
+                let _ = ui.button(i18n::tr("Cancelar"));
             });
         });
     ui.add_space(6.0);
@@ -1995,7 +1995,16 @@ fn panel(
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let (r, _) = ui.allocate_exact_size(egui::vec2(15.0, 15.0), egui::Sense::hover());
                 icons::draw(ui.painter(), icono, r.center(), 14.0, theme::acc());
-                ui.add(egui::Label::new(theme::instrument_label(titulo, theme::faint())));
+                // TRADUCE AQUÍ, no en `panel_title`. Son dos funciones distintas
+                // y `panel` pinta su rótulo directamente: al añadir la
+                // traducción solo en `panel_title` quedaron sin traducir los
+                // ocho paneles de Configuración —«MODELO Y COMPORTAMIENTO»,
+                // «CLAVES API», «INTERFAZ»— mientras las filas de dentro sí lo
+                // hacían. Media pantalla en cada idioma.
+                ui.add(egui::Label::new(theme::instrument_label(
+                    i18n::tr(titulo),
+                    theme::faint(),
+                )));
                 right(ui, 22.0, derecha);
             });
             ui.add_space(10.0);
@@ -2652,11 +2661,11 @@ fn svc_row(ui: &mut egui::Ui, w: f32, name: &str, crashed: bool) {
                 )
                 .truncate(),
             )
-            .on_hover_text(if crashed {
+            .on_hover_text(i18n::tr(if crashed {
                 "Salió con código de error"
             } else {
                 "Detenido, sin error de arranque"
-            });
+            }));
         },
     );
 }
@@ -6304,7 +6313,7 @@ impl App {
                             );
                         }
                         if sresp
-                            .on_hover_text(if busy { "Detener" } else { "Enviar" })
+                            .on_hover_text(i18n::tr(if busy { "Detener" } else { "Enviar" }))
                             .clicked()
                         {
                             if busy {
@@ -9703,11 +9712,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 }
                 let icono = if self.lv_paused { icons::Icon::Play } else { icons::Icon::Pause };
                 if ghost_icon(ui, icono)
-                    .on_hover_text(if self.lv_paused {
+                    .on_hover_text(i18n::tr(if self.lv_paused {
                         "Reanudar la actualización"
                     } else {
                         "Pausar la actualización"
-                    })
+                    }))
                     .clicked()
                 {
                     self.lv_paused = !self.lv_paused;
@@ -9979,6 +9988,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                         }
                         ui.add_sized(
                             [46.0, alto],
+                            // ERROR, WARN e INFO NO se traducen: son los nombres
+                            // del nivel tal y como los escribe el propio log, y
+                            // una fila que dijera FEHLER junto a una linea del
+                            // fichero que dice ERROR se lee peor que las dos en
+                            // ingles.
                             egui::Label::new(
                                 egui::RichText::new(match r.lv {
                                     lucy_core::logs::Level::Error => "ERROR",
@@ -10169,7 +10183,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ],
                         )
                     } else {
-                        "Pulsa Escanear para pasar los controles CIS a este equipo.".into()
+                        i18n::tr("Pulsa Escanear para pasar los controles CIS a este equipo.").into()
                     })
                     .size(theme::FS_FOOTNOTE)
                     .color(theme::faint()),
@@ -10373,11 +10387,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ui.add_space(6.0);
                 let hay = !self.cmp_rs.is_empty();
                 if ghost_icon(ui, icons::Icon::Copy)
-                    .on_hover_text(if hay {
+                    .on_hover_text(i18n::tr(if hay {
                         "Copiar el informe en CSV"
                     } else {
                         "Nada que copiar todavía"
-                    })
+                    }))
                     .clicked()
                     && hay
                 {
@@ -10653,7 +10667,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 ui.add_space(2.0);
                                 ui.label(
                                     egui::RichText::new(if r.evidencia.trim().is_empty() {
-                                        "(el comando no devolvió nada)".to_string()
+                                        i18n::tr("(el comando no devolvió nada)").to_string()
                                     } else {
                                         r.evidencia.clone()
                                     })
@@ -11096,7 +11110,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 // en rendirse contra un equipo apagado, que es justo cuando el
                 // operador más quiere salir de ahí.
                 let b = egui::Button::new(
-                    egui::RichText::new(if corriendo { "■  Parar" } else { "⟳  Escanear" })
+                    egui::RichText::new(i18n::tr(if corriendo { "■  Parar" } else { "⟳  Escanear" }))
                         .size(theme::FS_CAPTION)
                         .color(if corriendo { theme::txt() } else { theme::acc_ink() }),
                 )
@@ -11118,11 +11132,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                 ui.add_space(6.0);
                 let hay = !self.inv_data.is_empty();
                 if ghost_icon(ui, icons::Icon::Copy)
-                    .on_hover_text(if hay {
+                    .on_hover_text(i18n::tr(if hay {
                         "Copiar el inventario en CSV"
                     } else {
                         "Nada que copiar todavía"
-                    })
+                    }))
                     .clicked()
                     && hay
                 {
@@ -12671,11 +12685,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                 if ui
                                     .add_enabled(
                                         !probando,
-                                        egui::Button::new(if probando {
+                                        egui::Button::new(i18n::tr(if probando {
                                             "Probando…"
                                         } else {
                                             "Probar"
-                                        })
+                                        }))
                                         .small(),
                                     )
                                     .on_hover_text(i18n::tr("Pide el catálogo de modelos — no gasta"))
@@ -13056,11 +13070,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             if ui
                                 .add_enabled(
                                     !reembebiendo,
-                                    egui::Button::new(if reembebiendo {
+                                    egui::Button::new(i18n::tr(if reembebiendo {
                                         "Rehaciendo…"
                                     } else {
                                         "Rehacer"
-                                    })
+                                    }))
                                     .small(),
                                 )
                                 .clicked()
@@ -13628,9 +13642,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             ui.add_space(10.0);
                             if services.is_empty() {
                                 ui.label(
-                                    egui::RichText::new(
+                                    egui::RichText::new(i18n::tr(
                                         "✓ Todos los servicios automáticos en ejecución",
-                                    )
+                                    ))
                                     .size(theme::FS_CAPTION)
                                     .color(theme::acc()),
                                 );
@@ -13962,9 +13976,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             let te = ui.add(
                                 egui::TextEdit::singleline(&mut self.term_input)
                                     .id(id)
-                                    .hint_text(
+                                    .hint_text(i18n::tr(
                                         "Un comando, o pídemelo en español…   ·   ↑↓ historial",
-                                    )
+                                    ))
                                     .desired_width(ui.available_width() - 34.0)
                                     .frame(false)
                                     .font(egui::FontId::monospace(theme::FS_FOOTNOTE)),
@@ -14604,15 +14618,15 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     // abrir el desplegable y volver a encontrar la misma máquina
                     // — cuatro pasos para algo que se pide estando ya encima de
                     // la fila que la nombra.
-                    if h.protocol.can_shell() && ui.button("Ver sus logs").clicked() {
+                    if h.protocol.can_shell() && ui.button(i18n::tr("Ver sus logs")).clicked() {
                         ver_logs = Some(h.id.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Editar").clicked() {
+                    if ui.button(i18n::tr("Editar")).clicked() {
                         editar = Some(h.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Eliminar").clicked() {
+                    if ui.button(i18n::tr("Eliminar")).clicked() {
                         borrar = Some(h.id.clone());
                         ui.close_menu();
                     }
@@ -14806,7 +14820,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             egui::TextEdit::singleline(&mut self.nx_edit_pw)
                                 .password(true)
                                 .desired_width(220.0)
-                                .hint_text(if self.nx_edit_nuevo { "" } else { "(sin cambios)" }),
+                                .hint_text(i18n::tr(if self.nx_edit_nuevo { "" } else { "(sin cambios)" })),
                         );
                     });
                 }
@@ -14895,7 +14909,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     {
                         probar = true;
                     }
-                    if ui.button("Cancelar").clicked() {
+                    if ui.button(i18n::tr("Cancelar")).clicked() {
                         cerrar = true;
                     }
                     right(ui, 28.0, |ui| {
@@ -15232,7 +15246,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
     fn mem_tab_memorias(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("↻ Recargar").clicked() {
+            if ui.button(i18n::tr("↻ Recargar")).clicked() {
                 self.mems = load_memories();
             }
             // ── Duplicados ───────────────────────────────────────────────────
@@ -15245,7 +15259,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             // En un hilo, por el pool: si el mantenimiento está consolidando en
             // ese momento, esperar aquí su conexión congela la ventana.
             let girando = self.dedup_rx.is_some();
-            if ui.add_enabled(!girando, egui::Button::new(if girando { "Buscando…" } else { "Buscar duplicados" })).clicked() {
+            if ui.add_enabled(!girando, egui::Button::new(i18n::tr(if girando { "Buscando…" } else { "Buscar duplicados" }))).clicked() {
                 self.lanza_dedup(true);
             }
             if let Some(Ok(r)) = &self.dedup {
@@ -15331,9 +15345,9 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             Err(e) => {
                 ui.colored_label(theme::red(), format!("⚠ {e}"));
                 ui.label(
-                    egui::RichText::new(
+                    egui::RichText::new(i18n::tr(
                         "Abre Lucy al menos una vez para crear la DB, o corre desde el mismo usuario.",
-                    )
+                    ))
                     .weak(),
                 );
             }
@@ -15346,7 +15360,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             .desired_width(ui.available_width() - 108.0),
                     );
                     let enter = te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("◈ Semántica").clicked() || enter {
+                    if ui.button(i18n::tr("◈ Semántica")).clicked() || enter {
                         pedir_semantica = true;
                     }
                 });
@@ -15470,11 +15484,11 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                         .frame(false),
                                     );
                                     if pin
-                                        .on_hover_text(if fija {
+                                        .on_hover_text(i18n::tr(if fija {
                                             "Fijada: entra en TODOS los prompts. Pulsa para soltarla."
                                         } else {
                                             "Fijar: que Lucy la tenga presente siempre, venga o no al caso"
-                                        })
+                                        }))
                                         .clicked()
                                     {
                                         fijar = Some((m.id, !fija));
@@ -15492,14 +15506,14 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                                             .color(theme::importance_color(m.importance))
                                             .small(),
                                     )
-                                    .on_hover_text(match m.importance {
+                                    .on_hover_text(i18n::tr(match m.importance {
                                         i if i >= lucy_core::memories::FIJADA => {
                                             "Fijada · entra en todos los prompts"
                                         }
                                         3 => "Importancia alta · se recuerda antes que las demás",
                                         2 => "Importancia normal",
                                         _ => "Importancia baja · la última en entrar si no cabe todo",
-                                    });
+                                    }));
                                     let title = if m.title.trim().is_empty() {
                                         m.content.chars().take(64).collect::<String>()
                                     } else {
@@ -15597,7 +15611,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
     fn mem_tab_cristales(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("↻ Recargar").clicked() {
+            if ui.button(i18n::tr("↻ Recargar")).clicked() {
                 self.cristales = Some(lucy_core::crystals::list(100));
             }
             ui.label(
@@ -15708,7 +15722,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
 
     fn mem_tab_insights(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("↻ Recargar").clicked() {
+            if ui.button(i18n::tr("↻ Recargar")).clicked() {
                 self.insights_l = Some(lucy_core::insights::list(100));
             }
             ui.label(
@@ -15823,7 +15837,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             if ui
                 .add_enabled(
                     !ingiriendo,
-                    egui::Button::new(if ingiriendo { "Ingiriendo…" } else { "＋ Ingerir documento" }),
+                    egui::Button::new(i18n::tr(if ingiriendo { "Ingiriendo…" } else { "＋ Ingerir documento" })),
                 )
                 .clicked()
             {
@@ -15849,10 +15863,10 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     self.doc_estado = Some(("Extrayendo texto…".into(), false));
                 }
             }
-            if ingiriendo && ui.button("Cancelar").clicked() {
+            if ingiriendo && ui.button(i18n::tr("Cancelar")).clicked() {
                 self.doc_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            if ui.button("↻ Recargar").clicked() {
+            if ui.button(i18n::tr("↻ Recargar")).clicked() {
                 self.docs_l = Some(lucy_core::docs::list());
             }
             ui.label(
@@ -16033,7 +16047,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                     .desired_width(ui.available_width() - 96.0),
             );
             let enter = te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.button("＋ Añadir").clicked() || enter) && !self.princ_nueva.trim().is_empty() {
+            if (ui.button(i18n::tr("＋ Añadir")).clicked() || enter) && !self.princ_nueva.trim().is_empty() {
                 match lucy_core::principles::add("", self.princ_nueva.trim(), None) {
                     Ok(_) => {
                         self.princ_nueva.clear();
@@ -16052,7 +16066,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
             None => {}
             Some(Err(e)) => {
                 ui.colored_label(theme::red(), format!("⚠ {e}"));
-                if ui.button("↻ Reintentar").clicked() {
+                if ui.button(i18n::tr("↻ Reintentar")).clicked() {
                     self.principios_l = Some(lucy_core::principles::list());
                 }
             }
@@ -16177,7 +16191,7 @@ Lucy los pide sola cuando encajan. Para forzar uno, díselo por su nombre.",
                             if ui
                                 .add_enabled(
                                     !corriendo,
-                                    egui::Button::new(if corriendo { "Corriendo…" } else { boton }),
+                                    egui::Button::new(i18n::tr(if corriendo { "Corriendo…" } else { boton })),
                                 )
                                 .clicked()
                             {
